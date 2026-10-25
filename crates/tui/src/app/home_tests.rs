@@ -768,7 +768,10 @@ fn more_key(app: &App, project: &str) -> Option<u64> {
             ListLine::More { key, .. } => {
                 (home.sessions.by_key(key)?.project == project).then_some(key)
             }
-            _ => None,
+            ListLine::Head { .. }
+            | ListLine::Live { .. }
+            | ListLine::ExitedHead { .. }
+            | ListLine::Exited { .. } => None,
         })
 }
 

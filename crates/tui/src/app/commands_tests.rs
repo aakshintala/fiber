@@ -1548,17 +1548,16 @@ fn credential_overlays_and_rebound_session_only_route_to_the_picker() {
         },
         ..Default::default()
     });
-    app.on_line(session_line("session_status", json!({"name":"working","workspace":"/w","project":"-w","state":"streaming","since":0,"started":0,"calls":0,"delegates":0,"jobs":0,"clients":1,"model":"fake/m","spend":{"tokens":{"input":0,"output":0,"cache_read":0,"cache_write":{}},"cost":0.0,"subscription_cost":0.0}})));
     // The introducing status queues its project's scoped ask, drained
-    // on the next outgoing pass.
+    // on the same outgoing pass as the fresh feed and recent.
     let queued: Vec<Value> = app
-        .home_outgoing()
+        .on_line(session_line("session_status", json!({"name":"working","workspace":"/w","project":"-w","state":"streaming","since":0,"started":0,"calls":0,"delegates":0,"jobs":0,"clients":1,"model":"fake/m","spend":{"tokens":{"input":0,"output":0,"cache_read":0,"cache_write":{}},"cost":0.0,"subscription_cost":0.0}})))
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(queued.len(), 1);
-    assert_eq!(queued[0]["command"], "recent");
-    assert_eq!(queued[0]["args"]["project"], "-w");
+    assert_eq!(queued.len(), 3);
+    assert_eq!(queued[2]["command"], "recent");
+    assert_eq!(queued[2]["args"]["project"], "-w");
     app.quit();
     assert!(app.quit_open());
     assert_eq!(app.key_context(), crate::keyset::Context::Overlay);
@@ -2026,17 +2025,16 @@ fn clear_twice_before_any_prompt_keeps_the_start_credential() {
 #[test]
 fn clear_start_refused_keeps_the_old_session_with_one_notice() {
     let mut app = homed();
-    app.on_line(clear_status(SESSION, "/w", "fake/m", Some("high")));
     // The introducing status queues its project's scoped ask, drained
-    // on the next outgoing pass.
+    // on the same outgoing pass as the fresh feed and recent.
     let queued: Vec<Value> = app
-        .home_outgoing()
+        .on_line(clear_status(SESSION, "/w", "fake/m", Some("high")))
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(queued.len(), 1);
-    assert_eq!(queued[0]["command"], "recent");
-    assert_eq!(queued[0]["args"]["project"], "-w");
+    assert_eq!(queued.len(), 3);
+    assert_eq!(queued[2]["command"], "recent");
+    assert_eq!(queued[2]["args"]["project"], "-w");
     let lines = sent(enter(&mut app, "/clear"));
     let id = lines[0]["id"].clone();
     // Typing after the dispatch stays: the refusal takes nothing.
@@ -2225,17 +2223,16 @@ fn clear_overlay_esc_stays() {
 #[test]
 fn clear_overlay_refused_start_closes_with_one_notice() {
     let mut app = homed();
-    app.on_line(waiting_status(SESSION, "approval"));
     // The introducing status queues its project's scoped ask, drained
-    // on the next outgoing pass.
+    // on the same outgoing pass as the fresh feed and recent.
     let queued: Vec<Value> = app
-        .home_outgoing()
+        .on_line(waiting_status(SESSION, "approval"))
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(queued.len(), 1);
-    assert_eq!(queued[0]["command"], "recent");
-    assert_eq!(queued[0]["args"]["project"], "-w");
+    assert_eq!(queued.len(), 3);
+    assert_eq!(queued[2]["command"], "recent");
+    assert_eq!(queued[2]["args"]["project"], "-w");
     assert_eq!(enter(&mut app, "/clear"), Effect::None);
     let lines = sent(app.on_key(Key::Enter, now()));
     assert_eq!(lines.len(), 1);

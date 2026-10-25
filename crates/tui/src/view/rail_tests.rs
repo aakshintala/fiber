@@ -201,18 +201,6 @@ fn hold_total(app: &mut App, rows: Value, total: usize) {
     }
 }
 
-/// One exited `recent` row for `session` in the launch project.
-fn exited_row(session: &str, name: &str) -> Value {
-    json!({
-        "session_id": session,
-        "ts": 0,
-        "project": "-w",
-        "workspace": "/Users/you/work/fiber",
-        "name": name,
-        "how": "exited",
-    })
-}
-
 /// The text of `B`'s card's `n`th text row, 0-based, in `two`'s rail.
 fn b_row(buf: &Buffer, n: u16) -> String {
     lines(buf)
