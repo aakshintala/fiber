@@ -5330,9 +5330,21 @@ fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
     // The scoped ask is still in flight: the refresh keeps the unscoped
     // refill only, marking the project dirty.
     let lines = commands(app.on_line(accepted(&delete, json!({}))));
-    // `docs/tui.md:268` (scoped asks: one per project; delete keeps unscoped refill).
-    assert_eq!(lines.len(), 1);
-    assert!(lines[0].get("args").is_none());
+    // The refresh keeps an unscoped refill with no scoped ask while one is
+    // already in flight.
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+        "an unscoped refill went out: {lines:?}"
+    );
+    assert!(
+        lines.iter().all(|line| line
+            .get("args")
+            .and_then(|args| args.get("project"))
+            .is_none()),
+        "no scoped ask while one is in flight: {lines:?}"
+    );
     // Its answer folds and schedules exactly one fresh scoped ask.
     let follow = answer_value(
         &mut app,
@@ -5355,7 +5367,7 @@ fn a_new_section_status_queues_one_scoped_ask_for_home_outgoing() {
     assert_eq!(app.home_line(&status("s_aaaaaaaaaaaaaaaa")), None);
     // `home_outgoing` drains the queued scoped ask.
     let lines = commands(app.home_outgoing());
-    // `docs/tui.md:268` (scoped asks: one per project; delete keeps unscoped refill).
+    // `docs/tui.md:268` (one ask in flight per project).
     assert_eq!(lines.len(), 1);
     // `docs/invocation.md:1091` (recent command).
     assert_eq!(lines[0]["command"], "recent");
@@ -5553,7 +5565,7 @@ fn enter_on_more_with_more_held_asks_the_next_scoped_page() {
     let Effect::Send(lines) = app.home_click(Spot::More(key)) else {
         panic!("More opens the next scoped page");
     };
-    // `docs/tui.md:268` (scoped asks: one per project; delete keeps unscoped refill).
+    // `docs/tui.md:268` (opening it pages the project's `recent`).
     assert_eq!(lines.len(), 1);
     let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
@@ -5612,7 +5624,7 @@ fn down_on_the_last_row_pages_the_project_while_it_holds_more() {
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter on More pages the project");
     };
-    // `docs/tui.md:268` (scoped asks: one per project; delete keeps unscoped refill).
+    // `docs/tui.md:268` (opening it pages the project's `recent`).
     assert_eq!(lines.len(), 1);
     let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
@@ -6362,8 +6374,11 @@ fn scoped_answers_key_rows_and_total_by_project() {
     );
     // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(3));
-    // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
-    assert_eq!(listed(&app).len(), 4);
+    // A stale scoped id leaves the rows as they were.
+    assert_eq!(
+        listed(&app),
+        ["○  old", "○  other  other", "○  o2  other", "○  new",]
+    );
 }
 
 #[test]
@@ -6416,8 +6431,10 @@ fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
             .is_empty()
     );
     assert_eq!(app.notice(), Some("no recent"));
-    // `docs/errors.md:350` (malformed notice).
-    assert_eq!(app.notices().len(), 1);
+    assert!(app.notices().iter().any(|line| matches!(
+        line,
+        crate::app::NoticeLine::Notice { code, .. } if code == "gone"
+    )));
     // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), None);
     // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
@@ -6428,8 +6445,10 @@ fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
         app.on_line(accepted(&first, json!({"sessions": []})))
             .is_empty()
     );
-    // `docs/errors.md:350` (malformed notice).
-    assert_eq!(app.notices().len(), 1);
+    assert!(app.notices().iter().any(|line| matches!(
+        line,
+        crate::app::NoticeLine::Notice { code, .. } if code == "gone"
+    )));
     assert!(!app.home.as_ref().unwrap().sessions.is_dirty("-w"));
 }
 
@@ -6456,8 +6475,10 @@ fn a_scoped_malformed_answer_keeps_the_total_notices_once_and_sends_nothing() {
             .is_empty()
     );
     assert_eq!(app.notice(), Some("rejected"));
-    // `docs/errors.md:350` (malformed notice).
-    assert_eq!(app.notices().len(), 1);
+    assert!(app.notices().iter().any(|line| matches!(
+        line,
+        crate::app::NoticeLine::Notice { code, .. } if code == "malformed"
+    )));
     // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(5));
     // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
@@ -6498,8 +6519,13 @@ fn a_scoped_answer_missing_sessions_or_total_notices_once_and_folds_nothing() {
         // An incomplete answer would fold rows without a count on the old path.
         assert!(app.on_line(accepted(&second, result)).is_empty(), "{label}");
         assert_eq!(app.notice(), Some("rejected"), "{label}");
-        // `docs/errors.md:350` (malformed notice).
-        assert_eq!(app.notices().len(), 1, "{label}");
+        assert!(
+            app.notices().iter().any(|line| matches!(
+                line,
+                crate::app::NoticeLine::Notice { code, .. } if code == "malformed"
+            )),
+            "{label}"
+        );
         // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
         assert_eq!(stored(&app, "-w"), Some(5), "{label}");
         // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).

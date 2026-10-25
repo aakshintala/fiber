@@ -432,12 +432,16 @@ fn hold_total(app: &mut App, rows: serde_json::Value, total: usize) {
         serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
     }
     let outgoing: Vec<serde_json::Value> = app.on_line(hello()).iter().map(parse).collect();
-    let feed = outgoing[0]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("a feed"));
-    let recent = outgoing[1]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("a recent"));
+    let feed = outgoing
+        .iter()
+        .find(|line| line["command"] == "feed")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a feed: {outgoing:?}"));
+    let recent = outgoing
+        .iter()
+        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
     assert!(
         app.on_line(accepted(feed, serde_json::json!({})))
             .is_empty()
@@ -496,9 +500,11 @@ fn home_header_counts_loaded_rows_without_a_total() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
         .collect();
-    let recent = outgoing[1]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("a recent"));
+    let recent = outgoing
+        .iter()
+        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
     app.on_line(accepted(
         recent,
         serde_json::json!({"sessions": [
@@ -1623,9 +1629,11 @@ fn home_stop_flow_keeps_the_home_list_drawn() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
         .collect();
-    let feed = outgoing[0]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("a feed"));
+    let feed = outgoing
+        .iter()
+        .find(|line| line["command"] == "feed")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a feed: {outgoing:?}"));
     assert!(
         app.on_line(accepted(feed, serde_json::json!({})))
             .is_empty()

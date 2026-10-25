@@ -219,7 +219,7 @@ fn a_list_launch_focuses_the_list_after_the_first_recent_page() {
     )));
     // `docs/tui.md:268` (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
-    // `docs/tui.md:233-234` and `docs/tui.md:268` (one per project).
+    // `docs/tui.md:268` (scoped ask carries the project's key).
     assert_eq!(fanout[0]["args"]["project"], "-w");
     assert!(spent(&app));
     drawn(&mut app);
@@ -310,7 +310,7 @@ fn a_home_launch_never_focuses_the_list() {
     )));
     // `docs/tui.md:268` (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
-    // `docs/tui.md:233-234` and `docs/tui.md:268` (one per project).
+    // `docs/tui.md:268` (scoped ask carries the project's key).
     assert_eq!(fanout[0]["args"]["project"], "-w");
     drawn(&mut app);
     assert_eq!(app.focused(), None);
@@ -812,7 +812,7 @@ fn home_with_row() -> App {
     )));
     // `docs/tui.md:268` (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
-    // `docs/tui.md:233-234` and `docs/tui.md:268` (one per project).
+    // `docs/tui.md:268` (scoped ask carries the project's key).
     assert_eq!(fanout[0]["args"]["project"], "-w");
     app
 }

@@ -1292,8 +1292,25 @@ fn clicking_done_with_a_total_above_loaded_opens_the_first_row() {
     app.on_line(left(B, "exited"));
     app.home.as_mut().unwrap().sessions.note_total("-w", 4);
     let out = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
-    // `docs/tui.md:268` (no extra scoped ask without a new trigger: one subscribe).
-    assert_eq!(out, vec![subscribe(&out[0]["id"], A, "summary")]);
+    // A Done click sends no scoped ask without a new trigger: a subscribe
+    // goes out and no scoped recent does.
+    let parsed: Vec<serde_json::Value> = out
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    assert!(
+        parsed
+            .iter()
+            .any(|line| line["command"] == "subscribe" && line["session_id"] == A),
+        "a subscribe for the focused session went out: {parsed:?}"
+    );
+    assert!(
+        parsed.iter().all(|line| line
+            .get("args")
+            .and_then(|args| args.get("project"))
+            .is_none()),
+        "no scoped ask went out: {parsed:?}"
+    );
     assert!(app.on_home());
     let area = ratatui::layout::Rect::new(0, 0, 200, 40);
     let mut buf = ratatui::buffer::Buffer::empty(area);
@@ -1315,8 +1332,25 @@ fn clicking_done_with_a_total_but_no_loaded_rows_lands_unfocused() {
     let mut app = opened(&[A, B], A);
     app.home.as_mut().unwrap().sessions.note_total("-w", 3);
     let out = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
-    // `docs/tui.md:268` (no extra scoped ask without a new trigger: one subscribe).
-    assert_eq!(out, vec![subscribe(&out[0]["id"], A, "summary")]);
+    // A Done click sends no scoped ask without a new trigger: a subscribe
+    // goes out and no scoped recent does.
+    let parsed: Vec<serde_json::Value> = out
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    assert!(
+        parsed
+            .iter()
+            .any(|line| line["command"] == "subscribe" && line["session_id"] == A),
+        "a subscribe for the focused session went out: {parsed:?}"
+    );
+    assert!(
+        parsed.iter().all(|line| line
+            .get("args")
+            .and_then(|args| args.get("project"))
+            .is_none()),
+        "no scoped ask went out: {parsed:?}"
+    );
     assert!(app.on_home());
     assert_eq!(rail_focus(&app), None);
     assert_eq!(app.focused(), None);
