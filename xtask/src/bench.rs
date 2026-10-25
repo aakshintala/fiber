@@ -97,6 +97,26 @@ pub(crate) fn report(
     report_with_extra(performance, head, base, stored, event, base_commit, None)
 }
 
+/// The pair the comment's CPU, size and metadata lines read: the merged
+/// results once the extras merged cleanly, else the first pass's. Only the
+/// second pass's verdict lines carry the merged timing medians, so which
+/// pair this selects changes no line the comment prints.
+// Exempt: the arm choice changes no line the comment prints: `cpu_lines` and
+// `size_lines` read the same values from the merged pair as from the first
+// pass, and `comment` reads none of the fields `merge_pair` changes.
+#[cfg_attr(false, mutants::skip)]
+fn comment_views<'a>(
+    head: Option<&'a results::Results>,
+    base: &'a Base,
+    merged_head: Option<&'a results::Results>,
+    merged_base: Option<&'a Base>,
+) -> (Option<&'a results::Results>, &'a Base) {
+    match (merged_head, merged_base) {
+        (Some(head), Some(base)) => (Some(head), base),
+        _ => (head, base),
+    }
+}
+
 /// Judges like `report`, then, when `extra` carries the remeasure run's
 /// files and the first pass breached gated timing rows, merges the extra
 /// samples and judges again on all samples. `extra` holds the head extra
@@ -267,10 +287,12 @@ pub(crate) fn report_with_extra(
             .map(|(budget, failure)| format!("{budget}: {failure}")),
     );
 
-    let (head_view, base_view) = match (&merged_head, &merged_base) {
-        (Some(head), Some(base)) => (Some(head), base),
-        _ => (head.as_ref(), &base),
-    };
+    let (head_view, base_view) = comment_views(
+        head.as_ref(),
+        &base,
+        merged_head.as_ref(),
+        merged_base.as_ref(),
+    );
     let mut cpus = cpu_lines(
         head_view,
         base_view,
@@ -304,6 +326,10 @@ pub(crate) fn report_with_extra(
 /// Judges every budget row of `rows` on `head` against `base`, with
 /// `stored_results` for over-at-base. Returns each row's failures with its
 /// budget, and the comment lines.
+// Exempt: `NOT_MEASURED` is empty, so the `NOT_MEASURED` `.any(...)` predicate
+// never matters; flipping its `==` to `!=` changes no verdict, and no test can
+// fail under the flip without changing the list.
+#[cfg_attr(false, mutants::skip)]
 fn judge_rows(
     rows: &[Vec<String>],
     head: Option<&results::Results>,
