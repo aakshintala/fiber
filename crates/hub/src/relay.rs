@@ -387,6 +387,45 @@ pub(crate) fn route(
         return;
     };
     let order = lock(relays).order.clone();
+    // A caller that names itself needs no relay, socket or log: the
+    // owner==target match refuses without a target pid, while every other
+    // command falls through to the paths below (the pid version re-checks
+    // ancestors and the parent exception there). Subscribe is not in the
+    // refused set, so it always falls through. An incomplete caller walk
+    // whose peer pid was read keeps the direct-parent exception, which
+    // needs the target's pid to evaluate, so only an approval reply
+    // (which no exception covers) refuses early; every other incomplete
+    // command falls through to the pid version.
+    if let Some(attribution) = admit {
+        let defer_to_target_pid = matches!(
+            attribution,
+            crate::connection::Attribution::Incomplete {
+                peer_pid: Some(_),
+                ..
+            }
+        ) && !is_approval_reply(&stripped);
+        if !defer_to_target_pid {
+            let read = crate::connection::read_for(hub);
+            if let Some(refused) = session_command_refusal(
+                attribution,
+                &stripped,
+                &SessionId(session.to_owned()),
+                None,
+                read.as_ref(),
+            ) {
+                crate::retire::refuse(
+                    writer,
+                    hub,
+                    relays,
+                    session,
+                    id,
+                    &refused.code,
+                    &refused.message,
+                );
+                return;
+            }
+        }
+    }
     // A `full` subscribe for a finished delegate never reaches a relay,
     // an opener or a resume: the exited run's log is the view, replayed
     // below, and the kept subscription follows a resume. Above
