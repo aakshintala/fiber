@@ -62,3 +62,11 @@ fn a_hold_is_acknowledged_then_released_before_the_join() {
 fn the_fixture_usage_error_names_its_modes() {
     warm_up(&super::example_path(), &["bogus-mode"], 2);
 }
+
+#[test]
+#[should_panic(expected = "the fixture exits 0")]
+fn finish_fails_when_the_fixture_exits_unsuccessfully() {
+    let fixture = ProcessFixture::spawn("bogus-mode");
+    let deadline = within();
+    fixture.finish(deadline);
+}
