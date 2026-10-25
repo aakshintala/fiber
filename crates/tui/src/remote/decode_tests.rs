@@ -2,6 +2,39 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn hooks_answers_require_complete_names_and_an_empty_install_object() {
+    assert_eq!(blocking_hooks(&json!({"names":[]})), Some(vec![]));
+    assert_eq!(
+        blocking_hooks(&json!({"names":["a","z"]})),
+        Some(vec!["a".into(), "z".into()])
+    );
+    for value in [
+        json!({}),
+        json!(null),
+        json!([]),
+        json!({"names":null}),
+        json!({"names":"a"}),
+        json!({"names":["a",1]}),
+    ] {
+        assert!(blocking_hooks(&value).is_none(), "{value}");
+    }
+    assert_eq!(install_hooks(&json!({})), Some(()));
+    for value in [json!(null), json!([]), json!(true), json!({"installed":[]})] {
+        assert!(install_hooks(&value).is_none(), "{value}");
+    }
+    for operation in ["blocking_hooks", "install_hooks"] {
+        let line: HubLine = serde_json::from_value(json!({"kind":"command_rejected","ts":1,"schema_version":1,"payload":{"code":"fetch_failed","message":"original failure"}})).unwrap();
+        assert_eq!(
+            result(&line, operation).unwrap_err(),
+            ConfigureError {
+                code: ErrorCode::FetchFailed,
+                message: "original failure".into()
+            }
+        );
+    }
+}
+
+#[test]
 fn rules_preserve_physical_rows_and_reject_malformed_answers() {
     let input = json!({"global":{"file":"/hub/rules","rows":[{"line":7,"text":"deny shell rm","rule":{"decision":"deny","tool":"shell","prefix":"rm"}}]},"project":{"file":"/hub/project/rules","rows":[]}});
     let parsed = rules(&input).unwrap();

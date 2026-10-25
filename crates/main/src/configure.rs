@@ -2,9 +2,11 @@
 //! `/settings` reads every key through `config` and writes through the
 //! same path as `fiber config set`, for the project of the workspace the
 //! view is about, and lists the themes in Fiber home's `themes/` and each
-//! installed extension's. The
-//! terminal loads configuration with no `-c`, so no row comes from one.
+//! installed extension's. Settings views load without `-c` and cache each
+//! workspace's project key. The off-loop hooks query instead uses the
+//! supplied per-run overrides and resolves project identity afresh.
 
+mod hooks;
 mod install;
 mod login;
 mod logout;
@@ -225,6 +227,18 @@ fn row(config: &Config, info: config::SettingInfo) -> SettingRow {
 }
 
 impl tui::Configure for Seam {
+    fn blocking_hooks(
+        &self,
+        workspace: &Path,
+        overrides: &[String],
+    ) -> Result<Vec<String>, ConfigureError> {
+        hooks::blocking(self, workspace, overrides)
+    }
+
+    fn install_hooks(&self, clock: Arc<dyn contract::clock::Clock>) -> Result<(), ConfigureError> {
+        hooks::install(self, clock)
+    }
+
     fn import_pending(&self) -> bool {
         config::import_pending(&self.home)
     }

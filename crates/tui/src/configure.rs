@@ -1,10 +1,10 @@
 //! The seam the configuration views read and write through
 //! (`docs/tui.md`, "Swapped views"). The terminal never reads
 //! configuration itself (`docs/architecture.md`, "The call rules"): `main`
-//! implements [`Configure`] and passes it in [`crate::Launch`]. Every call
-//! is a few small file reads or one locked write, made only on a person's
-//! action, so it runs on the loop's thread, except [`BrowserLogin::run`],
-//! which blocks on a worker thread until the login ends.
+//! implements [`Configure`] and passes it in [`crate::Launch`]. Settings
+//! reads and writes run on the loop's thread. [`BrowserLogin::run`],
+//! provider installs, [`Configure::blocking_hooks`] and
+//! [`Configure::install_hooks`] block and must run on a worker thread.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -457,6 +457,28 @@ pub trait Configure: Send + Sync {
         provider: &str,
         clock: Arc<dyn Clock>,
     ) -> Result<ProviderInstall, ConfigureError>;
+
+    /// Sorted blocking hook names from the merged, repository-filtered
+    /// configuration for `workspace`, using the exact ordered per-run
+    /// `overrides` (including repeated keys). Resolves project identity
+    /// afresh for both settings and repository approvals. Returns empty
+    /// when the hooks package is installed (even disabled or unloadable),
+    /// or when the filtered gate is not blocking or has no named entries.
+    /// Runs only off the loop thread: gathering may prepare approved
+    /// dependency-bearing copies. This synchronous call starts no VM or
+    /// session and does not itself spawn a worker.
+    fn blocking_hooks(
+        &self,
+        workspace: &Path,
+        overrides: &[String],
+    ) -> Result<Vec<String>, ConfigureError>;
+
+    /// Installs `hooks` globally into the hub's home, without asking:
+    /// caller approval is pre-given. Uses the same plan and atomic commit
+    /// as unflagged `fiber extension install hooks`, preserving installer
+    /// error codes and messages. Starts no session or hook point.
+    /// Runs only off the loop thread: fetching and committing block.
+    fn install_hooks(&self, clock: Arc<dyn Clock>) -> Result<(), ConfigureError>;
 
     // `/settings`.
 

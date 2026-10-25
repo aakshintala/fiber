@@ -107,6 +107,89 @@ fn install(home: &Path) {
 }
 
 #[test]
+fn hooks_operations_validate_wire_arguments_before_side_effects() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::with_origin(
+        home.clone(),
+        Arc::new(extensions::Origin::new("git", |_| {
+            panic!("invalid hooks request must not fetch")
+        })),
+    );
+    for args in [
+        json!({}),
+        json!({"workspace":null}),
+        json!({"workspace":7}),
+        json!({"workspace":"relative"}),
+        json!({"workspace":workspace,"unknown":true}),
+        json!({"workspace":workspace,"overrides":null}),
+        json!({"workspace":workspace,"overrides":"a=b"}),
+        json!({"workspace":workspace,"overrides":["a=b",1]}),
+    ] {
+        assert_eq!(
+            call(&seam, "blocking_hooks", args).unwrap_err().code,
+            ErrorCode::InvalidArguments
+        );
+    }
+    for args in [
+        json!({"workspace":workspace}),
+        json!({"extra":true}),
+        json!({"clock":null}),
+    ] {
+        assert_eq!(
+            call(&seam, "install_hooks", args).unwrap_err().code,
+            ErrorCode::InvalidArguments
+        );
+    }
+    assert!(!home.join("extensions").exists());
+}
+
+#[test]
+fn blocking_hooks_wire_keeps_absence_override_precedence_and_config_errors() {
+    fakes::within("hooks wire query", Deadline::start(), || {
+        let dirs = Dirs::new();
+        let workspace = dirs.workspace("one");
+        let home = dirs.home();
+        let seam = Seam::new(home.clone());
+        assert_eq!(
+            result(&seam, "blocking_hooks", json!({"workspace":workspace})),
+            json!({"names":[]})
+        );
+        let key = "extensions.\"github.com/aakshintala/fiber/extensions/hooks\".settings.hooks";
+        let overrides = vec![
+            format!("{key}.z={{\"on_failure\":\"blocking\"}}"),
+            format!("{key}.a={{\"on_failure\":\"blocking\"}}"),
+            format!("{key}.z.on_failure=non-blocking"),
+        ];
+        assert_eq!(
+            result(
+                &seam,
+                "blocking_hooks",
+                json!({"workspace":workspace,"overrides":overrides})
+            ),
+            json!({"names":["a"]})
+        );
+        let actual = call(
+            &seam,
+            "blocking_hooks",
+            json!({"workspace":workspace,"overrides":["=bad"]}),
+        )
+        .unwrap_err();
+        let expected = seam
+            .blocking_hooks(&workspace, &["=bad".into()])
+            .unwrap_err();
+        assert_eq!(actual.code, expected.code);
+        assert_eq!(actual.message, expected.message);
+        write(&home.join("config.json"), "not json");
+        let actual = call(&seam, "blocking_hooks", json!({"workspace":workspace})).unwrap_err();
+        let expected = seam.blocking_hooks(&workspace, &[]).unwrap_err();
+        assert_eq!(actual.code, ErrorCode::ConfigInvalid);
+        assert_eq!(actual.message, expected.message);
+    });
+}
+
+#[test]
 fn provider_install_rejects_invalid_argument_shapes_and_unknown_providers() {
     let dirs = Dirs::new();
     let home = dirs.home();
@@ -1320,6 +1403,8 @@ fn remote_operation_documentation_lists_the_complete_wire_surface() {
             "reviewer_models",
             "models",
             "install_provider",
+            "blocking_hooks",
+            "install_hooks",
             "set_reviewer",
             "gaps",
             "save_host",
