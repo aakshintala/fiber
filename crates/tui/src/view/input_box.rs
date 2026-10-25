@@ -308,7 +308,7 @@ fn draw_selection(
     // The selection's rects read draft rows from the column's first row:
     // the shown slab clips them, so scrolled rows paint nothing.
     let base = below.saturating_sub(shown).saturating_sub(to_u16(top));
-    let full = Rect::new(text.x, base, text.width, to_u16(top) + shown);
+    let full = Rect::new(text.x, base, text.width, to_u16(top).saturating_add(shown));
     let slab = Rect::new(text.x, first, text.width, height);
     let tint = super::marks::selection_style();
     for rect in app.selection_cells(crate::app::SurfaceId::Input, full) {

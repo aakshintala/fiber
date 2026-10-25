@@ -875,7 +875,7 @@ pub(super) fn render(
     {
         let shown = to_u16(placed.shown.len());
         let text_w = placed.inner;
-        if shown > 0 {
+        if shown != 0 {
             app.note_input_area(
                 Rect::new(text_x, placed.draft_top, text_w, shown),
                 placed.top,
@@ -890,9 +890,7 @@ pub(super) fn render(
         let slab = Rect::new(text_x, placed.draft_top, text_w, shown);
         for rect in app.selection_cells(crate::app::SurfaceId::Input, full) {
             let clipped = rect.intersection(slab);
-            if !clipped.is_empty() {
-                buf.set_style(clipped, crate::view::marks::selection_style());
-            }
+            buf.set_style(clipped, crate::view::marks::selection_style());
         }
     }
     // The cursor is a drawn dim `█` at the draft's cursor while nothing

@@ -3559,7 +3559,11 @@ fn a_failed_read_starts_the_body_with_the_message() {
     let login = Login::open(&ctx(&fake));
     let (framed, _) = login.list_framed(Rect::new(0, 0, 80, 24));
     let first = framed.body.first().expect("a body row");
-    let text: String = first.spans.iter().map(|span| span.content.as_ref()).collect();
+    let text: String = first
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
     assert!(
         text.contains("config.json: not JSON"),
         "the message leads the body: {text:?}"

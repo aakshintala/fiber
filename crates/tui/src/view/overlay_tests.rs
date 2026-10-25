@@ -759,8 +759,14 @@ fn guttered(left: &[&str], right: &[&str]) -> Row {
 /// "Selection and copy").
 #[test]
 fn body_text_drops_the_choice_gutter() {
-    assert_eq!(super::body_text(&guttered(&["› ", "choice"], &[]), 20), "choice");
-    assert_eq!(super::body_text(&guttered(&["  ", "choice"], &[]), 20), "choice");
+    assert_eq!(
+        super::body_text(&guttered(&["› ", "choice"], &[]), 20),
+        "choice"
+    );
+    assert_eq!(
+        super::body_text(&guttered(&["  ", "choice"], &[]), 20),
+        "choice"
+    );
 }
 
 /// The gutter's padding goes with it: a continuation row's padding
@@ -779,7 +785,10 @@ fn body_text_drops_the_gutter_padding() {
 /// (`docs/tui.md`, "Selection and copy").
 #[test]
 fn body_text_keeps_text_after_the_gutter() {
-    assert_eq!(super::body_text(&guttered(&["  ", "choice"], &[]), 20), "choice");
+    assert_eq!(
+        super::body_text(&guttered(&["  ", "choice"], &[]), 20),
+        "choice"
+    );
     assert_eq!(
         super::body_text(&guttered(&["› ", "two words"], &[]), 20),
         "two words"

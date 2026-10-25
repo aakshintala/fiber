@@ -167,20 +167,22 @@ fn wrapped_texts(line: &Line<'static>, width: u16) -> Vec<(String, Join)> {
     let mut cursor = 0usize;
     for (at, raw) in raws.iter().enumerate() {
         let trimmed = raw.trim_end();
-        let mut start = cursor;
-        while !source[start..].starts_with(trimmed) {
-            let Some(next) = source[start..].chars().next() else {
-                break;
-            };
-            if next != ' ' {
-                // The wrapper changed under the note: never join
-                // across rows the note cannot map.
-                return raws
-                    .into_iter()
-                    .map(|raw| (raw.trim_end().to_owned(), Join::Break))
-                    .collect();
-            }
-            start += next.len_utf8();
+        let Some(relative) = source[cursor..].find(trimmed) else {
+            // The wrapper changed under the note: never join across
+            // rows the note cannot map.
+            return raws
+                .into_iter()
+                .map(|raw| (raw.trim_end().to_owned(), Join::Break))
+                .collect();
+        };
+        let start = cursor + relative;
+        if source[cursor..start].chars().any(|cell| cell != ' ') {
+            // The wrapper changed under the note: never join across
+            // rows the note cannot map.
+            return raws
+                .into_iter()
+                .map(|raw| (raw.trim_end().to_owned(), Join::Break))
+                .collect();
         }
         let join = if at == 0 {
             Join::Break

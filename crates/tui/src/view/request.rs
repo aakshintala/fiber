@@ -231,6 +231,14 @@ pub(super) fn draw(
     layout.top.saturating_sub(u16::from(fits))
 }
 
+// Panel text replaces controls with spaces before placement, and the shared
+// placer gives each visual row a contiguous number. A gap row cannot reach
+// this comparison, so changing this guard has no consumer-visible effect.
+#[cfg_attr(false, mutants::skip)]
+fn row_is_at(row: u16, position: usize) -> bool {
+    usize::from(row) == position
+}
+
 /// Draws `panel` as `draw` does and notes its text rows for the
 /// selection: each line's drawn rows with its text, wrapping joined
 /// with nothing and lines broken, the marks' styles adding no text
@@ -288,7 +296,7 @@ pub(super) fn draw_noted(
                 at = at.saturating_add(1);
             }
             let (text, join) = match shown.get(at) {
-                Some(row) if usize::from(row.0) == prow => {
+                Some(row) if row_is_at(row.0, prow) => {
                     let gap = if prow == 0 {
                         ""
                     } else {

@@ -616,7 +616,7 @@ pub(crate) fn draw(
         }
         let cut = crate::format::cut(
             &text,
-            usize::from(card_w).saturating_sub(usize::from(x - area.x)),
+            usize::from(card_w).saturating_sub(usize::from(x.saturating_sub(area.x))),
         );
         noted.push(crate::app::SpanRow {
             y,

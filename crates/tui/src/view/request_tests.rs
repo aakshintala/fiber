@@ -1393,7 +1393,9 @@ fn a_drag_across_two_lines_breaks_between_them() {
     };
     let find_col = |needle: &str, y: u16| {
         let line = screen.lines().nth(usize::from(y)).unwrap_or_default();
-        let at = line.find(needle).unwrap_or_else(|| panic!("{needle} on row {y}"));
+        let at = line
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} on row {y}"));
         u16::try_from(line[..at].chars().count()).unwrap_or(u16::MAX)
     };
     let y0 = find_row("Which branch?");
@@ -1459,8 +1461,8 @@ fn a_drag_across_a_wrap_keeps_the_dropped_space() {
 /// drawn ones (`docs/tui.md`, "Selection and copy").
 #[test]
 fn a_scrolled_line_copies_its_shown_text() {
-    use crate::keys::{Button, Mouse, MouseKind};
     use crate::keys::Key;
+    use crate::keys::{Button, Mouse, MouseKind};
     let mut app = asking(four_long_options(), 30, 10);
     for _ in 0..3 {
         app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
@@ -1468,7 +1470,10 @@ fn a_scrolled_line_copies_its_shown_text() {
     let area = Rect::new(0, 0, 30, 10);
     let (screen, _) = screen(&app, 30, 10);
     assert!(
-        screen.lines().next().is_some_and(|line| line.contains("columns")),
+        screen
+            .lines()
+            .next()
+            .is_some_and(|line| line.contains("columns")),
         "the first option's last row stays on top: {screen}"
     );
     let mut pointer = crate::mouse::Pointer::default();

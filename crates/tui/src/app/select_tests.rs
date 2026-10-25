@@ -1722,7 +1722,8 @@ fn noted_selection_highlights_only_the_covered_rows() {
         ],
     });
     // The middle row from its second cell through the last row's first.
-    app.select.press(SurfaceId::Swapped, Point { row: 1, col: 1 });
+    app.select
+        .press(SurfaceId::Swapped, Point { row: 1, col: 1 });
     app.select.drag(Point { row: 2, col: 0 });
     assert_eq!(
         app.selection_cells(SurfaceId::Swapped, Rect::new(0, 0, 40, 10)),
@@ -1742,7 +1743,8 @@ fn noted_selection_highlights_only_the_covered_rows() {
 /// conversation's box does (`docs/tui.md`, "Selection and copy").
 #[test]
 fn a_drag_in_the_home_input_box_copies_its_text() {
-    let mut app = attached(200, 40);
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(200, 40);
     app.set_home(launch());
     type_draft(&mut app, "zzqx");
     let at = {
@@ -1760,7 +1762,10 @@ fn a_drag_in_the_home_input_box_copies_its_text() {
             })
             .unwrap_or_else(|| panic!("{needle:?} is not on screen: {:#?}", rows(&app)))
     };
-    assert_eq!(select(&mut app, at, right(at, 4)), Effect::Copy("zzqx".to_owned()));
+    assert_eq!(
+        select(&mut app, at, right(at, 4)),
+        Effect::Copy("zzqx".to_owned())
+    );
 }
 
 /// A person's own Home binding wins over the input editor's line
