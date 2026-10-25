@@ -299,6 +299,95 @@ fn a_declaration_cycle_falls_back_to_convention() {
 }
 
 #[test]
+fn scope_of_names_a_tests_binary() {
+    assert_eq!(
+        scope_of("crates/loop/tests/turns.rs", &members(), &BTreeMap::new()),
+        Some((
+            "loop".to_owned(),
+            Scope::Binary("turns".to_owned()),
+            String::new(),
+        ))
+    );
+}
+
+#[test]
+fn scope_of_names_a_src_package_with_its_test_prefix() {
+    assert_eq!(
+        scope_of(
+            "crates/log/src/writer_tests.rs",
+            &members(),
+            &BTreeMap::new(),
+        ),
+        Some((
+            "log".to_owned(),
+            Scope::Package,
+            "writer::tests::".to_owned(),
+        ))
+    );
+}
+
+#[test]
+fn scope_of_names_an_example_binary_with_its_test_prefix() {
+    assert_eq!(
+        scope_of(
+            "crates/bench/examples/bench/fold/inner_tests.rs",
+            &members(),
+            &BTreeMap::new(),
+        ),
+        Some((
+            "bench".to_owned(),
+            Scope::Example("bench".to_owned()),
+            "fold::inner::tests::".to_owned(),
+        ))
+    );
+}
+
+#[test]
+fn scope_of_ignores_a_file_in_a_subdirectory_of_tests() {
+    assert_eq!(
+        scope_of(
+            "crates/loop/tests/support/mod.rs",
+            &members(),
+            &BTreeMap::new()
+        ),
+        None,
+    );
+    assert_eq!(
+        scope_of(
+            "crates/loop/tests/completion/bash.rs",
+            &members(),
+            &BTreeMap::new()
+        ),
+        None,
+    );
+}
+
+#[test]
+fn scope_of_ignores_a_non_test_file() {
+    assert_eq!(
+        scope_of("crates/log/src/writer.rs", &members(), &BTreeMap::new()),
+        None,
+    );
+    assert_eq!(
+        scope_of("crates/log/build_tests.rs", &members(), &BTreeMap::new()),
+        None,
+    );
+    // A test-named path without the `.rs` suffix is no Rust file.
+    assert_eq!(
+        scope_of("crates/loop/tests/turns", &members(), &BTreeMap::new()),
+        None,
+    );
+}
+
+#[test]
+fn scope_of_ignores_a_file_outside_every_member() {
+    assert_eq!(
+        scope_of("crates/unknown/tests/t.rs", &members(), &BTreeMap::new()),
+        None,
+    );
+}
+
+#[test]
 fn test_files_are_named_or_under_tests() {
     assert!(is_test_file("src/tests.rs"));
     assert!(is_test_file("src/a/b_tests.rs"));

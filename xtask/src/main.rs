@@ -21,6 +21,13 @@
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
 //!   as tab-separated lines
+//! - `stress-plan --base REV [--labels L] [--summary FILE]`: the test functions the
+//!   working tree adds or changes against the merge base with REV, as tab-separated lines,
+//!   appending the job-summary block to FILE when given
+//! - `touched-retries --base REV --list FILE`: whether any test the working tree adds or
+//!   changes passed only on retry, reading the retry list in FILE; exit 1 when one did
+//! - `stress-cost --start S --end E --count N --tests T --outcome O`: the stress job's
+//!   wall time and runner minutes, as the job-summary block
 //! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
 //!   `docs-only: no`
 //! - `bench-report --head FILE [--base FILE --base-commit SHA] [--stored-base FILE --stored-commit SHA]
@@ -73,6 +80,7 @@ mod must_succeed;
 mod rules;
 mod select;
 mod site;
+mod stress;
 mod ticket;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -237,6 +245,9 @@ fn run(args: &[String]) -> Result<bool, String> {
             }
             Ok(true)
         }
+        "stress-plan" => stress::plan_command(rest),
+        "touched-retries" => stress::touched_retries_command(rest),
+        "stress-cost" => stress::cost_command(rest),
         "docs-only" => {
             let yes = select::docs_only(rest);
             println!("docs-only: {}", if yes { "yes" } else { "no" });

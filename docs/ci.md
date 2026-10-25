@@ -40,8 +40,10 @@ the pull request is marked ready, which starts the full run.
 
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report and gate nothing:
-`backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`. They run outside the verdict, so their
-result never decides `CI`. The docs check fails when any other job is
+`backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`, `stress`. They run outside the verdict, so their
+result never decides `CI`. The `stress` job is a pilot exemption: its
+result never decides `CI`, and it joins the `ci` job's `needs` when the
+owner makes it required. The docs check fails when any other job is
 missing from `needs`, so a new job, such as a new shard, cannot run
 without gating the merge.
 
@@ -144,7 +146,8 @@ the `fiber` binary that binary-level tests start behaves like the one that
 ships. Cargo ignores the setting when it builds the test harness.
 
 A failed binary-level test retries once. A pass on retry does not fail the
-run: CI opens a flake issue naming the test, or comments on the open one
+run, except for a test the pull request touched (below): CI opens a flake
+issue naming the test, or comments on the open one
 (`docs/testing.md`, "Flaky tests"). The retry is nextest's `ci` profile over
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
@@ -176,6 +179,24 @@ unsupported-schema diagnostic. The workflow-level
 concurrency is unchanged: a newer push still cancels an older pull request
 run, which can lose its report, and a later test run reports the flake
 again. No other test retries.
+
+A test the pull request adds or changes runs 30 times under the `stress`
+profile, which never retries; 100 times when the pull request fixes a
+flaky test. One failure fails the run. The retry above applies only to
+tests the pull request did not touch.
+
+Pending owner ruling (#3190): the number of copies run at once.
+
+The `stress` job runs on a ready pull request on Linux x86_64 beside the
+test jobs and builds from the same restored cache. The tests it runs are
+the test functions the diff adds or changes, found by
+`cargo xtask stress-plan` with the same test-file rules as the red-commit
+check, and a diff that touches no test function skips the run. The count
+is read from the linked issue's labels. The job is not in `ci`'s `needs`,
+so a failure there stops no merge during the pilot. It writes its wall
+time, runner minutes and selected tests to its job summary. A touched
+test still gets nextest's one retry but a pass on that retry fails the
+test job (`cargo xtask touched-retries`).
 
 The Linux x86_64 full-suite run uploads its JUnit XML as the `junit`
 artifact, kept 7 days. It holds only XML this run wrote: the full-suite
