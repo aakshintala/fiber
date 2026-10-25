@@ -10,8 +10,8 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::declared_tests::Repo;
-use super::hooks::{HookState, repository_hooks};
-use super::{Index, hash};
+use super::hooks::repository_hooks;
+use super::{HookState, Index, hash};
 
 const KEY: &str = "-tmp-project-.git";
 
@@ -35,7 +35,7 @@ fn approve(repo: &Repo, name: &str) -> String {
 fn approved_map(
     repo: &Repo,
     skipped: &BTreeSet<(String, String)>,
-) -> std::collections::BTreeMap<String, Result<HookState, super::hooks::HookFailure>> {
+) -> std::collections::BTreeMap<String, Result<HookState, super::HookFailure>> {
     let (map, _holds) = repository_hooks(
         &repo.home(),
         &project(),

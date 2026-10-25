@@ -80,6 +80,18 @@ pub struct SessionExtensions {
     /// The approved `required` repository extensions the set approved, by
     /// name: what `missing_required` reports when they did not load.
     required: Vec<String>,
+    /// The approved repository hooks this session runs, by name: each with
+    /// its frozen declaration, pinned mapping, hash and copy. A skipped or
+    /// unapproved replacement never removes the running snapshot; only an
+    /// approved and materialized replacement swaps it.
+    hook_snapshots: BTreeMap<String, crate::repository::ApprovedHook>,
+    /// Each approved required hook whose copy could not be made: what the
+    /// required gate fails the start with.
+    hook_failures: Vec<crate::repository::HookFailure>,
+    /// Whether the repository declares any hooks (approved or not): when
+    /// it does, the filtered configuration withholds unapproved entries
+    /// even when no snapshot is approved.
+    has_repository_hooks: bool,
     /// The started Lua extensions.
     lua: Vec<Arc<LuaExtension>>,
     /// Every watcher the loaded extensions registered, in extension-name
@@ -283,15 +295,41 @@ impl SessionExtensions {
 
     /// Reloads extensions with the repository set over the session's live
     /// state without closing it. The set's holds move into the reloaded
-    /// session, so its copies live until the next reload replaces them.
+    /// session, so its copies live until the next reload replaces them. An
+    /// old approved hook stays running when its replacement is unapproved,
+    /// skipped or failed: only an approved and materialized replacement
+    /// swaps the snapshot, and the old copy stays held until then.
     pub fn reload_repository(
         &self,
         home: &Path,
         config: &Config,
         clock: Arc<dyn Clock>,
         locks: Arc<dyn PathLock>,
-        repository: crate::RepositorySet,
+        mut repository: crate::RepositorySet,
     ) -> Self {
+        for (name, snapshot) in &self.hook_snapshots {
+            let has_new_approved = matches!(
+                repository.hooks.get(name),
+                Some(crate::repository::HookState::Approved(_))
+            );
+            if has_new_approved {
+                continue;
+            }
+            let new_has_entry = repository.hooks.contains_key(name)
+                || repository.hook_failures.iter().any(|f| &f.name == name);
+            if !new_has_entry {
+                continue;
+            }
+            let project = config.extensions().project().clone();
+            let store = crate::repository::Store::new(home, &project, Arc::clone(&clock));
+            if let Ok(hold) = store.try_hold_finished(&snapshot.hash) {
+                repository.holds.push(hold);
+                repository.hooks.insert(
+                    name.clone(),
+                    crate::repository::HookState::Approved(snapshot.clone()),
+                );
+            }
+        }
         Self::load_registry(
             home,
             config,
@@ -312,6 +350,44 @@ impl SessionExtensions {
             .filter(|name| !self.loaded.iter().any(|loaded| &loaded.name == *name))
             .cloned()
             .collect()
+    }
+
+    /// The approved required hooks whose pinned copies could not be made, by
+    /// name: what the required gate fails the start with. The repository's
+    /// `required` decides, never the merged person boolean.
+    pub fn hook_required_failures(&self) -> Vec<String> {
+        self.hook_failures
+            .iter()
+            .filter(|failure| failure.required)
+            .map(|failure| failure.name.clone())
+            .collect()
+    }
+
+    /// One filtered `Config` clone for this session: the raw configuration
+    /// with only this session's active approved hook snapshot as the
+    /// repository's contribution to the `hooks` extension. An unapproved
+    /// repository entry stays withheld before the layers merge, so the
+    /// person's entry of that name runs unchanged; an approved one merges
+    /// key by key in normal layer order. The same frozen mapping governs
+    /// the hooks VM, `hooks_state` and main's `missing_hooks`.
+    pub fn hooks_config(&self, config: &Config) -> Config {
+        if !self.has_repository_hooks && self.hook_snapshots.is_empty() {
+            return config.clone();
+        }
+        let mut filtered = config.clone();
+        let mut hooks = Map::new();
+        for (name, snapshot) in &self.hook_snapshots {
+            hooks.insert(name.clone(), snapshot.entry.clone());
+        }
+        filtered.extensions_mut().set_overlay(
+            &config::full_name("hooks"),
+            Value::Object({
+                let mut outer = Map::new();
+                outer.insert("hooks".to_owned(), Value::Object(hooks));
+                outer
+            }),
+        );
+        filtered
     }
 
     /// The lazy extensions whose VM started: a reload starts these again and
@@ -368,6 +444,21 @@ impl SessionExtensions {
         session.notices.append(&mut candidate_notices);
         session.holds = repository.holds;
         session.required = repository.required;
+        session.has_repository_hooks =
+            !repository.hooks.is_empty() || !repository.hook_failures.is_empty();
+        for (name, state) in &repository.hooks {
+            if let crate::repository::HookState::Approved(snapshot) = state {
+                session
+                    .hook_snapshots
+                    .insert(name.clone(), snapshot.clone());
+            }
+        }
+        session.hook_failures = repository.hook_failures;
+        // The authorized repository contribution for the hooks extension:
+        // approved entries mapped to their pinned copies, withheld entries
+        // absent so the person's entry runs unchanged.
+        let filtered = session.hooks_config(config);
+        let config = &filtered;
         let mut chain = chain::Builder::default();
         // debt: entry scripts load one after another, each up to its load
         // timeout; start every VM before waiting on any if session start
@@ -1629,6 +1720,9 @@ pub enum HooksState {
     MissingBlocking,
 }
 
+#[cfg(test)]
+#[path = "hooks/repository_tests.rs"]
+mod repository_tests;
 #[cfg(test)]
 #[path = "hooks_tests.rs"]
 mod tests;

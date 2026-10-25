@@ -42,6 +42,7 @@ use contract::events::OfferedKind;
 
 pub use content::{Index, hash};
 pub use declared::{RepoItem, declared_items, mcp_server_item};
+pub(crate) use hooks::{ApprovedHook, HookFailure, HookState};
 pub use offer::{Pending, pending};
 pub use project::{ApprovedExtension, RepositorySet, approved_extension, approved_extensions};
 pub(crate) use project::{Candidate, candidates};
