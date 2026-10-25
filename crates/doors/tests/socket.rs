@@ -15,6 +15,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex};
@@ -6467,4 +6468,334 @@ mod import_sameness {
             person.path(),
         );
     }
+}
+
+/// Session-owned socket peers, refused at the door (`docs/permissions.md`,
+/// "Sessions on the sockets"). A fake owner is `sh` started as
+/// `sh session --id=<owned>`: a shell reads its first operand as its script,
+/// so the kernel argument vector is `[sh, session, --id=<owned>, ...]`,
+/// the shape `session_argv_id` matches. The script spawns the probe, so the
+/// probe connects as a session-owned peer. The probe prints each answer
+/// line; the test reads them under [`DEADLINE`], so a missing answer fails
+/// instead of hanging.
+const OWNED_PROBE: &str = r#"import json, socket, sys
+path = sys.argv[1]
+specs = [json.loads(a) for a in sys.argv[2:]]
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(path)
+f = s.makefile("r")
+
+
+def wait_for(cid):
+    while True:
+        line = f.readline()
+        if not line:
+            print("SOCKET_CLOSED", flush=True)
+            sys.exit(0)
+        try:
+            v = json.loads(line)
+        except Exception:
+            continue
+        if v.get("payload", {}).get("command_id") == cid:
+            return v
+
+
+s.sendall(
+    (json.dumps({"id": "c_sub", "command": "subscribe", "args": {"level": "full"}}) + "\n").encode()
+)
+wait_for("c_sub")
+for spec in specs:
+    s.sendall((json.dumps(spec) + "\n").encode())
+    print(json.dumps(wait_for(spec["id"])), flush=True)
+"#;
+
+/// A fake session owner and the probe it parents: the probe's kernel walk
+/// names the owner's `--id=`, so the socket sees a session-owned peer.
+/// Dropping kills the owner, so a failed test leaves no stray process.
+struct OwnedPeer {
+    child: Option<Child>,
+    lines: mpsc::Receiver<String>,
+}
+
+impl OwnedPeer {
+    /// Starts `sh session --id=<owned>` in `dir`, running the probe against
+    /// `socket` with `specs` as its command lines.
+    fn start(dir: &Path, owned: &SessionId, socket: &Path, specs: &[Value]) -> OwnedPeer {
+        let probe = dir.join("probe.py");
+        fs::write(&probe, OWNED_PROBE).unwrap();
+        // The first operand names the fake session; the rest are the probe's
+        // command lines. The probe runs as a child, so this shell keeps its
+        // fake argument vector alive as the probe's parent.
+        fs::write(
+            dir.join("session"),
+            "shift\npython3 -u \"$OWNED_PROBE\" \"$OWNED_SOCK\" \"$@\" & wait\n",
+        )
+        .unwrap();
+        let mut child = Command::new("sh")
+            .arg("session")
+            .arg(format!("--id={}", owned.0))
+            .args(specs.iter().map(ToString::to_string))
+            .current_dir(dir)
+            .env("OWNED_PROBE", &probe)
+            .env("OWNED_SOCK", socket)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let out = child.stdout.take().unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(out).lines() {
+                let Ok(line) = line else { break };
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        OwnedPeer {
+            child: Some(child),
+            lines: rx,
+        }
+    }
+
+    /// The probe's next answer line, parsed, within one [`DEADLINE`].
+    fn answer(&self) -> Value {
+        let line = Deadline::after(DEADLINE)
+            .recv(&self.lines)
+            .expect("the probe printed its answer");
+        serde_json::from_str(&line).unwrap()
+    }
+
+    /// Reaps the probe once every answer is read.
+    fn finish(&mut self) {
+        let Some(child) = self.child.take() else {
+            panic!("the probe was already reaped");
+        };
+        fakes::wait_output(child, "the probe exited");
+    }
+}
+
+impl Drop for OwnedPeer {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _killed = child.kill();
+        }
+    }
+}
+
+/// A person-shaped steer or prompt line with `id`.
+fn text_command(id: &str, command: &str) -> Value {
+    serde_json::json!({
+        "id": id,
+        "command": command,
+        "args": {"content": [{"type": "text", "text": "hi"}]},
+    })
+}
+
+/// An approval reply line: `decision` answers the approval request.
+fn approval_command(id: &str, request: &str) -> Value {
+    serde_json::json!({
+        "id": id,
+        "command": "reply",
+        "args": {"request_id": request, "decision": "allow"},
+    })
+}
+
+/// A question reply line: `confirmed` answers the question asked.
+fn question_reply_command(id: &str, request: &str) -> Value {
+    serde_json::json!({
+        "id": id,
+        "command": "reply",
+        "args": {"request_id": request, "confirmed": true},
+    })
+}
+
+/// A message line from `from`, reusing the harness's own shape.
+fn owned_message_command(id: &str, from: &SessionId) -> Value {
+    serde_json::from_str(&message_line(id, &from.0, "hi")).unwrap()
+}
+
+/// A valid session id that is never `id`: the last hex digit flips.
+fn other_id(id: &SessionId) -> SessionId {
+    let mut other = id.0.clone();
+    let last = other.pop().unwrap();
+    other.push(if last == '0' { '1' } else { '0' });
+    SessionId(other)
+}
+
+/// The `from_session` sentence for `command` sent from inside `owner` to
+/// `target`: the refusal names both sessions.
+fn owned_command_sentence(owner: &SessionId, command: &str, target: &SessionId) -> String {
+    format!(
+        "A connection from inside session `{}` cannot send `{command}` to session `{}`, which is that session or one of its delegates. A session messages its delegates with `delegate_message`.",
+        owner.0, target.0
+    )
+}
+
+/// The `from_session` sentence for an approval answered from inside `owner`:
+/// only a person answers.
+fn owned_approval_sentence(owner: &SessionId) -> String {
+    format!(
+        "Only a person answers an approval. This connection comes from inside session `{}`.",
+        owner.0
+    )
+}
+
+#[test]
+fn session_owned_steer_and_prompt_are_refused() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let owned = opened.id.clone();
+    let specs = [text_command("c_1", "steer"), text_command("c_2", "prompt")];
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let holder = fakes::TempDir::new("fiber-owned");
+            let dir = holder.path().to_path_buf();
+            let mut peer = OwnedPeer::start(&dir, &owned, &socket, &specs);
+            for (id, command) in [("c_1", "steer"), ("c_2", "prompt")] {
+                let answer = peer.answer();
+                assert_eq!(command_id(&answer), Some(id));
+                assert_eq!(
+                    rejection(&answer),
+                    (
+                        "from_session",
+                        owned_command_sentence(&owned, command, &owned).as_str()
+                    ),
+                    "{answer}"
+                );
+            }
+            assert!(
+                inbox.try_recv().is_err(),
+                "a refused steer or prompt is never delivered"
+            );
+            peer.finish();
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn session_owned_replies_are_refused() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let owned = opened.id.clone();
+    let specs = [
+        question_reply_command("c_1", "r_1"),
+        approval_command("c_2", "r_2"),
+    ];
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let holder = fakes::TempDir::new("fiber-owned");
+            let dir = holder.path().to_path_buf();
+            let mut peer = OwnedPeer::start(&dir, &owned, &socket, &specs);
+            let answer = peer.answer();
+            assert_eq!(command_id(&answer), Some("c_1"));
+            assert_eq!(
+                rejection(&answer),
+                (
+                    "from_session",
+                    owned_command_sentence(&owned, "reply", &owned).as_str()
+                ),
+                "{answer}"
+            );
+            let answer = peer.answer();
+            assert_eq!(command_id(&answer), Some("c_2"));
+            assert_eq!(
+                rejection(&answer),
+                ("from_session", owned_approval_sentence(&owned).as_str()),
+                "{answer}"
+            );
+            assert!(
+                inbox.try_recv().is_err(),
+                "a refused reply is never delivered"
+            );
+            peer.finish();
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn session_owned_message_is_delivered() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let owned = opened.id.clone();
+    let specs = [owned_message_command("c_1", &opened.id)];
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let holder = fakes::TempDir::new("fiber-owned");
+            let dir = holder.path().to_path_buf();
+            let mut peer = OwnedPeer::start(&dir, &owned, &socket, &specs);
+            let wait = Deadline::after(DEADLINE);
+            assert_eq!(
+                take(&inbox, &wait),
+                format!("message {} c_1", owned.0),
+                "a message from the owning session is delivered"
+            );
+            let answer = peer.answer();
+            assert_eq!(command_id(&answer), Some("c_1"));
+            assert_eq!(kind(&answer), "command_accepted", "{answer}");
+            peer.finish();
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn unrelated_session_steer_reply_and_message_are_allowed() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let target = opened.id.clone();
+    let other = other_id(&target);
+    let specs = [
+        text_command("c_1", "steer"),
+        question_reply_command("c_2", "r_9"),
+        owned_message_command("c_3", &other),
+        approval_command("c_4", "r_4"),
+    ];
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let holder = fakes::TempDir::new("fiber-owned");
+            let dir = holder.path().to_path_buf();
+            let mut peer = OwnedPeer::start(&dir, &other, &socket, &specs);
+            let wait = Deadline::after(DEADLINE);
+            assert_eq!(take(&inbox, &wait), "steer hi");
+            let answer = peer.answer();
+            assert_eq!(command_id(&answer), Some("c_1"));
+            assert_eq!(kind(&answer), "command_accepted", "{answer}");
+            assert_eq!(take(&inbox, &wait), "reply r_9");
+            let answer = peer.answer();
+            assert_eq!(command_id(&answer), Some("c_2"));
+            assert_eq!(kind(&answer), "command_accepted", "{answer}");
+            assert_eq!(
+                take(&inbox, &wait),
+                format!("message {} c_3", other.0),
+                "a message from another session is delivered"
+            );
+            let answer = peer.answer();
+            assert_eq!(command_id(&answer), Some("c_3"));
+            assert_eq!(kind(&answer), "command_accepted", "{answer}");
+            let answer = peer.answer();
+            assert_eq!(command_id(&answer), Some("c_4"));
+            assert_eq!(
+                rejection(&answer),
+                ("from_session", owned_approval_sentence(&other).as_str()),
+                "{answer}"
+            );
+            assert!(
+                inbox.try_recv().is_err(),
+                "the refused approval is never delivered"
+            );
+            peer.finish();
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
 }

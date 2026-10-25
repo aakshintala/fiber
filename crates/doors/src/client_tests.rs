@@ -981,3 +981,405 @@ mod attribution_tests {
         assert!(unreadable.contains("s_fedcba9876543210"), "{unreadable}");
     }
 }
+
+/// Refusal-predicate tests at the dispatch seam: fabricated caller
+/// attribution with scripted target reads, covering every command class on
+/// the own session, a delegate, and an unrelated session.
+mod refusal_tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "test helpers; a failure is the test's"
+    )]
+
+    use std::collections::HashMap;
+
+    use super::super::{Attribution, attribute_peer, session_command_refusal};
+    use contract::RequestId;
+    use contract::SessionId;
+    use contract::commands::{Command, ContentArgs, Reply, ReplyAnswer, SentPart};
+    use contract::events::Decision;
+
+    const PEER: u32 = 555;
+    const TARGET_PID: u32 = 777;
+    const UNREADABLE: u32 = 999;
+    const OWNED: &str = "s_0123456789abcdef";
+    const OTHER: &str = "s_fedcba9876543210";
+
+    fn owned_id() -> SessionId {
+        SessionId(OWNED.to_owned())
+    }
+
+    fn other_id() -> SessionId {
+        SessionId(OTHER.to_owned())
+    }
+
+    /// Scripted kernel reads: the refusal paths answer from these tables,
+    /// and a missing entry reads as unreadable.
+    #[derive(Default)]
+    struct Script {
+        current: u32,
+        parents: HashMap<u32, u32>,
+        euids: HashMap<u32, u32>,
+        argvs: HashMap<u32, Vec<Vec<u8>>>,
+    }
+
+    impl support::peer::ProcessRead for Script {
+        fn current_euid(&self) -> Result<u32, support::peer::ReadError> {
+            Ok(self.current)
+        }
+
+        fn euid(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+            self.euids
+                .get(&pid)
+                .copied()
+                .ok_or(support::peer::ReadError::Unreadable { pid, what: "euid" })
+        }
+
+        fn parent(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+            self.parents
+                .get(&pid)
+                .copied()
+                .ok_or(support::peer::ReadError::Unreadable {
+                    pid,
+                    what: "parent",
+                })
+        }
+
+        fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
+            self.argvs
+                .get(&pid)
+                .cloned()
+                .ok_or(support::peer::ReadError::Unreadable { pid, what: "argv" })
+        }
+    }
+
+    fn session_argv(id: &str) -> Vec<Vec<u8>> {
+        [
+            "/path/to/fiber",
+            "session",
+            &format!("--id={id}"),
+            "--workspace=/w",
+        ]
+        .iter()
+        .map(|word| word.as_bytes().to_vec())
+        .collect()
+    }
+
+    /// The target's walk with no session above it: the target session
+    /// itself decides.
+    fn plain_target() -> Script {
+        Script {
+            current: 1000,
+            parents: [(TARGET_PID, 1), (1, 0)].into_iter().collect(),
+            euids: [(TARGET_PID, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [(1, vec![b"/sbin/init".to_vec()])].into_iter().collect(),
+        }
+    }
+
+    fn owned(peer: u32, id: &str) -> Attribution {
+        Attribution::Local {
+            peer_pid: peer,
+            owners: vec![SessionId(id.to_owned())],
+        }
+    }
+
+    fn incomplete(peer: Option<u32>, pid: Option<u32>) -> Attribution {
+        Attribution::Incomplete {
+            peer_pid: peer,
+            pid,
+            peer_error: None,
+        }
+    }
+
+    fn prompt() -> Command {
+        Command::Prompt(ContentArgs {
+            content: vec![SentPart::Text { text: "hi".into() }],
+        })
+    }
+
+    fn steer() -> Command {
+        Command::Steer(ContentArgs {
+            content: vec![SentPart::Text { text: "hi".into() }],
+        })
+    }
+
+    fn approval_reply() -> Command {
+        Command::Reply(Reply {
+            request_id: RequestId("r_1".into()),
+            answer: ReplyAnswer::Approval {
+                decision: Decision::Allow,
+                feedback: None,
+                remember: None,
+            },
+        })
+    }
+
+    fn question_reply() -> Command {
+        Command::Reply(Reply {
+            request_id: RequestId("r_1".into()),
+            answer: ReplyAnswer::Confirmed { confirmed: true },
+        })
+    }
+
+    fn labels_reply() -> Command {
+        Command::Reply(Reply {
+            request_id: RequestId("r_1".into()),
+            answer: ReplyAnswer::Labels {
+                labels: vec!["a".into()],
+            },
+        })
+    }
+
+    fn message() -> Command {
+        Command::Message(contract::commands::Message {
+            from_session_id: owned_id(),
+            parent_session_id: None,
+            text: "hi".into(),
+        })
+    }
+
+    fn refused(
+        attribution: &Attribution,
+        command: &Command,
+        target: &SessionId,
+        read: &Script,
+    ) -> Option<super::super::Refused> {
+        session_command_refusal(attribution, command, target, TARGET_PID, read)
+    }
+
+    #[test]
+    fn an_approval_reply_from_an_owned_peer_is_refused_on_any_session() {
+        let script = plain_target();
+        for target in [owned_id(), other_id()] {
+            let refused = refused(&owned(PEER, OWNED), &approval_reply(), &target, &script)
+                .expect("an approval answer is refused");
+            assert_eq!(refused.code, contract::ErrorCode::FromSession);
+            assert!(refused.message.contains(OWNED), "{}", refused.message);
+        }
+    }
+
+    #[test]
+    fn an_approval_reply_has_no_parent_exception() {
+        // The peer is the target's kernel parent, which exempts refusal 2:
+        // refusal 1 still fires.
+        let script = Script {
+            parents: [(TARGET_PID, PEER)].into_iter().collect(),
+            ..Default::default()
+        };
+        let refused = refused(&owned(PEER, OWNED), &approval_reply(), &other_id(), &script)
+            .expect("an approval answer is refused without exception");
+        assert_eq!(refused.code, contract::ErrorCode::FromSession);
+        assert!(refused.message.contains(OWNED), "{}", refused.message);
+    }
+
+    #[test]
+    fn a_question_reply_to_the_callers_own_session_is_refused() {
+        let script = plain_target();
+        for command in [question_reply(), labels_reply()] {
+            let refused = refused(&owned(PEER, OWNED), &command, &owned_id(), &script)
+                .expect("a question answer to the own session is refused");
+            assert_eq!(refused.code, contract::ErrorCode::FromSession);
+            assert!(refused.message.contains(OWNED), "{}", refused.message);
+        }
+    }
+
+    #[test]
+    fn prompt_and_steer_to_a_delegate_are_refused() {
+        let script = Script {
+            current: 1000,
+            parents: [(TARGET_PID, 1), (1, 0)].into_iter().collect(),
+            euids: [(TARGET_PID, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [(1, session_argv(OWNED))].into_iter().collect(),
+        };
+        for command in [prompt(), steer(), labels_reply()] {
+            let refused = refused(&owned(PEER, OWNED), &command, &other_id(), &script)
+                .expect("a command to a delegate is refused");
+            assert_eq!(refused.code, contract::ErrorCode::FromSession);
+            assert!(refused.message.contains(OWNED), "{}", refused.message);
+            assert!(refused.message.contains(OTHER), "{}", refused.message);
+        }
+    }
+
+    #[test]
+    fn unrelated_and_unowned_commands_are_allowed() {
+        let script = plain_target();
+        // An approval answer is refused on every session, related or not;
+        // everything else stays reachable on an unrelated one.
+        let unrelated = [
+            prompt(),
+            steer(),
+            question_reply(),
+            labels_reply(),
+            message(),
+        ];
+        for command in unrelated {
+            assert!(
+                refused(&owned(PEER, OWNED), &command, &other_id(), &script).is_none(),
+                "an unrelated session stays reachable"
+            );
+        }
+        let unrelated_approval =
+            refused(&owned(PEER, OWNED), &approval_reply(), &other_id(), &script)
+                .expect("an approval answer is refused on an unrelated session");
+        assert_eq!(unrelated_approval.code, contract::ErrorCode::FromSession);
+        let unowned = Attribution::Local {
+            peer_pid: PEER,
+            owners: vec![],
+        };
+        for command in [prompt(), steer(), approval_reply(), message()] {
+            assert!(
+                refused(&unowned, &command, &owned_id(), &script).is_none(),
+                "an unowned connection is never refused"
+            );
+        }
+        assert!(
+            refused(&owned(PEER, OWNED), &message(), &owned_id(), &script).is_none(),
+            "a message is never refused"
+        );
+    }
+
+    #[test]
+    fn other_commands_are_never_refused() {
+        use contract::commands::{SubscribeArgs, SubscribeLevel};
+        let script = plain_target();
+        let subscribe = Command::Subscribe(SubscribeArgs {
+            level: SubscribeLevel::Full,
+            credential: None,
+        });
+        assert!(
+            refused(&owned(PEER, OWNED), &subscribe, &owned_id(), &script).is_none(),
+            "subscribe is never refused"
+        );
+    }
+
+    #[test]
+    fn the_direct_parent_reaches_its_session_but_never_an_approval() {
+        let script = Script {
+            parents: [(TARGET_PID, PEER)].into_iter().collect(),
+            ..Default::default()
+        };
+        for command in [prompt(), steer(), question_reply(), labels_reply()] {
+            assert!(
+                refused(&owned(PEER, OWNED), &command, &other_id(), &script).is_none(),
+                "the delegate's own client reaches it"
+            );
+        }
+        let refused = refused(&owned(PEER, OWNED), &approval_reply(), &other_id(), &script)
+            .expect("an approval answer has no parent exception");
+        assert_eq!(refused.code, contract::ErrorCode::FromSession);
+    }
+
+    #[test]
+    fn an_incomplete_caller_without_the_exception_names_its_pid() {
+        let script = plain_target();
+        let refused = refused(
+            &incomplete(Some(PEER), Some(UNREADABLE)),
+            &steer(),
+            &other_id(),
+            &script,
+        )
+        .expect("an incomplete walk fails closed");
+        assert_eq!(refused.code, contract::ErrorCode::FromSession);
+        assert!(
+            refused.message.contains(&UNREADABLE.to_string()),
+            "{}",
+            refused.message
+        );
+    }
+
+    #[test]
+    fn an_incomplete_caller_with_the_parent_exception_still_reaches() {
+        let script = Script {
+            parents: [(TARGET_PID, PEER)].into_iter().collect(),
+            ..Default::default()
+        };
+        assert!(
+            refused(
+                &incomplete(Some(PEER), Some(UNREADABLE)),
+                &steer(),
+                &other_id(),
+                &script
+            )
+            .is_none(),
+            "the exception holds on an incomplete walk"
+        );
+    }
+
+    #[test]
+    fn a_failed_credential_read_renders_its_error() {
+        let attribution = Attribution::Incomplete {
+            peer_pid: None,
+            pid: None,
+            peer_error: Some("injected credential failure".to_owned()),
+        };
+        let script = plain_target();
+        let refused = refused(&attribution, &steer(), &other_id(), &script)
+            .expect("a failed credential read fails closed");
+        assert_eq!(refused.code, contract::ErrorCode::FromSession);
+        assert!(
+            refused.message.contains("injected credential failure"),
+            "{}",
+            refused.message
+        );
+    }
+
+    #[test]
+    fn an_unreadable_target_names_the_target_session() {
+        let script = Script::default();
+        let refused = refused(&owned(PEER, OWNED), &steer(), &other_id(), &script)
+            .expect("an unreadable target fails closed");
+        assert_eq!(refused.code, contract::ErrorCode::FromSession);
+        assert!(refused.message.contains(OTHER), "{}", refused.message);
+    }
+
+    #[test]
+    fn attribute_peer_names_the_unreadable_owner_and_keeps_the_error() {
+        let read = Script {
+            current: 1000,
+            parents: [(PEER, UNREADABLE)].into_iter().collect(),
+            ..Default::default()
+        };
+        assert_eq!(
+            attribute_peer(Ok(PEER), &read),
+            Attribution::Incomplete {
+                peer_pid: Some(PEER),
+                pid: Some(UNREADABLE),
+                peer_error: None,
+            }
+        );
+        let error = support::peer::PeerCredentialError::Unavailable(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "no peering",
+        ));
+        let kept = error.to_string();
+        assert_eq!(
+            attribute_peer(Err(error), &read),
+            Attribution::Incomplete {
+                peer_pid: None,
+                pid: None,
+                peer_error: Some(kept),
+            }
+        );
+    }
+
+    #[test]
+    fn an_unreadable_owner_walk_fails_closed_with_its_pid() {
+        let read = Script {
+            current: 1000,
+            parents: [(1, 0)].into_iter().collect(),
+            euids: [(1, 1000)].into_iter().collect(),
+            ..Default::default()
+        };
+        let attribution = attribute_peer(Ok(PEER), &read);
+        let script = plain_target();
+        let refused = refused(&attribution, &steer(), &other_id(), &script)
+            .expect("an unreadable owner fails closed");
+        assert!(
+            refused.message.contains(&PEER.to_string()),
+            "{}",
+            refused.message
+        );
+    }
+}

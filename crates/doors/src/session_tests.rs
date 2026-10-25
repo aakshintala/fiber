@@ -202,6 +202,348 @@ pub(crate) fn wait_switch_waiting() {
     );
 }
 
+/// Socket-command refusal tests at the dispatch seam: a driven connection
+/// carrying fabricated caller attribution, with the target reads scripted
+/// through the gate seam. Refusals answer synchronously; the allowed cases
+/// assert that nothing is rejected.
+mod refusal_tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use super::{Gate, reset};
+    use contract::commands::{
+        Command, CommandLine, ContentArgs, Message as MessageArgs, Reply, ReplyAnswer, SentPart,
+    };
+    use contract::events::Decision;
+    use contract::{CommandId, ErrorCode, RequestId, SessionId};
+    use fakes::Deadline;
+
+    const PEER: u32 = 555;
+    const UNREADABLE: u32 = 999;
+    const FAKE: &str = "s_aaaaaaaaaaaaaaaa";
+
+    /// Scripted kernel reads: the refusal paths answer from these tables,
+    /// and a missing entry reads as unreadable.
+    #[derive(Default)]
+    struct Script {
+        current: u32,
+        parents: HashMap<u32, u32>,
+        euids: HashMap<u32, u32>,
+        argvs: HashMap<u32, Vec<Vec<u8>>>,
+    }
+
+    impl ::support::peer::ProcessRead for Script {
+        fn current_euid(&self) -> Result<u32, ::support::peer::ReadError> {
+            Ok(self.current)
+        }
+
+        fn euid(&self, pid: u32) -> Result<u32, ::support::peer::ReadError> {
+            self.euids
+                .get(&pid)
+                .copied()
+                .ok_or(::support::peer::ReadError::Unreadable { pid, what: "euid" })
+        }
+
+        fn parent(&self, pid: u32) -> Result<u32, ::support::peer::ReadError> {
+            self.parents
+                .get(&pid)
+                .copied()
+                .ok_or(::support::peer::ReadError::Unreadable {
+                    pid,
+                    what: "parent",
+                })
+        }
+
+        fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, ::support::peer::ReadError> {
+            self.argvs
+                .get(&pid)
+                .cloned()
+                .ok_or(::support::peer::ReadError::Unreadable { pid, what: "argv" })
+        }
+    }
+
+    /// The target's walk with no session above it: the target session
+    /// itself decides. The target is always this test process.
+    fn plain_target() -> Script {
+        let own = std::process::id();
+        Script {
+            current: 1000,
+            parents: [(own, 1), (1, 0)].into_iter().collect(),
+            euids: [(own, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [(1, vec![b"/sbin/init".to_vec()])].into_iter().collect(),
+        }
+    }
+
+    fn owned(peer: u32, id: SessionId) -> crate::client::Attribution {
+        crate::client::Attribution::Local {
+            peer_pid: peer,
+            owners: vec![id],
+        }
+    }
+
+    fn steered(id: &str) -> CommandLine {
+        CommandLine {
+            id: CommandId(id.into()),
+            command: Command::Steer(ContentArgs {
+                content: vec![SentPart::Text { text: "hi".into() }],
+            }),
+        }
+    }
+
+    fn approval_answered(id: &str) -> CommandLine {
+        CommandLine {
+            id: CommandId(id.into()),
+            command: Command::Reply(Reply {
+                request_id: RequestId("r_1".into()),
+                answer: ReplyAnswer::Approval {
+                    decision: Decision::Allow,
+                    feedback: None,
+                    remember: None,
+                },
+            }),
+        }
+    }
+
+    fn question_answered(id: &str) -> CommandLine {
+        CommandLine {
+            id: CommandId(id.into()),
+            command: Command::Reply(Reply {
+                request_id: RequestId("r_1".into()),
+                answer: ReplyAnswer::Confirmed { confirmed: true },
+            }),
+        }
+    }
+
+    fn messaged(id: &str, target: &SessionId) -> CommandLine {
+        CommandLine {
+            id: CommandId(id.into()),
+            command: Command::Message(MessageArgs {
+                from_session_id: target.clone(),
+                parent_session_id: None,
+                text: "hi".into(),
+            }),
+        }
+    }
+
+    fn attributed(
+        gate: &Arc<Gate>,
+        attribution: crate::client::Attribution,
+    ) -> (
+        crate::client::Conn,
+        std::sync::mpsc::Receiver<contract::inbox::Answer>,
+    ) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let conn = crate::client::Conn {
+            id: 0,
+            gate: Arc::clone(gate),
+            sink: crate::client::Sink::Driven {
+                answer: contract::inbox::Ack(Box::new(move |answer| {
+                    tx.send(answer).unwrap_or(());
+                })),
+                origin: contract::shapes::Origin::Driver,
+            },
+            full: true,
+            gone: false,
+            attribution: Some(attribution),
+        };
+        (conn, rx)
+    }
+
+    fn scripted(gate: &Arc<Gate>, script: Script) {
+        *::support::lock(&gate.test_read) = Some(Arc::new(script));
+    }
+
+    fn rejected(answer: contract::inbox::Answer) -> contract::inbox::Rejection {
+        match answer {
+            Err(rejection) => rejection,
+            Ok(_) => panic!("a refusal was expected: {answer:?}"),
+        }
+    }
+
+    #[test]
+    fn an_approval_answer_from_an_owned_peer_is_refused_on_an_unrelated_session() {
+        reset();
+        let opened = super::support::Opened::open(Vec::new());
+        let gate = Arc::clone(&opened.session.gate);
+        scripted(&gate, plain_target());
+        let (mut conn, rx) = attributed(&gate, owned(PEER, SessionId(FAKE.into())));
+        crate::client::dispatch(&mut conn, approval_answered("c_1"), "reply");
+        let answer = Deadline::after(super::support::DEADLINE)
+            .recv(&rx)
+            .expect("the refusal is answered");
+        let rejection = rejected(answer);
+        assert_eq!(rejection.code, ErrorCode::FromSession);
+        assert!(rejection.message.contains(FAKE), "{}", rejection.message);
+        super::support::close_within(opened.session, opened.log);
+    }
+
+    #[test]
+    fn a_question_answer_on_an_unrelated_session_stays_allowed() {
+        reset();
+        let opened = super::support::Opened::open(Vec::new());
+        let gate = Arc::clone(&opened.session.gate);
+        scripted(&gate, plain_target());
+        let (mut conn, rx) = attributed(&gate, owned(PEER, SessionId(FAKE.into())));
+        crate::client::dispatch(&mut conn, question_answered("c_1"), "reply");
+        // The refusal check passed: without a running loop the idle inbox
+        // ends delivery `Closing`, never `from_session`.
+        let answer = Deadline::after(super::support::DEADLINE)
+            .recv(&rx)
+            .expect("delivery ends the command");
+        let rejection = rejected(answer);
+        assert_eq!(rejection.code, ErrorCode::Closing);
+        super::support::close_within(opened.session, opened.log);
+    }
+
+    #[test]
+    fn a_question_answer_to_the_own_session_is_refused() {
+        reset();
+        let opened = super::support::Opened::open(Vec::new());
+        let gate = Arc::clone(&opened.session.gate);
+        scripted(&gate, plain_target());
+        let target = gate.session_id.clone();
+        let (mut conn, rx) = attributed(&gate, owned(PEER, target.clone()));
+        crate::client::dispatch(&mut conn, question_answered("c_1"), "reply");
+        let answer = Deadline::after(super::support::DEADLINE)
+            .recv(&rx)
+            .expect("the refusal is answered");
+        let rejection = rejected(answer);
+        assert_eq!(rejection.code, ErrorCode::FromSession);
+        assert!(
+            rejection.message.contains(&target.0),
+            "{}",
+            rejection.message
+        );
+        super::support::close_within(opened.session, opened.log);
+    }
+
+    #[test]
+    fn a_message_to_self_is_not_refused() {
+        reset();
+        let opened = super::support::Opened::open(Vec::new());
+        let gate = Arc::clone(&opened.session.gate);
+        scripted(&gate, plain_target());
+        let target = gate.session_id.clone();
+        let (mut conn, rx) = attributed(&gate, owned(PEER, target.clone()));
+        crate::client::dispatch(&mut conn, messaged("c_1", &target), "message");
+        // A message is never refused: without a running loop the idle
+        // inbox ends delivery `Closing`, never `from_session`.
+        let answer = Deadline::after(super::support::DEADLINE)
+            .recv(&rx)
+            .expect("delivery ends the command");
+        let rejection = rejected(answer);
+        assert_eq!(rejection.code, ErrorCode::Closing);
+        super::support::close_within(opened.session, opened.log);
+    }
+
+    #[test]
+    fn a_failed_credential_read_renders_its_error() {
+        reset();
+        let opened = super::support::Opened::open(Vec::new());
+        let gate = Arc::clone(&opened.session.gate);
+        scripted(&gate, plain_target());
+        let attribution = crate::client::Attribution::Incomplete {
+            peer_pid: None,
+            pid: None,
+            peer_error: Some("injected credential failure".to_owned()),
+        };
+        let (mut conn, rx) = attributed(&gate, attribution);
+        crate::client::dispatch(&mut conn, steered("c_1"), "steer");
+        let answer = Deadline::after(super::support::DEADLINE)
+            .recv(&rx)
+            .expect("the refusal is answered");
+        let rejection = rejected(answer);
+        assert_eq!(rejection.code, ErrorCode::FromSession);
+        assert!(
+            rejection.message.contains("injected credential failure"),
+            "{}",
+            rejection.message
+        );
+        super::support::close_within(opened.session, opened.log);
+    }
+
+    #[test]
+    fn an_unreadable_target_names_the_target_session() {
+        reset();
+        let opened = super::support::Opened::open(Vec::new());
+        let gate = Arc::clone(&opened.session.gate);
+        scripted(&gate, Script::default());
+        let target = gate.session_id.clone();
+        let (mut conn, rx) = attributed(&gate, owned(PEER, SessionId(FAKE.into())));
+        crate::client::dispatch(&mut conn, steered("c_1"), "steer");
+        let answer = Deadline::after(super::support::DEADLINE)
+            .recv(&rx)
+            .expect("the refusal is answered");
+        let rejection = rejected(answer);
+        assert_eq!(rejection.code, ErrorCode::FromSession);
+        assert!(
+            rejection.message.contains(&target.0),
+            "{}",
+            rejection.message
+        );
+        super::support::close_within(opened.session, opened.log);
+    }
+
+    #[test]
+    fn the_direct_parent_reaches_despite_an_incomplete_walk() {
+        reset();
+        let opened = super::support::Opened::open(Vec::new());
+        let gate = Arc::clone(&opened.session.gate);
+        let own = std::process::id();
+        scripted(
+            &gate,
+            Script {
+                parents: [(own, PEER)].into_iter().collect(),
+                ..Default::default()
+            },
+        );
+        let attribution = crate::client::Attribution::Incomplete {
+            peer_pid: Some(PEER),
+            pid: Some(UNREADABLE),
+            peer_error: None,
+        };
+        let (mut conn, rx) = attributed(&gate, attribution);
+        crate::client::dispatch(&mut conn, steered("c_1"), "steer");
+        // The exception allowed the steer: without a running loop the idle
+        // inbox ends delivery `Closing`, never `from_session`.
+        let answer = Deadline::after(super::support::DEADLINE)
+            .recv(&rx)
+            .expect("delivery ends the command");
+        let rejection = rejected(answer);
+        assert_eq!(rejection.code, ErrorCode::Closing);
+        super::support::close_within(opened.session, opened.log);
+    }
+
+    #[test]
+    fn an_approval_answer_has_no_parent_exception() {
+        reset();
+        let opened = super::support::Opened::open(Vec::new());
+        let gate = Arc::clone(&opened.session.gate);
+        let own = std::process::id();
+        scripted(
+            &gate,
+            Script {
+                parents: [(own, PEER)].into_iter().collect(),
+                ..Default::default()
+            },
+        );
+        let target = gate.session_id.clone();
+        let (mut conn, rx) = attributed(&gate, owned(PEER, target.clone()));
+        crate::client::dispatch(&mut conn, approval_answered("c_1"), "reply");
+        let answer = Deadline::after(super::support::DEADLINE)
+            .recv(&rx)
+            .expect("the refusal is answered");
+        let rejection = rejected(answer);
+        assert_eq!(rejection.code, ErrorCode::FromSession);
+        assert!(
+            rejection.message.contains(&target.0),
+            "{}",
+            rejection.message
+        );
+        super::support::close_within(opened.session, opened.log);
+    }
+}
+
 fn reset() {
     CONTROL.hold_reader.store(false, Ordering::Relaxed);
     CONTROL.hold_cv.notify_all();
@@ -900,6 +1242,7 @@ fn a_reader_that_reaps_itself_finishes() {
     let (peer, stream) = UnixStream::pair().unwrap();
     let shutdown = stream.try_clone().unwrap();
     let shut = stream.try_clone().unwrap();
+    let peer_pid = ::support::peer::peer_pid(&stream);
     let (read, stop) = ::support::stoppable::reader(stream).unwrap();
     let (id_tx, id_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
@@ -908,7 +1251,7 @@ fn a_reader_that_reaps_itself_finishes() {
         let Ok(id) = Deadline::after(DEADLINE).recv(&id_rx) else {
             return;
         };
-        crate::client::serve(read, child, id);
+        crate::client::serve(read, child, id, peer_pid);
         if let Ok(()) = done_tx.send(()) {}
     });
     let id = gate
@@ -4815,6 +5158,7 @@ fn dispatch_subscribe_on_answered_writes_nothing_and_frees_id() {
         },
         full: true,
         gone: false,
+        attribution: None,
     };
     // An answered connection has no stream and no writer: the subscribe
     // frees the id and leaves the connection alone.
@@ -4881,6 +5225,7 @@ fn a_failed_summary_write_leaves_the_socket_connection_direct() {
         },
         full: false,
         gone: false,
+        attribution: None,
     };
     let line = subscribe_line_for_level("c_9", contract::commands::SubscribeLevel::Summary);
     crate::client::dispatch(&mut conn, line, "subscribe");

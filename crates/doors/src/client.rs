@@ -64,6 +64,9 @@ pub(crate) struct Conn {
     pub(crate) sink: Sink,
     pub(crate) full: bool,
     pub(crate) gone: bool,
+    /// The socket peer's session attribution, when the connection arrived
+    /// on the session socket. The in-process driver carries none.
+    pub(crate) attribution: Option<Attribution>,
 }
 
 /// Where a connection's answers go: `Direct` writes its lines straight to
@@ -126,23 +129,31 @@ impl Conn {
 
 /// Reads `stream` until the client hangs up or its ender stops it. `id` is
 /// the slot [`Gate`] stored the reader in, with the ender that stops it and
-/// shuts the socket. The writer is the socket's other clone.
-pub(crate) fn serve(stream: support::stoppable::Reader, gate: Arc<Gate>, id: u64) {
+/// shuts the socket. The writer is the socket's other clone. `peer` is the
+/// kernel peer the accept thread read, kept distinct from a failed read.
+pub(crate) fn serve(
+    stream: support::stoppable::Reader,
+    gate: Arc<Gate>,
+    id: u64,
+    peer: Result<u32, support::peer::PeerCredentialError>,
+) {
     let Some(writer) = stream.get_ref().try_clone().ok() else {
         return;
     };
-    serve_connection(stream, Box::new(writer), gate, id);
+    serve_connection(stream, Box::new(writer), gate, id, peer);
 }
 
 /// Reads `stream` and writes through `writer`. The connection's ender was
 /// stored with its reader, which is how [`crate::session::Session::close`]
 /// stops a blocked reader and reaps it. Production builds the reader and
-/// the writer from one socket.
+/// the writer from one socket. The caller attribution is walked once here;
+/// the target side is read fresh for every command in [`dispatch`].
 pub(crate) fn serve_connection(
     stream: support::stoppable::Reader,
     writer: Box<dyn Write + Send>,
     gate: Arc<Gate>,
     id: u64,
+    peer: Result<u32, support::peer::PeerCredentialError>,
 ) {
     let _finish = Finish {
         gate: Arc::clone(&gate),
@@ -151,12 +162,14 @@ pub(crate) fn serve_connection(
     let Some(direct) = stream.get_ref().try_clone().ok() else {
         return;
     };
+    let attribution = attribute_peer(peer, &support::peer::KernelProcessRead);
     let mut conn = Conn {
         id,
         gate,
         sink: Sink::Direct { direct, writer },
         full: false,
         gone: false,
+        attribution: Some(attribution),
     };
     let mut read = BufReader::new(stream);
     loop {
@@ -245,6 +258,22 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
 
 pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
     let id = line.id;
+    // A session-owned connection is refused before its command reaches
+    // the inbox. The in-process driver carries no attribution, so its
+    // commands are never refused here.
+    if let Some(attribution) = conn.attribution.as_ref() {
+        let read = read_for(&conn.gate);
+        if let Some(refused) = session_command_refusal(
+            attribution,
+            &line.command,
+            &conn.gate.session_id,
+            std::process::id(),
+            read.as_ref(),
+        ) {
+            reject(conn, Some(id), refused.code, &refused.message);
+            return;
+        }
+    }
     match line.command {
         Command::Subscribe(args) => {
             // `dispatch` pulls the `Direct` halves out and passes them to
@@ -918,7 +947,6 @@ pub(crate) fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResul
 /// exactly `--id=s_...` with a valid session id. Anything else names no
 /// session, so a shell's words only add refusals by matching this shape.
 /// Local to this refusal boundary; `support::peer` stays generic.
-#[allow(dead_code, reason = "wired into the refusal paths next")]
 pub(crate) fn session_argv_id(argv: &[Vec<u8>]) -> Option<contract::SessionId> {
     let words = argv.get(1..)?;
     let (command, flags) = words.split_first()?;
@@ -934,7 +962,6 @@ pub(crate) fn session_argv_id(argv: &[Vec<u8>]) -> Option<contract::SessionId> {
 
 /// Whether `id` is a session id the hub mints: `s_` plus 16 lowercase hex
 /// digits. Anything else names no session.
-#[allow(dead_code, reason = "wired into the refusal paths next")]
 fn valid_session_id(id: &str) -> bool {
     let hex = id.strip_prefix("s_").unwrap_or("");
     hex.len() == 16
@@ -949,7 +976,7 @@ fn valid_session_id(id: &str) -> bool {
 /// local connection whose peer credential or walk could not be read carries
 /// what is known. An incomplete walk keeps a known peer pid so the
 /// direct-parent exception can still be checked.
-#[allow(dead_code, reason = "wired into the refusal paths next")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Attribution {
     /// A local connection with its kernel peer pid and session owners.
     Local {
@@ -972,7 +999,6 @@ pub(crate) enum Attribution {
     },
 }
 
-#[allow(dead_code, reason = "wired into the refusal paths next")]
 impl Attribution {
     /// The kernel peer pid, when the credential read held.
     pub(crate) fn peer_pid(&self) -> Option<u32> {
@@ -985,7 +1011,6 @@ impl Attribution {
 
 /// The refused command class a `from_session` message names
 /// (`docs/permissions.md`, "Sessions on the sockets").
-#[allow(dead_code, reason = "wired into the refusal paths next")]
 pub(crate) enum FromSessionRefusal<'a> {
     /// An approval answer.
     Approval,
@@ -998,7 +1023,6 @@ pub(crate) enum FromSessionRefusal<'a> {
     },
 }
 
-#[allow(dead_code, reason = "wired into the refusal paths next")]
 impl FromSessionRefusal<'_> {
     /// The wire command the refusal names in its fallback messages.
     fn command(&self) -> &str {
@@ -1013,7 +1037,6 @@ impl FromSessionRefusal<'_> {
 /// the refusal class when the caller's walk names a session, otherwise the
 /// unreadable pid, otherwise the preserved peer-credential error. The owner
 /// is the nearest session process on the walk.
-#[allow(dead_code, reason = "wired into the refusal paths next")]
 pub(crate) fn from_session_message(
     attribution: &Attribution,
     refusal: FromSessionRefusal<'_>,
@@ -1052,7 +1075,6 @@ pub(crate) fn from_session_message(
 
 /// The `from_session` message when the refused target session's own process
 /// cannot be read: the target names the session, not the caller.
-#[allow(dead_code, reason = "wired into the refusal paths next")]
 pub(crate) fn unreadable_target_message(target: &contract::SessionId, command: &str) -> String {
     format!(
         "Session `{}`'s process could not be read, so `{command}` is refused.",
@@ -1065,7 +1087,6 @@ pub(crate) fn unreadable_target_message(target: &contract::SessionId, command: &
 /// ancestors sharing it. A foreign-owned ancestor contributes nothing and
 /// its arguments are never read; an unreadable owner, parent, or
 /// same-owner argument vector names its pid.
-#[allow(dead_code, reason = "wired into the refusal paths next")]
 pub(crate) fn session_owners(
     peer_pid: u32,
     read: &dyn support::peer::ProcessRead,
@@ -1087,6 +1108,168 @@ pub(crate) fn session_owners(
         }
     }
     Ok(owners)
+}
+
+/// A refused socket command: the `from_session` code with its sentence.
+pub(crate) struct Refused {
+    pub(crate) code: ErrorCode,
+    pub(crate) message: String,
+}
+
+/// The process reads the refusal paths use: the test seam when set,
+/// otherwise the kernel.
+pub(crate) fn read_for(_gate: &Gate) -> Arc<dyn support::peer::ProcessRead + Send + Sync> {
+    #[cfg(test)]
+    if let Some(read) = lock(&_gate.test_read).clone() {
+        return read;
+    }
+    Arc::new(support::peer::KernelProcessRead)
+}
+
+/// The attribution of one accepted local connection: the kernel peer pid
+/// first, then every session id on its walk. A failed peer credential or
+/// walk reads as [`Attribution::Incomplete`], never as remote.
+pub(crate) fn attribute_peer(
+    peer: Result<u32, support::peer::PeerCredentialError>,
+    read: &dyn support::peer::ProcessRead,
+) -> Attribution {
+    match peer {
+        Err(error) => Attribution::Incomplete {
+            peer_pid: None,
+            pid: None,
+            peer_error: Some(error.to_string()),
+        },
+        Ok(peer_pid) => match session_owners(peer_pid, read) {
+            Ok(owners) => Attribution::Local { peer_pid, owners },
+            Err(incomplete) => Attribution::Incomplete {
+                peer_pid: Some(peer_pid),
+                pid: Some(incomplete.pid),
+                peer_error: None,
+            },
+        },
+    }
+}
+
+/// Whether the parsed socket command answers an approval: a `reply`
+/// carrying the approval answer (`docs/invocation.md`, "Replying").
+fn is_approval_reply(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Reply(reply)
+            if matches!(
+                reply.answer,
+                contract::commands::ReplyAnswer::Approval { .. }
+            )
+    )
+}
+
+/// The `from_session` refusal for one socket command, if any
+/// (`docs/permissions.md`, "Sessions on the sockets"). Refusal 1 rejects
+/// an approval answer from an owned or incomplete local connection, with
+/// no exception. Refusal 2 rejects `prompt`, `steer` and every `reply`
+/// when the caller's owners meet this session or its strict ancestors,
+/// unless the caller is this session's current kernel parent. A `message`
+/// is a session message, never a person's words, so it is never refused.
+/// Incomplete walks fail closed, naming the unreadable pid.
+pub(crate) fn session_command_refusal(
+    attribution: &Attribution,
+    command: &Command,
+    target: &contract::SessionId,
+    target_pid: u32,
+    read: &dyn support::peer::ProcessRead,
+) -> Option<Refused> {
+    let owned = match attribution {
+        Attribution::Local { owners, .. } => !owners.is_empty(),
+        Attribution::Incomplete { .. } => true,
+    };
+    if !owned {
+        return None;
+    }
+    if is_approval_reply(command) {
+        return Some(Refused {
+            code: ErrorCode::FromSession,
+            message: from_session_message(attribution, FromSessionRefusal::Approval),
+        });
+    }
+    let command_name = match command {
+        Command::Prompt(_) => "prompt",
+        Command::Steer(_) => "steer",
+        Command::Reply(_) => "reply",
+        Command::Subscribe(_)
+        | Command::SteerDrop(_)
+        | Command::Message(_)
+        | Command::Cancel
+        | Command::JobStop(_)
+        | Command::JobInput(_)
+        | Command::Background
+        | Command::Reload
+        | Command::Import(_)
+        | Command::Tools
+        | Command::McpServers
+        | Command::McpLogin(_)
+        | Command::McpReconnect(_)
+        | Command::Commands
+        | Command::Skills
+        | Command::Quota(_)
+        | Command::Credentials
+        | Command::History(_)
+        | Command::ArtifactPage(_)
+        | Command::Model(_)
+        | Command::Credential(_)
+        | Command::Name(_)
+        | Command::Handoff(_)
+        | Command::Rewind(_)
+        | Command::Shell(_)
+        | Command::ProposeNotes(_)
+        | Command::Command(_)
+        | Command::Close(_)
+        | Command::OfferedFile(_)
+        | Command::Unknown => return None,
+    };
+    let refusal = || FromSessionRefusal::SessionCommand {
+        command: command_name,
+        target,
+    };
+    // The direct-parent exception first: the delegate's own client still
+    // reaches it, even on an incomplete caller walk.
+    if let Some(peer) = attribution.peer_pid()
+        && read.parent(target_pid).is_ok_and(|parent| parent == peer)
+    {
+        return None;
+    }
+    match attribution {
+        Attribution::Incomplete { .. } => Some(Refused {
+            code: ErrorCode::FromSession,
+            message: from_session_message(attribution, refusal()),
+        }),
+        Attribution::Local { owners, .. } => {
+            // This session itself needs no walk.
+            if owners.iter().any(|owner| owner == target) {
+                return Some(Refused {
+                    code: ErrorCode::FromSession,
+                    message: from_session_message(attribution, refusal()),
+                });
+            }
+            let mut target_set = vec![target.clone()];
+            match session_owners(target_pid, read) {
+                Ok(ancestors) => target_set.extend(ancestors),
+                Err(_) => {
+                    return Some(Refused {
+                        code: ErrorCode::FromSession,
+                        message: unreadable_target_message(target, command_name),
+                    });
+                }
+            }
+            if owners.iter().any(|owner| target_set.contains(owner)) {
+                Some(Refused {
+                    code: ErrorCode::FromSession,
+                    message: from_session_message(attribution, refusal()),
+                })
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// A rejection frees the id for a retry, except one that never reserved it:
