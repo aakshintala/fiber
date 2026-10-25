@@ -1566,17 +1566,26 @@ impl App {
     /// Installs once, then invalidates every live displayed or folding cache.
     pub(crate) fn use_renderer(&mut self, renderer: Rc<dyn Renderer>) {
         self.set_renderer(renderer);
-        self.screen.pages_mut().renderers_changed();
-        if let Some(stashed) = self
-            .items
-            .open
-            .as_mut()
-            .and_then(|open| open.stashed.as_mut())
-        {
-            stashed.pages_mut().renderers_changed();
+        let pages = [
+            Some(self.screen.pages_mut()),
+            self.items
+                .open
+                .as_mut()
+                .and_then(|open| open.stashed.as_mut())
+                .map(|stashed| stashed.pages_mut()),
+            if let Overlay::Folding { fold, .. } = &mut self.overlay {
+                Some(fold.as_mut())
+            } else {
+                None
+            },
+        ];
+        // Owners can share pending/failure state. Clear every cache before
+        // any recount can enqueue notices or memoize failures for this install.
+        for pages in pages.iter().flatten() {
+            pages.ext.cache.clear();
         }
-        if let Overlay::Folding { fold, .. } = &mut self.overlay {
-            fold.renderers_changed();
+        for pages in pages.into_iter().flatten() {
+            pages.recount();
         }
     }
 

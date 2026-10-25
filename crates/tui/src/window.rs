@@ -985,7 +985,7 @@ impl Pages {
     }
 
     /// Counts every resident page again, and marks every dropped one stale.
-    fn recount(&mut self) {
+    pub(crate) fn recount(&mut self) {
         for at in 0..=self.closed.len() {
             if self.part(at).is_some() {
                 self.count(at);
@@ -1033,13 +1033,6 @@ impl Pages {
                 .collect();
             self.record_halves(&envelope.session_id, halves);
         }
-    }
-
-    /// A new renderer was installed: the old lines are gone, so every
-    /// resident page counts again under the new one.
-    pub(crate) fn renderers_changed(&mut self) {
-        self.ext.cache.clear();
-        self.recount();
     }
 
     /// Whether the screen reader drops every style from the returned

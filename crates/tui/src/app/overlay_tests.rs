@@ -350,6 +350,41 @@ fn session_gate_event_during_fold_survives_fresh_snapshot_and_landing() {
 }
 
 #[test]
+fn renderer_replacement_preserves_failure_memo_and_notice_across_fold_recount() {
+    let lines = call_turn(&mut 0, "message", "call");
+    let mut app = folding(&lines, &lines, 5);
+    app.use_renderer(std::rc::Rc::new(crate::ext::tests::SessionRenderer::new(
+        "OLD-ROW",
+    )));
+    app.screen.pages_mut().toggle_ledgers();
+    let mut fresh = app.pages().fresh();
+    for line in &lines {
+        if let Line::Session(line) = line {
+            fresh.apply(line);
+        }
+    }
+    if let Overlay::Folding { fold, .. } = &mut app.overlay {
+        **fold = fresh;
+    }
+    let mut replacement = crate::ext::tests::SessionRenderer::new("replacement");
+    replacement.failure = Some(crate::ext::FailureKind::HookFailed);
+    let replacement = std::rc::Rc::new(replacement);
+    app.use_renderer(replacement.clone());
+    // The displayed and fresh-fold copies draw the same page/input. Their
+    // shared failure memo suppresses a second call, not delivery to App.
+    assert_eq!(replacement.calls.borrow().len(), 1);
+    assert!(
+        app.drawn(&[]),
+        "the replacement failure requests immediate redraw"
+    );
+    assert_eq!(app.notices().iter().filter(|line| matches!(line, crate::app::NoticeLine::Notice {code,text,..} if code == "hook_failed" && text.contains("session-test"))).count(), 1);
+    assert!(
+        !app.drawn(&[]),
+        "docs/tui.md: one failure notice per extension and slot"
+    );
+}
+
+#[test]
 fn reload_during_fold_recounts_before_land_and_landed_cache_can_reload_again() {
     let lines = call_turn(&mut 0, "message", "call");
     let mut app = folding(&lines, &lines, 5);
