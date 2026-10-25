@@ -512,6 +512,36 @@ fn try_hold_holds_through_another_descriptor_and_creates_a_missing_lock() {
 }
 
 #[test]
+fn try_hold_existing_leaves_a_missing_lock_missing() {
+    let home = fakes::TempDir::new("log-scan-existing-missing");
+    let dir = home.path().join("s");
+    fs::create_dir_all(&dir).unwrap();
+    assert!(try_hold_existing(&dir).unwrap().is_none());
+    assert!(!dir.join("session.lock").exists());
+}
+
+#[test]
+fn try_hold_existing_reports_busy_while_held_and_holds_when_free() {
+    let home = fakes::TempDir::new("log-scan-existing-held");
+    let dir = home.path().join("s");
+    fs::create_dir_all(&dir).unwrap();
+    File::create(dir.join("session.lock")).unwrap();
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dir.join("session.lock"))
+        .unwrap();
+    file.try_lock().unwrap();
+    assert!(matches!(try_hold_existing(&dir).unwrap(), Some(Hold::Busy)));
+    drop(file);
+    let guard = match try_hold_existing(&dir).unwrap() {
+        Some(Hold::Held(lock)) => lock,
+        _ => panic!("a free existing lock is held"),
+    };
+    drop(guard);
+}
+
+#[test]
 fn last_line_where_with_a_missing_or_empty_log_gives_none() {
     let home = fakes::TempDir::new("log-scan-where-missing");
     assert_eq!(

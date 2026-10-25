@@ -13,7 +13,7 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -304,6 +304,53 @@ fn a_dry_run_over_the_wire_answers_the_sessions() {
         answer["payload"]["result"],
         json!({"sessions": [id(1), id(2)]})
     );
+}
+
+/// Every path under `dir`, sorted: file bytes for files, so a comparison
+/// catches anything a dry run writes.
+fn snapshot_tree(dir: &Path) -> Vec<(String, Option<Vec<u8>>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        for entry in fs::read_dir(&path).unwrap() {
+            let entry = entry.unwrap();
+            let entry_path = entry.path();
+            let relative = entry_path
+                .strip_prefix(dir)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if entry.file_type().unwrap().is_dir() {
+                stack.push(entry_path);
+                out.push((relative, None));
+            } else {
+                out.push((relative, Some(fs::read(&entry_path).unwrap())));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn a_dry_run_on_a_lockless_tree_answers_and_writes_nothing() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    for dir in [&root, &fork] {
+        fs::remove_file(dir.join("session.lock")).unwrap();
+    }
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
+    let answer = dry_run(
+        &hub,
+        json!({"session": id(1), "cascade": true, "dry_run": true}),
+    );
+    assert_eq!(answer, json!({"sessions": [id(1), id(2)]}));
+    assert_eq!(snapshot_tree(&temp.dir), before);
+    for dir in [&root, &fork] {
+        assert!(!dir.join("session.lock").exists(), "{}", dir.display());
+    }
 }
 
 #[test]

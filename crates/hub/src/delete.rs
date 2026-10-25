@@ -36,20 +36,26 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     // No resume starts a process for a session while it is deleted.
     let _gate = support::lock(&hub.resume_gate);
     let set = resolve(hub, &session, cascade, expect.as_ref())?;
-    // Held until every removal ends. The dry run takes the locks too, so a
-    // session another process holds is refused exactly as a real delete
-    // refuses it; they are released when this returns, nothing is removed.
+    // Held until every removal ends. The dry run probes existing locks
+    // without creating missing ones, so a lockless tree is unchanged; the
+    // guards it takes stay held until the answer, so a session another
+    // process holds is refused exactly as a real delete refuses it.
     let mut locks = Vec::with_capacity(set.len());
     for (id, dir) in &set {
-        match log::try_hold(dir) {
-            Ok(log::Hold::Held(lock)) => locks.push(lock),
-            Ok(log::Hold::Busy) => {
+        let held: Option<log::Hold> = if parsed.dry_run {
+            log::try_hold_existing(dir).map_err(|error| io_failed(id, &error))?
+        } else {
+            Some(log::try_hold(dir).map_err(|error| io_failed(id, &error))?)
+        };
+        match held {
+            None => {}
+            Some(log::Hold::Held(lock)) => locks.push(lock),
+            Some(log::Hold::Busy) => {
                 return Err(Refused {
                     code: ErrorCode::SessionHeld,
                     message: format!("Session `{}` is held by another process.", id.0),
                 });
             }
-            Err(error) => return Err(io_failed(id, &error)),
         }
     }
     if parsed.dry_run {
