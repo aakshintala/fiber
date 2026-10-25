@@ -4144,3 +4144,54 @@ fn every_built_command_synopsis_in_the_doc_matches_the_menu() {
     unbuilt.sort();
     assert_eq!(unbuilt, ["mcp serve"]);
 }
+
+/// The session-host list beside the enum names exactly the variants that
+/// host a session, and each name parses to its variant and is recognized by
+/// the contract argv predicate (`docs/permissions.md`, "Sessions on the
+/// sockets"). A renamed subcommand, a dropped host word, or a list entry
+/// with no variant fails here.
+#[test]
+fn session_host_commands_match_the_enum_and_the_contract_predicate() {
+    assert_eq!(
+        Commands::session_host_commands(),
+        &["session", "ask", "extension-case"]
+    );
+    for (name, args) in [
+        (
+            "session",
+            vec![
+                "fiber",
+                "session",
+                "--id",
+                "s_0123456789abcdef",
+                "--workspace",
+                "/w",
+            ],
+        ),
+        ("ask", vec!["fiber", "ask"]),
+        (
+            "extension-case",
+            vec!["fiber", "extension-case", "casefile"],
+        ),
+    ] {
+        assert!(
+            Commands::session_host_commands().contains(&name),
+            "{name} is not in the host list"
+        );
+        let invocation = parse_from(args.clone());
+        let Invocation::Run(Some(command), _) = invocation else {
+            panic!("{name} did not parse from {args:?}");
+        };
+        match (name, command) {
+            ("session", Commands::Session(_)) => {}
+            ("ask", Commands::Ask(_)) => {}
+            ("extension-case", Commands::ExtensionCase { .. }) => {}
+            (name, command) => panic!("{name} parsed as {command:?}"),
+        }
+        let argv: Vec<Vec<u8>> = args.iter().map(|word| word.as_bytes().to_vec()).collect();
+        assert!(
+            contract::session_process::is_session_process(&argv),
+            "{name} is not recognized as a session host"
+        );
+    }
+}
