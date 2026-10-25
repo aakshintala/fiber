@@ -766,13 +766,36 @@ fn continue_with_no_session_is_a_usage_error() {
     assert_eq!(output.status.code(), Some(2));
 }
 
-/// Two exited sessions on the hub machine in different projects, the
+/// Serves `a`'s hub on a test port and returns the live hub: the asks
+/// seed through it, and the client pairs to it. The test holds the
+/// handle and reaps it at its end; an installed hub never exits for
+/// being idle (docs/configuration.md:119), so no stop, socket wait or
+/// timer is involved.
+fn installed_hub(a: &support::Setup) -> hub_start::Served {
+    hub_start::serve_installed(
+        a,
+        hub_start::ATTEMPTS,
+        &mut hub_start::free_port,
+        &mut |port| {
+            // Preserve the provider config the seed needs: only the hub
+            // port is set here.
+            let path = a.home().join("config.json");
+            let mut config: Value = fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or(json!({}));
+            config["hub"]["port"] = json!(port);
+            write_json(&path, &config);
+            a.fiber(&["hub", "serve", "--installed"])
+        },
+    )
+}
+
+/// Two exited sessions in different projects on the hub machine, the
 /// second newer: what `continue --hub` must choose between. The asks run
-/// before the test-port hub is served, and the local hub is stopped
-/// explicitly before the serve, so only one hub holds the home at a time.
+/// through the already-served test-port hub, so no local hub lifecycle
+/// (and no idle timer) is involved.
 fn seed_hub_sessions(a: &support::Setup) {
-    let server = ProviderServer::start([reply("First."), reply("Second.")]).unwrap();
-    provider(a, &server);
     assert_eq!(ask(a, &["ask", "first"]).status.code(), Some(0));
     let other = a.root.path().join("other");
     fs::create_dir_all(&other).unwrap();
@@ -784,16 +807,19 @@ fn seed_hub_sessions(a: &support::Setup) {
             .code(),
         Some(0)
     );
-    // An explicit stop, not the hub's idle timer, ends the local hub: the
-    // wait below is for that stop's effect.
-    let stopped = support::run_to_exit(a.deadline, "fiber stop", a.fiber(&["stop"]));
-    assert_eq!(stopped.status.code(), Some(0));
-    until_socket(
-        a.deadline,
-        &a.hub_socket(),
-        false,
-        "the stopped hub to exit",
-    );
+}
+
+/// The hub machine with two exited sessions in different projects: serves
+/// the installed test-port hub first, seeds the asks through it, and
+/// returns the machine with the live hub for the test to pair to and
+/// reap. The provider server lives only for the seeding.
+fn seeded_hub() -> (support::Setup, hub_start::Served) {
+    let a = support::Setup::new();
+    let server = ProviderServer::start([reply("First."), reply("Second.")]).unwrap();
+    provider(&a, &server);
+    let served = installed_hub(&a);
+    seed_hub_sessions(&a);
+    (a, served)
 }
 
 /// Arms the guard for the seeded `other` workspace: a hub-continued
@@ -804,22 +830,10 @@ fn guard_other(a: &support::Setup) -> support::SessionGuard {
     support::SessionGuard::arm(a.deadline, &a.root.path().join("other").to_string_lossy())
 }
 
-/// Serves `a`'s hub on a test port and pairs a fresh client to it as
-/// `box`: the client selects `box` by default when `default` holds.
-fn paired_client(a: &support::Setup, default: bool) -> (support::Setup, hub_start::Served) {
+/// Pairs a fresh client to the already-running hub as `box`: the client
+/// selects `box` by default when `default` holds.
+fn paired_client(a: &support::Setup, served: &hub_start::Served, default: bool) -> support::Setup {
     let b = support::Setup::new();
-    let served = hub_start::serve_installed(
-        a,
-        hub_start::ATTEMPTS,
-        &mut hub_start::free_port,
-        &mut |port| {
-            write_json(
-                &a.home().join("config.json"),
-                &json!({"hub": {"port": port}}),
-            );
-            a.fiber(&["hub", "serve", "--installed"])
-        },
-    );
     let paired = ask(a, &["hub", "pair", "laptop"]);
     assert_eq!(paired.status.code(), Some(0));
     let code = String::from_utf8(paired.stdout).unwrap();
@@ -834,7 +848,7 @@ fn paired_client(a: &support::Setup, default: bool) -> (support::Setup, hub_star
     command.stdin(fs::File::open(input).unwrap());
     let added = support::run_to_exit(b.deadline, "hub add with a pairing code", command);
     assert_eq!(added.status.code(), Some(0));
-    (b, served)
+    b
 }
 
 /// Reaps a served hub: the held connection drops and the hub exits on
@@ -847,12 +861,11 @@ fn reap_served(served: hub_start::Served) {
 
 #[test]
 fn continue_hub_opens_the_latest_session_across_projects() {
-    let a = support::Setup::new();
-    seed_hub_sessions(&a);
+    let (a, served) = seeded_hub();
     // The resumed session lives in `other`: arm before the PTY flow
     // starts so its process dies with this test, pass or panic.
     let _resumed = guard_other(&a);
-    let (b, served) = paired_client(&a, false);
+    let b = paired_client(&a, &served, false);
     let mut run = terminal(&b, 120, 32, &["continue", "--hub", "box"], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
@@ -868,8 +881,10 @@ fn continue_hub_opens_the_latest_session_across_projects() {
 
 #[test]
 fn continue_hub_without_a_session_is_a_usage_error() {
+    // The same owned hub fixture, with no sessions seeded on it.
     let a = support::Setup::new();
-    let (b, served) = paired_client(&a, false);
+    let served = installed_hub(&a);
+    let b = paired_client(&a, &served, false);
     let mut run = terminal(&b, 120, 32, &["continue", "--hub", "box"], &[]);
     run.wait_screen("the usage error", |grid| {
         grid.contents.contains("No session on hub `box`")
@@ -881,9 +896,8 @@ fn continue_hub_without_a_session_is_a_usage_error() {
 
 #[test]
 fn continue_without_a_flag_uses_the_configured_hub() {
-    let a = support::Setup::new();
-    seed_hub_sessions(&a);
-    let (b, served) = paired_client(&a, true);
+    let (a, served) = seeded_hub();
+    let b = paired_client(&a, &served, true);
     // No `--hub`: `hub.default=box` selects the listed hub; the resumed
     // session lives in `other`, so guard it like the explicit-flag test.
     let _resumed = guard_other(&a);
@@ -902,9 +916,8 @@ fn continue_without_a_flag_uses_the_configured_hub() {
 
 #[test]
 fn continue_explicit_hub_overrides_the_configured_default() {
-    let a = support::Setup::new();
-    seed_hub_sessions(&a);
-    let (b, served) = paired_client(&a, true);
+    let (a, served) = seeded_hub();
+    let b = paired_client(&a, &served, true);
     // `hub.default=box` is configured, but the explicit flag wins: the
     // unknown hub fails instead of opening the default hub's session.
     let mut run = terminal(&b, 120, 32, &["continue", "--hub", "nope"], &[]);

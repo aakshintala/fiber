@@ -1856,10 +1856,10 @@ fn hub_prune_dry_run_prints_the_preview_and_deletes_nothing() {
         "session  s_11111111111111a1  30d  10 B\nwould free 10 B\n"
     );
     assert_eq!(err, "");
+    // One request: a dry run prints the preview and deletes nothing
+    // (docs/invocation.md:1474-1476), so it connects once and sends no confirm.
     assert_eq!(hub.connects, 1);
     let received = hub.received.lock().unwrap();
-    // One request: a dry run prints the preview and deletes nothing
-    // (docs/invocation.md:1474-1476), so it sends no confirm.
     assert_eq!(received.len(), 1, "a dry run sends no confirm");
     assert_eq!(
         received[0]["args"],
@@ -1977,6 +1977,9 @@ fn hub_prune_stale_preview_keeps_its_code() {
     assert_eq!(out, "session  s_11111111111111a1  30d  10 B\n");
     assert_eq!(err, "prune? [y/N] ");
     let received = hub.received.lock().unwrap();
+    // Two requests, dry run then confirm (docs/invocation.md:1479-1484:
+    // without `--yes` the dry run comes first, and the hub rejects the
+    // confirm `stale_request` when the set changed, deleting nothing).
     assert_eq!(received.len(), 2, "preview then one confirm");
 }
 
@@ -1993,6 +1996,10 @@ fn hub_prune_without_a_terminal_never_connects() {
     let error = got.unwrap_err();
     assert!(matches!(&error, CliError::NobodyToAsk { .. }), "{error:?}");
     assert_eq!(error.code(), ErrorCode::Usage);
+    // Nobody to ask fails before connecting
+    // (docs/invocation.md:1475-1476: prune asks as delete does, and
+    // docs/invocation.md:1418-1420: with no terminal to ask on, asking is
+    // a usage error), so the hub is never reached.
     assert_eq!(hub.connects, 0);
 }
 
@@ -2022,6 +2029,9 @@ fn hub_prune_unreadable_duration_surfaces_the_hub_refusal() {
     assert_eq!(error.to_string(), "bad duration");
     assert_eq!(out, "");
     let received = hub.received.lock().unwrap();
+    // A refused preview yields no items to confirm
+    // (docs/invocation.md:1480-1483: the confirm sends the dry run's items
+    // back as `expect`), so nothing follows it.
     assert_eq!(received.len(), 1, "nothing follows a refused preview");
     assert_eq!(received[0]["args"]["older_than"], "soon");
 }
