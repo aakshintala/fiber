@@ -6,7 +6,7 @@ use std::time::Instant;
 use super::{App, Effect, Surface};
 use crate::keymap::{KeyMap, KeyPress};
 use crate::keys::{Edit, Event, Key, default_event};
-use crate::keyset::{KeysSetup, Keyset, Resolved, load};
+use crate::keyset::{Context, KeysSetup, Keyset, Resolved, load};
 use crate::rebind::{KeysScreen, Outcome};
 use crate::stroke::{Code, Mods, Stroke};
 use crate::swapped::{Frame, Spot};
@@ -182,6 +182,26 @@ impl App {
     fn bindings_press(&mut self, stroke: Stroke, now: Instant) -> (Effect, bool) {
         if let Some(effect) = self.rail_stroke(&stroke, now) {
             return (effect, false);
+        }
+        // Unshifted Home edits the input editor's line, but only where
+        // typing would reach it: a person's own binding for the stroke
+        // wins, and every other context keeps its dispatch
+        // (`docs/tui.md`, "Selection and copy"). `on_edit` still gives
+        // focus, the find bar and every overlay above the draft the
+        // first say, as it does for typed characters. End keeps its
+        // `Key::End` identity everywhere and edits the line in the input
+        // box's own key arm, so its recall-drop and jump-to-end survive.
+        if stroke.code == Code::Home
+            && let Some(edit) = crate::keys::home_end_edit(&stroke)
+        {
+            let context = self.key_context();
+            if matches!(
+                context,
+                Context::Input | Context::Steering | Context::Conversation
+            ) && !self.keys().person_bound(&stroke, context)
+            {
+                return (self.on_edit(edit), false);
+            }
         }
         if self.home_owns_arrows()
             && stroke.mods == Mods::NONE

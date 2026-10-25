@@ -623,6 +623,74 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
     rows
 }
 
+/// Whether `content` is a chosen chip: `[text]` with a non-empty
+/// spaceless middle, whose brackets never copy
+/// (`docs/tui.md`, "Selection and copy").
+// Exempt: the only mutant no test tells apart is `len() > 2` to `<`,
+// and a string under two bytes long cannot both start with `[` and
+// end with `]`; every other shape of chip or bracket reaches the
+// noted-rows test below.
+#[cfg_attr(false, mutants::skip)]
+fn is_chip(content: &str) -> bool {
+    content.len() > 2
+        && content.starts_with('[')
+        && content.ends_with(']')
+        && !content[1..content.len() - 1].contains(' ')
+}
+
+/// The picker's noted text rows in `area` with the drawn `slab`: each
+/// kept body row's drawn cells with a chosen chip's brackets left out,
+/// the row's targets and bars untouched
+/// (`docs/tui.md`, "Selection and copy"). A span that is nothing but
+/// `[text]` is a chosen chip; any other brackets stay, as drawn. The
+/// body rebuilds from the same pure rows the draw keeps, so the noted
+/// rows sit where the draw put them.
+pub(crate) fn note_selection(
+    view: &PickerView,
+    area: Rect,
+    slab: Rect,
+) -> Vec<crate::app::SpanRow> {
+    let framed = overlay::Overlay {
+        title: None,
+        close: None,
+        body: body(view, area.width, area.height),
+        footer: Some(overlay::legend(&view.footer)),
+        prefer: PREFER,
+    };
+    let (_, placed) = overlay::body_rows(&framed, area, Place::Under { top: area.y });
+    let (text_x, inner) = overlay::inner_width(slab);
+    let room = usize::from(inner);
+    placed
+        .into_iter()
+        .filter_map(|(y, at)| {
+            let row = framed.body.get(at)?;
+            if row.spans.is_empty() {
+                return None;
+            }
+            let spans: Vec<Span<'static>> = row
+                .spans
+                .iter()
+                .map(|span| {
+                    let content = span.content.as_ref();
+                    if is_chip(content) {
+                        let inner = content[1..content.len() - 1].to_owned();
+                        Span::styled(inner, span.style)
+                    } else {
+                        span.clone()
+                    }
+                })
+                .collect();
+            Some(crate::app::SpanRow {
+                y,
+                x: text_x,
+                end: slab.x.saturating_add(slab.width),
+                text: overlay::cut_text(&spans, room),
+                join: crate::rows::Join::Break,
+            })
+        })
+        .collect()
+}
+
 /// Draws the picker in the shared frame under the view's top row `area`
 /// covers: the slab's ▄ edge on the area's first row, centred across it,
 /// with the screen behind reading around the side margins. Returns the

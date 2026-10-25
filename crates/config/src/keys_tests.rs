@@ -31,10 +31,36 @@ fn a_repository_may_set_cache_diagnostics() {
 
 #[test]
 fn thinking_key_values_match_the_contract_levels() {
-    assert_eq!(
-        LEVELS,
-        contract::ThinkingLevel::ALL.map(contract::ThinkingLevel::as_str)
-    );
+    let names = contract::ThinkingLevel::ALL.map(contract::ThinkingLevel::as_str);
+    // Both thinking keys accept exactly the contract's names: nothing
+    // outside the contract validates.
+    for path in ["thinking", "models.*.thinking"] {
+        let key = KEYS
+            .iter()
+            .find(|key| key.path == path)
+            .unwrap_or_else(|| panic!("the `{path}` key exists"));
+        let Kind::OneOf(allowed) = key.kind else {
+            panic!("the `{path}` key accepts one of a fixed set");
+        };
+        // Order is contractual (`docs/model-routing.md:1015-16`, "Thinking"):
+        // the doc lists the levels `off`, `minimal`, `low`, `medium`,
+        // `high`, `xhigh`, `max`, and the refusal/expected messages render
+        // them in that order.
+        assert_eq!(
+            allowed, names,
+            "`{path}` accepts exactly the contract levels"
+        );
+        for name in names {
+            assert!(
+                key.kind.accepts(&serde_json::json!(name)),
+                "`{path}` accepts `{name}`"
+            );
+        }
+        assert!(
+            !key.kind.accepts(&serde_json::json!("turbo")),
+            "`{path}` rejects a name outside the contract"
+        );
+    }
 }
 
 #[test]

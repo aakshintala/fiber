@@ -4036,3 +4036,515 @@ fn the_pinned_turn_keeps_its_stop_below_the_top_row() {
         stop.rect
     );
 }
+
+/// An unshifted Home or End stroke.
+fn home_end(code: crate::stroke::Code) -> crate::stroke::Stroke {
+    crate::stroke::Stroke {
+        code,
+        mods: crate::stroke::Mods::NONE,
+    }
+}
+
+/// Presses and releases with no movement through the full mouse path,
+/// returning the release's effect: a click's effect wins, and a press
+/// with no drag selects nothing.
+fn click_at(app: &mut App, width: u16, height: u16, col: u16, row: u16) -> crate::app::Effect {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut pointer = Pointer::default();
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let targets = render(app, area, &mut buf, None);
+    let _ = app.on_mouse(
+        &Mouse {
+            kind: MouseKind::Press(Button::Left),
+            col,
+            row,
+        },
+        &targets,
+        &mut pointer,
+        true,
+        now,
+    );
+    let mut buf = Buffer::empty(area);
+    let targets = render(app, area, &mut buf, None);
+    app.on_mouse(
+        &Mouse {
+            kind: MouseKind::Release,
+            col,
+            row,
+        },
+        &targets,
+        &mut pointer,
+        true,
+        now,
+    )
+}
+
+/// Drags from `from` to `to` through the full mouse path, returning the
+/// release's effect: the selection's copy, and no click.
+fn drag_at(
+    app: &mut App,
+    width: u16,
+    height: u16,
+    from: (u16, u16),
+    to: (u16, u16),
+) -> crate::app::Effect {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut pointer = Pointer::default();
+    let area = Rect::new(0, 0, width, height);
+    let mut report = |kind: MouseKind, (col, row): (u16, u16)| {
+        let mut buf = Buffer::empty(area);
+        let targets = render(app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), from);
+    let _ = report(MouseKind::Drag(Button::Left), to);
+    report(MouseKind::Release, to)
+}
+
+/// The screen cell where `needle` first shows on a `width` by `height`
+/// screen.
+fn cell_at(app: &mut App, width: u16, height: u16, needle: &str) -> (u16, u16) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    render(app, area, &mut buf, None);
+    for y in 0..height {
+        let row: String = (0..width)
+            .map(|x| buf[(x, y)].symbol().to_owned())
+            .collect();
+        if let Some(byte) = row.find(needle) {
+            let col = row.get(..byte).map_or(0, |before| before.chars().count());
+            return (u16::try_from(col).expect("a column"), y);
+        }
+    }
+    panic!("{needle:?} is not on screen");
+}
+
+#[test]
+fn home_and_end_collapse_the_input_selection() {
+    let mut app = asked();
+    type_draft(&mut app, "zzqx");
+    let at = cell_at(&mut app, WIDTH, HEIGHT, "zzqx");
+    select(&mut app, WIDTH, HEIGHT, at, (at.0 + 4, at.1));
+    assert_eq!(app.input().selected(), Some((0, 4)));
+    app.on_press(
+        home_end(crate::stroke::Code::Home),
+        fakes::clock::FakeClock::new().now(),
+    );
+    assert_eq!(app.input().selected(), None);
+    assert_eq!(app.input().position(), 0);
+    select(&mut app, WIDTH, HEIGHT, at, (at.0 + 4, at.1));
+    app.on_press(
+        home_end(crate::stroke::Code::End),
+        fakes::clock::FakeClock::new().now(),
+    );
+    assert_eq!(app.input().selected(), None);
+    assert_eq!(app.input().position(), 4);
+}
+
+#[test]
+fn left_after_an_input_drag_clears_at_the_start() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = asked();
+    type_draft(&mut app, "zzqx");
+    let at = cell_at(&mut app, WIDTH, HEIGHT, "zzqx");
+    select(&mut app, WIDTH, HEIGHT, at, (at.0 + 4, at.1));
+    assert_eq!(app.input().selected(), Some((0, 4)));
+    app.on_edit(Edit::Left);
+    assert_eq!(app.input().selected(), None);
+    assert_eq!(app.input().position(), 0);
+    let _ = now;
+}
+
+#[test]
+fn a_click_in_the_input_box_places_the_cursor() {
+    let mut app = asked();
+    type_draft(&mut app, "zzqx");
+    let at = cell_at(&mut app, WIDTH, HEIGHT, "zzqx");
+    select(&mut app, WIDTH, HEIGHT, at, (at.0 + 4, at.1));
+    assert_eq!(app.input().selected(), Some((0, 4)));
+    // A press-and-release with no movement is a click: the selection
+    // clears and the cursor lands on the clicked piece.
+    let _ = click_at(&mut app, WIDTH, HEIGHT, at.0 + 1, at.1);
+    assert_eq!(app.input().selected(), None);
+    assert_eq!(app.input().position(), 1);
+}
+
+#[test]
+fn a_click_without_movement_still_activates_its_target() {
+    use crate::mouse::TargetId;
+    let mut app = badged();
+    let (_, targets) = pointed(&mut app, 40, 12, None);
+    let badge = targets
+        .iter()
+        .find(|target| matches!(target.id, TargetId::Badge))
+        .expect("the badge draws a target");
+    let (col, row) = (badge.rect.x, badge.rect.y);
+    let _ = click_at(&mut app, 40, 12, col, row);
+    assert!(app.panel().is_some(), "the click opens the approval panel");
+    assert!(
+        app.selection_cells(crate::app::SurfaceId::Conversation, app.conversation_area())
+            .is_empty()
+    );
+    assert!(app.input().selected().is_none());
+}
+
+#[test]
+fn a_drag_from_a_link_selects_and_clicks_nothing() {
+    use crate::app::Effect;
+    let mut app = replying(WIDTH, HEIGHT, "see [hi](http://example.com/x) now");
+    let at = cell_at(&mut app, WIDTH, HEIGHT, "hi");
+    // A click without movement follows the link: it copies the URL.
+    let clicked = click_at(&mut app, WIDTH, HEIGHT, at.0, at.1);
+    assert_eq!(clicked, Effect::Copy("http://example.com/x".to_owned()));
+    // A drag from the same link selects instead: the copy holds the
+    // selected text, never the link's URL, and the click never fires.
+    let effect = drag_at(&mut app, WIDTH, HEIGHT, at, (at.0 + 1, at.1));
+    assert!(
+        matches!(&effect, Effect::Copy(text) if text.contains("hi") && !text.contains("example.com")),
+        "{effect:?}"
+    );
+}
+
+#[test]
+fn an_input_drag_then_a_typed_char_replaces_the_selection() {
+    use crate::app::Effect;
+    let mut app = asked();
+    type_draft(&mut app, "zzqx");
+    let at = cell_at(&mut app, WIDTH, HEIGHT, "zzqx");
+    // The release copies the dragged text and keeps the editor's
+    // selection: typing replaces the selected pieces.
+    let effect = drag_at(&mut app, WIDTH, HEIGHT, at, (at.0 + 2, at.1));
+    assert_eq!(effect, Effect::Copy("zz".to_owned()));
+    assert_eq!(app.input().selected(), Some((0, 2)));
+    type_draft(&mut app, "q");
+    assert_eq!(app.input().expand(), "qqx");
+}
+
+#[test]
+fn a_drag_on_a_notice_copies_its_text() {
+    use crate::app::Effect;
+    let mut app = running(100, 24);
+    raise_four(&mut app);
+    let at = cell_at(&mut app, 100, 24, "Notice 1.");
+    let effect = drag_at(&mut app, 100, 24, at, (at.0 + 9, at.1));
+    // The copy holds the notice's text exactly: no closing pad and no
+    // dismiss cross.
+    assert_eq!(effect, Effect::Copy("Notice 1.".to_owned()));
+}
+
+#[test]
+fn a_drag_on_the_notice_overlay_copies_its_text() {
+    use crate::app::Effect;
+    // A tall screen: a short frame drops its body rows, keeping the
+    // title and footer, so the text needs room to show.
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.set_size(80, 24);
+    app.on_line(session_line(
+        S_A,
+        "notice",
+        serde_json::json!({"code": "x", "message": "Saved."}),
+        None,
+    ));
+    app.open_notice(0);
+    let at = cell_at(&mut app, 80, 24, "Saved.");
+    let effect = drag_at(&mut app, 80, 24, at, (at.0 + 4, at.1));
+    assert_eq!(effect, Effect::Copy("Saved".to_owned()));
+}
+
+#[test]
+fn a_drag_holds_a_fading_notice_until_after_the_release_copy() {
+    use crate::app::Effect;
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.set_size(80, 24);
+    app.on_line(session_line(
+        S_A,
+        "notice",
+        serde_json::json!({"code": "io_failed", "message": "Saved."}),
+        None,
+    ));
+    app.sweep_notices(t0);
+    let area = Rect::new(0, 0, 80, 24);
+    let at = cell_at(&mut app, 80, 24, "Saved.");
+    let mut pointer = Pointer::default();
+    let mut report =
+        |app: &mut App, kind: MouseKind, col: u16, row: u16, now: std::time::Instant| {
+            let mut buf = Buffer::empty(area);
+            let targets = render(app, area, &mut buf, None);
+            app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+        };
+    let _ = report(&mut app, MouseKind::Press(Button::Left), at.0, at.1, t0);
+    let _ = report(&mut app, MouseKind::Drag(Button::Left), at.0 + 4, at.1, t0);
+    // Past the fade, mid-drag, the row still shows: the fade waits
+    // for the release (`docs/tui.md:1553`: on release the copy
+    // happens first, then the waiting fade).
+    app.sweep_notices(t0 + std::time::Duration::from_secs(30));
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    assert!(text(&buf).contains("Saved."));
+    // The release copies first; the waiting fade runs on the next
+    // sweep, after the copy.
+    let effect = report(
+        &mut app,
+        MouseKind::Release,
+        at.0 + 4,
+        at.1,
+        t0 + std::time::Duration::from_secs(30),
+    );
+    assert_eq!(effect, Effect::Copy("Saved".to_owned()));
+    app.sweep_notices(t0 + std::time::Duration::from_secs(30));
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn a_drag_on_the_approval_panel_copies_its_text() {
+    use crate::app::Effect;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(session_line(
+        S_A,
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review"}),
+        Some("a_1"),
+    ));
+    assert!(app.panel().is_some());
+    let at = cell_at(&mut app, WIDTH, HEIGHT, "runs a command");
+    let effect = drag_at(&mut app, WIDTH, HEIGHT, at, (at.0 + 14, at.1));
+    assert_eq!(effect, Effect::Copy("runs a command".to_owned()));
+}
+
+#[test]
+fn a_drag_across_an_approval_wrap_reads_the_space_back() {
+    use crate::app::Effect;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.set_size(60, 24);
+    // Short words only, so every wrap lands on a space: joining with
+    // nothing would drop them all, while the copy reads each back.
+    let paths: Vec<String> = (0..12).map(|n| format!("p{n}")).collect();
+    app.on_line(session_line(
+        S_A,
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review", "paths": paths}),
+        Some("a_1"),
+    ));
+    let facts = format!(
+        "runs a command · {} · no rule allows this call",
+        (0..12)
+            .map(|n| format!("p{n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    assert!(app.panel().is_some());
+    assert!(
+        app.panel()
+            .expect("a panel")
+            .lines
+            .iter()
+            .any(|line| line == &facts),
+        "facts line shows"
+    );
+    // The whole facts line, first cell to last: the wrap's dropped
+    // space reads back, and no newline splits the copy.
+    let start = cell_at(&mut app, 60, 24, "runs a command");
+    let end = cell_at(&mut app, 60, 24, "no rule allows this call");
+    let effect = drag_at(
+        &mut app,
+        60,
+        24,
+        start,
+        (
+            end.0 + u16::try_from("no rule allows this call".len()).expect("a width"),
+            end.1,
+        ),
+    );
+    assert_eq!(effect, Effect::Copy(facts));
+}
+
+#[test]
+fn a_drag_across_a_wrapped_conversation_row_joins_with_no_newline() {
+    use crate::app::Effect;
+    let text = format!("quixotic {}yodel", "zebras ".repeat(12));
+    let mut app = replying(WIDTH, HEIGHT, &text);
+    let start = cell_at(&mut app, WIDTH, HEIGHT, "quixotic");
+    let end = cell_at(&mut app, WIDTH, HEIGHT, "yodel");
+    let effect = drag_at(
+        &mut app,
+        WIDTH,
+        HEIGHT,
+        start,
+        (
+            end.0 + u16::try_from("yodel".len()).expect("a width"),
+            end.1,
+        ),
+    );
+    assert_eq!(effect, Effect::Copy(text));
+}
+
+/// A drag over the model picker copies the row's text: the picker
+/// reads as its own surface over the conversation
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_over_the_model_picker_copies_its_row() {
+    use crate::app::Effect;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.open_model_picker(crate::model_picker::Mode::Choose);
+    let at = cell_at(&mut app, 80, 24, "Reading");
+    let effect = drag_at(&mut app, 80, 24, at, (at.0 + 6, at.1));
+    assert_eq!(effect, Effect::Copy("Reading".to_owned()));
+}
+
+/// A drag over the `/keys` screen copies the frame's rows: the title
+/// and footer never copy (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_over_the_keys_screen_copies_its_rows() {
+    use crate::app::Effect;
+    let mut app = empty();
+    app.open_keys();
+    let at = cell_at(&mut app, 80, 24, "Send a prompt");
+    let effect = drag_at(&mut app, 80, 24, at, (at.0 + 3, at.1));
+    assert_eq!(effect, Effect::Copy("Send".to_owned()));
+}
+
+/// A drag over the F1 key-map overlay copies its row's text: the
+/// overlay notes its kept body rows through the shared overlay path,
+/// the title and footer never copying
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_over_the_key_map_overlay_copies_its_row() {
+    use crate::app::Effect;
+    use crate::keys::Key;
+    let mut app = empty();
+    app.on_key(Key::F1, fakes::clock::FakeClock::new().now());
+    assert!(app.keymap_top().is_some());
+    let at = cell_at(&mut app, 80, 24, "Send a prompt");
+    let effect = drag_at(&mut app, 80, 24, at, (at.0 + 3, at.1));
+    assert_eq!(effect, Effect::Copy("Send".to_owned()));
+}
+
+/// A connected app attached to a session, holding a repository offer
+/// of `items`.
+fn offered(items: serde_json::Value, width: u16, height: u16) -> App {
+    use crate::link::Line;
+    let mut app = App::new(PathBuf::from("/w"));
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.attach(contract::SessionId(S_A.to_owned()));
+    app.set_size(width, height);
+    app.on_line(session_line(
+        S_A,
+        "repository_code_offered",
+        serde_json::json!({"request_id": "r_1", "items": items}),
+        None,
+    ));
+    assert!(app.offer_open());
+    app
+}
+
+/// A drag over the repository offer copies the row's text: the
+/// offer's body rows, the title never copying (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn a_drag_over_the_offer_copies_its_body_text() {
+    use crate::app::Effect;
+    let items = serde_json::json!([{
+        "kind": "mcp_server", "name": "db", "hash": "h", "required": true,
+        "summary": "MCP server: db\ndeclared in: .fiber/config.json\nruns: /bin/echo",
+    }]);
+    let mut app = offered(items, 80, 24);
+    let at = cell_at(&mut app, 80, 24, "declared in");
+    let effect = drag_at(&mut app, 80, 24, at, (at.0 + 7, at.1));
+    assert_eq!(effect, Effect::Copy("declared".to_owned()));
+}
+
+/// A drag over the login overlay copies its row's text: the login
+/// overlay reads as its own surface (`docs/tui.md`, "Selection and
+/// copy").
+#[test]
+fn a_drag_over_the_login_overlay_copies_its_row() {
+    use crate::app::Effect;
+    let mut app = empty();
+    let seam = std::sync::Arc::new(crate::configure_fake::Fake::new(Vec::new()));
+    app.set_configure(Some(seam));
+    app.open_config_view(crate::app::ConfigView::Login);
+    let at = cell_at(&mut app, 80, 24, "No provider");
+    let effect = drag_at(&mut app, 80, 24, at, (at.0 + 10, at.1));
+    assert_eq!(effect, Effect::Copy("No provider".to_owned()));
+}
+
+/// A drag over the input box paints the selection tint over the
+/// covered cells and only those: the draft's range reads through its
+/// visible spans (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_over_the_input_box_paints_the_covered_cells() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    for ch in "hello".chars() {
+        app.on_key(Key::Char(ch), fakes::clock::FakeClock::new().now());
+    }
+    let at = cell_at(&mut app, 80, 24, "hello");
+    // The column counts cells, not bytes: the input box's `› ` mark is
+    // multibyte.
+    let area = Rect::new(0, 0, 80, 24);
+    let mut probe = Buffer::empty(area);
+    render(&app, area, &mut probe, None);
+    let row_text: String = (0..80)
+        .map(|col| {
+            probe
+                .cell((col, at.1))
+                .map(|cell| cell.symbol().to_owned())
+                .unwrap_or_default()
+        })
+        .collect();
+    let prefix = row_text.split("hello").next().unwrap_or_default();
+    let x = crate::text::to_u16(crate::text::width(prefix));
+    let at = (x, at.1);
+    let mut pointer = Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    let mut press = |app: &mut App, kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = render(app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = press(&mut app, MouseKind::Press(Button::Left), at.0 + 1, at.1);
+    let _ = press(&mut app, MouseKind::Drag(Button::Left), at.0 + 3, at.1);
+    let tint = crate::theme::Role::Selection.color();
+    let buf = buffer(&app, 80, 24);
+    // The covered cells carry the tint: the press and drag pieces, the
+    // release piece's cell not yet, as the copy reads the same pieces.
+    for col in [at.0 + 1, at.0 + 2] {
+        assert_eq!(
+            buf.cell((col, at.1)).map(|cell| cell.bg),
+            Some(tint),
+            "col {col} paints the selection"
+        );
+    }
+    assert_ne!(
+        buf.cell((at.0, at.1)).map(|cell| cell.bg),
+        Some(tint),
+        "before the drag stays plain"
+    );
+    assert_ne!(
+        buf.cell((at.0 + 3, at.1)).map(|cell| cell.bg),
+        Some(tint),
+        "past the drag stays plain"
+    );
+}

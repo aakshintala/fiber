@@ -117,6 +117,36 @@ pub(crate) enum Reply {
     Graphics { id: u32, ok: bool },
 }
 
+/// The edit an unshifted Home or End is in the input editor: Home moves
+/// to the line's start, End to its end (`docs/tui.md`, "Selection and
+/// copy"). Shifted or modified Home and End stay unmapped, as does any
+/// other stroke: the caller routes only where the input editor is the
+/// active key context, so every other context keeps its dispatch.
+pub(crate) fn home_end_edit(stroke: &Stroke) -> Option<Edit> {
+    if stroke.mods != Mods::NONE {
+        return None;
+    }
+    match stroke.code {
+        Code::Home => Some(Edit::LineStart),
+        Code::End => Some(Edit::LineEnd),
+        Code::Char(_)
+        | Code::Enter
+        | Code::Esc
+        | Code::Tab
+        | Code::Backspace
+        | Code::Delete
+        | Code::Insert
+        | Code::Up
+        | Code::Down
+        | Code::Left
+        | Code::Right
+        | Code::Space
+        | Code::PageUp
+        | Code::PageDown
+        | Code::F(_) => None,
+    }
+}
+
 /// A mouse button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Button {

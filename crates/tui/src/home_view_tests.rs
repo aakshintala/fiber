@@ -3700,3 +3700,38 @@ fn the_import_offer_swallow_target_needs_a_drawn_slab() {
         "no slab, no swallow target"
     );
 }
+
+/// A drag over the import offer copies its row's text: the overlay
+/// reads as its own surface with the legend left out (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn a_drag_over_the_import_offer_copies_its_row() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let mut app = home(80, 24);
+    app.set_import_offer(true);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    let (y, line) = shown
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("Claude Code"))
+        .map(|(y, line)| (u16::try_from(y).unwrap_or(u16::MAX), line.to_owned()))
+        .expect("the import offer lists Claude Code");
+    let x = u16::try_from(line.find("Claude").unwrap_or_default()).unwrap_or(u16::MAX);
+    let mut pointer = Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    let mut report = |kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), x, y);
+    let _ = report(MouseKind::Drag(Button::Left), x + 5, y);
+    assert_eq!(
+        report(MouseKind::Release, x + 5, y),
+        Effect::Copy("Claude".to_owned())
+    );
+}
