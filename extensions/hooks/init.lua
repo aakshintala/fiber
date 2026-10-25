@@ -102,22 +102,68 @@ local function run_entry(name, point, command, args, tools_set)
   end
 end
 
+local function run_watcher(name, command, args)
+  return function(event)
+    -- The workspace lands in `cwd` and under `/`-programs: a watcher that
+    -- fires with none cached fails instead of running in the wrong
+    -- directory (`docs/extensions.md`, "Hooks declared in configuration").
+    -- The cache hook below runs first, so this fires only if that hook
+    -- never ran.
+    if workspace == nil then
+      error("entry `" .. name .. "`: no workspace cached yet", 0)
+    end
+    -- Standard input carries one JSON line: the event, its kind beside
+    -- its payload, with no hook-only field (`docs/extensions.md`, "Hooks
+    -- declared in configuration", "What the command reads").
+    local line = json.encode({ kind = event.kind, payload = event.payload }) .. "\n"
+    local result = host.exec(resolve(command), args, { cwd = workspace, input = line })
+    if result.signal ~= nil then
+      error("entry `" .. name .. "`: command ended on signal " .. tostring(result.signal), 0)
+    end
+    -- A watcher changes nothing, so any exit but 0 fails: the failure is
+    -- a notice, and there is no `on_failure` (`docs/extensions.md`,
+    -- "Watchers", "How the command answers").
+    if result.exit_code ~= 0 then
+      error("entry `" .. name .. "`: command exited with status " .. tostring(result.exit_code), 0)
+    end
+    -- A watcher's answer is ignored (`docs/extensions.md`, "Hooks declared
+    -- in configuration", "How the command answers").
+    return nil
+  end
+end
+
+local function register_watcher(name, entry)
+  -- No timeout: `fiber.watch` cannot name the entry, so refuse through
+  -- `fiber.hook` with the field as the point, leaving a notice that names
+  -- the entry and `timeout`, and the rest register (`docs/extensions.md`,
+  -- "Hooks declared in configuration"). Any other invalid field is
+  -- refused by `fiber.watch` itself.
+  if entry.timeout == nil then
+    fiber.hook("timeout", { entry = name })
+    return
+  end
+  fiber.watch(entry.watch, {
+    timeout = entry.timeout,
+    entry = name,
+    run = run_watcher(name, entry.command, entry.args or {}),
+  })
+end
+
 local function register(name, entry)
   if type(entry) ~= "table" then
     error("entry `" .. name .. "` must be a table", 0)
   end
-  -- Watcher entries are not hooks: refuse through `fiber.hook` with a
-  -- point that is not one, so the entry is unregistered with an
-  -- entry-labeled notice like an unknown point, and the rest register.
-  if entry.watch ~= nil then
-    fiber.hook("watch", { entry = name })
-    return
-  end
-  -- No command to run: refuse the same way, so the entry is unregistered
-  -- with a notice naming the entry and `command` instead of aborting the
-  -- entries after it, and the rest register.
+  -- Neither hooks nor watchers can run without a command. Refuse through
+  -- `fiber.hook` so the entry and `command` appear in the notice.
   if type(entry.command) ~= "string" then
     fiber.hook("command", { entry = name })
+    return
+  end
+  -- A watcher entry names `watch`, not a hook point: a valid one
+  -- registers through `fiber.watch` and takes no `on_failure`
+  -- (`docs/extensions.md`, "Hooks declared in configuration").
+  if entry.watch ~= nil then
+    register_watcher(name, entry)
     return
   end
   -- `tools` filters the tool points only, and an empty list can never run:

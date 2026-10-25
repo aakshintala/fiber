@@ -273,6 +273,8 @@ get a correct result.
 (`crates/fakes/src/process_group_tests.rs`) holds a `sh -c "read line"` group
 alive this way, then drops its stdin.
 
+A test helper that waits for a socket to go and then for a process to exit checks the socket with a paced predicate that starts no process. It then lists processes at most once to find the pid it waits on. It never starts a process per socket-poll pass. A test may pin this contract: no listing while the socket exists, and at most one listing once it is gone.
+
 A test that reproduces a race forces the bad interleaving with a pause point:
 a committed, test-only seam where the code under test waits until the test
 releases it. The race then happens on every run, so the red commit fails every
