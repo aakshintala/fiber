@@ -216,9 +216,9 @@ fn missing_jobs_are_sorted() {
 #[test]
 fn an_extra_report_job_in_the_doc_fails() {
     let doc = real_doc();
-    let from = "`flake_report`.";
+    let from = "`stress`.";
     assert!(doc.contains(from), "the fixture drifted");
-    let changed = doc.replace(from, "`flake_report`, `extra`.");
+    let changed = doc.replace(from, "`stress`, `extra`.");
     let failures = check(&real_workflow(), &changed).unwrap();
     assert_eq!(failures.len(), 1);
     assert!(
