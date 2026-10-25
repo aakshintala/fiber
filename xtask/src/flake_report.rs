@@ -496,8 +496,7 @@ impl Classified {
 /// skipped; a line that is only a TAB names the empty test, and a
 /// last line with no trailing newline is still read.
 pub(crate) fn classify(lists: &[Listed], run: &Run) -> Vec<Classified> {
-    let mut seen: Vec<String> = Vec::new();
-    let mut out = Vec::new();
+    let mut out: Vec<Classified> = Vec::new();
     for list in lists {
         for line in list.text.split('\n') {
             if line.is_empty() {
@@ -508,10 +507,9 @@ pub(crate) fn classify(lists: &[Listed], run: &Run) -> Vec<Classified> {
                 None => (line, ""),
             };
             let title = format!("Flaky test: {name}");
-            if seen.iter().any(|seen| seen == &title) {
+            if out.iter().any(|seen| seen.title == title) {
                 continue;
             }
-            seen.push(title.clone());
             let failing = failing_file(detail).map(str::to_owned);
             let action = match &failing {
                 Some(file)
