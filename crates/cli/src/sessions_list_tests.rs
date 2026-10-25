@@ -746,7 +746,9 @@ fn latest_requests_activity_without_a_project() {
 #[test]
 fn latest_prefers_the_greatest_activity_live_or_exited() {
     // The exited row wrote last, so it wins over the live one: the pick
-    // follows the last line, never the row's `ts` or `since`.
+    // follows the last line, never the row's `ts` or `since`
+    // (docs/invocation.md:115: `continue --hub` opens the entry with the
+    // greatest (`active`, `id`)).
     let result = json!({
         "live": [live_active("s_live", "a", json!(100))],
         "exited": [exited_active("s_exited", json!(300))],

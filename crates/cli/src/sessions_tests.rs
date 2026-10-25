@@ -304,11 +304,16 @@ impl Setup {
     }
 }
 
-/// An in-process hub: `connect` hands out one end of a pair, and a thread
-/// on the other reads the one command line, then writes `answers`.
+/// An in-process hub holding a shared answer queue: every `connect`
+/// hands out one end of a pair, and a thread on the other answers each
+/// command line it reads with the next queued answer, recording every
+/// line it read. The queue and the log are shared across connects, so a
+/// resolve on one connection and its dry run and confirm on the next
+/// read successive answers in order.
 struct FakeHub {
     connects: usize,
-    answers: Vec<String>,
+    answers: Arc<Mutex<VecDeque<String>>>,
+    sent: Arc<Mutex<Vec<String>>>,
     got: Option<mpsc::Receiver<String>>,
 }
 
@@ -316,7 +321,10 @@ impl FakeHub {
     fn new(answers: &[Value]) -> Self {
         Self {
             connects: 0,
-            answers: answers.iter().map(|line| format!("{line}\n")).collect(),
+            answers: Arc::new(Mutex::new(
+                answers.iter().map(|line| format!("{line}\n")).collect(),
+            )),
+            sent: Arc::new(Mutex::new(Vec::new())),
             got: None,
         }
     }
@@ -327,13 +335,44 @@ impl FakeHub {
         hub.set_read_timeout(Some(HUB_DEADLINE))
             .map_err(doors::Error::Local)?;
         let (tx, rx) = mpsc::channel();
-        let answers = self.answers.clone();
+        let answers = Arc::clone(&self.answers);
+        let sent = Arc::clone(&self.sent);
         thread::spawn(move || {
-            let mut line = String::new();
-            BufReader::new(&hub).read_line(&mut line).unwrap();
-            tx.send(line).unwrap();
-            for answer in answers {
-                (&hub).write_all(answer.as_bytes()).unwrap();
+            let mut lines = BufReader::new(&hub);
+            let mut first = Some(tx);
+            loop {
+                let mut line = String::new();
+                match lines.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                sent.lock().unwrap().push(line.clone());
+                if let Some(tx) = first.take() {
+                    tx.send(line.clone()).unwrap();
+                }
+                // Answers queued lines until the command just read is
+                // answered, so a stray line for another command is skipped
+                // as `request_value` skips it; an empty queue ends the
+                // connection, as a dropped hub end does.
+                let want = request_id(&line);
+                loop {
+                    let Some(answer) = answers.lock().unwrap().pop_front() else {
+                        break;
+                    };
+                    let done = match (want.as_deref(), answer_command_id(&answer)) {
+                        (Some(want), Some(got)) => want == got,
+                        _ => true,
+                    };
+                    if (&hub).write_all(answer.as_bytes()).is_err() {
+                        break;
+                    }
+                    if done {
+                        break;
+                    }
+                }
+                if answers.lock().unwrap().is_empty() {
+                    break;
+                }
             }
             // Dropping `hub` ends the connection.
         });
@@ -347,7 +386,7 @@ impl FakeHub {
         Ok((client, hello))
     }
 
-    /// The command line the hub read, as JSON.
+    /// The first command line the hub read, as JSON.
     #[track_caller]
     fn sent(&self) -> Value {
         let line = Deadline::after(HUB_DEADLINE)
@@ -355,6 +394,36 @@ impl FakeHub {
             .unwrap();
         serde_json::from_str(&line).unwrap()
     }
+
+    /// Every command line the hub read, as JSON, in read order.
+    fn sent_all(&self) -> Vec<Value> {
+        self.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+}
+
+/// The request `id` of a command line the hub read, when it parses.
+fn request_id(line: &str) -> Option<String> {
+    serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|line| line.get("id")?.as_str().map(str::to_owned))
+}
+
+/// The answered `command_id` of a queued answer line, when it parses.
+fn answer_command_id(answer: &str) -> Option<String> {
+    serde_json::from_str::<Value>(answer)
+        .ok()
+        .and_then(|answer| {
+            answer
+                .get("payload")?
+                .get("command_id")?
+                .as_str()
+                .map(str::to_owned)
+        })
 }
 
 fn accepted() -> Value {
@@ -890,74 +959,6 @@ const HUB_ROOT: &str = "s_11111111111111a1";
 const HUB_FORK: &str = "s_11111111111111b2";
 const HUB_OTHER: &str = "s_11111111111111c3";
 
-/// A scripted hub: every `connect` hands out one end of a pair, and a
-/// thread on the other answers each command line it reads with the next
-/// scripted answer, recording every line it read.
-struct ScriptHub {
-    answers: Arc<Mutex<VecDeque<String>>>,
-    sent: Arc<Mutex<Vec<String>>>,
-    connects: Arc<Mutex<usize>>,
-}
-
-impl ScriptHub {
-    fn new(answers: &[Value]) -> Self {
-        Self {
-            answers: Arc::new(Mutex::new(
-                answers.iter().map(|line| format!("{line}\n")).collect(),
-            )),
-            sent: Arc::new(Mutex::new(Vec::new())),
-            connects: Arc::new(Mutex::new(0)),
-        }
-    }
-
-    fn connect(&mut self) -> Result<doors::hub::Hub, doors::Error> {
-        *self.connects.lock().unwrap() += 1;
-        let (client, hub) = UnixStream::pair().map_err(doors::Error::Local)?;
-        hub.set_read_timeout(Some(HUB_DEADLINE))
-            .map_err(doors::Error::Local)?;
-        let answers = Arc::clone(&self.answers);
-        let sent = Arc::clone(&self.sent);
-        thread::spawn(move || {
-            let mut lines = BufReader::new(&hub);
-            loop {
-                let mut line = String::new();
-                match lines.read_line(&mut line) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                sent.lock().unwrap().push(line);
-                let Some(answer) = answers.lock().unwrap().pop_front() else {
-                    break;
-                };
-                if (&hub).write_all(answer.as_bytes()).is_err() {
-                    break;
-                }
-            }
-        });
-        let hello = HubLine {
-            kind: "hub_hello".to_owned(),
-            ts: 1,
-            schema_version: 1,
-            payload: Map::new(),
-        };
-        Ok((client, hello))
-    }
-
-    /// Every command line the hub read, as JSON, in read order.
-    fn sent(&self) -> Vec<Value> {
-        self.sent
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
-    }
-
-    fn connects(&self) -> usize {
-        *self.connects.lock().unwrap()
-    }
-}
-
 /// A `sessions` answer naming `ids` as exited sessions.
 fn sessions_answer(ids: &[&str]) -> Value {
     let exited: Vec<Value> = ids
@@ -996,7 +997,7 @@ fn run_delete_listed(
     let selector = selector.to_owned();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let mut hub = ScriptHub::new(&answers);
+        let mut hub = FakeHub::new(&answers);
         let mut input = input;
         let mut out = Vec::new();
         let mut err = Vec::new();
@@ -1013,8 +1014,8 @@ fn run_delete_listed(
             String::from_utf8(out).unwrap(),
             String::from_utf8(err).unwrap(),
             got,
-            hub.connects(),
-            hub.sent(),
+            hub.connects,
+            hub.sent_all(),
         ))
         .unwrap_or(());
     });
@@ -1042,6 +1043,9 @@ fn hub_delete_without_yes_confirms_the_dry_run_set_exactly() {
         format!("{HUB_ROOT}\n{HUB_FORK}\n{HUB_ROOT}\n{HUB_FORK}\n")
     );
     assert_eq!(err, "delete? [y/N] ");
+    // Order and count per docs/invocation.md:1421-1426: the id resolves
+    // against the hub's `sessions` answer, then a dry run prints and asks,
+    // then `delete` carries that exact set as `expect` (docs/invocation.md:1415).
     assert_eq!(
         sent,
         vec![
@@ -1067,7 +1071,8 @@ fn hub_delete_yes_sends_one_delete_without_expect() {
     );
     got.unwrap();
     // One `delete` with no `expect` and no dry run: the exact line
-    // proves both keys are absent.
+    // proves both keys are absent (docs/invocation.md:1424-1426: with
+    // `--yes` one `delete` with no `expect` follows the `sessions` resolve).
     assert_eq!(
         sent,
         vec![
@@ -1095,7 +1100,8 @@ fn hub_delete_unknown_and_ambiguous_ids_fail_after_resolving() {
         "{error:?}"
     );
     assert_eq!(error.code(), ErrorCode::SessionNotFound);
-    // The resolve connected; no dry run follows a failed resolve.
+    // The resolve connected; no dry run follows a failed resolve
+    // (docs/invocation.md:1421-1424: the dry run comes only after a resolve).
     assert_eq!(sent.len(), 1);
 
     let (_, _, got, _, sent) = run_delete_listed(
@@ -1112,6 +1118,8 @@ fn hub_delete_unknown_and_ambiguous_ids_fail_after_resolving() {
         "{error:?}"
     );
     assert_eq!(error.code(), ErrorCode::Usage);
+    // One `sessions` resolve and nothing after the ambiguous match
+    // (docs/invocation.md:1421-1424: the dry run comes only after a resolve).
     assert_eq!(sent.len(), 1);
 }
 
@@ -1129,6 +1137,8 @@ fn hub_delete_without_a_terminal_never_connects() {
     assert!(matches!(&error, CliError::DeleteNobody), "{error:?}");
     assert_eq!(error.code(), ErrorCode::Usage);
     assert_eq!(out, "");
+    // Nobody to ask fails before connecting (docs/invocation.md:1418-1420:
+    // with no terminal to ask on, asking is a usage error), so no request.
     assert_eq!(connects, 0);
     assert!(sent.is_empty());
 }

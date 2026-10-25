@@ -8,6 +8,7 @@
 )]
 
 #[path = "support/hub_start.rs"]
+#[allow(dead_code, reason = "this test binary seeds no paired client")]
 mod hub_start;
 mod support;
 use serde_json::{Value, json};

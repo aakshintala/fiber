@@ -28,10 +28,6 @@ const ROOT: &str = "s_00000000000000a1";
 const FORK: &str = "s_00000000000000b2";
 const NEW: &str = "s_00000000000000c3";
 
-fn run(setup: &Setup, args: &[&str]) -> Output {
-    run_to_exit(setup.deadline, "the hub client command", setup.fiber(args))
-}
-
 fn succeeds(output: &Output) {
     assert_eq!(
         output.status.code(),
@@ -39,22 +35,6 @@ fn succeeds(output: &Output) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-fn add(setup: &Setup, name: &str, address: &str, code: &str, default: bool) -> Output {
-    let input = setup.root.path().join("pairing-input");
-    fs::write(&input, format!("{code}\n")).unwrap();
-    let mut args = vec!["hub", "add", name, address];
-    if default {
-        args.push("--default");
-    }
-    let mut command = setup.fiber(&args);
-    command.stdin(fs::File::open(input).unwrap());
-    run_to_exit(
-        setup.deadline,
-        "hub add with a pairing code on stdin",
-        command,
-    )
 }
 
 /// A hub machine and a client paired to it as `box`: the client selects
@@ -68,27 +48,9 @@ struct World {
 
 fn world(default: bool) -> World {
     let a = Setup::new();
-    let b = Setup::new();
-    let served = hub_start::serve_installed(
-        &a,
-        hub_start::ATTEMPTS,
-        &mut hub_start::free_port,
-        &mut |port| {
-            write_json(
-                &a.home().join("config.json"),
-                &json!({"hub": {"port": port}}),
-            );
-            a.fiber(&["hub", "serve", "--installed"])
-        },
-    );
-    assert_eq!(served.hub.1.kind, "hub_hello");
-    let address = format!("ws://127.0.0.1:{}", served.port);
-    let code = run(&a, &["hub", "pair", "laptop"]);
-    succeeds(&code);
-    let code = String::from_utf8(code.stdout).unwrap();
-    let added = add(&b, "box", &address, code.trim(), default);
-    succeeds(&added);
-    assert!(added.stdout.is_empty());
+    // Serve, pair and add through the shared scaffold: the same helper
+    // `terminal.rs` seeds its hub-continue tests with.
+    let (b, served) = hub_start::paired_client(&a, default);
     World { a, b, served }
 }
 
