@@ -507,7 +507,6 @@ jobs:
     outputs:
       has_flakes: ${{ steps.collate.outputs.has_flakes }}
     env:
-      GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
       # A selected leg that never reported a list proves nothing: a
@@ -610,63 +609,77 @@ jobs:
       - name: Install the toolchain
         if: steps.collate.outputs.has_flakes == 'true'
         run: rustup toolchain install
-      # Complete exact-title open and closed lookups feed
-      # `cargo xtask flake-report-events`, which selects the unique closed
-      # issue numbers in Rust; the workflow fetches only those event
-      # endpoints, passes the complete raw data back, and `cargo xtask
-      # flake-report --tested-commit` decides one JSON-lines action per
-      # unique title, probing ancestry itself only for each selected
-      # latest fix. A failed lookup arrives as failed/incomplete, never
-      # as an empty list. Repeat titles across runner lists collapse to
-      # one decision.
-      - name: Look up issues and decide the report actions
+      # Complete exact-title open and closed lookups land as files, never
+      # as arguments. Each raw response is stored, then normalized with jq
+      # reading the file, so a large closed listing never becomes an
+      # argument. A failed fetch or parse yields ok false with no issues;
+      # an empty list stays ok true.
+      - name: Fetch the open and closed issue listings
+        if: steps.collate.outputs.has_flakes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/flake-lists"
+          open_ok=true
+          if ! gh api --paginate "repos/$GH_REPO/issues?state=open&per_page=100" >"$RUNNER_TEMP/flake-lists/open.raw" 2>/dev/null; then
+            open_ok=false
+            printf '[]\n' >"$RUNNER_TEMP/flake-lists/open.raw"
+          fi
+          if ! jq -s --argjson ok "$open_ok" 'add // [] | {ok: $ok, issues: (map({number, title} + (if .pull_request == null then {} else {pull_request: true} end)))}' "$RUNNER_TEMP/flake-lists/open.raw" >"$RUNNER_TEMP/flake-lists/open.json" 2>/dev/null; then
+            jq -n '{ok: false, issues: []}' >"$RUNNER_TEMP/flake-lists/open.json"
+          fi
+          closed_ok=true
+          if ! gh api --paginate "repos/$GH_REPO/issues?state=closed&per_page=100" >"$RUNNER_TEMP/flake-lists/closed.raw" 2>/dev/null; then
+            closed_ok=false
+            printf '[]\n' >"$RUNNER_TEMP/flake-lists/closed.raw"
+          fi
+          if ! jq -s --argjson ok "$closed_ok" 'add // [] | {ok: $ok, issues: (map({number, title, closed_at} + (if .pull_request == null then {} else {pull_request: true} end)))}' "$RUNNER_TEMP/flake-lists/closed.raw" >"$RUNNER_TEMP/flake-lists/closed.json" 2>/dev/null; then
+            jq -n '{ok: false, issues: []}' >"$RUNNER_TEMP/flake-lists/closed.json"
+          fi
+      # The titles file selects the unique closed issue numbers in Rust;
+      # the request carries files, never listings as arguments.
+      - name: Select the events to fetch
         if: steps.collate.outputs.has_flakes == 'true'
         run: |
           titles=$RUNNER_TEMP/flake-titles.txt
-          flakes=$(jq -R -s '{flakes: (split("\n") | map(select(length > 0)) | map({title: .}))}' "$titles")
-          open_ok=true
-          open_raw="[]"
-          if ! open_raw=$(gh api --paginate "repos/$GH_REPO/issues?state=open&per_page=100" 2>/dev/null); then
-            open_ok=false
-            open_raw="[]"
-          fi
-          if ! open_issues=$(printf '%s' "$open_raw" | jq -s 'add // [] | map({number, title} + (if .pull_request == null then {} else {pull_request: true} end))' 2>/dev/null); then
-            open_ok=false
-            open_issues="[]"
-          fi
-          closed_ok=true
-          closed_raw="[]"
-          if ! closed_raw=$(gh api --paginate "repos/$GH_REPO/issues?state=closed&per_page=100" 2>/dev/null); then
-            closed_ok=false
-            closed_raw="[]"
-          fi
-          if ! closed_issues=$(printf '%s' "$closed_raw" | jq -s 'add // [] | map({number, title, closed_at} + (if .pull_request == null then {} else {pull_request: true} end))' 2>/dev/null); then
-            closed_ok=false
-            closed_issues="[]"
-          fi
-          open=$(jq -n --argjson ok "$open_ok" --argjson issues "$open_issues" '{ok: $ok, issues: $issues}')
-          closed=$(jq -n --argjson ok "$closed_ok" --argjson issues "$closed_issues" '{ok: $ok, issues: $issues}')
-          jq -n --argjson flakes "$flakes" --argjson open "$open" --argjson closed "$closed" '{flakes: $flakes.flakes, open: $open, closed: $closed}' > "$RUNNER_TEMP/flake-request-input.json"
-          numbers=$(cargo xtask flake-report-events < "$RUNNER_TEMP/flake-request-input.json") || exit 1
-          events_all="{}"
+          jq -R -s '{flakes: (split("\n") | map(select(length > 0)) | map({title: .}))}' "$titles" >"$RUNNER_TEMP/flakes.json"
+          jq -n --slurpfile flakes "$RUNNER_TEMP/flakes.json" --slurpfile open "$RUNNER_TEMP/flake-lists/open.json" --slurpfile closed "$RUNNER_TEMP/flake-lists/closed.json" '{flakes: $flakes[0].flakes, open: $open[0], closed: $closed[0]}' >"$RUNNER_TEMP/flake-request-input.json"
+          cargo xtask flake-report-events <"$RUNNER_TEMP/flake-request-input.json" >"$RUNNER_TEMP/numbers.txt" || exit 1
+      # Only the selected event endpoints are fetched, one raw file per
+      # issue, appended as one JSON line each. Events never pass as an
+      # argument; the ok flag is a small boolean. A failed fetch or parse
+      # appends ok false with no events.
+      - name: Fetch the events of the selected issues
+        if: steps.collate.outputs.has_flakes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          : >"$RUNNER_TEMP/events.ndjson"
           while IFS= read -r number; do
             [ -n "$number" ] || continue
             events_ok=true
-            events_raw="[]"
-            if ! events_raw=$(gh api --paginate "repos/$GH_REPO/issues/$number/events" 2>/dev/null); then
+            raw="$RUNNER_TEMP/flake-lists/events-$number.raw"
+            if ! gh api --paginate "repos/$GH_REPO/issues/$number/events" >"$raw" 2>/dev/null; then
               events_ok=false
-              events_raw="[]"
+              printf '[]\n' >"$raw"
             fi
-            if ! events=$(printf '%s' "$events_raw" | jq -s 'add // [] | map({event, id, commit_id, created_at})' 2>/dev/null); then
-              events_ok=false
-              events="[]"
+            if ! jq -s -c --arg n "$number" --argjson ok "$events_ok" '{($n): {ok: $ok, events: (add // [] | map({event, id, commit_id, created_at}))}}' "$raw" >>"$RUNNER_TEMP/events.ndjson" 2>/dev/null; then
+              printf '{"%s": {"ok": false, "events": []}}\n' "$number" >>"$RUNNER_TEMP/events.ndjson"
             fi
-            events_all=$(printf '%s' "$events_all" | jq --arg n "$number" --argjson ok "$events_ok" --argjson e "$events" '. + {($n): {ok: $ok, events: $e}}')
-          done <<< "$numbers"
-          jq -n --argjson flakes "$flakes" --argjson open "$open" --argjson closed "$closed" --argjson events "$events_all" '{flakes: $flakes.flakes, open: $open, closed: $closed, events: $events}' > "$RUNNER_TEMP/flake-input.json"
+          done <"$RUNNER_TEMP/numbers.txt"
+      # The decision reads files only, giving the same shape as before.
+      # `cargo xtask flake-report --tested-commit` decides one JSON-lines
+      # action per unique title, probing ancestry itself only for each
+      # selected latest fix. Repeat titles across runner lists collapse to
+      # one decision.
+      - name: Decide the report actions
+        if: steps.collate.outputs.has_flakes == 'true'
+        run: |
+          jq -s 'add // {}' "$RUNNER_TEMP/events.ndjson" >"$RUNNER_TEMP/events.json"
+          jq -n --slurpfile flakes "$RUNNER_TEMP/flakes.json" --slurpfile open "$RUNNER_TEMP/flake-lists/open.json" --slurpfile closed "$RUNNER_TEMP/flake-lists/closed.json" --slurpfile events "$RUNNER_TEMP/events.json" '{flakes: $flakes[0].flakes, open: $open[0], closed: $closed[0], events: $events[0]}' >"$RUNNER_TEMP/flake-input.json"
           report_data=$RUNNER_TEMP/flake-report-data
           mkdir -p "$report_data"
-          cargo xtask flake-report --tested-commit "$GITHUB_SHA" < "$RUNNER_TEMP/flake-input.json" > "$report_data/flake-decisions.jsonl"
+          cargo xtask flake-report --tested-commit "$GITHUB_SHA" <"$RUNNER_TEMP/flake-input.json" >"$report_data/flake-decisions.jsonl"
           cp "$RUNNER_TEMP"/flaky/flaky-tests-*.txt "$report_data"/ 2>/dev/null || true
       # One combined artifact carries the decision JSON-lines plus the
       # selected runner lists the writer checks them against, so the

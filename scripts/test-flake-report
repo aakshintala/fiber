@@ -27,6 +27,15 @@ cd "$(git rev-parse --show-toplevel)"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+# The decide self-check needs the real jq before any stub goes on PATH.
+# A missing jq fails the check; it never skips.
+orig_path=$PATH
+real_jq=$(command -v jq || true)
+[ -n "$real_jq" ] || {
+  echo "scripts/test-flake-report: jq is required for the flake decide self-check" >&2
+  exit 1
+}
+
 fail() {
   echo "scripts/test-flake-report: $1" >&2
   exit 1
@@ -612,5 +621,240 @@ fi
 [ ! -s "$tmp/empty-list.txt" ] || fail "empty XML must print no list"
 echo true >"$tmp/empty-marker.txt"
 [ "$(cat "$tmp/empty-marker.txt")" = true ] || fail "the complete marker must read true"
+
+# Every listing reaches the decision as a file, never as an argument.
+# This block extracts the decide job's steps in file order and runs them
+# against stubs that make the closed listing larger than one argument.
+decide_dir=$tmp/decide
+mkdir -p "$decide_dir/blocks" "$decide_dir/bin" "$decide_dir/state" "$decide_dir/runner-temp"
+awk -v outdir="$decide_dir/blocks" '
+  BEGIN { idx=-1; in_job=0; seen_collate=0; done=0; capturing=0; in_env=0; in_run=0 }
+  /^  flake_decide:/ { in_job=1; next }
+  in_job && /^  [A-Za-z0-9_-]+:/ { in_job=0; capturing=0; in_run=0; in_env=0; next }
+  !in_job { next }
+  /^      - / {
+    if (index($0, "Collate this run") > 0) { seen_collate=1; capturing=0; in_run=0; in_env=0; next }
+    if (seen_collate && index($0, "upload-artifact") > 0) { capturing=0; done=1; in_run=0; in_env=0; next }
+    if (seen_collate && !done) {
+      capturing=1
+      idx++
+      printf "" > (outdir "/" sprintf("%02d.sh", idx))
+      printf "" > (outdir "/" sprintf("%02d.env", idx))
+      print $0 > (outdir "/" sprintf("%02d.header", idx))
+      in_run=0; in_env=0
+    }
+    next
+  }
+  !capturing { next }
+  /^        env:/ { in_env=1; in_run=0; next }
+  /^        run: \| *$/ { in_env=0; in_run=1; next }
+  /^        run: [^|]/ {
+    in_env=0; in_run=0
+    line=$0
+    sub(/^        run: /, "", line)
+    print line >> (outdir "/" sprintf("%02d.sh", idx))
+    next
+  }
+  {
+    if (in_env) {
+      if ($0 ~ /^ *$/) { next }
+      match($0, /[^ ]/)
+      cur=RSTART-1
+      if (cur <= 8) { in_env=0 }
+      else if ($0 ~ /^          [A-Za-z_][A-Za-z0-9_]*:/) {
+        line=$0
+        sub(/^          /, "", line)
+        n=index(line, ":")
+        key=substr(line, 1, n-1)
+        val=substr(line, n+1)
+        sub(/^ +/, "", val)
+        print key "=" val >> (outdir "/" sprintf("%02d.env", idx))
+        next
+      } else { in_env=0 }
+    }
+    if (in_run) {
+      if ($0 ~ /^ *$/) { print "" >> (outdir "/" sprintf("%02d.sh", idx)); next }
+      match($0, /[^ ]/)
+      cur=RSTART-1
+      if (cur <= 8) { in_run=0 }
+      else { print $0 >> (outdir "/" sprintf("%02d.sh", idx)); next }
+    }
+  }
+' .github/workflows/ci.yml
+found=0
+for block_sh in "$decide_dir"/blocks/*.sh; do
+  [ -f "$block_sh" ] || continue
+  [ -s "$block_sh" ] || continue
+  found=1
+  break
+done
+[ "$found" = 1 ] || fail "the flake decide steps were not found in .github/workflows/ci.yml"
+# The stubs are executables on PATH, never shell functions: each step
+# runs in its own shell. The closed listing is larger than one argument
+# can hold, so passing it as an argument must fail.
+decide_state=$decide_dir/state
+decide_runner=$decide_dir/runner-temp
+: >"$decide_state/gh-calls.log"
+: >"$decide_runner/output"
+: >"$decide_runner/summary"
+printf 'Flaky test: probe\n' >"$decide_runner/flake-titles.txt"
+cat >"$decide_dir/bin/gh" <<'GH_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+log="${DECIDE_STATE_DIR:?}/gh-calls.log"
+if [ -n "${GH_TOKEN:-}" ]; then
+  printf 'token-set %s\n' "$*" >>"$log"
+else
+  printf 'token-unset %s\n' "$*" >>"$log"
+fi
+args="$*"
+case "$args" in
+  *"/events"*) printf '[]\n' ;;
+  *"state=closed"*) python3 -c 'import json; items=[{"number": i, "title": "x"*100, "closed_at": "2026-10-24T00:00:00Z"} for i in range(1, 2001)]; print(json.dumps(items))' ;;
+  *"state=open"*) printf '[]\n' ;;
+  *) echo "stub gh: unexpected api call: $*" >&2; exit 1 ;;
+esac
+GH_EOF
+cat >"$decide_dir/bin/cargo" <<'CARGO_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ -n "${GH_TOKEN:-}" ]; then
+  echo "stub cargo: GH_TOKEN must be absent" >&2
+  exit 99
+fi
+if [ "${1:-}" = "xtask" ] && [ "${2:-}" = "flake-report-events" ]; then
+  cat >/dev/null
+  exit 0
+elif [ "${1:-}" = "xtask" ] && [ "${2:-}" = "flake-report" ]; then
+  cat >"${DECIDE_STATE_DIR:?}/decide-input.json"
+  printf '[]\n'
+  exit 0
+else
+  echo "stub cargo: unexpected call: $*" >&2
+  exit 1
+fi
+CARGO_EOF
+cat >"$decide_dir/bin/rustup" <<'RUSTUP_EOF'
+#!/usr/bin/env bash
+exit 0
+RUSTUP_EOF
+chmod +x "$decide_dir/bin/gh" "$decide_dir/bin/cargo" "$decide_dir/bin/rustup"
+cat >"$decide_dir/bin/jq" <<JQ_EOF
+#!/usr/bin/env bash
+limit=131072
+for arg in "\$@"; do
+  if [ "\${#arg}" -gt "\$limit" ]; then
+    echo "/usr/bin/jq: Argument list too long" >&2
+    exit 126
+  fi
+done
+exec "$real_jq" "\$@"
+JQ_EOF
+chmod +x "$decide_dir/bin/jq"
+# Each block runs in its own shell with its own step env. The job env
+# carries only the repository name, never the token text.
+decide_failed=""
+for block_sh in "$decide_dir"/blocks/*.sh; do
+  [ -f "$block_sh" ] || continue
+  [ -s "$block_sh" ] || continue
+  base=$(basename "$block_sh" .sh)
+  block_env="$decide_dir/blocks/$base.env"
+  block_err="$decide_dir/$base.stderr"
+  code=0
+  if grep -q '^GH_TOKEN=' "$block_env" 2>/dev/null; then
+    env -i PATH="$decide_dir/bin:$orig_path" HOME="$tmp" FIBER_CHECK_RUN="${FIBER_CHECK_RUN:-}" RUNNER_TEMP="$decide_runner" GITHUB_SHA="1111111111111111111111111111111111111111" GH_REPO="aakshintala/fiber" GITHUB_OUTPUT="$decide_runner/output" GITHUB_STEP_SUMMARY="$decide_runner/summary" DECIDE_STATE_DIR="$decide_state" GH_TOKEN="test-token" bash --noprofile --norc -eo pipefail "$block_sh" 2>"$block_err" || code=$?
+  else
+    env -i PATH="$decide_dir/bin:$orig_path" HOME="$tmp" FIBER_CHECK_RUN="${FIBER_CHECK_RUN:-}" RUNNER_TEMP="$decide_runner" GITHUB_SHA="1111111111111111111111111111111111111111" GH_REPO="aakshintala/fiber" GITHUB_OUTPUT="$decide_runner/output" GITHUB_STEP_SUMMARY="$decide_runner/summary" DECIDE_STATE_DIR="$decide_state" bash --noprofile --norc -eo pipefail "$block_sh" 2>"$block_err" || code=$?
+  fi
+  if [ "$code" -ne 0 ]; then
+    decide_failed="$base"
+    break
+  fi
+done
+if [ -n "$decide_failed" ]; then
+  cat "$decide_dir/$decide_failed.stderr" >&2
+  exit 1
+fi
+# The token lives only on the steps that call the API, never on the job
+# and never on a step that only decides. The closed listing must arrive
+# whole in the decision input.
+job_env=$(awk '
+  /^  flake_decide:/ { in_job=1; next }
+  in_job && /^  [A-Za-z0-9_-]+:/ { exit }
+  in_job && /^    env:/ { in_env=1; next }
+  in_job && /^    [a-z]+:/ { if (in_env) exit }
+  in_env { print }
+' .github/workflows/ci.yml)
+if printf '%s\n' "$job_env" | grep -q 'GH_TOKEN'; then
+  fail "the flake_decide job must not set GH_TOKEN"
+fi
+for block_sh in "$decide_dir"/blocks/*.sh; do
+  [ -f "$block_sh" ] || continue
+  [ -s "$block_sh" ] || continue
+  base=$(basename "$block_sh" .sh)
+  block_env="$decide_dir/blocks/$base.env"
+  if grep -q '^GH_TOKEN=' "$block_env" 2>/dev/null; then
+    grep -q 'gh api' "$block_sh" || fail "a token-bearing decide block does not call gh ($base)"
+    if grep -q 'cargo' "$block_sh"; then
+      fail "a token-bearing decide block runs cargo ($base)"
+    fi
+  else
+    if grep -q 'cargo' "$block_sh"; then
+      : # a deciding block without the token is the rule
+    fi
+    if grep -q 'gh api' "$block_sh"; then
+      fail "a decide block calls gh without the token ($base)"
+    fi
+    if grep -q 'jq' "$block_sh" && ! grep -q 'gh api' "$block_sh"; then
+      : # a deciding jq block without the token is the rule
+    fi
+  fi
+done
+grep -q '^token-set.*state=open' "$decide_state/gh-calls.log" || fail "the token-bearing blocks did not fetch the open listing"
+grep -q '^token-set.*state=closed' "$decide_state/gh-calls.log" || fail "the token-bearing blocks did not fetch the closed listing"
+[ -f "$decide_state/decide-input.json" ] || fail "the decide input was not written"
+closed_count=$("$real_jq" -e '.closed.issues | length' "$decide_state/decide-input.json" 2>/dev/null) || fail "the decide input has no closed issues"
+[ "$closed_count" = 2000 ] || fail "want 2000 closed issues in the decide input, got $closed_count"
+if ! python3 - "$decide_state/decide-input.json" <<'PY_EOF'
+import json
+import sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+try:
+    issues = data["closed"]["issues"]
+except (KeyError, TypeError):
+    print("the decide input has no closed issues", file=sys.stderr)
+    sys.exit(1)
+if not isinstance(issues, list) or len(issues) != 2000:
+    got = len(issues) if isinstance(issues, list) else "non-list"
+    print(f"want 2000 closed issues, got {got}", file=sys.stderr)
+    sys.exit(1)
+seen = set()
+for index, item in enumerate(issues):
+    want_number = index + 1
+    want_title = "x" * 100
+    want_closed_at = "2026-10-24T00:00:00Z"
+    got_number = item.get("number") if isinstance(item, dict) else None
+    got_title = item.get("title") if isinstance(item, dict) else None
+    got_closed_at = item.get("closed_at") if isinstance(item, dict) else None
+    if got_number != want_number or got_title != want_title or got_closed_at != want_closed_at:
+        bad = []
+        if got_number != want_number:
+            bad.append("number")
+        if got_title != want_title:
+            bad.append("title")
+        if got_closed_at != want_closed_at:
+            bad.append("closed_at")
+        print(f"closed issue mismatch at index {index}: {','.join(bad)}", file=sys.stderr)
+        sys.exit(1)
+    if got_number in seen:
+        print(f"duplicate closed issue at index {index}", file=sys.stderr)
+        sys.exit(1)
+    seen.add(got_number)
+PY_EOF
+then
+  fail "the closed issues differ from the generated fixture"
+fi
 
 echo "scripts/test-flake-report: ok"
