@@ -1,151 +1,177 @@
-//! The per-page cache of a renderer's lines (`docs/tui.md`, "How a TUI
-//! extension runs").
-//!
-//! A renderer runs again only when its input or the width changes: a hit
-//! returns the stored lines without calling it, and an error or a wrong
-//! shape falls back to the built-in for that item without calling it
-//! again until the input changes. The failure is cached against the
-//! item's input, so a width change calls nothing for a failed input.
-//! Entries live with the paging window and are dropped with their pages.
+//! Page-qualified renderer entries, shared failure memo and pending notices.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use super::spans::{self, FittedLine};
-use super::{Failure, Input, RawSpan};
+use super::{Decision, Failure, FailureKind, Input};
 
-/// One cached item: its page, slot and input hash. The entry adds the
-/// width the renderer was given; the failure does not.
-type EntryKey = (usize, String, u64, u16);
-/// One failed item: its page, slot and input hash.
-type FailKey = (usize, String, u64);
-
-/// A renderer's cached lines, one entry per page, slot, input and width.
-/// Failures are cached per page, slot and input, and listed once for the
-/// fallback notice. The cache crosses threads behind `Arc` (the paging
-/// window shares it with the rows bound to each page), so it holds only
-/// `Send` data: keys, spans and failures. No guard crosses a renderer
-/// call, so a renderer that calls back into the cache never deadlocks
-/// here the way a held `RefCell` borrow would panic.
-#[derive(Debug, Default)]
-pub(crate) struct Cache {
-    inner: Mutex<Inner>,
+/// The drawn page, never a caller's current session.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct PageKey {
+    pub(crate) session: contract::SessionId,
+    pub(crate) index: usize,
 }
 
-/// What [`Cache`] locks: successful results by page, slot, input hash
-/// and width, failed inputs by page, slot and input hash, and failures
-/// not yet reported, each with its page and slot.
+type FailKey = (PageKey, String, u64, String, Option<String>);
+type EntryKey = (FailKey, u16);
+
 #[derive(Debug, Default)]
-struct Inner {
-    /// Successful results, by page, slot, input hash and width.
-    entries: HashMap<EntryKey, Arc<Vec<FittedLine>>>,
-    /// Failed inputs, by page, slot and input hash.
-    failed: HashSet<FailKey>,
-    /// Failures not yet reported, each with its page and slot.
-    pending: Vec<(usize, String, Failure)>,
+struct Pending {
+    failures: Vec<(PageKey, String, Failure)>,
+    notices: Vec<(String, String)>,
+}
+
+/// Successful entries are local; speculative draws share only failure state.
+#[derive(Debug)]
+pub(crate) struct Cache {
+    entries: Mutex<HashMap<EntryKey, Arc<Vec<FittedLine>>>>,
+    failed: Arc<Mutex<HashSet<FailKey>>>,
+    pending: Arc<Mutex<Pending>>,
+    owner: AtomicBool,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self {
+            entries: Mutex::default(),
+            failed: Arc::default(),
+            pending: Arc::default(),
+            owner: AtomicBool::new(true),
+        }
+    }
 }
 
 impl Cache {
-    /// The lock, with a poisoned one taken as is: only a panicking
-    /// thread poisons it, and a panic aborts the process, so no
-    /// poisoned lock is ever observed here.
-    fn lock(&self) -> MutexGuard<'_, Inner> {
-        support::lock(&self.inner)
+    /// A non-owning draw cache whose failures survive its disposal.
+    pub(crate) fn scratch_sharing_pending(&self) -> Self {
+        Self {
+            entries: Mutex::default(),
+            failed: Arc::clone(&self.failed),
+            pending: Arc::clone(&self.pending),
+            owner: AtomicBool::new(false),
+        }
     }
 
-    /// The renderer's lines for `input` at `width`: a hit returns the
-    /// stored lines; a miss calls `call` once and validates what it
-    /// returns before storing or drawing any of it. An error or a wrong
-    /// shape stores the failure under `extension` and returns none, so
-    /// the item falls back to its built-in row. No lock crosses the
-    /// renderer call, so a renderer that calls back into the cache never
-    /// deadlocks.
+    /// A landed copy gains authority to clear shared state on reload.
+    pub(crate) fn promote(&self) {
+        self.owner.store(true, Ordering::Relaxed);
+    }
+
+    /// Looks up only the selected winner and its output-relevant half identity.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the key and callback describe one bound row"
+    )]
     pub(crate) fn lines(
         &self,
-        page: usize,
+        page: PageKey,
         slot: &str,
         extension: &str,
+        half: Option<String>,
         input: &Input<'_>,
         width: u16,
-        call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>,
+        call: impl FnOnce() -> Decision,
     ) -> Option<Arc<Vec<FittedLine>>> {
-        let hash = match input {
-            Input::LedgerRow(row) => row.key(slot),
-        };
-        if self.lock().failed.contains(&(page, slot.to_owned(), hash)) {
+        let Input::LedgerRow(row) = input;
+        let key = (
+            page,
+            slot.to_owned(),
+            row.key(slot),
+            extension.to_owned(),
+            half,
+        );
+        if support::lock(&self.failed).contains(&key) {
             return None;
         }
-        let entry = (page, slot.to_owned(), hash, width);
-        if let Some(hit) = self.lock().entries.get(&entry).cloned() {
+        let entry = (key.clone(), width);
+        if let Some(hit) = support::lock(&self.entries).get(&entry).cloned() {
             return Some(hit);
         }
         crate::work::add(|work| work.renderer_calls += 1);
-        let rendered = call();
-        let flat = match input {
-            Input::LedgerRow(row) => row.flat,
-        };
-        match rendered {
-            Ok(lines) => match spans::fit(&lines, width, flat) {
-                Ok(fitted) => {
-                    let fitted = Arc::new(fitted);
-                    self.lock().entries.insert(entry, Arc::clone(&fitted));
-                    Some(fitted)
+        match call() {
+            Decision::Draw {
+                extension: actual,
+                lines,
+            } => {
+                if actual != extension {
+                    return None;
                 }
-                Err(shape) => {
-                    self.fail(
-                        page,
-                        slot,
-                        hash,
-                        Failure {
-                            extension: extension.to_owned(),
-                            message: shape.to_string(),
-                        },
-                    );
-                    None
+                match spans::fit(&lines, width, row.flat) {
+                    Ok(lines) => {
+                        let lines = Arc::new(lines);
+                        support::lock(&self.entries).insert(entry, Arc::clone(&lines));
+                        Some(lines)
+                    }
+                    Err(error) => {
+                        self.fail(
+                            key,
+                            Failure {
+                                kind: FailureKind::HookFailed,
+                                extension: actual,
+                                message: error.to_string(),
+                            },
+                        );
+                        None
+                    }
                 }
-            },
-            Err(failure) => {
-                self.fail(page, slot, hash, failure);
+            }
+            Decision::Fail(failure) => {
+                if failure.extension == extension {
+                    self.fail(key, failure);
+                }
                 None
             }
+            Decision::NotForSession { .. } => None,
         }
     }
 
-    /// Records `failure` against the input and lists it for the notice.
-    fn fail(&self, page: usize, slot: &str, hash: u64, failure: Failure) {
-        let mut inner = self.lock();
-        inner.failed.insert((page, slot.to_owned(), hash));
-        inner.pending.push((page, slot.to_owned(), failure));
+    fn fail(&self, key: FailKey, failure: Failure) {
+        if support::lock(&self.failed).insert(key.clone()) {
+            support::lock(&self.pending)
+                .failures
+                .push((key.0, key.1, failure));
+        }
     }
 
-    /// Drops the page's entries and failures.
-    pub(crate) fn drop_page(&self, page: usize) {
-        let mut inner = self.lock();
-        inner.entries.retain(|key, _| key.0 != page);
-        inner.failed.retain(|key| key.0 != page);
-        inner.pending.retain(|(at, _, _)| *at != page);
+    /// Selection notices have no page lifetime and are already deduplicated.
+    pub(crate) fn queue_notice(&self, notice: (String, String)) {
+        support::lock(&self.pending).notices.push(notice);
     }
 
-    /// Drops every successful entry at every width and keeps the
-    /// failures: a changed page width changes every derived width.
+    /// Only displayed owners may prune shared failures for this exact page.
+    pub(crate) fn drop_page(&self, page: PageKey) {
+        support::lock(&self.entries).retain(|key, _| key.0.0 != page);
+        if self.owner.load(Ordering::Relaxed) {
+            support::lock(&self.failed).retain(|key| key.0 != page);
+            support::lock(&self.pending)
+                .failures
+                .retain(|(at, _, _)| *at != page);
+        }
+    }
+
     pub(crate) fn drop_entries(&self) {
-        self.lock().entries.clear();
+        support::lock(&self.entries).clear();
     }
 
-    /// Drops every entry, failure and listed failure.
     pub(crate) fn clear(&self) {
-        let mut inner = self.lock();
-        inner.entries.clear();
-        inner.failed.clear();
-        inner.pending.clear();
+        self.drop_entries();
+        if self.owner.load(Ordering::Relaxed) {
+            support::lock(&self.failed).clear();
+            *support::lock(&self.pending) = Pending::default();
+        }
     }
 
-    /// The failures not yet reported, each with its slot, emptied.
     pub(crate) fn take_failures(&self) -> Vec<(String, Failure)> {
-        std::mem::take(&mut self.lock().pending)
+        std::mem::take(&mut support::lock(&self.pending).failures)
             .into_iter()
             .map(|(_, slot, failure)| (slot, failure))
             .collect()
+    }
+
+    pub(crate) fn take_notices(&self) -> Vec<(String, String)> {
+        std::mem::take(&mut support::lock(&self.pending).notices)
     }
 }
 

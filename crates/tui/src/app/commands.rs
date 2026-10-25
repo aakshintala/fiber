@@ -333,6 +333,17 @@ fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
 pub(super) fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
     // A reloaded extension draws again: its next failure reports anew.
     app.renderer_reported.clear();
+    if let Some(loader) = app
+        .home
+        .as_ref()
+        .and_then(|home| home.launch.extensions.clone())
+    {
+        let (renderer, notices) = loader.load();
+        app.use_renderer(renderer);
+        for (code, text) in notices {
+            app.push_notice(&code, text);
+        }
+    }
     Some(app.send_command("reload", None).0)
 }
 

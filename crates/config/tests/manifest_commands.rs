@@ -28,6 +28,42 @@ fn read(commands: Option<Value>) -> Result<Manifest, ConfigError> {
     read_manifest(dir.path())
 }
 
+#[test]
+fn tui_session_versions_require_strings_and_distinguish_null_from_omission() {
+    for (section, valid) in [
+        (json!({}), true),
+        (json!({"session_versions":{"min":"v1.0.0"}}), true),
+        (
+            json!({"session_versions":{"min":"v1.0.0","before":"v2.0.0"}}),
+            true,
+        ),
+        (json!({"session_versions":null}), false),
+        (json!({"session_versions":{}}), false),
+        (json!({"session_versions":{"min":1}}), false),
+        (
+            json!({"session_versions":{"min":"v1.0.0","before":null}}),
+            false,
+        ),
+        (
+            json!({"session_versions":{"min":"v1.0.0","before":2}}),
+            false,
+        ),
+    ] {
+        let dir = fakes::TempDir::new("fiber-tui-manifest");
+        dir.write(
+            "extension.json",
+            &json!({"name":"test","version":"v1.0.0","fiber":"0.1.0","api":1,"tui":section})
+                .to_string(),
+        );
+        let result = read_manifest(dir.path());
+        assert_eq!(result.is_ok(), valid, "{section}: {result:?}");
+        if let Ok(manifest) = result {
+            let tui: config::TuiManifest = manifest.tui.unwrap();
+            let _: Option<config::SessionVersions> = tui.session_versions;
+        }
+    }
+}
+
 fn refused_name(name: &str) -> bool {
     let result = read(Some(json!({ name: { "description": "d" } })));
     matches!(result, Err(ConfigError::WrongType { key, .. }) if key == "commands")

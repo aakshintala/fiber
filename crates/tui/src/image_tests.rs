@@ -640,7 +640,16 @@ fn a_flat_seam_draws_the_one_line() {
         flat: true,
         ..Default::default()
     };
-    let mut out = Rows::default().with_seam(ext.bind(0));
+    let mut out = Rows::default().with_seam(ext.bind(
+        crate::ext::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        crate::ext::SessionCtx {
+            session_id: contract::SessionId("s".into()),
+            halves: None,
+        },
+    ));
     super::ledger_rows(
         &part,
         &inline_layout(&part, (10, 20)),

@@ -83,6 +83,37 @@ fn the_slash_list_shows_the_name_row() {
 }
 
 #[test]
+fn reload_rebuilds_renderer_and_installs_an_empty_replacement() {
+    use std::sync::atomic::Ordering;
+    let mut app = attached();
+    let loader = crate::ext::tests::TestLoad::new("replacement");
+    app.set_home(crate::home::Launch {
+        extensions: Some(loader.clone()),
+        ..Default::default()
+    });
+    enter(&mut app, "/reload");
+    assert_eq!(loader.calls.load(Ordering::SeqCst), 1); // One rebuild per /reload.
+    assert!(matches!(
+        app.handle.get().unwrap().fills_for(
+            &crate::ext::SessionCtx {
+                session_id: contract::SessionId(SESSION.into()),
+                halves: None
+            },
+            "ledger_row"
+        ),
+        crate::ext::SlotSelection::Draw { .. }
+    ));
+    assert!(app.notices().iter().any(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="extension_failed" && text.contains("load fixture notice"))));
+    loader.enabled.store(false, Ordering::SeqCst);
+    enter(&mut app, "/reload");
+    assert_eq!(loader.calls.load(Ordering::SeqCst), 2);
+    assert!(
+        !app.handle.get().unwrap().fills("ledger_row"),
+        "empty result replaces the old renderer"
+    );
+}
+
+#[test]
 fn reload_sends_reload_without_args() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/reload"));

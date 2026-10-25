@@ -25,7 +25,7 @@ mod context_view;
 mod diff;
 mod editor;
 mod event_loop;
-mod ext;
+pub mod ext;
 mod feedback;
 pub mod files;
 mod focus;

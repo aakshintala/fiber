@@ -2839,6 +2839,16 @@ fn tail_open(
     history: History,
     extra: Vec<serde_json::Value>,
 ) -> TailOpen {
+    tail_open_prepared(log, full, history, extra, |_| {})
+}
+
+fn tail_open_prepared(
+    log: Vec<contract::Envelope>,
+    full: Full,
+    history: History,
+    extra: Vec<serde_json::Value>,
+    prepare: impl FnOnce(&mut crate::app::App),
+) -> TailOpen {
     use std::sync::Mutex;
     let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
     app.set_home(crate::home::Launch {
@@ -2860,6 +2870,7 @@ fn tail_open(
         ..Default::default()
     });
     app.set_size(60, 12);
+    prepare(&mut app);
     let (events_tx, events) = mpsc::channel();
     let backend = RecordBackend {
         inner: ratatui::backend::TestBackend::new(60, 12),
@@ -3117,6 +3128,204 @@ fn frames(open: &TailOpen) -> Vec<String> {
 /// The first frame draws the last page of the tail before the `full`
 /// raise: the preview's last reply shows, and the raise goes out after
 /// the frame's history read.
+#[test]
+fn startup_loader_completes_before_the_first_draw_observes_its_result() {
+    struct TracedLoad(mpsc::Sender<&'static str>);
+    impl crate::ext::Load for TracedLoad {
+        fn load(&self) -> (std::rc::Rc<dyn crate::ext::Renderer>, Vec<(String, String)>) {
+            let loaded: (std::rc::Rc<dyn crate::ext::Renderer>, Vec<(String, String)>) = (
+                std::rc::Rc::new(crate::ext::tests::SessionRenderer::new("first-renderer")),
+                vec![("extension_failed".into(), "FIRST-LOAD-RESULT".into())],
+            );
+            self.0.send("load completed").unwrap();
+            loaded
+        }
+    }
+    let pair = crate::event_loop::tests::open();
+    let watched = crate::pty_watch::watch(&pair.main, vec![b"\x1b]2;fiber\x07"]);
+    let (trace_tx, trace) = mpsc::channel();
+    let observer = trace_tx.clone();
+    let (done, finished) = mpsc::channel();
+    let mut launch = crate::event_loop::tests::launch();
+    launch.extensions = Some(Arc::new(TracedLoad(trace_tx)));
+    std::thread::spawn(move || {
+        let result = crate::event_loop::run_with(
+            pair.slave,
+            launch,
+            Box::new(|| Err(std::io::Error::other("unused"))),
+            Box::new(|_| {}),
+            fakes::clock::FakeClock::new(),
+            |tty, tx| {
+                crate::event_loop::Reader::spawn_with(
+                    tty,
+                    tx,
+                    |_| Err(std::io::Error::other("stop after first frame")),
+                    std::io::pipe,
+                    |builder, body| builder.spawn(body),
+                )
+            },
+            |builder, body| builder.spawn(body),
+        );
+        done.send(result).unwrap();
+    });
+    let wait = Deadline::after(DEADLINE);
+    let bytes = wait.recv_or_fail(&watched, "the first frame title");
+    assert!(
+        String::from_utf8_lossy(&bytes).contains("FIRST-LOAD-RESULT"),
+        "first draw must observe the loader result"
+    );
+    observer.send("first draw").unwrap();
+    // docs/tui.md:2659: the first frame waits for the loader, so load
+    // completion precedes the first draw observation in this trace.
+    assert_eq!(
+        wait.recv_or_fail(&trace, "load completion"),
+        "load completed"
+    );
+    assert_eq!(
+        wait.recv_or_fail(&trace, "first draw observation"),
+        "first draw"
+    );
+    assert!(wait.recv_or_fail(&finished, "terminal cleanup").is_err());
+}
+
+#[test]
+fn tail_speculation_failure_survives_replay_and_reaches_actual_app_drain_once() {
+    let mut log = super::handoff_log(3, "tail reply");
+    let at = log
+        .iter()
+        .position(|line| line.kind == "assistant_message_completed")
+        .unwrap();
+    let mut tool = log[at].clone();
+    tool.kind = "tool_call_requested".into();
+    tool.action_id = Some(contract::ActionId("a_tail_tool".into()));
+    tool.payload = json!({"name":"shell","arguments":{"command":"echo tail"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    log.insert(at, tool);
+    for (at, line) in log.iter_mut().enumerate() {
+        line.seq = Some(contract::Seq(at as u64));
+    }
+    let mut fake = crate::ext::tests::SessionRenderer::new("tail-failure");
+    fake.failure = Some(crate::ext::FailureKind::HookFailed);
+    let fake = std::rc::Rc::new(fake);
+    let renderer = fake.clone();
+    let mut open = tail_open_prepared(
+        log,
+        Full::Replay,
+        History::Windows,
+        Vec::new(),
+        move |app| {
+            app.install_renderer(renderer);
+            app.on_key(
+                crate::keys::Key::CtrlO,
+                contract::clock::Clock::now(&*fakes::clock::FakeClock::new()),
+            );
+        },
+    );
+    assert!(
+        !fake.calls.borrow().is_empty(),
+        "tail counted a rendered tool row"
+    );
+    open.lp.app.drawn(&[]);
+    let notices = open.lp.app.notices();
+    // docs/tui.md:2734: the failure keeps one hook_failed per extension and slot.
+    assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="hook_failed"&&text.contains("session-test"))).count(),1);
+    assert!(!open.lp.app.drawn(&[]), "a replay cannot report it twice");
+}
+
+#[test]
+fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
+    // Two contenders claim every ledger row: selection stays inert and
+    // queues one conflict notice through the shared sink, without halves.
+    #[derive(Debug)]
+    struct ConflictPair {
+        pending: std::cell::RefCell<Vec<(String, String)>>,
+        reported: std::cell::Cell<bool>,
+    }
+    impl crate::ext::Renderer for ConflictPair {
+        fn name(&self) -> &str {
+            "tail-a"
+        }
+        fn fills(&self, slot: &str) -> bool {
+            slot.starts_with("ledger_row")
+        }
+        fn fills_for(
+            &self,
+            _ctx: &crate::ext::SessionCtx,
+            slot: &str,
+        ) -> crate::ext::SlotSelection {
+            if !self.fills(slot) {
+                return crate::ext::SlotSelection::Absent;
+            }
+            if !self.reported.replace(true) {
+                self.pending.borrow_mut().push((
+                    "command_conflict".into(),
+                    format!("extensions tail-a, tail-b replace {slot}; the built-in stays"),
+                ));
+            }
+            crate::ext::SlotSelection::Suppressed
+        }
+        fn take_pending(&self) -> Vec<(String, String)> {
+            std::mem::take(&mut *self.pending.borrow_mut())
+        }
+        fn render(
+            &self,
+            _ctx: &crate::ext::SessionCtx,
+            _slot: &str,
+            _input: &crate::ext::Input<'_>,
+            _width: u16,
+            _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+        ) -> crate::ext::Decision {
+            crate::ext::Decision::Draw {
+                extension: "tail-a".into(),
+                lines: Vec::new(),
+            }
+        }
+    }
+    let mut log = super::handoff_log(3, "tail reply");
+    let at = log
+        .iter()
+        .position(|line| line.kind == "assistant_message_completed")
+        .unwrap();
+    let mut tool = log[at].clone();
+    tool.kind = "tool_call_requested".into();
+    tool.action_id = Some(contract::ActionId("a_tail_tool".into()));
+    tool.payload = json!({"name":"shell","arguments":{"command":"echo tail"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    log.insert(at, tool);
+    for (at, line) in log.iter_mut().enumerate() {
+        line.seq = Some(contract::Seq(at as u64));
+    }
+    let renderer = std::rc::Rc::new(ConflictPair {
+        pending: std::cell::RefCell::new(Vec::new()),
+        reported: std::cell::Cell::new(false),
+    });
+    let mut open = tail_open_prepared(
+        log,
+        Full::Replay,
+        History::Windows,
+        Vec::new(),
+        move |app| {
+            app.install_renderer(renderer);
+            app.on_key(
+                crate::keys::Key::CtrlO,
+                contract::clock::Clock::now(&*fakes::clock::FakeClock::new()),
+            );
+        },
+    );
+    open.lp.app.drawn(&[]);
+    let notices = open.lp.app.notices();
+    // docs/tui.md:2757: one command_conflict per slot and set of contenders.
+    assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="command_conflict"&&text.contains("tail-a, tail-b"))).count(),1);
+    assert!(
+        !open.lp.app.drawn(&[]),
+        "a replay cannot report the notice twice"
+    );
+}
+
 #[test]
 fn the_first_frame_draws_the_last_page_before_the_full_subscribe() {
     let log = super::handoff_log(3, "the last reply holds quokkas");

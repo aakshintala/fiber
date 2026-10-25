@@ -107,6 +107,21 @@ impl Rows {
         self
     }
 
+    /// Selects before lookup and forwards notices even without a drawing winner.
+    pub(crate) fn fills_for(&self, slot: &str) -> crate::ext::SlotSelection {
+        let Some(seam) = &self.seam else {
+            return crate::ext::SlotSelection::Absent;
+        };
+        let Some(renderer) = seam.handle.get() else {
+            return crate::ext::SlotSelection::Absent;
+        };
+        let selected = renderer.fills_for(&seam.ctx, slot);
+        for notice in renderer.take_pending() {
+            seam.cache.queue_notice(notice);
+        }
+        selected
+    }
+
     /// The bound renderer's lines for `slot`: none without a seam,
     /// without an installed renderer, or when the item falls back to
     /// its built-in row. A miss calls the renderer once and validates
@@ -114,18 +129,26 @@ impl Rows {
     pub(crate) fn ext_lines(
         &self,
         slot: &str,
+        extension: &str,
         input: &Input<'_>,
         width: u16,
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> Option<Arc<Vec<FittedLine>>> {
         let seam = self.seam.as_ref()?;
         let renderer = seam.handle.get()?;
-        let page = seam.page;
-        let cache = Arc::clone(&seam.cache);
-        let extension = renderer.name().to_owned();
-        cache.lines(page, slot, &extension, input, width, || {
-            renderer.render(slot, input, width, builtin)
-        })
+        let result = seam.cache.lines(
+            seam.page.clone(),
+            slot,
+            extension,
+            renderer.half(&seam.ctx, extension),
+            input,
+            width,
+            || renderer.render(&seam.ctx, slot, input, width, builtin),
+        );
+        for notice in renderer.take_pending() {
+            seam.cache.queue_notice(notice);
+        }
+        result
     }
 
     /// Enters what `target` opens: a collapsible body draws when `open`
