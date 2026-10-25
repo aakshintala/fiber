@@ -5506,12 +5506,30 @@ fn a_client_hanging_up_after_the_stop_ends_its_writer_and_the_close_still_comple
     let opened = Opened::open(Vec::new());
     let gate = Arc::clone(&opened.session.gate);
     let client = subscribed_client(&opened);
+    // The detach below runs only after the reader's read sees end of
+    // file, so the zero-clients line proves the server consumed the
+    // hang-up: the peer's FIN arrived. A line appended before that can
+    // reach the writer while the FIN is still in flight; its write
+    // succeeds into the closing socket and the writer parks at the stop
+    // with nothing left to fail it. Appending after the zero-clients
+    // line makes this append the write that fails, which ends the writer.
+    let mut hung_watcher = opened.log.watch();
     gate.conns.mark_stopped();
     drop(client);
-    // The writer learns of the hang-up from a write that fails. The
-    // roster line the hang-up itself queues can land before the peer's
-    // close does (it does on macOS), so a line appended after the drop
-    // returned, with the client's sockets closed, is the one that fails.
+    let (hung_tx, hung) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok(Some(line)) = hung_watcher.recv() {
+            if line.kind == "clients"
+                && line.payload.get("count").and_then(Value::as_u64) == Some(0)
+            {
+                if let Ok(()) = hung_tx.send(()) {}
+                return;
+            }
+        }
+    });
+    Deadline::after(DEADLINE)
+        .recv(&hung)
+        .expect("the reader saw the hang-up and detached");
     opened.log.append(&notice(), None, None).unwrap();
     assert!(
         gate.conns
