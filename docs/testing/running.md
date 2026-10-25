@@ -92,7 +92,8 @@ the merge commit's parents are main and the pull request head, and
 `git merge-base --is-ancestor` check below takes them as written. The first
 failure's text is kept to 6000 characters; longer text is cut and `...` is
 appended. Within one report job a test title files or comments once; a repeat
-is skipped. On a pull request run the report reads
+is skipped, and a repeated title takes its runner and detail from its first
+occurrence in file-name byte order. On a pull request run the report reads
 the failing file from the panic path: when main changed that file since
 the run's tested base it files nothing and notes the stale base in the
 summary, and when the pull request itself changed that file it comments on

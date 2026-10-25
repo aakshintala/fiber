@@ -160,8 +160,12 @@ up the complete open and closed issues, asks
 fetches only those endpoints, and runs
 `cargo xtask flake-report --tested-commit` to decide one JSON-lines action
 per unique test title, probing ancestry itself only for each selected
-latest fix. It uploads one combined `flake-report-data` artifact carrying
-the decision lines plus the selected runner lists. The write-only
+latest fix. It then runs `cargo xtask flake-classify`, which reads the
+runner lists and the two file lists git diffs from the merge base, and
+writes one classification line per unique test title: a stale base, a
+file the pull request owns, or the issue lookup. It uploads one combined
+`flake-report-data` artifact carrying the decision lines plus the
+classification lines. The write-only
 `flake_report` job holds `contents: read`, `pull-requests: write` and
 `issues: write`, checks nothing out and runs no Fiber code: it downloads
 only that exact combined artifact, with no Actions API call and no added
@@ -324,7 +328,7 @@ under 24 MiB and runs the benchmarks that gate each pull request, the rows the s
 (`docs/performance.md`), timing-only workloads and the `paging` jig at 3 runs and the rest at 5. The head and base
 binaries run only the timing benchmarks the selection chooses, in the same job on the same runner, so a
 timing comparison never crosses runners: one harness process alternates head and base timings,
-by sample for every timing row, and a row the selection does not choose runs on neither side while the budgets it feeds read skipped. Memory and
+by sample for every timing row. When a gated timing row breaches, the job runs a second harness process for that row alone, 4 more samples per side, and judges all samples. The `terminal attach` row and `session_list_ms` never remeasure: the first already takes 5 samples and the second maps to no row. A row the selection does not choose runs on neither side while the budgets it feeds read skipped. Memory and
 exact rows no skipped row feeds still run on the head and compare
 against the backstop's stored results for the base commit, the
 `benchmarks-<sha>` artifact, and a memory or exact budget the base fails

@@ -1244,6 +1244,203 @@ fn flake_report_events_prints_only_numbers_needing_event_fetches() {
 }
 
 #[test]
+fn flake_classify_prints_one_record_per_unique_title() {
+    // A repeated title is written once, from its first occurrence; a
+    // line with no TAB has an empty detail and no failing file.
+    let dir = TempDir::new("xtask-flake-classify");
+    dir.write(
+        "flaky/flaky-tests-linux.txt",
+        "main::a\tthread a panicked at crates/a.rs:10\nmain::a\tthread a panicked at crates/a.rs:10\n",
+    );
+    dir.write("flaky/flaky-tests-arm.txt", "main::b\n");
+    let flaky = dir.path().join("flaky");
+    let (code, out) = xtask(
+        &dir,
+        &[
+            "flake-classify",
+            "--flaky-dir",
+            flaky.to_str().unwrap(),
+            "--event",
+            "push",
+            "--tested-commit",
+            "1111111111111111111111111111111111111111",
+        ],
+        &[],
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    let records: Vec<serde_json::Value> = out
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    // Records are matched by title: their order is not part of this
+    // test's contract. The count holds docs/testing/running.md, "Flaky
+    // tests": "Within one report job a test title files or comments once;
+    // a repeat is skipped".
+    assert_eq!(records.len(), 2, "{out}");
+    let by_title = |title: &str| {
+        records
+            .iter()
+            .find(|record| record["title"] == title)
+            .unwrap_or_else(|| panic!("no record titled {title}: {out}"))
+    };
+    let b = by_title("Flaky test: main::b");
+    assert_eq!(b["action"], "lookup");
+    assert_eq!(b["runner"], "arm");
+    assert_eq!(b["detail"], "");
+    assert!(b.get("failing").is_none(), "{out}");
+    let a = by_title("Flaky test: main::a");
+    assert_eq!(a["action"], "lookup");
+    assert_eq!(a["failing"], "crates/a.rs");
+    assert_eq!(a["runner"], "linux");
+    assert_eq!(
+        a["tested"],
+        "tested 1111111111111111111111111111111111111111"
+    );
+}
+
+#[test]
+fn flake_classify_absent_compare_files_are_an_empty_list() {
+    // No --compare-files flag: a pull request run with the file only in
+    // the PR list is PR-owned, never stale.
+    let dir = TempDir::new("xtask-flake-classify-no-compare");
+    dir.write(
+        "flaky/flaky-tests-linux.txt",
+        "main::a\tthread a panicked at crates/a.rs:10\n",
+    );
+    dir.write("pr.txt", "crates/a.rs\n");
+    let flaky = dir.path().join("flaky");
+    let pr = dir.path().join("pr.txt");
+    let (code, out) = xtask(
+        &dir,
+        &[
+            "flake-classify",
+            "--flaky-dir",
+            flaky.to_str().unwrap(),
+            "--event",
+            "pull_request",
+            "--tested-commit",
+            "1111111111111111111111111111111111111111",
+            "--base",
+            "2222222222222222222222222222222222222222",
+            "--head",
+            "3333333333333333333333333333333333333333",
+            "--pr-files",
+            pr.to_str().unwrap(),
+        ],
+        &[],
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    let record: serde_json::Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
+    assert_eq!(record["action"], "pr-owned");
+}
+
+#[test]
+fn flake_classify_skips_directories_named_like_lists() {
+    // A directory named flaky-tests-d.txt holds no list: only the real
+    // file is read.
+    let dir = TempDir::new("xtask-flake-classify-dir");
+    dir.write(
+        "flaky/flaky-tests-linux.txt",
+        "main::a\tthread a panicked at crates/a.rs:10\n",
+    );
+    std::fs::create_dir_all(dir.path().join("flaky/flaky-tests-d.txt")).unwrap();
+    let flaky = dir.path().join("flaky");
+    let (code, out) = xtask(
+        &dir,
+        &[
+            "flake-classify",
+            "--flaky-dir",
+            flaky.to_str().unwrap(),
+            "--event",
+            "push",
+            "--tested-commit",
+            "1111111111111111111111111111111111111111",
+        ],
+        &[],
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    for line in out.lines() {
+        let record: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(record["title"], "Flaky test: main::a", "{out}");
+        assert_eq!(record["runner"], "linux", "{out}");
+    }
+    assert!(out.contains("Flaky test: main::a"), "{out}");
+}
+
+#[test]
+fn flake_classify_missing_flags_and_unreadable_files_are_errors() {
+    let dir = TempDir::new("xtask-flake-classify-errors");
+    dir.write("flaky/flaky-tests-linux.txt", "main::a\n");
+    let flaky = dir.path().join("flaky");
+    let missing = dir.path().join("missing.txt");
+    // A missing --flaky-dir exits 2.
+    assert_eq!(
+        xtask(&dir, &["flake-classify", "--event", "push"], &[], "").0,
+        2
+    );
+    // An unreadable --flaky-dir exits 2.
+    assert_eq!(
+        xtask(
+            &dir,
+            &[
+                "flake-classify",
+                "--flaky-dir",
+                missing.to_str().unwrap(),
+                "--event",
+                "push",
+                "--tested-commit",
+                "1111111111111111111111111111111111111111",
+            ],
+            &[],
+            "",
+        )
+        .0,
+        2
+    );
+    // A missing --event exits 2.
+    assert_eq!(
+        xtask(
+            &dir,
+            &[
+                "flake-classify",
+                "--flaky-dir",
+                flaky.to_str().unwrap(),
+                "--tested-commit",
+                "1111111111111111111111111111111111111111",
+            ],
+            &[],
+            "",
+        )
+        .0,
+        2
+    );
+    // An unreadable --pr-files exits 2.
+    assert_eq!(
+        xtask(
+            &dir,
+            &[
+                "flake-classify",
+                "--flaky-dir",
+                flaky.to_str().unwrap(),
+                "--event",
+                "push",
+                "--tested-commit",
+                "1111111111111111111111111111111111111111",
+                "--pr-files",
+                missing.to_str().unwrap(),
+            ],
+            &[],
+            "",
+        )
+        .0,
+        2
+    );
+}
+
+#[test]
 fn an_unknown_or_missing_command_is_an_error() {
     let dir = TempDir::new("xtask-unknown");
     assert_eq!(

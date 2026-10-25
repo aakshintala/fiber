@@ -31,9 +31,13 @@
 //! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
 //!   `docs-only: no`
 //! - `bench-report --head FILE [--base FILE --base-commit SHA] [--stored-base FILE --stored-commit SHA]
-//!   --doc docs/performance.md --event pull_request|push --comment FILE`: judges the benchmark result
+//!   --doc docs/performance.md --event pull_request|push --comment FILE [--remeasure FILE]
+//!   [--head-extra FILE --base-extra FILE]`: judges the benchmark result
 //!   files against the budget table and writes the pull request comment; exit 1
-//!   when a budget, a head self-check or the table mapping fails
+//!   when a budget, a head self-check or the table mapping fails. `--remeasure`
+//!   takes the path the skip list for the remeasure run is written to, when a
+//!   gated timing row breaches on a pull request; `--head-extra` and
+//!   `--base-extra` judge again with the remeasure run's samples merged in
 //! - `models-dev [--from FILE]`: regenerates the first-party model lists
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
@@ -56,6 +60,13 @@
 //!   it probes ancestry itself with `git merge-base --is-ancestor`, but
 //!   only for each title's latest closed event's non-null commit; without
 //!   it every fix probes unknown
+//! - `flake-classify --flaky-dir DIR --event NAME --tested-commit SHA
+//!   [--base SHA] [--head SHA] [--compare-files FILE] [--pr-files FILE]`:
+//!   reads the `flaky-tests-<runner>.txt` files under DIR and prints one
+//!   JSON object per unique title, in first-seen order: `lookup` when the
+//!   failure goes on to the issue lookup, `stale-base` when main changed
+//!   the failing file since base, `pr-owned` when the pull request changed
+//!   it (`docs/testing/running.md`, "Flaky tests")
 //! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
 //! - `must-succeed`: no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, except the kept bounds in `xtask/src/must_succeed.rs`
 //! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
@@ -400,6 +411,38 @@ fn run(args: &[String]) -> Result<bool, String> {
             }
             Ok(true)
         }
+        "flake-classify" => {
+            let dir = flag(rest, "--flaky-dir")?;
+            let event = flag(rest, "--event")?;
+            let tested = flag(rest, "--tested-commit")?;
+            let base = optional(rest, "--base").unwrap_or_default();
+            let head = optional(rest, "--head").unwrap_or_default();
+            let compare_files = match optional(rest, "--compare-files") {
+                Some(path) => read(&path)?,
+                None => String::new(),
+            };
+            let pr_files = match optional(rest, "--pr-files") {
+                Some(path) => read(&path)?,
+                None => String::new(),
+            };
+            let lists = flake_report::read_lists(Path::new(&dir))?;
+            let listed: Vec<flake_report::Listed> = lists
+                .iter()
+                .map(|(runner, text)| flake_report::Listed { runner, text })
+                .collect();
+            let run = flake_report::Run {
+                pull_request: event == "pull_request",
+                tested_commit: &tested,
+                base: &base,
+                head: &head,
+                compare_files: &compare_files,
+                pr_files: &pr_files,
+            };
+            for classified in flake_report::classify(&listed, &run) {
+                println!("{}", classified.line());
+            }
+            Ok(true)
+        }
         "logo-mask" => logo::run(rest),
         "bench-report" => {
             let event = bench::Event::parse(&flag(rest, "--event")?)?;
@@ -426,9 +469,38 @@ fn run(args: &[String]) -> Result<bool, String> {
                     },
                 }
             });
-            let out = bench::report(&doc, &head, base, stored, event, &base_commit);
+            // The remeasure run's samples, merged into the breached rows and
+            // judged again: both or neither, since one side alone cannot
+            // move the median both sides are judged on.
+            let extra = match (
+                optional(rest, "--head-extra"),
+                optional(rest, "--base-extra"),
+            ) {
+                (Some(head_path), Some(base_path)) => {
+                    let head_extra = read(&head_path)?;
+                    Some((head_extra, Some(read(&base_path))))
+                }
+                (None, None) => None,
+                _ => {
+                    return Err("--head-extra and --base-extra must be given together".to_owned());
+                }
+            };
+            // `report` is `report_with_extra` without extras, so one call
+            // covers both arms: `None` judges the first pass alone.
+            let out =
+                bench::report_with_extra(&doc, &head, base, stored, event, &base_commit, extra);
             std::fs::write(&comment_path, &out.comment)
                 .map_err(|e| format!("{comment_path}: {e}"))?;
+            // The skip list for the remeasure run: only when a gated timing
+            // row breached on a pull request, so the file's absence or
+            // emptiness means no second harness run.
+            if event == bench::Event::PullRequest
+                && let (Some(path), Some(skip)) =
+                    (optional(rest, "--remeasure"), &out.remeasure_skip)
+            {
+                std::fs::write(path, format!("{skip}\n"))
+                    .map_err(|e| format!("--remeasure: {e}"))?;
+            }
             report(
                 "bench-report",
                 &out.failures,
