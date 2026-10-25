@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 use std::num::NonZeroU32;
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 
 use contract::events::{
     AssistantMessageCompleted, Empty, Event, MessageOutcome, ToolCallRequested, TurnCompleted,
@@ -14,6 +14,7 @@ use contract::provider::{CallError, Delta, Finish, HostedCall, ModelRequest, Rep
 use contract::shapes::Failure;
 use contract::{ActionId, ErrorCode, TurnId};
 use serde_json::Value;
+use support::lock;
 
 use crate::{Error, Loop, Step, cancel, completion, ended, handoff, mint, usage, util};
 
@@ -103,13 +104,7 @@ impl Loop {
         if let Some(jobs) = &self.ending.jobs {
             jobs.stop_delegates();
         }
-        if self.is_delegate
-            && self
-                .spend_trip
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .tripped()
-        {
+        if self.is_delegate && lock(&self.spend_trip).tripped() {
             self.cancel.shutdown(Self::TREE_STOP_CODE);
         }
         completed

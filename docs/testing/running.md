@@ -81,7 +81,8 @@ developer machine.
 A failed binary-level test retries once. The binary-level tests are the test
 binaries in `crates/main/tests/`; no other test retries, including the unit
 tests in `crates/main/src/`. A pass on retry does not block the
-merge. CI opens a flake issue naming the test and its first failure, or
+merge, unless the pull request added or changed that test, in which case
+the test job fails (`docs/ci.md`). CI opens a flake issue naming the test and its first failure, or
 comments on the open one. The issue's title is `Flaky test: ` followed by
 the test as nextest prints it. Each body the report writes (the issue, a
 sighting comment, a pull request comment) names the tested commit on its own
@@ -91,7 +92,8 @@ the merge commit's parents are main and the pull request head, and
 `git merge-base --is-ancestor` check below takes them as written. The first
 failure's text is kept to 6000 characters; longer text is cut and `...` is
 appended. Within one report job a test title files or comments once; a repeat
-is skipped. On a pull request run the report reads
+is skipped, and a repeated title takes its runner and detail from its first
+occurrence in file-name byte order. On a pull request run the report reads
 the failing file from the panic path: when main changed that file since
 the run's tested base it files nothing and notes the stale base in the
 summary, and when the pull request itself changed that file it comments on

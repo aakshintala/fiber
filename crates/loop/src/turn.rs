@@ -319,10 +319,43 @@ impl Loop {
         if let Some(changed) = skills.changed {
             self.append_early(&Event::SkillsChanged(changed))?;
         }
+        if skills.commands_changed {
+            for notice in self.refresh_commands(&skills.inputs, &skills.found) {
+                self.append_early(&Event::Notice(notice))?;
+            }
+        }
         if let Some(date) = out.date {
             self.append_early(&Event::DateChanged(date))?;
         }
         Ok(())
+    }
+
+    /// Recomputes the session's `commands` rows from the check's inputs
+    /// and exact discovery snapshot, plus the current prompt and extension
+    /// rows, and replaces the session's stored answer with the
+    /// complete result (`docs/invocation.md`, "What each command does").
+    /// A change the check found never restores a stale or shadowed row:
+    /// every row comes from the current sources, through the same
+    /// precedence the construction sites build with. Without the wired
+    /// refresh nothing moves.
+    pub(crate) fn refresh_commands(
+        &mut self,
+        inputs: &prompt::PromptInputs,
+        found: &[crate::skills::Found],
+    ) -> Vec<contract::events::Notice> {
+        let Some(refresh) = self.commands_refresh.as_ref() else {
+            return Vec::new();
+        };
+        let prompts = self
+            .server_prompts
+            .as_ref()
+            .map(|prompts| prompts.rows.as_slice())
+            .unwrap_or(&[]);
+        let commands =
+            crate::commands::commands_from_found(inputs, found, prompts, &(refresh.extensions)());
+        self.skills.sync_commands(&commands.runnable);
+        (refresh.replace)(commands.rows);
+        commands.notices
     }
 
     /// Writes `event` before its turn started, when there is no turn id yet.

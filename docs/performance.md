@@ -186,7 +186,7 @@ rules out a derived database, and the ruling stands while this budget holds.
 ## Measuring
 
 Each number is the median of 5 runs, except a pull request's timing-only
-workloads and the `paging` jig, which are the median of 3. Every results file records the runner's CPU model.
+workloads and the `paging` jig, which are the median of 3; when a gated timing row's median is over its ceiling and over its base tolerance, that row is measured 4 more times on each side in the same job and the budget is judged on the median of all 7. The `terminal attach` row, which already takes 5 samples, and `session_list_ms`, which no row maps for a remeasure, never remeasure. Every results file records the runner's CPU model.
 Memory is peak RSS on Linux and peak
 footprint on macOS, by the method in `docs/dependencies.md`. The retained rows
 read RssAnon from `/proc/<pid>/status` 10 s after the work ends, once freed

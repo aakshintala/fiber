@@ -7,6 +7,7 @@ fn jobs(
     mutants: bool,
     bug_red: bool,
     release: bool,
+    stress: bool,
 ) -> BTreeMap<&'static str, bool> {
     BTreeMap::from([
         ("lint", lint),
@@ -15,6 +16,7 @@ fn jobs(
         ("mutants", mutants),
         ("bug_red", bug_red),
         ("release", release),
+        ("stress", stress),
     ])
 }
 
@@ -24,7 +26,7 @@ fn a_docs_only_pull_request_runs_no_job_after_the_selection() {
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(false, false, false, false, false),
+            jobs: jobs(false, false, false, false, false, false),
             shards: 0
         }
     );
@@ -45,7 +47,7 @@ fn a_code_pull_request_runs_what_it_selected() {
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, true, true, false),
+            jobs: jobs(true, true, true, true, false, true),
             shards: 7
         }
     );
@@ -63,13 +65,13 @@ fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
         100,
         &[],
     );
-    assert_eq!(plan.jobs, jobs(true, true, true, false, false));
+    assert_eq!(plan.jobs, jobs(true, true, true, false, false, true));
 }
 
 #[test]
 fn a_pull_request_that_selects_no_crate_skips_the_tests() {
     let plan = plan("crates", &[], "pull_request", false, false, true, 100, &[]);
-    assert_eq!(plan.jobs, jobs(true, false, false, false, false));
+    assert_eq!(plan.jobs, jobs(true, false, false, false, false, false));
     assert_eq!(plan.shards, 0);
 }
 
@@ -100,7 +102,66 @@ fn a_draft_pull_request_skips_test_but_runs_test_linux() {
     for job in ["lint", "test_linux", "mutants", "bug_red", "release"] {
         assert_eq!(draft.jobs[job], ready.jobs[job], "{job}");
     }
+    assert!(!draft.jobs["stress"]);
+    assert!(ready.jobs["stress"]);
     assert_eq!(draft.shards, ready.shards);
+}
+
+#[test]
+fn a_ready_pull_request_with_packages_runs_the_stress_job() {
+    let plan = plan(
+        "crates",
+        &strings(&["log"]),
+        "pull_request",
+        false,
+        true,
+        true,
+        100,
+        &[],
+    );
+    assert!(plan.jobs["stress"]);
+}
+
+#[test]
+fn a_draft_pull_request_skips_the_stress_job() {
+    let plan = plan(
+        "crates",
+        &strings(&["log"]),
+        "pull_request",
+        true,
+        true,
+        true,
+        100,
+        &[],
+    );
+    assert!(!plan.jobs["stress"]);
+}
+
+#[test]
+fn a_pull_request_without_packages_skips_the_stress_job() {
+    let plan = plan("crates", &[], "pull_request", false, true, true, 100, &[]);
+    assert!(!plan.jobs["stress"]);
+}
+
+#[test]
+fn a_push_skips_the_stress_job() {
+    let plan = plan(
+        "crates",
+        &strings(&["log"]),
+        "push",
+        false,
+        true,
+        true,
+        100,
+        &[],
+    );
+    assert!(!plan.jobs["stress"]);
+}
+
+#[test]
+fn a_docs_only_pull_request_skips_the_stress_job() {
+    let plan = plan("docs", &[], "pull_request", false, true, true, 100, &[]);
+    assert!(!plan.jobs["stress"]);
 }
 
 #[test]
@@ -126,7 +187,7 @@ fn a_docs_push_runs_lint_and_tests_but_no_mutants() {
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, false, false, true),
+            jobs: jobs(true, true, false, false, true, false),
             shards: 0
         }
     );
@@ -147,7 +208,7 @@ fn a_code_push_runs_lint_tests_and_release_but_no_mutants_or_bug_check() {
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, false, false, true),
+            jobs: jobs(true, true, false, false, true, false),
             shards: 0
         }
     );
@@ -165,7 +226,7 @@ fn a_pull_request_that_selects_the_binary_runs_the_release_job() {
         100,
         &[],
     );
-    assert_eq!(plan.jobs, jobs(true, true, true, false, true));
+    assert_eq!(plan.jobs, jobs(true, true, true, false, true, true));
 }
 
 #[test]
@@ -181,7 +242,7 @@ fn a_pull_request_that_runs_everything_runs_the_release_job() {
         100,
         &[],
     );
-    assert_eq!(plan.jobs, jobs(true, true, true, false, true));
+    assert_eq!(plan.jobs, jobs(true, true, true, false, true, true));
 }
 
 #[test]
@@ -196,7 +257,7 @@ fn a_pull_request_without_the_binary_skips_the_release_job() {
         100,
         &[],
     );
-    assert_eq!(plan.jobs, jobs(true, true, true, false, false));
+    assert_eq!(plan.jobs, jobs(true, true, true, false, false, true));
 }
 
 #[test]
@@ -285,7 +346,7 @@ fn a_pull_request_touching_only_the_performance_table_runs_the_release_job() {
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, false, false, true),
+            jobs: jobs(true, true, false, false, true, true),
             shards: 0
         }
     );
@@ -306,7 +367,7 @@ fn a_pull_request_touching_another_docs_file_skips_the_release_job() {
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, false, false, false),
+            jobs: jobs(true, true, false, false, false, true),
             shards: 0
         }
     );
@@ -351,7 +412,7 @@ fn a_docs_only_pull_request_touching_the_bench_crate_runs_no_job() {
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(false, false, false, false, false),
+            jobs: jobs(false, false, false, false, false, false),
             shards: 0
         }
     );
@@ -372,7 +433,7 @@ fn an_ordinary_docs_only_pull_request_still_runs_no_job() {
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(false, false, false, false, false),
+            jobs: jobs(false, false, false, false, false, false),
             shards: 0
         }
     );
