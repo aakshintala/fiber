@@ -943,10 +943,19 @@ fn the_acknowledgement_sends_the_branch_query_once() {
     let out = opened(&mut app);
     let id = branch_query(&ack(&mut app, &out));
     assert!(id.starts_with("c_"));
-    assert!(
-        app.on_line(session_line(SESSION, "turn_started", json!({"input": []})))
-            .is_empty()
+    // The turn asks `commands` again: answer with no rows so the
+    // acknowledgement sends only its branch query.
+    let asked = app.on_line(session_line(SESSION, "turn_started", json!({"input": []})));
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    assert_eq!(asked.len(), 1);
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    assert_eq!(asked["command"], "commands");
+    let answer = session_line(
+        SESSION,
+        "command_accepted",
+        json!({"command_id": asked["id"], "result": {"commands": []}}),
     );
+    assert!(app.on_line(answer).is_empty());
 }
 
 #[test]
