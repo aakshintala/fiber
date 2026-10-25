@@ -154,24 +154,7 @@ impl App {
         let id = super::mint();
         self.reconnect.sessions = Some(id.clone());
         self.reconnect.fresh.clear();
-        let mut lines = vec![serde_json::json!({"id": id, "command": "sessions"}).to_string()];
-        // The reset dropped every held total next to this request: ask
-        // every project on home again, one scoped first page each.
-        let projects: Vec<String> = self
-            .home
-            .as_ref()
-            .map(|home| {
-                home.sessions
-                    .sections(home.launch_project())
-                    .into_iter()
-                    .map(|section| section.project.to_owned())
-                    .collect()
-            })
-            .unwrap_or_default();
-        for project in &projects {
-            lines.extend(self.scoped_first(project));
-        }
-        lines
+        vec![serde_json::json!({"id": id, "command": "sessions"}).to_string()]
     }
 
     /// A `session_status` folded into the rows: after `sessions` was sent,

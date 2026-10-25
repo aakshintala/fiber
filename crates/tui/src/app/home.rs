@@ -69,6 +69,9 @@ pub(super) struct Home {
     fed: bool,
     /// The `feed` command waiting for its answer.
     feed_id: Option<String>,
+    /// A reconnect dropped every held total: the next outgoing pass
+    /// asks every project on home again, one scoped first page each.
+    refetch_scoped: bool,
     /// The latest `recent` command waiting for its answer, and whether it
     /// asked the first page.
     recent_ask: Option<(String, bool)>,
@@ -236,6 +239,7 @@ impl App {
             feed_id: None,
             recent_ask: None,
             scoped_asks: BTreeMap::new(),
+            refetch_scoped: false,
             subs: Subscriptions::default(),
             focus_list: None,
             list_scroll: Cell::new(0),
@@ -583,12 +587,27 @@ impl App {
             return out;
         }
         home.fed = true;
+        // A reconnect dropped every held total next to the `sessions`
+        // request this pass ends with: ask every project on home again
+        // here, where the link is back up.
+        let refetch: Vec<String> = if std::mem::replace(&mut home.refetch_scoped, false) {
+            home.sessions
+                .sections(home.launch_project())
+                .into_iter()
+                .map(|section| section.project.to_owned())
+                .collect()
+        } else {
+            Vec::new()
+        };
         let feed = mint();
         let recent = mint();
         home.feed_id = Some(feed.clone());
         home.recent_ask = Some((recent.clone(), true));
         let recent = recent_line(&recent, None, None);
         let mut out = vec![json!({"id": feed, "command": "feed"}).to_string(), recent];
+        for project in &refetch {
+            out.extend(self.scoped_first(project));
+        }
         out.extend(self.launch_lines());
         out.append(&mut asks);
         out
@@ -1180,7 +1199,7 @@ impl App {
     /// of duplicating the ask: the answer sends exactly one follow-up.
     /// Nothing goes out with no home, with the link down, or for an
     /// empty project.
-    pub(super) fn scoped_first(&mut self, project: &str) -> Vec<String> {
+    fn scoped_first(&mut self, project: &str) -> Vec<String> {
         if project.is_empty() || !self.outbox.is_up() {
             return Vec::new();
         }

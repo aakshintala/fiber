@@ -5092,8 +5092,8 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
                 .unwrap_or_else(|| panic!("a command: {line}"))
         })
         .collect();
-    assert_eq!(kinds, ["feed", "recent", "sessions", "recent", "recent"]);
-    assert_eq!(fanout_projects(&lines[3..]), ["-w", "-other"]);
+    assert_eq!(kinds, ["feed", "recent", "recent", "recent", "sessions"]);
+    assert_eq!(fanout_projects(&lines[2..4]), ["-w", "-other"]);
     // Totals are empty but rows stay for the refetch.
     assert_eq!(stored(&app, "-w"), None);
     assert_eq!(stored(&app, "-other"), None);

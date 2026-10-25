@@ -19,9 +19,11 @@ impl App {
         home.subs.reset();
         // Every held total goes with the old connection, with the scoped
         // ids waiting and their dirty flags: a stale scoped answer
-        // matches nothing afterwards. Rows stay for the refetch.
+        // matches nothing afterwards. Rows stay for the refetch, which
+        // the next outgoing pass queues into the home outbox.
         home.sessions.drop_all_totals();
         home.scoped_asks.clear();
+        home.refetch_scoped = true;
         self.settle_deletes();
     }
 }
