@@ -2475,6 +2475,22 @@ fn the_summary_names_no_head_skip_when_none() {
 }
 
 #[test]
+fn a_push_judges_a_head_row_even_when_it_is_marked_skipped() {
+    let unselected = with_skipped(head(), &["paging"]);
+    let out = judge(&unselected, None, Event::Push);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(
+        &out.comment,
+        "`paging` jig, its session at scale 1 and 160 by 48",
+    );
+    assert!(line.ends_with("| pass |"), "{line}");
+    assert!(
+        !line.contains("skipped: the selection did not run"),
+        "{line}"
+    );
+}
+
+#[test]
 fn a_skipped_base_leaves_the_head_ten_turns_skip_alone() {
     let headed = with_skipped(head(), &["10 busy turns"]);
     let unselected = with_skipped(base(), &["session start"]);
