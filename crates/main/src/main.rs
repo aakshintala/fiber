@@ -137,7 +137,9 @@ fn run() -> i32 {
             }),
             _,
         ) => open::resume(id, credential, hub, fiber),
-        cli::Invocation::Run(Some(cli::Commands::Continue), _) => open::continue_latest(fiber),
+        cli::Invocation::Run(Some(cli::Commands::Continue { hub: _ }), _) => {
+            open::continue_latest(fiber)
+        }
         cli::Invocation::Usage {
             ask: true,
             sentence,
@@ -181,14 +183,18 @@ fn run() -> i32 {
                 clock.as_ref(),
                 fiber,
             ),
-            Some(cli::SessionsCommands::Delete { cascade, yes, id }) => {
-                sessions_delete(&id, cascade, yes, clock.as_ref(), fiber)
-            }
+            Some(cli::SessionsCommands::Delete {
+                hub: _,
+                cascade,
+                yes,
+                id,
+            }) => sessions_delete(&id, cascade, yes, clock.as_ref(), fiber),
             Some(cli::SessionsCommands::Export { id, path }) => ::cli::export(&id, path.as_deref()),
             Some(cli::SessionsCommands::Search { all, json, text }) => {
                 ::cli::sessions_search(&text, all, json)
             }
             Some(cli::SessionsCommands::Prune {
+                hub: _,
                 older_than,
                 cascade,
                 dry_run,
