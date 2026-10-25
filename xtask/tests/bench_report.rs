@@ -105,6 +105,62 @@ fn head_extra_without_base_extra_is_a_usage_error() {
     assert_eq!(run(&["--base-extra", "be.json"]), Some(2));
 }
 
+/// A one-row Budgets table breaching the paging width gate on the
+/// artifact's medians: head 112.6 ms over the 106 ms slow ceiling and over
+/// base 97.7 ms by more than the 8 % tolerance.
+const WIDTH_DOC: &str = "# Performance\n\n## Budgets\n\n\
+     | Budget | Ceiling | Gated on | Basis | Fast ceiling | Middle ceiling | Slow ceiling | Fast tolerance | Slow tolerance |\n\
+     |---|---|---|---|---|---|---|---|---|\n\
+     | `paging` jig, slowest re-count at a new width | 48 ms | Linux x86_64 | picked | 67 ms | 77 ms | 106 ms | 16 % | 8 % |\n";
+
+/// The artifact's first pass on the eligible slow model: 3 width samples
+/// per side, medians 112.6 head and 97.7 base.
+const WIDTH_HEAD: &str = r#"{"schema":1,"runs":5,"timing_runs":3,"idle_secs":10,"cpu":"AMD EPYC 7763 64-Core Processor","metric_runs":{"paging_width_ms":3},"metrics":{"paging_width_ms":[113.42,112.56,102.27]},"failures":[]}"#;
+const WIDTH_BASE: &str = r#"{"schema":1,"runs":5,"timing_runs":3,"idle_secs":10,"cpu":"AMD EPYC 7763 64-Core Processor","metric_runs":{"paging_width_ms":3},"metrics":{"paging_width_ms":[116.54,97.18,97.74]},"failures":[]}"#;
+
+#[test]
+fn a_breached_timing_row_writes_the_remeasure_skip_list() {
+    // A pull request breaching a gated timing row writes the skip list for
+    // the remeasure run: every timing workload but the breached row.
+    let dir = TempDir::new("xtask-bench-report");
+    dir.write("doc.md", WIDTH_DOC);
+    dir.write("head.json", WIDTH_HEAD);
+    dir.write("base.json", WIDTH_BASE);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command
+        .args([
+            "bench-report",
+            "--doc",
+            "doc.md",
+            "--head",
+            "head.json",
+            "--base",
+            "base.json",
+            "--base-commit",
+            "base0000",
+            "--event",
+            "pull_request",
+            "--comment",
+            "comment.md",
+            "--remeasure",
+            "skip.txt",
+        ])
+        .current_dir(dir.path());
+    isolated(&mut command);
+    let child = command.spawn().unwrap();
+    let output = finished(
+        "xtask bench-report",
+        child,
+        &[],
+        Deadline::after(CHILD_WITHIN),
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("skip.txt")).unwrap(),
+        "session start,terminal first frame,sessions list,terminal attach,terminal wheel,session_list\n",
+    );
+}
+
 #[test]
 fn paired_extra_flags_are_accepted() {
     // The two-row table matches no benchmark, so the judged run fails with
