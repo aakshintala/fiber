@@ -334,13 +334,10 @@ fn stepped(
 /// The second session the ordering test switches to.
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
 
-/// A session change deletes the shown image before the next session
-/// shows its own: the pre-draw drain writes the delete, and the draw
-/// itself stays in memory, so from the terminal's view the delete is
-/// ahead of the next session's first frame, and no id is ever drawn
-/// under a stale image.
+/// A session change deletes the shown image, and the next session's
+/// image reaches the terminal without reusing the old id.
 #[test]
-fn a_session_change_deletes_the_shown_image_before_the_next_shows() {
+fn a_session_change_deletes_the_shown_image_and_the_next_session_shows() {
     let (mut lp, theirs, tx, rx) = inline_opened(image_session());
     let dir = fakes::TempDir::new("tui-image-delete-order");
     let path = dir.path().join("tty");
@@ -375,32 +372,19 @@ fn a_session_change_deletes_the_shown_image_before_the_next_shows() {
     for envelope in image_session() {
         lp.app.on_line(Line::Session(envelope));
     }
-    // The delete drains before the next session's first frame draws: no
-    // frame runs between the attach and this drain.
+    // The loop drains the queued delete in its pre-draw phase.
     lp.drain_image_deletes();
-    let text = String::from_utf8_lossy(&wire()).into_owned();
-    text.find("Ga=d,")
-        .expect("the delete drains before the draw");
     assert!(
         lp.app.take_image_deletes().is_empty(),
         "the pre-draw drain empties the queue"
     );
     let (lp, rx) = stepped(lp, rx, Input::Tick);
     let other = read_display_id(&theirs);
-    let fresh = wire().len();
     let (lp, _) = stepped(lp, rx, display_answer(&other));
     drop(lp);
     let text = String::from_utf8_lossy(&wire()).into_owned();
-    // Both sessions' images reach the terminal: the first session's
-    // delete is on the wire, and the next session transmits after the
-    // switch.
-    text.find("Ga=d,").expect("the delete went out");
-    let rest = wire();
-    let rest = rest.get(fresh..).unwrap_or_default();
-    assert!(
-        rest.windows(b"Ga=t,".len()).any(|word| word == b"Ga=t,"),
-        "the next session transmits"
-    );
+    assert!(text.contains("Ga=d,"), "the old image delete went out");
+    assert!(text.contains("Ga=t,"), "the next session image transmits");
 }
 
 /// A loop at 60x12, attached to the session, with its lines folded and

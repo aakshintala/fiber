@@ -3,6 +3,9 @@
 //! clickable line; inline rows arrive with kitty's graphics protocol.
 
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(not(test))]
+use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use contract::SessionId;
 use contract::shapes::ContentPart;
@@ -132,6 +135,78 @@ pub(crate) fn grid(part: &Part, columns: u16, cell: (u16, u16)) -> (u16, u16) {
     }
 }
 
+/// Image ids shared by every page layout during the TUI's lifetime.
+/// One `(generation, session, path)` keeps its id across refolds, while
+/// a new generation or image gets a never-reused id. The terminal's
+/// placeholder colour carries one byte, so ids stop at 255.
+#[derive(Clone, Debug)]
+pub(crate) struct IdAllocator(Arc<Mutex<IdState>>);
+
+#[derive(Debug, Default)]
+struct IdState {
+    generation: u64,
+    next: u32,
+    ids: BTreeMap<(u64, SessionId, String), u32>,
+}
+
+impl Default for IdAllocator {
+    fn default() -> Self {
+        #[cfg(test)]
+        {
+            Self::new()
+        }
+        #[cfg(not(test))]
+        {
+            static PROCESS: OnceLock<IdAllocator> = OnceLock::new();
+            PROCESS.get_or_init(Self::new).clone()
+        }
+    }
+}
+
+impl IdAllocator {
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(IdState::default())))
+    }
+
+    /// Uses a fresh identity scope after a session attachment.
+    pub(crate) fn advance_generation(&self) {
+        let mut state = self.lock();
+        state.generation = state.generation.saturating_add(1);
+    }
+
+    /// The current identity scope.
+    fn generation(&self) -> u64 {
+        self.lock().generation
+    }
+
+    /// Returns the id for this image in the current scope, allocating
+    /// the next unused placeholder colour or 0 after exhaustion.
+    fn id(&self, part: &Part) -> u32 {
+        let mut state = self.lock();
+        let key = (state.generation, part.session.clone(), part.path.clone());
+        if let Some(id) = state.ids.get(&key) {
+            return *id;
+        }
+        let mut id = state.next.saturating_add(1);
+        if id == crate::term::PROBE_ID {
+            id = id.saturating_add(1);
+        }
+        if id > u32::from(u8::MAX) {
+            return 0;
+        }
+        state.next = id;
+        state.ids.insert(key, id);
+        id
+    }
+
+    /// A poisoned lock still holds allocated ids, so keep them monotonic.
+    fn lock(&self) -> MutexGuard<'_, IdState> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// The chain's image registry: one id per `(session, path)`, in the
 /// order first seen (`docs/tui.md`, "Images"). Two paths never share
 /// an id, and neither does one path in two segments, so clicks name
@@ -140,7 +215,8 @@ pub(crate) fn grid(part: &Part, columns: u16, cell: (u16, u16)) -> (u16, u16) {
 pub(crate) struct Layout {
     pub(crate) ids: BTreeMap<(SessionId, String), u32>,
     pub(crate) parts: BTreeMap<u32, Part>,
-    next: u32,
+    allocator: IdAllocator,
+    generation: u64,
     pub(crate) sizing: Sizing,
     /// The images whose display failed, by `(session, path)`: each keeps
     /// its one clickable line, and no fetch asks for it again while this
@@ -149,6 +225,26 @@ pub(crate) struct Layout {
 }
 
 impl Layout {
+    /// Shares the TUI's process-lifetime id source with this layout.
+    pub(crate) fn set_allocator(&mut self, allocator: IdAllocator) {
+        self.allocator = allocator;
+        self.sync_generation();
+    }
+
+    /// Assigns fresh ids when the attached session generation changes.
+    fn sync_generation(&mut self) {
+        let generation = self.allocator.generation();
+        if generation == self.generation {
+            return;
+        }
+        let parts = std::mem::take(&mut self.parts);
+        self.ids.clear();
+        self.generation = generation;
+        for part in parts.into_values() {
+            self.note(&part);
+        }
+    }
+
     /// The id `path` drew under in `session`, when it has drawn.
     pub(crate) fn id(&self, session: &SessionId, path: &str) -> Option<u32> {
         self.ids.get(&(session.clone(), path.to_owned())).copied()
@@ -162,18 +258,15 @@ impl Layout {
     /// a part stays unnoted and draws its one line, and 0 names no
     /// image.
     pub(crate) fn note(&mut self, part: &Part) -> u32 {
+        self.sync_generation();
         let key = (part.session.clone(), part.path.clone());
         if let Some(id) = self.ids.get(&key) {
             return *id;
         }
-        let mut id = self.next.saturating_add(1);
-        if id == crate::term::PROBE_ID {
-            id = id.saturating_add(1);
-        }
-        if id > u32::from(u8::MAX) {
+        let id = self.allocator.id(part);
+        if id == 0 {
             return 0;
         }
-        self.next = id;
         self.ids.insert(key, id);
         self.parts.insert(id, part.clone());
         id

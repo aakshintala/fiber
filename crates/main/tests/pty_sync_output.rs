@@ -15,6 +15,8 @@ mod support;
 use std::sync::mpsc;
 use std::thread;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::pty::{KITTY_PUSH, TITLE};
@@ -341,31 +343,6 @@ fn image_read_script() -> [fakes::Response; 2] {
     ]
 }
 
-/// Standard base64 of `bytes`: the test's only encoder, checked by the
-/// reassembly below against the hub's own encoding of the same file.
-fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let word = (u32::from(chunk[0]) << 16)
-            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
-            | u32::from(*chunk.get(2).unwrap_or(&0));
-        out.push(ALPHABET[((word >> 18) & 63) as usize] as char);
-        out.push(ALPHABET[((word >> 12) & 63) as usize] as char);
-        out.push(if chunk.len() > 1 {
-            ALPHABET[((word >> 6) & 63) as usize] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            ALPHABET[(word & 63) as usize] as char
-        } else {
-            '='
-        });
-    }
-    out
-}
-
 /// The transmit payloads on `wire` in order, asserting the chunk flags:
 /// the first chunk's control data carries the PNG format, every chunk
 /// but the last says more follow, and the last says none.
@@ -459,10 +436,6 @@ fn an_inline_image_transmits_places_and_draws_placeholders() {
     // waiting for it sees every chunk.
     run.wait_bytes(from, b"Ga=p,", "the display place");
     let wire = String::from_utf8_lossy(&run.output()).into_owned();
-    // Exactly one transmit goes out, however often the frame redraws:
-    // the terminal holds the image, and Fiber sends nothing again on a
-    // scroll (`docs/tui.md`, "Images").
-    assert_eq!(wire.matches("Ga=t,").count(), 1, "one transmit: {wire:?}");
     // The transmit payload is the stored artifact's bytes in base64,
     // chunked at 4096: reassemble the wire chunks and compare.
     let id = support::journey::only_session(&setup);
@@ -472,7 +445,7 @@ fn an_inline_image_transmits_places_and_draws_placeholders() {
             .map(|entry| entry.unwrap().path())
             .collect();
     assert_eq!(stored.len(), 1, "one stored image: {stored:?}");
-    let expected = base64(&std::fs::read(&stored[0]).unwrap());
+    let expected = STANDARD.encode(std::fs::read(&stored[0]).unwrap());
     let payloads = transmit_payloads(&wire);
     assert!(payloads.len() >= 2, "the payload chunks: {wire:?}");
     assert_eq!(

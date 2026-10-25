@@ -8,7 +8,7 @@ use ratatui::layout::Alignment;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 
-use super::{Align, Layout, parts};
+use super::{Align, IdAllocator, Layout, parts};
 use crate::app::Target;
 use crate::format;
 use crate::rows::Rows;
@@ -435,7 +435,9 @@ fn the_registry_never_hands_out_31() {
 
 #[test]
 fn ids_stop_at_255_and_later_images_keep_their_one_line() {
+    let allocator = IdAllocator::default();
     let mut layout = Layout::default();
+    layout.set_allocator(allocator.clone());
     let mut ids = Vec::new();
     for at in 0..300 {
         let part =
@@ -466,6 +468,62 @@ fn ids_stop_at_255_and_later_images_keep_their_one_line() {
     let (rows, _) = out.into_parts();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0.to_string(), "    ▣ i_299.png · 10×20");
+
+    // Exhaustion is shared with new page layouts: a later image cannot
+    // receive a previous image's placeholder colour after a refold.
+    let later = super::Part::from_content(&other(), &image("artifacts/after.png", 10, 20))
+        .expect("the later image is kept");
+    let mut next_layout = Layout::default();
+    next_layout.set_allocator(allocator);
+    assert_eq!(next_layout.note(&later), 0);
+    next_layout.sizing = super::Sizing::Inline { cell: (10, 20) };
+    let mut out = Rows::default();
+    super::ledger_rows(
+        &later,
+        &next_layout,
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ after.png · 10×20");
+}
+
+#[test]
+fn ids_follow_image_identity_across_layouts_and_change_by_generation() {
+    let allocator = IdAllocator::default();
+    let first = super::Part::from_content(&session(), &image("artifacts/a.png", 10, 20))
+        .expect("the first image is kept");
+    let other_session = super::Part::from_content(&other(), &image("artifacts/a.png", 10, 20))
+        .expect("the other session's image is kept");
+
+    let mut first_layout = Layout::default();
+    first_layout.set_allocator(allocator.clone());
+    let first_id = first_layout.note(&first);
+    let mut refolded = Layout::default();
+    refolded.set_allocator(allocator.clone());
+    assert_eq!(refolded.note(&first), first_id, "a refold keeps its id");
+    assert_ne!(
+        refolded.note(&other_session),
+        first_id,
+        "distinct sessions never share an id"
+    );
+
+    allocator.advance_generation();
+    let mut next_generation = Layout::default();
+    next_generation.set_allocator(allocator.clone());
+    assert_ne!(
+        next_generation.note(&first),
+        first_id,
+        "an attached generation never reuses an id"
+    );
+    allocator.advance_generation();
+    assert_ne!(
+        first_layout.note(&first),
+        first_id,
+        "an existing layout moves to its new generation's id"
+    );
 }
 
 #[test]

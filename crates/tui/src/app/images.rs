@@ -67,6 +67,8 @@ pub(crate) struct Images {
     /// nothing transmitted in this generation is an older session's and
     /// drops (`docs/tui.md`, "Images").
     transmitted: BTreeMap<u32, u64>,
+    /// The process-lifetime image ids, shared with every page layout.
+    pub(super) id_allocator: image::IdAllocator,
     /// The session-change deletes queued for the loop's pre-draw drain:
     /// shown images leave the terminal before the next session draws.
     deletes: Vec<u8>,
@@ -353,10 +355,10 @@ impl App {
 
     /// Forgets the session's images on every session change: fetches
     /// and queued views go, and the generation moves, so a late
-    /// answer or viewer completion is dropped. The shown images leave
-    /// the terminal before their ids return: a later session reuses ids
-    /// from 1, and a late error for a retired id drops, never drawing
-    /// under a stale image (`docs/tui.md`, "Images").
+    /// answer or viewer completion is dropped. Shown images leave the
+    /// terminal, and the process-lifetime id allocator gives the next
+    /// generation different ids so a late error cannot affect it
+    /// (`docs/tui.md`, "Images").
     pub(in crate::app) fn forget_images(&mut self) {
         let shown: Vec<u32> = self
             .images
@@ -374,6 +376,10 @@ impl App {
             self.images.deletes.extend(crate::graphics::delete(id));
         }
         self.images.generation = self.images.generation.saturating_add(1);
+        self.images.id_allocator.advance_generation();
+        let ids = self.images.id_allocator.clone();
+        self.screen.pages_mut().set_image_ids(ids.clone());
+        self.attached_screen_mut().pages_mut().set_image_ids(ids);
     }
 
     /// Queues the display `read_file` commands for the inline images

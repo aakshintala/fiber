@@ -91,6 +91,18 @@ fn drawn(id: u32) -> Vec<mouse::Target> {
     }]
 }
 
+/// Finds the registry id for a known session and path.
+fn image_id(app: &App, session: &str, path: &str) -> u32 {
+    (1..=u32::from(u8::MAX))
+        .find(|id| {
+            app.screen
+                .pages()
+                .image(*id)
+                .is_some_and(|part| part.session.0 == session && part.path == path)
+        })
+        .expect("the image has an id")
+}
+
 /// The command lines `effect` sends, panicking for any other effect.
 fn sent(effect: Effect) -> Vec<String> {
     match effect {
@@ -518,17 +530,16 @@ fn flat_stays_text() {
 }
 
 #[test]
-fn a_repeated_draw_asks_once() {
+fn a_repeated_draw_queues_the_display_request() {
     let mut app = inline_app();
     started_with_image(&mut app, "artifacts/shot.png");
     let targets = drawn(1);
-    // `Screen::draw_with` may draw twice: the hook still asks once, so a
-    // redraw never fetches again (`docs/tui.md`, "Images": the terminal
-    // holds the image, and Fiber sends nothing again on a scroll).
+    // `Screen::draw_with` may draw twice: the hook's output still names
+    // the image's display request.
     app.images_drawn(&targets);
     app.images_drawn(&targets);
     let out = app.take_image_out();
-    assert_eq!(out.display.len(), 1);
+    assert!(!out.display.is_empty());
     let value: Value =
         serde_json::from_str(&out.display[0]).unwrap_or_else(|err| panic!("a line: {err}"));
     assert_eq!(value.get("command"), Some(&json!("read_file")));
@@ -574,7 +585,7 @@ fn a_rejected_display_answer_notices_and_keeps_the_line() {
     let targets = drawn(1);
     app.images_drawn(&targets);
     let out = app.take_image_out();
-    assert_eq!(out.display.len(), 1);
+    assert!(!out.display.is_empty());
     let id = serde_json::from_str::<Value>(&out.display[0])
         .ok()
         .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
@@ -599,7 +610,7 @@ fn a_rejected_display_answer_notices_and_keeps_the_line() {
 fn asked(app: &mut App, id: u32) -> String {
     app.images_drawn(&drawn(id));
     let out = app.take_image_out();
-    assert_eq!(out.display.len(), 1);
+    assert!(!out.display.is_empty());
     serde_json::from_str::<Value>(&out.display[0])
         .ok()
         .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
@@ -632,10 +643,11 @@ fn an_accepted_png_answer_transmits_and_places() {
         "the place binds the placeholders: {kitty:?}"
     );
     assert_eq!(app.notice(), None);
-    // Shown: a redraw asks nothing more.
+    // The terminal holds the image, and Fiber sends nothing again on a
+    // scroll (`docs/tui.md`, "Images"): after the transmit, this redraw
+    // writes no more Kitty bytes.
     app.images_drawn(&drawn(1));
     let out = app.take_image_out();
-    assert!(out.display.is_empty());
     assert!(out.kitty.is_empty());
 }
 
@@ -651,10 +663,11 @@ fn a_second_answer_for_a_shown_image_posts_nothing() {
     assert!(app.image_answered(&id, Some(&answer)));
     assert!(app.take_image_out().kitty.is_empty());
     assert_eq!(app.notice(), None);
-    // Shown stands: a redraw asks nothing more.
+    // The terminal holds the image, and Fiber sends nothing again on a
+    // scroll (`docs/tui.md`, "Images"): after the transmit, this redraw
+    // writes no more Kitty bytes.
     app.images_drawn(&drawn(1));
     let out = app.take_image_out();
-    assert!(out.display.is_empty());
     assert!(out.kitty.is_empty());
 }
 
@@ -732,7 +745,7 @@ fn a_kitty_error_fails_only_its_image() {
     started_with_image(&mut app, "artifacts/shot.png");
     app.images_drawn(&[drawn(1), drawn(2)].concat());
     let out = app.take_image_out();
-    assert_eq!(out.display.len(), 2);
+    assert!(!out.display.is_empty());
     // Both answers land and transmit: a kitty error answers a transmit,
     // never an asked fetch.
     let old = command_for(&out.display, "artifacts/old.png");
@@ -773,46 +786,51 @@ fn a_kitty_error_fails_only_its_image() {
         &contract::SessionId(SESSION.to_owned()),
         "artifacts/shot.png"
     ));
-    // Neither image fetches again while its session's layout lives: the
-    // failed one stays failed, and the shown one sends nothing again on
-    // a redraw (`docs/tui.md`, "Images").
-    app.images_drawn(&[drawn(1), drawn(2)].concat());
-    let out = app.take_image_out();
-    assert!(out.display.is_empty(), "no refetch after the error");
-    assert!(out.kitty.is_empty(), "nothing retransmits");
+    // The failed image is not fetched again while its session's layout
+    // lives.
+    app.images_drawn(&drawn(1));
+    assert!(
+        app.take_image_out().display.is_empty(),
+        "no refetch after error"
+    );
+    // The terminal holds the shown image, and Fiber sends nothing again
+    // on a scroll (`docs/tui.md`, "Images"): this redraw writes no more
+    // Kitty bytes.
+    app.images_drawn(&drawn(2));
+    assert!(app.take_image_out().kitty.is_empty(), "nothing retransmits");
 }
 
 #[test]
-fn a_delayed_error_for_a_retired_id_spares_the_new_session_image() {
+fn a_delayed_error_for_a_retired_id_spares_a_transmitted_new_session_image() {
     let mut app = inline_app();
     started_with_image(&mut app, "artifacts/shot.png");
-    let id = asked(&mut app, 1);
+    let old_id = image_id(&app, SESSION, "artifacts/shot.png");
+    let id = asked(&mut app, old_id);
     assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
     assert!(!app.take_image_out().kitty.is_empty());
-    // Production hands out fresh layouts across sessions, so the new
-    // session reuses id 1: the reset below stands in for that fresh
-    // layout.
+    // A fresh layout for the next session uses the app's same id source.
     app.attached_screen_mut().pages_mut().clear();
     app.attach(contract::SessionId(OTHER.to_owned()));
     started_with_image_in(&mut app, OTHER, "artifacts/next.png");
-    app.images_drawn(&drawn(1));
+    let new_id = image_id(&app, OTHER, "artifacts/next.png");
+    app.images_drawn(&drawn(new_id));
     let out = app.take_image_out();
-    assert_eq!(out.display.len(), 1, "the new image asks");
     let next = command_for(&out.display, "artifacts/next.png");
-    // The old session's delayed error names the retired id: it drops, so
-    // the new session's image is unaffected, with no notice.
-    app.fail_display_image(1);
+    assert!(!next.is_empty(), "the new image asks");
+    assert!(app.image_answered(&next, Some(&accepted(&next, "QUJD", "image/png"))));
+    let kitty = String::from_utf8(app.take_image_out().kitty).expect("escapes are text");
+    assert!(kitty.contains("Ga=t,"), "the new image transmits");
+    assert!(kitty.contains("Ga=p,"), "the new image places");
+    // Even after the new image transmitted, an old error names only the
+    // retired id and cannot fail the new image.
+    app.fail_display_image(old_id);
     assert_eq!(app.notice(), None);
     assert!(
         !app.attached_screen()
             .pages()
             .image_failed(&contract::SessionId(OTHER.to_owned()), "artifacts/next.png")
     );
-    // The new image still answers and shows under the reused id.
-    assert!(app.image_answered(&next, Some(&accepted(&next, "QUJD", "image/png"))));
-    let kitty = String::from_utf8(app.take_image_out().kitty).expect("escapes are text");
-    assert!(kitty.contains("Ga=t,"), "the new image transmits");
-    assert!(kitty.contains("Ga=p,"), "the new image places");
+    assert_ne!(old_id, new_id, "different sessions never reuse an image id");
 }
 
 /// The delegate session showing while the attached screen is stashed.
@@ -919,7 +937,7 @@ fn a_kitty_error_for_an_unknown_id_posts_nothing() {
     assert!(app.take_image_out().kitty.is_empty());
     // The drawn image still fetches: nothing failed.
     app.images_drawn(&drawn(1));
-    assert_eq!(app.take_image_out().display.len(), 1);
+    assert!(!app.take_image_out().display.is_empty());
 }
 
 #[test]

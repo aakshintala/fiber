@@ -11,6 +11,11 @@ use super::Pages;
 use crate::image;
 
 impl Pages {
+    /// Shares the app's process-lifetime image ids with this page layout.
+    pub(crate) fn set_image_ids(&mut self, ids: image::IdAllocator) {
+        self.images.set_allocator(ids);
+    }
+
     /// Notes every image part `envelope` carries under its segment
     /// session, handing each unseen `(session, path)` the next id; a
     /// pair already seen keeps its id, so a page dropped and folded

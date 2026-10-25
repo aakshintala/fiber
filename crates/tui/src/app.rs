@@ -402,6 +402,9 @@ impl App {
         };
         // One install reaches every page the screen draws.
         app.screen.pages_mut().ext.handle = app.handle;
+        app.screen
+            .pages_mut()
+            .set_image_ids(app.images.id_allocator.clone());
         app
     }
 
@@ -697,6 +700,7 @@ impl App {
             return;
         };
         let mut preview = self.attached_screen().pages().fresh();
+        preview.set_image_ids(self.images.id_allocator.clone());
         let mut busy = None;
         if let Some(lines) = tail.turn_lines() {
             for line in lines {
@@ -746,6 +750,7 @@ impl App {
     /// A fresh second `Pages` for the pass, held while a batch is open.
     fn fresh_fold(&self) -> Box<Pages> {
         let mut fold = self.attached_screen().pages().fresh();
+        fold.set_image_ids(self.images.id_allocator.clone());
         if self.screen.pages().holding() {
             fold.hold();
         }
