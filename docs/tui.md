@@ -256,6 +256,12 @@ list is one row tall, it shows the focused row's first line.
   right the id, turns, spend and age ("3h ago"). When there are more, a last
   row reads "… N more", and Enter or a click on it lists the rest of the
   project's exited sessions in place.
+- **The count beside `exited` is the hub's total** for the project, not the
+  loaded rows: the list holds every exited session the hub's `recent`
+  command names, newest first, and the count stays whole even when the
+  terminal only loads the first page. A stop, a crash, a delete or a
+  dropped connection asks the project's `recent` again instead of changing
+  the count here.
 
 The focused row is drawn on the selection bar. With no session, the list's
 rows hold two dim lines, centred: "No sessions yet." and "Type below and
