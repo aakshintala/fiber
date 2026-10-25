@@ -8,6 +8,7 @@ use std::time::Duration;
 use serde_json::{Map, Value};
 
 use contract::ErrorCode;
+use contract::ThinkingLevel;
 use contract::events::Notice;
 
 use crate::Source;
@@ -254,7 +255,6 @@ use Kind::{
 const YES: bool = true;
 const NO: bool = false;
 const LIFETIMES: &[&str] = &["5m", "1h"];
-const LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const DIAGNOSTIC_LEVELS: &[&str] = &["info", "debug"];
 
 pub(crate) const KEYS: &[Key] = &[
@@ -284,13 +284,13 @@ pub(crate) const KEYS: &[Key] = &[
     key("cache.warm_idle", Bool, YES, Some("false")),
     key("cache.warm_cap", CountBelow(12), YES, Some("2")),
     key("cache.diagnostics", Bool, YES, Some("false")),
-    key("thinking", OneOf(LEVELS), YES, None),
+    key("thinking", OneOf(&ThinkingLevel::NAMES), YES, None),
     key("models.*.handoff.enabled", Bool, YES, None),
     key("models.*.handoff.tokens", Count, YES, None),
     key("models.*.handoff.window_fraction", Number, YES, None),
     key("models.*.handoff.nudge", Bool, YES, None),
     key("models.*.cache.lifetime", OneOf(LIFETIMES), YES, None),
-    key("models.*.thinking", OneOf(LEVELS), YES, None),
+    key("models.*.thinking", OneOf(&ThinkingLevel::NAMES), YES, None),
     key("retry.attempts", Count, YES, Some("3")),
     key("retry.initial_delay_ms", Count, YES, Some("2000")),
     key("retry.max_delay_ms", Count, YES, Some("60000")),
