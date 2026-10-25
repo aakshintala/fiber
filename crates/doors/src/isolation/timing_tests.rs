@@ -102,6 +102,7 @@ fn held(sessions: &Path, id: &str, workspace: &str) -> Log {
             forked_from: None,
             rewind: None,
             worktree: None,
+            supervised: false,
         }),
         None,
         None,

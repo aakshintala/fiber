@@ -725,6 +725,7 @@ fn a_subscribe_through_the_hub_to_an_exited_delegate_is_refused() {
             forked_from: None,
             rewind: None,
             worktree: None,
+            supervised: false,
         }),
         None,
         None,

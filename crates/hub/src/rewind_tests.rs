@@ -254,9 +254,11 @@ impl Starter for GateStarter {
         overrides: &[&str],
         worktree: bool,
         continues: Option<&SessionId>,
+        supervised: bool,
     ) -> std::io::Result<Box<dyn crate::Started>> {
-        self.inner
-            .start(id, workspace, model, overrides, worktree, continues)
+        self.inner.start(
+            id, workspace, model, overrides, worktree, continues, supervised,
+        )
     }
 
     fn resume(
@@ -457,6 +459,7 @@ impl Starter for FailRewind {
         _overrides: &[&str],
         _worktree: bool,
         _continues: Option<&SessionId>,
+        _supervised: bool,
     ) -> std::io::Result<Box<dyn crate::Started>> {
         Err(std::io::Error::other("unused"))
     }

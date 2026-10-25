@@ -1448,6 +1448,7 @@ fn status(name: &str) -> Event {
         project: "-w".into(),
         clients: 0,
         closing: false,
+        supervised: false,
     })
 }
 
@@ -4023,6 +4024,7 @@ fn close_keeps_a_started_rewound_session_with_no_prompt() {
                 note: "n".into(),
             }),
             worktree: None,
+            supervised: false,
         })
     };
     let fiber = || {
@@ -4093,6 +4095,7 @@ fn print_ends_at_rewound_while_the_log_is_held() {
             }),
             rewind: None,
             worktree: None,
+            supervised: false,
         }),
         Event::Rewound(Rewound {
             new_session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".into()),

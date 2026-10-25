@@ -126,7 +126,13 @@ pub trait Starter: Send + Sync {
     /// "Isolation"); the session command creates the worktree itself.
     /// With `continues` naming a session, the session runs in that
     /// session's worktree instead, which `start` checked is the
-    /// workspace (`docs/invocation.md`, "Isolation").
+    /// workspace (`docs/invocation.md`, "Isolation"). With `supervised`
+    /// true, the session is driven by a program (`docs/permissions.md`,
+    /// "Supervised sessions").
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the start call takes each launch option once"
+    )]
     fn start(
         &self,
         id: &SessionId,
@@ -135,6 +141,7 @@ pub trait Starter: Send + Sync {
         overrides: &[&str],
         worktree: bool,
         continues: Option<&SessionId>,
+        supervised: bool,
     ) -> io::Result<Box<dyn Started>>;
 
     /// Starts the session command resuming `id` in `workspace`, the launch

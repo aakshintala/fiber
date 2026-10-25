@@ -70,6 +70,9 @@ pub(crate) struct FakeStarter {
     rewound: Arc<Mutex<Vec<(SessionId, PathBuf, SessionId)>>>,
     /// Each `start` call's worktree flag, in order.
     started_worktrees: Arc<Mutex<Vec<bool>>>,
+    /// Each `start` call's supervised flag, in order, beside
+    /// [`FakeStarter::started_worktrees`].
+    started_supervised: Arc<Mutex<Vec<bool>>>,
     /// Each `start` call's continued session, in order, beside
     /// [`FakeStarter::started_worktrees`].
     started_continues: Arc<Mutex<Vec<Option<SessionId>>>>,
@@ -219,6 +222,7 @@ impl FakeStarter {
             asked: Arc::new(Mutex::new(Vec::new())),
             rewound: Arc::new(Mutex::new(Vec::new())),
             started_worktrees: Arc::new(Mutex::new(Vec::new())),
+            started_supervised: Arc::new(Mutex::new(Vec::new())),
             started_continues: Arc::new(Mutex::new(Vec::new())),
             serving: Arc::new(Serving::default()),
             held: Arc::new(Mutex::new(0)),
@@ -276,6 +280,11 @@ impl FakeStarter {
     /// Each `start` call's worktree flag, in order.
     pub(crate) fn started_worktrees(&self) -> Vec<bool> {
         lock(&self.started_worktrees).clone()
+    }
+
+    /// Each `start` call's supervised flag, in order.
+    pub(crate) fn started_supervised(&self) -> Vec<bool> {
+        lock(&self.started_supervised).clone()
     }
 
     /// Each `start` call's continued session, in order: `None` for a
@@ -364,8 +373,10 @@ impl Starter for FakeStarter {
         _overrides: &[&str],
         worktree: bool,
         continues: Option<&SessionId>,
+        supervised: bool,
     ) -> std::io::Result<Box<dyn Started>> {
         lock(&self.started_worktrees).push(worktree);
+        lock(&self.started_supervised).push(supervised);
         lock(&self.started_continues).push(continues.cloned());
         self.launch(id)
     }

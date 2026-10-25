@@ -755,6 +755,7 @@ fn the_live_fold_and_the_history_fold_agree_at_each_side_of_the_cut() {
         forked_from: None,
         rewind: None,
         worktree: None,
+        supervised: false,
     });
     log.append(&started, None, None).unwrap();
     log.append(
