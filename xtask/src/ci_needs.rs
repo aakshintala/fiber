@@ -9,6 +9,8 @@ pub(crate) const WORKFLOW: &str = ".github/workflows/ci.yml";
 /// The doc that names the report jobs, relative to the working directory.
 pub(crate) const CI_DOC: &str = "docs/ci.md";
 /// Jobs that report and gate nothing; named in docs/ci.md, "The merge gate".
+/// `stress` is a temporary pilot entry: remove it and add `stress` to
+/// `ci`'s `needs` when the owner makes it required (#3190 item 5).
 pub(crate) const REPORT_JOBS: [&str; 6] = [
     "backstop_report",
     "bench_comment",

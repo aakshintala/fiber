@@ -12,6 +12,7 @@ fail-fast = { max-fail = 1, terminate = "immediate" }
 # nextest under this profile, so a selected test fails instead of passing
 # on retry, and the selected tests share every core.
 [profile.stress]
+inherits = "default"
 retries = 0
 test-threads = "num-cpus"
 
