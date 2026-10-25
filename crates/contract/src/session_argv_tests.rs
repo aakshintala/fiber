@@ -55,6 +55,7 @@ fn full_value_lists_every_field_in_order_with_login_shell_last() {
         delegate_id: Some(JobId("j_cccccccccccccccc".to_owned())),
         depth: Some(2),
         login_shell: true,
+        ..SessionArgv::default()
     };
     assert_eq!(
         rendered(&args.to_argv()),
@@ -176,6 +177,32 @@ fn continues_absent_renders_nothing_and_set_renders_once_after_rewound_from() {
         .position(|arg| arg == "--rewound-from=s_aaaaaaaaaaaaaaaa")
         .expect("rewound-from renders");
     assert_eq!(argv[rewound_at + 1], "--continues=s_dddddddddddddddd");
+}
+
+#[test]
+fn supervised_absent_renders_nothing_and_set_renders() {
+    let absent = SessionArgv {
+        login_shell: true,
+        ..SessionArgv::default()
+    };
+    assert!(
+        !rendered(&absent.to_argv())
+            .iter()
+            .any(|arg| arg.starts_with("--supervised"))
+    );
+    let set = SessionArgv {
+        login_shell: true,
+        supervised: true,
+        ..SessionArgv::default()
+    };
+    let argv = rendered(&set.to_argv());
+    // Presence when set, absence when not: no area doc pins the flag's count
+    // or its place after `--login-shell`, so the test pins neither, only
+    // that a set flag renders.
+    assert!(
+        argv.iter().any(|arg| arg == "--supervised"),
+        "set supervised renders: {argv:?}"
+    );
 }
 
 #[test]

@@ -69,6 +69,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         // the real one: the error returns first, so it never leaves.
         workspace: String::new(),
         worktree: None,
+        supervised: false,
         model: None,
         credential: None,
         thinking: None,
@@ -276,6 +277,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     {
         pass.workspace = Some(started.workspace.clone());
         resumed.worktree = started.worktree.clone();
+        resumed.supervised = started.supervised;
     } else if let Event::UsageRecorded(recorded) = &event {
         // The call's model is not the session's: the line may be a
         // delegate's copy, a reviewer's call or an extension's.

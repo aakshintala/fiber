@@ -133,6 +133,7 @@ fn log_with(dir: &Path, calls: &[Call<'_>]) {
             forked_from: None,
             rewind: None,
             worktree: None,
+            supervised: false,
         }),
     )];
     for (index, (action, name, arguments, effects, paths, ran)) in calls.iter().enumerate() {
@@ -359,6 +360,7 @@ fn a_rewound_loop_takes_its_thinking_and_its_trigger_from_the_logged_build() {
             forked_from: None,
             rewind: None,
             worktree: None,
+            supervised: false,
         }),
     ))
     .unwrap();
@@ -489,6 +491,7 @@ fn a_rewound_loop_writes_no_model_changed_for_a_later_label_switch() {
             forked_from: None,
             rewind: None,
             worktree: None,
+            supervised: false,
         }),
     ))
     .unwrap();
@@ -659,6 +662,7 @@ fn parent_started() -> Event {
         forked_from: None,
         rewind: None,
         worktree: None,
+        supervised: false,
     })
 }
 
@@ -889,6 +893,7 @@ fn handoff_session_started(from: Option<(&str, u64)>) -> Event {
         }),
         rewind: None,
         worktree: None,
+        supervised: false,
     })
 }
 
@@ -1614,6 +1619,7 @@ fn a_forked_loop_writes_no_model_changed_for_a_later_label_switch() {
             forked_from: None,
             rewind: None,
             worktree: None,
+            supervised: false,
         }),
     ))
     .unwrap();

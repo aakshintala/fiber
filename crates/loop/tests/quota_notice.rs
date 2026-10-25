@@ -246,6 +246,7 @@ fn quota_notice_fold_reads_only_the_sessions_own_log() {
             }),
             rewind: None,
             worktree: None,
+            supervised: false,
         }),
         None,
         None,

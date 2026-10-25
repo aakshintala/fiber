@@ -169,6 +169,7 @@ pub(crate) fn session_forked(
             how: r#loop::Continuation::Fork { parent },
         }),
         context.reads,
+        false,
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),
@@ -246,6 +247,7 @@ pub(crate) fn session_rewound(
             },
         }),
         context.reads,
+        false,
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),

@@ -463,6 +463,7 @@ fn a_subscribe_to_an_exited_session_is_refused_while_a_sessions_stop_runs() {
         &[],
         false,
         None,
+        false,
     )
     .expect("the closing session binds");
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
@@ -867,13 +868,15 @@ impl Starter for GateStarter {
         overrides: &[&str],
         worktree: bool,
         continues: Option<&SessionId>,
+        supervised: bool,
     ) -> std::io::Result<Box<dyn Started>> {
         self.entered.send(()).unwrap_or(());
         if let Some(release) = support::lock(&self.release).take() {
             release.recv().unwrap_or(());
         }
-        self.inner
-            .start(id, workspace, model, overrides, worktree, continues)
+        self.inner.start(
+            id, workspace, model, overrides, worktree, continues, supervised,
+        )
     }
 
     fn resume(
@@ -1481,6 +1484,77 @@ fn start_with_worktree_false_starts_in_place() {
 }
 
 #[test]
+fn start_with_supervised_true_records_supervised() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command(
+        "c_1",
+        "start",
+        json!({"workspace": workspace, "supervised": true}),
+    ));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_1");
+    assert!(result.get("session_id").is_some());
+    // One accepted `start` starts one session (`docs/invocation.md`, "The
+    // hub", `start`: "Starts a session in the workspace ... and answers with
+    // its `session_id`"), so the single launch carries the request's flag.
+    assert_eq!(starter.started_supervised(), [true]);
+}
+
+#[test]
+fn start_without_supervised_records_not_supervised() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_1");
+    assert!(result.get("session_id").is_some());
+    // One accepted `start` starts one session (`docs/invocation.md`, "The
+    // hub", `start`: "Starts a session in the workspace ... and answers with
+    // its `session_id`"), so the single launch carries the absent flag as
+    // false.
+    assert_eq!(starter.started_supervised(), [false]);
+}
+
+#[test]
+fn start_rejects_a_misshaped_supervised() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    for (name, supervised) in [
+        ("c_1", json!("yes")),
+        ("c_2", Value::Null),
+        ("c_3", json!({"supervised": true})),
+    ] {
+        client.send(&command(
+            name,
+            "start",
+            json!({"workspace": workspace, "supervised": supervised}),
+        ));
+        let (code, _, _) = rejected(&client.next("the rejection"));
+        assert_eq!(code, "invalid_arguments", "{name}");
+    }
+    // A rejected `start` launches nothing: `supervised` is a boolean,
+    // optional arg (`docs/invocation.md`, "The hub", `start`), and a request
+    // that does not fit is rejected `invalid_arguments` before any session
+    // starts (same page: a `content` that does not fit `prompt`'s `args` is
+    // "rejected `invalid_arguments` before any session starts"; the arg
+    // validation in `start_args` runs before `start::run` either way).
+    assert!(starter.started_supervised().is_empty());
+}
+
+#[test]
 fn start_without_worktree_starts_in_place() {
     let temp = Temp::new();
     let starter = FakeStarter::bind_and_hold(&temp.dir);
@@ -1827,10 +1901,11 @@ impl Starter for Recording {
         overrides: &[&str],
         worktree: bool,
         continues: Option<&SessionId>,
+        supervised: bool,
     ) -> std::io::Result<Box<dyn Started>> {
         lock(&self.seen).push(overrides.iter().map(|text| text.to_string()).collect());
         self.inner
-            .start(id, workspace, model, &[], worktree, continues)
+            .start(id, workspace, model, &[], worktree, continues, supervised)
     }
 
     fn resume(

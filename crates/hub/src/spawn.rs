@@ -54,6 +54,7 @@ impl Starter for SpawnStarter {
         overrides: &[&str],
         worktree: bool,
         continues: Option<&SessionId>,
+        supervised: bool,
     ) -> std::io::Result<Box<dyn Started>> {
         let environment = self.environments.get();
         let mut command = start_command(
@@ -64,6 +65,7 @@ impl Starter for SpawnStarter {
             overrides,
             worktree,
             continues,
+            supervised,
             login_shell(&environment),
         );
         apply(&mut command, &environment);
@@ -162,6 +164,7 @@ fn start_command(
     overrides: &[&str],
     worktree: bool,
     continues: Option<&SessionId>,
+    supervised: bool,
     login_shell: bool,
 ) -> Command {
     session_command_from(
@@ -173,6 +176,7 @@ fn start_command(
             overrides: overrides.iter().map(|text| (*text).to_owned()).collect(),
             worktree,
             continues: continues.cloned(),
+            supervised,
             login_shell,
             ..SessionArgv::default()
         },
