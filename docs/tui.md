@@ -2397,6 +2397,10 @@ image, in the prompt bubble.
 - The terminal holds the image and moves it with the text, through kitty's
   Unicode placeholders. Fiber keeps no decoded image and sends nothing again
   on a scroll.
+- When the session changes, Fiber deletes the previous session's inline
+  image placements before drawing the next session and does not write those
+  placements again; images the next session presents are written for the new
+  session.
 - An image part in the log carries its width and height, so paging counts its
   rows without decoding it.
 
