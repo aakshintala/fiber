@@ -434,6 +434,41 @@ fn the_registry_never_hands_out_31() {
 }
 
 #[test]
+fn ids_stop_at_255_and_later_images_keep_their_one_line() {
+    let mut layout = Layout::default();
+    let mut ids = Vec::new();
+    for at in 0..300 {
+        let part =
+            super::Part::from_content(&session(), &image(&format!("artifacts/i_{at}.png"), 10, 20))
+                .expect("the image is kept");
+        ids.push(layout.note(&part));
+    }
+    // 255 colours minus the probe's: every handed-out id stays unique
+    // and paintable, and past exhaustion a part stays unnoted.
+    let mut handed: Vec<u32> = ids.iter().copied().filter(|id| *id != 0).collect();
+    handed.sort_unstable();
+    handed.dedup();
+    assert_eq!(handed.len(), 254, "one id per image but the probe's");
+    assert_eq!(handed.first(), Some(&1));
+    assert_eq!(handed.last(), Some(&255));
+    assert!(!handed.contains(&31), "the probe's id is never an image");
+    assert!(
+        ids.iter().skip(254).all(|id| *id == 0),
+        "past exhaustion nothing is noted"
+    );
+    // An unnoted part draws its one clickable line, never a shared grid.
+    let last = super::Part::from_content(&session(), &image("artifacts/i_299.png", 10, 20))
+        .expect("the image is kept");
+    assert_eq!(layout.id(&session(), "artifacts/i_299.png"), None);
+    layout.sizing = super::Sizing::Inline { cell: (10, 20) };
+    let mut out = Rows::default();
+    super::ledger_rows(&last, &layout, 80, Align::Left { indent: 4 }, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ i_299.png · 10×20");
+}
+
+#[test]
 fn grid_keeps_a_small_image_at_its_natural_cells() {
     // A small image draws as it is: no upscale past its natural cells.
     assert_eq!(super::grid(&sized(20, 40), 60, (10, 20)), (2, 2));

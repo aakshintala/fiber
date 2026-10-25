@@ -62,6 +62,11 @@ pub(crate) struct Images {
     refused: BTreeSet<(String, String)>,
     /// The inline images' display fetches, by `(session, path)`.
     display: BTreeMap<(String, String), Display>,
+    /// The generation that last queued a transmit for each placeholder
+    /// id: a kitty error answers a transmit, so an error for an id
+    /// nothing transmitted in this generation is an older session's and
+    /// drops (`docs/tui.md`, "Images").
+    transmitted: BTreeMap<u32, u64>,
     /// The session-change deletes queued for the loop's pre-draw drain:
     /// shown images leave the terminal before the next session draws.
     deletes: Vec<u8>,
@@ -216,6 +221,7 @@ impl App {
             .out
             .kitty
             .extend(crate::graphics::place(fetch.id, cols, rows));
+        self.images.transmitted.insert(fetch.id, fetch.generation);
         self.images.display.insert(
             key,
             Display {
@@ -228,11 +234,20 @@ impl App {
 
     /// Fails the display fetch `fetch` for `key` with one notice: the
     /// image keeps its one clickable line, is not asked for again while
-    /// its session's layout lives, and resident pages recount to the
-    /// one-line form (`docs/tui.md`, "Images").
+    /// its session's layout lives, and the owning pages recount to the
+    /// one-line form (`docs/tui.md`, "Images"). The owner is the
+    /// attached screen while no transcript is swapped in, else the
+    /// swapped-in transcript for its own session and the stashed screen
+    /// for the attached one.
     fn fail_display(&mut self, key: &(String, String), reason: &str, fetch: Display) {
         let session = contract::SessionId(key.0.clone());
-        self.screen.pages_mut().fail_image(&session, &key.1);
+        if self.is_item_session(&session) {
+            self.screen.pages_mut().fail_image(&session, &key.1);
+        } else {
+            self.attached_screen_mut()
+                .pages_mut()
+                .fail_image(&session, &key.1);
+        }
         self.images.display.insert(
             key.clone(),
             Display {
@@ -246,10 +261,15 @@ impl App {
             .push("io_failed", format!("Could not show {name}: {reason}."));
     }
 
-    /// A kitty error reply for `id`: its display image fails with one
-    /// notice, and is not asked for again while its session's layout
-    /// lives (`docs/tui.md`, "Images").
+    /// A kitty error reply for `id`: the display image that transmitted
+    /// under `id` in this generation fails with one notice, and is not
+    /// asked for again while its session's layout lives (`docs/tui.md`,
+    /// "Images"). An id nothing transmitted in this generation names an
+    /// older session's image, so the error drops.
     pub(crate) fn fail_display_image(&mut self, id: u32) {
+        if self.images.transmitted.get(&id) != Some(&self.images.generation) {
+            return;
+        }
         let failed: Vec<((String, String), Display)> = self
             .images
             .display
@@ -335,8 +355,8 @@ impl App {
     /// and queued views go, and the generation moves, so a late
     /// answer or viewer completion is dropped. The shown images leave
     /// the terminal before their ids return: a later session reuses ids
-    /// from 1, never drawing under a stale image
-    /// (`docs/tui.md`, "Images").
+    /// from 1, and a late error for a retired id drops, never drawing
+    /// under a stale image (`docs/tui.md`, "Images").
     pub(in crate::app) fn forget_images(&mut self) {
         let shown: Vec<u32> = self
             .images

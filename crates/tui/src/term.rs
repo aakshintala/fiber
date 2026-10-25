@@ -29,6 +29,10 @@ const MOTION: &[u8] = b"\x1b[?1003h";
 /// registry never hands out (`docs/tui.md`, "Images").
 pub(crate) const PROBE_ID: u32 = 31;
 
+/// One cell's fallback size in pixels, while the tty reports none
+/// (`docs/tui.md`, "Images").
+pub(crate) const FALLBACK_CELL: (u16, u16) = (10, 20);
+
 /// Kitty's keyboard flags query, then the primary device attributes query,
 /// then kitty's graphics probe: a one-pixel query image under
 /// [`PROBE_ID`]. The appearance queries go first, so the theme follows
@@ -94,13 +98,13 @@ pub(crate) fn pixels(tty: &File) -> (u16, u16) {
 
 /// One cell's size in pixels from the tty's pixel size over its cell
 /// counts, for the placeholder grid (`docs/tui.md`, "Images"). Zero
-/// pixels or a zero count reads the (10, 20) fallback, so the grid math
-/// never divides by zero.
+/// pixels or a zero count reads the fallback, so the grid math never
+/// divides by zero.
 pub(crate) fn cell(pixel: (u16, u16), count: (u16, u16)) -> (u16, u16) {
     let (wide, high) = pixel;
     let (cols, rows) = count;
     if wide == 0 || high == 0 || cols == 0 || rows == 0 {
-        return (10, 20);
+        return FALLBACK_CELL;
     }
     ((wide / cols).max(1), (high / rows).max(1))
 }

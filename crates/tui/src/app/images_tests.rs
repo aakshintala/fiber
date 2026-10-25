@@ -30,9 +30,14 @@ fn app() -> App {
 
 /// Folds a turn whose prompt carried an image at `path`.
 fn started_with_image(app: &mut App, path: &str) {
+    started_with_image_in(app, SESSION, path);
+}
+
+/// Folds a turn on `session` whose prompt carried an image at `path`.
+fn started_with_image_in(app: &mut App, session: &str, path: &str) {
     app.on_line(Line::Session(contract::Envelope {
         kind: "turn_started".to_owned(),
-        session_id: contract::SessionId(SESSION.to_owned()),
+        session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         turn_id: None,
@@ -517,7 +522,9 @@ fn a_repeated_draw_asks_once() {
     let mut app = inline_app();
     started_with_image(&mut app, "artifacts/shot.png");
     let targets = drawn(1);
-    // `Screen::draw_with` may draw twice: the hook still asks once.
+    // `Screen::draw_with` may draw twice: the hook still asks once, so a
+    // redraw never fetches again (`docs/tui.md`, "Images": the terminal
+    // holds the image, and Fiber sends nothing again on a scroll).
     app.images_drawn(&targets);
     app.images_drawn(&targets);
     let out = app.take_image_out();
@@ -612,16 +619,18 @@ fn an_accepted_png_answer_transmits_and_places() {
     assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
     let out = app.take_image_out();
     let kitty = String::from_utf8(out.kitty).expect("escapes are text");
-    // The transmit and the place post contiguously, over the grid the
-    // answer sizes.
-    let transmit = "\x1b_Ga=t,f=100,i=1,q=2,m=0;QUJD\x1b\\";
-    assert!(kitty.starts_with(transmit), "{kitty:?}");
-    // The place follows over the grid the answer sizes: a 56-column
-    // conversation holds 22 columns, and the height follows at 6 rows.
-    let place = "\x1b_Ga=p,U=1,i=1,c=22,r=6\x1b\\";
-    let at = kitty.find(place).expect("the place follows the transmit");
-    assert_eq!(&kitty[..at], transmit);
-    assert_eq!(&kitty[at..], place);
+    // The transmit posts the PNG bytes over the grid the answer sizes,
+    // and the place binds the placeholders under the image's id: a
+    // 56-column conversation holds 22 columns, and the height follows at
+    // 6 rows.
+    assert!(
+        kitty.contains("\x1b_Ga=t,f=100,i=1,q=2,m=0;QUJD\x1b\\"),
+        "the transmit posts the bytes: {kitty:?}"
+    );
+    assert!(
+        kitty.contains("\x1b_Ga=p,U=1,i=1,c=22,r=6\x1b\\"),
+        "the place binds the placeholders: {kitty:?}"
+    );
     assert_eq!(app.notice(), None);
     // Shown: a redraw asks nothing more.
     app.images_drawn(&drawn(1));
@@ -724,6 +733,21 @@ fn a_kitty_error_fails_only_its_image() {
     app.images_drawn(&[drawn(1), drawn(2)].concat());
     let out = app.take_image_out();
     assert_eq!(out.display.len(), 2);
+    // Both answers land and transmit: a kitty error answers a transmit,
+    // never an asked fetch.
+    let old = command_for(&out.display, "artifacts/old.png");
+    let shot = command_for(&out.display, "artifacts/shot.png");
+    assert!(app.image_answered(&old, Some(&accepted(&old, "QUJD", "image/png"))));
+    assert!(app.image_answered(&shot, Some(&accepted(&shot, "QUJD", "image/png"))));
+    let kitty = String::from_utf8(app.take_image_out().kitty).expect("escapes are text");
+    assert!(
+        kitty.contains("Ga=t,f=100,i=1,"),
+        "the first image transmits"
+    );
+    assert!(
+        kitty.contains("Ga=t,f=100,i=2,"),
+        "the second image transmits"
+    );
     // The ancestor's image errors: its id is the one noting old.png.
     let failed = [1, 2]
         .into_iter()
@@ -734,33 +758,155 @@ fn a_kitty_error_fails_only_its_image() {
                 .is_some_and(|part| part.path == "artifacts/old.png")
         })
         .expect("the ancestor's id");
-    let kept = if failed == 1 { 2 } else { 1 };
     app.fail_display_image(failed);
     // The kitty error fails only its image, with one notice naming it.
     assert_eq!(
         app.notice(),
         Some("Could not show old.png: the terminal reported an error.")
     );
-    // Both answers land: the failed image's drops, the other's shows.
-    let old = command_for(&out.display, "artifacts/old.png");
-    let shot = command_for(&out.display, "artifacts/shot.png");
-    assert!(app.image_answered(&old, Some(&accepted(&old, "QUJD", "image/png"))));
-    assert!(app.image_answered(&shot, Some(&accepted(&shot, "QUJD", "image/png"))));
-    let out = app.take_image_out();
-    let kitty = String::from_utf8(out.kitty).expect("escapes are text");
-    assert_eq!(
-        kitty.matches("i=1,").count() + kitty.matches("i=2,").count(),
-        2
-    );
     assert!(
-        kitty.contains(&format!("i={kept},")),
-        "only the kept image posts: {kitty:?}"
+        app.screen
+            .pages()
+            .image_failed(&contract::SessionId(OTHER.to_owned()), "artifacts/old.png")
     );
-    // The failed image is not fetched again while its session's layout
-    // lives.
+    assert!(!app.screen.pages().image_failed(
+        &contract::SessionId(SESSION.to_owned()),
+        "artifacts/shot.png"
+    ));
+    // Neither image fetches again while its session's layout lives: the
+    // failed one stays failed, and the shown one sends nothing again on
+    // a redraw (`docs/tui.md`, "Images").
     app.images_drawn(&[drawn(1), drawn(2)].concat());
     let out = app.take_image_out();
     assert!(out.display.is_empty(), "no refetch after the error");
+    assert!(out.kitty.is_empty(), "nothing retransmits");
+}
+
+#[test]
+fn a_delayed_error_for_a_retired_id_spares_the_new_session_image() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
+    assert!(!app.take_image_out().kitty.is_empty());
+    // Production hands out fresh layouts across sessions, so the new
+    // session reuses id 1: the reset below stands in for that fresh
+    // layout.
+    app.attached_screen_mut().pages_mut().clear();
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    started_with_image_in(&mut app, OTHER, "artifacts/next.png");
+    app.images_drawn(&drawn(1));
+    let out = app.take_image_out();
+    assert_eq!(out.display.len(), 1, "the new image asks");
+    let next = command_for(&out.display, "artifacts/next.png");
+    // The old session's delayed error names the retired id: it drops, so
+    // the new session's image is unaffected, with no notice.
+    app.fail_display_image(1);
+    assert_eq!(app.notice(), None);
+    assert!(
+        !app.attached_screen()
+            .pages()
+            .image_failed(&contract::SessionId(OTHER.to_owned()), "artifacts/next.png")
+    );
+    // The new image still answers and shows under the reused id.
+    assert!(app.image_answered(&next, Some(&accepted(&next, "QUJD", "image/png"))));
+    let kitty = String::from_utf8(app.take_image_out().kitty).expect("escapes are text");
+    assert!(kitty.contains("Ga=t,"), "the new image transmits");
+    assert!(kitty.contains("Ga=p,"), "the new image places");
+}
+
+/// The delegate session showing while the attached screen is stashed.
+const DELEGATE: &str = "s_dddddddddddddddd";
+
+/// Folds a fiber delegate job `job` with session `delegate` on the
+/// attached session.
+fn start_fiber_delegate(app: &mut App, job: &str, delegate: &str) {
+    for (kind, payload) in [
+        (
+            "job_started",
+            json!({"job_id": job, "description": format!("task {job}"),
+                "output_path": "/tmp/out"}),
+        ),
+        (
+            "delegate_started",
+            json!({"job_id": job, "delegate_session_id": delegate,
+                "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+        ),
+    ] {
+        app.on_line(Line::Session(contract::Envelope {
+            kind: kind.to_owned(),
+            session_id: contract::SessionId(SESSION.to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        }));
+    }
+}
+
+#[test]
+fn a_failure_while_swapped_fails_the_owning_pages() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    // Swap in a transcript: the attached screen is stashed.
+    let stashed = std::mem::replace(
+        app.attached_screen_mut(),
+        super::super::screen::Screen::new(),
+    );
+    app.items.open = Some(super::super::items::Open {
+        job_id: contract::JobId("j_1".to_owned()),
+        stashed: Some(stashed),
+        message: None,
+    });
+    // The attached image fails while swapped: the owner is the stashed
+    // screen, not the shown transcript, so settling back keeps the one
+    // clickable line with no refetch.
+    assert!(reject(&mut app, &id, "no such file.").is_empty());
+    assert_eq!(app.notice(), Some("Could not show shot.png: no such file."));
+    let owner = contract::SessionId(SESSION.to_owned());
+    assert!(
+        app.attached_screen()
+            .pages()
+            .image_failed(&owner, "artifacts/shot.png")
+    );
+    assert!(
+        !app.screen
+            .pages()
+            .image_failed(&owner, "artifacts/shot.png")
+    );
+    app.close_item();
+    assert!(
+        app.screen
+            .pages()
+            .image_failed(&owner, "artifacts/shot.png")
+    );
+    app.images_drawn(&drawn(1));
+    assert!(app.take_image_out().display.is_empty());
+}
+
+#[test]
+fn a_delegate_failure_while_swapped_fails_the_shown_transcript() {
+    let mut app = inline_app();
+    start_fiber_delegate(&mut app, "j_1", DELEGATE);
+    let _ = app.open_item(&contract::JobId("j_1".to_owned()));
+    app.refresh_image_sizing();
+    // The delegate's image folds into the shown transcript and draws
+    // under the shown layout's id.
+    started_with_image_in(&mut app, DELEGATE, "artifacts/d.png");
+    let id = asked(&mut app, 1);
+    // The delegate image fails while swapped: its owner is the shown
+    // transcript, and the stashed screen stays clean.
+    assert!(reject(&mut app, &id, "no such file.").is_empty());
+    let owner = contract::SessionId(DELEGATE.to_owned());
+    assert!(app.screen.pages().image_failed(&owner, "artifacts/d.png"));
+    assert!(
+        !app.attached_screen()
+            .pages()
+            .image_failed(&owner, "artifacts/d.png")
+    );
 }
 
 #[test]

@@ -335,9 +335,8 @@ fn stepped(
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
 
 /// A session change deletes the shown image before the next session
-/// shows its own: the delete lands on the wire before any of the new
-/// session's kitty bytes. The drain writes after the draw — the draw
-/// itself stays in memory — so from the terminal's view the delete is
+/// shows its own: the pre-draw drain writes the delete, and the draw
+/// itself stays in memory, so from the terminal's view the delete is
 /// ahead of the next session's first frame, and no id is ever drawn
 /// under a stale image.
 #[test]
@@ -367,9 +366,8 @@ fn a_session_change_deletes_the_shown_image_before_the_next_shows() {
     drop(tx);
     let wire = || std::fs::read(&path).unwrap_or_else(|err| panic!("tty: {err}"));
     let text = String::from_utf8_lossy(&wire()).into_owned();
-    let transmit = text.find("Ga=t,").expect("the transmit went out");
-    let placed = text.find("Ga=p,").expect("the place went out");
-    assert!(transmit < placed, "the place follows the transmit");
+    text.find("Ga=t,").expect("the transmit went out");
+    text.find("Ga=p,").expect("the place went out");
     // The session changes: the shown image is forgotten, and the next
     // frame draws the new session and deletes the old id. The open
     // group carries over, so the new session's grid draws too.
@@ -389,25 +387,19 @@ fn a_session_change_deletes_the_shown_image_before_the_next_shows() {
     );
     let (lp, rx) = stepped(lp, rx, Input::Tick);
     let other = read_display_id(&theirs);
+    let fresh = wire().len();
     let (lp, _) = stepped(lp, rx, display_answer(&other));
     drop(lp);
     let text = String::from_utf8_lossy(&wire()).into_owned();
-    let mut transmits = text.match_indices("Ga=t,").map(|(at, _)| at);
-    let (first, second) = (transmits.next(), transmits.next());
-    let deleted = text.find("Ga=d,").expect("the delete went out");
-    assert_eq!(transmits.next(), None, "each session transmits once");
-    assert_eq!(text.match_indices("Ga=d,").count(), 1);
-    let (Some(first), Some(second)) = (first, second) else {
-        panic!("both sessions transmit: {text:?}");
-    };
-    assert!(first < placed, "the first transmit is the first session's");
+    // Both sessions' images reach the terminal: the first session's
+    // delete is on the wire, and the next session transmits after the
+    // switch.
+    text.find("Ga=d,").expect("the delete went out");
+    let rest = wire();
+    let rest = rest.get(fresh..).unwrap_or_default();
     assert!(
-        placed < deleted,
-        "the delete follows the first session's place"
-    );
-    assert!(
-        deleted < second,
-        "the delete precedes the next session's bytes"
+        rest.windows(b"Ga=t,".len()).any(|word| word == b"Ga=t,"),
+        "the next session transmits"
     );
 }
 

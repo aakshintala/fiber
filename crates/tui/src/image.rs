@@ -157,17 +157,23 @@ impl Layout {
     /// Notes `part`, handing its `(session, path)` the next id when
     /// unseen; a pair already seen keeps its id, so a page dropped and
     /// folded again draws the same id. Id 31 is never handed out: it is
-    /// the graphics probe's (`docs/tui.md`, "Images").
+    /// the graphics probe's (`docs/tui.md`, "Images"). Ids stop at 255:
+    /// the placeholder colour carries only one byte, so past 255 images
+    /// a part stays unnoted and draws its one line, and 0 names no
+    /// image.
     pub(crate) fn note(&mut self, part: &Part) -> u32 {
         let key = (part.session.clone(), part.path.clone());
         if let Some(id) = self.ids.get(&key) {
             return *id;
         }
-        self.next = self.next.saturating_add(1);
-        if self.next == crate::term::PROBE_ID {
-            self.next = self.next.saturating_add(1);
+        let mut id = self.next.saturating_add(1);
+        if id == crate::term::PROBE_ID {
+            id = id.saturating_add(1);
         }
-        let id = self.next;
+        if id > u32::from(u8::MAX) {
+            return 0;
+        }
+        self.next = id;
         self.ids.insert(key, id);
         self.parts.insert(id, part.clone());
         id

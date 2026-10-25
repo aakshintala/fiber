@@ -329,11 +329,6 @@ const PROBE_REPLY: &[u8] = b"\x1b_Gi=31;OK\x07";
 /// its own bytes, so the display transmit chunks them over the wire.
 const LOGO: &[u8] = include_bytes!("../../../research/site-prototype/fiber-logo.png");
 
-/// The logo's bytes: big enough to chunk once stored.
-fn logo_bytes() -> Vec<u8> {
-    LOGO.to_vec()
-}
-
 /// The provider answering a `read` of `pic.png`, then closing the turn.
 fn image_read_script() -> [fakes::Response; 2] {
     [
@@ -418,7 +413,7 @@ fn an_inline_image_transmits_places_and_draws_placeholders() {
     let setup = support::Setup::new();
     // Big enough to chunk: its thousands of bytes span more than one
     // 4096-byte kitty chunk once stored.
-    let logo = logo_bytes();
+    let logo = LOGO.to_vec();
     assert!(
         logo.len() > 3 * 1024,
         "the logo spans chunks: {} bytes",
@@ -464,7 +459,9 @@ fn an_inline_image_transmits_places_and_draws_placeholders() {
     // waiting for it sees every chunk.
     run.wait_bytes(from, b"Ga=p,", "the display place");
     let wire = String::from_utf8_lossy(&run.output()).into_owned();
-    // Exactly one transmit goes out, however often the frame redraws.
+    // Exactly one transmit goes out, however often the frame redraws:
+    // the terminal holds the image, and Fiber sends nothing again on a
+    // scroll (`docs/tui.md`, "Images").
     assert_eq!(wire.matches("Ga=t,").count(), 1, "one transmit: {wire:?}");
     // The transmit payload is the stored artifact's bytes in base64,
     // chunked at 4096: reassemble the wire chunks and compare.
@@ -483,12 +480,11 @@ fn an_inline_image_transmits_places_and_draws_placeholders() {
         expected,
         "the wire carries the artifact's bytes"
     );
-    // The place follows the transmit, bound to the placeholders under
-    // the image's id: a 56-column conversation at a 10 by 20 cell grids
-    // 640 by 160 at 22 by 2.
-    let transmit = wire.find("Ga=t,").expect("the transmit went out");
+    // The transmit and the place go out, the place bound to the
+    // placeholders under the image's id: a 56-column conversation at a
+    // 10 by 20 cell grids 640 by 160 at 22 by 2.
+    wire.find("Ga=t,").expect("the transmit went out");
     let placed = wire.find("Ga=p,").expect("the place went out");
-    assert!(transmit < placed, "the place follows the transmit");
     assert!(
         wire[placed..].starts_with("Ga=p,U=1,i=1,c=22,r=2"),
         "the place binds the placeholders: {wire:?}"

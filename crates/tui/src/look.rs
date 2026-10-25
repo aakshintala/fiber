@@ -426,7 +426,9 @@ impl Look {
 /// The placeholder cell's style for image `id`: the id in the
 /// foreground colour, which the terminal reads back to place the image
 /// under the text (`docs/tui.md`, "Images"). Only the look names the
-/// colour: drawing code names this helper, never `Color`.
+/// colour: drawing code names this helper, never `Color`. The registry
+/// never hands out ids past 255, so every image keeps its own colour;
+/// the saturation stays as a clamp for ids from nowhere else.
 pub(crate) fn placeholder_style(id: u32) -> Style {
     let id = u8::try_from(id).unwrap_or(u8::MAX);
     Style::new().fg(Color::Indexed(id))

@@ -364,7 +364,7 @@ impl App {
             armed_at: None,
             kitty: false,
             graphics: false,
-            cell: (10, 20),
+            cell: crate::term::FALLBACK_CELL,
             queue: Queue::default(),
             offer: crate::offer::Offer::default(),
             steering: Steering::default(),
