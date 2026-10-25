@@ -3826,49 +3826,54 @@ impl Renderer for Fake {
 
     fn render(
         &self,
+        _ctx: &crate::ext::SessionCtx,
         slot: &str,
         input: &Input<'_>,
         _width: u16,
         _builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
-    ) -> Result<Vec<Vec<RawSpan>>, Failure> {
-        let key = format!("{slot} {input:?}");
-        *self.calls.borrow_mut() += 1;
-        *self.per_input.borrow_mut().entry(key.clone()).or_insert(0) += 1;
-        if self.fail_all {
-            self.failed.borrow_mut().insert(key);
-            return Err(Failure {
-                extension: self.extension.clone(),
-                message: "always fails".to_owned(),
-            });
-        }
-        if self.wrong_shape {
-            return Ok(vec![vec![RawSpan {
-                text: "hi".to_owned(),
-                fg: Some("nope".to_owned()),
-                ..RawSpan::default()
-            }]]);
-        }
-        if self.fail_edits && matches!(input, Input::LedgerRow(row) if row.name == "edit") {
-            self.failed.borrow_mut().insert(key);
-            return Err(Failure {
-                extension: "fake".to_owned(),
-                message: "edits stay built-in".to_owned(),
-            });
-        }
-        let span = if self.styled {
-            RawSpan {
-                text: "zxqy".to_owned(),
-                fg: Some("success".to_owned()),
-                bold: true,
-                ..RawSpan::default()
+    ) -> crate::ext::Decision {
+        crate::ext::tests::decide(self.name(), || -> Result<Vec<Vec<RawSpan>>, Failure> {
+            let key = format!("{slot} {input:?}");
+            *self.calls.borrow_mut() += 1;
+            *self.per_input.borrow_mut().entry(key.clone()).or_insert(0) += 1;
+            if self.fail_all {
+                self.failed.borrow_mut().insert(key);
+                return Err(Failure {
+                    kind: crate::ext::FailureKind::HookFailed,
+                    extension: self.extension.clone(),
+                    message: "always fails".to_owned(),
+                });
             }
-        } else {
-            RawSpan {
-                text: "X".to_owned(),
-                ..RawSpan::default()
+            if self.wrong_shape {
+                return Ok(vec![vec![RawSpan {
+                    text: "hi".to_owned(),
+                    fg: Some("nope".to_owned()),
+                    ..RawSpan::default()
+                }]]);
             }
-        };
-        Ok(vec![vec![span]; self.lines])
+            if self.fail_edits && matches!(input, Input::LedgerRow(row) if row.name == "edit") {
+                self.failed.borrow_mut().insert(key);
+                return Err(Failure {
+                    kind: crate::ext::FailureKind::HookFailed,
+                    extension: "fake".to_owned(),
+                    message: "edits stay built-in".to_owned(),
+                });
+            }
+            let span = if self.styled {
+                RawSpan {
+                    text: "zxqy".to_owned(),
+                    fg: Some("success".to_owned()),
+                    bold: true,
+                    ..RawSpan::default()
+                }
+            } else {
+                RawSpan {
+                    text: "X".to_owned(),
+                    ..RawSpan::default()
+                }
+            };
+            Ok(vec![vec![span]; self.lines])
+        })
     }
 }
 
@@ -4166,6 +4171,203 @@ fn a_fresh_copy_shares_the_renderer_with_an_empty_cache() {
 }
 
 /// The notice text of every shown notice, oldest first.
+#[test]
+fn session_gate_recounts_only_matching_residents_and_stales_dropped_pages() {
+    let lines = session(3, false);
+    let mut pages = Pages::new(80);
+    pages.set_flat(true);
+    let mut fake = crate::ext::tests::SessionRenderer::new("GATED-ROWS");
+    fake.gated = true;
+    pages.ext.handle = Handle::create();
+    pages.ext.handle.set(Rc::new(fake));
+    for line in &lines {
+        pages.apply(line);
+    }
+    pages.toggle_ledgers(); // Count visible ledger rows, not their unchanged summary.
+    let session = lines[0].session_id.clone();
+    let before: Vec<_> = pages.index().pages().iter().map(|p| p.rows).collect();
+    let recounts = pages.recounts;
+    pages.record_halves(
+        &contract::SessionId("unrelated".into()),
+        [("session-test".into(), "v1.0.0".into())].into(),
+    );
+    assert_eq!(
+        pages.recounts, recounts,
+        "unrelated sessions do not recount"
+    );
+    pages.record_halves(&session, [("session-test".into(), "v1.0.0".into())].into());
+    assert!(pages.recounts > recounts);
+    assert_ne!(
+        before,
+        pages
+            .index()
+            .pages()
+            .iter()
+            .map(|p| p.rows)
+            .collect::<Vec<_>>()
+    );
+    assert!(pages.index().pages().iter().enumerate().any(|(at, _)| {
+        pages.page_text_open(at).is_some_and(|(rows, _)| {
+            rows.iter()
+                .any(|(line, _)| line.to_string().contains("GATED-ROWS"))
+        })
+    }));
+    pages.trim(0, 0);
+    let dropped = (0..pages.index().pages().len())
+        .find(|at| pages.part(*at).is_none())
+        .expect("fixture drops a page");
+    pages.record_halves(&session, std::collections::BTreeMap::new());
+    assert!(pages.stale.contains(&dropped));
+    let page = pages.index().pages()[dropped].clone();
+    let reload: Vec<_> = lines
+        .iter()
+        .filter(|line| {
+            line.seq
+                .is_some_and(|seq| seq >= page.first_seq && seq <= page.last_seq)
+        })
+        .cloned()
+        .collect();
+    pages.load(&session, &reload);
+    let (rows, _) = pages.page_text_open(dropped).expect("reloaded page");
+    assert!(
+        !rows
+            .iter()
+            .any(|(line, _)| line.to_string().contains("GATED-ROWS"))
+    );
+    assert!(!pages.stale.contains(&dropped));
+}
+
+#[test]
+fn unrelated_halves_keep_entries_and_failures_but_selected_half_changes_retry() {
+    for failure in [None, Some(crate::ext::FailureKind::HookFailed)] {
+        let lines = session(1, false);
+        let mut pages = Pages::new(80);
+        let mut fake = crate::ext::tests::SessionRenderer::new("HALF-KEY");
+        fake.gated = true;
+        fake.failure = failure;
+        let fake = Rc::new(fake);
+        pages.ext.handle = Handle::create();
+        pages.ext.handle.set(fake.clone());
+        for line in &lines {
+            pages.apply(line);
+        }
+        let mut halves =
+            std::collections::BTreeMap::from([("session-test".into(), "v1.0.0".into())]);
+        pages.record_halves(&lines[0].session_id, halves.clone());
+        search_pages(&pages);
+        let first = fake.calls.borrow().len();
+        assert!(first > 0);
+        halves.insert("unrelated".into(), "v9.0.0".into());
+        pages.record_halves(&lines[0].session_id, halves.clone());
+        search_pages(&pages);
+        assert_eq!(
+            fake.calls.borrow().len(),
+            first,
+            "unrelated map updates keep the selected identity"
+        );
+        halves.insert("session-test".into(), "v1.1.0".into());
+        pages.record_halves(&lines[0].session_id, halves);
+        search_pages(&pages);
+        assert_eq!(
+            fake.calls.borrow().len(),
+            first * 2,
+            "relevant half changes miss entries and width-independent failure memo"
+        );
+    }
+}
+
+#[test]
+fn dropped_page_selection_notice_survives_scratch_without_a_render_call() {
+    let lines = session(3, false);
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    let mut fake = crate::ext::tests::SessionRenderer::new("unseen");
+    fake.gated = true;
+    let fake = Rc::new(fake);
+    app.install_renderer(fake.clone());
+    let mut fresh = app.pages().fresh();
+    for line in &lines {
+        fresh.apply(line);
+    }
+    fresh.trim(0, 0);
+    let at = (0..fresh.index().pages().len())
+        .find(|at| fresh.part(*at).is_none())
+        .unwrap();
+    fresh.record_halves(&lines[0].session_id, std::collections::BTreeMap::new());
+    let page = &fresh.index().pages()[at];
+    let data = history(&lines, &(page.first_seq..=page.last_seq));
+    fresh.fold_text(at, &data);
+    fresh.fold_text(at, &data);
+    drop(fresh);
+    assert!(
+        fake.calls.borrow().is_empty(),
+        "incompatible selection never calls render"
+    );
+    assert!(app.drawn(&[]));
+    let notices = notice_texts(&app);
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].0, "extension_incompatible");
+    assert!(notices[0].1.contains("not loaded"));
+    assert!(!app.drawn(&[]));
+}
+
+#[test]
+fn dropped_and_speculative_draws_deliver_failures_once_to_app() {
+    for kind in [
+        crate::ext::FailureKind::HookFailed,
+        crate::ext::FailureKind::ExtensionFailed,
+    ] {
+        let lines = session(3, false);
+        let mut app = app(80, 20);
+        open(&mut app, &lines);
+        let mut fake = crate::ext::tests::SessionRenderer::new("failure");
+        fake.failure = Some(kind);
+        let fake = Rc::new(fake);
+        app.install_renderer(fake.clone());
+        let mut fresh = app.pages().fresh();
+        for line in &lines {
+            fresh.apply(line);
+        }
+        fresh.trim(0, 0);
+        let dropped = (0..fresh.index().pages().len())
+            .find(|at| fresh.part(*at).is_none())
+            .unwrap();
+        let page = fresh.index().pages()[dropped].clone();
+        let data: Vec<_> = lines
+            .iter()
+            .filter(|line| {
+                line.seq
+                    .is_some_and(|seq| seq >= page.first_seq && seq <= page.last_seq)
+            })
+            .cloned()
+            .collect();
+        fresh.fold_text(dropped, &data);
+        let calls = fake.calls.borrow().len();
+        assert!(calls > 0);
+        fresh.fold_text(dropped, &data);
+        assert_eq!(
+            fake.calls.borrow().len(),
+            calls,
+            "scratch draws share failure memo"
+        );
+        drop(fresh);
+        assert!(app.drawn(&[]));
+        let notices = notice_texts(&app);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(
+            notices[0].0,
+            if kind == crate::ext::FailureKind::HookFailed {
+                "hook_failed"
+            } else {
+                "extension_failed"
+            }
+        );
+        assert!(notices[0].1.contains("session-test"));
+        assert!(notices[0].1.contains("ledger_row"));
+        assert!(!app.drawn(&[]));
+    }
+}
+
 fn notice_texts(app: &App) -> Vec<(String, String)> {
     app.notices()
         .into_iter()

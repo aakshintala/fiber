@@ -122,6 +122,7 @@ pub(crate) fn launch(
         feedback: None,
         // `main` gives the seam once it holds Fiber home.
         configure: None,
+        extensions: None,
     }
 }
 
