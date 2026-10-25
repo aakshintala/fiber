@@ -117,7 +117,7 @@ A pull request runs only what its diff can affect.
   a broken harness or judge fails its own pull request rather than the
   backstop.
 - A diff that touches `crates/loop`, `crates/bench` or `xtask/src/bench*` also runs the "Session, memory kept after 10 busy turns" workload (`docs/performance.md`) in `release`. Any other pull request skips it, and the job summary says so. The loop holds the session's state, so a diff elsewhere rarely moves the row, and the backstop catches one that does.
-- On a pull request, the base binary runs only the timing rows the diff selects (`docs/performance.md`). A diff touching one of a row's crates runs it, and the job summary names each skipped row. `session start` runs on `crates/contract`, `crates/support`, `crates/log`, `crates/loop`, `crates/doors`, `crates/provider`, `crates/routing`, `crates/tools`, `crates/mcp`, `crates/jobs`, `crates/net`, `crates/worktree`, `crates/extensions`, `crates/config`, `crates/hub` or `crates/main`; `sessions list` on `crates/config`, `crates/cli`, `crates/doors`, `crates/hub`, `crates/contract`, `crates/support`, `crates/log` or `crates/main`; the terminal rows (`terminal first frame`, `terminal attach`, `terminal wheel`) on the session-start crates plus `crates/tui` or `crates/cli`; `paging` on `crates/tui`, `crates/contract`, `crates/support` or `crates/log`. Every other path runs every row, and a `.md` file under `crates/` counts as code. A regression that reaches a row through a dependency the mapping misses surfaces at the backstop, the same as the 10-busy-turns row above.
+- On a pull request, the head and base binaries run only the timing rows the diff selects (`docs/performance.md`). A diff touching one of a row's crates runs it, and the job summary names each skipped row on both passes. `session start` runs on `crates/contract`, `crates/support`, `crates/log`, `crates/loop`, `crates/doors`, `crates/provider`, `crates/routing`, `crates/tools`, `crates/mcp`, `crates/jobs`, `crates/net`, `crates/worktree`, `crates/extensions`, `crates/config`, `crates/hub` or `crates/main`; `sessions list` on `crates/config`, `crates/cli`, `crates/doors`, `crates/hub`, `crates/contract`, `crates/support`, `crates/log` or `crates/main`; the terminal rows (`terminal first frame`, `terminal attach`, `terminal wheel`) on the session-start crates plus `crates/tui` or `crates/cli`; `paging` on `crates/tui`, `crates/contract`, `crates/support` or `crates/log`. Every other path runs every row, and a `.md` file under `crates/` counts as code. A diff touching only `docs/performance.md` selects no row, since the selector treats a docs file as selecting nothing: none of the six timing rows is measured on either pass, and the pull request is gated by the table checks and the `main` backstop alone. A regression that reaches a row through a dependency the mapping misses surfaces at the backstop, the same as the 10-busy-turns row above.
 
 The selector has its own tests.
 
@@ -299,12 +299,12 @@ request's head and at its base commit (`scripts/release-size`). The base
 binary comes from the build cache when the backstop stored one for that
 commit, and is built otherwise. The scripts that build and measure both
 binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
-under 24 MiB and runs the benchmarks that gate each pull request, the 10-busy-turns workload only when the selection above chooses it,
-(`docs/performance.md`), timing-only workloads and the `paging` jig at 3 runs and the rest at 5. The base binary
-runs only the timing benchmarks the selection chooses, in the same job on the same runner, so a
+under 24 MiB and runs the benchmarks that gate each pull request, the rows the selection above chooses (the 10-busy-turns workload only when the selection chooses it),
+(`docs/performance.md`), timing-only workloads and the `paging` jig at 3 runs and the rest at 5. The head and base
+binaries run only the timing benchmarks the selection chooses, in the same job on the same runner, so a
 timing comparison never crosses runners: one harness process alternates head and base timings,
-by sample for every timing row, and rows the base skips run on the head alone. Memory and
-exact rows compare
+by sample for every timing row, and a row the selection does not choose runs on neither side while the budgets it feeds read skipped. Memory and
+exact rows no skipped row feeds still run on the head and compare
 against the backstop's stored results for the base commit, the
 `benchmarks-<sha>` artifact, and a memory or exact budget the base fails
 there does not fail the pull request.
@@ -381,7 +381,7 @@ pull requests shows in a crate that depends on what the later one changed,
 and the selection includes that crate. The release job runs on every push
 and stores that commit's stripped binary in the build cache and its
 benchmark results, the full suite at 5 runs, including the 10-busy-turns workload, as the `benchmarks-<sha>`
-artifact, both for a later pull request's base. The results file records the
+artifact, both for a later pull request's base. A push runs every gating row, as does the release workflow: neither passes `--skip-rows`. The results file records the
 stripped binary's size in bytes, so a size history is one artifact per commit.
 
 One backstop runs and one waits. All pushes to `main` share a concurrency group
