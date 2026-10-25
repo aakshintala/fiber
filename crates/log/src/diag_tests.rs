@@ -450,6 +450,10 @@ fn a_second_writer_waits_for_the_pair() {
     Deadline::after(LIMIT).recv_or_fail(&done_rx, "the second writer finishes after the release");
     writer.join().unwrap();
     worker.join().unwrap();
+    // docs/state.md:288-292 promises `peak_memory` just before each
+    // `hub_stopped` at debug; the controlled pause holds the files lock
+    // until the release above, so the competing `second` line lands after
+    // that documented pair.
     assert_eq!(
         home.text("hub.log"),
         "{\"ts\":1700000000000,\"level\":\"debug\",\"process\":\"hub\",\
