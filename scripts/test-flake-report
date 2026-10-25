@@ -815,5 +815,37 @@ grep -q '^token-set.*state=closed' "$decide_state/gh-calls.log" || fail "the tok
 [ -f "$decide_state/decide-input.json" ] || fail "the decide input was not written"
 closed_count=$("$real_jq" -e '.closed.issues | length' "$decide_state/decide-input.json" 2>/dev/null) || fail "the decide input has no closed issues"
 [ "$closed_count" = 2000 ] || fail "want 2000 closed issues in the decide input, got $closed_count"
+if ! python3 - "$decide_state/decide-input.json" <<'PY_EOF'
+import json
+import sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+try:
+    issues = data["closed"]["issues"]
+except (KeyError, TypeError):
+    print("the decide input has no closed issues", file=sys.stderr)
+    sys.exit(1)
+if not isinstance(issues, list) or len(issues) != 2000:
+    got = len(issues) if isinstance(issues, list) else "non-list"
+    print(f"want 2000 closed issues, got {got}", file=sys.stderr)
+    sys.exit(1)
+seen = set()
+for index, item in enumerate(issues):
+    want_number = index + 1
+    want_title = "x" * 100
+    got_number = item.get("number") if isinstance(item, dict) else None
+    got_title = item.get("title") if isinstance(item, dict) else None
+    if got_number != want_number or got_title != want_title:
+        print(f"closed issue mismatch at index {index}: want number={want_number} title={want_title} got number={got_number} title={got_title}", file=sys.stderr)
+        sys.exit(1)
+    if got_number in seen:
+        print(f"duplicate closed issue at index {index}: number={got_number}", file=sys.stderr)
+        sys.exit(1)
+    seen.add(got_number)
+PY_EOF
+then
+  fail "the closed issues differ from the generated fixture"
+fi
 
 echo "scripts/test-flake-report: ok"
