@@ -172,25 +172,35 @@ fn hello() -> Line {
     })
 }
 
-/// Accepts the feed, answers the first unscoped `recent` page with
-/// `rows`, then answers every scoped ask with `total` and no rows: the
-/// held total with the loaded fallback beneath it.
-fn hold_total(app: &mut App, rows: Value, total: usize) {
+/// Accepts the feed and the empty unscoped first page, then triggers a
+/// scoped refresh as `B` leaves and answers it with `total` and no rows:
+/// the held total with the loaded fallback beneath it.
+fn hold_total(app: &mut App, total: usize) {
     fn parse(line: &String) -> Value {
         serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
     }
     let start: Vec<Value> = app.on_line(hello()).iter().map(parse).collect();
-    let feed = start[0]["id"].as_str().unwrap_or_else(|| panic!("a feed"));
-    let recent = start[1]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("a recent"));
-    assert!(app.on_line(accepted(feed, json!({}))).is_empty());
-    let fanout: Vec<Value> = app
-        .on_line(accepted(recent, rows))
+    let feed = start
         .iter()
-        .map(parse)
-        .collect();
-    assert!(!fanout.is_empty(), "the unscoped answer fans out");
+        .find(|line| line["command"] == "feed")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a feed"));
+    let recent = start
+        .iter()
+        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("an unscoped recent"));
+    assert!(app.on_line(accepted(feed, json!({}))).is_empty());
+    assert!(
+        app.on_line(accepted(recent, json!({"sessions": []})))
+            .is_empty()
+    );
+    let fanout: Vec<Value> = app.on_line(left(B, "exited")).iter().map(parse).collect();
+    // `docs/tui.md:268` (a session leaving asks for its project's total).
+    assert!(
+        !fanout.is_empty(),
+        "the session-left trigger asks for a scoped total"
+    );
     for line in &fanout {
         // `docs/invocation.md:1091` (scoped `recent` for the project).
         assert_eq!(line["command"], "recent");
@@ -391,12 +401,12 @@ fn a_long_project_name_keeps_its_plus() {
 #[test]
 fn the_header_draws_the_held_total_beside_the_spend() {
     let mut app = two(20.0, json!({}));
-    app.on_line(left(B, "exited"));
-    hold_total(&mut app, json!({"sessions": []}), 7);
+    hold_total(&mut app, 7);
     let drawn = super::rows(&app, 40);
     let header = &drawn[0];
     let text = header.line.to_string();
     assert!(text.ends_with("$0.00 · 7 ✓"), "{text:?}");
+    // `docs/tui.md:332-335` (the project header's start target and right-aligned exited count).
     assert_eq!(
         header.spots,
         vec![
@@ -411,8 +421,7 @@ fn the_header_draws_the_held_total_beside_the_spend() {
 #[test]
 fn the_header_widens_the_count_for_a_two_digit_total() {
     let mut app = two(20.0, json!({}));
-    app.on_line(left(B, "exited"));
-    hold_total(&mut app, json!({"sessions": []}), 12);
+    hold_total(&mut app, 12);
     let drawn = super::rows(&app, 40);
     let header = &drawn[0];
     let text = header.line.to_string();
@@ -430,8 +439,7 @@ fn the_header_widens_the_count_for_a_two_digit_total() {
 #[test]
 fn the_header_draws_zero_for_a_held_zero_total() {
     let mut app = two(20.0, json!({}));
-    app.on_line(left(B, "exited"));
-    hold_total(&mut app, json!({"sessions": []}), 0);
+    hold_total(&mut app, 0);
     let drawn = super::rows(&app, 40);
     let header = &drawn[0];
     let text = header.line.to_string();

@@ -719,27 +719,22 @@ impl App {
                                 .get("result")
                                 .map(recent_rows)
                                 .unwrap_or_default();
-                            // Projects on home before this page folds, for a later
-                            // page only: the first page fans out for every
-                            // project lacking a total (a live-only project
-                            // has no scoped ask yet), while a later page
-                            // earns an ask only for a project first
-                            // appearing here, so ordinary pagination never
-                            // retries an already-seen project.
-                            let before: std::collections::BTreeSet<String> = if first {
-                                std::collections::BTreeSet::new()
-                            } else {
-                                self.home
-                                    .as_ref()
-                                    .map(|home| {
-                                        home.sessions
-                                            .sections(home.launch_project())
-                                            .into_iter()
-                                            .map(|section| section.project.to_owned())
-                                            .collect()
-                                    })
-                                    .unwrap_or_default()
-                            };
+                            // Projects on home before this page folds:
+                            // only a project first appearing in the page
+                            // earns an ask. The delete path separately asks
+                            // its captured project directly, so a refill
+                            // cannot retry an already-seen refusal.
+                            let before: std::collections::BTreeSet<String> = self
+                                .home
+                                .as_ref()
+                                .map(|home| {
+                                    home.sessions
+                                        .sections(home.launch_project())
+                                        .into_iter()
+                                        .map(|section| section.project.to_owned())
+                                        .collect()
+                                })
+                                .unwrap_or_default();
                             if let Some(home) = self.home.as_mut() {
                                 home.sessions.recent(rows, first);
                                 home.refill_picker();
@@ -1247,11 +1242,10 @@ impl App {
     }
 
     /// One scoped `recent` first page per project lacking a stored total
-    /// and an in-flight scoped ask, skipping projects in `before`: the
-    /// first page passes an empty `before` and fans out for every project,
-    /// a later page passes the projects already on home and fans out only
-    /// for a project first appearing there, so ordinary pagination never
-    /// retries an already-seen project without a new trigger.
+    /// and an in-flight scoped ask, skipping projects in `before`: every
+    /// unscoped page passes the projects already on home and fans out only
+    /// for a project first appearing there, so a refill never retries an
+    /// already-seen project without a new trigger.
     fn fan_out_scoped(&mut self, before: &std::collections::BTreeSet<String>) -> Vec<String> {
         let projects: Vec<String> = self
             .home

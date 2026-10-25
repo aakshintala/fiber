@@ -460,6 +460,7 @@ fn rail_header_draws_the_hub_total_for_seeded_exits() {
     let home = run.wait_screen("home on the first seeded exit", |grid| {
         grid.contents.contains("exited · 2") && grid.contents.contains("seeded exit two")
     });
+    // `docs/tui.md:254-255` (up to three exited rows, newest first) and `268` (count from the scoped total).
     assert!(
         home.rows.iter().any(|row| row.contains("seeded exit one")),
         "both seeded exits drawn:\n{}",

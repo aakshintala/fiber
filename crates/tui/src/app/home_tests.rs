@@ -2162,7 +2162,7 @@ fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
             }
         })
         .collect();
-    // `docs/tui.md:268` (one ask in flight per project).
+    // `docs/tui.md:254-255` (up to three exited rows draw).
     assert_eq!(entries.len(), 3, "all three exited rows draw");
     app.drawn(&targets);
     let now = fakes::clock::FakeClock::new().now();
@@ -5070,7 +5070,7 @@ fn a_left_with_no_ask_in_flight_sends_one_scoped_ask() {
         &first,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old")], "total": 1}),
     );
-    // `docs/tui.md:233-234` (sections order) and `docs/tui.md:268` (one ask per project).
+    // `docs/tui.md:268` (one ask per project; request order is open).
     assert_eq!(fanout_projects(&follow), ["-w"]);
     // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
@@ -5094,7 +5094,12 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
             exited_in("s_bbbbbbbbbbbbbbbb", "b", "/other", "-other"),
         ]}),
     );
-    let (own_id, _) = (line_id(&lines[0]).to_owned(), line_id(&lines[1]).to_owned());
+    let own_id = lines
+        .iter()
+        .find(|line| line["args"]["project"] == "-w")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the launch project's scoped ask"))
+        .to_owned();
     assert!(
         app.on_line(accepted(
             &own_id,
@@ -5121,9 +5126,7 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
     assert!(kinds.contains(&"feed"));
     assert!(kinds.contains(&"recent"));
     assert!(kinds.contains(&"sessions"));
-    // The scoped refetches cover both projects in sections order
-    // (`docs/tui.md:233-234` for the order, `docs/tui.md:268` for one ask
-    // per project).
+    // The scoped refetches cover both projects; request order is open.
     let scoped: Vec<Value> = lines
         .iter()
         .filter(|line| {
@@ -5132,8 +5135,10 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
         })
         .cloned()
         .collect();
-    // `docs/tui.md:233-234` (sections order) and `docs/tui.md:268` (one ask per project).
-    assert_eq!(fanout_projects(&scoped), ["-w", "-other"]);
+    let mut projects = fanout_projects(&scoped);
+    projects.sort_unstable();
+    // `docs/tui.md:268` (one ask per project).
+    assert_eq!(projects, ["-other", "-w"]);
     // Totals are empty but rows stay for the refetch.
     // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), None);
@@ -5195,7 +5200,7 @@ fn replayed_status_then_left_only_retriggers_without_counting() {
     assert_eq!(stored(&app, "-w"), Some(1));
     // A replayed left retriggers one ask without incrementing.
     let queued = commands(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")));
-    // `docs/tui.md:233-234` (sections order) and `docs/tui.md:268` (one ask per project).
+    // `docs/tui.md:268` (one ask per project; request order is open).
     assert_eq!(fanout_projects(&queued), ["-w"]);
     // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
@@ -5211,7 +5216,7 @@ fn replayed_status_then_left_only_retriggers_without_counting() {
         &second,
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")], "total": 2}),
     );
-    // `docs/tui.md:233-234` (sections order) and `docs/tui.md:268` (one ask per project).
+    // `docs/tui.md:268` (one ask per project; request order is open).
     assert_eq!(fanout_projects(&follow), ["-w"]);
     // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(2));
@@ -5236,12 +5241,26 @@ fn an_accepted_delete_asks_the_deleted_projects_scoped_page() {
             exited_in("s_bbbbbbbbbbbbbbbb", "other", "/other", "-other"),
         ]}),
     );
-    for line in &lines {
-        assert!(
-            app.on_line(accepted(line_id(line), json!({"sessions": [], "total": 1}),))
-                .is_empty()
-        );
-    }
+    let own_id = lines
+        .iter()
+        .find(|line| line["args"]["project"] == "-w")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the launch project's scoped ask"))
+        .to_owned();
+    let other_id = lines
+        .iter()
+        .find(|line| line["args"]["project"] == "-other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask"))
+        .to_owned();
+    assert!(
+        app.on_line(hub_refused(&other_id, "gone", "no recent"))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(&own_id, json!({"sessions": [], "total": 1})))
+            .is_empty()
+    );
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(sent) = app.on_key(Key::Enter, now) else {
@@ -5251,15 +5270,34 @@ fn an_accepted_delete_asks_the_deleted_projects_scoped_page() {
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
         .to_owned();
-    let lines = commands(app.on_line(accepted(&delete, json!({}))));
-    // `docs/tui.md:268` (scoped asks: one per project; delete keeps unscoped refill).
-    assert_eq!(lines.len(), 2);
-    // `docs/invocation.md:1091` (recent command).
-    assert_eq!(lines[0]["command"], "recent");
-    assert!(lines[0].get("args").is_none());
-    assert_eq!(lines[1]["args"]["project"], "-w");
+    let outgoing = commands(app.on_line(accepted(&delete, json!({}))));
+    let refill = outgoing
+        .iter()
+        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .unwrap_or_else(|| panic!("the unscoped refill"));
+    let refill_id = line_id(refill).to_owned();
+    let scoped: Vec<Value> = outgoing
+        .iter()
+        .filter(|line| {
+            line.get("args")
+                .is_some_and(|args| args.get("project").is_some())
+        })
+        .cloned()
+        .collect();
+    // `docs/tui.md:268` (the delete directly refreshes its project's total).
+    assert_eq!(fanout_projects(&scoped), ["-w"]);
     // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
     assert_eq!(listed(&app), ["○  other  other"]);
+    // The refill returns the already-seen project whose scoped ask was
+    // refused. It must not retry it without a new trigger.
+    assert!(
+        answer_value(
+            &mut app,
+            &refill_id,
+            json!({"sessions": [exited_in("s_bbbbbbbbbbbbbbbb", "other", "/other", "-other")]})
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -5274,7 +5312,12 @@ fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
             exited_in("s_bbbbbbbbbbbbbbbb", "other", "/other", "-other"),
         ]}),
     );
-    let own_id = line_id(&lines[0]).to_owned();
+    let own_id = lines
+        .iter()
+        .find(|line| line["args"]["project"] == "-w")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the launch project's scoped ask"))
+        .to_owned();
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(sent) = app.on_key(Key::Enter, now) else {
@@ -5296,7 +5339,7 @@ fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
         &own_id,
         json!({"sessions": [exited_in("s_cccccccccccccccc", "new", "/w", "-w")], "total": 1}),
     );
-    // `docs/tui.md:233-234` (sections order) and `docs/tui.md:268` (one ask per project).
+    // `docs/tui.md:268` (one ask per project; request order is open).
     assert_eq!(fanout_projects(&follow), ["-w"]);
     // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
@@ -5379,20 +5422,27 @@ fn home_counts_come_from_the_held_total() {
             exited_in("s_bbbbbbbbbbbbbbbb", "b", "/other", "-other"),
         ]}),
     );
+    let launch_id = fanout
+        .iter()
+        .find(|line| line["args"]["project"] == "-w")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the launch project's scoped ask"))
+        .to_owned();
+    let other_id = fanout
+        .iter()
+        .find(|line| line["args"]["project"] == "-other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask"))
+        .to_owned();
     assert!(
-        app.on_line(accepted(
-            line_id(&fanout[0]),
-            json!({"sessions": [], "total": 7})
-        ))
-        .is_empty()
+        app.on_line(accepted(&launch_id, json!({"sessions": [], "total": 7})))
+            .is_empty()
     );
     assert!(
-        app.on_line(accepted(
-            line_id(&fanout[1]),
-            json!({"sessions": [], "total": 1})
-        ))
-        .is_empty()
+        app.on_line(accepted(&other_id, json!({"sessions": [], "total": 1})))
+            .is_empty()
     );
+    // `docs/tui.md:233-234` (sections order), `254-255` (exited rows and More), and `268` (counts from scoped totals).
     assert_eq!(
         list_shapes(&app),
         [
@@ -5408,6 +5458,7 @@ fn home_counts_come_from_the_held_total() {
     // `More` carries its section's project through its key.
     let key = more_key(&app, "-w").expect("a more row");
     assert_eq!(row_key(&app, "s_aaaaaaaaaaaaaaaa"), key);
+    // `docs/tui.md:268` (More counts from the scoped total).
     assert_eq!(app.home_text(Spot::More(key)).as_deref(), Some("… 6 more"));
 }
 
@@ -5421,7 +5472,7 @@ fn home_draws_no_exited_head_at_total_zero() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
     );
     answer_scoped_empty(&mut app, &fanout, 0);
-    // `docs/tui.md:254-255` (exited rows and More).
+    // `docs/tui.md:254-255` (exited rows and More) and `268` (count from the scoped total).
     assert_eq!(list_shapes(&app), ["section w", "row"]);
     // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
     assert_eq!(listed(&app), ["○  a"]);
@@ -5440,7 +5491,7 @@ fn home_draws_no_more_when_the_total_meets_the_loaded_rows() {
         ]}),
     );
     answer_scoped_empty(&mut app, &fanout, 2);
-    // `docs/tui.md:254-255` (exited rows and More).
+    // `docs/tui.md:254-255` (More when rows remain) and `268` (More counts from the scoped total).
     assert_eq!(list_shapes(&app), ["section w", "head 2", "row", "row"]);
     // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
     assert_eq!(listed(&app), ["○  a", "○  b"]);
@@ -5459,11 +5510,13 @@ fn home_more_draws_one_more_at_total_one_above_shown() {
         ]}),
     );
     answer_scoped_empty(&mut app, &fanout, 3);
+    // `docs/tui.md:254-255` (exited rows and More) and `268` (More counts from the scoped total).
     assert_eq!(
         list_shapes(&app),
         ["section w", "head 3", "row", "row", "more 1"]
     );
     let key = more_key(&app, "-w").expect("a more row");
+    // `docs/tui.md:268` (More counts from the scoped total).
     assert_eq!(app.home_text(Spot::More(key)).as_deref(), Some("… 1 more"));
 }
 
@@ -5482,7 +5535,7 @@ fn home_draws_no_more_when_the_total_falls_below_loaded() {
     answer_scoped_empty(&mut app, &fanout, 1);
     // Below loaded rows the count never goes negative and no `More`
     // draws.
-    // `docs/tui.md:254-255` (exited rows and More).
+    // `docs/tui.md:254-255` (More when rows remain) and `268` (More counts from the scoped total).
     assert_eq!(list_shapes(&app), ["section w", "head 1", "row", "row"]);
 }
 
@@ -5514,6 +5567,7 @@ fn enter_on_more_with_more_held_asks_the_next_scoped_page() {
         ))
         .is_empty()
     );
+    // `docs/tui.md:254-255` (exited rows and More) and `268` (counts from the scoped total).
     assert_eq!(
         list_shapes(&app),
         ["section w", "head 3", "row", "row", "more 1"]
@@ -5534,7 +5588,7 @@ fn enter_on_more_at_or_below_the_total_sends_nothing() {
     );
     answer_scoped_empty(&mut app, &fanout, 2);
     // The second row's key still resolves the project, but the held
-    // total says nothing more: no page goes out.
+    // total says nothing more: no page goes out (`docs/tui.md:268`).
     let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
     assert_eq!(app.home_click(Spot::More(key)), Effect::None);
 }
@@ -6214,8 +6268,10 @@ fn an_unscoped_answer_fans_out_one_scoped_ask_per_new_project() {
             exited_in("s_bbbbbbbbbbbbbbbb", "other", "/other", "-other"),
         ]}),
     );
-    // `docs/tui.md:233-234` (sections order) and `docs/tui.md:268` (one ask per project).
-    assert_eq!(fanout_projects(&lines), ["-w", "-other"]);
+    let mut projects = fanout_projects(&lines);
+    projects.sort_unstable();
+    // `docs/tui.md:268` (one ask per project; request order is open).
+    assert_eq!(projects, ["-other", "-w"]);
     for line in &lines {
         assert!(line["args"].get("before").is_none());
     }
@@ -6236,7 +6292,7 @@ fn an_unscoped_answer_carrying_a_total_stores_nothing() {
         &recent,
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")], "total": 12}),
     );
-    // `docs/tui.md:233-234` (sections order) and `docs/tui.md:268` (one ask per project).
+    // `docs/tui.md:268` (one ask per project; request order is open).
     assert_eq!(fanout_projects(&lines), ["-w"]);
     // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), None);
@@ -6254,7 +6310,18 @@ fn scoped_answers_key_rows_and_total_by_project() {
             exited_in("s_bbbbbbbbbbbbbbbb", "other", "/other", "-other"),
         ]}),
     );
-    let (other_id, own_id) = (line_id(&lines[1]).to_owned(), line_id(&lines[0]).to_owned());
+    let other_id = lines
+        .iter()
+        .find(|line| line["args"]["project"] == "-other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask"))
+        .to_owned();
+    let own_id = lines
+        .iter()
+        .find(|line| line["args"]["project"] == "-w")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the launch project's scoped ask"))
+        .to_owned();
     // Out of order: `-other` first.
     assert!(
         app.on_line(accepted(
@@ -6280,6 +6347,7 @@ fn scoped_answers_key_rows_and_total_by_project() {
     );
     // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(3));
+    // `docs/tui.md:254-255` (newest first) and `233-234` (sections order).
     assert_eq!(
         listed(&app),
         ["○  old", "○  other  other", "○  o2  other", "○  new",]
@@ -6317,7 +6385,7 @@ fn a_dirty_answer_sends_exactly_one_follow_up() {
     );
     // `docs/tui.md:268` (one ask in flight per project).
     assert_eq!(follow.len(), 1);
-    // `docs/tui.md:233-234` (sections order) and `docs/tui.md:268` (one ask per project).
+    // `docs/tui.md:268` (one ask per project; request order is open).
     assert_eq!(fanout_projects(&follow), ["-w"]);
     assert_ne!(line_id(&follow[0]), first);
     // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
@@ -6533,7 +6601,18 @@ fn out_of_order_scoped_answers_leave_the_unscoped_cursor() {
             exited_in("s_bbbbbbbbbbbbbbbb", "b", "/other", "-other"),
         ]}),
     );
-    let (own_id, other_id) = (line_id(&lines[0]).to_owned(), line_id(&lines[1]).to_owned());
+    let own_id = lines
+        .iter()
+        .find(|line| line["args"]["project"] == "-w")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the launch project's scoped ask"))
+        .to_owned();
+    let other_id = lines
+        .iter()
+        .find(|line| line["args"]["project"] == "-other")
+        .map(line_id)
+        .unwrap_or_else(|| panic!("the other project's scoped ask"))
+        .to_owned();
     assert!(
         app.on_line(accepted(
             &other_id,
