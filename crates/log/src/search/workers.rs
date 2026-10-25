@@ -68,10 +68,7 @@ pub(super) fn run(
             problems.push((index, session.take_problems()));
             hits.merge(session);
         }
-        found
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push((hits, problems));
+        support::lock(&found).push((hits, problems));
     };
     thread::scope(|scope| {
         for _ in 1..workers {
