@@ -194,7 +194,7 @@ fn run() -> i32 {
                 ::cli::sessions_search(&text, all, json)
             }
             Some(cli::SessionsCommands::Prune {
-                hub: _,
+                hub,
                 older_than,
                 cascade,
                 dry_run,
@@ -206,6 +206,7 @@ fn run() -> i32 {
                 dry_run,
                 yes,
                 force,
+                hub.as_deref(),
                 clock.as_ref(),
                 fiber,
             ),
@@ -1251,23 +1252,29 @@ fn sessions_delete(
 }
 
 /// `fiber sessions prune`: the hub it reaches is started when none runs.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one hand-off of prune's flags: what to prune, the hub, the clock and the binary"
+)]
 fn sessions_prune(
     older_than: Option<String>,
     cascade: bool,
     dry_run: bool,
     yes: bool,
     force: bool,
+    named: Option<&str>,
     clock: &dyn contract::clock::Clock,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
-    let mut connect = || {
-        connect_hub(
-            &config::fiber_home_from_env().map_err(doors::Error::Config)?,
-            &doors::hub::Target::Local,
-            &fiber,
-            clock,
-        )
+    let (home, target) = match hub_target(named) {
+        Ok(target) => target,
+        Err(error) => return fail(error),
     };
+    let hub = match &target {
+        doors::hub::Target::Local => None,
+        doors::hub::Target::Listed { name, .. } => Some(name.as_str()),
+    };
+    let mut connect = || connect_hub(&home, &target, &fiber, clock);
     ::cli::prune(
         &::cli::PruneArgs {
             older_than,
@@ -1276,6 +1283,7 @@ fn sessions_prune(
             yes,
             force,
         },
+        hub,
         clock,
         &mut connect,
     )
