@@ -773,6 +773,264 @@ fn an_unparsable_test_file_is_an_error_naming_the_path() {
 }
 
 #[test]
+fn a_single_colon_in_a_test_path_selects_nothing() {
+    // `#[test : foo]` has only the first colon, so the path walk stops
+    // after `test` and the trailing tokens reject it: `&&` needs both
+    // colons, while `||` would walk past `test` and accept the empty rest.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/attr_tests.rs",
+        "#[test : foo]\nfn odd() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/attr_tests.rs",
+        "@@ -2,1 +2,1 @@\n-fn odd() {}\n+fn odd() {}\n",
+    );
+    assert_eq!(selected(&diff, &sources), vec![]);
+}
+
+#[test]
+fn a_stray_semicolon_does_not_eat_the_next_attribute() {
+    // The `;` is not `#`, so it leaves the following `#[test]` for the
+    // attribute arm; matching any punctuation there would swallow the `#`
+    // and the test would go unselected.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/semi_tests.rs",
+        "fn helper() {};\n#[test]\nfn real() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/semi_tests.rs",
+        "@@ -3,1 +3,1 @@\n-fn real() {}\n+fn real() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("log", None, true, "semi::tests::real")]
+    );
+}
+
+#[test]
+fn a_hash_with_a_paren_group_is_not_an_attribute() {
+    // Only `#[` joins a stack: `#(test)` is not an attribute even though
+    // its group holds a test path, so treating any delimiter as `[` would
+    // wrongly select `paren`.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/paren_tests.rs",
+        "#(test)\nfn paren() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/paren_tests.rs",
+        "@@ -2,1 +2,1 @@\n-fn paren() {}\n+fn paren() {}\n",
+    );
+    assert_eq!(selected(&diff, &sources), vec![]);
+}
+
+#[test]
+fn an_inner_attribute_keeps_a_pending_test_stack() {
+    // `#![..]` after `#[test]` skips its group without clearing the
+    // stack; falling through to the clearing arm (as `!=` on the `!`
+    // check, or `false` for its guard, would) drops `kept`.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/inner_tests.rs",
+        "#[test]\n#![allow(dead_code)]\nfn kept() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/inner_tests.rs",
+        "@@ -3,1 +3,1 @@\n-fn kept() {}\n+fn kept() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("log", None, true, "inner::tests::kept")]
+    );
+}
+
+#[test]
+fn a_hash_before_other_punctuation_clears_the_stack() {
+    // After `#[test]`, `#;` is neither an attribute nor an inner
+    // attribute, so the stack clears. Keeping it on any punctuation
+    // (as `true` for the `!` guard, or `!=` on the `!` check, would)
+    // wrongly selects `cleared`.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/cleared_tests.rs",
+        "#[test]\n#;\nfn cleared() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/cleared_tests.rs",
+        "@@ -3,1 +3,1 @@\n-fn cleared() {}\n+fn cleared() {}\n",
+    );
+    assert_eq!(selected(&diff, &sources), vec![]);
+}
+
+#[test]
+fn a_function_declaration_stops_at_its_semicolon() {
+    // `fn declared();` has no body: the scan stops at `;` instead of
+    // running on into `real`, so the hunk touches only `real`. Skipping
+    // the `;` (as `false` for its guard would) merges both into one span.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/decl_tests.rs",
+        "fn declared();\n#[test]\nfn real() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/decl_tests.rs",
+        "@@ -3,1 +3,1 @@\n-fn real() {}\n+fn real() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("log", None, true, "decl::tests::real")]
+    );
+}
+
+#[test]
+fn an_unsafe_qualifier_keeps_the_stack() {
+    // `unsafe` between the attribute and the `fn` is a qualifier like
+    // `pub`: only it flips the `||` arm that drops it (and the `||`-to-`&&`
+    // arm, which drops every qualifier).
+    let sources = vec![file(
+        "log",
+        "crates/log/src/unsafe_tests.rs",
+        "#[test]\nunsafe fn guarded() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/unsafe_tests.rs",
+        "@@ -2,1 +2,1 @@\n-unsafe fn guarded() {}\n+unsafe fn guarded() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("log", None, true, "unsafe::tests::guarded")]
+    );
+}
+
+#[test]
+fn an_extern_string_keeps_the_stack() {
+    // `extern "C"` is a qualifier plus a literal: the qualifier arm keeps
+    // the stack across `extern`, and the group-or-literal arm keeps it
+    // across `"C"`. Dropping either (the `extern` or `const` arm, the
+    // `||`-to-`&&` arm, or the group arm) loses `linked`.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/linked_tests.rs",
+        "#[test]\nextern \"C\"\nfn linked() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/linked_tests.rs",
+        "@@ -3,1 +3,1 @@\n-fn linked() {}\n+fn linked() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("log", None, true, "linked::tests::linked")]
+    );
+}
+
+#[test]
+fn a_const_qualifier_keeps_the_stack() {
+    // Only `const` flips the `||` arm that drops it (and the `||`-to-`&&`
+    // arm, which drops every qualifier).
+    let sources = vec![file(
+        "log",
+        "crates/log/src/const_tests.rs",
+        "#[test]\nconst fn evaluated() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/const_tests.rs",
+        "@@ -2,1 +2,1 @@\n-const fn evaluated() {}\n+const fn evaluated() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("log", None, true, "const::tests::evaluated")]
+    );
+}
+
+#[test]
+fn a_pub_restriction_keeps_the_stack() {
+    // `pub(crate)` is a qualifier plus a group: the qualifier arm keeps
+    // the stack across `pub`, and the group-or-literal arm keeps it
+    // across `(crate)`. Clearing the stack on a group would lose `scoped`.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/scoped_tests.rs",
+        "#[test]\npub(crate)\nfn scoped() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/scoped_tests.rs",
+        "@@ -3,1 +3,1 @@\n-fn scoped() {}\n+fn scoped() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("log", None, true, "scoped::tests::scoped")]
+    );
+}
+
+#[test]
+fn an_added_line_in_a_zero_new_count_hunk_is_an_error_naming_the_path() {
+    // The hunk holds two old lines and no new ones, yet its body adds one:
+    // the `+` line finds no remaining new line and errors. Without the
+    // `remaining_old > 0` check the hunk closes early and the error is lost.
+    let diff = diff_file(
+        "crates/log/src/span_tests.rs",
+        "@@ -1,2 +1,0 @@\n-foo\n+bar\n",
+    );
+    match changed_tests(&diff, &members(), &span_sources()) {
+        Err(error) => assert!(error.contains("crates/log/src/span_tests.rs"), "{error}"),
+        Ok(tests) => panic!("expected an error naming the path, got {tests:?}"),
+    }
+}
+
+#[test]
+fn a_context_line_counts_and_selects() {
+    // A context line consumes one old and one new line and selects like
+    // any held line: it starts with a space but is not empty (and the
+    // blank context line is empty but starts with nothing), so exactly one
+    // side of the `||` holds in each case. Requiring both would ignore
+    // context lines and misalign every line after them.
+    let spaced = diff_file(
+        "crates/log/src/span_tests.rs",
+        "@@ -10,2 +10,2 @@\n /// doc for second\n-#[test]\n+#[test]\n",
+    );
+    assert_eq!(
+        selected(&spaced, &span_sources()),
+        vec![refer("log", None, true, "span::tests::second")]
+    );
+    let gappy = vec![file(
+        "log",
+        "crates/log/src/gappy_tests.rs",
+        "#[test]\nfn gappy() {\n\n}\n",
+    )];
+    let blank = diff_file("crates/log/src/gappy_tests.rs", "@@ -3,1 +3,1 @@\n\n");
+    assert_eq!(
+        selected(&blank, &gappy),
+        vec![refer("log", None, true, "gappy::tests::gappy")]
+    );
+}
+
+#[test]
+fn a_context_line_on_the_spans_last_line_selects() {
+    // The context line is `}` on line 20: selecting `next_new - 1` keeps
+    // the span, while adding to or dividing the first term moves off it.
+    let diff = diff_file("crates/log/src/span_tests.rs", "@@ -20,1 +20,1 @@\n }\n");
+    assert_eq!(
+        selected(&diff, &span_sources()),
+        vec![refer("log", None, true, "span::tests::second")]
+    );
+}
+
+#[test]
+fn a_context_line_before_the_span_selects_nothing() {
+    // The context line is the plain comment on line 9, just above the
+    // span: selecting `next_new - 1` misses, while adding to or dividing
+    // the second term reaches into the span. Unlike the `-`/`+` version
+    // above, this hunk runs through the context-line arithmetic.
+    let diff = diff_file(
+        "crates/log/src/span_tests.rs",
+        "@@ -9,1 +9,1 @@\n // another plain comment\n",
+    );
+    assert_eq!(selected(&diff, &span_sources()), vec![]);
+}
+
+#[test]
 fn a_hunk_count_past_u32_is_an_error_naming_the_path() {
     for header in [
         "@@ -1 +18446744073709551615,2 @@\n-old\n+new\n+new\n",

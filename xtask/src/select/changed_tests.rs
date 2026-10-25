@@ -262,13 +262,14 @@ fn walk(trees: Vec<TokenTree>, prefix: &str, out: &mut Vec<TestFn>) {
                     || word == "async"
                     || word == "extern"
                     || word == "const" => {}
-            // The `pub(..)` restriction or the `extern` string: only
-            // `pub` puts a group or literal after the attributes.
-            TokenTree::Group(_) | TokenTree::Literal(_) if stack.is_some() => {}
-            TokenTree::Group(_)
-            | TokenTree::Ident(_)
-            | TokenTree::Punct(_)
-            | TokenTree::Literal(_) => {
+            // A group or literal never clears the stack: after a pending
+            // stack it is the `pub(..)` restriction or the `extern`
+            // string, and with no stack there is nothing to clear. (A
+            // `stack.is_some()` guard here would be a tautology: dropping
+            // it changes no selection, so it would leave a mutant no test
+            // can catch.)
+            TokenTree::Group(_) | TokenTree::Literal(_) => {}
+            TokenTree::Ident(_) | TokenTree::Punct(_) => {
                 stack = None;
             }
         }
@@ -295,6 +296,14 @@ enum Hunk {
 /// inside too or the far side is the span's first line. A gap after the
 /// closing brace changes nothing, and a deleted function above a test
 /// changes that test through its first line.
+// Exempt: the gap arm's inner `&&` becomes `||` without changing any
+// selection. `changed_tests` only builds gaps as (`new_start`,
+// `new_start + 1`), so when exactly one side of the inner `&&` holds the
+// far side already misses the span: `before` past `end` puts `after` past
+// it too, and `before` short of `start` puts `after` on or short of
+// `start` (on it, `after == start` already selects). No consumer-visible
+// input distinguishes the two, so no test can catch it.
+#[cfg_attr(false, mutants::skip)]
 fn touches(hunk: &Hunk, start: u32, end: u32) -> bool {
     match *hunk {
         Hunk::Lines(first, last) => first <= end && last >= start,
