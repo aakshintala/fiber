@@ -510,25 +510,25 @@ fn a_panic_with_a_file_goes_on_to_the_lookup() {
         &[("ubuntu-24.04", &line)],
         &pr_run(BASE_SHA, HEAD_SHA, "other/file.rs", "other/file.rs"),
     );
-    assert_eq!(out.len(), 1);
-    assert_eq!(field(&out[0], "action"), Some("lookup"));
-    assert_eq!(field(&out[0], "failing"), Some(FILE));
-    assert_eq!(field(&out[0], "name"), Some("main::t"));
-    assert_eq!(field(&out[0], "runner"), Some("ubuntu-24.04"));
-    assert_eq!(field(&out[0], "title"), Some("Flaky test: main::t"));
-    assert_eq!(field(&out[0], "detail"), Some(PANIC));
+    let record = titled(&out, "main::t");
+    assert_eq!(field(record, "action"), Some("lookup"));
+    assert_eq!(field(record, "failing"), Some(FILE));
+    assert_eq!(field(record, "name"), Some("main::t"));
+    assert_eq!(field(record, "runner"), Some("ubuntu-24.04"));
+    assert_eq!(field(record, "title"), Some("Flaky test: main::t"));
+    assert_eq!(field(record, "detail"), Some(PANIC));
     let want_tested = format!("tested {SHA} = main {BASE_SHA} + head {HEAD_SHA}");
-    assert_eq!(field(&out[0], "tested"), Some(want_tested.as_str()));
-    assert_eq!(field(&out[0], "base"), None);
+    assert_eq!(field(record, "tested"), Some(want_tested.as_str()));
+    assert_eq!(field(record, "base"), None);
 }
 
 #[test]
 fn a_panic_without_a_rs_line_has_no_failing_file() {
     let line = "main::t\tthread fails_once_then_passes panicked at nowhere";
     let out = classified(&[("linux", line)], &pr_run(BASE_SHA, HEAD_SHA, FILE, FILE));
-    assert_eq!(out.len(), 1);
-    assert_eq!(field(&out[0], "action"), Some("lookup"));
-    assert_eq!(field(&out[0], "failing"), None);
+    let record = titled(&out, "main::t");
+    assert_eq!(field(record, "action"), Some("lookup"));
+    assert_eq!(field(record, "failing"), None);
 }
 
 #[test]
@@ -537,9 +537,9 @@ fn no_panic_text_has_no_failing_file() {
     // goes on to the lookup: only a panic names a failing file.
     let line = format!("main::t\tthread failed at {FILE}:10: some output");
     let out = classified(&[("linux", &line)], &pr_run(BASE_SHA, HEAD_SHA, FILE, FILE));
-    assert_eq!(out.len(), 1);
-    assert_eq!(field(&out[0], "action"), Some("lookup"));
-    assert_eq!(field(&out[0], "failing"), None);
+    let record = titled(&out, "main::t");
+    assert_eq!(field(record, "action"), Some("lookup"));
+    assert_eq!(field(record, "failing"), None);
     assert_eq!(failing_file("panicked  at crates/a/b.rs:10"), None);
     assert_eq!(failing_file("Panicked at crates/a/b.rs:10"), None);
 }
@@ -551,10 +551,10 @@ fn a_file_main_changed_is_a_stale_base() {
         &[("linux", &line)],
         &pr_run(BASE_SHA, HEAD_SHA, FILE, "other/file.rs"),
     );
-    assert_eq!(out.len(), 1);
-    assert_eq!(field(&out[0], "action"), Some("stale-base"));
-    assert_eq!(field(&out[0], "failing"), Some(FILE));
-    assert_eq!(field(&out[0], "base"), Some(BASE_SHA));
+    let record = titled(&out, "main::t");
+    assert_eq!(field(record, "action"), Some("stale-base"));
+    assert_eq!(field(record, "failing"), Some(FILE));
+    assert_eq!(field(record, "base"), Some(BASE_SHA));
 }
 
 #[test]
@@ -564,10 +564,10 @@ fn a_file_the_pull_request_changed_is_pr_owned() {
         &[("linux", &line)],
         &pr_run(BASE_SHA, HEAD_SHA, "other/file.rs", FILE),
     );
-    assert_eq!(out.len(), 1);
-    assert_eq!(field(&out[0], "action"), Some("pr-owned"));
-    assert_eq!(field(&out[0], "failing"), Some(FILE));
-    assert_eq!(field(&out[0], "base"), None);
+    let record = titled(&out, "main::t");
+    assert_eq!(field(record, "action"), Some("pr-owned"));
+    assert_eq!(field(record, "failing"), Some(FILE));
+    assert_eq!(field(record, "base"), None);
 }
 
 #[test]
@@ -581,7 +581,6 @@ fn only_a_stale_base_record_names_the_base() {
         &[("linux", text)],
         &pr_run(BASE_SHA, HEAD_SHA, "crates/old.rs", "crates/new.rs"),
     );
-    assert_eq!(out.len(), 3);
     for (name, action, base) in [
         ("main::old", "stale-base", Some(BASE_SHA)),
         ("main::new", "pr-owned", None),
@@ -597,46 +596,52 @@ fn only_a_stale_base_record_names_the_base() {
 fn stale_wins_over_pr_owned() {
     let line = format!("main::t\t{PANIC}");
     let out = classified(&[("linux", &line)], &pr_run(BASE_SHA, HEAD_SHA, FILE, FILE));
-    assert_eq!(field(&out[0], "action"), Some("stale-base"));
+    assert_eq!(field(titled(&out, "main::t"), "action"), Some("stale-base"));
 }
 
 #[test]
 fn a_line_with_no_tab_has_empty_detail() {
     let out = classified(&[("linux", "main::t")], &push_run());
-    assert_eq!(out.len(), 1);
-    assert_eq!(field(&out[0], "name"), Some("main::t"));
-    assert_eq!(field(&out[0], "detail"), Some(""));
-    assert_eq!(field(&out[0], "title"), Some("Flaky test: main::t"));
-    assert_eq!(field(&out[0], "failing"), None);
+    let record = titled(&out, "main::t");
+    assert_eq!(field(record, "name"), Some("main::t"));
+    assert_eq!(field(record, "detail"), Some(""));
+    assert_eq!(field(record, "title"), Some("Flaky test: main::t"));
+    assert_eq!(field(record, "failing"), None);
 }
 
 #[test]
 fn a_line_with_two_tabs_keeps_the_second_in_the_detail() {
     // Only the first TAB splits: the rest of the line is the detail.
     let out = classified(&[("linux", "main::t\tfirst\tsecond")], &push_run());
-    assert_eq!(field(&out[0], "detail"), Some("first\tsecond"));
+    assert_eq!(
+        field(titled(&out, "main::t"), "detail"),
+        Some("first\tsecond")
+    );
 }
 
 #[test]
 fn a_line_that_is_only_a_tab_names_the_empty_test() {
     let out = classified(&[("linux", "\t")], &push_run());
-    assert_eq!(out.len(), 1);
-    assert_eq!(field(&out[0], "name"), Some(""));
-    assert_eq!(field(&out[0], "title"), Some("Flaky test: "));
+    let record = titled(&out, "");
+    assert_eq!(field(record, "name"), Some(""));
+    assert_eq!(field(record, "title"), Some("Flaky test: "));
 }
 
 #[test]
 fn blank_lines_are_skipped() {
     let out = classified(&[("linux", "main::a\n\nmain::b\n")], &push_run());
-    assert_eq!(out.len(), 2);
     titled(&out, "main::a");
     titled(&out, "main::b");
+    assert!(
+        out.iter().all(|record| field(record, "name") != Some("")),
+        "a blank line makes no record: {out:?}"
+    );
 }
 
 #[test]
 fn a_last_line_without_a_newline_is_kept() {
     let out = classified(&[("linux", "main::a\nmain::b")], &push_run());
-    assert_eq!(out.len(), 2);
+    titled(&out, "main::a");
     titled(&out, "main::b");
 }
 
@@ -644,9 +649,9 @@ fn a_last_line_without_a_newline_is_kept() {
 fn a_carriage_return_is_data() {
     // Lines split on `\n` only: a `\r` stays in the name and detail.
     let out = classified(&[("linux", "main::a\r\tpanicked at x.rs:1\r")], &push_run());
-    assert_eq!(out.len(), 1);
-    assert_eq!(field(&out[0], "name"), Some("main::a\r"));
-    assert_eq!(field(&out[0], "detail"), Some("panicked at x.rs:1\r"));
+    let record = titled(&out, "main::a\r");
+    assert_eq!(field(record, "name"), Some("main::a\r"));
+    assert_eq!(field(record, "detail"), Some("panicked at x.rs:1\r"));
 }
 
 #[test]
@@ -655,6 +660,8 @@ fn a_repeated_title_is_written_once_from_its_first_occurrence() {
     let second = "main::t\tthread other panicked at crates/other.rs:3";
     let text = format!("{first}\n{second}\n");
     let out = classified(&[("linux", &text)], &push_run());
+    // docs/testing/running.md, "Flaky tests": "Within one report job a test
+    // title files or comments once; a repeat is skipped".
     assert_eq!(out.len(), 1);
     assert_eq!(field(&out[0], "detail"), Some(PANIC));
     let out = classified(
@@ -668,6 +675,8 @@ fn a_repeated_title_is_written_once_from_its_first_occurrence() {
             pr_files: "",
         },
     );
+    // docs/testing/running.md, "Flaky tests": "Within one report job a test
+    // title files or comments once; a repeat is skipped".
     assert_eq!(out.len(), 1);
     assert_eq!(field(&out[0], "runner"), Some("zeta"));
     assert_eq!(

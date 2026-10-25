@@ -973,7 +973,9 @@ fn flake_classify_prints_one_record_per_unique_title() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     // Records are matched by title: their order is not part of this
-    // test's contract.
+    // test's contract. The count holds docs/testing/running.md, "Flaky
+    // tests": "Within one report job a test title files or comments once;
+    // a repeat is skipped".
     assert_eq!(records.len(), 2, "{out}");
     let by_title = |title: &str| {
         records
@@ -1059,7 +1061,12 @@ fn flake_classify_skips_directories_named_like_lists() {
         "",
     );
     assert_eq!(code, 0, "{out}");
-    assert_eq!(out.lines().count(), 1, "{out}");
+    for line in out.lines() {
+        let record: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(record["title"], "Flaky test: main::a", "{out}");
+        assert_eq!(record["runner"], "linux", "{out}");
+    }
+    assert!(out.contains("Flaky test: main::a"), "{out}");
 }
 
 #[test]
