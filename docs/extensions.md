@@ -1285,7 +1285,9 @@ not silently dropped. When any entry is `blocking`, a headless run fails with
 session starts, so a guard never fails open. When every entry is
 `non-blocking`, the session starts and a `notice` names the missing
 extension. An entry that is not an object fails the session with
-`config_invalid`, naming it, whether or not `hooks` is installed.
+`config_invalid`, naming it, whether or not `hooks` is installed. When
+several entries are malformed, the error names the first in sorted key
+order.
 
 The declarations are the extension's settings (`docs/configuration.md`,
 "Extension settings"), under `hooks`, one entry per name, so each layer adds

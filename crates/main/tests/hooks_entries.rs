@@ -920,74 +920,68 @@ fn an_after_tool_exit_two_with_non_blocking_keeps_the_output() {
     );
 }
 
-/// A non-object entry fails `config_invalid` naming the entry, whatever the
-/// key order, when `hooks` is installed.
+/// A non-object entry fails `config_invalid` naming the malformed entry,
+/// whatever the file's key order, whether or not `hooks` is installed.
 #[test]
-fn a_non_object_entry_is_config_invalid_when_hooks_is_installed() {
-    for entries in [
-        json!({
-            "a": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "a.log"]), 1000, "blocking"),
-            "z": false,
-        }),
-        json!({
-            "z": false,
-            "a": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "a.log"]), 1000, "blocking"),
-        }),
-    ] {
-        let (setup, _server) = hooked(vec![hello()], &entries);
-        let run = setup.run(&["ask", "hi"]);
-        assert_eq!(
-            run.code,
-            Some(1),
-            "entries: {entries}, stderr: {}",
-            run.stderr
-        );
-        assert_eq!(run.kinds(), ["fiber_exited"], "entries: {entries}");
-        assert_eq!(
-            run.first("fiber_exited")["payload"]["error"]["code"],
-            "config_invalid",
-            "entries: {entries}"
-        );
-        let message = run.first("fiber_exited")["payload"]["error"]["message"]
-            .as_str()
-            .unwrap();
-        assert!(message.contains("hooks.z"), "{message}");
-    }
-}
-
-/// A non-object entry fails `config_invalid` naming the entry, whatever the
-/// key order, when `hooks` is not installed.
-#[test]
-fn a_non_object_entry_is_config_invalid_when_hooks_is_missing() {
-    for entries in [
-        json!({
-            "a": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "a.log"]), 1000, "blocking"),
-            "z": false,
-        }),
-        json!({
-            "z": false,
-            "a": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "a.log"]), 1000, "blocking"),
-        }),
-    ] {
-        let (setup, _server) = hooked(vec![hello()], &entries);
-        setup.remove_hooks();
-        let run = setup.run(&["ask", "hi"]);
-        assert_eq!(
-            run.code,
-            Some(1),
-            "entries: {entries}, stderr: {}",
-            run.stderr
-        );
-        assert_eq!(run.kinds(), ["fiber_exited"], "entries: {entries}");
-        assert_eq!(
-            run.first("fiber_exited")["payload"]["error"]["code"],
-            "config_invalid",
-            "entries: {entries}"
-        );
-        let message = run.first("fiber_exited")["payload"]["error"]["message"]
-            .as_str()
-            .unwrap();
-        assert!(message.contains("hooks.z"), "{message}");
+fn a_non_object_entry_is_config_invalid() {
+    let blocking_a = entry(
+        "after_tool",
+        "/bin/sh",
+        json!(["hooks/capture.sh", "a.log"]),
+        1000,
+        "blocking",
+    );
+    let blocking_z = entry(
+        "after_tool",
+        "/bin/sh",
+        json!(["hooks/capture.sh", "z.log"]),
+        1000,
+        "blocking",
+    );
+    // Each acceptance map in both file orders: the verdict names the
+    // malformed entry (`docs/extensions.md`, "Hooks declared in
+    // configuration"), `z` here and `a` below.
+    let cases = [
+        (json!({"a": blocking_a.clone(), "z": false}), "hooks.z"),
+        (json!({"z": false, "a": blocking_a}), "hooks.z"),
+        (json!({"a": false, "z": blocking_z.clone()}), "hooks.a"),
+        (json!({"z": blocking_z, "a": false}), "hooks.a"),
+        // Both malformed: the verdict names the first in sorted key order
+        // even when the file order leads with the other one.
+        (json!({"b": false, "a": false}), "hooks.a"),
+        (json!({"a": false, "b": false}), "hooks.a"),
+    ];
+    for installed in [true, false] {
+        for (entries, expected) in &cases {
+            let (setup, _server) = hooked(vec![hello()], entries);
+            if !installed {
+                setup.remove_hooks();
+            }
+            let run = setup.run(&["ask", "hi"]);
+            assert_eq!(
+                run.code,
+                Some(1),
+                "installed: {installed}, entries: {entries}, stderr: {}",
+                run.stderr
+            );
+            // One line only, so no turn starts: a failure before
+            // `fiber_started` prints one `fiber_exited` line
+            // (`docs/errors.md:85-91`).
+            assert_eq!(
+                run.kinds(),
+                ["fiber_exited"],
+                "installed: {installed}, entries: {entries}"
+            );
+            assert_eq!(
+                run.first("fiber_exited")["payload"]["error"]["code"],
+                "config_invalid",
+                "installed: {installed}, entries: {entries}"
+            );
+            let message = run.first("fiber_exited")["payload"]["error"]["message"]
+                .as_str()
+                .unwrap();
+            assert!(message.contains(expected), "{message}");
+        }
     }
 }
 
@@ -1007,6 +1001,9 @@ fn a_non_object_hooks_value_is_config_invalid_naming_hooks() {
             "installed: {installed}, stderr: {}",
             run.stderr
         );
+        // One line only, so no turn starts (`docs/errors.md:85-91`); the
+        // message names the `hooks` key (`docs/extensions.md`, "Hooks
+        // declared in configuration").
         assert_eq!(run.kinds(), ["fiber_exited"], "installed: {installed}");
         assert_eq!(
             run.first("fiber_exited")["payload"]["error"]["code"],

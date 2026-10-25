@@ -3545,7 +3545,8 @@ fn hooks_state_names_every_blocker_but_no_watcher_or_non_blocking_entry() {
     let home = Home::new();
     let entries = r#"{"z":{"on_failure":"blocking"},"a":false,"missing":{},"invalid":{"on_failure":7},"notice":{"on_failure":"non-blocking"},"watch":{"watch":[],"on_failure":"blocking"}}"#;
     // A non-object entry fails before any installed/missing decision, naming
-    // the first malformed entry in sorted key order.
+    // the first malformed entry in sorted key order (`docs/extensions.md`,
+    // "Hooks declared in configuration").
     let error = super::hooks_state(&hooks_config(&home, entries), &[]).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ConfigInvalid, "{error:?}");
     let crate::Error::Config(config::ConfigError::WrongType { key, .. }) = &error else {
@@ -3568,16 +3569,20 @@ fn hooks_state_names_every_blocker_but_no_watcher_or_non_blocking_entry() {
 }
 
 /// A non-object entry fails `config_invalid` naming the entry, whatever the
-/// key order and whether or not `hooks` is installed.
+/// key order and whether or not `hooks` is installed. The named entry is
+/// the malformed one (`docs/extensions.md`, "Hooks declared in
+/// configuration").
 #[test]
 fn hooks_state_rejects_a_non_object_entry_before_any_installed_decision() {
     let home = Home::new();
     let hooks = config::full_name("hooks");
-    // The malformed entry arrives after a valid blocking entry in one order
-    // and before it in the other: either order names the malformed entry.
-    for entries in [
-        r#"{"a":{"on_failure":"blocking"},"z":false}"#,
-        r#"{"z":false,"a":{"on_failure":"blocking"}}"#,
+    // Each acceptance map arrives in both file orders: either order names
+    // the malformed entry, `z` here and `a` below.
+    for (entries, expected) in [
+        (r#"{"a":{"on_failure":"blocking"},"z":false}"#, "hooks.z"),
+        (r#"{"z":false,"a":{"on_failure":"blocking"}}"#, "hooks.z"),
+        (r#"{"a":false,"z":{"on_failure":"blocking"}}"#, "hooks.a"),
+        (r#"{"z":{"on_failure":"blocking"},"a":false}"#, "hooks.a"),
     ] {
         for loaded in [Vec::new(), vec![hooks.clone()]] {
             let error = super::hooks_state(&hooks_config(&home, entries), &loaded).unwrap_err();
@@ -3585,12 +3590,13 @@ fn hooks_state_rejects_a_non_object_entry_before_any_installed_decision() {
             let crate::Error::Config(config::ConfigError::WrongType { key, .. }) = &error else {
                 panic!("expected WrongType, got {error:?}");
             };
-            assert_eq!(key, "hooks.z", "entries: {entries}");
-            assert!(error.to_string().contains("hooks.z"), "{error}");
+            assert_eq!(key, expected, "entries: {entries}");
+            assert!(error.to_string().contains(expected), "{error}");
         }
     }
     // Several malformed entries report the first in sorted key order, not the
-    // first in the file order.
+    // first in the file order (`docs/extensions.md`, "Hooks declared in
+    // configuration").
     let error = super::hooks_state(&hooks_config(&home, r#"{"b":false,"a":5}"#), &[]).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ConfigInvalid, "{error:?}");
     let crate::Error::Config(config::ConfigError::WrongType { key, .. }) = &error else {
