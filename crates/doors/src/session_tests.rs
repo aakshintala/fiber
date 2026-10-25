@@ -2522,35 +2522,25 @@ fn after_quiesce_a_client_waiting_for_the_shutdown_before_its_write_gets_no_answ
         .unwrap();
     opened.session.quiesce();
     drop(connected);
-    // A client attaching after quiesce is rejected: the session shuts the
-    // connection down without reading its line, then closes it as its
-    // accept thread finishes the rejection. A write in between still
-    // lands, so the test writes until the close lands: only `BrokenPipe`
-    // proves it did. `Ok` means the close is still on its way, so the
-    // loop yields and retries under the one deadline; its expiry fails
-    // naming the close, so a hang cannot pass as the rejection.
-    let late = Client::connect(&socket).unwrap();
-    let close = Deadline::after(DEADLINE);
-    loop {
-        match late.send(&subscribe_line("c_late", "full")) {
-            Err(error) if error.kind() == io::ErrorKind::BrokenPipe => break,
-            Err(error) => panic!("the late client's send failed: {error:?}"),
-            Ok(()) => {
-                assert!(
-                    !close.left().is_zero(),
-                    "the server closed the rejected post-quiesce connection before the deadline"
-                );
-                thread::yield_now();
-            }
-        }
+    // The read proves the close: a rejected post-quiesce connection gets
+    // end of file with no answer, and the write after it lands or fails
+    // depending on the platform, so it only checks for no panic on a
+    // closed peer.
+    let mut late = UnixStream::connect(&socket).unwrap();
+    late.set_read_timeout(Some(DEADLINE)).unwrap();
+    let mut closed = [0u8; 64];
+    match late.read(&mut closed) {
+        Ok(0) => {}
+        Ok(n) => panic!(
+            "no answer is written for a line never read, got {:?}",
+            &closed[..n]
+        ),
+        Err(error) => panic!(
+            "the server closed the rejected post-quiesce connection before the deadline: {error:?}"
+        ),
     }
-    assert!(
-        late.recv(fakes::Deadline::after(Duration::ZERO)).is_none(),
-        "no answer is written for a line never read"
-    );
-    assert!(
-        late.recv(Deadline::after(DEADLINE)).is_none(),
-        "a subscribe after quiesce ends the connection"
+    tolerated_late_write(
+        late.write_all(format!("{}\n", subscribe_line("c_late", "full")).as_bytes()),
     );
     drop(late);
     close_within(opened.session, opened.log);
