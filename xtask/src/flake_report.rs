@@ -554,13 +554,7 @@ pub(crate) fn runner_lists(names: &[String]) -> Vec<(String, String)> {
     let mut kept: Vec<(String, String)> = names
         .iter()
         .filter_map(|name| {
-            if name.len() < PREFIX.len() + SUFFIX.len() {
-                return None;
-            }
-            if !name.starts_with(PREFIX) || !name.ends_with(SUFFIX) {
-                return None;
-            }
-            let runner = name[PREFIX.len()..name.len() - SUFFIX.len()].to_owned();
+            let runner = name.strip_prefix(PREFIX)?.strip_suffix(SUFFIX)?.to_owned();
             Some((runner, name.clone()))
         })
         .collect();
@@ -612,8 +606,8 @@ fn failing_file(detail: &str) -> Option<&str> {
     }
     let bytes = detail.as_bytes();
     let mut i = 0;
-    while i < bytes.len() {
-        if !bytes.get(i).is_some_and(|byte| is_path_char(*byte)) {
+    while let Some(&byte) = bytes.get(i) {
+        if !is_path_char(byte) {
             i += 1;
             continue;
         }

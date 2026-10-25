@@ -716,6 +716,7 @@ fn list_files_are_read_in_name_byte_order() {
         "flaky-tests-x.json".to_owned(),
         "flaky-tests-x.txt.bak".to_owned(),
         "flaky-tests-".to_owned(),
+        "flaky-tests.txt".to_owned(),
     ];
     assert!(runner_lists(&other).is_empty());
     let empty = vec!["flaky-tests-.txt".to_owned()];
