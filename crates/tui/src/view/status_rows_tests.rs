@@ -359,7 +359,7 @@ fn budget_preamble(budget: f64) -> Line {
 }
 
 #[test]
-fn the_spend_segment_reads_against_the_budget() {
+fn the_spend_segment_reads_billed_spend_against_the_budget() {
     let mut app = attached(100, 30);
     app.on_line(budget_preamble(5.0));
     app.on_line(spend_status(serde_json::json!(1.25), 0.0));
@@ -373,10 +373,7 @@ fn the_spend_segment_reads_against_the_budget() {
     let rows: Vec<&str> = screen.lines().collect();
     assert!(rows[rows.len() - 1].contains("$1.25"), "{screen}");
     assert!(!screen.contains("of $"), "{screen}");
-}
 
-#[test]
-fn the_budget_comparison_counts_billed_spend_only() {
     // $1 billed plus $9 on subscription against a $5 budget: the
     // subscription bills nothing per call.
     let mut app = attached(100, 30);
@@ -394,10 +391,7 @@ fn the_budget_comparison_counts_billed_spend_only() {
     let (screen, _) = draw(&app, 100, 30);
     let rows: Vec<&str> = screen.lines().collect();
     assert!(rows[rows.len() - 1].contains("$0.00 of $5.00"), "{screen}");
-}
 
-#[test]
-fn the_spend_segment_reads_unknown_when_billed_cost_is_null() {
     // A budget is set but the billed cost is not known yet.
     let mut app = attached(100, 30);
     app.on_line(budget_preamble(5.0));
@@ -408,6 +402,20 @@ fn the_spend_segment_reads_unknown_when_billed_cost_is_null() {
         rows[rows.len() - 1].contains("unknown of $5.00"),
         "{screen}"
     );
+
+    // A budget is set but no status parsed: the segment reads the
+    // attached spend plain, with no comparison.
+    let mut app = attached(100, 30);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(session_line(
+        SESSION,
+        "session_status",
+        serde_json::json!({"bogus": true}),
+    ));
+    let (screen, _) = draw(&app, 100, 30);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows[rows.len() - 1].contains("$0.00"), "{screen}");
+    assert!(!screen.contains("of $"), "{screen}");
 }
 
 #[test]
