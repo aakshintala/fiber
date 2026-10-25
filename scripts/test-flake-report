@@ -885,10 +885,11 @@ expect_summary "$tmp/pr-missing-origin-main" "flake_decide found flakes but thei
 # main advances on another file after the PR branches, so the merge of
 # old-main and the PR head lists a main-side file (stale-base) and a
 # PR-side file (pr-owned). A second merge built from a rebased PR branch
-# lists only the rebased changes, and a force-pushed head with the same
-# tree lists the same. The ref layout matches a full-history checkout:
-# refs/remotes/origin/main at the new main tip. cargo runs from the real
-# checkout, since the block's working directory is the throwaway repo.
+# lists only the rebased changes, and a force-pushed head that rewrites
+# the PR commit lists only the rewritten head's files. The ref layout
+# matches a full-history checkout: refs/remotes/origin/main at the new
+# main tip. cargo runs from the real checkout, since the block's working
+# directory is the throwaway repo.
 realgit=$tmp/real-git
 mkdir -p "$realgit/work" "$realgit/temp/flaky" "$realgit/bin"
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com
@@ -962,17 +963,35 @@ classify_real "$realgit" "$mg2"
 [ "$(classify_action "$classes" 'Flaky test: main::rebased')" = pr-owned ] || fail "classify-real-git rebased-head: pr2.rs must be pr-owned"
 [ "$(classify_action "$classes" 'Flaky test: main::oldpr')" = lookup ] || fail "classify-real-git rebased-head: pr.rs must be lookup, not pr-owned"
 [ "$(classify_action "$classes" 'Flaky test: main::main')" = lookup ] || fail "classify-real-git rebased-head: main.rs must be lookup, not stale"
-# force-pushed-head: the same tree reached by a force-push, so the merge
-# commit differs only in its ^2; the lists match the rebased case.
+[ "$("$real_jq" -r --arg t 'Flaky test: main::rebased' "select(.title == \$t) | .tested // empty" "$classes")" = "tested $mg2 = main $m2 + head $p2" ] || fail "classify-real-git rebased-head: the tested line must name the rebased head"
+# force-pushed-head: the PR commit is amended to drop pr2.rs and add
+# pr3.rs, and the PR ref is force-updated to it, not a fast-forward. The
+# merge of the rewritten head lists only its files, and the tested line
+# names the rewritten head, not the one it replaced.
+g checkout -q pr2
+g rm -q pr2.rs
+printf 'pr3\n' >"$realgit/work/pr3.rs"
+g add pr3.rs
+g commit -q --amend -m "P2 force-pushed"
+p3=$(g rev-parse HEAD)
+[ "$p3" != "$p2" ] || fail "classify-real-git: the force-pushed head must be a new commit"
+[ "$(g rev-parse "$p3^")" = "$m2" ] || fail "classify-real-git: the force-pushed head must replace, not extend, the old head"
+if g merge-base --is-ancestor "$p2" "$p3"; then
+  fail "classify-real-git: the force-push must not be a fast-forward"
+fi
+g update-ref refs/remotes/origin/pr2 "$p2"
+g update-ref refs/remotes/origin/pr2 "$p3" "$p2"
+[ "$(g rev-parse refs/remotes/origin/pr2)" = "$p3" ] || fail "classify-real-git: the PR ref must point at the force-pushed head"
 g checkout -qb mg3 "$m2"
-g merge -q --no-ff -m "merge force-pushed" "$p2"
+g merge -q --no-ff -m "merge force-pushed" refs/remotes/origin/pr2
 mg3=$(g rev-parse HEAD)
-[ "$mg3" != "$mg2" ] || fail "classify-real-git: the force-pushed merge must differ"
-[ "$(g rev-parse "$mg3^{tree}")" = "$(g rev-parse "$mg2^{tree}")" ] || fail "classify-real-git: the force-pushed merge must hold the same tree"
+[ "$(g rev-parse "$mg3^2")" = "$p3" ] || fail "classify-real-git: the force-pushed merge must have the rewritten head as ^2"
+printf 'main::rebased\tthread rebased panicked at pr2.rs:3\nmain::forced\tthread forced panicked at pr3.rs:3\nmain::main\tthread main panicked at main.rs:10\n' >"$realgit/temp/flaky/flaky-tests-linux.txt"
 classify_real "$realgit" "$mg3"
-[ "$(classify_action "$classes" 'Flaky test: main::rebased')" = pr-owned ] || fail "classify-real-git force-pushed-head: pr2.rs must be pr-owned"
-[ "$(classify_action "$classes" 'Flaky test: main::oldpr')" = lookup ] || fail "classify-real-git force-pushed-head: pr.rs must be lookup"
+[ "$(classify_action "$classes" 'Flaky test: main::forced')" = pr-owned ] || fail "classify-real-git force-pushed-head: pr3.rs must be pr-owned"
+[ "$(classify_action "$classes" 'Flaky test: main::rebased')" = lookup ] || fail "classify-real-git force-pushed-head: pr2.rs, dropped by the force-push, must be lookup"
 [ "$(classify_action "$classes" 'Flaky test: main::main')" = lookup ] || fail "classify-real-git force-pushed-head: main.rs must be lookup"
+[ "$("$real_jq" -r --arg t 'Flaky test: main::forced' "select(.title == \$t) | .tested // empty" "$classes")" = "tested $mg3 = main $m2 + head $p3" ] || fail "classify-real-git force-pushed-head: the tested line must name the rewritten head"
 unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 
 # A malformed JUnit file fails collection with no list, so the producer
