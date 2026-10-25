@@ -447,7 +447,39 @@ fn shell_child_prompt_and_question_reply_to_own_session_are_refused() {
 }
 
 #[test]
-fn steer_and_question_reply_to_a_hub_started_session_are_allowed() {
+fn steer_to_a_hub_started_session_is_allowed() {
+    let setup = Setup::new();
+    let server = fakes::ProviderServer::start([hello(), hello(), hello(), hello()]).unwrap();
+    let probe = write_probe(&setup);
+    let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
+    setup.provider(&server);
+    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let first = start_session(&client, &workspace, "first");
+    subscribe(&client, &first);
+    let second = start_session(&client, &workspace, "second");
+    subscribe(&client, &second);
+    let answer = probe_answer_to(
+        &client,
+        &first,
+        &second,
+        &probe,
+        &hub_socket,
+        &json!({
+            "id": "c_probe_steer",
+            "session_id": second,
+            "command": "steer",
+            "args": {"content": [{"type": "text", "text": "from a sibling"}]},
+        }),
+    );
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    finish(hub, client, guard, &[&first, &second]);
+}
+
+#[test]
+fn question_reply_to_a_hub_started_session_is_allowed() {
     let setup = Setup::new();
     let server = fakes::ProviderServer::start_responding(|request: &fakes::Request| {
         let text = String::from_utf8_lossy(&request.body);
@@ -493,20 +525,6 @@ fn steer_and_question_reply_to_a_hub_started_session_are_allowed() {
         .as_str()
         .unwrap()
         .to_owned();
-    let answer = probe_answer_to(
-        &client,
-        &first,
-        &second,
-        &probe,
-        &hub_socket,
-        &json!({
-            "id": "c_probe_steer",
-            "session_id": second,
-            "command": "steer",
-            "args": {"content": [{"type": "text", "text": "from a sibling"}]},
-        }),
-    );
-    assert_eq!(answer["kind"], "command_accepted", "{answer}");
     let answer = probe_answer_to(
         &client,
         &first,
