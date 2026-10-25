@@ -610,10 +610,17 @@ impl App {
             Ask::Delete(id) => {
                 if accepted {
                     self.clear_prompt(&id);
+                    // The row's project goes with the refresh: the
+                    // removal below erases where to re-ask.
+                    let project = self
+                        .home
+                        .as_ref()
+                        .and_then(|home| home.sessions.row(&id))
+                        .map(|row| row.project.clone());
                     if let Some(home) = self.home.as_mut() {
                         home.sessions.remove(&id);
                     }
-                    return self.ask_recent_first();
+                    return self.ask_recent_first(project.as_deref());
                 }
                 let (code, message) = refusal_parts(payload);
                 if code == "session_has_dependents" || code == "stale_request" {

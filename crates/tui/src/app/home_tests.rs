@@ -506,10 +506,14 @@ fn no_feed_before_hello_and_none_on_a_refused_schema() {
 }
 
 #[test]
-fn a_line_after_hello_sends_nothing_more() {
+fn a_status_after_hello_queues_one_scoped_ask() {
     let mut app = home();
     app.on_line(hello());
-    assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
+    let lines = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "recent");
+    assert_eq!(lines[0]["args"]["project"], "-w");
+    assert!(lines[0]["args"].get("before").is_none());
     assert_eq!(rows(&app), ["✓  fix the parser"]);
 }
 
@@ -571,8 +575,10 @@ fn session_status_for_the_attached_session_still_reaches_the_conversation() {
         Some("s_aaaaaaaaaaaaaaaa")
     );
     // The status folds into the rows, and passes through to the
-    // conversation below.
-    assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
+    // conversation below, queuing its project's scoped ask beside it.
+    let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0]["args"]["project"], "-w");
     assert_eq!(listed(&app), ["✓  fix the parser"]);
     turn_started_answered(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert!(
@@ -5021,6 +5027,248 @@ fn slash_new_from_a_session_with_a_focused_steering_row_lands_on_the_entry_bar()
     drawn(&mut app);
     assert_eq!(app.focused(), None);
     assert_eq!(app.draft(), "");
+}
+
+#[test]
+fn a_left_with_no_ask_in_flight_sends_one_scoped_ask() {
+    let mut app = home();
+    app.on_line(hello());
+    // An unknown session names no row: no trigger.
+    assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
+    // A live session's status queues its scoped ask, drained at once.
+    let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
+    assert_eq!(queued.len(), 1);
+    let first = line_id(&queued[0]).to_owned();
+    // While in flight, the left marks dirty and sends nothing, keeping
+    // the held fallback.
+    assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
+    assert_eq!(stored(&app, "-w"), None);
+    assert_eq!(listed(&app), ["○  fix the parser"]);
+    // The answer folds the total and sends exactly one follow-up.
+    let follow = answer_value(
+        &mut app,
+        &first,
+        json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old")], "total": 1}),
+    );
+    assert_eq!(fanout_projects(&follow), ["-w"]);
+    assert_eq!(stored(&app, "-w"), Some(1));
+    let second = line_id(&follow[0]).to_owned();
+    assert!(
+        app.on_line(accepted(&second, json!({"sessions": [], "total": 1}),))
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_reconnect_drops_totals_and_refetches_every_project() {
+    let mut app = home();
+    let (feed, recent) = linked(&mut app);
+    assert!(app.on_line(accepted(&feed, json!({}))).is_empty());
+    let lines = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w"),
+            exited_in("s_bbbbbbbbbbbbbbbb", "b", "/other", "-other"),
+        ]}),
+    );
+    let (own_id, _) = (line_id(&lines[0]).to_owned(), line_id(&lines[1]).to_owned());
+    assert!(
+        app.on_line(accepted(
+            &own_id,
+            json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")], "total": 7}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(stored(&app, "-w"), Some(7));
+    // The drop and the second hello reset the connection state.
+    app.disconnected();
+    let lines = commands(app.on_line(hello()));
+    let kinds: Vec<&str> = lines
+        .iter()
+        .map(|line| {
+            line["command"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a command: {line}"))
+        })
+        .collect();
+    assert_eq!(kinds, ["feed", "recent", "sessions", "recent", "recent"]);
+    assert_eq!(fanout_projects(&lines[3..]), ["-w", "-other"]);
+    // Totals are empty but rows stay for the refetch.
+    assert_eq!(stored(&app, "-w"), None);
+    assert_eq!(stored(&app, "-other"), None);
+    assert_eq!(listed(&app), ["○  a", "○  b  other"]);
+    // The stale scoped answer matches nothing and folds nothing.
+    assert!(
+        app.on_line(accepted(
+            &own_id,
+            json!({"sessions": [exited_in("s_z", "z", "/w", "-w")], "total": 9}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(stored(&app, "-w"), None);
+    assert_eq!(listed(&app), ["○  a", "○  b  other"]);
+    // The refetched unscoped page triggers nothing new: both projects
+    // already have asks in flight.
+    let recent_id = lines[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"));
+    assert!(
+        app.on_line(accepted(
+            recent_id,
+            json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn replayed_status_then_left_only_retriggers_without_counting() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let lines = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    let first = line_id(&lines[0]).to_owned();
+    assert!(
+        app.on_line(accepted(
+            &first,
+            json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(stored(&app, "-w"), Some(1));
+    // A replayed status for a known section queues nothing and keeps
+    // the total.
+    assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
+    assert_eq!(stored(&app, "-w"), Some(1));
+    // A replayed left retriggers one ask without incrementing.
+    let queued = commands(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")));
+    assert_eq!(fanout_projects(&queued), ["-w"]);
+    assert_eq!(stored(&app, "-w"), Some(1));
+    // A second replayed left while in flight only marks dirty.
+    assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
+    assert_eq!(stored(&app, "-w"), Some(1));
+    // Only a fresh scoped answer moves the total, sending the one
+    // follow-up the dirty replay earned.
+    let second = line_id(&queued[0]).to_owned();
+    let follow = answer_value(
+        &mut app,
+        &second,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")], "total": 2}),
+    );
+    assert_eq!(fanout_projects(&follow), ["-w"]);
+    assert_eq!(stored(&app, "-w"), Some(2));
+    assert!(
+        app.on_line(accepted(
+            line_id(&follow[0]),
+            json!({"sessions": [], "total": 2}),
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn an_accepted_delete_asks_the_deleted_projects_scoped_page() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let lines = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited("s_aaaaaaaaaaaaaaaa", "old work"),
+            exited_in("s_bbbbbbbbbbbbbbbb", "other", "/other", "-other"),
+        ]}),
+    );
+    for line in &lines {
+        assert!(
+            app.on_line(accepted(line_id(line), json!({"sessions": [], "total": 1}),))
+                .is_empty()
+        );
+    }
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(sent) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(sent)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    let lines = commands(app.on_line(accepted(&delete, json!({}))));
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["command"], "recent");
+    assert!(lines[0].get("args").is_none());
+    assert_eq!(lines[1]["args"]["project"], "-w");
+    assert_eq!(listed(&app), ["○  other  other"]);
+}
+
+#[test]
+fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let lines = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited("s_aaaaaaaaaaaaaaaa", "old work"),
+            exited_in("s_bbbbbbbbbbbbbbbb", "other", "/other", "-other"),
+        ]}),
+    );
+    let own_id = line_id(&lines[0]).to_owned();
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(sent) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(sent)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    // The scoped ask is still in flight: the refresh keeps the unscoped
+    // refill only, marking the project dirty.
+    let lines = commands(app.on_line(accepted(&delete, json!({}))));
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].get("args").is_none());
+    // Its answer folds and schedules exactly one fresh scoped ask.
+    let follow = answer_value(
+        &mut app,
+        &own_id,
+        json!({"sessions": [exited_in("s_cccccccccccccccc", "new", "/w", "-w")], "total": 1}),
+    );
+    assert_eq!(fanout_projects(&follow), ["-w"]);
+    assert_eq!(stored(&app, "-w"), Some(1));
+    assert_eq!(listed(&app), ["○  other  other", "○  new"]);
+}
+
+#[test]
+fn a_new_section_status_queues_one_scoped_ask_for_home_outgoing() {
+    let mut app = home();
+    app.on_line(hello());
+    // `home_line` returns `None`, so the status reaches the session.
+    assert_eq!(app.home_line(&status("s_aaaaaaaaaaaaaaaa")), None);
+    // `home_outgoing` drains the queued scoped ask.
+    let lines = commands(app.home_outgoing());
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "recent");
+    assert_eq!(lines[0]["args"]["project"], "-w");
+    assert!(lines[0]["args"].get("before").is_none());
+    // No duplicate while in flight: the trigger marks dirty instead.
+    assert_eq!(app.home_line(&status("s_aaaaaaaaaaaaaaaa")), None);
+    assert!(app.home_outgoing().is_empty());
+}
+
+#[test]
+fn triggers_send_nothing_while_the_link_is_down() {
+    let mut app = home();
+    assert_eq!(app.home_line(&status("s_aaaaaaaaaaaaaaaa")), None);
+    assert!(app.home_outgoing().is_empty());
+    assert_eq!(
+        app.home_line(&left("s_aaaaaaaaaaaaaaaa", "exited")),
+        Some(Vec::new())
+    );
 }
 
 /// The row key of `session` on home.

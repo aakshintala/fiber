@@ -626,10 +626,21 @@ impl App {
                             home.left_after_attach = Some(exited.clone());
                         }
                     }
+                    // The project's count may have changed: ask again
+                    // under the one-in-flight-plus-dirty bound, never
+                    // adjusting the count here.
+                    let project = self
+                        .home
+                        .as_ref()
+                        .and_then(|home| home.sessions.row(&exited))
+                        .map(|row| row.project.clone());
+                    let lines = project
+                        .map(|project| self.scoped_first(&project))
+                        .unwrap_or_default();
                     if how == Left::Exited {
                         self.rail_state.note_exited(&exited);
                     }
-                    Some(Vec::new())
+                    Some(lines)
                 }
                 "command_accepted" | "command_rejected" => {
                     let id = hub.payload.get("command_id").and_then(Value::as_str)?;
@@ -750,6 +761,24 @@ impl App {
                         .as_ref()
                         .and_then(|home| home.sessions.row(&session))
                         .is_some_and(|row| row.left.is_some());
+                    // A status introducing a project queues one bounded
+                    // scoped ask for it: the project holds no section
+                    // yet. Later statuses for a known project queue
+                    // nothing.
+                    let fresh = self.home.as_ref().and_then(|home| {
+                        let project = envelope
+                            .payload
+                            .get("project")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        (!project.is_empty()
+                            && !home
+                                .sessions
+                                .sections(home.launch_project())
+                                .iter()
+                                .any(|section| section.project == project))
+                        .then(|| project.to_owned())
+                    });
                     let row = from_status(envelope);
                     if let Some(home) = self.home.as_mut() {
                         home.sessions.status(row);
@@ -763,6 +792,22 @@ impl App {
                             && home.left_after_attach.as_ref() == Some(&session)
                         {
                             home.left_after_attach = None;
+                        }
+                    }
+                    // The queued ask rides in home's outbox, drained by
+                    // `home_outgoing`; while one is in flight it marks the
+                    // project dirty instead. The status still reaches the
+                    // conversation below.
+                    if let Some(project) = fresh
+                        && self
+                            .home
+                            .as_ref()
+                            .is_some_and(|home| home.sessions.total_for(&project).is_none())
+                    {
+                        for line in self.scoped_first(&project) {
+                            if let Some(home) = self.home.as_mut() {
+                                home.subs.queue(line);
+                            }
                         }
                     }
                     self.note_feed(&session);
@@ -1112,8 +1157,9 @@ impl App {
     }
 
     /// Asks the first unscoped `recent` page again: an accepted delete
-    /// fills the gap it left.
-    fn ask_recent_first(&mut self) -> Vec<String> {
+    /// fills the gap it left. It also asks the scoped `recent` for the
+    /// deleted row's project, or marks it dirty while one is in flight.
+    fn ask_recent_first(&mut self, delete_project: Option<&str>) -> Vec<String> {
         if !self.outbox.is_up() {
             return Vec::new();
         }
@@ -1122,7 +1168,11 @@ impl App {
         };
         let id = mint();
         home.recent_ask = Some((id.clone(), true));
-        vec![recent_line(&id, None, None)]
+        let mut out = vec![recent_line(&id, None, None)];
+        if let Some(project) = delete_project {
+            out.extend(self.scoped_first(project));
+        }
+        out
     }
 
     /// Sends one scoped `recent` first page for `project`, recording its
@@ -1130,7 +1180,7 @@ impl App {
     /// of duplicating the ask: the answer sends exactly one follow-up.
     /// Nothing goes out with no home, with the link down, or for an
     /// empty project.
-    fn scoped_first(&mut self, project: &str) -> Vec<String> {
+    pub(super) fn scoped_first(&mut self, project: &str) -> Vec<String> {
         if project.is_empty() || !self.outbox.is_up() {
             return Vec::new();
         }

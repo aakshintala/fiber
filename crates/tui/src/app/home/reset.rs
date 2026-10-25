@@ -17,6 +17,11 @@ impl App {
         };
         home.fed = false;
         home.subs.reset();
+        // Every held total goes with the old connection, with the scoped
+        // ids waiting and their dirty flags: a stale scoped answer
+        // matches nothing afterwards. Rows stay for the refetch.
+        home.sessions.drop_all_totals();
+        home.scoped_asks.clear();
         self.settle_deletes();
     }
 }
