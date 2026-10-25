@@ -253,17 +253,23 @@ fn a_list_launch_with_no_rows_leaves_the_box_focused() {
 #[test]
 fn a_list_launch_with_an_empty_first_page_but_a_live_row_focuses_the_list() {
     let mut app = home_at(OpenAt::List);
-    assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
+    // `docs/invocation.md:1033` (the hub speaks first on each connection).
     let lines = commands(app.on_line(hello()));
-    let recent = lines[1]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("recent id"));
-    // The empty page still fans out the live row's project.
-    let fanout = commands(app.on_line(accepted(recent, json!({"sessions": []}))));
-    // `docs/tui.md:268` (one ask in flight per project).
-    assert_eq!(fanout.len(), 1);
-    // `docs/tui.md:233-234` and `docs/tui.md:268` (one per project).
-    assert_eq!(fanout[0]["args"]["project"], "-w");
+    let recent = lines
+        .iter()
+        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("unscoped recent id"));
+    let scoped = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
+    // `docs/tui.md:268` (a newly appearing project earns one scoped ask).
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0]["command"], "recent");
+    assert_eq!(scoped[0]["args"]["project"], "-w");
+    // The empty first page must not duplicate the already-sent scoped ask.
+    assert!(
+        app.on_line(accepted(recent, json!({"sessions": []})))
+            .is_empty()
+    );
     assert!(spent(&app));
     drawn(&mut app);
     let row = keys(&app)
