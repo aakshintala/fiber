@@ -381,7 +381,7 @@ classify_case() {
   mkdir -p "$dir/temp/flake-report-data" "$dir/temp/report-data"
   cp "$dir/decisions.jsonl" "$dir/temp/report-data/decisions.jsonl"
   # shellcheck disable=SC2086
-  env -i PATH="$tmp/gitbin:$orig_path" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" \
+  env -i PATH="$tmp/gitbin:$orig_path" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" FIBER_CHECK_RUN="${FIBER_CHECK_RUN:-}" \
     RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME="$event" \
     GH_REPO=aakshintala/fiber REAL_GIT="$real_git" \
     STUB_PARENTS="$parents" STUB_COMPARE="$compare" STUB_PR_FILES="$pr_files" \
@@ -930,7 +930,7 @@ classify_real() {
   # checkout is the working directory; cargo is redirected to the real
   # checkout by the wrapper on PATH.
   cd "$rdir/work" || fail "classify-real-git: cannot enter the throwaway repo"
-  env -i PATH="$realgit/bin:$orig_path" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" \
+  env -i PATH="$realgit/bin:$orig_path" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" FIBER_CHECK_RUN="${FIBER_CHECK_RUN:-}" \
     RUNNER_TEMP="$rdir/temp" GITHUB_SHA="$rsha" GITHUB_EVENT_NAME=pull_request \
     GH_REPO=aakshintala/fiber \
     bash --noprofile --norc -eo pipefail "$tmp/classify.sh" >"$rdir/classify-out" 2>"$rdir/classify-err" || code=$?
