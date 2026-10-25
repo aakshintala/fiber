@@ -1462,8 +1462,9 @@ fn exited_row(session: &str) -> Value {
     })
 }
 
-/// Answers `recent` with exited rows for `sessions`, oldest first.
-fn answer_recent(app: &mut App, recent: &str, sessions: &[&str]) {
+/// Answers `recent` with exited rows for `sessions`, oldest first: the
+/// scoped fan-out lines, if any.
+fn answer_recent(app: &mut App, recent: &str, sessions: &[&str]) -> Vec<String> {
     let result = json!({"sessions": sessions
         .iter()
         .map(|session| exited_row(session))
@@ -1479,7 +1480,7 @@ fn answer_recent(app: &mut App, recent: &str, sessions: &[&str]) {
         .into_iter()
         .collect(),
     });
-    assert!(app.on_line(line).is_empty());
+    app.on_line(line)
 }
 
 /// Thirty live sessions in the launch project with `recent` waiting,

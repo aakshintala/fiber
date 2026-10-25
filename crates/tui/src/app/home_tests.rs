@@ -888,13 +888,14 @@ fn exited_in(session: &str, name: &str, workspace: &str, project: &str) -> Value
     })
 }
 
-/// Answers `recent` with exited rows for `sessions`.
-fn answer_recent(app: &mut App, recent: &str, sessions: &[(&str, &str)]) {
+/// Answers `recent` with exited rows for `sessions`: the scoped fan-out
+/// lines, if any.
+fn answer_recent(app: &mut App, recent: &str, sessions: &[(&str, &str)]) -> Vec<String> {
     let result = json!({"sessions": sessions
         .iter()
         .map(|(session, name)| exited(session, name))
         .collect::<Vec<_>>()});
-    assert!(app.on_line(accepted(recent, result)).is_empty());
+    app.on_line(accepted(recent, result))
 }
 
 /// Links the app: the feed and recent ids, both waiting for their
@@ -2127,10 +2128,9 @@ fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
         exited_in("s_bbbbbbbbbbbbbbbb", "beta", "/work/beta", "beta"),
         exited_in("s_cccccccccccccccc", "gamma", "/work/gamma", "gamma"),
     ];
-    assert!(
-        app.on_line(accepted(&recent, json!({"sessions": rows})))
-            .is_empty()
-    );
+    // The unscoped answer fans out one scoped ask per project.
+    let fanout = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))));
+    assert_eq!(fanout.len(), 3);
     let (_, targets) = drawn_frame(&app);
     let entries: Vec<u64> = targets
         .iter()
@@ -2810,10 +2810,9 @@ fn a_click_on_more_expands_the_same_project_only() {
     .into_iter()
     .map(|(id, name, workspace, project)| exited_in(id, name, workspace, project))
     .collect::<Vec<_>>();
-    assert!(
-        app.on_line(accepted(&recent, json!({"sessions": rows})))
-            .is_empty()
-    );
+    // The unscoped answer fans out one scoped ask per project.
+    let fanout = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))));
+    assert_eq!(fanout.len(), 2);
     let first_hidden = more_key(&app, "-w").expect("first project has more");
     let second_hidden = more_key(&app, "-other").expect("second project has more");
     assert_eq!(app.home_click(Spot::More(first_hidden)), Effect::None);
@@ -5621,4 +5620,291 @@ fn an_accept_arriving_while_its_session_reopens_falls_through_the_gate() {
     assert_eq!((report.copied_count(), report.left_count()), (4, 1));
     assert!(app.notices().is_empty());
     assert!(!app.outbox.pending.contains_key(&id));
+}
+
+/// Answers `id` with `result`: the outgoing lines, parsed.
+fn answer_value(app: &mut App, id: &str, result: Value) -> Vec<Value> {
+    app.on_line(accepted(id, result))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect()
+}
+
+/// The `project` arg of each outgoing `recent` line, in order.
+fn fanout_projects(lines: &[Value]) -> Vec<&str> {
+    lines
+        .iter()
+        .map(|line| {
+            assert_eq!(line["command"], "recent");
+            line["args"]["project"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a scoped ask: {line}"))
+        })
+        .collect()
+}
+
+/// The outgoing line's id.
+fn line_id(line: &Value) -> &str {
+    line["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("an id: {line}"))
+}
+
+/// The stored scoped total for `project`.
+fn stored(app: &App, project: &str) -> Option<usize> {
+    app.home
+        .as_ref()
+        .and_then(|home| home.sessions.total_for(project))
+}
+
+#[test]
+fn an_unscoped_answer_fans_out_one_scoped_ask_per_new_project() {
+    let mut app = home();
+    let (feed, recent) = linked(&mut app);
+    assert!(app.on_line(accepted(&feed, json!({}))).is_empty());
+    let lines = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w"),
+            exited_in("s_bbbbbbbbbbbbbbbb", "other", "/other", "-other"),
+        ]}),
+    );
+    assert_eq!(fanout_projects(&lines), ["-w", "-other"]);
+    for line in &lines {
+        assert!(line["args"].get("before").is_none());
+    }
+    assert_ne!(line_id(&lines[0]), line_id(&lines[1]));
+    // A stale unscoped id answers nothing more.
+    assert!(
+        app.on_line(accepted("c_deadbeefdeadbeef", json!({"sessions": []})))
+            .is_empty()
+    );
+}
+
+#[test]
+fn an_unscoped_answer_carrying_a_total_stores_nothing() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let lines = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")], "total": 12}),
+    );
+    assert_eq!(fanout_projects(&lines), ["-w"]);
+    assert_eq!(stored(&app, "-w"), None);
+}
+
+#[test]
+fn scoped_answers_key_rows_and_total_by_project() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let lines = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w"),
+            exited_in("s_bbbbbbbbbbbbbbbb", "other", "/other", "-other"),
+        ]}),
+    );
+    let (other_id, own_id) = (line_id(&lines[1]).to_owned(), line_id(&lines[0]).to_owned());
+    // Out of order: `-other` first.
+    assert!(
+        app.on_line(accepted(
+            &other_id,
+            json!({"sessions": [exited_in("s_o2", "o2", "/other", "-other")], "total": 2}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(stored(&app, "-other"), Some(2));
+    assert_eq!(stored(&app, "-w"), None);
+    // `-w` next, with a duplicate and a new row: pages append.
+    assert!(
+        app.on_line(accepted(
+            &own_id,
+            json!({"sessions": [
+                exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w"),
+                exited_in("s_cccccccccccccccc", "new", "/w", "-w"),
+            ], "total": 3}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(stored(&app, "-w"), Some(3));
+    assert_eq!(
+        listed(&app),
+        ["○  old", "○  other  other", "○  o2  other", "○  new",]
+    );
+    // A stale scoped id drops without touching rows or totals.
+    assert!(
+        app.on_line(accepted(
+            &own_id,
+            json!({"sessions": [exited_in("s_z", "z", "/w", "-w")], "total": 9}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(stored(&app, "-w"), Some(3));
+    assert_eq!(listed(&app).len(), 4);
+}
+
+#[test]
+fn a_dirty_answer_sends_exactly_one_follow_up() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let lines = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")]}),
+    );
+    let first = line_id(&lines[0]).to_owned();
+    // A trigger arrived while the ask was in flight.
+    app.home.as_mut().unwrap().sessions.mark_dirty("-w");
+    let follow = answer_value(
+        &mut app,
+        &first,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")], "total": 5}),
+    );
+    assert_eq!(follow.len(), 1);
+    assert_eq!(fanout_projects(&follow), ["-w"]);
+    assert_ne!(line_id(&follow[0]), first);
+    assert_eq!(stored(&app, "-w"), Some(5));
+    // The follow-up answers with no further trigger: nothing more.
+    let second = line_id(&follow[0]).to_owned();
+    assert!(
+        app.on_line(accepted(&second, json!({"sessions": [], "total": 5}),))
+            .is_empty()
+    );
+    assert_eq!(stored(&app, "-w"), Some(5));
+}
+
+#[test]
+fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let lines = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")]}),
+    );
+    let first = line_id(&lines[0]).to_owned();
+    app.home.as_mut().unwrap().sessions.mark_dirty("-w");
+    assert!(
+        app.on_line(hub_refused(&first, "gone", "no recent"))
+            .is_empty()
+    );
+    assert_eq!(app.notice(), Some("no recent"));
+    assert_eq!(app.notices().len(), 1);
+    assert_eq!(stored(&app, "-w"), None);
+    assert_eq!(listed(&app), ["○  old"]);
+    // Pending and dirty cleared: the same id matches nothing, and no
+    // follow-up went out.
+    assert!(
+        app.on_line(accepted(&first, json!({"sessions": []})))
+            .is_empty()
+    );
+    assert_eq!(app.notices().len(), 1);
+    assert!(!app.home.as_ref().unwrap().sessions.is_dirty("-w"));
+}
+
+#[test]
+fn a_scoped_malformed_answer_keeps_the_total_notices_once_and_sends_nothing() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let lines = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")]}),
+    );
+    let first = line_id(&lines[0]).to_owned();
+    app.home.as_mut().unwrap().sessions.mark_dirty("-w");
+    let follow = answer_value(
+        &mut app,
+        &first,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")], "total": 5}),
+    );
+    let second = line_id(&follow[0]).to_owned();
+    let before = listed(&app);
+    assert!(
+        app.on_line(accepted(&second, json!({"sessions": {}})))
+            .is_empty()
+    );
+    assert_eq!(app.notice(), Some("rejected"));
+    assert_eq!(app.notices().len(), 1);
+    assert_eq!(stored(&app, "-w"), Some(5));
+    assert_eq!(listed(&app), before);
+}
+
+#[test]
+fn unknown_before_on_an_unscoped_page_leaves_totals_alone() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let lines = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")]}),
+    );
+    let first = line_id(&lines[0]).to_owned();
+    assert!(
+        app.on_line(accepted(
+            &first,
+            json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")], "total": 1}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(stored(&app, "-w"), Some(1));
+    // The project's loaded rows already match its total, so the next
+    // page stays unscoped.
+    focus_last(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(page) = app.on_key(Key::Down, now) else {
+        panic!("the last row asks the next page");
+    };
+    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    let page_id = page["id"].as_str().unwrap_or_else(|| panic!("page id"));
+    assert_eq!(page["args"]["before"], "s_aaaaaaaaaaaaaaaa");
+    assert!(
+        app.on_line(hub_refused(page_id, "unknown_before", "too old"))
+            .is_empty()
+    );
+    assert_eq!(app.notice(), Some("too old"));
+    assert_eq!(stored(&app, "-w"), Some(1));
+    assert_eq!(listed(&app), ["○  old"]);
+}
+
+#[test]
+fn out_of_order_scoped_answers_leave_the_unscoped_cursor() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let lines = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w"),
+            exited_in("s_bbbbbbbbbbbbbbbb", "b", "/other", "-other"),
+        ]}),
+    );
+    let (own_id, other_id) = (line_id(&lines[0]).to_owned(), line_id(&lines[1]).to_owned());
+    assert!(
+        app.on_line(accepted(
+            &other_id,
+            json!({"sessions": [exited_in("s_o2", "o2", "/other", "-other")], "total": 2}),
+        ))
+        .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(
+            &own_id,
+            json!({"sessions": [exited_in("s_cccccccccccccccc", "c", "/w", "-w")], "total": 2}),
+        ))
+        .is_empty()
+    );
+    // Both projects hold exactly their loaded rows, so paging stays on
+    // the unscoped cursor: the last unscoped row.
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    let Some(Effect::Send(page)) = app.page_recent(key) else {
+        panic!("the unscoped cursor pages");
+    };
+    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(page["command"], "recent");
+    assert_eq!(page["args"]["before"], "s_bbbbbbbbbbbbbbbb");
+    assert!(page["args"].get("project").is_none());
 }
