@@ -777,9 +777,28 @@ jobs:
           report_data=$RUNNER_TEMP/flake-report-data
           mkdir -p "$report_data"
           cargo xtask flake-report --tested-commit "$GITHUB_SHA" <"$RUNNER_TEMP/flake-input.json" >"$report_data/flake-decisions.jsonl"
-          cp "$RUNNER_TEMP"/flaky/flaky-tests-*.txt "$report_data"/ 2>/dev/null || true
+      # The classification reads files only and runs no Git itself: the
+      # two file lists come from git here, so this step needs no token
+      # and makes no API call. A failed rev-parse or diff ends the step,
+      # and the writer then files nothing.
+      - name: Classify the flaky tests by failing file
+        if: steps.collate.outputs.has_flakes == 'true'
+        run: |
+          report_data=$RUNNER_TEMP/flake-report-data
+          mkdir -p "$report_data"
+          base=""
+          head=""
+          : >"$report_data/compare-files.txt"
+          : >"$report_data/pr-files.txt"
+          if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
+            base=$(git rev-parse "$GITHUB_SHA^1")
+            head=$(git rev-parse "$GITHUB_SHA^2")
+            git diff --name-only "$base...origin/main" >"$report_data/compare-files.txt"
+            git diff --name-only "$GITHUB_SHA^1...$GITHUB_SHA^2" >"$report_data/pr-files.txt"
+          fi
+          cargo xtask flake-classify --flaky-dir "$RUNNER_TEMP/flaky" --event "$GITHUB_EVENT_NAME" --tested-commit "$GITHUB_SHA" --base "$base" --head "$head" --compare-files "$report_data/compare-files.txt" --pr-files "$report_data/pr-files.txt" >"$report_data/flake-classes.jsonl"
       # One combined artifact carries the decision JSON-lines plus the
-      # selected runner lists the writer checks them against, so the
+      # classification JSON-lines the writer reads per title, so the
       # writer downloads one exact name and lists no artifacts.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.collate.outputs.has_flakes == 'true'
@@ -1261,8 +1280,8 @@ jobs:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       # The combined decision artifact is required: without
-      # flake_decide's JSON-lines actions and the runner lists there is
-      # no reopen, skip or create, and no old create path runs as
+      # flake_decide's JSON-lines actions and the classification there
+      # is no reopen, skip or create, and no old create path runs as
       # fallback. The exact-name download fails the job when it is
       # missing, and no Actions API call lists anything.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1276,10 +1295,11 @@ jobs:
           DECIDE_RESULT: ${{ needs.flake_decide.result }}
           DECIDE_FLAKES: ${{ needs.flake_decide.outputs.has_flakes }}
           DECISIONS: ${{ runner.temp }}/report-data/flake-decisions.jsonl
+          CLASSES: ${{ runner.temp }}/report-data/flake-classes.jsonl
         run: |
           # Fail closed before any write: the decision job must have
           # succeeded with flakes, and its combined artifact must carry
-          # both the JSON-lines decisions and the runner lists. No old
+          # both the JSON-lines decisions and the classification. No old
           # create path runs as fallback.
           if [ "${DECIDE_RESULT:-}" != success ] || [ "${DECIDE_FLAKES:-}" != true ]; then
             echo "flake_decide did not decide flakes (result ${DECIDE_RESULT:-missing}, has_flakes ${DECIDE_FLAKES:-missing}): no write" >> "$GITHUB_STEP_SUMMARY"
@@ -1289,34 +1309,9 @@ jobs:
             echo "the flake-report-data artifact is missing: no write" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          dir=$RUNNER_TEMP/report-data
-          if ! ls "$dir"/flaky-tests-*.txt >/dev/null 2>&1; then
-            echo "flake_decide found flakes but their lists are missing: no write" >> "$GITHUB_STEP_SUMMARY"
+          if [ ! -s "${CLASSES:-}" ]; then
+            echo "flake_decide found flakes but their classification is missing: no write" >> "$GITHUB_STEP_SUMMARY"
             exit 1
-          fi
-          seen=$RUNNER_TEMP/flaky-seen.txt
-          : > "$seen"
-          base=""
-          head_sha=""
-          compare_files=""
-          pr_files=""
-          if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
-            # A pull request's merge commit has main as parents[0] and the
-            # pull request head as parents[1].
-            parents=$(gh api "repos/$GH_REPO/commits/$GITHUB_SHA" -q '[.parents[].sha] | join(" ")' || true)
-            read -r base head_sha <<< "$parents" || true
-            if [ -n "$base" ]; then
-              compare_files=$(gh api --paginate "repos/$GH_REPO/compare/$base...main" -q '.files[].filename' || true)
-            fi
-            if [ -n "$PR" ]; then
-              pr_files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR/files" -q '.[].filename' || true)
-            fi
-          fi
-          # The tested commit, named in every body this step writes
-          # (docs/testing/running.md, "Flaky tests").
-          tested="tested $GITHUB_SHA"
-          if [ -n "$base" ] && [ -n "$head_sha" ]; then
-            tested="tested $GITHUB_SHA = main $base + head $head_sha"
           fi
           # The one body construction for the issue, the sighting comment
           # and the pull request comment: the sentence, the tested commit,
@@ -1334,46 +1329,37 @@ jobs:
             raw=$(gh api --paginate "repos/$GH_REPO/issues?state=open&per_page=100" 2>/dev/null) || return 1
             printf '%s' "$raw" | jq -r -s --arg t "$1" 'add // [] | map(select(.title == $t and .pull_request == null)) | .[0].number // empty' 2>/dev/null || return 1
           }
-          for file in "$dir"/flaky-tests-*.txt; do
-            [ -f "$file" ] || continue
-            runner=${file#"$dir"/flaky-tests-}
-            runner=${runner%.txt}
-            while IFS= read -r line || [ -n "$line" ]; do
-              [ -n "$line" ] || continue
-              # The test, then a TAB, then its first failure; a line with no
-              # tab has empty detail. Quoted throughout: data only, never eval.
-              name=${line%%$'\t'*}
-              case "$line" in
-                *$'\t'*) detail=${line#*$'\t'} ;;
-                *) detail="" ;;
-              esac
-              title="Flaky test: $name"
-              if grep -Fxq "$title" "$seen"; then
+          while IFS= read -r record || [ -n "$record" ]; do
+            [ -n "$record" ] || continue
+            # The classification comes first, before any open-issue
+            # lookup: a stale base or a pull-request-owned file never
+            # reaches the open issue. Quoted throughout: data only,
+            # never eval, and no list passes as an argument.
+            action=$(printf '%s' "$record" | jq -r '.action // empty')
+            title=$(printf '%s' "$record" | jq -r '.title // empty')
+            name=$(printf '%s' "$record" | jq -r '.name // empty')
+            runner=$(printf '%s' "$record" | jq -r '.runner // empty')
+            detail=$(printf '%s' "$record" | jq -r '.detail // empty')
+            failing=$(printf '%s' "$record" | jq -r '.failing // empty')
+            base=$(printf '%s' "$record" | jq -r '.base // empty')
+            tested=$(printf '%s' "$record" | jq -r '.tested // empty')
+            case "$action" in
+              stale-base)
+                echo "stale base: main changed $failing since $base" >> "$GITHUB_STEP_SUMMARY"
                 continue
-              fi
-              failing=""
-              case "$detail" in
-                *panicked\ at*)
-                  hit=$(printf '%s' "$detail" | grep -o -E '[A-Za-z0-9_./-]+\.rs:[0-9]+' | head -n 1 || true)
-                  if [ -n "$hit" ]; then
-                    failing=${hit%:*}
-                  fi
-                  ;;
-              esac
-              if [ -n "$failing" ] && [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
-                if [ -n "$base" ] && [ -n "$compare_files" ] \
-                  && printf '%s\n' "$compare_files" | grep -Fxq "$failing"; then
-                  echo "stale base: main changed $failing since $base" >> "$GITHUB_STEP_SUMMARY"
-                  printf '%s\n' "$title" >> "$seen"
-                  continue
-                fi
-                if [ -n "$pr_files" ] && printf '%s\n' "$pr_files" | grep -Fxq "$failing"; then
-                  pr_body=$(flake_body "The test \`$name\` passed after a retry on $runner, but its failing file \`$failing\` belongs to #$PR rather than main: $RUN_URL.")
-                  gh issue comment "$PR" --body "$pr_body"
-                  printf '%s\n' "$title" >> "$seen"
-                  continue
-                fi
-              fi
+                ;;
+              pr-owned)
+                pr_body=$(flake_body "The test \`$name\` passed after a retry on $runner, but its failing file \`$failing\` belongs to #$PR rather than main: $RUN_URL.")
+                gh issue comment "$PR" --body "$pr_body"
+                continue
+                ;;
+              lookup)
+                ;;
+              *)
+                echo "invalid classification for $title: no write" >> "$GITHUB_STEP_SUMMARY"
+                continue
+                ;;
+            esac
               text="The test \`$name\` passed after a retry on $runner: $RUN_URL."
               if [ -n "$PR" ]; then
                 text="$text (see #$PR)"
@@ -1384,12 +1370,10 @@ jobs:
               if number=$(open_number "$title"); then
                 if [ -n "$number" ]; then
                   gh issue comment "$number" --body "$body"
-                  printf '%s\n' "$title" >> "$seen"
                   continue
                 fi
               else
                 echo "unknown open lookup: the open-issue search for $title failed, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
-                printf '%s\n' "$title" >> "$seen"
                 continue
               fi
               # No open issue: the decision job's one action whose title
@@ -1409,7 +1393,6 @@ jobs:
                 reopen)
                   if ! printf '%s' "$action_issue" | grep -Eq '^[0-9]+$'; then
                     echo "invalid decision for $title: no write" >> "$GITHUB_STEP_SUMMARY"
-                    printf '%s\n' "$title" >> "$seen"
                     continue
                   fi
                   # Validate only the ruled reopen predicates: not a
@@ -1417,12 +1400,10 @@ jobs:
                   # flake label.
                   if ! fetched=$(gh api "repos/$GH_REPO/issues/$action_issue" 2>/dev/null); then
                     echo "unknown reopen target: issue $action_issue could not be fetched, so $title stays closed" >> "$GITHUB_STEP_SUMMARY"
-                    printf '%s\n' "$title" >> "$seen"
                     continue
                   fi
                   if ! printf '%s' "$fetched" | jq -e --arg t "$title" '.pull_request == null and .state == "closed" and .title == $t and ([.labels[].name] | index("test-only") != null)' >/dev/null 2>&1; then
                     echo "validation mismatch: issue $action_issue is not a closed test-only issue titled $title, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
-                    printf '%s\n' "$title" >> "$seen"
                     continue
                   fi
                   # Recheck the open titles immediately before the
@@ -1430,12 +1411,10 @@ jobs:
                   if number=$(open_number "$title"); then
                     if [ -n "$number" ]; then
                       echo "an open issue for $title appeared before the reopen, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
-                      printf '%s\n' "$title" >> "$seen"
                       continue
                     fi
                   else
                     echo "unknown open lookup: the recheck for $title failed, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
-                    printf '%s\n' "$title" >> "$seen"
                     continue
                   fi
                   gh issue reopen "$action_issue"
@@ -1446,12 +1425,10 @@ jobs:
                   if number=$(open_number "$title"); then
                     if [ -n "$number" ]; then
                       echo "an open issue for $title appeared before the create, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
-                      printf '%s\n' "$title" >> "$seen"
                       continue
                     fi
                   else
                     echo "unknown open lookup: the recheck for $title failed, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
-                    printf '%s\n' "$title" >> "$seen"
                     continue
                   fi
                   gh issue create --title "$title" --body "$body" --label test-only
@@ -1476,9 +1453,7 @@ jobs:
                   echo "invalid decision for $title: no write" >> "$GITHUB_STEP_SUMMARY"
                   ;;
               esac
-              printf '%s\n' "$title" >> "$seen"
-            done < "$file"
-          done
+            done < "$CLASSES"
 
   ci:
     # On a draft the required `CI` check stays pending, so a draft's partial run never satisfies it.
