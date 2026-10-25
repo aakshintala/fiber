@@ -192,6 +192,30 @@ pub(crate) fn check(
         });
     }
     slug(&manifest.name)?;
+    if let Some(range) = manifest
+        .tui
+        .as_ref()
+        .and_then(|tui| tui.session_versions.as_ref())
+    {
+        let valid = crate::version_key(&range.min).is_ok_and(|min| {
+            range
+                .before
+                .as_ref()
+                .is_none_or(|before| crate::version_key(before).is_ok_and(|before| before > min))
+        });
+        if !valid {
+            return Err(config::ConfigError::WrongType {
+                source_name: format!(
+                    "{} ({})",
+                    source.join("extension.json").display(),
+                    manifest.name
+                ),
+                key: "tui.session_versions".into(),
+                expected: "version tags with min below before".into(),
+            }
+            .into());
+        }
+    }
     let providers = config::read_providers(source)?;
     Ok((manifest, providers))
 }

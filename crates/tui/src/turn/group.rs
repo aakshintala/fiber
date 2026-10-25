@@ -543,21 +543,22 @@ impl Group {
                     vec![crate::ext::spans::from_ratatui(&self.builtin_row(built, w))]
                 };
                 let wrapped = Input::LedgerRow(input);
-                let rendered = out.seam.as_ref().and_then(|seam| {
-                    let renderer = seam.handle.get()?;
-                    // The tool's own slot beats the catch-all, with no
-                    // notice: a renderer that fills neither costs one
-                    // fills call per candidate slot and nothing else.
-                    let specific = format!("ledger_row:{}", call.name);
-                    let slot = if renderer.fills(&specific) {
-                        specific
-                    } else if renderer.fills("ledger_row") {
-                        "ledger_row".to_owned()
-                    } else {
-                        return None;
-                    };
-                    out.ext_lines(&slot, &wrapped, after_gutter, &builtin)
-                });
+                let specific = format!("ledger_row:{}", call.name);
+                let (slot, selection) = match out.fills_for(&specific) {
+                    crate::ext::SlotSelection::Absent => {
+                        ("ledger_row", out.fills_for("ledger_row"))
+                    }
+                    selection @ (crate::ext::SlotSelection::Draw { .. }
+                    | crate::ext::SlotSelection::Suppressed) => (specific.as_str(), selection),
+                };
+                let rendered = match selection {
+                    crate::ext::SlotSelection::Draw { extension } => {
+                        out.ext_lines(slot, &extension, &wrapped, after_gutter, &builtin)
+                    }
+                    crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => {
+                        None
+                    }
+                };
                 match rendered {
                     Some(fitted) => {
                         for (index, line) in fitted.iter().enumerate() {
