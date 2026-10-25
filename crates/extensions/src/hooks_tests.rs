@@ -3544,13 +3544,15 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
 fn hooks_state_names_every_blocker_but_no_watcher_or_non_blocking_entry() {
     let home = Home::new();
     let entries = r#"{"z":{"on_failure":"blocking"},"a":false,"missing":{},"invalid":{"on_failure":7},"notice":{"on_failure":"non-blocking"},"watch":{"watch":[],"on_failure":"blocking"}}"#;
-    // Blocker names arrive sorted (`docs/invocation.md:1160`).
-    assert_eq!(
-        super::hooks_state(&hooks_config(&home, entries), &[]).unwrap(),
-        super::HooksState::MissingBlocking {
-            names: vec!["a".into(), "invalid".into(), "missing".into(), "z".into()]
-        }
-    );
+    // A non-object entry fails before any installed/missing decision, naming
+    // the first malformed entry in sorted key order.
+    let error = super::hooks_state(&hooks_config(&home, entries), &[]).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ConfigInvalid, "{error:?}");
+    let crate::Error::Config(config::ConfigError::WrongType { key, .. }) = &error else {
+        panic!("expected WrongType, got {error:?}");
+    };
+    assert_eq!(key, "hooks.a");
+    assert!(error.to_string().contains("hooks.a"), "{error}");
     let objects = r#"{"z":{"on_failure":"blocking"},"a":{"on_failure":"blocking"},"notice":{"on_failure":"non-blocking"},"watch":{"watch":[]}}"#;
     // Blocker names arrive sorted (`docs/invocation.md:1160`).
     assert_eq!(
@@ -3563,6 +3565,56 @@ fn hooks_state_names_every_blocker_but_no_watcher_or_non_blocking_entry() {
         super::hooks_state(&hooks_config(&home, objects), &[config::full_name("hooks")]).unwrap(),
         super::HooksState::Ready
     );
+}
+
+/// A non-object entry fails `config_invalid` naming the entry, whatever the
+/// key order and whether or not `hooks` is installed.
+#[test]
+fn hooks_state_rejects_a_non_object_entry_before_any_installed_decision() {
+    let home = Home::new();
+    let hooks = config::full_name("hooks");
+    // The malformed entry arrives after a valid blocking entry in one order
+    // and before it in the other: either order names the malformed entry.
+    for entries in [
+        r#"{"a":{"on_failure":"blocking"},"z":false}"#,
+        r#"{"z":false,"a":{"on_failure":"blocking"}}"#,
+    ] {
+        for loaded in [Vec::new(), vec![hooks.clone()]] {
+            let error = super::hooks_state(&hooks_config(&home, entries), &loaded).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::ConfigInvalid, "entries: {entries}");
+            let crate::Error::Config(config::ConfigError::WrongType { key, .. }) = &error else {
+                panic!("expected WrongType, got {error:?}");
+            };
+            assert_eq!(key, "hooks.z", "entries: {entries}");
+            assert!(error.to_string().contains("hooks.z"), "{error}");
+        }
+    }
+    // Several malformed entries report the first in sorted key order, not the
+    // first in the file order.
+    let error = super::hooks_state(&hooks_config(&home, r#"{"b":false,"a":5}"#), &[]).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ConfigInvalid, "{error:?}");
+    let crate::Error::Config(config::ConfigError::WrongType { key, .. }) = &error else {
+        panic!("expected WrongType, got {error:?}");
+    };
+    assert_eq!(key, "hooks.a");
+    assert!(error.to_string().contains("hooks.a"), "{error}");
+}
+
+/// A non-object `hooks` value fails `config_invalid` naming the `hooks` key,
+/// whether or not `hooks` is installed.
+#[test]
+fn hooks_state_rejects_a_non_object_hooks_value_naming_hooks() {
+    let home = Home::new();
+    let hooks = config::full_name("hooks");
+    for loaded in [Vec::new(), vec![hooks.clone()]] {
+        let error = super::hooks_state(&hooks_config(&home, "false"), &loaded).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ConfigInvalid, "{error:?}");
+        let crate::Error::Config(config::ConfigError::WrongType { key, .. }) = &error else {
+            panic!("expected WrongType, got {error:?}");
+        };
+        assert_eq!(key, "hooks");
+        assert!(error.to_string().contains("hooks"), "{error}");
+    }
 }
 
 #[test]

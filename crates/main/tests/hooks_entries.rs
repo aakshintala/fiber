@@ -919,3 +919,103 @@ fn an_after_tool_exit_two_with_non_blocking_keeps_the_output() {
         completed["payload"]["content"]
     );
 }
+
+/// A non-object entry fails `config_invalid` naming the entry, whatever the
+/// key order, when `hooks` is installed.
+#[test]
+fn a_non_object_entry_is_config_invalid_when_hooks_is_installed() {
+    for entries in [
+        json!({
+            "a": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "a.log"]), 1000, "blocking"),
+            "z": false,
+        }),
+        json!({
+            "z": false,
+            "a": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "a.log"]), 1000, "blocking"),
+        }),
+    ] {
+        let (setup, _server) = hooked(vec![hello()], &entries);
+        let run = setup.run(&["ask", "hi"]);
+        assert_eq!(
+            run.code,
+            Some(1),
+            "entries: {entries}, stderr: {}",
+            run.stderr
+        );
+        assert_eq!(run.kinds(), ["fiber_exited"], "entries: {entries}");
+        assert_eq!(
+            run.first("fiber_exited")["payload"]["error"]["code"],
+            "config_invalid",
+            "entries: {entries}"
+        );
+        let message = run.first("fiber_exited")["payload"]["error"]["message"]
+            .as_str()
+            .unwrap();
+        assert!(message.contains("hooks.z"), "{message}");
+    }
+}
+
+/// A non-object entry fails `config_invalid` naming the entry, whatever the
+/// key order, when `hooks` is not installed.
+#[test]
+fn a_non_object_entry_is_config_invalid_when_hooks_is_missing() {
+    for entries in [
+        json!({
+            "a": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "a.log"]), 1000, "blocking"),
+            "z": false,
+        }),
+        json!({
+            "z": false,
+            "a": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "a.log"]), 1000, "blocking"),
+        }),
+    ] {
+        let (setup, _server) = hooked(vec![hello()], &entries);
+        setup.remove_hooks();
+        let run = setup.run(&["ask", "hi"]);
+        assert_eq!(
+            run.code,
+            Some(1),
+            "entries: {entries}, stderr: {}",
+            run.stderr
+        );
+        assert_eq!(run.kinds(), ["fiber_exited"], "entries: {entries}");
+        assert_eq!(
+            run.first("fiber_exited")["payload"]["error"]["code"],
+            "config_invalid",
+            "entries: {entries}"
+        );
+        let message = run.first("fiber_exited")["payload"]["error"]["message"]
+            .as_str()
+            .unwrap();
+        assert!(message.contains("hooks.z"), "{message}");
+    }
+}
+
+/// A non-object `hooks` value fails `config_invalid` naming the `hooks` key,
+/// whether or not `hooks` is installed.
+#[test]
+fn a_non_object_hooks_value_is_config_invalid_naming_hooks() {
+    for installed in [true, false] {
+        let (setup, _server) = hooked(vec![hello()], &json!(false));
+        if !installed {
+            setup.remove_hooks();
+        }
+        let run = setup.run(&["ask", "hi"]);
+        assert_eq!(
+            run.code,
+            Some(1),
+            "installed: {installed}, stderr: {}",
+            run.stderr
+        );
+        assert_eq!(run.kinds(), ["fiber_exited"], "installed: {installed}");
+        assert_eq!(
+            run.first("fiber_exited")["payload"]["error"]["code"],
+            "config_invalid",
+            "installed: {installed}"
+        );
+        let message = run.first("fiber_exited")["payload"]["error"]["message"]
+            .as_str()
+            .unwrap();
+        assert!(message.contains("hooks"), "{message}");
+    }
+}
