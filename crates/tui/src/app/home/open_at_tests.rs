@@ -212,13 +212,13 @@ fn a_list_launch_focuses_the_list_after_the_first_recent_page() {
     let recent = lines[1]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("recent id"));
-    assert!(
-        app.on_line(accepted(
-            recent,
-            json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
-        ))
-        .is_empty()
-    );
+    // The unscoped answer fans out the project's scoped ask.
+    let fanout = commands(app.on_line(accepted(
+        recent,
+        json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
+    )));
+    assert_eq!(fanout.len(), 1);
+    assert_eq!(fanout[0]["args"]["project"], "-w");
     assert!(spent(&app));
     drawn(&mut app);
     let row = keys(&app)
@@ -256,10 +256,10 @@ fn a_list_launch_with_an_empty_first_page_but_a_live_row_focuses_the_list() {
     let recent = lines[1]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("recent id"));
-    assert!(
-        app.on_line(accepted(recent, json!({"sessions": []})))
-            .is_empty()
-    );
+    // The empty page still fans out the live row's project.
+    let fanout = commands(app.on_line(accepted(recent, json!({"sessions": []}))));
+    assert_eq!(fanout.len(), 1);
+    assert_eq!(fanout[0]["args"]["project"], "-w");
     assert!(spent(&app));
     drawn(&mut app);
     let row = keys(&app)
@@ -293,13 +293,13 @@ fn a_home_launch_never_focuses_the_list() {
     let recent = lines[1]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("recent id"));
-    assert!(
-        app.on_line(accepted(
-            recent,
-            json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
-        ))
-        .is_empty()
-    );
+    // The unscoped answer fans out the project's scoped ask.
+    let fanout = commands(app.on_line(accepted(
+        recent,
+        json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
+    )));
+    assert_eq!(fanout.len(), 1);
+    assert_eq!(fanout[0]["args"]["project"], "-w");
     drawn(&mut app);
     assert_eq!(app.focused(), None);
 }
@@ -793,13 +793,13 @@ fn home_with_row() -> App {
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a recent id"));
     assert!(app.on_line(accepted(feed, json!({}))).is_empty());
-    assert!(
-        app.on_line(accepted(
-            recent,
-            json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]})
-        ))
-        .is_empty()
-    );
+    // The unscoped answer fans out the project's scoped ask.
+    let fanout = commands(app.on_line(accepted(
+        recent,
+        json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
+    )));
+    assert_eq!(fanout.len(), 1);
+    assert_eq!(fanout[0]["args"]["project"], "-w");
     app
 }
 
