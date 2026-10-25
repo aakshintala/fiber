@@ -691,7 +691,6 @@ fn a_watch_entry_is_not_registered_and_names_the_entry() {
                 "watch": ["turn_completed"],
                 "command": "/bin/sh",
                 "args": ["hooks/capture.sh", "seen.log"],
-                "timeout": 10000,
             }),
             "note": json!({
                 "point": "after_tool",
@@ -738,13 +737,16 @@ fn a_watch_entry_is_not_registered_and_names_the_entry() {
     );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
-    // The watch entry left its notice and never ran; the hook entry ran.
+    // The watch entry missing `timeout` left its notice and never ran;
+    // the hook entry ran.
     let notices = run.all("notice");
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0]["payload"]["code"], "extension_failed");
     let message = notices[0]["payload"]["message"].as_str().unwrap();
-    assert!(message.contains("seen"), "{message}");
-    assert!(message.contains("watch"), "{message}");
+    assert!(
+        message.contains("`timeout` hook not registered for entry `seen`"),
+        "{message}"
+    );
     assert!(
         !setup.workspace().join("seen.log").exists(),
         "the watch entry never ran"
