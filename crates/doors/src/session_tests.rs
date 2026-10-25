@@ -2407,6 +2407,24 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
     drop(client);
 }
 
+/// A write to a rejected post-quiesce connection either lands before the
+/// server closes it or fails with a closed-peer error. The read returning
+/// end of file proves the rejection either way, so only another error is a
+/// failure.
+fn tolerated_late_write(result: io::Result<()>) {
+    match result {
+        Ok(()) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::BrokenPipe
+                    | io::ErrorKind::NotConnected
+                    | io::ErrorKind::ConnectionReset
+            ) => {}
+        Err(error) => panic!("the late client's send failed: {error:?}"),
+    }
+}
+
 #[test]
 fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     let opened = Opened::open(Vec::new());
@@ -2459,13 +2477,9 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     // read, so it gets end of file with no answer and no `clients` line.
     let late = Client::connect(&socket).unwrap();
     // The session closes a rejected post-quiesce connection before the
-    // client's write, so the write itself can fail with `BrokenPipe`: a
-    // rejected line is never read either way.
-    match late.send(&subscribe_line("c_late", "full")) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
-        Err(error) => panic!("the late client's send failed: {error:?}"),
-    }
+    // client's write, so the write itself can fail with a closed-peer
+    // error: a rejected line is never read either way.
+    tolerated_late_write(late.send(&subscribe_line("c_late", "full")));
     assert!(
         late.recv(fakes::Deadline::after(Duration::ZERO)).is_none(),
         "no answer is written for a line never read"
