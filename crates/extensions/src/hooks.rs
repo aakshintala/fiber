@@ -363,6 +363,15 @@ impl SessionExtensions {
             .collect()
     }
 
+    /// What making the approved copy of `name` failed with, for the required
+    /// gate's message.
+    pub fn hook_failure_message(&self, name: &str) -> Option<String> {
+        self.hook_failures
+            .iter()
+            .find(|failure| failure.name == name)
+            .map(|failure| failure.error.to_string())
+    }
+
     /// One filtered `Config` clone for this session: the raw configuration
     /// with only this session's active approved hook snapshot as the
     /// repository's contribution to the `hooks` extension. An unapproved

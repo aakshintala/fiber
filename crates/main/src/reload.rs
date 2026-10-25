@@ -310,13 +310,13 @@ impl State {
             message: error.message,
         })?;
         // Declared hooks with no extension to run them and any `blocking`
-        // entry reject the reload the same way.
-        crate::session_extensions::missing_hooks(&config, &extensions).map_err(|error| {
-            Rejection {
+        // entry reject the reload the same way. The gate reads the
+        // reloaded session's filtered repository contribution.
+        crate::session_extensions::missing_hooks(&extensions.hooks_config(&config), &extensions)
+            .map_err(|error| Rejection {
                 code: error.code,
                 message: error.message,
-            }
-        })?;
+            })?;
         if self.diag.debugging() {
             extensions = extensions.with_diagnostics(
                 self.diag.timings(),

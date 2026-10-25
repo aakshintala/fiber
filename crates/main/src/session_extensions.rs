@@ -58,24 +58,36 @@ pub(crate) fn repository_set(
 }
 
 /// `extension_required_failed` naming the first missing required
-/// extension and its notice's text.
+/// extension and its notice's text, then `hook_failed` naming the first
+/// approved required hook whose pinned copy could not be made.
 pub(crate) fn required(
     extensions: &extensions::SessionExtensions,
 ) -> Result<(), contract::shapes::Failure> {
-    let Some(name) = extensions.missing_required().into_iter().next() else {
-        return Ok(());
-    };
-    let short = config::short_name(&name);
-    let detail = extensions
-        .notices()
-        .iter()
-        .find(|notice| notice.extension.as_deref() == Some(name.as_str()))
-        .map(|notice| notice.message.clone())
-        .unwrap_or_else(|| "it did not start".to_owned());
-    Err(crate::failed(
-        contract::ErrorCode::ExtensionRequiredFailed,
-        format!("The repository requires the extension `{short}`, which did not load: {detail}"),
-    ))
+    if let Some(name) = extensions.missing_required().into_iter().next() {
+        let short = config::short_name(&name);
+        let detail = extensions
+            .notices()
+            .iter()
+            .find(|notice| notice.extension.as_deref() == Some(name.as_str()))
+            .map(|notice| notice.message.clone())
+            .unwrap_or_else(|| "it did not start".to_owned());
+        return Err(crate::failed(
+            contract::ErrorCode::ExtensionRequiredFailed,
+            format!(
+                "The repository requires the extension `{short}`, which did not load: {detail}"
+            ),
+        ));
+    }
+    if let Some(name) = extensions.hook_required_failures().into_iter().next() {
+        let detail = extensions
+            .hook_failure_message(&name)
+            .unwrap_or_else(|| "it did not start".to_owned());
+        return Err(crate::failed(
+            contract::ErrorCode::HookFailed,
+            format!("The repository requires the hook `{name}`, which did not run: {detail}"),
+        ));
+    }
+    Ok(())
 }
 
 /// `extension_missing` naming `fiber extension install hooks` when declared
@@ -91,7 +103,8 @@ pub(crate) fn missing_hooks(
     use crate::failed;
 
     let loaded = extensions.loaded_names();
-    let state = match extensions::hooks_state(config, &loaded) {
+    let filtered = extensions.hooks_config(config);
+    let state = match extensions::hooks_state(&filtered, &loaded) {
         Ok(state) => state,
         Err(error) => return Err(failed(error.code(), error)),
     };
