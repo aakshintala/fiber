@@ -28,7 +28,7 @@ use crate::mouse::TargetId;
 use crate::swapped::{Frame, List, Spot};
 use crate::turn::opened::{self, CallSnapshot};
 use contract::SessionId;
-use contract::events::{CommandAccepted, CommandRejected, CommandResult};
+use contract::events::{CommandAccepted, CommandRejected, CommandResult, ToolCallCompleted};
 
 /// A `y` copy waiting on its pages, in file order: while it runs the
 /// draw window holds every fetched page; when it lands whole or
@@ -42,6 +42,12 @@ struct CopyReq;
 pub(crate) struct CallView {
     /// The call's id: Esc returns with its row still focused.
     call: usize,
+    /// The action naming the call, to match its completion line.
+    action: String,
+    /// The call's tool name and arguments, to rebuild its rows when the
+    /// result arrives after the view opened on a running call.
+    name: String,
+    arguments: serde_json::Value,
     /// The capitalised kind word, drawn bold on the top row.
     title: String,
     /// The call's target, drawn dim on the top row.
@@ -88,10 +94,19 @@ impl CallView {
     /// and numbering from the per-kind renderer, the uncapped rows for
     /// a result with no artifact, and the paging inputs from its
     /// result. A call with no result yet shows its empty rows.
-    fn open(call: CallSnapshot, session: SessionId) -> Self {
+    fn open(
+        call: CallSnapshot,
+        action: String,
+        name: String,
+        arguments: serde_json::Value,
+        session: SessionId,
+    ) -> Self {
         let pager = Pager::new(call.artifact.is_some());
         Self {
             call: call.id,
+            action,
+            name,
+            arguments,
             title: call.title,
             command: call.command,
             prefix: call.prefix,
@@ -111,6 +126,33 @@ impl CallView {
             matches: Vec::new(),
             current: None,
         }
+    }
+
+    /// Refreshes the snapshot from the call's completion: a view opened
+    /// on a running call shows its empty rows until the result arrives,
+    /// so the completion rebuilds the uncapped rows and paging inputs
+    /// from the same per-kind renderer. True when the view's call
+    /// completed, so the caller pumps the new artifact fetch.
+    fn refresh_from_completed(&mut self, done: &ToolCallCompleted) -> bool {
+        let fresh = opened::snapshot_completed(
+            self.call,
+            &self.name.clone(),
+            &self.arguments.clone(),
+            &self.action.clone(),
+            done,
+        );
+        let was_paged = self.paged();
+        self.plain = fresh.plain;
+        self.prefix = fresh.prefix;
+        self.closing = fresh.closing;
+        self.numbering = fresh.numbering;
+        self.copy_text = fresh.copy;
+        self.artifact = fresh.artifact;
+        self.kept = fresh.kept;
+        if !was_paged && self.paged() && self.pager.fill_next.is_none() {
+            self.pager.fill_next = Some(0);
+        }
+        true
     }
 
     /// Whether the result pages an artifact.
@@ -253,13 +295,14 @@ impl CallView {
         let position = |source: Option<Source>| {
             source.and_then(|source| rows.iter().position(|row| row.source == source))
         };
-        self.list.rebase(
-            position(top_source).unwrap_or(top.min(rows.len().saturating_sub(1))),
-            position(selected_source)
-                .unwrap_or_else(|| self.list.selected().min(rows.len().saturating_sub(1))),
-            rows.len(),
-            shown,
-        );
+        // Keep the same logical rows after pages leave the window with
+        // the existing list API: selecting the top first puts it at the
+        // top, then selecting the row keeps it shown.
+        let kept_top = position(top_source).unwrap_or(top.min(rows.len().saturating_sub(1)));
+        let kept_selected = position(selected_source)
+            .unwrap_or_else(|| self.list.selected().min(rows.len().saturating_sub(1)));
+        self.list.select(kept_top, rows.len(), shown);
+        self.list.select(kept_selected, rows.len(), shown);
     }
 
     /// Lands a fetched page: holds its text, records its extent, pulls
@@ -345,7 +388,10 @@ impl App {
         let Some(call) = self.find_call(id) else {
             return Effect::None;
         };
-        let mut view = CallView::open(call, session);
+        let Some((action, name, arguments)) = self.find_call_parts(id) else {
+            return Effect::None;
+        };
+        let mut view = CallView::open(call, action, name, arguments, session);
         if !self.connected() {
             view.notice = Some("The call's output could not load: not connected.".to_owned());
         }
@@ -366,6 +412,49 @@ impl App {
             .flat_map(|turn| turn.groups())
             .flat_map(|group| group.calls());
         opened::snapshot(calls, id)
+    }
+
+    /// The call `id` names on the attached screen: its action, tool
+    /// name and arguments, to rebuild the view when the result arrives
+    /// after the view opened on a running call.
+    fn find_call_parts(&self, id: usize) -> Option<(String, String, serde_json::Value)> {
+        self.screen
+            .pages()
+            .newest_first()
+            .flatten()
+            .flat_map(|turns| turns.iter())
+            .flat_map(|turn| turn.groups())
+            .flat_map(|group| group.calls())
+            .find(|call| call.id == id)
+            .map(|call| {
+                (
+                    call.action.clone(),
+                    call.name.clone(),
+                    call.arguments.clone(),
+                )
+            })
+    }
+
+    /// Refreshes the open view when its call completes: a view opened
+    /// on a running call rebuilds its rows from the completion and
+    /// pumps the new artifact fetch. The follow-up fetch lines go out.
+    pub(in crate::app) fn refresh_call_view(
+        &mut self,
+        session: &contract::SessionId,
+        action: &str,
+        done: &ToolCallCompleted,
+    ) -> Vec<String> {
+        let id = crate::turn::target_id(action);
+        let Some(view) = self.call_view_mut() else {
+            return Vec::new();
+        };
+        if view.call != id || view.session != *session {
+            return Vec::new();
+        }
+        view.refresh_from_completed(done);
+        self.settle();
+        self.refresh_call_view_matches();
+        self.call_view_pump().into_iter().collect()
     }
 
     /// Whether the call `id` names is open inline.

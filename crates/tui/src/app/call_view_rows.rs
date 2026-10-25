@@ -369,9 +369,6 @@ fn highlight_cells(
         // Hit parts inside this cell, clipped to it, in order.
         let mut at = offset;
         for (from, to) in ranges.iter().copied() {
-            if to <= offset || from >= end {
-                continue;
-            }
             let from = from.max(at);
             let to = to.min(end);
             if from < to {

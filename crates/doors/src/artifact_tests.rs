@@ -330,7 +330,9 @@ fn two_hundred_lines_page_within_bounds_to_the_end() {
     let mut size;
     loop {
         let found = page_at_path(&path, offset).unwrap();
+        // `docs/invocation.md:462` promises at most 64 lines per page.
         assert!(found.lines.len() <= 64, "at most 64 lines a page");
+        // `docs/invocation.md:462` promises at most 64 KiB per page.
         assert!(found.text.len() <= 65536, "at most 64 KiB a page");
         size = found.size;
         text.push_str(&found.text);
@@ -344,8 +346,8 @@ fn two_hundred_lines_page_within_bounds_to_the_end() {
         }
         assert!(pages < 10, "paged past the end");
     }
-    // Two hundred lines need more than three 64-line pages.
-    assert!(pages >= 4, "a 200-line file pages: {pages}");
+    // 200 short lines at `docs/invocation.md:462`'s 64-line bound page in exactly four.
+    assert_eq!(pages, 4, "a 200-line file pages: {pages}");
     assert_eq!(text.as_bytes(), bytes.as_slice());
     assert_eq!(size, u64::try_from(bytes.len()).unwrap());
 }
@@ -382,13 +384,13 @@ fn lines_pin_offsets_cap_cut_malformed_and_empty() {
     let (_temp, path) = staged(b"a\nb\n");
     let found = page_at_path(&path, 0).unwrap();
     assert_eq!(found.lines, vec![0, 2]);
-    // 64-entry cap: 65 lines take 64.
+    // 64-entry cap (`docs/invocation.md:462`'s 64-line bound): 65 lines take 64.
     let (_temp, path) = staged(&lined(65, 2));
     let found = page_at_path(&path, 0).unwrap();
     assert_eq!(found.lines.len(), 64);
     assert_eq!(found.lines[0], 0);
     assert_eq!(found.lines[63], 63 * 2);
-    // Character-boundary cut: first page ends at the lead byte.
+    // Character-boundary cut (`docs/invocation.md:462`): first page ends at the lead byte.
     let mut bytes = vec![b'a'; 65535];
     bytes.extend_from_slice("é tail\n".as_bytes());
     let (_temp, path) = staged(&bytes);

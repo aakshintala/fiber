@@ -217,6 +217,69 @@ pub(crate) fn snapshot<'a>(
     })
 }
 
+/// The swapped view's inputs rebuilt from the call's completion: a
+/// view opened on a running call shows its empty rows until the result
+/// arrives, so the completion rebuilds the same per-kind rows the
+/// snapshot holds. The caller keeps its identity, target and scroll.
+pub(crate) fn snapshot_completed(
+    id: usize,
+    name: &str,
+    arguments: &Value,
+    action: &str,
+    done: &contract::events::ToolCallCompleted,
+) -> CallSnapshot {
+    let content = crate::format::content_text(done);
+    let headline = crate::format::headline(done);
+    let details = done
+        .details
+        .clone()
+        .filter(|details| !details.is_null())
+        .map(|details| details.to_string());
+    let call = Call {
+        id,
+        action: action.to_owned(),
+        name: name.to_owned(),
+        arguments: arguments.clone(),
+        result: Some(Box::new(super::group::CallResult {
+            details,
+            artifact: done.artifact.clone(),
+            kept: done.kept.clone(),
+            signal: done
+                .process
+                .as_ref()
+                .and_then(|process| process.signal.clone()),
+            headline,
+            content,
+        })),
+        ..Call::default()
+    };
+    let kind = crate::format::kind(&call.name, &call.arguments);
+    let mut title = kind.word().to_owned();
+    if let Some(first) = title.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    let copy = call.content().to_owned();
+    CallSnapshot {
+        id: call.id,
+        open: call.open,
+        title,
+        command: crate::format::summary(&call.name, &call.arguments),
+        plain: uncapped(&call),
+        prefix: prefix(&call),
+        closing: closing(&call),
+        numbering: numbering(&call),
+        copy,
+        artifact: call
+            .result
+            .as_deref()
+            .and_then(|result| result.artifact.clone()),
+        kept: call
+            .result
+            .as_deref()
+            .and_then(|result| result.kept.clone()),
+    }
+}
+
 /// The first paged output line's number: a read's `start_line`, 1 for
 /// a written file, none for unnumbered output.
 pub(crate) fn numbering(call: &Call) -> Option<u64> {

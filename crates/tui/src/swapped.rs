@@ -186,19 +186,6 @@ impl List {
         }
     }
 
-    /// Repositions the selected row and first shown row after a view
-    /// removes rows before them, such as when a page leaves its window.
-    pub(crate) fn rebase(&mut self, top: usize, selected: usize, rows: usize, height: usize) {
-        if rows == 0 || height == 0 {
-            return;
-        }
-        self.selected = selected.min(rows - 1);
-        self.top = top.min(self.selected);
-        if self.selected >= self.top.saturating_add(height) {
-            self.top = self.selected.saturating_add(1).saturating_sub(height);
-        }
-    }
-
     /// The selected row's index.
     pub(crate) fn selected(&self) -> usize {
         self.selected

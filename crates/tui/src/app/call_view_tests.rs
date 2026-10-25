@@ -441,7 +441,6 @@ fn page_to_end_from_zero(app: &mut App, first: Value, text: &str) -> Vec<u64> {
 fn pages_land_in_order_and_evict_then_refetch_by_offset() {
     let mut app = attached(80, 24);
     let text = lined_file();
-    let size = text.len() as u64;
     let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
     let offsets = page_to_end_from_zero(&mut app, first, &text);
     // A 150-line file needs more than two 64-line pages.
@@ -471,7 +470,6 @@ fn pages_land_in_order_and_evict_then_refetch_by_offset() {
         view.pager.segs.contains_key(&0),
         "extents survive paging out"
     );
-    let _ = size;
 }
 
 #[test]
@@ -1254,4 +1252,785 @@ fn an_uncut_result_shows_every_line_past_twenty() {
             "{rows:?}"
         );
     }
+}
+
+#[test]
+fn a_view_opened_on_a_running_call_refreshes_when_its_result_arrives() {
+    // The body is the call drawn as inline with no 20-line cap: a view
+    // opened while the call runs shows its empty rows, then the
+    // completion rebuilds them and pages the new artifact.
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    requested(&mut app, "shell", json!({"command": COMMAND}), ACTION);
+    let id = crate::turn::target_id(ACTION);
+    app.open(Target::Group(id));
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    assert!(app.call_view_open());
+    assert!(
+        frame_text(&app).is_empty() || !frame_text(&app).iter().any(|row| row.contains("head")),
+        "a running call shows no output yet: {:?}",
+        frame_text(&app)
+    );
+    let sends: Vec<Value> = app
+        .on_line(envelope(
+            "tool_call_completed",
+            json!({"status": "completed",
+                "content": [{"type": "text", "text": "head\ntail"}],
+                "details": {"command": COMMAND, "exit_code": 0},
+                "artifact": ARTIFACT,
+                "kept": [[0, 5], [10, 15]]}),
+            Some(ACTION),
+        ))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert!(
+        app.call_view_open(),
+        "the view stays open across completion"
+    );
+    let view = app.call_view().expect("the view stays open");
+    assert_eq!(view.artifact.as_deref(), Some(ARTIFACT));
+    assert_eq!(view.kept, Some(vec![[0, 5], [10, 15]]));
+    let request = sends
+        .iter()
+        .find(|line| line["command"] == json!("artifact_page"))
+        .expect("the completion pumps the new artifact fetch: {sends:?}")
+        .clone();
+    assert_eq!(request["args"]["offset"], json!(0));
+    assert_eq!(request["args"]["path"], json!(ARTIFACT));
+    assert!(
+        app.on_line(accepted(&request, "head\ntail\n", vec![0, 5], None, 10))
+            .is_empty()
+    );
+    let rows = frame_text(&app);
+    assert!(rows.iter().any(|row| row.contains("head")), "{rows:?}");
+    assert!(rows.iter().any(|row| row.contains("tail")), "{rows:?}");
+}
+
+#[test]
+fn a_view_opened_on_a_running_call_shows_a_whole_result_when_it_completes() {
+    // No artifact: the completion's uncapped rows draw whole at once,
+    // with no fetch.
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    requested(&mut app, "shell", json!({"command": COMMAND}), ACTION);
+    let id = crate::turn::target_id(ACTION);
+    app.open(Target::Group(id));
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    let sends: Vec<Value> = app
+        .on_line(envelope(
+            "tool_call_completed",
+            json!({"status": "completed",
+                "content": [{"type": "text", "text": "one\ntwo"}],
+                "details": {"command": COMMAND, "exit_code": 0}}),
+            Some(ACTION),
+        ))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert!(sends.is_empty(), "no artifact means no fetch: {sends:?}");
+    let rows = frame_text(&app);
+    assert!(rows.iter().any(|row| row.contains("one")), "{rows:?}");
+    assert!(rows.iter().any(|row| row.contains("two")), "{rows:?}");
+}
+
+#[test]
+fn below_len_counts_the_notice() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let view = app.call_view().expect("open");
+    assert_eq!(view.below_len(), 0, "no notice leaves the height whole");
+    let sends = answer_page(&mut app, &first, &text, 0);
+    let next = page_next(&text, 0).expect("first page names next");
+    let second = sends
+        .iter()
+        .find(|line| line["args"]["offset"] == json!(next))
+        .expect("follow-up")
+        .clone();
+    assert!(app.on_line(rejected(&second, "io_failed")).is_empty());
+    let view = app.call_view().expect("open");
+    assert_eq!(view.below_len(), 1, "one notice takes one row");
+    let frame = view.frame();
+    assert!(frame.below.iter().any(|line| line.contains("io_failed")));
+}
+
+#[test]
+fn opening_while_disconnected_notices_and_sends_nothing() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    app.disconnected();
+    assert_eq!(app.open_call_view(id), Effect::None);
+    let view = app.call_view().expect("open");
+    assert!(
+        view.notice
+            .as_ref()
+            .is_some_and(|notice| notice.contains("not connected")),
+        "disconnected open notices: {:?}",
+        view.notice
+    );
+}
+
+#[test]
+fn opening_while_connected_sends_without_a_notice() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    let request = page_request(app.open_call_view(id));
+    let view = app.call_view().expect("open");
+    assert!(view.notice.is_none(), "connected open has no notice");
+    assert_eq!(request["args"]["offset"], json!(0));
+}
+
+#[test]
+fn keys_without_a_view_and_ctrl_c_with_one_go_nowhere() {
+    let mut app = attached(80, 24);
+    assert_eq!(app.call_view_key(&Key::Esc), None);
+    assert_eq!(app.call_view_key(&Key::Up), None);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    let _ = page_request(app.open_call_view(id));
+    assert_eq!(app.call_view_key(&Key::CtrlC), None);
+}
+
+#[test]
+fn arrows_without_find_scroll_instead_of_stepping_matches() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    let before = app.call_view().expect("open").list.selected();
+    assert!(before > 0, "following starts at the bottom: {before}");
+    app.on_key(Key::Up, now());
+    let after = app.call_view().expect("open").list.selected();
+    assert_eq!(after + 1, before, "Up scrolls one row when find is closed");
+    assert!(
+        !app.call_view().expect("open").follow,
+        "scrolling up leaves follow"
+    );
+}
+
+#[test]
+fn closing_focuses_the_more_row_only_past_twenty_plain_rows() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let text = (0..30)
+        .map(|i| format!("row{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    requested(&mut app, "shell", json!({"command": COMMAND}), ACTION);
+    completed(
+        &mut app,
+        ACTION,
+        &text,
+        json!({"command": COMMAND, "exit_code": 0}),
+        None,
+        None,
+    );
+    let id = crate::turn::target_id(ACTION);
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    let plain = app.call_view().expect("open").plain.len();
+    assert!(plain > crate::turn::opened::OPENED_LINES, "{plain}");
+    app.close_call_view();
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Line(Target::CallView(id))),
+        "a long call returns to its more row"
+    );
+}
+
+#[test]
+fn scrolling_down_mid_file_stays_unfollowed_until_the_end() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    assert!(app.call_view().expect("open").follow, "following starts on");
+    app.on_key(Key::Up, now());
+    app.on_key(Key::Up, now());
+    assert!(!app.call_view().expect("open").follow, "Up leaves follow");
+    let selected = app.call_view().expect("open").list.selected();
+    app.on_key(Key::Down, now());
+    let view = app.call_view().expect("open");
+    assert_eq!(view.list.selected(), selected + 1, "Down moves one row");
+    assert!(!view.follow, "Down mid-file stays unfollowed");
+    for _ in 0..30 {
+        app.on_key(Key::Down, now());
+        if app.call_view().expect("open").follow {
+            break;
+        }
+    }
+    assert!(
+        app.call_view().expect("open").follow,
+        "Down to the end follows"
+    );
+}
+
+#[test]
+fn scrolling_down_at_the_bottom_with_no_move_stays_following() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    {
+        let view = app.call_view_mut().expect("open");
+        view.follow = false;
+    }
+    let selected = app.call_view().expect("open").list.selected();
+    app.on_key(Key::Down, now());
+    let view = app.call_view().expect("open");
+    assert_eq!(
+        view.list.selected(),
+        selected,
+        "Down at the end moves nowhere"
+    );
+    assert!(view.follow, "Down with no move follows");
+}
+
+#[test]
+fn scrolling_up_at_the_end_does_not_refetch_the_fill() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    {
+        let view = app.call_view_mut().expect("open");
+        view.pager.fill_next = Some(99999);
+        view.pager.missing.insert(99999);
+    }
+    let sends = sent(app.on_key(Key::Up, now()));
+    assert!(
+        sends
+            .iter()
+            .all(|line| line["args"]["offset"] != json!(99999)),
+        "Up never refetches the fill: {sends:?}"
+    );
+}
+
+#[test]
+fn scrolling_down_at_the_end_refetches_a_missing_fill() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    {
+        let view = app.call_view_mut().expect("open");
+        view.pager.fill_next = Some(99999);
+        view.pager.missing.insert(99999);
+    }
+    let sends = sent(app.on_key(Key::Down, now()));
+    assert!(
+        sends
+            .iter()
+            .any(|line| line["args"]["offset"] == json!(99999)),
+        "Down at the end refetches the missing fill: {sends:?}"
+    );
+}
+
+#[test]
+fn a_wrong_answer_id_leaves_the_request_on_the_wire() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    let request = page_request(app.open_call_view(id));
+    let wrong = accepted(&request, "other\n", vec![0], None, 6);
+    let mut wrong = wrong;
+    if let crate::link::Line::Session(envelope) = &mut wrong {
+        envelope
+            .payload
+            .insert("command_id".to_owned(), json!("someone-else"));
+    }
+    assert!(app.on_line(wrong).is_empty(), "a wrong id answers nothing");
+    let view = app.call_view().expect("open");
+    assert!(
+        view.pager.request.is_some(),
+        "the real request stays on the wire"
+    );
+    assert!(view.pager.pages.is_empty(), "nothing lands from a wrong id");
+}
+
+#[test]
+fn an_unexpected_answer_kind_fails_without_landing() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    let request = page_request(app.open_call_view(id));
+    let wrong = envelope(
+        "command_accepted",
+        json!({"command_id": request["id"], "result": {"text": "x"}}),
+        None,
+    );
+    assert!(app.on_line(wrong).is_empty());
+    let view = app.call_view().expect("open");
+    assert!(
+        view.pager.pages.is_empty(),
+        "no page lands from a wrong shape"
+    );
+    assert!(
+        view.notice
+            .as_ref()
+            .is_some_and(|notice| notice.contains("unexpected answer")),
+        "the view notices the wrong shape: {:?}",
+        view.notice
+    );
+}
+
+#[test]
+fn losing_the_link_clears_the_request_so_scroll_asks_again() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    let _ = page_request(app.open_call_view(id));
+    assert!(app.call_view().expect("open").pager.request.is_some());
+    app.disconnected();
+    let view = app.call_view().expect("open");
+    assert!(
+        view.pager.request.is_none(),
+        "the lost request leaves the wire"
+    );
+}
+
+#[test]
+fn pager_queue_skips_the_request_on_the_wire_but_takes_a_new_offset() {
+    use crate::app::call_view_pages::Pager;
+    let mut pager = Pager::new(true);
+    pager.request = Some(("r".to_owned(), 7));
+    pager.queue(7);
+    assert!(
+        pager.queued.is_empty(),
+        "the offset on the wire queues nothing"
+    );
+    pager.queue(9);
+    assert_eq!(pager.queued.iter().collect::<Vec<_>>(), [&9]);
+}
+
+#[test]
+fn shown_height_leaves_top_notice_and_footer_rows() {
+    use crate::app::call_view_rows::{shown_height, window};
+    use crate::swapped::List;
+    assert_eq!(shown_height(24, 0), 22);
+    assert_eq!(shown_height(24, 1), 21);
+    let rows: Vec<crate::app::call_view_rows::Row> = Vec::new();
+    let list = List::default();
+    assert_eq!(window(&rows, &list, 0, 24), (0, 22));
+}
+
+#[test]
+fn closing_a_twenty_row_call_focuses_its_row() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    // A shell result draws its command row and its closing around the
+    // output, so 18 output lines make exactly twenty plain rows.
+    let text = (0..18)
+        .map(|i| format!("row{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    requested(&mut app, "shell", json!({"command": COMMAND}), ACTION);
+    completed(
+        &mut app,
+        ACTION,
+        &text,
+        json!({"command": COMMAND, "exit_code": 0}),
+        None,
+        None,
+    );
+    let id = crate::turn::target_id(ACTION);
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    app.close_call_view();
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Line(Target::Call(id))),
+        "exactly twenty rows is not past the cap"
+    );
+}
+
+#[test]
+fn stepping_wraps_both_ways_across_three_matches() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    let request = page_request(app.open_call_view(id));
+    assert!(
+        app.on_line(accepted(
+            &request,
+            "aa\nbb\naa\nbb\naa\n",
+            vec![0, 3, 6, 9, 12],
+            None,
+            15
+        ))
+        .is_empty()
+    );
+    type_query(&mut app, "aa");
+    let matches = app.call_view().expect("open").matches.clone();
+    assert_eq!(matches.len(), 3, "three rows hold aa: {matches:?}");
+    assert_eq!(current_row(&app), Some(matches[0]));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(current_row(&app), Some(matches[1]), "Down steps forward");
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(current_row(&app), Some(matches[2]));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(current_row(&app), Some(matches[0]), "Down wraps to first");
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(current_row(&app), Some(matches[2]), "Up wraps to last");
+}
+
+#[test]
+fn the_count_names_the_current_match_one_based() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    let request = page_request(app.open_call_view(id));
+    assert!(
+        app.on_line(accepted(&request, "aa\nbb\naa\n", vec![0, 3, 6], None, 9))
+            .is_empty()
+    );
+    type_query(&mut app, "aa");
+    assert_eq!(app.call_view_count(), Some("1 of 2".to_owned()));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.call_view_count(), Some("2 of 2".to_owned()));
+}
+
+#[test]
+fn a_new_query_resets_while_the_same_one_keeps_its_row() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    let request = page_request(app.open_call_view(id));
+    assert!(
+        app.on_line(accepted(&request, "ab\nac\nabc\n", vec![0, 3, 6], None, 9))
+            .is_empty()
+    );
+    type_query(&mut app, "a");
+    // The shell prefix row holds the command's "cargo", so "a" matches
+    // the prefix plus the three output rows.
+    assert_eq!(app.call_view().expect("open").matches.len(), 4);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    let stayed = current_row(&app).expect("second match");
+    assert_eq!(
+        stayed,
+        app.call_view().expect("open").matches[1],
+        "stepped to the second row"
+    );
+    app.refresh_call_view_matches();
+    assert_eq!(
+        current_row(&app),
+        Some(stayed),
+        "the same query keeps its row"
+    );
+}
+
+#[test]
+fn a_numbered_read_gutters_single_digits_past_nine() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    requested(&mut app, "read", json!({"path": "a.txt"}), ACTION);
+    completed(
+        &mut app,
+        ACTION,
+        "l9\nl10\nl11",
+        json!({"start_line": 9}),
+        None,
+        None,
+    );
+    let id = crate::turn::target_id(ACTION);
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    let rows = frame_text(&app);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains(" 9 ") && row.contains("l9")),
+        "single digits gutter to two widths past nine: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("10") && row.contains("l10")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("11") && row.contains("l11")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_paged_read_numbers_the_second_page_past_sixty_four() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    requested(&mut app, "read", json!({"path": "a.txt"}), ACTION);
+    completed(
+        &mut app,
+        ACTION,
+        "cut",
+        json!({"start_line": 1}),
+        Some(ARTIFACT),
+        None,
+    );
+    let id = crate::turn::target_id(ACTION);
+    app.open(Target::Group(id));
+    open_inline(&mut app, id);
+    let first = page_request(app.open_call_view(id));
+    let text = lined_file();
+    let sends = answer_page(&mut app, &first, &text, 0);
+    let next = page_next(&text, 0).expect("first page names next");
+    let second = sends
+        .iter()
+        .find(|line| line["args"]["offset"] == json!(next))
+        .expect("follow-up")
+        .clone();
+    let _ = answer_page(&mut app, &second, &text, next);
+    let rows = frame_text(&app);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("65") && row.contains("L064")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn only_the_current_match_draws_brightest() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    let request = page_request(app.open_call_view(id));
+    assert!(
+        app.on_line(accepted(&request, "aa\nbb\naa\n", vec![0, 3, 6], None, 9))
+            .is_empty()
+    );
+    type_query(&mut app, "aa");
+    let view = app.call_view().expect("open");
+    assert_eq!(view.matches.len(), 2);
+    let frame = view.frame();
+    let marked: Vec<Vec<Ink>> = frame
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| view.matches.contains(at))
+        .map(|(_, cells)| cells.iter().map(|(_, _, ink)| *ink).collect())
+        .collect();
+    assert_eq!(marked.len(), 2);
+    let current = view.current.expect("current");
+    for (at, inks) in view.matches.iter().zip(marked.iter()) {
+        let is_current = Some(*at) == view.matches.get(current).copied();
+        if is_current {
+            assert!(
+                inks.contains(&Ink::Marked(Role::MatchCurrent)),
+                "{at} brightest"
+            );
+        } else {
+            assert!(inks.contains(&Ink::Marked(Role::Match)), "{at} marked");
+            assert!(
+                !inks.contains(&Ink::Marked(Role::MatchCurrent)),
+                "{at} not brightest"
+            );
+        }
+    }
+}
+
+#[test]
+fn clicking_close_shuts_while_a_body_row_only_selects() {
+    use crate::swapped::Spot;
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    let _ = page_request(app.open_call_view(id));
+    assert!(app.call_view_open());
+    app.session_view_click(Spot::Row(0));
+    assert!(app.call_view_open(), "a body row keeps the view open");
+    app.session_view_click(Spot::Close);
+    assert!(!app.call_view_open(), "the top row closes the view");
+}
+
+#[test]
+fn numbering_pins_read_but_not_shell() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    requested(&mut app, "read", json!({"path": "a.txt"}), "a_r");
+    completed(&mut app, "a_r", "l9", json!({"start_line": 9}), None, None);
+    let read = crate::turn::target_id("a_r");
+    open_inline(&mut app, read);
+    assert_eq!(app.open_call_view(read), Effect::None);
+    assert_eq!(app.call_view().expect("open").numbering, Some(9));
+    app.close_call_view();
+    let shell = shell_whole(&mut app, ACTION);
+    open_inline(&mut app, shell);
+    assert_eq!(app.open_call_view(shell), Effect::None);
+    assert_eq!(app.call_view().expect("open").numbering, None);
+}
+
+#[test]
+fn a_hit_ending_at_a_cell_start_belongs_to_the_next_cell() {
+    use crate::app::call_view_rows::Source;
+    use crate::app::call_view_rows::{Row, highlight_rows};
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let mut rows = vec![Row {
+        cells: vec![("ab".to_owned(), Ink::Plain), ("cd".to_owned(), Ink::Plain)],
+        source: Source::Prefix(0),
+    }];
+    highlight_rows(&mut rows, "cd", Some(0), &[0]);
+    let texts: Vec<String> = rows[0].cells.iter().map(|(text, _)| text.clone()).collect();
+    assert_eq!(texts, vec!["ab".to_owned(), "cd".to_owned()]);
+    assert!(
+        rows[0]
+            .cells
+            .iter()
+            .any(|(text, ink)| text == "cd" && *ink == Ink::Marked(Role::MatchCurrent))
+    );
+    assert!(
+        rows[0]
+            .cells
+            .iter()
+            .any(|(text, ink)| text == "ab" && *ink == Ink::Plain)
+    );
+}
+
+#[test]
+fn a_hit_spanning_two_cells_marks_both_parts() {
+    use crate::app::call_view_rows::Source;
+    use crate::app::call_view_rows::{Row, highlight_rows};
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let mut rows = vec![Row {
+        cells: vec![("ab".to_owned(), Ink::Plain), ("cd".to_owned(), Ink::Plain)],
+        source: Source::Prefix(0),
+    }];
+    highlight_rows(&mut rows, "bc", Some(0), &[0]);
+    let joined: String = rows[0]
+        .cells
+        .iter()
+        .map(|(text, _)| text.as_str())
+        .collect();
+    assert_eq!(joined, "abcd");
+    assert!(
+        rows[0]
+            .cells
+            .iter()
+            .any(|(text, ink)| text == "b" && *ink == Ink::Marked(Role::MatchCurrent))
+    );
+    assert!(
+        rows[0]
+            .cells
+            .iter()
+            .any(|(text, ink)| text == "c" && *ink == Ink::Marked(Role::MatchCurrent))
+    );
+}
+
+#[test]
+fn markers_never_match_even_when_the_query_names_them() {
+    use crate::app::call_view_rows::Source;
+    use crate::app::call_view_rows::{Row, highlight_rows};
+    let mut rows = vec![
+        Row {
+            cells: vec![(
+                "── end of the model's view ──".to_owned(),
+                crate::swapped::Ink::Muted,
+            )],
+            source: Source::Marker {
+                offset: 0,
+                index: 0,
+                resume: false,
+            },
+        },
+        Row {
+            cells: vec![("model hello".to_owned(), crate::swapped::Ink::Plain)],
+            source: Source::Prefix(0),
+        },
+    ];
+    highlight_rows(&mut rows, "model", Some(0), &[1]);
+    assert_eq!(rows[0].cells.len(), 1, "markers keep no highlight");
+    assert!(
+        rows[1]
+            .cells
+            .iter()
+            .any(|(_, ink)| matches!(ink, crate::swapped::Ink::Marked(_)))
+    );
+}
+
+#[test]
+fn a_diff_view_keeps_its_role_colours() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    requested(&mut app, "edit", json!({"path": "a.txt"}), ACTION);
+    completed(
+        &mut app,
+        ACTION,
+        "",
+        json!({"diff": "@@ -1 +1 @@\n-a\n+b\n"}),
+        None,
+        None,
+    );
+    let id = crate::turn::target_id(ACTION);
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    let frame = app.call_view().map(|view| view.frame()).expect("open");
+    let inks: Vec<Ink> = frame
+        .rows
+        .iter()
+        .flatten()
+        .map(|(_, _, ink)| *ink)
+        .collect();
+    assert!(
+        inks.iter()
+            .any(|ink| matches!(ink, Ink::Role(Role::Removed) | Ink::Marked(Role::Removed))),
+        "removed draws red: {inks:?}"
+    );
+    assert!(
+        inks.iter()
+            .any(|ink| matches!(ink, Ink::Role(Role::Added) | Ink::Marked(Role::Added))),
+        "added draws green: {inks:?}"
+    );
+}
+
+#[test]
+fn a_search_view_keeps_its_match_tint() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    requested(&mut app, "shell", json!({"command": "rg foo a"}), ACTION);
+    completed(
+        &mut app,
+        ACTION,
+        "",
+        json!({"command": "rg foo a", "exit_code": 0, "matches": [{"path": "a", "lines": [
+            {"line": 1, "text": "aéx", "spans": [[1, 3]]},
+        ]}]}),
+        None,
+        None,
+    );
+    let id = crate::turn::target_id(ACTION);
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    let frame = app.call_view().map(|view| view.frame()).expect("open");
+    let inks: Vec<Ink> = frame
+        .rows
+        .iter()
+        .flatten()
+        .map(|(_, _, ink)| *ink)
+        .collect();
+    assert!(
+        inks.contains(&Ink::Marked(Role::Match)),
+        "the span tint draws marked: {inks:?}"
+    );
 }

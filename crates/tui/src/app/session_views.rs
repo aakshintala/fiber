@@ -13,7 +13,7 @@ use crate::swapped::{Frame, List, Spot};
 use crate::usage_view::UsageFold;
 use contract::Envelope;
 use contract::events::{
-    CommandAccepted, CommandRejected, DelegateStarted, JobStarted, UsageRecorded,
+    CommandAccepted, CommandRejected, DelegateStarted, JobStarted, ToolCallCompleted, UsageRecorded,
 };
 
 /// A session view the person can open from a command or a click.
@@ -479,6 +479,14 @@ impl App {
                     } else {
                         self.session_views_rejected(&rejected);
                     }
+                }
+            }
+            "tool_call_completed" => {
+                if let Some(done) = super::read!(envelope, ToolCallCompleted)
+                    && matches!(self.session_views.open, Some(Open::Call(_)))
+                    && let Some(action) = envelope.action_id.as_ref()
+                {
+                    return self.refresh_call_view(&envelope.session_id, &action.0, &done);
                 }
             }
             _ => {}
