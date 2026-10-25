@@ -578,11 +578,8 @@ pub(crate) fn read_lists(dir: &Path) -> Result<Vec<(String, String)>, String> {
     let mut names = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| format!("flake-classify: {}: {e}", dir.display()))?;
-        let is_file = entry
-            .file_type()
-            .map(|kind| kind.is_file())
-            .unwrap_or(false);
-        if !is_file {
+        let kind = entry.file_type().map(|kind| kind.is_file());
+        if !entry_is_file(&entry.path(), kind)? {
             continue;
         }
         names.push(entry.file_name().to_string_lossy().into_owned());
@@ -595,6 +592,13 @@ pub(crate) fn read_lists(dir: &Path) -> Result<Vec<(String, String)>, String> {
         out.push((runner, String::from_utf8_lossy(&bytes).into_owned()));
     }
     Ok(out)
+}
+
+/// Whether the entry at `path` is a regular file, given the result of
+/// reading its file type: a failed read is an error naming the entry,
+/// never "not a file", so no runner list is silently skipped.
+fn entry_is_file(path: &Path, kind: std::io::Result<bool>) -> Result<bool, String> {
+    kind.map_err(|e| format!("flake-classify: {}: {e}", path.display()))
 }
 
 /// The file a failure names: `None` unless the detail carries a panic,

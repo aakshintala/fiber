@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use super::{
-    Listed, Run, classify, decide_with, event_requests, failing_file, runner_lists, tested_line,
+    Listed, Run, classify, decide_with, entry_is_file, event_requests, failing_file, runner_lists,
+    tested_line,
 };
 
 const TITLE: &str = "Flaky test: main::probe fails_once_then_passes";
@@ -843,4 +844,21 @@ fn failing_file_scan_rejects_a_digitless_or_bare_rs() {
 fn failing_file_scan_stops_the_run_at_punctuation() {
     assert_eq!(failing_file("panicked at (a.rs:3)"), Some("a.rs"));
     assert_eq!(failing_file("panicked at 'a.rs:3'"), Some("a.rs"));
+}
+
+#[test]
+fn unreadable_entry_type_is_an_error() {
+    // A runner-list entry whose file type cannot be read is an error
+    // naming the entry, never "not a file": skipping it would drop that
+    // runner's list and file nothing for it without a word. The harness
+    // cannot make a directory entry's type unreadable, so this drives the
+    // helper `read_lists` uses with a fake metadata error.
+    let path = std::path::Path::new("lists/flaky-tests-x.txt");
+    let failed = entry_is_file(path, Err(std::io::Error::other("boom")));
+    assert_eq!(
+        failed,
+        Err("flake-classify: lists/flaky-tests-x.txt: boom".to_owned())
+    );
+    assert_eq!(entry_is_file(path, Ok(true)), Ok(true));
+    assert_eq!(entry_is_file(path, Ok(false)), Ok(false));
 }

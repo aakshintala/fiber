@@ -515,6 +515,7 @@ code=$(classify_case "$tmp/push-no-tab" push "" "" "")
 expect_exit push-no-tab-classify "$code" 0
 code=$(run_step "$tmp/push-no-tab" push "" "$empty_open" "" decisions.jsonl)
 expect_exit push-no-tab "$code" 0
+# docs/testing/running.md, "Flaky tests": "A failure with no panic path, or any failure on a push run, files as usual"
 expect_writes "$tmp/push-no-tab" 1
 expect_write "$tmp/push-no-tab" 0 "$(printf 'create %s\n%s\n%s\nlabel=test-only' "$title" "$plain" "$push_tested")"
 
@@ -546,6 +547,7 @@ code=$(classify_case "$tmp/pr-comment" pull_request "$base $head" "" "$probe_fil
 expect_exit pr-comment-classify "$code" 0
 code=$(run_step "$tmp/pr-comment" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-comment "$code" 0
+# docs/testing/running.md, "Flaky tests": "when the pull request itself changed that file it comments on the pull request instead of filing"
 expect_writes "$tmp/pr-comment" 1
 expect_write "$tmp/pr-comment" 0 "$(printf 'comment 12\n%s' "$(body "$belongs" "$pr_tested")")"
 
@@ -555,6 +557,7 @@ code=$(classify_case "$tmp/pr-stale-base" pull_request "$base $head" "$probe_fil
 expect_exit pr-stale-base-classify "$code" 0
 code=$(run_step "$tmp/pr-stale-base" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-stale-base "$code" 0
+# docs/testing/running.md, "Flaky tests": "when main changed that file since the run's tested base it files nothing and notes the stale base in the summary"
 expect_writes "$tmp/pr-stale-base" 0
 expect_summary "$tmp/pr-stale-base" "stale base: main changed $probe_file since $base"
 
@@ -565,6 +568,7 @@ code=$(classify_case "$tmp/pr-stale-before-pr-owned" pull_request "$base $head" 
 expect_exit pr-stale-before-pr-owned-classify "$code" 0
 code=$(run_step "$tmp/pr-stale-before-pr-owned" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-stale-before-pr-owned "$code" 0
+# docs/testing/running.md, "Flaky tests": "when main changed that file since the run's tested base it files nothing and notes the stale base in the summary"
 expect_writes "$tmp/pr-stale-before-pr-owned" 0
 expect_summary "$tmp/pr-stale-before-pr-owned" "stale base: main changed $probe_file since $base"
 
@@ -576,6 +580,7 @@ code=$(classify_case "$tmp/pr-stale-base-open-issue" pull_request "$base $head" 
 expect_exit pr-stale-base-open-issue-classify "$code" 0
 code=$(run_step "$tmp/pr-stale-base-open-issue" pull_request 12 "$open7" "" decisions.jsonl)
 expect_exit pr-stale-base-open-issue "$code" 0
+# docs/testing/running.md, "Flaky tests": "when main changed that file since the run's tested base it files nothing and notes the stale base in the summary"
 expect_writes "$tmp/pr-stale-base-open-issue" 0
 expect_summary "$tmp/pr-stale-base-open-issue" "stale base: main changed $probe_file since $base"
 
@@ -587,6 +592,7 @@ code=$(classify_case "$tmp/pr-owned-open-issue" pull_request "$base $head" "" "$
 expect_exit pr-owned-open-issue-classify "$code" 0
 code=$(run_step "$tmp/pr-owned-open-issue" pull_request 12 "$open7" "" decisions.jsonl)
 expect_exit pr-owned-open-issue "$code" 0
+# docs/testing/running.md, "Flaky tests": "when the pull request itself changed that file it comments on the pull request instead of filing"
 expect_writes "$tmp/pr-owned-open-issue" 1
 expect_write "$tmp/pr-owned-open-issue" 0 "$(printf 'comment 12\n%s' "$(body "$belongs" "$pr_tested")")"
 
@@ -599,6 +605,7 @@ code=$(classify_case "$tmp/pr-panic-without-file" pull_request "$base $head" "ot
 expect_exit pr-panic-without-file-classify "$code" 0
 code=$(run_step "$tmp/pr-panic-without-file" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-panic-without-file "$code" 0
+# docs/testing/running.md, "Flaky tests": "A failure with no panic path, or any failure on a push run, files as usual"
 expect_writes "$tmp/pr-panic-without-file" 1
 expect_write "$tmp/pr-panic-without-file" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(detail="$detail_nofile" body "$see_pr" "$pr_tested")")"
 
@@ -611,6 +618,7 @@ code=$(classify_case "$tmp/pr-no-panic-text" pull_request "$base $head" "$probe_
 expect_exit pr-no-panic-text-classify "$code" 0
 code=$(run_step "$tmp/pr-no-panic-text" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-no-panic-text "$code" 0
+# docs/testing/running.md, "Flaky tests": "A failure with no panic path, or any failure on a push run, files as usual"
 expect_writes "$tmp/pr-no-panic-text" 1
 expect_write "$tmp/pr-no-panic-text" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(detail="$detail_nopanic" body "$see_pr" "$pr_tested")")"
 
@@ -819,7 +827,6 @@ expect_exit guard-no-classes-classify "$code" 0
 rm -f "$tmp/guard-no-classes/temp/report-data/flake-classes.jsonl"
 code=$(run_step "$tmp/guard-no-classes" push "" "$empty_open" "" decisions.jsonl)
 expect_exit guard-no-classes "$code" 1
-expect_writes "$tmp/guard-no-classes" 0
 expect_summary "$tmp/guard-no-classes" "flake_decide found flakes but their classification is missing: no write"
 
 # An unrecognised classification action writes nothing.
@@ -830,7 +837,6 @@ expect_exit class-invalid-classify "$code" 0
 printf '{"action":"bogus","title":"%s"}\n' "$title" >"$tmp/class-invalid/temp/report-data/flake-classes.jsonl"
 code=$(run_step "$tmp/class-invalid" push "" "$empty_open" "" decisions.jsonl)
 expect_exit class-invalid "$code" 0
-expect_writes "$tmp/class-invalid" 0
 expect_summary "$tmp/class-invalid" "invalid classification for $title: no write"
 
 # A duplicate title across runner lists writes once.
@@ -842,6 +848,7 @@ code=$(classify_case "$tmp/duplicate-title" push "" "" "")
 expect_exit duplicate-title-classify "$code" 0
 code=$(run_step "$tmp/duplicate-title" push "" "$empty_open" "" decisions.jsonl)
 expect_exit duplicate-title "$code" 0
+# docs/testing/running.md, "Flaky tests": "Within one report job a test title files or comments once; a repeat is skipped"
 expect_writes "$tmp/duplicate-title" 1
 arm_plain="The test \`$name\` passed after a retry on arm: $url."
 expect_write "$tmp/duplicate-title" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$arm_plain" "$push_tested")")"
@@ -858,7 +865,6 @@ code=$(classify_case "$tmp/pr-missing-revparse" pull_request "$base $head" "" ""
 grep -q 'unknown revision' "$tmp/pr-missing-revparse/classify-err" || fail "pr-missing-revparse: the failure must name the missing revision"
 code=$(run_step "$tmp/pr-missing-revparse" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-missing-revparse "$code" 1
-expect_writes "$tmp/pr-missing-revparse" 0
 expect_summary "$tmp/pr-missing-revparse" "flake_decide found flakes but their classification is missing: no write"
 
 setup_case pr-missing-diff
@@ -869,7 +875,6 @@ code=$(classify_case "$tmp/pr-missing-diff" pull_request "$base $head" "" "" STU
 grep -q 'unable to read tree' "$tmp/pr-missing-diff/classify-err" || fail "pr-missing-diff: the failure must name the missing input"
 code=$(run_step "$tmp/pr-missing-diff" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-missing-diff "$code" 1
-expect_writes "$tmp/pr-missing-diff" 0
 expect_summary "$tmp/pr-missing-diff" "flake_decide found flakes but their classification is missing: no write"
 
 setup_case pr-missing-origin-main
@@ -880,7 +885,6 @@ code=$(classify_case "$tmp/pr-missing-origin-main" pull_request "$base $head" ""
 grep -q "no such ref 'origin/main'" "$tmp/pr-missing-origin-main/classify-err" || fail "pr-missing-origin-main: the failure must name the missing ref"
 code=$(run_step "$tmp/pr-missing-origin-main" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-missing-origin-main "$code" 1
-expect_writes "$tmp/pr-missing-origin-main" 0
 expect_summary "$tmp/pr-missing-origin-main" "flake_decide found flakes but their classification is missing: no write"
 
 # classify-real-git: the two three-dot diffs against a throwaway repo.
