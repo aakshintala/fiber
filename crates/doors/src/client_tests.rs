@@ -771,7 +771,10 @@ mod attribution_tests {
 
     use std::collections::HashMap;
 
-    use super::super::{session_argv_id, session_owners};
+    use super::super::{
+        Attribution, FromSessionRefusal, from_session_message, session_argv_id, session_owners,
+        unreadable_target_message,
+    };
 
     struct OwnerScript {
         current: u32,
@@ -939,5 +942,42 @@ mod attribution_tests {
             session_owners(10, &unreadable).unwrap_err(),
             support::peer::IncompleteWalk { pid: 20 }
         );
+    }
+
+    #[test]
+    fn refusal_messages_name_the_owner_target_pid_and_peer_error() {
+        let owner = contract::SessionId("s_0123456789abcdef".to_owned());
+        let target = contract::SessionId("s_fedcba9876543210".to_owned());
+        let owned = Attribution::Local {
+            peer_pid: 555,
+            owners: vec![owner.clone()],
+        };
+        let approval = from_session_message(&owned, FromSessionRefusal::Approval);
+        assert!(approval.contains("s_0123456789abcdef"), "{approval}");
+        let command = from_session_message(
+            &owned,
+            FromSessionRefusal::SessionCommand {
+                command: "steer",
+                target: &target,
+            },
+        );
+        assert!(command.contains("s_0123456789abcdef"), "{command}");
+        assert!(command.contains("s_fedcba9876543210"), "{command}");
+        let incomplete = Attribution::Incomplete {
+            peer_pid: Some(555),
+            pid: Some(999),
+            peer_error: None,
+        };
+        let incomplete = from_session_message(&incomplete, FromSessionRefusal::Approval);
+        assert!(incomplete.contains("999"), "{incomplete}");
+        let unknown = Attribution::Incomplete {
+            peer_pid: None,
+            pid: None,
+            peer_error: Some("injected credential failure".to_owned()),
+        };
+        let unknown = from_session_message(&unknown, FromSessionRefusal::Approval);
+        assert!(unknown.contains("injected credential failure"), "{unknown}");
+        let unreadable = unreadable_target_message(&target, "steer");
+        assert!(unreadable.contains("s_fedcba9876543210"), "{unreadable}");
     }
 }

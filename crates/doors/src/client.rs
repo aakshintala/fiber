@@ -943,6 +943,123 @@ fn valid_session_id(id: &str) -> bool {
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+/// What a socket connection is, for the session-socket refusals
+/// (`docs/permissions.md`, "Sessions on the sockets"): a local connection
+/// carries the kernel peer pid and every session id on its walk, and a
+/// local connection whose peer credential or walk could not be read carries
+/// what is known. An incomplete walk keeps a known peer pid so the
+/// direct-parent exception can still be checked.
+#[allow(dead_code, reason = "wired into the refusal paths next")]
+pub(crate) enum Attribution {
+    /// A local connection with its kernel peer pid and session owners.
+    Local {
+        /// The kernel-reported peer pid.
+        peer_pid: u32,
+        /// Every session id on the peer's strict-ancestor walk.
+        owners: Vec<contract::SessionId>,
+    },
+    /// A local connection whose peer credential or walk could not be
+    /// read, failing closed.
+    Incomplete {
+        /// The kernel-reported peer pid, when the credential read held.
+        peer_pid: Option<u32>,
+        /// The unreadable pid, when the walk failed; `None` when the peer
+        /// credential itself could not be read.
+        pid: Option<u32>,
+        /// The peer-credential read's error text, when the credential
+        /// itself could not be read; the refusal names it.
+        peer_error: Option<String>,
+    },
+}
+
+#[allow(dead_code, reason = "wired into the refusal paths next")]
+impl Attribution {
+    /// The kernel peer pid, when the credential read held.
+    pub(crate) fn peer_pid(&self) -> Option<u32> {
+        match self {
+            Attribution::Local { peer_pid, .. } => Some(*peer_pid),
+            Attribution::Incomplete { peer_pid, .. } => *peer_pid,
+        }
+    }
+}
+
+/// The refused command class a `from_session` message names
+/// (`docs/permissions.md`, "Sessions on the sockets").
+#[allow(dead_code, reason = "wired into the refusal paths next")]
+pub(crate) enum FromSessionRefusal<'a> {
+    /// An approval answer.
+    Approval,
+    /// `prompt`, `steer` or `reply` to the caller's own session or delegate.
+    SessionCommand {
+        /// The refused wire command.
+        command: &'a str,
+        /// The refused session.
+        target: &'a contract::SessionId,
+    },
+}
+
+#[allow(dead_code, reason = "wired into the refusal paths next")]
+impl FromSessionRefusal<'_> {
+    /// The wire command the refusal names in its fallback messages.
+    fn command(&self) -> &str {
+        match self {
+            FromSessionRefusal::Approval => "reply",
+            FromSessionRefusal::SessionCommand { command, .. } => command,
+        }
+    }
+}
+
+/// The `from_session` message for a refused command: the exact sentence for
+/// the refusal class when the caller's walk names a session, otherwise the
+/// unreadable pid, otherwise the preserved peer-credential error. The owner
+/// is the nearest session process on the walk.
+#[allow(dead_code, reason = "wired into the refusal paths next")]
+pub(crate) fn from_session_message(
+    attribution: &Attribution,
+    refusal: FromSessionRefusal<'_>,
+) -> String {
+    let owner = match attribution {
+        Attribution::Local { owners, .. } => owners.first().map(|owner| owner.0.as_str()),
+        Attribution::Incomplete { .. } => None,
+    };
+    if let Some(owner) = owner {
+        return match refusal {
+            FromSessionRefusal::Approval => format!(
+                "Only a person answers an approval. This connection comes from inside session `{owner}`."
+            ),
+            FromSessionRefusal::SessionCommand { command, target } => format!(
+                "A connection from inside session `{owner}` cannot send `{command}` to session `{}`, which is that session or one of its delegates. A session messages its delegates with `delegate_message`.",
+                target.0
+            ),
+        };
+    }
+    let command = refusal.command();
+    match attribution {
+        Attribution::Incomplete { pid: Some(pid), .. } => format!(
+            "The process walk from this connection is incomplete at unreadable pid `{pid}`, so `{command}` is refused."
+        ),
+        Attribution::Incomplete { peer_error, .. } => format!(
+            "This connection's process could not be identified ({}), so `{command}` is refused.",
+            peer_error.as_deref().unwrap_or("unknown error")
+        ),
+        // No owner to name: the refusal paths never send an unowned local
+        // connection here, so this falls back to the unreadable shape.
+        Attribution::Local { .. } => format!(
+            "This connection's process could not be identified (unknown error), so `{command}` is refused."
+        ),
+    }
+}
+
+/// The `from_session` message when the refused target session's own process
+/// cannot be read: the target names the session, not the caller.
+#[allow(dead_code, reason = "wired into the refusal paths next")]
+pub(crate) fn unreadable_target_message(target: &contract::SessionId, command: &str) -> String {
+    format!(
+        "Session `{}`'s process could not be read, so `{command}` is refused.",
+        target.0
+    )
+}
+
 /// Every session id on the strict ancestors of `peer_pid`: the caller's
 /// own effective uid is read first, and argument vectors only for
 /// ancestors sharing it. A foreign-owned ancestor contributes nothing and
@@ -951,7 +1068,7 @@ fn valid_session_id(id: &str) -> bool {
 #[allow(dead_code, reason = "wired into the refusal paths next")]
 pub(crate) fn session_owners(
     peer_pid: u32,
-    read: &impl support::peer::ProcessRead,
+    read: &dyn support::peer::ProcessRead,
 ) -> Result<Vec<contract::SessionId>, support::peer::IncompleteWalk> {
     use support::peer::IncompleteWalk;
     let current = read

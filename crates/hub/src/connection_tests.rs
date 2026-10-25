@@ -3378,3 +3378,506 @@ fn session_owners_names_an_unreadable_owner_or_argv() {
         support::peer::IncompleteWalk { pid: 20 }
     );
 }
+
+/// Tests for the hub side of the session-socket refusals: the caller
+/// attribution, the three refusals, the direct-parent exception and the
+/// incomplete-walk failure, on published relays and on the no-relay
+/// first-command path.
+mod session_refusal_tests {
+    use std::collections::HashMap;
+    use std::io::BufRead;
+    use std::os::unix::net::UnixStream;
+
+    use serde_json::{Value, json};
+
+    use super::{Attribution, Temp};
+    use crate::fake::FakeStarter;
+    use crate::relay::{Kept, Relay, Replayed};
+
+    const PEER: u32 = 555;
+    const TARGET: u32 = 777;
+    const UNREADABLE: u32 = 999;
+    const OWNED: &str = "s_0123456789abcdef";
+    const OTHER: &str = "s_fedcba9876543210";
+
+    /// Scripted kernel reads: the hub's test seam answers from these
+    /// tables, and a missing entry reads as unreadable.
+    #[derive(Default)]
+    struct Script {
+        current: u32,
+        parents: HashMap<u32, u32>,
+        euids: HashMap<u32, u32>,
+        argvs: HashMap<u32, Vec<Vec<u8>>>,
+    }
+
+    impl support::peer::ProcessRead for Script {
+        fn current_euid(&self) -> Result<u32, support::peer::ReadError> {
+            Ok(self.current)
+        }
+
+        fn euid(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+            self.euids
+                .get(&pid)
+                .copied()
+                .ok_or(support::peer::ReadError::Unreadable { pid, what: "euid" })
+        }
+
+        fn parent(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+            self.parents
+                .get(&pid)
+                .copied()
+                .ok_or(support::peer::ReadError::Unreadable {
+                    pid,
+                    what: "parent",
+                })
+        }
+
+        fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
+            self.argvs
+                .get(&pid)
+                .cloned()
+                .ok_or(support::peer::ReadError::Unreadable { pid, what: "argv" })
+        }
+    }
+
+    struct Rig {
+        hub: std::sync::Arc<super::Hub>,
+        writer: std::sync::Arc<std::sync::Mutex<UnixStream>>,
+        read: std::io::BufReader<UnixStream>,
+        relays: std::sync::Arc<std::sync::Mutex<crate::relay::Relays>>,
+        _temp: Temp,
+    }
+
+    impl Rig {
+        fn new(script: Script) -> Self {
+            let temp = Temp::new();
+            let hub = temp.hub(FakeStarter::hang(&temp.dir));
+            *crate::connection::lock(&hub.test_read) = Some(std::sync::Arc::new(script));
+            let (write, read) = UnixStream::pair().unwrap();
+            read.set_read_timeout(Some(super::DEADLINE)).unwrap();
+            Self {
+                hub,
+                writer: std::sync::Arc::new(std::sync::Mutex::new(write)),
+                read: std::io::BufReader::new(read),
+                relays: std::sync::Arc::default(),
+                _temp: temp,
+            }
+        }
+
+        fn push_entry(
+            &self,
+            session: &str,
+            session_pid: Option<u32>,
+        ) -> (UnixStream, std::sync::mpsc::Sender<()>) {
+            let (writer, peer) = UnixStream::pair().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let thread = std::thread::spawn(move || {
+                rx.recv().unwrap_err();
+            });
+            crate::connection::lock(&self.relays).entries.push(Relay {
+                session: session.to_owned(),
+                epoch: 1,
+                writer,
+                kept: Kept::default(),
+                replayed: Replayed::default(),
+                thread: Some(thread),
+                retiring: None,
+                session_pid,
+            });
+            peer.set_read_timeout(Some(super::DEADLINE)).unwrap();
+            (peer, tx)
+        }
+
+        fn relay(&mut self, id: &str, session: &str, command: Value, attribution: &Attribution) {
+            crate::relay::relay_command(
+                &contract::CommandId(id.to_owned()),
+                session,
+                &command,
+                &self.hub,
+                &self.writer,
+                &self.relays,
+                attribution,
+            );
+        }
+
+        fn next_client_line(&mut self) -> Value {
+            let mut text = String::new();
+            self.read.read_line(&mut text).unwrap();
+            serde_json::from_str(text.trim_end()).unwrap()
+        }
+    }
+
+    fn reply_with(id: &str, args: Value) -> Value {
+        json!({"command": "reply", "args": args, "id": id})
+    }
+
+    fn steer(id: &str) -> Value {
+        json!({"command": "steer", "args": {"content": [{"type": "text", "text": "hi"}]}, "id": id})
+    }
+
+    fn approval_args(request: &str) -> Value {
+        json!({"request_id": request, "decision": "allow"})
+    }
+
+    fn labels_args(request: &str) -> Value {
+        json!({"request_id": request, "labels": ["a"]})
+    }
+
+    fn owned_owners(session: &str) -> Attribution {
+        Attribution::Local {
+            peer_pid: PEER,
+            owners: vec![contract::SessionId(session.to_owned())],
+        }
+    }
+
+    fn incomplete() -> Attribution {
+        Attribution::Incomplete {
+            peer_pid: Some(PEER),
+            pid: Some(UNREADABLE),
+            peer_error: None,
+        }
+    }
+
+    /// The target's walk: its parent and, through PID 1, no session.
+    fn plain_target() -> Script {
+        Script {
+            current: 1000,
+            parents: [(TARGET, 1), (1, 0)].into_iter().collect(),
+            euids: [(TARGET, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [(1, vec![b"/sbin/init".to_vec()])].into_iter().collect(),
+        }
+    }
+
+    #[test]
+    fn approval_reply_from_an_owned_peer_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OWNED, Some(TARGET));
+        rig.relay(
+            "c_1",
+            OWNED,
+            reply_with("c_1", approval_args("r_1")),
+            &owned_owners(OWNED),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        assert_eq!(line["payload"]["command_id"], "c_1");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(OWNED), "{message}");
+    }
+
+    #[test]
+    fn other_answers_from_an_owned_peer_are_forwarded() {
+        let mut rig = Rig::new(plain_target());
+        let (peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        rig.relay(
+            "c_1",
+            OTHER,
+            reply_with("c_1", labels_args("r_1")),
+            &owned_owners(OWNED),
+        );
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "reply");
+        assert!(sent.get("session_id").is_none());
+    }
+
+    #[test]
+    fn steer_to_an_unrelated_session_is_allowed() {
+        let mut rig = Rig::new(plain_target());
+        let (peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        rig.relay("c_1", OTHER, steer("c_1"), &owned_owners(OWNED));
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+    }
+
+    #[test]
+    fn steer_to_the_callers_own_session_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OWNED, Some(TARGET));
+        rig.relay("c_1", OWNED, steer("c_1"), &owned_owners(OWNED));
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(OWNED), "{message}");
+    }
+
+    #[test]
+    fn steer_to_a_delegate_below_the_caller_is_refused() {
+        let script = Script {
+            current: 1000,
+            parents: [(TARGET, 1), (1, 0)].into_iter().collect(),
+            euids: [(TARGET, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [(
+                1,
+                vec![
+                    b"/path/to/fiber".to_vec(),
+                    b"session".to_vec(),
+                    format!("--id={OWNED}").into_bytes(),
+                ],
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let mut rig = Rig::new(script);
+        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        rig.relay("c_1", OTHER, steer("c_1"), &owned_owners(OWNED));
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(OWNED), "{message}");
+        assert!(message.contains(OTHER), "{message}");
+    }
+
+    #[test]
+    fn the_direct_parent_reaches_its_delegate() {
+        let script = Script {
+            current: 1000,
+            parents: [(TARGET, PEER), (PEER, 1), (1, 0)].into_iter().collect(),
+            euids: [(TARGET, 1000), (PEER, 1000), (1, 1000)]
+                .into_iter()
+                .collect(),
+            argvs: HashMap::new(),
+        };
+        let mut rig = Rig::new(script);
+        let (peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        rig.relay("c_1", OTHER, steer("c_1"), &owned_owners(OWNED));
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+    }
+
+    #[test]
+    fn an_incomplete_caller_with_the_parent_exception_still_reaches() {
+        let script = Script {
+            current: 1000,
+            parents: [(TARGET, PEER)].into_iter().collect(),
+            euids: HashMap::new(),
+            argvs: HashMap::new(),
+        };
+        let mut rig = Rig::new(script);
+        let (peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        rig.relay("c_1", OTHER, steer("c_1"), &incomplete());
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+    }
+
+    #[test]
+    fn an_incomplete_caller_without_the_exception_names_its_pid() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        rig.relay("c_1", OTHER, steer("c_1"), &incomplete());
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(&UNREADABLE.to_string()), "{message}");
+        assert!(message.contains("incomplete"), "{message}");
+    }
+
+    #[test]
+    fn an_incomplete_target_walk_names_its_pid() {
+        let script = Script {
+            current: 1000,
+            parents: HashMap::new(),
+            euids: HashMap::new(),
+            argvs: HashMap::new(),
+        };
+        let mut rig = Rig::new(script);
+        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        rig.relay("c_1", OTHER, steer("c_1"), &owned_owners(OWNED));
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(OTHER), "{message}");
+    }
+
+    #[test]
+    fn remote_commands_route_unchanged() {
+        let mut rig = Rig::new(plain_target());
+        let (peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        rig.relay("c_1", OTHER, steer("c_1"), &Attribution::Remote);
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+    }
+
+    #[test]
+    fn approval_reply_on_a_failed_credential_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OWNED, Some(TARGET));
+        let attribution = Attribution::Incomplete {
+            peer_pid: None,
+            pid: None,
+            peer_error: Some("injected credential failure".to_owned()),
+        };
+        rig.relay(
+            "c_1",
+            OWNED,
+            reply_with("c_1", approval_args("r_1")),
+            &attribution,
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains("injected credential failure"), "{message}");
+    }
+
+    /// A live client against a hub whose walk is scripted: the peer is
+    /// this test process, so the script names it.
+    fn pairing_client(script: Script) -> (super::Client, Temp) {
+        let temp = Temp::new();
+        let hub = temp.hub(FakeStarter::hang(&temp.dir));
+        *crate::connection::lock(&hub.test_read) = Some(std::sync::Arc::new(script));
+        let mut client = super::Client::connect(&hub);
+        client.hello();
+        (client, temp)
+    }
+
+    fn owned_walk() -> Script {
+        let own = std::process::id();
+        Script {
+            current: 1000,
+            parents: [(own, 1), (1, 0)].into_iter().collect(),
+            euids: [(1, 1000)].into_iter().collect(),
+            argvs: [(
+                1,
+                vec![
+                    b"/path/to/fiber".to_vec(),
+                    b"session".to_vec(),
+                    format!("--id={OWNED}").into_bytes(),
+                ],
+            )]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    fn empty_walk() -> Script {
+        let own = std::process::id();
+        Script {
+            current: 1000,
+            parents: [(own, 1), (1, 0)].into_iter().collect(),
+            euids: [(1, 0)].into_iter().collect(),
+            argvs: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn pairing_code_from_an_owned_peer_is_refused() {
+        let (mut client, _temp) = pairing_client(owned_walk());
+        client.send(&json!({"id": "c_p", "command": "pairing_code", "args": {"device": "probe"}}));
+        let line = client.next("the refusal");
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        assert_eq!(line["payload"]["command_id"], "c_p");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(OWNED), "{message}");
+    }
+
+    #[test]
+    fn pairing_code_from_an_unowned_peer_is_minted() {
+        let (mut client, _temp) = pairing_client(empty_walk());
+        client.send(&json!({"id": "c_p", "command": "pairing_code", "args": {"device": "probe"}}));
+        let line = client.next("the mint");
+        assert_eq!(line["kind"], "command_accepted", "{line}");
+        assert_eq!(line["payload"]["command_id"], "c_p");
+    }
+
+    /// The no-relay first command: a listener stands in for the session
+    /// socket, so the hub's opener connects to this test process.
+    fn first_command_rig(script: Script, session: &str) -> (Rig, std::os::unix::net::UnixListener) {
+        let rig = Rig::new(script);
+        let run = rig._temp.dir.join("run");
+        std::fs::create_dir_all(&run).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(run.join(session)).unwrap();
+        (rig, listener)
+    }
+
+    #[test]
+    fn a_first_command_from_an_owned_peer_is_refused_before_it_publishes() {
+        let own = std::process::id();
+        let script = Script {
+            current: 1000,
+            parents: [(own, TARGET), (TARGET, 1), (1, 0)].into_iter().collect(),
+            euids: [(TARGET, 1000), (1, 0)].into_iter().collect(),
+            argvs: [(
+                TARGET,
+                vec![
+                    b"/path/to/fiber".to_vec(),
+                    b"session".to_vec(),
+                    format!("--id={OWNED}").into_bytes(),
+                ],
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let (mut rig, listener) = first_command_rig(script, OTHER);
+        // The opener's peer is this test process, whose walk passes the
+        // owned session above it; the target set holds the routed session
+        // itself, which the caller owns.
+        let accepted = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+        });
+        rig.relay("c_1", OTHER, steer("c_1"), &owned_owners(OWNED));
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        assert!(
+            crate::connection::lock(&rig.relays).entries.is_empty(),
+            "no relay publishes on a refused first command"
+        );
+        drop(accepted.join().unwrap());
+    }
+
+    #[test]
+    fn a_first_command_from_a_remote_peer_publishes() {
+        let script = Script {
+            current: 1000,
+            parents: HashMap::new(),
+            euids: HashMap::new(),
+            argvs: HashMap::new(),
+        };
+        let (mut rig, listener) = first_command_rig(script, OTHER);
+        // No subscription is kept on this rig, so the opener writes the
+        // command alone: one line, not a subscribe plus the command.
+        let accepted = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut read = std::io::BufReader::new(stream);
+            let mut first = String::new();
+            read.read_line(&mut first).unwrap();
+            first
+        });
+        rig.relay("c_1", OTHER, steer("c_1"), &Attribution::Remote);
+        let forwarded = accepted.join().unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+        let held = crate::connection::lock(&rig.relays);
+        assert_eq!(held.entries.len(), 1);
+        let entry = held.entries.first().unwrap();
+        assert_eq!(entry.session, OTHER);
+        assert_eq!(entry.session_pid, Some(std::process::id()));
+    }
+}
