@@ -387,10 +387,10 @@ fn for_session_writes_the_session_file_and_leaves_the_original_unattached() {
 
 /// A second writer waits while a pair holds the files lock: the pair's
 /// seam holds the lock until the test releases it, the competing writer
-/// signals it has reached the lock, and its completion stays unreceived
-/// while the pair is still parked holding the lock. After the pair
-/// returns the line lands after both lines of the pair: the whole
-/// ordered file.
+/// itself observes `WouldBlock` on the files lock and signals what it
+/// saw before writing, and its completion stays unreceived while the
+/// pair is still parked holding the lock. After the pair returns the
+/// line lands after both lines of the pair: the whole ordered file.
 #[test]
 fn a_second_writer_waits_for_the_pair() {
     let home = Home::new("ld-pair-waits");
@@ -400,7 +400,7 @@ fn a_second_writer_waits_for_the_pair() {
     let between: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_held| {
         seam_tx.send(()).unwrap();
         let release_rx = release_rx.lock().unwrap();
-        Deadline::after(LIMIT).recv(&release_rx).unwrap();
+        Deadline::after(LIMIT).recv_or_fail(&release_rx, "the test releases the pair callback");
     });
     let pair = home
         .diag(Process::Hub, Level::Debug)
@@ -412,21 +412,30 @@ fn a_second_writer_waits_for_the_pair() {
             pair.peak_memory_then_info("hub_stopped", "The hub stopped.");
         })
         .unwrap();
-    Deadline::after(LIMIT).recv(&seam_rx).unwrap();
+    Deadline::after(LIMIT).recv_or_fail(&seam_rx, "the pair pauses between its two appends");
     let second = home.diag(Process::Hub, Level::Debug);
-    let (reached_tx, reached_rx) = mpsc::channel::<()>();
+    let (observed_tx, observed_rx) = mpsc::channel::<()>();
     let (done_tx, done_rx) = mpsc::channel::<()>();
     let writer = thread::Builder::new()
         .name("log-test-second".to_owned())
         .spawn(move || {
-            // The seam above proves the pair holds the files lock, so
-            // this signal says the competing write is next in line for it.
-            reached_tx.send(()).unwrap();
+            // The test waits for the pair's pause before spawning this
+            // thread, so the pair holds the files lock here: the
+            // observation below, not this thread's arrival, proves the
+            // competing write ran while the pair was parked.
+            assert!(
+                matches!(FILES.try_lock(), Err(std::sync::TryLockError::WouldBlock)),
+                "the pair holds the files lock while the second writer waits"
+            );
+            observed_tx.send(()).unwrap();
             second.line(Severity::Info, None, "second", "Second.");
             done_tx.send(()).unwrap_or(());
         })
         .unwrap();
-    Deadline::after(LIMIT).recv(&reached_rx).unwrap();
+    Deadline::after(LIMIT).recv_or_fail(
+        &observed_rx,
+        "the second writer observes the files lock held",
+    );
     // The pair is still parked in its seam with the files lock held, so
     // the competing write cannot have landed yet.
     assert!(
@@ -438,7 +447,7 @@ fn a_second_writer_waits_for_the_pair() {
         "a second writer waits while the pair holds the files lock"
     );
     release_tx.send(()).unwrap();
-    Deadline::after(LIMIT).recv(&done_rx).unwrap();
+    Deadline::after(LIMIT).recv_or_fail(&done_rx, "the second writer finishes after the release");
     writer.join().unwrap();
     worker.join().unwrap();
     assert_eq!(
