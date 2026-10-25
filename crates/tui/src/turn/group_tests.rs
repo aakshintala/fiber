@@ -1617,35 +1617,39 @@ impl Renderer for Fake {
 
     fn render(
         &self,
+        _ctx: &crate::ext::SessionCtx,
         slot: &str,
         input: &Input<'_>,
         width: u16,
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
-    ) -> Result<Vec<Vec<RawSpan>>, Failure> {
-        self.calls
-            .borrow_mut()
-            .push((slot.to_owned(), width, format!("{input:?}")));
-        match self.script.borrow().clone() {
-            Script::Replace(lines) => Ok(lines),
-            Script::Fail(message) => Err(Failure {
-                extension: "fake".to_owned(),
-                message,
-            }),
-            Script::Decorate { badge } => {
-                let trimming: usize = badge
-                    .iter()
-                    .map(|span| crate::format::width(&span.text))
-                    .sum();
-                let trimming = u16::try_from(trimming).unwrap_or(u16::MAX);
-                let built = builtin(input, width.saturating_sub(trimming));
-                self.builtins
-                    .borrow_mut()
-                    .push((width.saturating_sub(trimming), format!("{input:?}")));
-                let mut row = built.into_iter().next().unwrap_or_default();
-                row.extend(badge);
-                Ok(vec![row])
+    ) -> crate::ext::Decision {
+        crate::ext::tests::decide(self.name(), || -> Result<Vec<Vec<RawSpan>>, Failure> {
+            self.calls
+                .borrow_mut()
+                .push((slot.to_owned(), width, format!("{input:?}")));
+            match self.script.borrow().clone() {
+                Script::Replace(lines) => Ok(lines),
+                Script::Fail(message) => Err(Failure {
+                    kind: crate::ext::FailureKind::HookFailed,
+                    extension: "fake".to_owned(),
+                    message,
+                }),
+                Script::Decorate { badge } => {
+                    let trimming: usize = badge
+                        .iter()
+                        .map(|span| crate::format::width(&span.text))
+                        .sum();
+                    let trimming = u16::try_from(trimming).unwrap_or(u16::MAX);
+                    let built = builtin(input, width.saturating_sub(trimming));
+                    self.builtins
+                        .borrow_mut()
+                        .push((width.saturating_sub(trimming), format!("{input:?}")));
+                    let mut row = built.into_iter().next().unwrap_or_default();
+                    row.extend(badge);
+                    Ok(vec![row])
+                }
             }
-        }
+        })
     }
 }
 
@@ -1656,7 +1660,14 @@ fn seam(fake: &Rc<Fake>, flat: bool) -> Bound {
     Bound {
         handle,
         cache: Arc::new(Cache::default()),
-        page: 0,
+        page: crate::ext::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        ctx: crate::ext::SessionCtx {
+            session_id: contract::SessionId("s".into()),
+            halves: None,
+        },
         flat,
     }
 }

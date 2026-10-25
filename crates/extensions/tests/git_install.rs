@@ -1994,7 +1994,7 @@ fn a_raised_memory_cap_appears_in_carries_only_for_lua_extensions() {
         let mut m = manifest("acme");
         m["memory_mib"] = json!(memory_mib);
         if process {
-            m["process"] = json!({ "program": "node", "args": [] });
+            m["process"] = json!({ "program": "node", "args": [], "exit_timeout_ms": 0 });
         }
         let source = setup.source("local", &m, &[]);
         let clock = fakes::clock::FakeClock::new();

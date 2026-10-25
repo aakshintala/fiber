@@ -256,7 +256,6 @@ list is one row tall, it shows the focused row's first line.
   right the id, turns, spend and age ("3h ago"). When there are more, a last
   row reads "… N more", and Enter or a click on it lists the rest of the
   project's exited sessions in place.
-
 The focused row is drawn on the selection bar. With no session, the list's
 rows hold two dim lines, centred: "No sessions yet." and "Type below and
 press Enter to start one."
@@ -265,6 +264,8 @@ Live sessions come from the hub's feed, across every project, grouped by the
 `project` on each `session_status`. Exited sessions come from `recent.jsonl`,
 then from the hub's paged query for older ones, grouped by the `project` on
 each row.
+
+Each project's "exited · N", "… N more" and the rail's "N ✓" count from the `total` of a `recent` scoped to that project. The terminal asks for one when the project first appears, after a reconnect, and when one of the project's sessions leaves or is deleted, with one ask in flight per project; it never adjusts a count itself. Until the first answer arrives, N counts the rows loaded. "… N more" counts the rows the hub holds past those shown, and opening it pages the project's `recent`.
 
 Clicking a row, or Enter on it, opens the session: an exited one is resumed by
 the hub. A resume the hub refuses because the workspace is gone shows
@@ -2658,8 +2659,7 @@ built-in rather than drawing the row again.
   instruction hook enforces it.
 - **Loading comes before the first frame.** A replaced layout or input box
   changes the first frame, so the terminal loads its TUI extensions before
-  drawing it ("Performance"). An extension that passes its loading timeout is
-  switched off, and the frame goes ahead without it.
+  drawing it ("Performance"). Reading, compiling and running the entry script share the loading timeout, as on the session side. An extension that passes it is switched off, and the frame goes ahead without it.
 - **The renderer is a trait the terminal defines.** `tui` defines a
   `Renderer` trait, and `main` adapts the `extensions` Lua VM to it, so `tui`
   depends on no crate that holds the VM (`docs/architecture.md`, "The call
@@ -2670,6 +2670,16 @@ built-in rather than drawing the row again.
   width changes, so an unchanged frame
   calls no Lua and scrolling or searching costs what it costs for built-in
   rows. The cache lives with the paging window and is dropped with its pages.
+  The key also includes the page's session and index, the selected extension,
+  and its session-half version when it has one. A change to any of these
+  reruns the renderer; an unrelated session-half change does not. Failures
+  use the same key without width.
+- A range-bound client half stays inert without notice until the session's
+  first `extensions_loaded`. An omitted or out-of-range half stays inert
+  with one `extension_incompatible` notice per TUI extension and session-half
+  version until `/reload`; omission counts as `not loaded`. The notice names
+  the TUI version and the session-half version, or `not loaded`.
+  A client half with no session half, such as a layout or a ledger row for a built-in tool, draws for every session.
 
 Measured in the prototype on macOS arm64, on a session of 1,047 tool calls
 ([research/tui-prototype/SEAMS.md](../research/tui-prototype/SEAMS.md)): a
@@ -2745,6 +2755,7 @@ one tool, the input box, the layout, or one key.
   wins (`docs/configuration.md`). Two extensions binding the same key follow
   the same rule, as `tui.slots."key:<key>"`. This is the rule for commands
   (`docs/extensions.md`, "Commands and screens").
+  The notice comes once for each slot and set of contenders until `/reload`. A `tui.slots."<slot>"` that names none of them picks no winner, and the notice names the setting.
 - **A key the person bound in `keys`** is the person's. An extension that
   binds the same key does not get it, and a notice names the extension.
 - **A per-tool ledger row beats the catch-all** `ledger_row`, with no notice.

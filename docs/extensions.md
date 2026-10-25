@@ -185,6 +185,31 @@ envelope and `schema_version` (`docs/events.md`), and three kinds of traffic:
 - **from the extension:** its registrations, and host calls as requests Fiber
   answers
 
+> **The extension's calls are driver commands.** A registration, a `host` call or a `state` call is the command `call`, with `args` `{ "call": "<name>", "args": [ ... ] }`: the name as Lua writes it, such as `fiber.tool`, `host.http` or `state.set`, and the Lua call's arguments as a JSON array. A key whose Lua value is a function, such as `run`, a computed `effects`, or a provider's `sign` or `cost`, is sent as `true`, and Fiber calls it with a request. A call is answered by `command_accepted`, whose `result` is `{ "value": <what the Lua call returns> }`, with `value` absent when it returns nothing, or by `command_rejected` with the `code` and `message` a Lua call raises. A registration that would fail in Lua is rejected with the message its notice carries. `host.after`, `host.every` and `host.drive` are not calls: the program keeps its own timers and sends driver commands directly. The extension ends its registrations with the command `ready`, which takes no `args`. The startup deadline is met when `ready` arrives. A call made while answering a request names it with `request_id` in its `args`. Fiber treats it as made inside that request's callback, with every rule a Lua call in that callback follows: which calls it may make, what `ran_by` names, the timeout it counts against, whether a state write goes with a hook's change, and what is cancelled when the callback ends. A call with no `request_id` before `ready` is treated as made while the entry script runs. One after `ready` is treated as made from a timer with no timeout of its own. A call naming a request that is no longer pending, because it was answered, timed out or was cancelled, is rejected `stale_request` and runs nothing. When a request ends, each call still running under it is stopped as the Lua callback's would be, and answered `stale_request`.
+>
+> **Bytes are base64.** JSON strings are text, so every position below that holds bytes in Lua carries them as a string of standard base64, both ways. Every other string is text, as JSON carries it.
+>
+> | Call | Bytes positions |
+> |---|---|
+> | `host.http` | `opts.body`; the result's `body` |
+> | `host.exec` | `opts.input`; the result's `stdout` and `stderr` |
+> | `host.fs.read` | its result |
+> | `host.fs.write` | the contents argument |
+> | `host.sha256` | its argument (the result is hex text) |
+> | `host.hmac_sha256` | both arguments and the result, so one result passes unchanged as the next call's key |
+>
+> A bytes position that is not valid base64 is rejected `invalid_arguments`, naming the call and the argument.
+>
+> **Functions are requests.** A function passed as a value, whether a key such as `run`, `sign`, `cost` or a computed `effects`, or a positional argument such as `host.oauth.refresh`'s, is sent as `true`. Fiber calls it with an `extension_request`. Its `key` is the key's name or, for a positional argument, its 1-based position as a string, such as `"1"`. `host.after`, `host.every`, `host.drive` and `json` are not calls (above).
+>
+> **JSON is exact.** Lua cannot tell an empty object from an empty list (an empty table), and the rule that settles it in Lua ("`json.encode({})` is `{}`") does not apply on the wire. What the extension sends is read as sent, and what Fiber sends is the value as recorded, so `{}` and `[]` stay distinct. A whole number Lua requires, such as a `timeout`, must be a JSON integer, and a fraction there is rejected as it is in Lua.
+>
+> **Size.** Each line is bounded by the framing cap (64 MiB), counted after base64, which adds a third. A line the extension sends over the cap closes the pipe, as it closes a client's connection, and the extension counts as dead ("One that dies is restarted once"). A result Fiber cannot fit under the cap is answered `command_rejected` `too_large` in place of the result. The call's own limits still apply first, such as `state_too_large`.
+>
+> **Fiber's requests are lines the extension answers with `reply`.** Each is an ephemeral line of kind `extension_request`, whose payload holds `request_id`, `registration` (the `id` of the `call` command that registered it), `key` (the function's key, such as `run`) and `args` (the arguments the Lua function receives, as a JSON array). The extension answers with `reply`: `request_id` and `result` (what the Lua function returns), or `request_id` and `error`, `{ code, message }`, which fails the call as a Lua error does. Stream items, meaning hooks, watcher deliveries and commands, are sent one at a time, each after the reply to the last one. Tool calls are sent as they arrive, so several can be outstanding. A reply to a request that is no longer pending, such as one past its timeout, is rejected `stale_request` and changes nothing. That is how a late reply is dropped.
+>
+> **`extension_hello`** is the first line Fiber sends, ephemeral, with payload keys `session_id`, `reason` (`new`, `resume`, `fork`, `rewind` or `handoff`), `workspace` (the workspace root), `data_dirs` (`{ machine, project }`, the paths `host.data_dir` returns) and `state` (the extension's folded state, as `state.get` reads it). After a restart it is sent again, with the state as it stands in the session.
+
 Every session starts its own process extensions, a delegate included, as it
 starts its own MCP servers. Nothing is shared between sessions
 ([ADR 0009](adr/0009-each-session-is-one-process.md)). They start at session

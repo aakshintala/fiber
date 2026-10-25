@@ -82,13 +82,14 @@ pub(crate) fn groups<'a>(
                 .filter(|card| card.left.is_none())
                 .fold(0.0, |sum, card| sum + card.spend);
             // A crashed card is not exited either: the count and the
-            // first-exited key come from the exited rows alone.
+            // first-exited key come from the exited rows alone, with the
+            // count drawn from the hub's total when one is held.
             let (exited, first_exited) = sections
                 .iter()
                 .find(|section| section.project == project)
                 .map(|section| {
                     (
-                        section.exited.len(),
+                        section.total.unwrap_or(section.exited.len()),
                         section.exited.first().map(|row| row.key),
                     )
                 })

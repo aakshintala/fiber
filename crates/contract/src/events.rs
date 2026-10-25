@@ -30,7 +30,7 @@ pub use context::{
     SkillsChanged, SkillsResent, SwitchSource, ToolReplaced, UsageRecorded,
 };
 pub use host::{
-    CommandAccepted, CommandInfo, CommandRejected, CommandResult, CredentialLabels,
+    CallResult, CommandAccepted, CommandInfo, CommandRejected, CommandResult, CredentialLabels,
     DelegateFinished, DelegateStarted, ExtensionExec, ExtensionLog, ExtensionMessage,
     ExtensionStateSet, ExtensionStateUnset, ExtensionUi, ExtensionsLoaded, FinishedWorktree,
     JobCompleted, JobDelta, JobLine, JobStarted, JobsPendingNotified, LoadedExtension,
@@ -51,7 +51,7 @@ pub use session::{
     TurnStarted, Variables, VariablesSource, Waiting, WaitingKind,
 };
 
-use crate::Envelope;
+use crate::{CommandId, Envelope, RequestId, SessionId};
 
 /// Whether a kind's lines are durable, carrying `seq` and making up the log,
 /// or ephemeral (`docs/events.md`, "Durable and ephemeral").
@@ -121,6 +121,69 @@ impl Event {
     }
 }
 
+/// `extension_hello`: the first line Fiber sends a process extension, with
+/// the session's identity, why it started, its workspace, the extension's
+/// data directories and its folded state. Sent again after a restart, with
+/// the state as it stands in the session
+/// (`docs/events.md`, `extension_hello`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtensionHello {
+    /// The session's id.
+    pub session_id: SessionId,
+    /// Why the session started.
+    pub reason: ExtensionReason,
+    /// The workspace root.
+    pub workspace: String,
+    /// The paths `host.data_dir` returns.
+    pub data_dirs: ExtensionDataDirs,
+    /// The extension's folded state, as `state.get` reads it.
+    pub state: Map<String, Value>,
+}
+
+/// Why a session started, as `extension_hello` carries it: a closed set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionReason {
+    /// A new session.
+    New,
+    /// A resumed session.
+    Resume,
+    /// A fork.
+    Fork,
+    /// A rewind.
+    Rewind,
+    /// A handoff.
+    Handoff,
+}
+
+/// The paths `host.data_dir` returns, as `extension_hello` carries them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtensionDataDirs {
+    /// The machine data directory.
+    pub machine: String,
+    /// The project data directory.
+    pub project: String,
+}
+
+/// `extension_request`: one callback Fiber asks a process extension to run,
+/// answered with a driver `reply` naming its `request_id`
+/// (`docs/events.md`, `extension_request`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtensionRequest {
+    /// The request the extension answers.
+    pub request_id: RequestId,
+    /// The registering `call` command's id.
+    pub registration: CommandId,
+    /// The function's key, or its 1-based position as a string for a
+    /// positional argument.
+    pub key: String,
+    /// The arguments the Lua function receives, as a JSON array.
+    pub args: Vec<Value>,
+}
+
 kinds! {
     FiberStarted(FiberStarted) = "fiber_started", Durable;
     FiberExited(FiberExited) = "fiber_exited", Durable;
@@ -180,6 +243,8 @@ kinds! {
     ExtensionMessage(ExtensionMessage) = "extension_message", Ephemeral;
     ExtensionLog(ExtensionLog) = "extension_log", Ephemeral;
     ExtensionExec(ExtensionExec) = "extension_exec", Durable;
+    ExtensionHello(ExtensionHello) = "extension_hello", Ephemeral;
+    ExtensionRequest(ExtensionRequest) = "extension_request", Ephemeral;
     JobStarted(JobStarted) = "job_started", Durable;
     DelegateStarted(DelegateStarted) = "delegate_started", Durable;
     JobDelta(JobDelta) = "job_delta", Ephemeral;
