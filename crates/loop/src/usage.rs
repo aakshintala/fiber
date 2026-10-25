@@ -897,3 +897,107 @@ mod pending_tests {
         assert!((trip.sum - 1.0).abs() < 1e-9);
     }
 }
+
+/// `Loop::write_usage` must fold the billed line into the shared spend
+/// tripwire, not just the ledger and the log. An empty `record_usage`
+/// leaves the ledger ahead of the trip sum, so the loop's own spend never
+/// reaches the shared budget check and no ledger-only test notices.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test setup builds a Loop")]
+mod loop_record_tests {
+    use std::sync::{Arc, mpsc};
+
+    use contract::GenerationId;
+    use contract::SessionId;
+    use contract::events::UsageRecorded;
+    use contract::inbox::Delivery;
+    use contract::shapes::Tokens;
+    use log::Log;
+
+    use super::Recorded;
+    use crate::{Loop, Model};
+
+    fn started() -> (Loop, fakes::TempDir) {
+        let home = fakes::TempDir::new("fiber-loop-record");
+        let workspace = home.path().join("workspace");
+        let credentials = home.path().join("credentials");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&credentials).unwrap();
+        let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+        let log = Arc::new(
+            Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap(),
+        );
+        let (_inbox, rx) = mpsc::channel::<Delivery>();
+        let looped = Loop::start(
+            crate::Session {
+                log: Arc::clone(&log),
+                provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+                model: Model {
+                    reference: "fake/model".into(),
+                    cost: None,
+                    subscription: false,
+                },
+                prompt: crate::prompt::PromptInputs::new(
+                    home.path().to_path_buf(),
+                    "/bin/sh".into(),
+                    home.path()
+                        .join("s_test/events.jsonl")
+                        .display()
+                        .to_string(),
+                    Arc::clone(&clock),
+                    fakes::CONTEXT_WINDOW,
+                ),
+                inbox: rx,
+                tools: Vec::new(),
+                permissions: crate::Permissions {
+                    workspace: workspace.display().to_string(),
+                    credentials,
+                    credential_files: Vec::new(),
+                    rules: Arc::new(fakes::NoRules),
+                },
+            },
+            None,
+        )
+        .unwrap();
+        (looped, home)
+    }
+
+    #[test]
+    fn write_usage_folds_billed_spend_into_the_shared_tripwire() {
+        // One billed call through the Loop path every call's usage takes:
+        // the ledger and the shared tripwire agree, so an empty
+        // `record_usage` fails here while the ledger-only tests stay green.
+        let (mut looped, _home) = started();
+        let line = UsageRecorded {
+            generation_id: GenerationId("g1".into()),
+            model: "fake/m".into(),
+            tokens: Tokens {
+                input: 10,
+                cache_read: 0,
+                cache_write: std::collections::BTreeMap::new(),
+                output: 3,
+            },
+            input_bytes: 0,
+            input_media: None,
+            web_searches: None,
+            cost: Some(1.5),
+            subscription: None,
+            extension: None,
+            origin_session_id: None,
+            reviewer: None,
+        };
+        looped
+            .write_usage(
+                Recorded {
+                    line: line.clone(),
+                    lookable: false,
+                },
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(looped.ledger.spend(), 1.5);
+        assert_eq!(support::lock(&looped.spend_trip).sum, 1.5);
+    }
+}
