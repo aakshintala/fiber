@@ -114,8 +114,9 @@ fn started_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> Socket {
 /// `docs/events.md`, "`steering_queue`", "`assistant_message_delta`").
 /// The projection itself is `support::kinds`, imported through `support::*`.
 fn assert_one_clients_line(lines: &[Value]) {
-    // One `clients` line per attach is fixed (`docs/testing.md`, "Event
-    // streams"), so the count is pinned against the raw lines before the
+    // `clients` is "written whenever a `full` connection attaches or
+    // leaves" (`docs/events.md`, "`clients`"), so the one attach writes
+    // one line. The count is pinned against the raw lines before the
     // ordered projection sets it aside.
     let clients = lines
         .iter()

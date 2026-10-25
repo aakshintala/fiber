@@ -430,8 +430,7 @@ impl Loop {
                 summary: exit,
                 carry,
                 chosen: thinking.and_then(|level| level.parse().ok()),
-                is_delegate,
-                supervised,
+                mode: crate::Mode::of(is_delegate, supervised),
             },
         )?;
         let backfill = resumed.prepare_backfill(&delegate_sessions, &orphans)?;

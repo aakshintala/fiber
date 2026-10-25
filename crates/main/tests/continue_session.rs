@@ -244,6 +244,8 @@ fn logged_supervised(setup: &Setup, id: &str) -> Option<bool> {
         .into_iter()
         .next()
         .expect("the log has a first line");
+    // `session_started` is "the first line of every session's log"
+    // (`docs/events.md`, "`session_started`").
     assert_eq!(first["kind"], "session_started", "{first:?}");
     first["payload"]
         .get("supervised")

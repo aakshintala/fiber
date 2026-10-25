@@ -37,7 +37,7 @@ fn minimal_value_is_session_id_and_workspace() {
 }
 
 #[test]
-fn full_value_lists_every_field_in_order_with_supervised_last() {
+fn full_value_lists_every_field_in_order_with_login_shell_last() {
     let args = SessionArgv {
         id: SessionId("s_0123456789abcdef".to_owned()),
         workspace: PathBuf::from("/w"),
@@ -55,7 +55,7 @@ fn full_value_lists_every_field_in_order_with_supervised_last() {
         delegate_id: Some(JobId("j_cccccccccccccccc".to_owned())),
         depth: Some(2),
         login_shell: true,
-        supervised: true,
+        ..SessionArgv::default()
     };
     assert_eq!(
         rendered(&args.to_argv()),
@@ -80,14 +80,13 @@ fn full_value_lists_every_field_in_order_with_supervised_last() {
             "--delegate-id=j_cccccccccccccccc",
             "--depth=2",
             "--login-shell",
-            "--supervised",
         ]
     );
     assert_eq!(
         args.to_argv()
             .last()
             .map(|arg| arg.to_string_lossy().into_owned()),
-        Some("--supervised".to_owned())
+        Some("--login-shell".to_owned())
     );
 }
 
@@ -184,7 +183,6 @@ fn continues_absent_renders_nothing_and_set_renders_once_after_rewound_from() {
 fn supervised_absent_renders_nothing_and_set_renders() {
     let absent = SessionArgv {
         login_shell: true,
-        supervised: false,
         ..SessionArgv::default()
     };
     assert!(

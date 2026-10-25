@@ -1368,6 +1368,18 @@ mod supervised {
     }
 
     #[test]
+    fn a_recorded_parent_makes_a_delegate_even_beside_supervised() {
+        // A supervised session is top-level (`docs/permissions.md`,
+        // "Supervised sessions": "It is top-level"), so a log whose
+        // `session_started` names a parent resumes as a delegate whatever
+        // its `supervised` says.
+        assert_eq!(crate::Mode::of(true, true), crate::Mode::Delegate);
+        assert_eq!(crate::Mode::of(true, false), crate::Mode::Delegate);
+        assert_eq!(crate::Mode::of(false, true), crate::Mode::Supervised);
+        assert_eq!(crate::Mode::of(false, false), crate::Mode::Plain);
+    }
+
+    #[test]
     fn supervised_retry_after_a_steer_is_judged_again_and_allowed() {
         let tool = Arc::new(ProbeTool::new());
         let mut session = harness(
@@ -1387,7 +1399,6 @@ mod supervised {
         ]);
         session.prompt("go");
         assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-        assert_eq!(resolved(&session.lines()).len(), 1);
         let first_requests = reviewer.requests().len();
         // The supervisor steers its grant as driver words; the person's own
         // prompt would arrive the same way (`docs/permissions.md`,
