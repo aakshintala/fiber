@@ -626,17 +626,22 @@ judge an answer it gave.
 When a process connects to the hub's local socket or a session's socket, the
 operating system says which process it is (`LOCAL_PEERPID` on macOS,
 `SO_PEERCRED` on Linux). The hub, or the session, walks that process's
-parents. If one of them is a session process, the connection belongs to that
-session. Every session process counts, including a Fiber delegate: each one
-is `fiber` running the internal session command, recognized by its kernel
-arguments. The kernel's process tree is the record; no marker file,
-environment variable or pid table is kept.
+parents. When the walk passes a session process, the connection is treated
+as coming from inside a session. A session process is a `fiber` process
+running a command that hosts a session in that process: the internal session
+command, `fiber ask`, or the case runner's child. Which session it is, Fiber
+reads from the process tree, never from the arguments. Every session process
+on the walk counts, including a Fiber delegate's. The kernel's process tree
+is the record; no marker file, environment variable or pid table is kept.
 
-A connection that belongs to a session is refused `from_session` when it:
+A connection that comes from inside a session is refused `from_session`
+when it:
 
 1. answers an approval with `reply`, on any session;
-2. sends `prompt`, `steer` or `reply` to its own session, or to a Fiber
-   delegate that session started with `delegate_spawn` or `delegate_fork`;
+2. sends `prompt`, `steer` or `reply` to its own session — the session whose
+   process is on the connection's ancestor walk — or to a session that
+   shares a session process between its own parent walk and the connection's
+   walk, which is that session or one of its Fiber delegates;
 3. asks for `pairing_code`.
 
 A `message` is a session message, logged with its sender, not a person's words, so none of these refusals covers it.
@@ -649,15 +654,22 @@ started is never the delegate's parent, so its steering stays refused.
 
 Sessions started through the hub's `start`, including those the delegate CLI
 starts, are not that session's delegates, and steering them stays allowed.
-Everything else is allowed too, including steering and answering questions in
-sessions the model started itself, for example a supervised session.
+Everything else is allowed, including steering a session the model started
+itself through the hub's `start`. A session started below the session's own
+tree — `fiber ask` from its shell, or a delegate it spawned — shares a
+session process with the connection's walk, so steering it stays refused.
 
 A process owned by another account is never a session process, and its
 arguments are never read; the walk continues through it to PID 1. When the
 walk is incomplete — a parent pid cannot be read, or this account's
 process's arguments cannot be read — the refusals above still apply, and the
 rejection message names the unreadable pid. The second refusal still admits
-its parent-process exemption on an incomplete walk.
+its parent-process exemption on an incomplete caller walk, when the peer pid
+was read and the target session's own parent walk reads fully. A live target
+whose process, parent, or parent walk cannot be read fails the second
+refusal closed: the command is refused naming the target session. A
+synthetic replay of an exited delegate has no target process, so no refusal
+applies to it.
 
 A process that a model detaches from its session on purpose is reparented
 outside the session's tree, so the walk no longer sees it. Attaching a

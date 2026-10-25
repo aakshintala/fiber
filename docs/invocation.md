@@ -782,11 +782,12 @@ and [Control center](https://github.com/aakshintala/fiber/issues/256); the
 rationale and the rejected layouts are
 [ADR 0009](adr/0009-each-session-is-one-process.md).
 
-- **Every session is one process**, running the internal session command. The
-  hub starts one for a client; `fiber ask` is one; a parent starts one for each
-  Fiber delegate. Each session starts its own MCP servers and process
-  extensions, so nothing is shared between sessions (`docs/mcp.md`,
-  `docs/extensions.md`).
+- **Every session is one process**, running a command that hosts a session in
+  that process: the internal `session` command, in-process `ask`, or the case
+  runner's `extension-case` child. The hub starts one for a client; a parent
+  starts one for each Fiber delegate. Each session starts its own MCP servers
+  and process extensions, so nothing is shared between sessions
+  (`docs/mcp.md`, `docs/extensions.md`).
 - **No session has a pipe driver.** Every driver is a client over the
   session's socket. `fiber ask`'s stdout is a watcher.
 - **A Fiber delegate is a child process of its parent.** The parent is an

@@ -118,7 +118,7 @@ the code and the list disagree.
 | Crate | File | Why |
 |---|---|---|
 | `support` | `crates/support/src/group.rs` | `pre_exec` calls `setsid`, and for a `tty` command the `TIOCSCTTY` ioctl on fd 0, between fork and exec |
-| `support` | `crates/support/src/peer.rs` | on macOS, `getsockopt` with `LOCAL_PEERPID` reads the socket peer's pid from a borrowed fd, and `sysctl` with `KERN_PROC_PID`/`KERN_PROCARGS2` reads one process's parent pid, effective uid and argument vector into caller-sized buffers |
+| `support` | `crates/support/src/peer.rs` | on macOS, `getsockopt` with `LOCAL_PEERPID` reads the socket peer's pid from a borrowed fd, `proc_pidinfo` with `PROC_PIDTBSDINFO` reads one process's parent pid and effective uid, and `sysctl` with `KERN_PROCARGS2` reads its argument vector into a caller-sized buffer |
 | `fakes` | `crates/fakes/src/crash_ports.rs` | on macOS, `pre_exec` calls `task_set_exception_ports` so a re-run child's deliberate `abort()` writes no ReportCrash report; its test reads the port back with `task_get_exception_ports` |
 | `log` | `crates/log/src/diag/memory.rs` | on macOS, `proc_pid_rusage` reads the peak physical footprint for a `peak_memory` line |
 | `cli` | `crates/cli/src/stop_tests.rs` | the close-wait test wraps a write-only file fd as a `UnixStream`, forcing the read error the wait reports as lost |
