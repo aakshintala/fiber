@@ -128,6 +128,7 @@ fn compatible_boundaries_and_zero_contender_version_notices_are_deduplicated() {
             );
         }
         let notices = renderer.take_pending();
+        // docs/tui.md:2678: one extension_incompatible per extension and session-half version until /reload.
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].0, "extension_incompatible");
         assert!(notices[0].1.contains("v3.0.0"));
@@ -137,10 +138,12 @@ fn compatible_boundaries_and_zero_contender_version_notices_are_deduplicated() {
         renderer.fills_for(&ctx(Some(vec![])), "ledger_row");
     }
     let notices = renderer.take_pending();
+    // docs/tui.md:2678: one extension_incompatible per extension and session-half version until /reload.
     assert_eq!(notices.len(), 1);
     assert!(notices[0].1.contains("not loaded"));
     let (renderer, _) = loader.load();
     renderer.fills_for(&ctx(Some(vec![])), "ledger_row");
+    // docs/tui.md:2678: one extension_incompatible per extension and session-half version until /reload.
     assert_eq!(
         renderer.take_pending().len(),
         1,
@@ -171,6 +174,7 @@ fn invalid_winner_single_contender_and_compatible_rival_win_silently() {
             }
         );
         let notices = renderer.take_pending();
+        // docs/tui.md:2678: one extension_incompatible per extension and session-half version until /reload.
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].0, "extension_incompatible");
     }
@@ -190,6 +194,7 @@ fn changed_compatible_sets_and_configured_values_get_new_conflict_notices() {
             );
         }
         let notices = renderer.take_pending();
+        // docs/tui.md:2757: one command_conflict per slot and set of contenders until /reload.
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].0, "command_conflict");
     }
@@ -212,6 +217,7 @@ fn changed_compatible_sets_and_configured_values_get_new_conflict_notices() {
             SlotSelection::Suppressed
         );
         let notices = composite.take_pending();
+        // docs/tui.md:2757: one command_conflict per slot and set of contenders until /reload.
         assert_eq!(notices.len(), 1);
         assert!(notices[0].1.contains(value));
     }
@@ -222,6 +228,7 @@ fn config_reload_error_keeps_existing_error_code_and_empty_renderer() {
     package(&loader, "a", None, Some(SCRIPT));
     std::fs::write(loader.sources.home.join("config.json"), "{").unwrap();
     let (renderer, notices) = loader.load();
+    // docs/tui.md:1233: an event notice reports its failure once.
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].0, "config_invalid");
     assert!(!renderer.fills("ledger_row"));
@@ -245,6 +252,75 @@ fn runtime_and_wrong_shape_callbacks_keep_typed_hook_failure_identity() {
             "non-timeout errors do not disable the VM"
         );
     }
+}
+
+#[test]
+fn render_deadline_reports_typed_extension_failure_and_switches_off() {
+    // The binary cases keep the screen fallback; this one forces the
+    // renderer deadline on the injected clock, with no wall-clock waits.
+    let dir = fakes::TempDir::new("fiber-tui-render-timeout");
+    let sources = config::Sources {
+        home: dir.path().join("home"),
+        workspace: dir.path().join("workspace"),
+        project: config::ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    };
+    std::fs::create_dir_all(&sources.home).unwrap();
+    std::fs::create_dir_all(&sources.workspace).unwrap();
+    let clock = FakeClock::new();
+    let loader = Loader::new(sources, clock.clone());
+    package(
+        &loader,
+        "slow",
+        None,
+        Some(
+            "fiber.slot('ledger_row',{timeout=100,render=function() builtin() while true do end end})",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty());
+    let args = json!({});
+    let row = tui::ext::LedgerRow {
+        name: "shell",
+        arguments: &args,
+        status: Status::Completed,
+        exit: Some(0),
+        duration_ms: Some(1),
+        lines: 1,
+        changes: &[],
+        error: None,
+        output: "",
+        answer: None,
+        flat: false,
+    };
+    let input = Input::LedgerRow(row);
+    // The clock moves only inside the render callback, once the renderer
+    // runs: past its declared timeout the render is a typed failure.
+    let over = |_: &Input<'_>, _: u16| {
+        clock.advance(std::time::Duration::from_millis(100));
+        Vec::new()
+    };
+    let Decision::Fail(failure) = renderer.render(&ctx(None), "ledger_row", &input, 80, &over)
+    else {
+        panic!("overdue render fails")
+    };
+    assert_eq!(failure.kind, FailureKind::ExtensionFailed);
+    assert_eq!(failure.extension, "slow");
+    // Switched off until rebuild: selection drops the timed-out VM with no
+    // new notice, and a later render never reaches it, so neither a hook
+    // failure nor a second typed failure can follow, without moving the
+    // clock again.
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "ledger_row"),
+        SlotSelection::Absent
+    );
+    assert!(renderer.take_pending().is_empty());
+    assert!(!renderer.fills("ledger_row"));
+    let Decision::NotForSession { .. } =
+        renderer.render(&ctx(None), "ledger_row", &input, 80, &|_, _| vec![])
+    else {
+        panic!("off renderer stays inert")
+    };
 }
 
 #[test]
@@ -275,6 +351,7 @@ fn compatible_first_selection_and_notice_cadence() {
         );
     }
     let notices = renderer.take_pending();
+    // docs/tui.md:2678: one extension_incompatible per extension and session-half version until /reload.
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].0, "extension_incompatible");
     assert!(notices[0].1.contains("v3.0.0"));
@@ -289,6 +366,7 @@ fn compatible_first_selection_and_notice_cadence() {
         SlotSelection::Suppressed
     );
     let notices = renderer.take_pending();
+    // docs/tui.md:2757: one command_conflict per slot and set of contenders until /reload.
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].0, "command_conflict");
     assert!(notices[0].1.contains("a, b"));
@@ -298,6 +376,7 @@ fn compatible_first_selection_and_notice_cadence() {
             extension: "b".into()
         }
     );
+    // docs/tui.md:2678: one extension_incompatible per extension and session-half version until /reload.
     assert_eq!(renderer.take_pending().len(), 1);
     assert_eq!(
         renderer.fills_for(
@@ -380,6 +459,7 @@ fn declared_half_load_failures_and_absent_optional_half() {
             renderer.fills_for(&ctx(None), "ledger_row"),
             SlotSelection::Absent
         );
+        // docs/tui.md:1233: an event notice reports its failure once.
         assert_eq!(notices.len(), usize::from(failure != "absent"), "{failure}");
         if failure != "absent" {
             assert_eq!(notices[0].0, "extension_failed");
@@ -397,6 +477,7 @@ fn entrypoint_symlink_cannot_execute_outside_package() {
     std::fs::write(&outside, SCRIPT).unwrap();
     std::os::unix::fs::symlink(outside, package.join("tui/init.lua")).unwrap();
     let (renderer, notices) = loader.load();
+    // docs/tui.md:1233: an event notice reports its failure once.
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].0, "extension_failed");
     assert_eq!(

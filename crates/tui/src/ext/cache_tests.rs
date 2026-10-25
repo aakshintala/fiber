@@ -418,6 +418,73 @@ mod context_regressions {
     }
 
     #[test]
+    fn a_renderer_without_a_session_half_ignores_halves_map_changes() {
+        use crate::ext::{Renderer, SessionCtx};
+
+        /// A client-only renderer: no `half` override, so the default
+        /// reports no session half for every context.
+        #[derive(Debug)]
+        struct ClientOnly {
+            calls: Cell<usize>,
+        }
+        impl Renderer for ClientOnly {
+            fn name(&self) -> &str {
+                "client"
+            }
+            fn fills(&self, slot: &str) -> bool {
+                slot == "ledger_row"
+            }
+            fn render(
+                &self,
+                _ctx: &SessionCtx,
+                _slot: &str,
+                _input: &Input<'_>,
+                _width: u16,
+                _builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
+            ) -> Decision {
+                self.calls.set(self.calls.get() + 1);
+                Decision::Draw {
+                    extension: "client".into(),
+                    lines: vec![vec![RawSpan {
+                        text: "hi".into(),
+                        ..RawSpan::default()
+                    }]],
+                }
+            }
+        }
+
+        let renderer = ClientOnly {
+            calls: Cell::new(0),
+        };
+        let cache = Cache::default();
+        let args = serde_json::json!({});
+        let row = input(&args);
+        for version in ["v1", "v2"] {
+            let ctx = SessionCtx {
+                session_id: contract::SessionId("s".into()),
+                halves: Some(
+                    [("other".to_owned(), version.to_owned())]
+                        .into_iter()
+                        .collect(),
+                ),
+            };
+            // The default reports no half even as the map around it changes.
+            assert_eq!(renderer.half(&ctx, "client"), None);
+            let half = renderer.half(&ctx, "client");
+            assert!(
+                cache
+                    .lines(page("s", 0), "ledger_row", "client", half, &row, 20, || {
+                        renderer.render(&ctx, "ledger_row", &row, 20, &|_, _| Vec::new())
+                    })
+                    .is_some()
+            );
+        }
+        // docs/tui.md:2674: an unrelated session-half change does not rerun
+        // the renderer, so the second context hits the first entry.
+        assert_eq!(renderer.calls.get(), 1);
+    }
+
+    #[test]
     fn entries_key_page_winner_half_input_and_width() {
         let cache = Cache::default();
         let args = serde_json::json!({});
@@ -449,7 +516,7 @@ mod context_regressions {
                     .is_some()
             );
         }
-        // docs/tui.md: only output-relevant page/winner/half/input/width changes rerun.
+        // docs/tui.md:2673: only output-relevant page/winner/half/input/width changes rerun.
         assert_eq!(calls.get(), 6);
         let changed = serde_json::json!({"command":"pwd"});
         assert!(
@@ -468,6 +535,7 @@ mod context_regressions {
                 )
                 .is_some()
         );
+        // docs/tui.md:2673: a change to any key input reruns the renderer.
         assert_eq!(calls.get(), 7);
     }
 
@@ -502,11 +570,11 @@ mod context_regressions {
                     .is_none()
             );
         }
-        assert_eq!(calls.get(), 5); // docs/tui.md: failure key excludes width.
+        assert_eq!(calls.get(), 5); // docs/tui.md:2674: failure key excludes width.
         cache.queue_notice(("command_conflict".into(), "conflict".into()));
         cache.drop_page(page("s", 0));
-        assert_eq!(cache.take_failures().len(), 2); // Only the exact page is pruned.
-        assert_eq!(cache.take_notices().len(), 1); // Selection notices have no page lifetime.
+        assert_eq!(cache.take_failures().len(), 2); // docs/tui.md:2672: only the exact page is pruned.
+        assert_eq!(cache.take_notices().len(), 1); // docs/tui.md:2678: selection notices live until /reload, with no page lifetime.
         cache.lines(
             page("s", 1),
             "ledger_row",
@@ -537,7 +605,9 @@ mod context_regressions {
         fresh.drop_page(page("delegate", 0));
         fresh.clear();
         durable.drop_page(page("parent", 0));
+        // docs/tui.md:2734: one failure notice per extension and slot until /reload.
         assert_eq!(durable.take_failures().len(), 1);
+        // docs/tui.md:2678: one extension_incompatible per extension and session-half version until /reload.
         assert_eq!(durable.take_notices().len(), 1);
         let scratch = durable.scratch_sharing_pending();
         scratch.lines(
@@ -587,7 +657,9 @@ mod context_regressions {
         });
         fresh.queue_notice(("command_conflict".into(), "conflict".into()));
         durable.drop_entries();
+        // docs/tui.md:2734: one failure notice per extension and slot until /reload.
         assert_eq!(durable.take_failures().len(), 1);
+        // docs/tui.md:2757: one command_conflict per slot and set of contenders until /reload.
         assert_eq!(durable.take_notices().len(), 1);
         fresh.queue_notice(("command_conflict".into(), "again".into()));
         durable.clear();
@@ -610,6 +682,7 @@ mod context_regressions {
             draw("a", "bad\ntext")
         });
         let failures = cache.take_failures();
+        // docs/tui.md:2734: one failure notice per extension and slot until /reload.
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].1.kind, FailureKind::HookFailed);
         assert_eq!(failures[0].1.extension, "a");

@@ -229,8 +229,55 @@ fn parent_page_pruning_cannot_erase_delegate_failure_before_app_drain() {
         });
     assert!(app.drawn(&[]));
     let notices = app.notices();
+    // docs/tui.md:2734: the failure keeps one hook_failed per extension and slot.
     assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="hook_failed"&&text.contains("session-test"))).count(),1);
     assert!(!app.drawn(&[]));
+}
+
+#[test]
+fn delegate_extensions_loaded_marks_swapped_transcript_changed() {
+    // An `extensions_loaded` line marks the shown delegate transcript even
+    // when the fold itself changes nothing: `||` (not `&&`) with the kind
+    // check, while the delegate is swapped in.
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_changed", DELEGATE_A);
+    open(&mut app, "j_changed");
+    app.jump(1);
+    assert!(app.screen.top().is_some());
+    assert!(!app.screen.has_new());
+    app.on_line(other_line(
+        DELEGATE_A,
+        "extensions_loaded",
+        json!({"extensions": []}),
+    ));
+    assert!(
+        app.screen.has_new(),
+        "extensions_loaded marks the shown delegate transcript changed"
+    );
+    assert!(
+        !app.attached_screen().has_new(),
+        "the stashed parent transcript stays unchanged"
+    );
+}
+
+#[test]
+fn delegate_other_line_leaves_swapped_transcript_unchanged() {
+    // Any other line kind leaves the shown delegate transcript alone when
+    // the fold changes nothing: the kind check is `==` (not `!=`), while
+    // the delegate is swapped in.
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_quiet", DELEGATE_A);
+    open(&mut app, "j_quiet");
+    app.jump(1);
+    assert!(app.screen.top().is_some());
+    assert!(!app.screen.has_new());
+    app.on_line(other_line(DELEGATE_A, "step_started", json!({})));
+    assert!(
+        !app.screen.has_new(),
+        "a non-extensions_loaded line marks nothing when the fold is quiet"
+    );
 }
 
 #[test]

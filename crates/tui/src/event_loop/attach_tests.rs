@@ -3133,11 +3133,12 @@ fn startup_loader_completes_before_the_first_draw_observes_its_result() {
     struct TracedLoad(mpsc::Sender<&'static str>);
     impl crate::ext::Load for TracedLoad {
         fn load(&self) -> (std::rc::Rc<dyn crate::ext::Renderer>, Vec<(String, String)>) {
-            self.0.send("load completed").unwrap();
-            (
+            let loaded: (std::rc::Rc<dyn crate::ext::Renderer>, Vec<(String, String)>) = (
                 std::rc::Rc::new(crate::ext::tests::SessionRenderer::new("first-renderer")),
                 vec![("extension_failed".into(), "FIRST-LOAD-RESULT".into())],
-            )
+            );
+            self.0.send("load completed").unwrap();
+            loaded
         }
     }
     let pair = crate::event_loop::tests::open();
@@ -3174,6 +3175,8 @@ fn startup_loader_completes_before_the_first_draw_observes_its_result() {
         "first draw must observe the loader result"
     );
     observer.send("first draw").unwrap();
+    // docs/tui.md:2659: the first frame waits for the loader, so load
+    // completion precedes the first draw observation in this trace.
     assert_eq!(
         wait.recv_or_fail(&trace, "load completion"),
         "load completed"
@@ -3226,8 +3229,101 @@ fn tail_speculation_failure_survives_replay_and_reaches_actual_app_drain_once() 
     );
     open.lp.app.drawn(&[]);
     let notices = open.lp.app.notices();
+    // docs/tui.md:2734: the failure keeps one hook_failed per extension and slot.
     assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="hook_failed"&&text.contains("session-test"))).count(),1);
     assert!(!open.lp.app.drawn(&[]), "a replay cannot report it twice");
+}
+
+#[test]
+fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
+    // Two contenders claim every ledger row: selection stays inert and
+    // queues one conflict notice through the shared sink, without halves.
+    #[derive(Debug)]
+    struct ConflictPair {
+        pending: std::cell::RefCell<Vec<(String, String)>>,
+        reported: std::cell::Cell<bool>,
+    }
+    impl crate::ext::Renderer for ConflictPair {
+        fn name(&self) -> &str {
+            "tail-a"
+        }
+        fn fills(&self, slot: &str) -> bool {
+            slot.starts_with("ledger_row")
+        }
+        fn fills_for(
+            &self,
+            _ctx: &crate::ext::SessionCtx,
+            slot: &str,
+        ) -> crate::ext::SlotSelection {
+            if !self.fills(slot) {
+                return crate::ext::SlotSelection::Absent;
+            }
+            if !self.reported.replace(true) {
+                self.pending.borrow_mut().push((
+                    "command_conflict".into(),
+                    format!("extensions tail-a, tail-b replace {slot}; the built-in stays"),
+                ));
+            }
+            crate::ext::SlotSelection::Suppressed
+        }
+        fn take_pending(&self) -> Vec<(String, String)> {
+            std::mem::take(&mut *self.pending.borrow_mut())
+        }
+        fn render(
+            &self,
+            _ctx: &crate::ext::SessionCtx,
+            _slot: &str,
+            _input: &crate::ext::Input<'_>,
+            _width: u16,
+            _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+        ) -> crate::ext::Decision {
+            crate::ext::Decision::Draw {
+                extension: "tail-a".into(),
+                lines: Vec::new(),
+            }
+        }
+    }
+    let mut log = super::handoff_log(3, "tail reply");
+    let at = log
+        .iter()
+        .position(|line| line.kind == "assistant_message_completed")
+        .unwrap();
+    let mut tool = log[at].clone();
+    tool.kind = "tool_call_requested".into();
+    tool.action_id = Some(contract::ActionId("a_tail_tool".into()));
+    tool.payload = json!({"name":"shell","arguments":{"command":"echo tail"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    log.insert(at, tool);
+    for (at, line) in log.iter_mut().enumerate() {
+        line.seq = Some(contract::Seq(at as u64));
+    }
+    let renderer = std::rc::Rc::new(ConflictPair {
+        pending: std::cell::RefCell::new(Vec::new()),
+        reported: std::cell::Cell::new(false),
+    });
+    let mut open = tail_open_prepared(
+        log,
+        Full::Replay,
+        History::Windows,
+        Vec::new(),
+        move |app| {
+            app.install_renderer(renderer);
+            app.on_key(
+                crate::keys::Key::CtrlO,
+                contract::clock::Clock::now(&*fakes::clock::FakeClock::new()),
+            );
+        },
+    );
+    open.lp.app.drawn(&[]);
+    let notices = open.lp.app.notices();
+    // docs/tui.md:2757: one command_conflict per slot and set of contenders.
+    assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="command_conflict"&&text.contains("tail-a, tail-b"))).count(),1);
+    assert!(
+        !open.lp.app.drawn(&[]),
+        "a replay cannot report the notice twice"
+    );
 }
 
 #[test]

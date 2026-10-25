@@ -159,6 +159,9 @@ pub trait Renderer: std::fmt::Debug {
         }
     }
     /// Drains producer-deduplicated selection and callback notices.
+    // Replacing the empty default with `vec![]` is behaviorally identical:
+    // both construct a new empty vector, so no test can tell them apart.
+    #[cfg_attr(false, mutants::skip)]
     fn take_pending(&self) -> Vec<(String, String)> {
         Vec::new()
     }
