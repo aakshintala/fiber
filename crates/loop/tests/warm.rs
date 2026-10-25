@@ -760,10 +760,24 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
             .expect("a line in time")
             .expect("the log outlives the turn")
             .expect("the log ended before the awaited line");
-        if line.kind != "session_status" {
-            seen.push(line);
+        if line.kind == "session_status" {
+            continue;
         }
+        if !has_turn {
+            if line.kind == "turn_completed" {
+                seen.push(line);
+            }
+            continue;
+        }
+        seen.push(line);
     }
+    let mut kinds: Vec<&str> = seen.iter().map(|line| line.kind.as_str()).collect();
+    kinds.sort_unstable();
+    assert_eq!(
+        kinds,
+        ["notice", "turn_completed", "usage_recorded"],
+        "the drain contains exactly the required event kinds, without duplicates"
+    );
     let usage = seen
         .iter()
         .find(|line| {
