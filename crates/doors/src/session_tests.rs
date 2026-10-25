@@ -6357,3 +6357,61 @@ fn past_end_level_line_without_a_switch_changes_nothing() {
     );
     flying.finish();
 }
+
+#[test]
+fn a_process_call_on_an_ordinary_connection_is_rejected() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client.send(&subscribe_line("c_1", "full")).unwrap();
+            assert_eq!(answer_of(&client, "c_1")["kind"], "command_accepted");
+            client
+                .send(r#"{"id":"c_2","command":"call","args":{"call":"fiber.tool","args":[]}}"#)
+                .unwrap();
+            let rejected = answer_of(&client, "c_2");
+            assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+            assert_eq!(
+                rejected["payload"]["code"], "invalid_arguments",
+                "{rejected}"
+            );
+            assert!(
+                inbox.try_recv().is_err(),
+                "a refused process call delivers nothing"
+            );
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_process_ready_on_an_ordinary_connection_is_rejected() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client.send(&subscribe_line("c_1", "full")).unwrap();
+            assert_eq!(answer_of(&client, "c_1")["kind"], "command_accepted");
+            client.send(r#"{"id":"c_2","command":"ready"}"#).unwrap();
+            let rejected = answer_of(&client, "c_2");
+            assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+            assert_eq!(
+                rejected["payload"]["code"], "invalid_arguments",
+                "{rejected}"
+            );
+            assert!(
+                inbox.try_recv().is_err(),
+                "a refused process ready delivers nothing"
+            );
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
