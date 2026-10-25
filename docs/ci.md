@@ -157,8 +157,12 @@ up the complete open and closed issues, asks
 fetches only those endpoints, and runs
 `cargo xtask flake-report --tested-commit` to decide one JSON-lines action
 per unique test title, probing ancestry itself only for each selected
-latest fix. It uploads one combined `flake-report-data` artifact carrying
-the decision lines plus the selected runner lists. The write-only
+latest fix. It then runs `cargo xtask flake-classify`, which reads the
+runner lists and the two file lists git diffs from the merge base, and
+writes one classification line per unique test title: a stale base, a
+file the pull request owns, or the issue lookup. It uploads one combined
+`flake-report-data` artifact carrying the decision lines plus the
+classification lines. The write-only
 `flake_report` job holds `contents: read`, `pull-requests: write` and
 `issues: write`, checks nothing out and runs no Fiber code: it downloads
 only that exact combined artifact, with no Actions API call and no added
