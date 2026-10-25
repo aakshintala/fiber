@@ -931,4 +931,38 @@ fn leftover_log_dump_truncates_an_oversized_line_by_bytes() {
         !exact_dump.contains("truncated"),
         "no truncation marker at the cap:\n{exact_dump}"
     );
+    // One byte below the cap is kept whole, with no truncation marker.
+    let below = "y".repeat(LEFTOVER_LOG_HEAD_BYTES - 1);
+    let below_path = write_log("s_below_bytes", &format!("{below}\n"));
+    let below_dump = describe_leftover_logs(std::slice::from_ref(&below_path));
+    assert!(
+        below_dump.contains(&below),
+        "below-cap head kept:\n{below_dump}"
+    );
+    assert!(
+        !below_dump.contains("truncated"),
+        "no truncation marker below the cap:\n{below_dump}"
+    );
+    // One byte over the cap is cut, keeping the full lengths and marking
+    // the truncation: this pins the boundary from above.
+    let just_over = "z".repeat(LEFTOVER_LOG_HEAD_BYTES + 1);
+    let just_over_line = format!("{just_over}\n");
+    let just_over_path = write_log("s_just_over_bytes", &just_over_line);
+    let just_over_dump = describe_leftover_logs(std::slice::from_ref(&just_over_path));
+    assert!(
+        just_over_dump.contains(&format!("{} bytes", just_over_line.len())),
+        "full byte length kept one over the cap:\n{just_over_dump}"
+    );
+    assert!(
+        just_over_dump.contains("1 lines"),
+        "full line count kept one over the cap:\n{just_over_dump}"
+    );
+    assert!(
+        !just_over_dump.contains(&just_over),
+        "one-over-cap line cut:\n{just_over_dump}"
+    );
+    assert!(
+        just_over_dump.contains("truncated"),
+        "truncation marker one over the cap:\n{just_over_dump}"
+    );
 }
