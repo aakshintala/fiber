@@ -2,9 +2,17 @@
 //! latest-session pick, and the memoized project test.
 
 use std::cell::RefCell;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
-use super::{hub_entries, in_project, notice_lines, route, select_latest, target_in, tty_refusal};
+use super::{
+    hub_entries, in_project, listed_latest, notice_lines, route, select_latest, target_in,
+    tty_refusal,
+};
 use contract::SessionId;
 
 /// The refusal sentence, as `fiber` without a tty prints it.
@@ -248,6 +256,109 @@ fn a_repository_hub_default_is_ignored_with_a_notice() {
 fn notice_lines_is_empty_without_an_ignored_key() {
     let (dir, workspace) = hub_home(Some("a"), &[("a", "unix:/tmp/a")]);
     assert!(notice_lines(loaded_config(dir.path(), &workspace).notices()).is_empty());
+}
+
+/// One named deadline for the fake hub's read and the test's receive.
+const HUB_DEADLINE: Duration = Duration::from_secs(10);
+
+/// An in-process hub answering one `sessions` command with `answer`: a
+/// thread on the hub end reads the one command line, then writes it.
+struct FakeHub {
+    answer: String,
+}
+
+impl FakeHub {
+    fn connect(&mut self) -> Result<doors::hub::Hub, doors::Error> {
+        let (client, hub) = UnixStream::pair().map_err(doors::Error::Local)?;
+        hub.set_read_timeout(Some(HUB_DEADLINE))
+            .map_err(doors::Error::Local)?;
+        let answer = self.answer.clone();
+        thread::spawn(move || {
+            let mut line = String::new();
+            BufReader::new(&hub).read_line(&mut line).unwrap();
+            (&hub).write_all(answer.as_bytes()).unwrap();
+        });
+        let hello = contract::HubLine {
+            kind: "hub_hello".to_owned(),
+            ts: 1,
+            schema_version: 1,
+            payload: serde_json::Map::new(),
+        };
+        Ok((client, hello))
+    }
+}
+
+/// One `sessions` answer line for `result`, as the hub writes it.
+fn sessions_answer(result: serde_json::Value) -> String {
+    let line = serde_json::json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_sessions", "result": result}});
+    format!("{line}\n")
+}
+
+/// Runs `listed_latest` for `name` against a hub answering `answer`, on a
+/// worker thread: the outcome, received under the hub deadline so a hung
+/// read fails the test instead of hanging it.
+fn listed(name: &str, answer: String) -> Result<SessionId, contract::shapes::Failure> {
+    let name = name.to_owned();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut hub = FakeHub { answer };
+        let got = listed_latest(&name, &mut || hub.connect());
+        tx.send(got).unwrap_or(());
+    });
+    fakes::Deadline::after(HUB_DEADLINE).recv(&rx).unwrap()
+}
+
+#[test]
+fn a_listed_route_opens_the_hub_session_without_reading_local_logs() {
+    let listed_target = doors::hub::Target::Listed {
+        name: "box".to_owned(),
+        address: doors::hub::Address::parse("unix:/x").unwrap(),
+        token: None,
+    };
+    let mut local = || -> Result<SessionId, contract::shapes::Failure> {
+        panic!("a listed continue never reads local logs")
+    };
+    let mut listed = |name: &str| {
+        assert_eq!(name, "box");
+        Ok::<_, contract::shapes::Failure>(SessionId("s_hub".to_owned()))
+    };
+    let id = route(&listed_target, &mut local, &mut listed).unwrap();
+    assert_eq!(id.0, "s_hub");
+}
+
+#[test]
+fn continue_without_a_flag_uses_the_configured_hub_and_a_flag_overrides_it() {
+    let (dir, workspace) = hub_home(
+        Some("box"),
+        &[("box", "unix:/tmp/box"), ("other", "unix:/tmp/other")],
+    );
+    let home = dir.path();
+    assert_eq!(
+        listed_name(&target_in(home, &workspace, None, Vec::new()).unwrap()),
+        Some("box")
+    );
+    assert_eq!(
+        listed_name(&target_in(home, &workspace, Some("other"), Vec::new()).unwrap()),
+        Some("other")
+    );
+}
+
+#[test]
+fn listed_continue_without_an_eligible_session_names_fiber() {
+    for result in [
+        serde_json::json!({"live": [], "exited": []}),
+        serde_json::json!({"live": [], "exited": [
+            {"session_id": "s_1", "name": "n", "how": "exited", "active": null},
+        ]}),
+    ] {
+        let error = listed("box", sessions_answer(result)).unwrap_err();
+        assert_eq!(error.code, contract::ErrorCode::Usage);
+        assert_eq!(
+            error.message,
+            "No session on hub `box` to continue; run `fiber` to start one. Run `fiber --help` for usage."
+        );
+    }
 }
 
 #[test]

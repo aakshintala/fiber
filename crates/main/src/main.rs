@@ -137,8 +137,8 @@ fn run() -> i32 {
             }),
             _,
         ) => open::resume(id, credential, hub, fiber),
-        cli::Invocation::Run(Some(cli::Commands::Continue { hub: _ }), _) => {
-            open::continue_latest(fiber)
+        cli::Invocation::Run(Some(cli::Commands::Continue { hub }), _) => {
+            open::continue_latest(fiber, hub)
         }
         cli::Invocation::Usage {
             ask: true,
