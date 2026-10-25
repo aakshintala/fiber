@@ -737,10 +737,13 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
     // The lines after the turn are exactly `usage_recorded, notice`, in
     // order: consume to the turn's end, skipping the status observer's
     // lines, then read the next two.
+    // Every wait takes what remains of one deadline, so the drain's reads
+    // share a single bound.
+    let wait = Deadline::after(DEADLINE);
     let mut next = || {
         loop {
             let line = watcher
-                .recv_timeout(DEADLINE)
+                .recv_timeout(wait.left())
                 .expect("a line in time")
                 .expect("the log outlives the turn")
                 .expect("the log ended before the awaited line");
