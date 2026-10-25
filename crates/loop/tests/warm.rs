@@ -734,36 +734,49 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
     let due = start + Duration::from_secs(270);
     parked(&session.clock, due, "the refresh is due");
     advance_to(&session, due);
-    // The lines after the turn are exactly `usage_recorded, notice`, in
-    // order: consume to the turn's end, skipping the status observer's
-    // lines, then read the next two.
-    // Every wait takes what remains of one deadline, so the drain's reads
-    // share a single bound.
+    // No doc promises the relative order of `turn_completed`,
+    // `usage_recorded` and `notice`, so collect the three under one
+    // deadline and assert them as a set (`docs/testing.md`, "Event
+    // streams"). Every wait takes what remains of that one deadline, so
+    // the drain's reads share a single bound. `session_status` lines have
+    // no position relative to the session's other lines and are set aside.
     let wait = Deadline::after(DEADLINE);
-    let mut next = || {
-        loop {
-            let line = watcher
-                .recv_timeout(wait.left())
-                .expect("a line in time")
-                .expect("the log outlives the turn")
-                .expect("the log ended before the awaited line");
-            if line.kind != "session_status" {
-                return line;
-            }
-        }
-    };
+    let mut seen: Vec<Envelope> = Vec::new();
     loop {
-        if next().kind == "turn_completed" {
+        let has_turn = seen
+            .iter()
+            .any(|line: &Envelope| line.kind == "turn_completed");
+        let has_usage = seen.iter().any(|line: &Envelope| {
+            line.kind == "usage_recorded" && line.payload["generation_id"] == "gen_refresh"
+        });
+        let has_notice = seen.iter().any(|line: &Envelope| {
+            line.kind == "notice" && line.payload["code"] == "provider_unavailable"
+        });
+        if has_turn && has_usage && has_notice {
             break;
         }
+        let line = watcher
+            .recv_timeout(wait.left())
+            .expect("a line in time")
+            .expect("the log outlives the turn")
+            .expect("the log ended before the awaited line");
+        if line.kind != "session_status" {
+            seen.push(line);
+        }
     }
-    let usage = next();
-    assert_eq!(usage.kind, "usage_recorded");
+    let usage = seen
+        .iter()
+        .find(|line| {
+            line.kind == "usage_recorded" && line.payload["generation_id"] == "gen_refresh"
+        })
+        .expect("a usage_recorded line");
     assert!(usage.turn_id.is_none(), "a refresh belongs to no turn");
     assert!(usage.action_id.is_none(), "a refresh belongs to no action");
     assert_eq!(usage.payload["generation_id"], "gen_refresh");
-    let notice = next();
-    assert_eq!(notice.kind, "notice");
+    let notice = seen
+        .iter()
+        .find(|line| line.kind == "notice" && line.payload["code"] == "provider_unavailable")
+        .expect("a notice line");
     assert_eq!(notice.payload["code"], "provider_unavailable");
     assert!(!notice.is_durable(), "the notice is ephemeral");
     assert!(notice.turn_id.is_none());
