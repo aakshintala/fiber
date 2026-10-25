@@ -339,23 +339,33 @@ fn an_inline_image_transmits_once_then_deletes_on_session_change() {
     let second_turn_from = run.output().len();
     run.write(b"\r");
     let events = sessions[0].join("events.jsonl");
+    let waiting = events.clone();
+    fakes::wait_until("the second turn to start", setup.deadline, move || {
+        fs::read_to_string(&waiting).is_ok_and(|text| {
+            support::complete_lines(&text)
+                .iter()
+                .filter(|line| line.get("kind").and_then(Value::as_str) == Some("turn_started"))
+                .count()
+                >= 2
+        })
+    });
     fakes::wait_until("the second turn to complete", setup.deadline, move || {
         fs::read_to_string(&events).is_ok_and(|text| {
             support::complete_lines(&text)
                 .iter()
-                .filter(|line| {
-                    matches!(
-                        line.get("kind").and_then(Value::as_str),
-                        Some("turn_started" | "turn_completed")
-                    )
-                })
+                .filter(|line| line.get("kind").and_then(Value::as_str) == Some("turn_completed"))
                 .count()
-                >= 4
+                >= 2
         })
     });
-    // The view sits scrolled up from the image checks. After the durable
-    // completion, click the emitted "New messages below" row to follow.
-    run.wait_bytes(second_turn_from, FRAME_END, "the second-turn frame");
+    // The view sits scrolled up from the image checks. The session log
+    // records completion before the terminal renders it; the fresh
+    // finished title follows the completed frame.
+    run.wait_bytes(
+        second_turn_from,
+        support::pty::FINISHED_TITLE,
+        "the second-turn finished title",
+    );
     let grid = run.wait_screen("the new-messages row", |grid| {
         grid.contents.contains("New messages below · End")
     });
