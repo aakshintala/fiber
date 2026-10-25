@@ -762,9 +762,9 @@ for block_sh in "$decide_dir"/blocks/*.sh; do
   block_err="$decide_dir/$base.stderr"
   code=0
   if grep -q '^GH_TOKEN=' "$block_env" 2>/dev/null; then
-    env -i PATH="$decide_dir/bin:$orig_path" HOME="$tmp" RUNNER_TEMP="$decide_runner" GITHUB_SHA="1111111111111111111111111111111111111111" GH_REPO="aakshintala/fiber" GITHUB_OUTPUT="$decide_runner/output" GITHUB_STEP_SUMMARY="$decide_runner/summary" DECIDE_STATE_DIR="$decide_state" GH_TOKEN="test-token" bash --noprofile --norc -eo pipefail "$block_sh" 2>"$block_err" || code=$?
+    env -i PATH="$decide_dir/bin:$orig_path" HOME="$tmp" FIBER_CHECK_RUN="${FIBER_CHECK_RUN:-}" RUNNER_TEMP="$decide_runner" GITHUB_SHA="1111111111111111111111111111111111111111" GH_REPO="aakshintala/fiber" GITHUB_OUTPUT="$decide_runner/output" GITHUB_STEP_SUMMARY="$decide_runner/summary" DECIDE_STATE_DIR="$decide_state" GH_TOKEN="test-token" bash --noprofile --norc -eo pipefail "$block_sh" 2>"$block_err" || code=$?
   else
-    env -i PATH="$decide_dir/bin:$orig_path" HOME="$tmp" RUNNER_TEMP="$decide_runner" GITHUB_SHA="1111111111111111111111111111111111111111" GH_REPO="aakshintala/fiber" GITHUB_OUTPUT="$decide_runner/output" GITHUB_STEP_SUMMARY="$decide_runner/summary" DECIDE_STATE_DIR="$decide_state" bash --noprofile --norc -eo pipefail "$block_sh" 2>"$block_err" || code=$?
+    env -i PATH="$decide_dir/bin:$orig_path" HOME="$tmp" FIBER_CHECK_RUN="${FIBER_CHECK_RUN:-}" RUNNER_TEMP="$decide_runner" GITHUB_SHA="1111111111111111111111111111111111111111" GH_REPO="aakshintala/fiber" GITHUB_OUTPUT="$decide_runner/output" GITHUB_STEP_SUMMARY="$decide_runner/summary" DECIDE_STATE_DIR="$decide_state" bash --noprofile --norc -eo pipefail "$block_sh" 2>"$block_err" || code=$?
   fi
   if [ "$code" -ne 0 ]; then
     decide_failed="$base"
