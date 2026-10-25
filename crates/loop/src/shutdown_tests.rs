@@ -656,6 +656,9 @@ fn a_normal_end_releases_running_extension_jobs_before_its_first_drain() {
     jobs.end("j_1", &inbox);
     jobs.end("j_2", &inbox);
     ran(&finished);
+    // (`docs/tools.md`, "Background jobs"): a session that ends normally
+    // stops an extension job, so the only stop is the still-running `j_2`
+    // one above; an ended job gets no further stop.
     let extra_stops: Vec<JobId> = std::iter::from_fn(|| stops.try_recv().ok()).collect();
     assert!(
         extra_stops.is_empty(),
