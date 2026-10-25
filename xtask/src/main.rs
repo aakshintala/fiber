@@ -73,6 +73,7 @@ mod must_succeed;
 mod rules;
 mod select;
 mod site;
+mod stress;
 mod ticket;
 
 use std::collections::{BTreeMap, BTreeSet};
