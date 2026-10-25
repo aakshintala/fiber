@@ -63,6 +63,7 @@ is a real child session process, because it is Fiber. The fakes are:
 - child processes that misbehave on purpose: ignore SIGTERM, leave descendants,
   escape their process group
 - a fixture Lua extension that registers a tool, a provider and each hook
+- a process extension fixture: a checked-in Rust program speaking the process wire over its stdin and stdout, with protocol modes and acknowledged holds, driven by a shared controller with bounded waits, capture and cleanup
 - a local OAuth token endpoint
 - a refused address, loopback port 1: a connect is reset, and a bind of port 0
   never draws it, so no concurrent listener can take it
