@@ -1008,7 +1008,7 @@ jobs:
         run: |
           out=$RUNNER_TEMP/bench
           args=(--head "$out/head.json" --doc docs/performance.md --event "$GITHUB_EVENT_NAME"
-            --comment "$out/bench-comment.md")
+            --comment "$out/bench-comment.md" --remeasure "$out/remeasure-skip")
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             args+=(--base "$out/base.json")
             if [ -f "$RUNNER_TEMP/release/base/commit" ]; then
@@ -1021,6 +1021,38 @@ jobs:
           fi
           status=0
           cargo xtask bench-report "${args[@]}" || status=$?
+          # A breached gated timing row is remeasured alone in this job, 4
+          # more samples per side, and judged on all 7: the skip list holds
+          # every timing workload but the breached rows. A failed harness
+          # run keeps the step red and never passes; only a successful one
+          # rejudges and overwrites the comment.
+          if [ "$status" -ne 0 ] && [ -s "$out/remeasure-skip" ]; then
+            harness=target/debug/examples/bench
+            remeasure_base=()
+            if [ -f "$RUNNER_TEMP/release/base/fiber" ]; then
+              remeasure_base=(--base-fiber "$RUNNER_TEMP/release/base/fiber"
+                --base-out "$out/base-extra.json")
+              if [ -f "$RUNNER_TEMP/release/base/paging" ]; then
+                remeasure_base+=(--base-paging "$RUNNER_TEMP/release/base/paging")
+              fi
+            fi
+            harness_status=0
+            "$harness" --fiber "$RUNNER_TEMP/release/head/fiber" \
+              --paging "$RUNNER_TEMP/release/head/paging" --out "$out/head-extra.json" \
+              --only timing --runs 4 --timing-runs 4 --skip-ten-turns \
+              --skip-rows "$(cat "$out/remeasure-skip")" \
+              "${remeasure_base[@]}" || harness_status=$?
+            if [ "$harness_status" -eq 0 ]; then
+              status=0
+              remeasure_args=("${args[@]}" --head-extra "$out/head-extra.json")
+              if [ -f "$out/base-extra.json" ]; then
+                remeasure_args+=(--base-extra "$out/base-extra.json")
+              fi
+              cargo xtask bench-report "${remeasure_args[@]}" || status=$?
+            else
+              status=1
+            fi
+          fi
           echo "status=$status" >> "$GITHUB_OUTPUT"
           # A fork's pull request gets no comment; the run's summary carries it.
           if [ -f "$out/bench-comment.md" ]; then
