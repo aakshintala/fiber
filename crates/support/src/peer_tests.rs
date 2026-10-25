@@ -118,6 +118,68 @@ fn ancestors_name_an_unreadable_parent() {
 }
 
 #[test]
+fn ancestors_name_a_repeated_pid() {
+    let read = Script {
+        parents: [(100, 50), (50, 100)].into_iter().collect(),
+        euids: [(100, 1000), (50, 1000)].into_iter().collect(),
+        ..Script::default()
+    };
+    assert_eq!(
+        super::ancestors(100, &read).unwrap_err(),
+        IncompleteWalk { pid: 100 }
+    );
+}
+
+#[test]
+fn ancestors_name_a_self_parent_pid() {
+    let read = Script {
+        parents: [(100, 100)].into_iter().collect(),
+        euids: [(100, 1000)].into_iter().collect(),
+        ..Script::default()
+    };
+    assert_eq!(
+        super::ancestors(100, &read).unwrap_err(),
+        IncompleteWalk { pid: 100 }
+    );
+}
+
+/// A chain of `depth` strict ancestors ending at PID 1: pids
+/// `start + 1` through `start + depth`, then PID 1.
+fn chain(start: u32, depth: usize) -> Script {
+    let mut parents = HashMap::new();
+    let mut euids = HashMap::new();
+    let mut child = start;
+    for step in 1..=depth {
+        let parent = start + u32::try_from(step).expect("test chain fits in u32");
+        parents.insert(child, parent);
+        euids.insert(parent, 1000);
+        child = parent;
+    }
+    parents.insert(child, 1);
+    euids.insert(1, 0);
+    Script {
+        parents,
+        euids,
+        ..Script::default()
+    }
+}
+
+#[test]
+fn ancestors_allow_4096_ancestors() {
+    let found = super::ancestors(10_000, &chain(10_000, 4096)).unwrap();
+    assert_eq!(found.len(), 4097);
+    assert_eq!(found.last(), Some(&ProcessInfo { pid: 1, euid: 0 }));
+}
+
+#[test]
+fn ancestors_name_the_4097th_ancestor() {
+    assert_eq!(
+        super::ancestors(10_000, &chain(10_000, 4097)).unwrap_err(),
+        IncompleteWalk { pid: 14_097 }
+    );
+}
+
+#[test]
 fn peer_pid_of_a_socket_pair_is_the_caller() {
     let (first, second) = UnixStream::pair().unwrap();
     assert_eq!(super::peer_pid(&first).unwrap(), std::process::id());

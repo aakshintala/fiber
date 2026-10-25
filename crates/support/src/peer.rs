@@ -4,6 +4,7 @@
 //! module knows nothing of Fiber commands; hub and doors recognize the
 //! session shape at their own refusal boundaries.
 
+use std::collections::HashSet;
 use std::os::unix::net::UnixStream;
 
 /// The kernel could not report a peer process id for the socket.
@@ -94,9 +95,14 @@ impl ProcessRead for KernelProcessRead {
 
 /// Every strict ancestor of `pid` through PID 1, nearest first. Reads each
 /// ancestor's effective uid and parent pid but never an argument vector.
-/// An unreadable effective uid or parent pid ends the walk with that pid.
-pub fn ancestors(pid: u32, read: &impl ProcessRead) -> Result<Vec<ProcessInfo>, IncompleteWalk> {
+/// An unreadable effective uid or parent pid ends the walk with that pid,
+/// as does a repeated pid (a kernel-data cycle) or a 4097th ancestor
+/// before PID 1 (an unbounded walk): both fail closed naming the repeated
+/// or excess pid. PID 1 itself always terminates the walk.
+pub fn ancestors(pid: u32, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, IncompleteWalk> {
     let mut ancestors = Vec::new();
+    let mut seen = HashSet::new();
+    seen.insert(pid);
     let mut child = pid;
     loop {
         let parent = read
@@ -105,13 +111,20 @@ pub fn ancestors(pid: u32, read: &impl ProcessRead) -> Result<Vec<ProcessInfo>, 
         if parent == 0 {
             return Ok(ancestors);
         }
+        if !seen.insert(parent) {
+            return Err(IncompleteWalk { pid: parent });
+        }
         let euid = read
             .euid(parent)
             .map_err(|_| IncompleteWalk { pid: parent })?;
-        ancestors.push(ProcessInfo { pid: parent, euid });
         if parent == 1 {
+            ancestors.push(ProcessInfo { pid: parent, euid });
             return Ok(ancestors);
         }
+        if ancestors.len() >= 4096 {
+            return Err(IncompleteWalk { pid: parent });
+        }
+        ancestors.push(ProcessInfo { pid: parent, euid });
         child = parent;
     }
 }
