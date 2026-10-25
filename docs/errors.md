@@ -415,7 +415,7 @@ Notices, for a failure outside any action or a login a person must finish:
 | `extension_incompatible` | event | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
 | `extension_missing` | event | configuration declares hooks but the `hooks` extension is not installed, so its declared hooks will not run; the message says to run `fiber extension install hooks` |
 | `extension_shadowed` | event | a repository's approved copy of an extension loads in place of the personal install of the same name, or in place of another version of it that another of the repository's extensions brings; the message names both versions |
-| `hook_failed` | event | a `non-blocking` hook, a watcher, or an extension delegate's `run` failed |
+| `hook_failed` | event | a `non-blocking` hook, a watcher, or an extension delegate's `run` failed; or an approved non-required repository hook's pinned copy could not be made: it is skipped with a notice naming it (`docs/extensions.md`, "Hooks") |
 | `hub_version` | event | the hub runs another Fiber version or commit than this terminal (`docs/tui.md`, "Notices") |
 | `instructions_large` | event | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
 | `login_url` | condition | an extension's `host.oauth.open` or `host.oauth.show` needs a person to finish a login, and a `full` client is attached; the message gives the URL to open, and the code to enter for a device-code login (`docs/extensions.md`, "Host calls") |

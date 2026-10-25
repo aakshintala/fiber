@@ -174,13 +174,18 @@ fn gathered_inside_symlinks_stay_frozen() {
         .to_owned();
     assert!(mapped_before.ends_with("a.sh"), "{mapped_before}");
     // Retarget the link after the load: the approved snapshot keeps the
-    // gathered resolution, so what runs does not change.
+    // gathered resolution, so what runs does not change. The frozen entry
+    // still points at the old target.
     fs::remove_file(repo.root().join("link.sh")).unwrap();
     repo.link("link.sh", &repo.root().join("b.sh"));
     assert_eq!(
-        approved.mapped("./link.sh"),
+        approved
+            .entry
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap(),
         mapped_before,
-        "the frozen map survives retargeting"
+        "the frozen entry survives retargeting"
     );
 }
 

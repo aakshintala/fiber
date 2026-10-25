@@ -42,26 +42,6 @@ pub(crate) struct ApprovedHook {
     pub named: BTreeMap<String, Named>,
 }
 
-impl ApprovedHook {
-    /// Maps one string to what runs: Inside to its pinned file, Outside and
-    /// unmapped to the original string. No file system access.
-    #[allow(
-        dead_code,
-        reason = "the session keeps the approved mapping for its life"
-    )]
-    pub(crate) fn mapped(&self, given: &str) -> String {
-        map_string_for(&self.named, &self.copy, given)
-    }
-}
-
-fn map_string_for(named: &BTreeMap<String, Named>, copy: &Path, given: &str) -> String {
-    match named.get(given) {
-        Some(Named::Inside(rel)) => copy.join(rel).display().to_string(),
-        Some(Named::Outside(_)) => given.to_owned(),
-        None => given.to_owned(),
-    }
-}
-
 /// A hook whose approved copy could not be made.
 #[derive(Debug)]
 #[allow(

@@ -177,6 +177,24 @@ fn overlay_debug_hides_values() {
 }
 
 #[test]
+fn overlay_debug_keeps_structure_while_hiding_values() {
+    // An empty `Debug` would also hide the secret, so assert the structure
+    // survives: the type name and the overlay key appear, while the value
+    // does not (`docs/configuration.md`, "Extension settings": Debug is free
+    // of values). Flipping `fmt` to an empty struct fails this test.
+    let setup = Setup::new();
+    let mut config = setup.load(&[]).unwrap();
+    config
+        .extensions_mut()
+        .set_overlay(ACME, json!({"a": "secret-value"}));
+    let debug = format!("{:?}", config.extensions());
+    assert!(debug.contains("ExtensionSettings"), "{debug}");
+    assert!(debug.contains("overlay"), "{debug}");
+    assert!(debug.contains(ACME), "{debug}");
+    assert!(!debug.contains("secret-value"), "{debug}");
+}
+
+#[test]
 fn withheld_name_leaves_the_person_s_entry_unchanged() {
     let setup = Setup::new();
     setup.write(
@@ -246,6 +264,10 @@ fn repository_cannot_set_hooks_order_or_hook_timeout() {
         .map(|n| n.message.clone())
         .collect();
     ignored.sort();
+    // Two person-only keys are set above, so two notices follow from
+    // `docs/configuration.md`, "What a repository may set" ("a person-only
+    // key gets a `notice` naming the key and the file, and the value is
+    // ignored").
     assert_eq!(ignored.len(), 2, "{:?}", config.notices());
     assert!(
         ignored.iter().any(|m| m.contains("hooks.order")),

@@ -315,8 +315,12 @@ impl SessionExtensions {
             if has_new_approved {
                 continue;
             }
+            // A failed gather keeps the running snapshot: the replacement was
+            // never classified, so the old copy stays held until an approved
+            // and materialized replacement swaps it.
             let new_has_entry = repository.hooks.contains_key(name)
-                || repository.hook_failures.iter().any(|f| &f.name == name);
+                || repository.hook_failures.iter().any(|f| &f.name == name)
+                || repository.hooks_failed;
             if !new_has_entry {
                 continue;
             }
@@ -352,24 +356,15 @@ impl SessionExtensions {
             .collect()
     }
 
-    /// The approved required hooks whose pinned copies could not be made, by
-    /// name: what the required gate fails the start with. The repository's
-    /// `required` decides, never the merged person boolean.
-    pub fn hook_required_failures(&self) -> Vec<String> {
+    /// The first approved required hook whose pinned copy could not be made,
+    /// with what making it failed with: what the required gate fails the
+    /// start with. The repository's `required` decides, never the merged
+    /// person boolean.
+    pub fn first_hook_required_failure(&self) -> Option<(String, String)> {
         self.hook_failures
             .iter()
-            .filter(|failure| failure.required)
-            .map(|failure| failure.name.clone())
-            .collect()
-    }
-
-    /// What making the approved copy of `name` failed with, for the required
-    /// gate's message.
-    pub fn hook_failure_message(&self, name: &str) -> Option<String> {
-        self.hook_failures
-            .iter()
-            .find(|failure| failure.name == name)
-            .map(|failure| failure.error.to_string())
+            .find(|failure| failure.required)
+            .map(|failure| (failure.name.clone(), failure.error.to_string()))
     }
 
     /// One filtered `Config` clone for this session: the raw configuration
@@ -453,8 +448,9 @@ impl SessionExtensions {
         session.notices.append(&mut candidate_notices);
         session.holds = repository.holds;
         session.required = repository.required;
-        session.has_repository_hooks =
-            !repository.hooks.is_empty() || !repository.hook_failures.is_empty();
+        session.has_repository_hooks = !repository.hooks.is_empty()
+            || !repository.hook_failures.is_empty()
+            || repository.hooks_failed;
         for (name, state) in &repository.hooks {
             if let crate::repository::HookState::Approved(snapshot) = state {
                 session

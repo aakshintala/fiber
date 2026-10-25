@@ -44,6 +44,11 @@ pub struct RepositorySet {
     /// repository's `required`.
     #[allow(dead_code, reason = "the session gate reads required copy failures")]
     pub(crate) hook_failures: Vec<super::hooks::HookFailure>,
+    /// Hook gathering failed, so the repository contribution stays withheld:
+    /// `hooks` and `hook_failures` are empty, but the session still filters
+    /// the repository layer instead of passing it through raw
+    /// (`docs/extensions.md`, "Hooks declared in configuration").
+    pub(crate) hooks_failed: bool,
 }
 
 impl RepositorySet {
@@ -68,10 +73,14 @@ impl RepositorySet {
         // A declaration that fails to read, or a workspace that no longer
         // exists, gives no entry and no notice: the offer step reads the
         // same declarations and reports them, so a second report would say
-        // it twice.
+        // it twice. Hook gathering is marked failed so the session still
+        // withholds the repository contribution instead of passing it raw.
         let items = match declared_items(workspace, clock.as_ref()) {
             Ok(items) => items,
-            Err(_) => return set,
+            Err(_) => {
+                set.hooks_failed = true;
+                return set;
+            }
         };
         let declared: Vec<&RepoItem> = items
             .iter()
@@ -167,6 +176,9 @@ impl RepositorySet {
             Err(_) => {
                 // Gathering hooks failed: the offer step reports it, so no
                 // second report here, and approved extensions still load.
+                // The repository hook contribution stays withheld: the
+                // session filters it to nothing instead of passing it raw.
+                set.hooks_failed = true;
             }
         }
         set

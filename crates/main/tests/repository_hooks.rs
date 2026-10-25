@@ -12,6 +12,7 @@
 mod support;
 
 use std::fs;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -103,12 +104,17 @@ impl Setup {
     }
 
     fn git_init(&self) {
-        let status = Command::new("git")
-            .args(["init", "-q"])
+        // Every blocking wait runs under the test's deadline
+        // (`docs/testing.md`, "Waits and timeouts").
+        let mut git = Command::new("git");
+        git.args(["init", "-q"])
             .arg(self.workspace())
-            .status()
-            .unwrap();
-        assert!(status.success());
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = support::run_to_exit(self.deadline, "git init", git);
+        assert!(output.status.success(), "{output:?}");
     }
 
     fn declare_hooks(&self, hooks: &Value) {
@@ -119,6 +125,8 @@ impl Setup {
     }
 
     fn approve(&self) {
+        // The approve run waits under the test's deadline, like `run_ask`
+        // below (`docs/testing.md`, "Waits and timeouts").
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(["approve", "--yes"])
@@ -128,10 +136,11 @@ impl Setup {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", self.root.path())
             .env("FIBER_HOME", self.home())
+            .process_group(0)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let output = command.output().unwrap();
+        let output = support::run_to_exit(self.deadline, "`fiber approve` to exit", command);
         assert!(output.status.success(), "{output:?}");
     }
 
@@ -338,6 +347,9 @@ fn break_copy_source(setup: &Setup, rel: &str) {
     use std::os::unix::fs::PermissionsExt;
     // Remove the finished pinned copy and its ready marker, keeping the
     // approval record: the next start must rebuild from the source.
+    // The fixture declares exactly one hook, so exactly one approval file
+    // holds its hash (`docs/extensions.md`, "Pinning": approving copies
+    // those files into Fiber home).
     let approvals: Vec<String> = fs::read_dir(setup.home().join("projects"))
         .unwrap()
         .flat_map(|e| fs::read_dir(e.unwrap().path().join("approvals")).unwrap())
@@ -394,6 +406,46 @@ fn approved_required_copy_failure_fails_start_with_hook_failed() {
 }
 
 #[test]
+fn approved_required_copy_failure_fails_without_the_hooks_extension() {
+    // The required gate consumes classified copy failures, never loaded
+    // extension names (`docs/extensions.md`, "Hooks declared in configuration":
+    // a `required` copy failure stops the start). Without the `hooks`
+    // extension installed, the same failure still exits 1 with `hook_failed`
+    // naming the hook. Removing the gate's failure branch lets this start and
+    // fails this test.
+    let setup = Setup::new();
+    let server = ProviderServer::start([support::hello()]).unwrap();
+    setup.provider(&server);
+    setup.git_init();
+    setup.write_repo("scripts/run.sh", "#!/bin/sh\necho hi\n");
+    setup.declare_hooks(&json!({"fmt": {
+        "point": "session_start",
+        "command": "/bin/sh",
+        "args": ["scripts/run.sh"],
+        "timeout": 10000,
+        "on_failure": "non-blocking",
+        "required": true,
+    }}));
+    setup.approve();
+    break_copy_source(&setup, "scripts/run.sh");
+    let run = setup.run_ask();
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    let exited = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "fiber_exited")
+        .expect("fiber_exited");
+    assert_eq!(exited["payload"]["error"]["code"], "hook_failed");
+    assert!(
+        exited["payload"]["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("`fmt`"),
+        "exit 1 names the hook without the extension: {exited:?}"
+    );
+}
+
+#[test]
 fn approved_optional_copy_failure_skips_with_a_hook_failed_notice() {
     let setup = Setup::new();
     let server = ProviderServer::start([support::hello()]).unwrap();
@@ -416,17 +468,24 @@ fn approved_optional_copy_failure_skips_with_a_hook_failed_notice() {
 fn deliberately_skipped_required_does_not_fail() {
     use contract::events::OfferedKind;
     use std::collections::BTreeSet;
+    let deadline = support::Deadline::start();
     let tmp = fakes::TempDir::new("fiber-repo-hooks-skip");
     let home = tmp.path().join("h");
     let workspace = tmp.path().join("w");
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&workspace).unwrap();
+    // Every blocking wait runs under the test's deadline
+    // (`docs/testing.md`, "Waits and timeouts").
+    let mut git = Command::new("git");
+    git.args(["init", "-q"])
+        .arg(&workspace)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     assert!(
-        Command::new("git")
-            .args(["init", "-q"])
-            .arg(&workspace)
-            .status()
-            .unwrap()
+        support::run_to_exit(deadline, "git init", git)
+            .status
             .success()
     );
     let write_repo = |rel: &str, text: &str| {
@@ -526,7 +585,10 @@ fn deliberately_skipped_required_does_not_fail() {
         std::sync::Arc::new(fakes::FakeLock::new()),
         set2,
     );
-    assert!(reloaded.hook_required_failures().is_empty());
+    // A deliberately skipped required replacement is not a copy failure:
+    // the required gate sees no failure (`docs/extensions.md`, "Hooks
+    // declared in configuration").
+    assert!(reloaded.first_hook_required_failure().is_none());
     assert!(
         !reloaded
             .hooks_config(&config)

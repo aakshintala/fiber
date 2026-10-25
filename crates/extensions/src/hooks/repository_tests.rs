@@ -4,7 +4,6 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 
 use config::{Config, ProjectKey, Sources};
@@ -31,12 +30,10 @@ impl Setup {
         let tmp = fakes::TempDir::new("fiber-hooks-session");
         fs::create_dir_all(tmp.path().join("home")).unwrap();
         fs::create_dir_all(tmp.path().join("workspace")).unwrap();
-        let status = Command::new("git")
-            .args(["init", "-q"])
-            .arg(tmp.path().join("workspace"))
-            .status()
-            .unwrap();
-        assert!(status.success());
+        // `fakes::git` runs under `MUST_SUCCEED_WITHIN`, so a stalled git
+        // fails naming the wait instead of hanging the runner
+        // (`docs/testing.md`, "Waits and timeouts").
+        fakes::git::git(&tmp.path().join("workspace"), &["init", "-q"]);
         Self { tmp }
     }
 
@@ -217,8 +214,33 @@ fn host_config_set_stays_visible_under_the_overlay() {
 
 #[test]
 fn skip_retains_old_and_approval_switches_to_new() {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    fn run_pinned(path: &str) -> String {
+        // Every blocking wait runs under a deadline (`docs/testing.md`,
+        // "Waits and timeouts"): the pinned script runs on a thread and the
+        // test receives its output with `MUST_SUCCEED_WITHIN`.
+        let child = Command::new("/bin/sh")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let output = fakes::finished(
+            "run the pinned hook",
+            child,
+            &[],
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        );
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    }
+
     let setup = Setup::new();
-    setup.write("scripts/v1.sh", "v1\n");
+    setup.write("scripts/v1.sh", "#!/bin/sh\necho v1\n");
     setup.hooks(&json!({"fmt": {"point": "after_tool", "command": "scripts/v1.sh", "timeout": 1000, "on_failure": "non-blocking"}}));
     let v1_hash = setup.approve("fmt");
     let config = setup.config(&[]);
@@ -229,9 +251,12 @@ fn skip_retains_old_and_approval_switches_to_new() {
         .get(&config::full_name("hooks"), &["hooks"], "hooks.fmt.command")
         .unwrap()
         .unwrap();
-    assert!(v1_command.as_str().unwrap().contains(&v1_hash));
-    // Edit to v2, observe the replacement, skip it, reload: the old still runs.
-    setup.write("scripts/v2.sh", "v2\n");
+    let v1_path = v1_command.as_str().unwrap().to_owned();
+    assert!(v1_path.contains(&v1_hash));
+    // The old approved copy runs.
+    assert_eq!(run_pinned(&v1_path), "v1\n");
+    // Edit to v2 and observe the replacement offer before skipping it.
+    setup.write("scripts/v2.sh", "#!/bin/sh\necho v2\n");
     setup.hooks(&json!({"fmt": {"point": "after_tool", "command": "scripts/v2.sh", "timeout": 1000, "on_failure": "non-blocking"}}));
     let items = declared_items(&setup.workspace(), &*FakeClock::new()).unwrap();
     let v2_item = items
@@ -240,6 +265,16 @@ fn skip_retains_old_and_approval_switches_to_new() {
         .unwrap();
     let v2_hash = hash(&mut Index::load(&setup.home()), &v2_item).unwrap();
     assert_ne!(v1_hash, v2_hash);
+    let store = Store::new(&setup.home(), &project(), FakeClock::new());
+    let mut index = Index::load(&setup.home());
+    let items = declared_items(&setup.workspace(), &*FakeClock::new()).unwrap();
+    let offered = crate::pending(&store, &mut index, items).unwrap();
+    assert!(
+        offered
+            .iter()
+            .any(|p| p.offered.name == "fmt" && p.offered.hash == v2_hash),
+        "the edited hook is offered as its replacement"
+    );
     let mut skipped = BTreeSet::new();
     skipped.insert(("fmt".to_owned(), v2_hash.clone()));
     let reloaded = session.reload_repository(
@@ -259,6 +294,8 @@ fn skip_retains_old_and_approval_switches_to_new() {
         kept, v1_command,
         "a skipped replacement keeps the old snapshot"
     );
+    // The old copy still runs across the skip.
+    assert_eq!(run_pinned(kept.as_str().unwrap()), "v1\n");
     // Approve v2 and reload: the new copy runs.
     Store::new(&setup.home(), &project(), FakeClock::new())
         .approve(&v2_item, &v2_hash)
@@ -278,6 +315,7 @@ fn skip_retains_old_and_approval_switches_to_new() {
         .unwrap();
     assert!(now.as_str().unwrap().contains(&v2_hash));
     assert_ne!(now, v1_command);
+    assert_eq!(run_pinned(now.as_str().unwrap()), "v2\n");
 }
 
 #[test]
@@ -355,6 +393,124 @@ fn non_required_copy_failures_leave_a_hook_failed_notice() {
 }
 
 #[test]
+fn gather_failure_withholds_repository_contribution() {
+    // A read/hash failure on a named file fails the whole hook gather: the
+    // set marks it failed and the session withholds the repository layer
+    // instead of passing it raw (`docs/extensions.md`, "Hooks declared in
+    // configuration": unapproved entries are withheld). Flipping either
+    // `hooks_failed` assignment or the `has_repository_hooks` disjunct lets
+    // the raw repository entry through and fails this test.
+    let setup = Setup::new();
+    setup.write("scripts/run.sh", "#!/bin/sh\necho hi\n");
+    setup.hooks(&json!({"fmt": {"point": "after_tool", "command": "scripts/run.sh", "timeout": 1000, "on_failure": "non-blocking"}}));
+    let digest = setup.approve("fmt");
+    // Rewrite the named file with different bytes and deny reads: the index
+    // cache misses on size/mtime, the open fails, hashing fails, and the whole
+    // hook gather fails even though the declaration itself still reads.
+    // (`resolve` still sees the file via metadata, so gathering reaches the
+    // hash; a deleted file would instead read as unapproved new content.)
+    setup.write(
+        "scripts/run.sh",
+        "#!/bin/sh\necho changed to miss the index cache\n",
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let file = setup.workspace().join("scripts/run.sh");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(
+            fs::File::open(&file).is_err(),
+            "the gather source cannot be read"
+        );
+    }
+    let set = setup.set(&empty_skipped());
+    assert!(set.hooks_failed, "a hash failure marks the gather failed");
+    assert!(set.hooks.is_empty());
+    assert!(set.hook_failures.is_empty());
+    let config = setup.config(&[]);
+    // The raw repository layer still declares `fmt`.
+    let (raw, _) = config
+        .extensions()
+        .merged(&config::full_name("hooks"), &["hooks"])
+        .unwrap();
+    assert!(raw.get("hooks").and_then(|v| v.get("fmt")).is_some());
+    let session = setup.load(&config, set);
+    let filtered = session.hooks_config(&config);
+    let (merged, _) = filtered
+        .extensions()
+        .merged(&config::full_name("hooks"), &["hooks"])
+        .unwrap();
+    assert!(
+        merged.get("hooks").and_then(|v| v.get("fmt")).is_none(),
+        "the failed gather withholds the repository entry: {merged:?}"
+    );
+    // The approval record is untouched: the digest still names the approved
+    // content.
+    assert!(!digest.is_empty());
+}
+
+#[test]
+fn failed_gather_retains_running_snapshot_and_hold() {
+    // The old approved copy keeps running when a replacement cannot even be
+    // gathered: only an approved and materialized replacement swaps it
+    // (`docs/extensions.md`, "Hooks declared in configuration"). Removing the
+    // `hooks_failed` disjunct in `reload_repository` drops the old snapshot
+    // and fails this test; removing the hold push loses the hold.
+    let setup = Setup::new();
+    setup.write("scripts/v1.sh", "#!/bin/sh\necho v1\n");
+    setup.hooks(&json!({"fmt": {"point": "after_tool", "command": "scripts/v1.sh", "timeout": 1000, "on_failure": "non-blocking"}}));
+    let v1_hash = setup.approve("fmt");
+    let config = setup.config(&[]);
+    let session = setup.load(&config, setup.set(&empty_skipped()));
+    let v1_command = session
+        .hooks_config(&config)
+        .extensions()
+        .get(&config::full_name("hooks"), &["hooks"], "hooks.fmt.command")
+        .unwrap()
+        .unwrap();
+    assert!(v1_command.as_str().unwrap().contains(&v1_hash));
+    let holds_before = session.holds.len();
+    assert!(!session.hook_snapshots.is_empty());
+    // Rewrite the named file with different bytes and deny reads, as above,
+    // so the next gather fails entirely instead of reading as new content.
+    setup.write("scripts/v1.sh", "#!/bin/sh\necho changed\n");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let file = setup.workspace().join("scripts/v1.sh");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(
+            fs::File::open(&file).is_err(),
+            "the gather source cannot be read"
+        );
+    }
+    let failed = setup.set(&empty_skipped());
+    assert!(failed.hooks_failed);
+    let reloaded = session.reload_repository(
+        &setup.home(),
+        &config,
+        FakeClock::new(),
+        Arc::new(fakes::FakeLock::new()),
+        failed,
+    );
+    let kept = reloaded
+        .hooks_config(&config)
+        .extensions()
+        .get(&config::full_name("hooks"), &["hooks"], "hooks.fmt.command")
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept, v1_command, "a failed gather keeps the old snapshot");
+    assert!(
+        reloaded.hook_snapshots.contains_key("fmt"),
+        "the old snapshot survives the failed gather"
+    );
+    assert!(
+        reloaded.holds.len() >= holds_before,
+        "the old copy stays held: {} -> {}",
+        holds_before,
+        reloaded.holds.len()
+    );
+}
+
+#[test]
 fn required_copy_failures_are_queryable_by_repository_required() {
     let setup = Setup::new();
     setup.write("scripts/fmt.sh", "x\n");
@@ -365,5 +521,21 @@ fn required_copy_failures_are_queryable_by_repository_required() {
     fs::remove_file(setup.home().join("pinned").join(format!("{hash}.ready"))).unwrap();
     fs::create_dir(setup.home().join("pinned").join(format!("{hash}.ready"))).unwrap();
     let session = setup.load(&setup.config(&[]), setup.set(&empty_skipped()));
-    assert_eq!(session.hook_required_failures(), vec!["fmt".to_owned()]);
+    // The repository marks `fmt` `required`, so its copy failure is what the
+    // required gate fails the start with (`docs/extensions.md`, "Hooks
+    // declared in configuration": a `required` copy failure stops the start).
+    // The message is the copy failure itself, never empty: flipping it to
+    // empty fails this test.
+    let (name, detail) = session
+        .first_hook_required_failure()
+        .expect("the required copy failure");
+    assert_eq!(name, "fmt");
+    assert!(
+        !detail.is_empty(),
+        "the failure names its cause: {detail:?}"
+    );
+    assert!(
+        detail.contains("fmt") || !detail.contains("it did not start"),
+        "the failure carries the copy error: {detail:?}"
+    );
 }

@@ -78,10 +78,7 @@ pub(crate) fn required(
             ),
         ));
     }
-    if let Some(name) = extensions.hook_required_failures().into_iter().next() {
-        let detail = extensions
-            .hook_failure_message(&name)
-            .unwrap_or_else(|| "it did not start".to_owned());
+    if let Some((name, detail)) = extensions.first_hook_required_failure() {
         return Err(crate::failed(
             contract::ErrorCode::HookFailed,
             format!("The repository requires the hook `{name}`, which did not run: {detail}"),

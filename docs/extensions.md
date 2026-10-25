@@ -1328,7 +1328,8 @@ entries instead of replacing the list:
   false, read only from the repository's file, as
   `mcp.servers."<name>".required` is for a server. A required entry nobody
   approved fails a run that has nobody to ask, with `hook_unapproved` ("Code a
-  repository ships").
+  repository ships"). An approved entry runs from its pinned copy. When that copy cannot be made, a `required` entry stops the session starting, and Fiber exits with error `hook_failed` naming it; any other entry is skipped, with a `notice` with code `hook_failed` naming it.
+- **A repository entry with the name of one of the person's.** An unapproved repository entry is withheld before the layers merge, so the person's entry of that name runs unchanged. Once approved, it merges key by key like any other layer.
 
 The command runs as `host.exec` runs a program ("Host calls"): in the
 session's workspace, in its own process group, with the session's
