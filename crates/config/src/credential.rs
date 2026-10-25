@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use contract::Secret;
 use serde_json::{Map, Value};
+use support::lock;
 
 use crate::credential_origin::Located;
 use crate::error::ConfigError;
@@ -55,7 +56,7 @@ impl CommandRuns {
     /// the command again. The lock is held across the run, so concurrent
     /// callers share one run.
     fn once(&self, key: RunKey, run: impl FnOnce() -> Ran) -> Ran {
-        let mut runs = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut runs = lock(&self.0);
         if let Some(secret) = runs.get(&key) {
             return Ok(secret.clone());
         }

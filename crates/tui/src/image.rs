@@ -11,6 +11,7 @@ use contract::SessionId;
 use contract::shapes::ContentPart;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use support::lock;
 
 use crate::app::Target;
 use crate::rows::Rows;
@@ -201,9 +202,7 @@ impl IdAllocator {
 
     /// A poisoned lock still holds allocated ids, so keep them monotonic.
     fn lock(&self) -> MutexGuard<'_, IdState> {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        lock(&self.0)
     }
 }
 
