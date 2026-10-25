@@ -481,7 +481,7 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     )])
     .unwrap();
     // Hold the child's response until the test releases it: the request
-    // is recorded first, so `await_request` signals while the child waits,
+    // is recorded first, so `await_requests` signals while the child waits,
     // and the cache must still equal `old` then.
     server.hold();
     extensions::plan(
@@ -555,7 +555,7 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     // The held response keeps the child waiting, so the cache must still
     // equal `old` here and differ only after `release()`.
     assert!(
-        server.await_request(setup.deadline),
+        server.await_requests(1, setup.deadline),
         "the refresh child never requested the model list: saw {} requests for {} (refresh child pids: {:?})",
         server.requests().len(),
         file.display(),

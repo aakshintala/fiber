@@ -390,13 +390,6 @@ impl ProviderServer {
         guard.requests.len() >= count
     }
 
-    /// Waits, at most what remains of `deadline`, until a request is recorded.
-    /// True once one is; false at the deadline. Dropping the server ends no
-    /// wait early.
-    pub fn await_request(&self, deadline: Deadline) -> bool {
-        self.await_requests(1, deadline)
-    }
-
     /// Holds every response until [`ProviderServer::release`]. A request is
     /// still recorded first, so [`ProviderServer::await_requests`] sees it
     /// while the client waits for the body. A held response never counts
