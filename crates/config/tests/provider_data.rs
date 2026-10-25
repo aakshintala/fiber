@@ -626,7 +626,7 @@ fn required_fields_only_read_every_default() {
     assert!(manifest.secrets.is_empty());
     setup.write(
         &dir.join("extension.json"),
-        &format!(r#"{BASE}, "memory_mib": null, "opening": {{}}, "process": {{"program": "x"}}}}"#),
+        &format!(r#"{BASE}, "memory_mib": null, "opening": {{}}, "process": {{"program": "x", "exit_timeout_ms": 0}}}}"#),
     );
     let manifest = read_manifest(&dir).unwrap();
     assert_eq!(manifest.memory_mib, None);

@@ -354,6 +354,7 @@ rusqlite carries SQLite's C source.
 | Syntax highlighting in the terminal | see below |
 | The hub's websocket server | RFC 6455's server side for text messages; tungstenite's blocking socket has one owner, and the hub writes to a connection from several threads |
 | The hub client's websocket | RFC 6455's client side for text messages; tungstenite's blocking socket has one owner, and the client reads and writes a connection from two threads |
+| A `SKILL.md` header's YAML | four keys (`name`, `description`, `argument-hint`, `disable-model-invocation`) in plain, quoted or block scalars; a YAML crate parses the whole language to read them |
 
 The hub's websocket server peaks at 2,704 KiB of macOS footprint with no
 client and 4,144 KiB with 10 authenticated websocket clients: the hub's

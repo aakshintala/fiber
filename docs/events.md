@@ -1213,6 +1213,37 @@ Durable. A program an extension ran outside a tool call.
 | `cwd` | string | yes | its working directory |
 | `process` | `process` | yes | how it ended |
 
+#### `extension_hello`
+
+Ephemeral. The first line Fiber sends a process extension, with the session's
+identity, why it started, its workspace, the extension's data directories and
+its folded state. Sent again after a restart, with the state as it stands in
+the session. Behaviour is `docs/extensions.md` ("Process extensions").
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `session_id` | string | yes | the session's id |
+| `reason` | string | yes | why the session started: `new`, `resume`, `fork`, `rewind` or `handoff`; a closed set |
+| `workspace` | string | yes | the workspace root |
+| `data_dirs` | object | yes | the paths `host.data_dir` returns: `machine` and `project` path strings |
+| `state` | object | yes | the extension's folded state, as `state.get` reads it |
+
+#### `extension_request`
+
+Ephemeral. One callback Fiber asks a process extension to run, answered with a
+driver `reply` naming its `request_id`. Stream items, meaning hooks, watcher
+deliveries and commands, are sent one at a time, each after the reply to the
+last one; tool calls are sent as they arrive, so several can be outstanding. A
+reply to a request that is no longer pending is rejected `stale_request` and
+changes nothing. Behaviour is `docs/extensions.md` ("Process extensions").
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `request_id` | string | yes | the request the extension answers |
+| `registration` | string | yes | the registering `call` command's id |
+| `key` | string | yes | the function's key, or its 1-based position as a string for a positional argument |
+| `args` | array | yes | the arguments the Lua function receives, as a JSON array |
+
 Extension state is a fold: the latest `extension_state_set` or
 `extension_state_unset` for each extension and key, up to the point being
 read. A write made inside a hook is written just before the line that hook
@@ -1388,6 +1419,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `status` | `running` (boolean, always true), `fiber_version` (string), `clients` (integer, the open connections, the asker included) and `variables` (object, as `session_started` carries it: the environment sessions the hub starts now get), over the hub (`docs/invocation.md`, "The hub") |
 | `stop` | `sessions_stopped` (integer, the sessions that confirmed closed), with `sessions` true; `result` is absent without `sessions`, over the hub (`docs/invocation.md`, "The hub") |
 | `placeholder_env` | `values` (object, the hub's captured value by requested placeholder name, absent names omitted, never logged), over the hub (`docs/invocation.md`, "What the hub speaks") |
+| `call` | `value` (any JSON value, absent when the call returns nothing), what the Lua call returns (`docs/extensions.md`, "Process extensions") |
 
 #### `command_rejected`
 

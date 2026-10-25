@@ -109,8 +109,8 @@ pub(crate) fn run_with(
     };
     catch_interrupts();
     let restore = term::Guard;
-    // Home is always set, so the first frame draws at once: it runs no
-    // child process and reads nothing.
+    // The first frame waits for the opening pass and local TUI loading,
+    // never a child process or a tty/hub read.
     let hover = launch.hover;
     let Ok((width, height)) = term::setup(&tty, hover) else {
         return Ok(1);
@@ -144,6 +144,7 @@ pub(crate) fn run_with(
     let models = std::mem::take(&mut launch.models);
     let router = crate::remote::Router::new();
     let seams = crate::remote::seams(&launch.location, launch.configure.take(), models, &router);
+    let extensions = launch.extensions.clone();
     let models = seams.models;
     if let Some(remote) = seams.remote {
         app.set_remote(remote);
@@ -208,8 +209,16 @@ pub(crate) fn run_with(
     crate::surface::init(&|name| std::env::var(name).ok());
     // The first frame's time: elapsed times and animation agree from it.
     app.set_now(clock.now(), contract::clock::wall_ms(clock.wall()));
-    // The first frame waits on nothing: the queries are out, and nothing
-    // reads the tty or the hub until it is drawn.
+    // Loading is synchronous: read, compile and initialization share one
+    // deadline started before reading. Uninterruptible overruns fail on return.
+    // The queries are out; no tty or hub read precedes the first frame.
+    if let Some(loader) = extensions {
+        let (renderer, notices) = loader.load();
+        app.use_renderer(renderer);
+        for (code, text) in notices {
+            app.push_notice(&code, text);
+        }
+    }
     if screen.draw(&mut app, None).is_err() {
         return Ok(1);
     }

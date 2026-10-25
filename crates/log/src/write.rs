@@ -862,6 +862,8 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         | Event::ExtensionUi(_)
         | Event::ExtensionMessage(_)
         | Event::ExtensionLog(_)
+        | Event::ExtensionHello(_)
+        | Event::ExtensionRequest(_)
         | Event::JobDelta(_)
         | Event::CommandAccepted(_)
         | Event::CommandRejected(_) => false,

@@ -14,6 +14,30 @@ use crate::{Error, ErrorCode};
 
 const MS: Duration = Duration::from_millis(1);
 
+#[test]
+fn loading_deadline_starts_before_source_read_and_precedes_read_error() {
+    // Owner ruling 6397275683: read, compile and init share LOAD_TIMEOUT.
+    for read_error in [false, true] {
+        let clock = FakeClock::new();
+        let result = TuiVm::load_with_source(
+            "test",
+            || {
+                clock.advance(crate::lua::LOAD_TIMEOUT + MS);
+                if read_error {
+                    Err(Error::TuiLua("read failed".into()))
+                } else {
+                    Ok(
+                        "fiber.slot('notice', {timeout=100, render=function() return {} end})"
+                            .into(),
+                    )
+                }
+            },
+            clock.clone(),
+        );
+        assert!(matches!(result, Err(Error::TuiTimeout)), "{result:?}");
+    }
+}
+
 /// A VM loaded from `source` on a clock that moves only when a test says.
 fn vm(source: &str) -> (Arc<FakeClock>, TuiVm) {
     let clock = FakeClock::new();
