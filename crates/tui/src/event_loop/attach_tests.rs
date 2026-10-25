@@ -3470,6 +3470,7 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         .iter()
         .filter(|command| command["command"] == "commands")
         .collect();
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
     assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
 }
 
@@ -3507,6 +3508,7 @@ fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
         .position(|command| command["command"] == "subscribe" && command["args"]["level"] == "full")
         .expect("the full subscribe");
     let replayed = &seen_commands[full_at + 1..];
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
     assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
     assert!(
         replayed

@@ -49,6 +49,36 @@ impl Drop for OpenedHold {
     }
 }
 
+/// The loop's turn-start command wiring, shared by the new-session and
+/// resume construction paths: the refresh reads the current extension
+/// commands and replaces the session's rows (the same complete recompute
+/// the construction above builds with, after every reload too), while the
+/// sync keeps the reload baseline the next turn-start check measures
+/// against the installed answer.
+pub(crate) fn command_update_wiring(
+    current: &Arc<crate::session_extensions::Current>,
+    session: &Session,
+    skill_set: &r#loop::SkillSet,
+) -> (r#loop::CommandsRefresh, crate::reload::CommandsSync) {
+    // The loop's turn-start refresh reads the current extensions and
+    // replaces the session's rows: the same complete recompute the
+    // construction above builds with, after every reload too.
+    let commands_refresh = r#loop::CommandsRefresh {
+        extensions: Arc::new({
+            let current = Arc::clone(current);
+            move || current.get().commands()
+        }),
+        replace: session.commands_replacer(),
+    };
+    // A reload's install syncs the same baseline its rows replace, so
+    // the next turn-start check measures against the installed answer.
+    let commands_sync: crate::reload::CommandsSync = {
+        let skill_set = skill_set.clone();
+        Arc::new(move |runnable: &r#loop::RunnableCommands| skill_set.sync_commands(runnable))
+    };
+    (commands_refresh, commands_sync)
+}
+
 /// The internal session command: one session process bound at
 /// `run/<session_id>` (`docs/invocation.md`, "Processes"). The workspace
 /// is entered before signals are installed or any thread starts, so the
@@ -585,22 +615,7 @@ pub(crate) fn run_new(
         backend: extensions.search_backend(),
     };
     let current = Arc::new(crate::session_extensions::Current::new(extensions));
-    // The loop's turn-start refresh reads the current extensions and
-    // replaces the session's rows: the same complete recompute the
-    // construction above builds with, after every reload too.
-    let commands_refresh = r#loop::CommandsRefresh {
-        extensions: Arc::new({
-            let current = Arc::clone(&current);
-            move || current.get().commands()
-        }),
-        replace: session.commands_replacer(),
-    };
-    // A reload's install syncs the same baseline its rows replace, so
-    // the next turn-start check measures against the installed answer.
-    let commands_sync = {
-        let skill_set = skill_set.clone();
-        Arc::new(move |runnable: &r#loop::RunnableCommands| skill_set.sync_commands(runnable))
-    };
+    let (commands_refresh, commands_sync) = command_update_wiring(&current, &session, &skill_set);
     let readers =
         switching.credential_readers(switching.clone().closure(door), model.reference.clone());
     session.credentials(readers.labels, readers.admitted);

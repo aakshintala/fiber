@@ -334,6 +334,7 @@ fn turn_started(session: &str) -> Line {
 /// terminal asks again at each one.
 fn turn_started_answered(app: &mut App, session: &str) {
     let asked = commands(app.on_line(turn_started(session)));
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
     assert_eq!(asked.len(), 1);
     assert_eq!(asked[0]["command"], "commands");
     let id = asked[0]["id"]

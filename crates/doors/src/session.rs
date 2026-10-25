@@ -418,15 +418,6 @@ impl Session {
         *lock(&self.gate.commands) = commands;
     }
 
-    /// Replaces the stored `commands` rows: what the loop's turn-start
-    /// refresh calls through the replacer below when its skill check
-    /// changed the runnable set (`docs/invocation.md`, "What each command
-    /// does"). The rows are the complete recomputed answer, never a patch
-    /// over the visible list.
-    pub fn replace_commands(&self, commands: Vec<CommandInfo>) {
-        *lock(&self.gate.commands) = commands;
-    }
-
     /// A weak handle replacing the stored `commands` rows: the loop's
     /// turn-start refresh calls it with the complete recomputed answer.
     /// It holds the gate weakly and does nothing once the session closed.

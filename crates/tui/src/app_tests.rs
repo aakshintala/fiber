@@ -1000,6 +1000,7 @@ fn turn_started_asks_again_and_the_latest_answer_fills_the_list() {
     let mut app = app();
     let first = attached_asking(&mut app, now);
     let lines = app.on_line(turn_started(S_A, "hi"));
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
     assert_eq!(lines.len(), 1);
     let again = parse(&lines[0]);
     assert_eq!(again["command"], "commands");
@@ -1034,6 +1035,7 @@ fn each_replayed_turn_started_asks_commands_again() {
             envelope.seq = Some(contract::Seq(at));
         }
         let lines = app.on_line(line);
+        // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
         assert_eq!(lines.len(), 1, "replayed turn {at}");
         let asked = parse(&lines[0]);
         assert_eq!(asked["command"], "commands");

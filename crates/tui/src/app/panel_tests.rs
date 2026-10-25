@@ -946,6 +946,7 @@ fn the_acknowledgement_sends_the_branch_query_once() {
     // The turn asks `commands` again: answer with no rows so the
     // acknowledgement sends only its branch query.
     let asked = app.on_line(session_line(SESSION, "turn_started", json!({"input": []})));
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
     assert_eq!(asked.len(), 1);
     let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
     assert_eq!(asked["command"], "commands");

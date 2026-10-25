@@ -1860,6 +1860,7 @@ fn resume_open_replays_the_log_to_the_tail() {
         .iter()
         .filter(|command| command["command"] == "commands")
         .collect();
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
     assert_eq!(commands.len(), replay_turns + 1, "{commands:?}");
     let screen = shown(&lp);
     assert!(screen.contains("quokkas"), "{screen}");

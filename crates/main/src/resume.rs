@@ -588,22 +588,8 @@ fn resumed_session(
         backend: extensions.search_backend(),
     };
     let current = Arc::new(crate::session_extensions::Current::new(extensions));
-    // The loop's turn-start refresh reads the current extensions and
-    // replaces the session's rows: the same complete recompute the
-    // construction above builds with, after every reload too.
-    let commands_refresh = r#loop::CommandsRefresh {
-        extensions: Arc::new({
-            let current = Arc::clone(&current);
-            move || current.get().commands()
-        }),
-        replace: session.commands_replacer(),
-    };
-    // A reload's install syncs the same baseline its rows replace, so
-    // the next turn-start check measures against the installed answer.
-    let commands_sync = {
-        let skill_set = skill_set.clone();
-        Arc::new(move |runnable: &r#loop::RunnableCommands| skill_set.sync_commands(runnable))
-    };
+    let (commands_refresh, commands_sync) =
+        crate::session_command::command_update_wiring(&current, &session, &skill_set);
     let readers =
         switching.credential_readers(switching.clone().closure(door), model.reference.clone());
     session.credentials(readers.labels, readers.admitted);

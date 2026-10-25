@@ -1986,10 +1986,6 @@ fn the_commands_replacer_swaps_the_whole_commands_answer() {
         opened.session.gate.commands(),
         [command("old", "skill"), command("gone", "template")]
     );
-    opened
-        .session
-        .replace_commands(vec![command("new", "template")]);
-    assert_eq!(opened.session.gate.commands(), [command("new", "template")]);
     let replacer = opened.session.commands_replacer();
     replacer(vec![command("newer", "skill")]);
     assert_eq!(opened.session.gate.commands(), [command("newer", "skill")]);

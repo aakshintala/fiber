@@ -589,6 +589,7 @@ fn report_keys_keep_the_held_conversation_position() {
     // The replayed start asks `commands` again; answering with no rows
     // leaves the held row to the anchor below.
     let asked = app.on_line(held);
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
     assert_eq!(asked.len(), 1);
     let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
     assert_eq!(asked["command"], "commands");
