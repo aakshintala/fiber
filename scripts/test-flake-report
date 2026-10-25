@@ -165,54 +165,55 @@ awk '
 grep -Fq 'flake-classify' "$tmp/classify.sh" || fail "the classify step's script was not found in .github/workflows/ci.yml"
 grep -Fq 'git diff --name-only' "$tmp/classify.sh" || fail "the classify step's file lists were not found in .github/workflows/ci.yml"
 
-# The `git` shim answers only the classify block's fixed history queries
-# from the case's fixture and runs the real git for anything else. The
-# main-side `diff --name-only` call is the one whose range ends in
+# The `git` function answers only the classify block's fixed history
+# queries from the case's fixture and runs the real git for anything else.
+# The main-side `diff --name-only` call is the one whose range ends in
 # `origin/main`; it prints STUB_COMPARE, the other prints STUB_PR_FILES.
 # `rev-parse <sha>^1` prints the first STUB_PARENTS word, `^2` the second,
-# or nothing when the run has one parent.
-mkdir -p "$tmp/gitbin"
-cat >"$tmp/gitbin/git" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-if [ "${1:-}" = rev-parse ] && [ $# -eq 2 ]; then
-  case "$2" in
-    *^1) printf '%s\n' "${STUB_PARENTS%% *}" ;;
-    *^2)
-      if [ -n "${STUB_REVPARSE_FAIL:-}" ]; then
-        echo "stub git: fatal: unknown revision '$2'" >&2
-        exit 128
-      fi
-      case "$STUB_PARENTS" in
-        *" "*) printf '%s\n' "${STUB_PARENTS##* }" ;;
-        *) printf '\n' ;;
-      esac
-      ;;
-    *) echo "stub git: unexpected rev-parse: $*" >&2; exit 1 ;;
-  esac
-  exit 0
-fi
-if [ "${1:-}" = diff ] && [ "${2:-}" = --name-only ] && [ $# -eq 3 ]; then
-  if [ -n "${STUB_DIFF_FAIL:-}" ]; then
-    echo "stub git: fatal: unable to read tree ($3)" >&2
-    exit 128
+# or nothing when the run has one parent. The case's bash sources it before
+# the block, so no shim is executed through PATH: a test does not execute a
+# file it wrote in the same run (docs/testing.md, "Waits and timeouts").
+cat >"$tmp/git-stub.sh" <<'GIT_EOF'
+git() {
+  if [ "${1:-}" = rev-parse ] && [ $# -eq 2 ]; then
+    case "$2" in
+      *^1) printf '%s\n' "${STUB_PARENTS%% *}" ;;
+      *^2)
+        if [ -n "${STUB_REVPARSE_FAIL:-}" ]; then
+          echo "stub git: fatal: unknown revision '$2'" >&2
+          return 128
+        fi
+        case "$STUB_PARENTS" in
+          *" "*) printf '%s\n' "${STUB_PARENTS##* }" ;;
+          *) printf '\n' ;;
+        esac
+        ;;
+      *) echo "stub git: unexpected rev-parse: $*" >&2; return 1 ;;
+    esac
+    return 0
   fi
-  case "$3" in
-    *...origin/main)
-      if [ -n "${STUB_NO_ORIGIN_MAIN:-}" ]; then
-        echo "stub git: fatal: no such ref 'origin/main'" >&2
-        exit 128
-      fi
-      list=$STUB_COMPARE
-      ;;
-    *) list=$STUB_PR_FILES ;;
-  esac
-  if [ -n "$list" ]; then printf '%s\n' "$list"; fi
-  exit 0
-fi
-exec "$REAL_GIT" "$@"
-EOF
-chmod +x "$tmp/gitbin/git"
+  if [ "${1:-}" = diff ] && [ "${2:-}" = --name-only ] && [ $# -eq 3 ]; then
+    if [ -n "${STUB_DIFF_FAIL:-}" ]; then
+      echo "stub git: fatal: unable to read tree ($3)" >&2
+      return 128
+    fi
+    local list
+    case "$3" in
+      *...origin/main)
+        if [ -n "${STUB_NO_ORIGIN_MAIN:-}" ]; then
+          echo "stub git: fatal: no such ref 'origin/main'" >&2
+          return 128
+        fi
+        list=$STUB_COMPARE
+        ;;
+      *) list=$STUB_PR_FILES ;;
+    esac
+    if [ -n "$list" ]; then printf '%s\n' "$list"; fi
+    return 0
+  fi
+  command git "$@"
+}
+GIT_EOF
 
 # `jq` is absent on the Linux runners (docs/testing/running.md, "Running
 # tests"), so the writer's fixed queries run against this minimal fake. It
@@ -380,13 +381,14 @@ classify_case() {
   code=0
   mkdir -p "$dir/temp/flake-report-data" "$dir/temp/report-data"
   cp "$dir/decisions.jsonl" "$dir/temp/report-data/decisions.jsonl"
-  # shellcheck disable=SC2086
-  env -i PATH="$tmp/gitbin:$orig_path" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" FIBER_CHECK_RUN="${FIBER_CHECK_RUN:-}" \
+  # The inner bash expands $1 and $2, so the -c script is single-quoted.
+  # shellcheck disable=SC2086,SC2016
+  env -i PATH="$orig_path" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" FIBER_CHECK_RUN="${FIBER_CHECK_RUN:-}" \
     RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME="$event" \
-    GH_REPO=aakshintala/fiber REAL_GIT="$real_git" \
+    GH_REPO=aakshintala/fiber \
     STUB_PARENTS="$parents" STUB_COMPARE="$compare" STUB_PR_FILES="$pr_files" \
     "$@" \
-    bash --noprofile --norc -eo pipefail "$tmp/classify.sh" >"$dir/classify-out" 2>"$dir/classify-err" || code=$?
+    bash --noprofile --norc -eo pipefail -c '. "$1"; . "$2"' classify "$tmp/git-stub.sh" "$tmp/classify.sh" >"$dir/classify-out" 2>"$dir/classify-err" || code=$?
   if [ "$code" -ne 0 ]; then
     echo "$code"
     return 0
@@ -891,7 +893,7 @@ expect_summary "$tmp/pr-missing-origin-main" "flake_decide found flakes but thei
 # main tip. cargo runs from the real checkout, since the block's working
 # directory is the throwaway repo.
 realgit=$tmp/real-git
-mkdir -p "$realgit/work" "$realgit/temp/flaky" "$realgit/bin"
+mkdir -p "$realgit/work" "$realgit/temp/flaky"
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com
 export GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
 g() { "$real_git" -C "$realgit/work" "$@"; }
@@ -914,26 +916,29 @@ g update-ref refs/remotes/origin/main "$m2"
 g checkout -qb mg1 "$m1"
 g merge -q --no-ff -m "merge pr" "$p1"
 mg1=$(g rev-parse HEAD)
-cat >"$realgit/bin/cargo" <<EOF
-#!/usr/bin/env bash
-[ "\$1" = xtask ] || { echo "stub cargo: unexpected call: \$*" >&2; exit 1; }
-shift
-exec "$real_cargo" run --quiet --manifest-path "$toplevel/xtask/Cargo.toml" -- "\$@"
-EOF
-chmod +x "$realgit/bin/cargo"
+# cargo is a function the block's bash sources first, not an executable
+# on PATH (docs/testing.md, "Waits and timeouts").
+cat >"$realgit/cargo-stub.sh" <<CARGO_EOF
+cargo() {
+  [ "\$1" = xtask ] || { echo "stub cargo: unexpected call: \$*" >&2; return 1; }
+  shift
+  "$real_cargo" run --quiet --manifest-path "$toplevel/xtask/Cargo.toml" -- "\$@"
+}
+CARGO_EOF
 classify_real() {
   rdir=$1
   rsha=$2
   code=0
   mkdir -p "$rdir/temp/flake-report-data"
   # The block's working directory is the throwaway repo, as in CI the
-  # checkout is the working directory; cargo is redirected to the real
-  # checkout by the wrapper on PATH.
+  # checkout is the working directory; the sourced cargo function
+  # redirects cargo to the real checkout, and git is the real git.
   cd "$rdir/work" || fail "classify-real-git: cannot enter the throwaway repo"
-  env -i PATH="$realgit/bin:$orig_path" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" FIBER_CHECK_RUN="${FIBER_CHECK_RUN:-}" \
+  # shellcheck disable=SC2016 # the inner bash expands $1 and $2
+  env -i PATH="$orig_path" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" FIBER_CHECK_RUN="${FIBER_CHECK_RUN:-}" \
     RUNNER_TEMP="$rdir/temp" GITHUB_SHA="$rsha" GITHUB_EVENT_NAME=pull_request \
     GH_REPO=aakshintala/fiber \
-    bash --noprofile --norc -eo pipefail "$tmp/classify.sh" >"$rdir/classify-out" 2>"$rdir/classify-err" || code=$?
+    bash --noprofile --norc -eo pipefail -c '. "$1"; . "$2"' classify "$realgit/cargo-stub.sh" "$tmp/classify.sh" >"$rdir/classify-out" 2>"$rdir/classify-err" || code=$?
   cd "$toplevel" || fail "classify-real-git: cannot return to the checkout"
   [ "$code" = 0 ] || { cat "$rdir/classify-err" >&2; fail "classify-real-git: the classify block exited $code"; }
 }
