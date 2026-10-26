@@ -661,7 +661,7 @@ fn the_changed_files_view_draws_a_gutter_and_reverse_video_words() {
 }
 
 #[test]
-fn the_more_row_is_dim_and_a_click_on_it_leaves_the_call_open() {
+fn the_more_row_is_dim_and_clicking_it_opens_the_whole_call() {
     let setup = Setup::new();
     let lines = (1..=25).map(|n| format!("A{n:04}\n")).collect::<String>();
     fs::write(setup.workspace().join("a.txt"), &lines).unwrap();
@@ -685,39 +685,13 @@ fn the_more_row_is_dim_and_a_click_on_it_leaves_the_call_open() {
     let gutter = left + 1;
     let more = find_row(&grid.rows, "… 5 more lines (Enter to view)").expect("the more row");
     assert_dim(&grid, more, gutter + 8, right - 1, "the more row");
-    // A click on the row opens nothing: toggling the ledger row
-    // afterwards still closes and reopens the call around the same
-    // rows, which proves the more-row click left it open.
+    // The more row opens the whole call, without the inline line cap.
     click(&mut run, gutter + 10, more);
-    let grid = run.wait_screen("the more row stays", |grid| {
-        grid.rows
-            .iter()
-            .any(|row| row.contains("… 5 more lines (Enter to view)"))
+    let grid = run.wait_screen("the call view opens", |grid| {
+        grid.rows.iter().any(|row| row.contains("A0025"))
     });
-    let call = ledger_row(&grid, gutter, "read", "a.txt");
-    click(&mut run, gutter + 10, call);
-    let grid = run.wait_screen("the call closed", |grid| {
-        !grid.rows.iter().any(|row| row.contains("A0020"))
-            && !grid.rows.iter().any(|row| row.contains("… 5 more lines"))
-    });
-    // The rows above move with the close: find the ledger row again.
-    let y = find_row(&grid.rows, "thought ").expect("the group row");
-    let (left, _right) = card_edges(&grid, y, 2);
-    let call = ledger_row(&grid, left + 1, "read", "a.txt");
-    click(&mut run, left + 1 + 10, call);
-    let grid = run.wait_screen("the call reopened", |grid| {
-        grid.rows.iter().any(|row| row.contains("A0020"))
-    });
-    assert!(
-        grid.rows
-            .iter()
-            .any(|row| row.contains("… 5 more lines (Enter to view)")),
-        "the more row stays"
-    );
-    assert!(
-        !grid.rows.iter().any(|row| row.contains("A0021")),
-        "still capped"
-    );
+    assert!(grid.rows.iter().any(|row| row.contains("Read  a.txt")));
+    assert!(!grid.rows.iter().any(|row| row.contains("… 5 more lines")));
     run.write(b"\x03\x03\r");
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));

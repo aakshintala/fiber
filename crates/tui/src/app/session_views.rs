@@ -3,6 +3,7 @@
 //! These views fold the stream the terminal already reads and fetch a file's
 //! diff only when the person chooses it.
 
+use super::call_view::CallView;
 use super::{App, Effect};
 use crate::changed_files_view::{self, Diff};
 use crate::context_view::{self, ContextFold, Sized};
@@ -12,7 +13,7 @@ use crate::swapped::{Frame, List, Spot};
 use crate::usage_view::UsageFold;
 use contract::Envelope;
 use contract::events::{
-    CommandAccepted, CommandRejected, DelegateStarted, JobStarted, UsageRecorded,
+    CommandAccepted, CommandRejected, DelegateStarted, JobStarted, ToolCallCompleted, UsageRecorded,
 };
 
 /// A session view the person can open from a command or a click.
@@ -32,11 +33,13 @@ pub(crate) enum SessionView {
     Delegates,
     /// The running jobs, from "N jobs running".
     Jobs,
+    /// A tool call's whole view, from its more row or its opened row.
+    Call(usize),
 }
 
 /// The selected row in an open session view.
 #[derive(Debug)]
-enum Open {
+pub(in crate::app) enum Open {
     /// `/usage`.
     Usage(List),
     /// `/quota`.
@@ -51,6 +54,8 @@ enum Open {
     Delegates(List),
     /// The running jobs.
     Jobs(List),
+    /// A tool call's whole view, boxed: it holds the call's pages.
+    Call(Box<CallView>),
 }
 
 /// The session views' state, reset for each attachment.
@@ -66,6 +71,27 @@ pub(in crate::app) struct SessionViews {
 }
 
 impl App {
+    /// The open call view, to read.
+    pub(in crate::app) fn call_view(&self) -> Option<&CallView> {
+        match self.session_views.open.as_ref() {
+            Some(Open::Call(view)) => Some(view.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// The open call view, to change.
+    pub(in crate::app) fn call_view_mut(&mut self) -> Option<&mut CallView> {
+        match self.session_views.open.as_mut() {
+            Some(Open::Call(view)) => Some(view.as_mut()),
+            _ => None,
+        }
+    }
+
+    /// Opens the call's view built by the caller.
+    pub(in crate::app) fn set_call_view(&mut self, view: CallView) {
+        self.session_views.open = Some(Open::Call(Box::new(view)));
+    }
+
     /// Opens `view` on the attached session. With no session the notice is
     /// pushed and nothing opens. The draft is left for panel and status-line
     /// clicks; a slash command clears it before calling this method.
@@ -89,6 +115,7 @@ impl App {
             SessionView::ChangedFiles => Open::Files(List::default()),
             SessionView::Delegates => Open::Delegates(List::default()),
             SessionView::Jobs => Open::Jobs(List::default()),
+            SessionView::Call(id) => return self.open_call_view(id),
         });
         Effect::None
     }
@@ -112,6 +139,9 @@ impl App {
     pub(in crate::app) fn session_view_key(&mut self, key: &Key) -> Option<Effect> {
         if !self.session_view_open() || *key == Key::CtrlC {
             return None;
+        }
+        if matches!(self.session_views.open, Some(Open::Call(_))) {
+            return self.call_view_key(key);
         }
         if *key == Key::Esc {
             self.close_session_view();
@@ -197,6 +227,15 @@ impl App {
             }
             return Effect::None;
         }
+        if matches!(self.session_views.open, Some(Open::Call(_))) {
+            // The top row closes the view with the call's row still
+            // focused, as Esc does; a body row selects it.
+            if spot == Spot::Close {
+                self.close_call_view();
+                return Effect::None;
+            }
+            return self.call_view_click(&spot);
+        }
         if spot == Spot::Close {
             self.close_session_view();
             return Effect::None;
@@ -240,6 +279,7 @@ impl App {
             | Some(Open::Context(_))
             | Some(Open::Status(_))
             | Some(Open::Files(_))
+            | Some(Open::Call(_))
             | None => {
                 return Effect::None;
             }
@@ -276,6 +316,7 @@ impl App {
             | Some(Open::Context(_))
             | Some(Open::Status(_))
             | Some(Open::Files(_))
+            | Some(Open::Call(_))
             | None => Vec::new(),
         }
     }
@@ -349,6 +390,7 @@ impl App {
             }
             Open::Delegates(list) => Some(crate::running_view::delegates_frame(self, *list)),
             Open::Jobs(list) => Some(crate::running_view::jobs_frame(self, *list)),
+            Open::Call(view) => Some(view.frame()),
         }
     }
 
@@ -392,8 +434,9 @@ impl App {
         Effect::Send(vec![line])
     }
 
-    /// Folds one line from the attached session into the session views.
-    pub(in crate::app) fn session_views_line(&mut self, envelope: &Envelope) {
+    /// Folds one line from the attached session into the session views,
+    /// returning the call view's follow-up fetch lines.
+    pub(in crate::app) fn session_views_line(&mut self, envelope: &Envelope) -> Vec<String> {
         self.session_views.rate.fold(envelope);
         self.session_views.context.fold(envelope);
         match envelope.kind.as_str() {
@@ -423,16 +466,32 @@ impl App {
             }
             "command_accepted" => {
                 if let Some(accepted) = super::read!(envelope, CommandAccepted) {
+                    if matches!(self.session_views.open, Some(Open::Call(_))) {
+                        return self.call_view_answered(&accepted);
+                    }
                     self.session_views_answered(&accepted);
                 }
             }
             "command_rejected" => {
                 if let Some(rejected) = super::read!(envelope, CommandRejected) {
-                    self.session_views_rejected(&rejected);
+                    if matches!(self.session_views.open, Some(Open::Call(_))) {
+                        self.call_view_refused(&rejected);
+                    } else {
+                        self.session_views_rejected(&rejected);
+                    }
+                }
+            }
+            "tool_call_completed" => {
+                if let Some(done) = super::read!(envelope, ToolCallCompleted)
+                    && matches!(self.session_views.open, Some(Open::Call(_)))
+                    && let Some(action) = envelope.action_id.as_ref()
+                {
+                    return self.refresh_call_view(&envelope.session_id, &action.0, &done);
                 }
             }
             _ => {}
         }
+        Vec::new()
     }
 
     /// A session answer fills only the diff request that still owns its id.

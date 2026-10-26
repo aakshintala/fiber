@@ -81,7 +81,7 @@ pub(crate) fn frame(facts: &Facts<'_>, list: List) -> Frame {
     ];
     Frame {
         title: "Status".to_owned(),
-        command: "/status",
+        command: "/status".to_owned(),
         rows,
         list,
         below: Vec::new(),

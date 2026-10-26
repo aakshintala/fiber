@@ -113,7 +113,7 @@ fn frame(title: &str, heading: &str, count: usize, mut rows: Vec<Row>, list: Lis
     }
     Frame {
         title: title.to_owned(),
-        command: "delegates · jobs",
+        command: "delegates · jobs".to_owned(),
         rows,
         list,
         below: empty
