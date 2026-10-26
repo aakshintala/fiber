@@ -129,6 +129,9 @@ pub(crate) struct Fake {
     pub(crate) hooks_install_answer: Mutex<Result<(), ConfigureError>>,
     /// Number of global hooks installs requested.
     pub(crate) hooks_installs: Mutex<usize>,
+    /// The threads hooks queries and installs ran on, in order: neither
+    /// ever runs on the loop thread.
+    pub(crate) hooks_threads: Mutex<Vec<std::thread::ThreadId>>,
     /// What `settings` answers.
     pub(crate) rows: Mutex<Result<Vec<SettingRow>, ConfigureError>>,
     /// Every workspace `settings` was asked about, in order.
@@ -245,6 +248,7 @@ impl Fake {
             blocking_hooks_queries: Mutex::new(Vec::new()),
             hooks_install_answer: Mutex::new(Ok(())),
             hooks_installs: Mutex::new(0),
+            hooks_threads: Mutex::new(Vec::new()),
             pending: Mutex::new(false),
             rows: Mutex::new(Ok(rows)),
             reads: Mutex::new(Vec::new()),
@@ -385,6 +389,14 @@ impl Fake {
     /// The threads installs ran on, in order.
     pub(crate) fn install_threads(&self) -> Vec<std::thread::ThreadId> {
         self.install_threads
+            .lock()
+            .map(|threads| threads.clone())
+            .unwrap_or_default()
+    }
+
+    /// The threads hooks queries and installs ran on, in order.
+    pub(crate) fn hooks_threads(&self) -> Vec<std::thread::ThreadId> {
+        self.hooks_threads
             .lock()
             .map(|threads| threads.clone())
             .unwrap_or_default()
@@ -531,11 +543,13 @@ impl Configure for Fake {
     ) -> Result<Vec<String>, ConfigureError> {
         support::lock(&self.blocking_hooks_queries)
             .push((workspace.to_path_buf(), overrides.to_vec()));
+        support::lock(&self.hooks_threads).push(std::thread::current().id());
         support::lock(&self.blocking_hooks_answer).clone()
     }
 
     fn install_hooks(&self, _clock: Arc<dyn Clock>) -> Result<(), ConfigureError> {
         *support::lock(&self.hooks_installs) += 1;
+        support::lock(&self.hooks_threads).push(std::thread::current().id());
         support::lock(&self.hooks_install_answer).clone()
     }
 

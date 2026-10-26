@@ -15,7 +15,9 @@ use super::{Surface, between};
 use crate::app::config_views::ConfigView;
 use crate::app::items::testkit::{job_started, mark_tty};
 use crate::app::session_views::SessionView;
-use crate::app::{App, Effect};
+use crate::app::{App, Effect, NoticeLine};
+use crate::configure::Configure;
+use crate::configure_fake::Fake;
 use crate::home::{Launch, Spot};
 use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::keyset::Context;
@@ -26,7 +28,11 @@ use contract::{JobId, SessionId};
 
 pub(in crate::app) const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
-/// The 19 surfaces, top first, as the ticket orders them.
+/// The 19 surfaces, top first, as the ticket orders them. The hooks
+/// offer asserts apart below: see #3000's `overlay integration` ruling
+/// (the offer takes precedence over background questions) for its place
+/// above the delete question and the input box; `docs/tui.md`, "Keys",
+/// "Rules" names the Overlay context but promises no order past that.
 const ORDER: [Surface; 19] = [
     Surface::Quit,
     Surface::Report,
@@ -50,7 +56,8 @@ const ORDER: [Surface; 19] = [
 ];
 
 /// The surfaces [`open`] can open on a session.
-pub(in crate::app) const ON_SESSION: [Surface; 16] = [
+pub(in crate::app) const ON_SESSION: [Surface; 17] = [
+    Surface::HooksOffer,
     Surface::Quit,
     Surface::Report,
     Surface::KeysScreen,
@@ -70,7 +77,8 @@ pub(in crate::app) const ON_SESSION: [Surface; 16] = [
 ];
 
 /// The surfaces [`open`] can open on home.
-pub(in crate::app) const ON_HOME: [Surface; 9] = [
+pub(in crate::app) const ON_HOME: [Surface; 10] = [
+    Surface::HooksOffer,
     Surface::Quit,
     Surface::Report,
     Surface::KeysScreen,
@@ -221,9 +229,44 @@ pub(in crate::app) fn open(app: &mut App, surface: Surface) {
     assert!(app.top_surfaces().contains(&surface), "{surface:?} opened");
 }
 
+/// Drives a refused start through the real interception path and
+/// answers its names query, leaving the hooks install offer open:
+/// typing and Enter on home, `/clear` over an attached session with a
+/// folded idle status. Another open question holds the foot instead,
+/// so the offer stays down.
+fn open_hooks_offer(app: &mut App) {
+    // The offer's query runs on the seam; the helper answers its names
+    // itself, so the fake's canned answer never runs.
+    app.set_configure(Some(Arc::new(Fake::new(Vec::new())) as Arc<dyn Configure>));
+    if app.session().is_some() {
+        app.on_line(session_line(
+            "session_status",
+            json!({
+                "name": "fix the parser", "workspace": "/w", "project": "-w",
+                "state": "idle", "started": 0, "calls": 0, "since": 0,
+                "spend": {"tokens": {"input": 1, "output": 2, "cache_read": 0,
+                    "cache_write": {}}, "cost": 0.0, "subscription_cost": 0.0},
+                "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+            }),
+            None,
+        ));
+    }
+    if app.refuse_start_for_offer("hi").is_none() {
+        return;
+    }
+    let ticket = match app.take_hooks_job() {
+        Some(crate::install_worker::HooksJob::Query(query)) => query.ticket,
+        _ => return,
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+}
+
 /// The entry point of `surface`, with no check that it shows.
 fn launch(app: &mut App, surface: Surface) {
     match surface {
+        Surface::HooksOffer => {
+            open_hooks_offer(app);
+        }
         Surface::Quit => {
             app.quit();
         }
@@ -338,6 +381,10 @@ fn the_declared_order_is_the_tickets() {
     for pair in ORDER.windows(2) {
         assert!(pair[0] < pair[1], "{:?} above {:?}", pair[0], pair[1]);
     }
+    // The offer's only required precedence: above the delete question
+    // and the input box, whose keys it takes while open.
+    assert!(Surface::HooksOffer < Surface::DeleteQuestion);
+    assert!(Surface::HooksOffer < Surface::Draft);
 }
 
 #[test]
@@ -369,7 +416,8 @@ fn two_surfaces_list_in_the_declared_order_whichever_opened_first() {
 /// the table's pairs with the draft are single surfaces and the panel
 /// hides a tty job, so neither is a pair here. Opening the import
 /// report closes the completion panels, so the report pairs with none.
-const PLAN_PAIRS: [(Surface, Surface); 33] = [
+const PLAN_PAIRS: [(Surface, Surface); 34] = [
+    (Surface::HooksOffer, Surface::Notice),
     (Surface::Quit, Surface::Report),
     (Surface::Quit, Surface::Notice),
     (Surface::Quit, Surface::Keymap),
@@ -1416,4 +1464,47 @@ fn a_lost_release_cannot_click_the_target_pressed_before_the_swallow() {
         now(),
     );
     assert!(app.panel().is_none(), "the badge never reopened the panel");
+}
+
+#[test]
+fn a_click_outside_the_hooks_offer_declines_it() {
+    for make in [home_app as fn() -> App, session_app as fn() -> App] {
+        let mut app = make();
+        open(&mut app, Surface::HooksOffer);
+        // The active offer is its own surface, not the delete question.
+        assert!(!app.home_question_open());
+        let listed = app.top_surfaces();
+        assert!(listed.contains(&Surface::HooksOffer), "{listed:?}");
+        assert!(!listed.contains(&Surface::DeleteQuestion), "{listed:?}");
+        // A click outside its frame declines through Esc: no session
+        // starts, and the original refusal shows once.
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        let slab = crate::view::frame_of(&app, Surface::HooksOffer);
+        assert!(!slab.is_empty(), "{listed:?}");
+        assert!(!slab.contains(Position::new(0, 0)), "{slab:?}");
+        let mut pointer = Pointer::default();
+        let outside = Mouse {
+            kind: MouseKind::Press(Button::Left),
+            col: 0,
+            row: 0,
+        };
+        assert_eq!(
+            app.on_mouse(&outside, &targets, &mut pointer, true, now()),
+            Effect::None
+        );
+        assert!(!app.top_surfaces().contains(&Surface::HooksOffer));
+        let refused = app
+            .notices()
+            .into_iter()
+            .filter_map(|line| match line {
+                NoticeLine::Notice { code, text, .. } => Some((code, text)),
+                NoticeLine::More(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(refused.len(), 1);
+        assert_eq!(refused[0].0, "extension_missing");
+        assert!(refused[0].1.contains("fiber extension install hooks"));
+    }
 }

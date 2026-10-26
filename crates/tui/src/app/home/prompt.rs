@@ -21,6 +21,8 @@ mod exit;
 
 mod clear;
 
+mod hooks_offer;
+
 /// A stop, delete or import waiting for its answer: a refusal becomes
 /// the row's note and a notice, an accepted delete drops the row, an
 /// accepted import closes the first-run offer.
@@ -94,6 +96,11 @@ pub(super) enum Prompt {
         /// `now`.
         now: bool,
     },
+    /// Offering to install `hooks` after the hub refused a `start`
+    /// for missing blocking hooks: Enter installs and retries the
+    /// refused start, Esc cancels. It holds the refused start behind
+    /// the offer until one of them settles it.
+    HooksOffer(hooks_offer::State),
 }
 
 impl Prompt {
@@ -105,6 +112,7 @@ impl Prompt {
             Prompt::Delete { id, .. } => Some(id),
             Prompt::Import | Prompt::Quit | Prompt::CloseAll { .. } | Prompt::Stop { .. } => None,
             Prompt::Clear { .. } => None,
+            Prompt::HooksOffer { .. } => None,
         }
     }
 }
@@ -397,7 +405,8 @@ impl App {
                     | Prompt::Quit
                     | Prompt::CloseAll { .. }
                     | Prompt::Stop { .. }
-                    | Prompt::Clear { .. },
+                    | Prompt::Clear { .. }
+                    | Prompt::HooksOffer { .. },
                 )
                 | None => None,
             });

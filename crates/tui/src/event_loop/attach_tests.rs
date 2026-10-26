@@ -277,6 +277,8 @@ fn kinds(inputs: &[Input]) -> Vec<String> {
             | Input::Viewed { .. }
             | Input::Models(_)
             | Input::Install { .. }
+            | Input::HooksOfferNames { .. }
+            | Input::HooksInstalled { .. }
             | Input::Login { .. } => "other".to_owned(),
         })
         .collect()
