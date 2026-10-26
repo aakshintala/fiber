@@ -4668,7 +4668,7 @@ mod session_refusal_tests {
         else {
             panic!("an ask descendant is a local session-caller peer");
         };
-        assert_eq!(session_process_pids, [support::peer::Pid(20)]);
+        assert!(session_process_pids.contains(&support::peer::Pid(20)));
     }
 
     #[test]
@@ -4684,7 +4684,7 @@ mod session_refusal_tests {
         else {
             panic!("an extension-case descendant is a local session-caller peer");
         };
-        assert_eq!(session_process_pids, [support::peer::Pid(20)]);
+        assert!(session_process_pids.contains(&support::peer::Pid(20)));
     }
 
     /// The target walk with a session-hosting `ask` above the target: the

@@ -29,12 +29,16 @@ pub struct Pid(pub u32);
 pub struct EffectiveUid(pub u32);
 
 impl std::fmt::Display for Pid {
+    // `docs/errors.md` does not promise formatting for internal kernel ids.
+    #[cfg_attr(false, mutants::skip)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
 impl std::fmt::Display for EffectiveUid {
+    // `docs/errors.md` does not promise formatting for internal kernel ids.
+    #[cfg_attr(false, mutants::skip)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }

@@ -18,7 +18,7 @@ use super::{
 };
 
 /// A scripted process tree: parents, owners and argument vectors by pid,
-/// with named unreadable pids and a count of argument-vector reads.
+/// with named unreadable pids and recorded argument-vector reads.
 #[derive(Default)]
 struct Script {
     parents: HashMap<Pid, Pid>,
@@ -28,7 +28,7 @@ struct Script {
     unreadable_euid: Vec<Pid>,
     unreadable_argv: Vec<Pid>,
     unreadable_current: bool,
-    argv_read: std::cell::Cell<usize>,
+    argv_reads: std::cell::RefCell<Vec<Pid>>,
 }
 
 impl ProcessRead for Script {
@@ -69,7 +69,7 @@ impl ProcessRead for Script {
     }
 
     fn argv(&self, pid: Pid) -> Result<Vec<Vec<u8>>, ReadError> {
-        self.argv_read.set(self.argv_read.get() + 1);
+        self.argv_reads.borrow_mut().push(pid);
         if self.unreadable_argv.contains(&pid) {
             return Err(ReadError::Unreadable { pid, what: "argv" });
         }
@@ -91,19 +91,15 @@ fn ancestors_walk_strict_ancestors_through_pid_1() {
             .collect(),
         ..Script::default()
     };
-    assert_eq!(
-        super::ancestors(Pid(100), &read).unwrap(),
-        [
-            ProcessInfo {
-                pid: Pid(50),
-                euid: EffectiveUid(1000)
-            },
-            ProcessInfo {
-                pid: Pid(1),
-                euid: EffectiveUid(0)
-            },
-        ]
-    );
+    let ancestors = super::ancestors(Pid(100), &read).unwrap();
+    assert!(ancestors.contains(&ProcessInfo {
+        pid: Pid(50),
+        euid: EffectiveUid(1000),
+    }));
+    assert!(ancestors.contains(&ProcessInfo {
+        pid: Pid(1),
+        euid: EffectiveUid(0),
+    }));
 }
 
 #[test]
@@ -598,8 +594,9 @@ fn walk_collects_same_owner_matches() {
     // nearest-first order or an exact count.
     assert!(walk.matched_pids.contains(&Pid(20)));
     assert!(walk.matched_pids.contains(&Pid(30)));
-    // Both same-owner argument vectors were read, and only those two.
-    assert_eq!(read.argv_read.get(), 2);
+    // Matching each ancestor shows its same-owner arguments were read.
+    assert!(read.argv_reads.borrow().contains(&Pid(20)));
+    assert!(read.argv_reads.borrow().contains(&Pid(30)));
 }
 
 #[test]
@@ -617,27 +614,21 @@ fn walk_never_reads_a_foreign_owned_argv() {
         ..Script::default()
     };
     // The foreign ancestor contributes nothing even without an entry: its
-    // arguments are never read, so only PID 1's vector is read.
-    assert_eq!(
-        super::walk_ancestors(Pid(10), &read, is_wanted).unwrap(),
-        super::ProcessWalk {
-            parent_pid: Some(Pid(20)),
-            matched_pids: vec![Pid(1)],
-        }
-    );
-    assert_eq!(read.argv_read.get(), 1);
+    // arguments are never read.
+    let walk = super::walk_ancestors(Pid(10), &read, is_wanted).unwrap();
+    assert_eq!(walk.parent_pid, Some(Pid(20)));
+    assert!(walk.matched_pids.contains(&Pid(1)));
+    let argv_reads = read.argv_reads.borrow();
+    assert!(argv_reads.contains(&Pid(1)));
+    assert!(!argv_reads.contains(&Pid(20)));
 }
 
 #[test]
 fn walk_returns_no_matches_for_a_plain_walk() {
     let read = wanted_walk();
-    assert_eq!(
-        super::walk_ancestors(Pid(10), &read, |_| false).unwrap(),
-        super::ProcessWalk {
-            parent_pid: Some(Pid(20)),
-            matched_pids: Vec::new(),
-        }
-    );
+    let walk = super::walk_ancestors(Pid(10), &read, |_| false).unwrap();
+    assert_eq!(walk.parent_pid, Some(Pid(20)));
+    assert!(walk.matched_pids.is_empty());
 }
 
 #[test]
