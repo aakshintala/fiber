@@ -11,11 +11,13 @@
 
 use std::fs;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::*;
+use contract::SessionId;
 use fakes::Deadline;
+use fakes::clock::FakeClock;
 
 /// One named deadline per wait: opening never blocks on a FIFO.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -310,4 +312,213 @@ fn each_refusal_maps_to_its_stable_code() {
         let text = refusal.to_string();
         assert!(!text.contains('/'), "{text}");
     }
+}
+
+fn logged(name: &str) -> (fakes::TempDir, Log) {
+    let sessions = fakes::TempDir::new(name);
+    let log = Log::create(sessions.path(), SessionId("s_1".into()), FakeClock::new()).unwrap();
+    (sessions, log)
+}
+
+#[test]
+fn output_path_joins_the_recorded_path_to_the_session_directory() {
+    let (_sessions, log) = logged("log-output-path");
+    assert_eq!(
+        log.output_path(Path::new("artifacts/out.log")),
+        log.dir().join("artifacts/out.log")
+    );
+    assert_eq!(
+        log.output_path(Path::new("/elsewhere/out.log")),
+        PathBuf::from("/elsewhere/out.log")
+    );
+}
+
+#[test]
+fn a_name_is_some_only_for_one_file_directly_under_artifacts() {
+    for (good, name) in [
+        ("artifacts/a.log", "a.log"),
+        ("artifacts/a", "a"),
+        ("artifacts/x/", "x"),
+    ] {
+        assert_eq!(
+            direct_artifact_name(Path::new(good)).as_deref(),
+            Some(name),
+            "{good}"
+        );
+    }
+    for bad in [
+        "",
+        "artifacts",
+        "artifacts/",
+        "events.jsonl",
+        "artifacts/sub/a.log",
+        "artifacts/../events.jsonl",
+        "artifacts/sub/../a.log",
+        "/artifacts/a.log",
+        "/elsewhere/out.log",
+        "jobs/a.log",
+    ] {
+        assert_eq!(direct_artifact_name(Path::new(bad)), None, "{bad}");
+    }
+}
+
+#[test]
+fn read_output_answers_a_small_file_and_hands_a_large_one_as_size() {
+    let (_sessions, log) = logged("log-read-output-bound");
+    for (size, small) in [(0, true), (8, true), (9, false)] {
+        let relative = format!("artifacts/f{size}.log");
+        fs::write(log.dir().join(&relative), vec![b'x'; size]).unwrap();
+        match log.read_output(Path::new(&relative), 8, || {}) {
+            Ok(OutputRead::Small(bytes)) => {
+                assert!(small, "{relative} fits but read large");
+                assert_eq!(bytes.len(), size);
+            }
+            Ok(OutputRead::Large { size: got }) => {
+                assert!(!small, "{relative} is small but read large");
+                assert_eq!(got, size as u64);
+            }
+            Err(error) => panic!("{relative} reads: {error:?}"),
+        }
+    }
+}
+
+#[test]
+fn read_output_on_a_missing_file_or_an_invalid_path_is_io() {
+    let (_sessions, log) = logged("log-read-output-io");
+    fs::create_dir_all(log.dir().join("artifacts/sub")).unwrap();
+    fs::write(log.dir().join("artifacts/sub/kept.log"), b"kept").unwrap();
+    for bad in [
+        "artifacts/missing.log",
+        "artifacts/sub/kept.log",
+        "artifacts/../events.jsonl",
+        "events.jsonl",
+        "artifacts",
+        "/elsewhere/out.log",
+    ] {
+        assert!(
+            matches!(
+                log.read_output(Path::new(bad), 8, || {}),
+                Err(Unreadable::Io)
+            ),
+            "{bad}"
+        );
+    }
+    assert_eq!(
+        fs::read(log.dir().join("artifacts/sub/kept.log")).unwrap(),
+        b"kept"
+    );
+}
+
+#[test]
+fn read_output_on_a_link_a_fifo_a_socket_or_a_directory_is_not_regular() {
+    let (_sessions, log) = logged("log-read-output-type");
+    let artifacts = log.dir().join("artifacts");
+    fs::write(artifacts.join("a.log"), b"bytes").unwrap();
+    fs::create_dir_all(artifacts.join("sub")).unwrap();
+    std::os::unix::fs::symlink("a.log", artifacts.join("link.log")).unwrap();
+    // The FIFO is never opened: the answer arrives without a writer.
+    let fifo = artifacts.join("f.log");
+    fakes::fifo(&fifo);
+    let held = std::os::unix::net::UnixListener::bind(artifacts.join("s.log")).unwrap();
+    for bad in [
+        "artifacts/sub",
+        "artifacts/link.log",
+        "artifacts/f.log",
+        "artifacts/s.log",
+    ] {
+        assert!(
+            matches!(
+                log.read_output(Path::new(bad), 8, || {}),
+                Err(Unreadable::NotRegular)
+            ),
+            "{bad}"
+        );
+    }
+    drop(held);
+}
+
+#[test]
+fn replace_output_keeps_bits_in_a_new_inode_with_no_sibling_left() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let (_sessions, log) = logged("log-replace-output-bits");
+    let relative = Path::new("artifacts/out.log");
+    fs::write(log.dir().join(relative), b"old\n").unwrap();
+    std::fs::set_permissions(
+        log.dir().join(relative),
+        std::fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
+    let inode_before = std::fs::metadata(log.dir().join(relative)).unwrap().ino();
+    log.replace_output(relative, b"new\n").unwrap();
+    let stat = std::fs::metadata(log.dir().join(relative)).unwrap();
+    assert_eq!(stat.mode() & 0o777, 0o640);
+    assert_ne!(stat.ino(), inode_before);
+    assert_eq!(fs::read(log.dir().join(relative)).unwrap(), b"new\n");
+    let siblings: Vec<_> = fs::read_dir(log.dir().join("artifacts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(
+        !siblings
+            .iter()
+            .any(|name| name.to_string_lossy().ends_with(".fiber-redact")),
+        "{siblings:?}"
+    );
+}
+
+#[test]
+fn replace_output_on_an_unwritable_directory_is_io_leaving_the_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_sessions, log) = logged("log-replace-output-denied");
+    let relative = Path::new("artifacts/out.log");
+    fs::write(log.dir().join(relative), b"old\n").unwrap();
+    let dir = log.dir().join("artifacts");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let error = log.replace_output(relative, b"new\n").unwrap_err();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        matches!(&error, Error::Io { path, .. } if path == &log.dir().join(relative)),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert_eq!(fs::read(log.dir().join(relative)).unwrap(), b"old\n");
+    let siblings: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(
+        !siblings
+            .iter()
+            .any(|name| name.to_string_lossy().ends_with(".fiber-redact")),
+        "{siblings:?}"
+    );
+}
+
+#[test]
+fn replace_output_refuses_paths_outside_artifacts_and_writes_nothing() {
+    let (_sessions, log) = logged("log-replace-output-refused");
+    fs::create_dir_all(log.dir().join("artifacts/sub")).unwrap();
+    fs::write(log.dir().join("artifacts/sub/kept.log"), b"kept").unwrap();
+    let events = fs::read(log.dir().join("events.jsonl")).unwrap();
+    for bad in [
+        "artifacts/sub/kept.log",
+        "artifacts/../events.jsonl",
+        "events.jsonl",
+        "artifacts",
+    ] {
+        let relative = Path::new(bad);
+        let error = log.replace_output(relative, b"x").unwrap_err();
+        assert!(
+            matches!(&error, Error::Io { path, .. } if path == &log.dir().join(relative)),
+            "{bad}: {error:?}"
+        );
+        assert_eq!(error.code(), ErrorCode::IoFailed);
+    }
+    assert_eq!(
+        fs::read(log.dir().join("artifacts/sub/kept.log")).unwrap(),
+        b"kept"
+    );
+    assert_eq!(fs::read(log.dir().join("events.jsonl")).unwrap(), events);
 }

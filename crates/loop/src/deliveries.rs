@@ -6,7 +6,6 @@
 //! The loop thread alone reads and writes it, on the loop's `write` path.
 
 use std::collections::HashMap;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use contract::JobId;
@@ -16,6 +15,7 @@ use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, JobDelive
 use contract::jobs::{JobRecord, Taken};
 use contract::shapes::Process;
 use contract::tool::Bound;
+use log::{OutputRead, Unreadable};
 use serde_json::Map;
 
 use crate::Loop;
@@ -520,34 +520,22 @@ pub(crate) fn bound_lines(replacement: &str, built: &str) -> String {
     cut
 }
 
-/// What the capped output-file read found: the whole file when it fits,
-/// else its length, taken from the open handle after the read.
-#[derive(Debug)]
-pub(crate) enum OutputRead {
-    Small(Vec<u8>),
-    Large { size: u64 },
-}
-
-/// Why the output-file read failed: the path is not a regular file, or
-/// the read itself failed. Both are the Ruling 9 failure.
-#[derive(Debug)]
-pub(crate) enum Unreadable {
-    NotRegular,
-    Io,
-}
-
 /// How much of the output file one read takes: 1 MiB, plus one byte to
 /// tell a file just over the bound from one exactly at it.
 const OUTPUT_LIMIT: u64 = 1_048_576;
 
-/// Reads at most [`OUTPUT_LIMIT`] + 1 bytes of the job's output file.
-/// The open follows no link and never blocks on a FIFO
+/// Reads at most [`OUTPUT_LIMIT`] + 1 bytes of the file at `path`, which
+/// the caller has established sits outside the session directory: the
+/// outside-session fallback for [`Loop::read_output_file`]. The open
+/// follows no link and never blocks on a FIFO
 /// (`OFlags::NOFOLLOW | OFlags::NONBLOCK`); the `fstat` below covers the
 /// descriptor actually opened, so a path swapped for a link or a FIFO
 /// before the open changes nothing about what is read. `between` runs
 /// before the open; it is empty in production and the pause point tests
 /// use to change the file first.
-pub(crate) fn read_output(path: &Path, between: impl FnOnce()) -> Result<OutputRead, Unreadable> {
+pub(crate) fn read_external(path: &Path, between: impl FnOnce()) -> Result<OutputRead, Unreadable> {
+    use std::io::Read as _;
+
     between();
     // No `symlink_metadata` first: the open itself refuses a link, and
     // `NONBLOCK` keeps a FIFO from blocking it. The `fstat` covers the
@@ -635,11 +623,11 @@ impl Loop {
             return Ok(());
         }
         let tool = started.tool.clone();
-        let path = self.log.dir().join(&started.output_path);
-        let read = match read_output(&path, between) {
+        let path = self.log.output_path(&started.output_path);
+        let read = match self.read_output_file(&path, between) {
             Ok(read) => read,
             Err(Unreadable::Io) => {
-                replace_output(&path, UNREADABLE_LINE.as_bytes())?;
+                self.replace_output_file(&path, UNREADABLE_LINE.as_bytes())?;
                 return Ok(());
             }
             Err(Unreadable::NotRegular) => {
@@ -701,9 +689,37 @@ impl Loop {
             }
         };
         if let Some(replacement) = replacement {
-            replace_output(&path, &replacement)?;
+            self.replace_output_file(&path, &replacement)?;
         }
         Ok(())
+    }
+
+    /// Reads the job's output file at `path`: through `log` when it sits
+    /// inside the session directory, by the outside-session fallback
+    /// otherwise. A path inside the session directory but outside
+    /// `artifacts/` fails as [`Unreadable::Io`], never reaching the
+    /// fallback, so the pass cannot hand over another session file.
+    fn read_output_file(
+        &self,
+        path: &Path,
+        between: impl FnOnce(),
+    ) -> Result<OutputRead, Unreadable> {
+        match path.strip_prefix(self.log.dir()) {
+            Ok(relative) => self.log.read_output(relative, OUTPUT_LIMIT, between),
+            Err(_) => read_external(path, between),
+        }
+    }
+
+    /// Replaces the job's output file at `path` with `bytes`: through
+    /// `log` when it sits inside the session directory, by the
+    /// outside-session fallback otherwise. A path inside the session
+    /// directory but outside `artifacts/` fails as [`log::Error::Io`].
+    fn replace_output_file(&self, path: &Path, bytes: &[u8]) -> Result<(), crate::Error> {
+        if let Ok(relative) = path.strip_prefix(self.log.dir()) {
+            self.log.replace_output(relative, bytes)?;
+            return Ok(());
+        }
+        replace_external(path, bytes)
     }
 
     /// Applies the synthesized failure of an `output_file` pass over a
@@ -749,19 +765,21 @@ impl Loop {
             }
         };
         if let Some(replacement) = replacement {
-            replace_output(path, &replacement)?;
+            self.replace_output_file(path, &replacement)?;
         }
         Ok(())
     }
 }
 
-/// Replaces the file at `path` with `bytes`, keeping the original's
+/// Replaces the file at `path`, which the caller has established sits
+/// outside the session directory, with `bytes`: the outside-session
+/// fallback for [`Loop::replace_output_file`]. It keeps the original's
 /// permission bits: the bytes go to a sibling file first, which is given
 /// those bits and `rename`d over the path (over a link, the link). The
 /// sibling is created exclusively and written through its own handle, so
 /// a pre-existing sibling link never redirects the write; only a sibling
 /// this call created is removed on an error path.
-fn replace_output(path: &Path, bytes: &[u8]) -> Result<(), crate::Error> {
+fn replace_external(path: &Path, bytes: &[u8]) -> Result<(), crate::Error> {
     use std::io::Write as _;
     let mut name = path
         .file_name()

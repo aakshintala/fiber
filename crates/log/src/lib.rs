@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 
 use contract::{ErrorCode, SessionId};
 
-pub use artifact::{Refusal, check_artifact_path, open_artifact};
+pub use artifact::{OutputRead, Refusal, Unreadable, check_artifact_path, open_artifact};
 pub use delete::{delete_session, is_plain_dir};
 pub use dependents::{Children, dependents};
 pub use escalations::{AllowedEscalation, allowed_escalations};
@@ -96,6 +96,13 @@ pub fn session_dir(home: &Path, project: &str, id: &SessionId) -> PathBuf {
 /// [`Path::is_dir`] does.
 pub fn dir_exists(dir: &Path) -> bool {
     dir.is_dir()
+}
+
+/// Whether `dir` sits at `expected`: `dir` canonicalized inside `log`
+/// equals the expected canonical path. A failed canonicalization is not
+/// placed, so the caller keeps its own refusal for it.
+pub fn dir_is_at(dir: &Path, expected: &Path) -> bool {
+    std::fs::canonicalize(dir).is_ok_and(|real| real.as_path() == expected)
 }
 
 /// A session directory: `sessions/<id>`, holding `events.jsonl`,

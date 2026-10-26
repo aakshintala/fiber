@@ -5844,6 +5844,77 @@ fn a_directory_at_the_output_path_fails_the_turn() {
 }
 
 #[test]
+fn an_output_path_nested_under_artifacts_fails_the_turn_leaving_the_file() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), "artifacts/sub/out.log");
+    write_output(&world, "artifacts/sub/out.log", b"token TOKEN-1234\n");
+    world.send(held(JOB));
+    let rx = world.spawn();
+    let (looped, outcome) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .expect("the turn ended");
+    // The nested in-session path cannot escape to the fallback: the read
+    // fails before any dispatch, and the unreadable-line replacement fails
+    // too, so the turn fails with the file untouched.
+    assert!(outcome.is_err(), "{outcome:?}");
+    world.looped = Some(looped);
+    assert_eq!(
+        output_bytes(&world, "artifacts/sub/out.log"),
+        b"token TOKEN-1234\n"
+    );
+    assert!(
+        hooks
+            .calls()
+            .iter()
+            .all(|call| call.delivery != Some(JobDelivery::OutputFile))
+    );
+}
+
+#[test]
+fn an_output_path_that_escapes_artifacts_fails_the_turn_leaving_the_log() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), "artifacts/../events.jsonl");
+    world.send(held(JOB));
+    let rx = world.spawn();
+    let (looped, outcome) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .expect("the turn ended");
+    // A traversal cannot reach the fallback: the turn fails instead of
+    // reading the log as output and replacing it with the unreadable line.
+    assert!(outcome.is_err(), "{outcome:?}");
+    world.looped = Some(looped);
+    let events = std::fs::read_to_string(world.dir.join("events.jsonl")).unwrap();
+    assert!(!events.contains("could not be read"), "{events}");
+}
+
+#[test]
+fn an_absolute_output_path_outside_the_session_keeps_the_fallback() {
+    let outside = fakes::TempDir::new("fiber-output-outside");
+    let path = outside.path().join("out.log");
+    std::fs::write(&path, b"token TOKEN-1234\n").unwrap();
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), &path.display().to_string());
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // Outside the session directory the pass still reads and replaces at
+    // the recorded path itself.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "token TOKEN-1234\n");
+    assert_eq!(std::fs::read(&path).unwrap(), b"token [redacted]\n");
+}
+
+#[test]
 #[cfg(unix)]
 fn a_non_regular_output_file_with_a_blocking_hook_is_withheld_naming_it() {
     let hooks = Arc::new(RecordingHooks::default());
@@ -6012,8 +6083,8 @@ fn a_capped_read_never_returns_more_than_the_bound_plus_one() {
     let dir = fakes::TempDir::new("fiber-read");
     let path = dir.path().join("big.log");
     std::fs::write(&path, vec![b'y'; 4 * 1024 * 1024]).unwrap();
-    match crate::deliveries::read_output(&path, || {}) {
-        Ok(crate::deliveries::OutputRead::Large { size }) => assert_eq!(size, 4 * 1024 * 1024),
+    match crate::deliveries::read_external(&path, || {}) {
+        Ok(log::OutputRead::Large { size }) => assert_eq!(size, 4 * 1024 * 1024),
         read => panic!("a 4 MiB file reads large, got {read:?}"),
     }
 }
