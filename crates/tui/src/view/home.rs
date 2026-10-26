@@ -1497,9 +1497,9 @@ pub(super) fn cursor(app: &App, screen: &HomeScreen, area: Rect) -> Option<Posit
 }
 
 #[cfg(test)]
-#[path = "home_view_tests.rs"]
+#[path = "../home_view_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "home_view_motion_tests.rs"]
+#[path = "../home_view_motion_tests.rs"]
 mod motion_tests;
