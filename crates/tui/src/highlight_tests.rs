@@ -1,7 +1,7 @@
 //! Tests for the code block lexer.
 
 use super::spans;
-use crate::markdown::Role;
+use crate::theme::Role;
 
 /// The runs of `code` in `lang`, as `(role, text)` pairs per line.
 fn runs(lang: &str, code: &str) -> Vec<Vec<(Role, String)>> {

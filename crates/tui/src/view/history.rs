@@ -9,9 +9,9 @@ use ratatui::text::Span;
 
 use super::notice_rows::wrap_runs;
 use crate::completion_rows::Completions;
-use crate::markdown::Role;
 use crate::mouse::{Target, TargetId};
 use crate::slash;
+use crate::theme::Role;
 use crate::view::overlay::{self, Place, Row};
 
 /// The panel's preferred content width (`docs/tui.md`, "Overlays").

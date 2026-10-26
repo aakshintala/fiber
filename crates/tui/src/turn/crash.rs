@@ -295,7 +295,7 @@ fn warning_rows(message: &str, inner: u16, out: &mut Rows) {
             Line::from(vec![
                 Span::styled(
                     "⚠ ".to_owned(),
-                    crate::markdown::style(crate::theme::Role::Attention),
+                    crate::theme::style(crate::theme::Role::Attention),
                 ),
                 Span::styled(row.clone(), Style::default().add_modifier(Modifier::DIM)),
             ])

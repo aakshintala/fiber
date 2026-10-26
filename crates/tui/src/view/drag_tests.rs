@@ -11,7 +11,7 @@ use crate::app::App;
 use crate::home::Launch;
 use crate::keys::{Button, Mouse, MouseKind};
 use crate::link::Line;
-use crate::markdown::Role;
+use crate::theme::Role;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";

@@ -10,7 +10,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::app::App;
-use crate::markdown::{Role, style};
+use crate::theme::{Role, style};
 
 /// The thumb's glyph.
 pub(crate) const THUMB: &str = "┃";

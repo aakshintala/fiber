@@ -14,9 +14,9 @@ use crate::app::App;
 use crate::app::rail::Spot;
 use crate::format;
 use crate::home::{Left, Row, Section, State, title};
-use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
 use crate::text::to_u16;
+use crate::theme::{Role, style};
 
 /// The rail's width from which a card draws its context bar.
 const BAR_FROM: u16 = 30;

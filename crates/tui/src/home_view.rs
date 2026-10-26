@@ -12,9 +12,9 @@ use crate::app::Surface;
 use crate::completion_rows::Rows;
 use crate::format::{cut, width, wrap};
 use crate::home::{HomeScreen, ListLine, Spot, TypedScreen};
-use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 use crate::text::to_u16;
+use crate::theme::{Role, style};
 
 /// The home input box's tint.
 const BOX_TINT: Style = Style::new().bg(Role::Surface.color());

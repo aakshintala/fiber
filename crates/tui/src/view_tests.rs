@@ -5,7 +5,7 @@ use crate::app::App;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::local_time::{new_york, turn_started_at};
-use crate::markdown::Role;
+use crate::theme::Role;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Position, Rect};
@@ -1410,7 +1410,7 @@ fn search_panel() {
     assert!(shown.contains("draft"), "{shown}");
     // Exactly one barred row: the second match, recall order newest first.
     let bars: Vec<u16> = (0..24)
-        .filter(|y| (0..80).any(|x| buf[(x, *y)].bg == crate::markdown::Role::Accent.color()))
+        .filter(|y| (0..80).any(|x| buf[(x, *y)].bg == crate::theme::Role::Accent.color()))
         .collect();
     assert_eq!(bars.len(), 1, "{shown}");
     let row: String = (0..80)
@@ -1424,7 +1424,7 @@ fn search_panel() {
     let shown = text(&buf);
     assert!(shown.contains("no matching prompts"), "{shown}");
     assert!(
-        (0..24).all(|y| (0..80).all(|x| buf[(x, y)].bg != crate::markdown::Role::Accent.color())),
+        (0..24).all(|y| (0..80).all(|x| buf[(x, y)].bg != crate::theme::Role::Accent.color())),
         "{shown}"
     );
 }
@@ -2378,7 +2378,7 @@ fn a_streaming_reply_renders_its_markdown_in_place() {
         let at = shown.lines().position(|line| line.contains(needle));
         u16::try_from(at.unwrap_or_else(|| panic!("{needle} on screen"))).unwrap_or(0)
     };
-    use crate::markdown::Role;
+    use crate::theme::Role;
     assert_eq!(fg(1, row("Plan")), Some(Role::Heading.color()));
     assert_eq!(fg(1, row("read the")), Some(Role::Accent.color()));
     assert_eq!(fg(3, row("read the")), Some(Role::Text.color()));

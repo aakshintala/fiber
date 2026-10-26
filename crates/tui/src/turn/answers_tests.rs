@@ -707,7 +707,7 @@ fn spans(line: &ratatui::text::Line<'_>) -> Vec<(String, ratatui::style::Style)>
 }
 
 fn accent_bold() -> ratatui::style::Style {
-    crate::markdown::style(crate::theme::Role::Accent).add_modifier(ratatui::style::Modifier::BOLD)
+    crate::theme::style(crate::theme::Role::Accent).add_modifier(ratatui::style::Modifier::BOLD)
 }
 
 fn dim() -> ratatui::style::Style {
@@ -719,11 +719,11 @@ fn bold() -> ratatui::style::Style {
 }
 
 fn accent() -> ratatui::style::Style {
-    crate::markdown::style(crate::theme::Role::Accent)
+    crate::theme::style(crate::theme::Role::Accent)
 }
 
 fn rule() -> ratatui::style::Style {
-    crate::markdown::style(crate::theme::Role::Rule)
+    crate::theme::style(crate::theme::Role::Rule)
 }
 
 /// An answered form's rule at 14:16 UTC.
