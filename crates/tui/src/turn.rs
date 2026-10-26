@@ -33,6 +33,7 @@ mod live;
 pub(crate) mod opened;
 mod steer;
 
+pub(crate) use card::DrawSummary;
 #[cfg(test)]
 use group::Section;
 use group::{Call, Streaming};
@@ -171,22 +172,6 @@ impl Turn {
     /// Closes the card.
     pub(crate) fn complete(&mut self, done: TurnCompleted, ts: u64) {
         self.ended = Some((Ending::Done(done), ts));
-    }
-
-    /// Restores the whole-turn totals on the page that holds its ending.
-    pub(crate) fn summary(
-        &mut self,
-        started: u64,
-        calls: u64,
-        spend: &format::Spend,
-        ended: Option<&(TurnCompleted, u64)>,
-    ) {
-        self.started = started;
-        self.calls = calls;
-        self.spend = spend.clone();
-        if let Some((done, ts)) = ended {
-            self.ended = Some((Ending::Done(done.clone()), *ts));
-        }
     }
 
     /// A steering message, in place; it does not end a group.

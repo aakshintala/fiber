@@ -2438,6 +2438,12 @@ fn session_worktree_conflicts_with_resume() {
         "--workspace",
         "/w",
         "--resume",
+        "--parent",
+        "s_0123456789abcdef",
+        "--delegate-id",
+        "j_0123456789abcdef",
+        "--prompt",
+        "scan",
         "--worktree",
     ]);
     assert!(ask);
@@ -2847,7 +2853,7 @@ fn session_depth_is_internal_unsigned_and_requires_a_parent() {
 }
 
 #[test]
-fn session_parent_conflicts_with_resume_and_worktree() {
+fn session_parent_accepts_a_delegate_resume_or_an_isolated_spawn() {
     // `--resume` with a prompt and a parent is a delegate's resume: it
     // parses, and the resume runs the prompt as one turn.
     let Invocation::Run(Some(Commands::Session(args)), _) = parse_from([
@@ -2869,7 +2875,7 @@ fn session_parent_conflicts_with_resume_and_worktree() {
     };
     assert!(args.resume);
     assert_eq!(args.parent.as_deref(), Some("s_aaaaaaaaaaaaaaaa"));
-    let isolated = sentence(&[
+    let Invocation::Run(Some(Commands::Session(isolated)), _) = parse_from([
         "fiber",
         "session",
         "--id",
@@ -2883,9 +2889,12 @@ fn session_parent_conflicts_with_resume_and_worktree() {
         "--delegate-id",
         "j_bbbbbbbbbbbbbbbb",
         "--worktree",
-    ]);
-    assert!(isolated.contains("--parent"), "{isolated}");
-    assert!(isolated.contains("--worktree"), "{isolated}");
+    ]) else {
+        panic!("an isolated delegate spawn parses");
+    };
+    assert!(isolated.worktree);
+    assert!(!isolated.resume);
+    assert_eq!(isolated.parent.as_deref(), Some("s_aaaaaaaaaaaaaaaa"));
 }
 
 #[test]

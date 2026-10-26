@@ -156,6 +156,76 @@ fn line(row: &WorktreeRow) -> String {
 }
 
 #[test]
+fn prune_skips_shared_worktrees_even_when_forced_and_leaves_locks() {
+    fakes::within(
+        "prune shared worktrees",
+        Deadline::after(Duration::from_secs(30)),
+        || {
+            for force in [false, true] {
+                let setup = Setup::new("prune-shared");
+                let path = setup.worktree("s_0123456789abcdef");
+                let hold = doors::share(&path).unwrap();
+                let mut plan = select(&setup, force, false);
+                assert_eq!(plan.rows.len(), 1);
+                assert!(line(&plan.rows[0]).contains("in use"));
+                assert!(plan.removals.is_empty());
+                let removed = remove_planned(&setup.home(), &mut plan, force, &mut |_| {});
+                assert_eq!(removed.total, 0);
+                assert!(path.exists());
+                assert!(path.with_extension("lock").exists());
+                drop(hold);
+                let mut plan = select(&setup, force, false);
+                assert_eq!(plan.removals.len(), 1);
+                let removed = remove_planned(&setup.home(), &mut plan, force, &mut |_| {});
+                assert!(removed.failures.is_empty());
+                assert!(!path.exists());
+                assert!(
+                    path.with_extension("lock").exists(),
+                    "prune never unlinks a lock file"
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn prune_cannot_enter_the_add_to_child_share_gap_or_a_new_share_after_listing() {
+    fakes::within(
+        "prune handoff interleavings",
+        Deadline::after(Duration::from_secs(30)),
+        || {
+            for force in [false, true] {
+                let setup = Setup::new("prune-handoff");
+                fs::create_dir_all(setup.worktrees()).unwrap();
+                let path = setup.worktrees().join("s_0123456789abcdef");
+                let parent = doors::share(&path).unwrap();
+                let path = setup.worktree("s_0123456789abcdef");
+                // Forced pause: add is complete, but no child share or session
+                // row exists yet (docs/invocation.md, "Isolation").
+                let plan = select(&setup, force, false);
+                assert!(plan.removals.is_empty());
+                assert!(line(&plan.rows[0]).contains("in use"));
+                let child = doors::share(&path).unwrap();
+                drop(parent);
+                assert!(path.exists());
+                drop(child);
+                let mut plan = select(&setup, force, false);
+                assert_eq!(plan.removals.len(), 1);
+                let mut late_child = None;
+                let removed = remove_planned(&setup.home(), &mut plan, force, &mut |dir| {
+                    late_child = Some(doors::share(dir).unwrap());
+                });
+                assert_eq!(removed.failures.len(), 1);
+                assert_eq!(removed.failures[0].2, "in use");
+                assert!(path.exists());
+                assert!(setup.branch_exists("s_0123456789abcdef"));
+                assert!(path.with_extension("lock").exists());
+            }
+        },
+    );
+}
+
+#[test]
 fn a_clean_worktree_lists_one_removable_row() {
     let setup = Setup::new("cli-prune-wt-clean");
     let dir = setup.worktree("s_00000000000000e1");

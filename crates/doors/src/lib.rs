@@ -49,7 +49,9 @@ use contract::{ErrorCode, PreSessionExit};
 
 pub use attach::attach;
 pub use isolation::{
-    Isolation, RecreateError, Recreated, Shared, WorktreeOpener, isolate, recreate, share,
+    DelegateCreateError, Isolation, RecreateError, Recreated, RemovalHold, Shared, WorktreeOpener,
+    adopt_delegate_worktree, create_delegate_worktree, end_delegate_worktree, isolate, recreate,
+    share, try_hold_removal,
 };
 pub use session::{Declare, McpLogin, Replacement, ServersRefresh, Session};
 pub use sessions::SessionSockets;
