@@ -2,6 +2,7 @@
 //! on the foot, and closing all.
 
 use super::super::super::{App, Effect};
+use crate::app::testkit::hello;
 use crate::home::Launch;
 use crate::keys::Key;
 use crate::link::Line;
@@ -33,16 +34,6 @@ pub(super) fn home() -> App {
     });
     app.set_size(80, 24);
     app
-}
-
-/// A `hub_hello` this terminal reads.
-pub(super) fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
 }
 
 /// Links the app: the feed and recent ids, both waiting for their

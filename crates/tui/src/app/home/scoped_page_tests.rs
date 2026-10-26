@@ -5,6 +5,7 @@
 //! of the survived mutants in `super` (`crates/tui/src/app/home.rs`).
 
 use super::{App, Effect};
+use crate::app::testkit::hello;
 use crate::home::{ListLine, Spot};
 use crate::keys::Key;
 use crate::link::Line;
@@ -35,16 +36,6 @@ fn home() -> App {
     });
     app.set_size(80, 24);
     app
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
 }
 
 /// A hub `command_accepted` for `id` with `result`.

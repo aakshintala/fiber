@@ -3,8 +3,9 @@
 //! (`docs/tui.md`, "Quit").
 
 use super::super::super::{App, Effect};
-use super::tests::{accepted, closes, commands, hello, home, rejected};
+use super::tests::{accepted, closes, commands, home, rejected};
 use super::{Ask, Prompt};
+use crate::app::testkit::hello;
 use crate::home::{QuitChoice, Spot};
 use crate::keys::{Button, Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
