@@ -22,6 +22,7 @@ use ureq::Agent;
 
 use crate::oauth::{self, Browser, Holder};
 
+pub(crate) mod admission;
 mod ask;
 mod delegate;
 mod drive;

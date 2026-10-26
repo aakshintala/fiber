@@ -1481,3 +1481,898 @@ fn positional_references_share_the_generation_triple() {
     runtime.register_owner("fiber.test/proc", None);
     assert!(runtime.resolve(&positional).is_err());
 }
+
+// Process transport and request lifecycle: the owner behind the package
+// seam, with real child processes answering over the pipe. Each peer is a
+// `python3` script reading JSON lines from its stdin and writing its
+// answers to its stdout, as a process extension does.
+
+use std::sync::{Arc, Mutex};
+
+use contract::clock::Clock as _;
+
+use super::process::transport::CloseReason;
+use super::process::{ProcessExtension, Pumped, context::ProcessContext};
+
+/// The bound a positive wait keeps: fast on success, failing the test
+/// instead of hanging it.
+const WITHIN: Duration = Duration::from_secs(10);
+
+/// How long a polling read rests between file checks.
+const POLL: Duration = Duration::from_millis(10);
+
+/// One `host.drive` call the tests observe, answered at once with no
+/// result.
+struct FakeDrive {
+    calls: Mutex<Vec<(String, serde_json::Map<String, Value>)>>,
+}
+
+impl contract::extension::Drive for FakeDrive {
+    fn drive(
+        &self,
+        _extension: &str,
+        command: &str,
+        args: serde_json::Map<String, Value>,
+        answer: contract::inbox::Ack,
+    ) {
+        support::lock(&self.calls).push((command.to_owned(), args));
+        answer.0(Ok(None));
+    }
+}
+
+impl FakeDrive {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            calls: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+/// One owner behind the package seam, with its scratch dir and registry:
+/// the package holds both, and the session fold reads what the child
+/// registers.
+struct Harness {
+    _dir: fakes::TempDir,
+    registry: Arc<Mutex<super::process::Registry>>,
+    extension: Arc<ProcessExtension>,
+    /// The frozen clock the owner reads: the test moves it to fire
+    /// timeouts, since nothing else does.
+    clock: Arc<fakes::clock::FakeClock>,
+}
+
+impl Harness {
+    /// Starts `python3 -c script` with `args` in a scratch workspace, the
+    /// hello carrying `state`, answered through `drive`.
+    fn start(
+        script: &str,
+        args: &[&str],
+        state: serde_json::Map<String, Value>,
+        drive: Option<Arc<dyn contract::extension::Drive>>,
+    ) -> Self {
+        let dir = fakes::TempDir::new("fiber-process-owner");
+        std::fs::write(
+            dir.path().join("extension.json"),
+            json!({
+                "name": "fiber.test/proc",
+                "version": "v1.2.3",
+                "fiber": "0.1.0",
+                "api": 1,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let manifest = config::read_manifest(dir.path()).unwrap();
+        let clock = fakes::clock::FakeClock::new();
+        let runtime = Runtime::new(clock.clone());
+        let registry = Arc::new(Mutex::new(super::process::Registry::new(
+            "fiber.test/proc".to_owned(),
+            runtime.clone(),
+            &manifest,
+        )));
+        let context = ProcessContext {
+            session_id: contract::SessionId("s_test".into()),
+            reason: contract::events::ExtensionReason::New,
+            workspace: dir.path().to_path_buf(),
+            data_dirs: contract::events::ExtensionDataDirs {
+                machine: dir.path().join("machine").display().to_string(),
+                project: dir.path().join("project").display().to_string(),
+            },
+            state,
+            extension: "fiber.test/proc".into(),
+            home: dir.path().to_path_buf(),
+        };
+        let mut argv = vec!["-c".to_owned(), script.to_owned()];
+        argv.extend(args.iter().map(|arg| (*arg).to_owned()));
+        let launch_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+        let extension = ProcessExtension::start(super::process::Launch {
+            owner: "fiber.test/proc".to_owned(),
+            runtime,
+            registry: Arc::clone(&registry),
+            program: std::path::PathBuf::from("python3"),
+            args: argv,
+            context,
+            drive,
+            clock: launch_clock,
+            limits: super::process::transport::Limits::default(),
+        })
+        .expect("a peer child starts");
+        Self {
+            _dir: dir,
+            registry,
+            extension: Arc::new(extension),
+            clock,
+        }
+    }
+
+    /// The workspace the peer runs in.
+    fn workspace(&self) -> &std::path::Path {
+        self._dir.path()
+    }
+
+    /// Pumps one line, which must arrive and be handled.
+    fn pump(&self) {
+        assert_eq!(self.extension.pump_once(), Pumped::Handled);
+    }
+
+    /// Pumps until the pipe closes, then reaps and joins: a watcher stops
+    /// and kills the peer once the bound passes with no close, so a
+    /// wedged peer fails the test instead of hanging it.
+    fn drain(&self) -> CloseReason {
+        let watchdog = Arc::clone(&self.extension);
+        std::thread::spawn(move || {
+            // The held sender keeps the channel live, so the receive
+            // ends only when the bound passes, never from a hangup.
+            let (_held, never) = std::sync::mpsc::channel::<()>();
+            if fakes::Deadline::after(WITHIN).recv(&never).is_err() {
+                watchdog.transport().stop();
+                match watchdog.transport().signal(rustix::process::Signal::KILL) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+        });
+        loop {
+            match self.extension.pump_once() {
+                Pumped::Handled => {}
+                Pumped::Closed(reason) => {
+                    match self.extension.transport().wait_exit() {
+                        Ok(_) | Err(_) => {}
+                    }
+                    self.extension.transport().join();
+                    return reason;
+                }
+            }
+        }
+    }
+}
+
+/// Reads `path` as JSON within the bound, polling: the peer writes it
+/// once it has what it waits for.
+fn read_json_file(path: &std::path::Path, what: &str) -> Value {
+    let owned = path.to_path_buf();
+    let read = move || {
+        std::fs::read_to_string(&owned)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+    };
+    fakes::within(
+        &format!("the peer to write {what}"),
+        fakes::Deadline::after(WITHIN),
+        move || {
+            // The held sender keeps the channel live, so each rest ends
+            // only when the slice passes, never from a hangup.
+            let (_held, idle) = std::sync::mpsc::channel::<()>();
+            loop {
+                if let Some(value) = read() {
+                    return value;
+                }
+                match fakes::Deadline::after(POLL).recv(&idle) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+        },
+    )
+}
+
+/// A valid `fiber.tool` spec with `run`, as JSON: `true` marks the
+/// function, as on the wire.
+fn wire_tool_spec() -> Value {
+    json!({
+        "description": "Does the thing.",
+        "input_schema": {"type": "object"},
+        "effects": {"effects": [], "reversible": true},
+        "timeout": 5000,
+        "run": true,
+    })
+}
+
+/// A valid `fiber.hook` spec with `run`, as JSON.
+fn wire_hook_spec() -> Value {
+    json!({
+        "phase": "transform",
+        "timeout": 5000,
+        "on_failure": "blocking",
+        "run": true,
+    })
+}
+
+/// A valid `fiber.command` spec with `run`, as JSON.
+fn wire_command_spec() -> Value {
+    json!({"description": "Runs it.", "timeout": 5000, "run": true})
+}
+
+/// The hello is the first complete outbound line, carrying the session's
+/// identity, why it started, its workspace, the data directories and the
+/// folded state.
+#[test]
+fn hello_is_first_with_the_documented_fields() {
+    let out = fakes::TempDir::new("fiber-process-hello");
+    let out_path = out.path().join("first.jsonl");
+    let script = r#"import sys
+line = sys.stdin.readline()
+open(sys.argv[1], "w").write(line if line else "")"#;
+    let mut state = serde_json::Map::new();
+    state.insert("k".to_owned(), json!("v"));
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        state,
+        Some(FakeDrive::new()),
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let line = std::fs::read_to_string(&out_path).expect("the peer writes the first line");
+    let envelope: Value = serde_json::from_str(&line).expect("the hello is one JSON line");
+    assert_eq!(envelope["kind"], json!("extension_hello"));
+    assert_eq!(envelope["session_id"], json!("s_test"));
+    assert_eq!(envelope["schema_version"], json!(1));
+    assert!(envelope["ts"].is_u64());
+    let payload = &envelope["payload"];
+    assert_eq!(payload["session_id"], json!("s_test"));
+    assert_eq!(payload["reason"], json!("new"));
+    assert_eq!(
+        payload["workspace"],
+        json!(owner.workspace().display().to_string())
+    );
+    assert_eq!(
+        payload["data_dirs"]["machine"],
+        json!(owner.workspace().join("machine").display().to_string())
+    );
+    assert_eq!(
+        payload["data_dirs"]["project"],
+        json!(owner.workspace().join("project").display().to_string())
+    );
+    assert_eq!(payload["state"], json!({"k": "v"}));
+    assert!(envelope.get("seq").is_none(), "the hello is ephemeral");
+}
+
+/// Registrations stand only before `ready`: a later registration refuses
+/// with the entry sentence and mutates nothing, and a call naming a dead
+/// request reads `stale_request`.
+#[test]
+fn registrations_stand_only_before_ready() {
+    let script = r#"import sys, json
+TOOL = json.loads(sys.argv[2])
+HOOK = json.loads(sys.argv[3])
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def call(cid, call, args, rid=None):
+    a = {"call": call, "args": args}
+    if rid is not None:
+        a["request_id"] = rid
+    write({"id": cid, "command": "call", "args": a})
+read()
+call("c1", "fiber.tool", ["t", TOOL])
+call("c2", "fiber.hook", ["turn_end", HOOK])
+write({"id": "c3", "command": "ready"})
+answers = [read(), read(), read()]
+call("c4", "fiber.tool", ["late", TOOL])
+call("c5", "fiber.tool", ["dead", TOOL], "r_dead")
+answers += [read(), read()]
+open(sys.argv[1], "w").write(json.dumps(answers))"#;
+    let out = fakes::TempDir::new("fiber-process-register");
+    let out_path = out.path().join("answers.json");
+    let owner = Harness::start(
+        script,
+        &[
+            out_path.to_str().unwrap(),
+            &wire_tool_spec().to_string(),
+            &wire_hook_spec().to_string(),
+        ],
+        serde_json::Map::new(),
+        Some(FakeDrive::new()),
+    );
+    for _ in 0..5 {
+        owner.pump();
+    }
+    assert!(owner.extension.is_ready());
+    {
+        let registry = support::lock(&owner.registry);
+        assert!(registry.tools().contains_key("t"));
+        assert_eq!(registry.tools().len(), 1);
+        assert!(registry.problems().is_empty());
+    }
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let answers = read_json_file(&out_path, "the registration answers");
+    assert_eq!(answers.as_array().unwrap().len(), 5);
+    for (id, index) in [("c1", 0), ("c2", 1), ("c3", 2)] {
+        let answer = &answers[index];
+        assert_eq!(answer["kind"], json!("command_accepted"), "{id}");
+        assert_eq!(answer["payload"]["command_id"], json!(id), "{id}");
+    }
+    let refused = &answers[3];
+    assert_eq!(refused["kind"], json!("command_rejected"));
+    assert_eq!(refused["payload"]["code"], json!("extension_failed"));
+    assert_eq!(
+        refused["payload"]["message"],
+        json!("fiber.tool: registers only while `init.lua` runs")
+    );
+    let stale = &answers[4];
+    assert_eq!(stale["kind"], json!("command_rejected"));
+    assert_eq!(stale["payload"]["code"], json!("stale_request"));
+    // The refusal mutated nothing: no tool stands, and no notice grows.
+    {
+        let registry = support::lock(&owner.registry);
+        assert_eq!(registry.tools().len(), 1);
+        assert!(!registry.tools().contains_key("late"));
+        assert!(!registry.tools().contains_key("dead"));
+        assert!(registry.problems().is_empty());
+    }
+}
+
+/// A failed package stays failed: later calls fail with the first
+/// failure, and the registry holds nothing from either call.
+#[test]
+fn a_failed_package_fails_later_calls_with_the_first_failure() {
+    let script = r#"import sys, json
+PROVIDER = json.loads(sys.argv[2])
+TOOL = json.loads(sys.argv[3])
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+read()
+write({"id": "c1", "command": "call", "args": {"call": "fiber.provider", "args": ["p", PROVIDER]}})
+write({"id": "c2", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
+write({"id": "c3", "command": "ready"})
+answers = [read(), read(), read()]
+open(sys.argv[1], "w").write(json.dumps(answers))"#;
+    let out = fakes::TempDir::new("fiber-process-failed");
+    let out_path = out.path().join("answers.json");
+    let owner = Harness::start(
+        script,
+        &[
+            out_path.to_str().unwrap(),
+            &provider_spec().to_string(),
+            &wire_tool_spec().to_string(),
+        ],
+        serde_json::Map::new(),
+        Some(FakeDrive::new()),
+    );
+    for _ in 0..3 {
+        owner.pump();
+    }
+    // Nothing registers: the provider is undeclared, and the failure
+    // latches before the tool call.
+    {
+        let registry = support::lock(&owner.registry);
+        assert!(registry.providers().is_empty());
+        assert!(registry.tools().is_empty());
+        let (code, message) = registry.failure().expect("the package failed");
+        assert_eq!(code, contract::ErrorCode::ExtensionFailed);
+        assert_eq!(
+            message,
+            "The extension `fiber.test/proc` registers the provider `p`, which its manifest does not declare under `providers`."
+        );
+    }
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let answers = read_json_file(&out_path, "the failure answers");
+    for (id, index) in [("c1", 0), ("c2", 1)] {
+        let answer = &answers[index];
+        assert_eq!(answer["kind"], json!("command_rejected"), "{id}");
+        assert_eq!(answer["payload"]["command_id"], json!(id), "{id}");
+        assert_eq!(answer["payload"]["code"], json!("extension_failed"), "{id}");
+        assert_eq!(
+            answer["payload"]["message"],
+            json!(
+                "The extension `fiber.test/proc` registers the provider `p`, which its manifest does not declare under `providers`."
+            ),
+            "{id}"
+        );
+    }
+    // The ready stands: the package is already dead, and the answer says so.
+    assert_eq!(answers[2]["kind"], json!("command_accepted"));
+}
+
+/// Stream items run one at a time in arrival order while tools run as
+/// they arrive: the hook waits, two tools answer reversed, and the
+/// command runs only after the hook's reply.
+#[test]
+fn stream_order_holds_while_tools_answer_reversed() {
+    let script = r#"import sys, json
+TOOL = json.loads(sys.argv[2])
+HOOK = json.loads(sys.argv[3])
+COMMAND = json.loads(sys.argv[4])
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def call(cid, call, args):
+    write({"id": cid, "command": "call", "args": {"call": call, "args": args}})
+read()
+call("c1", "fiber.tool", ["t", TOOL])
+call("c2", "fiber.hook", ["turn_end", HOOK])
+call("c3", "fiber.command", ["go", COMMAND])
+write({"id": "c4", "command": "ready"})
+for _ in range(4):
+    read()
+def reply(rid, result):
+    write({"id": "p-" + rid, "command": "reply", "args": {"request_id": rid, "result": result}})
+skipped = []
+def read_request():
+    # Replies are answered as they pump, so an acknowledgment can arrive
+    # before a later request: skip to the next request, keeping the
+    # acknowledgment for the final count.
+    while True:
+        line = read()
+        if line["kind"] == "extension_request":
+            return line["payload"]
+        skipped.append(line)
+log = []
+def got(request):
+    log.append(["got", request["registration"]])
+def answered(request, result):
+    reply(request["request_id"], result)
+    log.append(["replied", result])
+# The hook may lose the send race to the tools: read until the hook
+# arrives, buffering early tools, then wait for both tools.
+held = None
+tools = []
+while held is None:
+    request = read_request()
+    got(request)
+    if request["registration"] == "c2":
+        held = request
+    else:
+        tools.append(request)
+while len(tools) < 2:
+    request = read_request()
+    got(request)
+    tools.append(request)
+for index, request in enumerate(reversed(tools)):
+    answered(request, "tool-%d" % index)
+answered(held, held["registration"])
+command = read_request()
+got(command)
+answered(command, command["registration"])
+acks = skipped + [read() for _ in range(4 - len(skipped))]
+open(sys.argv[1], "w").write(json.dumps({"log": log, "acks": acks}))"#;
+    let out = fakes::TempDir::new("fiber-process-order");
+    let out_path = out.path().join("order.json");
+    let owner = Harness::start(
+        script,
+        &[
+            out_path.to_str().unwrap(),
+            &wire_tool_spec().to_string(),
+            &wire_hook_spec().to_string(),
+            &wire_command_spec().to_string(),
+        ],
+        serde_json::Map::new(),
+        Some(FakeDrive::new()),
+    );
+    for _ in 0..4 {
+        owner.pump();
+    }
+    let (hook, tool, command) = {
+        let registry = support::lock(&owner.registry);
+        (
+            registry.hook_runs()[&("turn_end".to_owned(), 0)].clone(),
+            registry.tools()["t"].run.clone(),
+            registry.commands()["go"].run.clone(),
+        )
+    };
+    let hook_extension = Arc::clone(&owner.extension);
+    let hook_thread = std::thread::spawn(move || {
+        let hook = hook;
+        let caller = support::cancel::Token::new();
+        hook_extension.dispatch_stream(
+            &hook,
+            json!({"event": "turn_end"}),
+            Duration::from_secs(10),
+            None,
+            &caller,
+        )
+    });
+    let tool_extension = Arc::clone(&owner.extension);
+    let tool_ref = tool.clone();
+    let tool_a = std::thread::spawn(move || {
+        let tool = tool_ref;
+        let caller = support::cancel::Token::new();
+        tool_extension.dispatch_tool(
+            &tool,
+            json!({"input": "a"}),
+            Duration::from_secs(10),
+            &caller,
+        )
+    });
+    let tool_extension = Arc::clone(&owner.extension);
+    let tool_b = std::thread::spawn(move || {
+        let tool = tool;
+        let caller = support::cancel::Token::new();
+        tool_extension.dispatch_tool(
+            &tool,
+            json!({"input": "b"}),
+            Duration::from_secs(10),
+            &caller,
+        )
+    });
+    let command_extension = Arc::clone(&owner.extension);
+    let command_thread = std::thread::spawn(move || {
+        let command = command;
+        let caller = support::cancel::Token::new();
+        command_extension.dispatch_stream(
+            &command,
+            json!({"args": []}),
+            Duration::from_secs(10),
+            None,
+            &caller,
+        )
+    });
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let hook_answer = fakes::within(
+        "the hook dispatch",
+        fakes::Deadline::after(WITHIN),
+        move || hook_thread.join().expect("the hook thread"),
+    );
+    assert_eq!(
+        hook_answer.map_err(|error| error.to_string()),
+        Ok(Some(json!("c2"))),
+        "the hook gets its own reply"
+    );
+    let mut tool_answers = [
+        fakes::within(
+            "tool dispatch a",
+            fakes::Deadline::after(WITHIN),
+            move || tool_a.join().expect("tool thread a"),
+        ),
+        fakes::within(
+            "tool dispatch b",
+            fakes::Deadline::after(WITHIN),
+            move || tool_b.join().expect("tool thread b"),
+        ),
+    ];
+    tool_answers.sort_by_key(|answer| format!("{answer:?}"));
+    assert_eq!(
+        tool_answers.map(|answer| answer.map_err(|error| error.to_string())),
+        [Ok(Some(json!("tool-0"))), Ok(Some(json!("tool-1")))],
+        "both tools complete, replies reversed"
+    );
+    let command_answer = fakes::within(
+        "the command dispatch",
+        fakes::Deadline::after(WITHIN),
+        move || command_thread.join().expect("the command thread"),
+    );
+    assert_eq!(
+        command_answer.map_err(|error| error.to_string()),
+        Ok(Some(json!("c3")))
+    );
+    // The stream order: the command is read only after the hook's
+    // reply, while both tools answer reversed in between. Arrival order
+    // varies with the send race; the reply order does not.
+    let report = read_json_file(&out_path, "the dispatch order");
+    for (index, ack) in report["acks"]
+        .as_array()
+        .expect("four acks")
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(ack["kind"], json!("command_accepted"), "ack {index}");
+    }
+    let log = &report["log"];
+    let mut got: Vec<Value> = Vec::new();
+    let mut replied: Vec<Value> = Vec::new();
+    for entry in log.as_array().expect("the log is an array") {
+        match (entry[0].as_str(), entry[1].as_str()) {
+            (Some("got"), Some(registration)) => got.push(json!(registration)),
+            (Some("replied"), Some(result)) => replied.push(json!(result)),
+            other => panic!("an unknown log entry: {other:?}"),
+        }
+    }
+    got.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    assert_eq!(
+        got,
+        vec![json!("c1"), json!("c1"), json!("c2"), json!("c3")]
+    );
+    assert_eq!(
+        replied,
+        vec![json!("tool-0"), json!("tool-1"), json!("c2"), json!("c3")]
+    );
+    let position = |kind: &str, what: &str| {
+        log.as_array()
+            .unwrap()
+            .iter()
+            .position(|entry| entry[0] == kind && entry[1] == what)
+            .unwrap_or(usize::MAX)
+    };
+    assert!(
+        position("replied", "c2") < position("got", "c3"),
+        "the command arrives only after the hook's reply: {log}"
+    );
+    assert!(
+        position("got", "c2") < position("replied", "c2"),
+        "the hook answers after it arrives: {log}"
+    );
+}
+
+/// A timed-out hook fails with its timeout: the late reply is dropped as
+/// `stale_request`, and the next hook stays healthy.
+#[test]
+fn a_timed_out_hook_drops_its_late_reply() {
+    let script = r#"import sys, json, time
+HOOK = json.loads(sys.argv[2])
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def call(cid, call, args):
+    write({"id": cid, "command": "call", "args": {"call": call, "args": args}})
+read()
+call("c1", "fiber.hook", ["turn_end", HOOK])
+write({"id": "c2", "command": "ready"})
+for _ in range(2):
+    read()
+def reply(rid, result):
+    write({"id": "p-" + rid, "command": "reply", "args": {"request_id": rid, "result": result}})
+first = read()["payload"]
+time.sleep(5)
+reply(first["request_id"], "late")
+second = read()["payload"]
+reply(second["request_id"], "fresh")
+answers = [read(), read()]
+open(sys.argv[1], "w").write(json.dumps(answers))"#;
+    let out = fakes::TempDir::new("fiber-process-timeout");
+    let out_path = out.path().join("answers.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap(), &wire_hook_spec().to_string()],
+        serde_json::Map::new(),
+        Some(FakeDrive::new()),
+    );
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    // The clock is frozen unless the test moves it: the advancer waits
+    // for the dispatch's park at the deadline, then moves time onto it.
+    // Landing on the deadline ends the wait, and the timeout fires.
+    let parked_at = owner
+        .clock
+        .now()
+        .checked_add(Duration::from_millis(500))
+        .expect("the suite starts before its first timeout");
+    let advancer = std::thread::spawn({
+        let clock = Arc::clone(&owner.clock);
+        let bound = fakes::Deadline::after(WITHIN);
+        move || {
+            clock.advance_when_parked(Some(parked_at), None, Duration::from_millis(500), &bound);
+        }
+    });
+    let hook_extension = Arc::clone(&owner.extension);
+    let finished = std::thread::spawn(move || {
+        let caller = support::cancel::Token::new();
+        let outcome = hook_extension
+            .dispatch_stream(
+                &hook,
+                json!({"event": "turn_end"}),
+                Duration::from_millis(500),
+                None,
+                &caller,
+            )
+            .map_err(|error| error.to_string());
+        (outcome, hook)
+    });
+    let (timed_out, hook) = fakes::within(
+        "the timed-out dispatch",
+        fakes::Deadline::after(WITHIN),
+        move || finished.join().expect("the dispatch thread"),
+    );
+    match advancer.join() {
+        Ok(()) | Err(_) => {}
+    }
+    let err = timed_out.unwrap_err();
+    assert!(err.contains("passed its 500 ms timeout"), "{err}");
+    let hook_extension = Arc::clone(&owner.extension);
+    let healthy = std::thread::spawn(move || {
+        let hook = hook;
+        let caller = support::cancel::Token::new();
+        hook_extension.dispatch_stream(
+            &hook,
+            json!({"event": "turn_end"}),
+            Duration::from_secs(10),
+            None,
+            &caller,
+        )
+    });
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let healthy = fakes::within(
+        "the healthy hook",
+        fakes::Deadline::after(WITHIN),
+        move || healthy.join().expect("the healthy hook thread"),
+    );
+    assert_eq!(
+        healthy.map_err(|error| error.to_string()),
+        Ok(Some(json!("fresh")))
+    );
+    let answers = read_json_file(&out_path, "the reply answers");
+    assert_eq!(answers[0]["kind"], json!("command_rejected"));
+    assert_eq!(answers[0]["payload"]["code"], json!("stale_request"));
+    assert_eq!(answers[1]["kind"], json!("command_accepted"));
+}
+
+/// Cancelling the dispatch ends the pending request: the late reply is
+/// dropped as `stale_request`, and the dispatch fails stopped.
+#[test]
+fn a_cancelled_dispatch_drops_its_late_reply() {
+    let script = r#"import sys, json, time
+HOOK = json.loads(sys.argv[2])
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def call(cid, call, args):
+    write({"id": cid, "command": "call", "args": {"call": call, "args": args}})
+read()
+call("c1", "fiber.hook", ["turn_end", HOOK])
+write({"id": "c2", "command": "ready"})
+for _ in range(2):
+    read()
+request = read()["payload"]
+time.sleep(5)
+write({"id": "p-late", "command": "reply", "args": {"request_id": request["request_id"], "result": "late"}})
+open(sys.argv[1], "w").write(json.dumps([read()]))"#;
+    let out = fakes::TempDir::new("fiber-process-cancel");
+    let out_path = out.path().join("answers.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap(), &wire_hook_spec().to_string()],
+        serde_json::Map::new(),
+        Some(FakeDrive::new()),
+    );
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let caller = support::cancel::Token::new();
+    let canceller = caller.clone();
+    let hook_extension = Arc::clone(&owner.extension);
+    let cancelled = std::thread::spawn(move || {
+        let hook = hook;
+        let caller = canceller;
+        hook_extension.dispatch_stream(
+            &hook,
+            json!({"event": "turn_end"}),
+            Duration::from_secs(10),
+            None,
+            &caller,
+        )
+    });
+    // Let the dispatch mint, send and park before the cancel lands: the
+    // wait, not the sleep, bounds the test.
+    // The held sender keeps the channel live, so the rest ends only
+    // when the delay passes, never from a hangup.
+    let (_held, idle) = std::sync::mpsc::channel::<()>();
+    match fakes::Deadline::after(Duration::from_millis(300)).recv(&idle) {
+        Ok(()) | Err(_) => {}
+    }
+    caller.cancel();
+    let cancelled = fakes::within(
+        "the cancelled dispatch",
+        fakes::Deadline::after(WITHIN),
+        move || cancelled.join().expect("the cancelled thread"),
+    );
+    assert_eq!(
+        cancelled.map_err(|error| error.to_string()),
+        Err("`fiber.test/proc` is stopped and takes no more calls.".to_owned())
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let answers = read_json_file(&out_path, "the late reply's answer");
+    assert_eq!(answers[0]["kind"], json!("command_rejected"));
+    assert_eq!(answers[0]["payload"]["code"], json!("stale_request"));
+}
+
+/// Garbage is ignored, unknown and unfit lines are rejected, a bad reply
+/// refuses, and an ordinary driver command goes through the `Drive` seam.
+#[test]
+fn malformed_unknown_and_forwarded_lines() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+read()
+sys.stdout.write("not json\n"); sys.stdout.flush()
+write({"id": "u1", "command": "frob"})
+write({"id": "c9", "command": "call", "args": {"call": 42}})
+write({"id": "b1", "command": "reply", "args": {"request_id": "r_x", "confirmed": True}})
+write({"id": "v1", "command": "tools", "args": {}})
+answers = [read(), read(), read(), read()]
+open(sys.argv[1], "w").write(json.dumps(answers))"#;
+    let out = fakes::TempDir::new("fiber-process-wire");
+    let out_path = out.path().join("answers.json");
+    let drive = FakeDrive::new();
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        Some(Arc::clone(&drive) as Arc<dyn contract::extension::Drive>),
+    );
+    for _ in 0..5 {
+        owner.pump();
+    }
+    // No registration stands: the pipe holds only supervised shapes and
+    // one forwarded command.
+    {
+        let registry = support::lock(&owner.registry);
+        assert!(registry.tools().is_empty());
+    }
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let answers = read_json_file(&out_path, "the wire answers");
+    assert_eq!(answers.as_array().unwrap().len(), 4);
+    assert_eq!(answers[0]["kind"], json!("command_rejected"));
+    assert_eq!(answers[0]["payload"]["code"], json!("unknown_command"));
+    assert_eq!(
+        answers[0]["payload"]["message"],
+        json!("`frob` is not built in this Fiber yet.")
+    );
+    assert_eq!(answers[1]["kind"], json!("command_rejected"));
+    assert_eq!(answers[1]["payload"]["code"], json!("invalid_arguments"));
+    assert_eq!(
+        answers[1]["payload"]["message"],
+        json!("The arguments do not fit this command.")
+    );
+    assert_eq!(answers[2]["kind"], json!("command_rejected"));
+    assert_eq!(answers[2]["payload"]["code"], json!("invalid_arguments"));
+    assert_eq!(
+        answers[2]["payload"]["message"],
+        json!("a `reply` answers with `result` or `error`.")
+    );
+    assert_eq!(answers[3]["kind"], json!("command_accepted"));
+    assert_eq!(
+        support::lock(&drive.calls).as_slice(),
+        &[("tools".to_owned(), serde_json::Map::new())]
+    );
+}
+
+/// With no driver the session is closing, and `host.drive` raises it.
+#[test]
+fn drive_without_a_driver_closes() {
+    let script = r#"import sys, json
+def read():
+    return json.loads(sys.stdin.readline())
+read()
+sys.stdout.write(json.dumps({"id": "v1", "command": "tools", "args": {}}) + "\n")
+sys.stdout.flush()
+open(sys.argv[1], "w").write(sys.stdin.readline())"#;
+    let out = fakes::TempDir::new("fiber-process-nodrive");
+    let out_path = out.path().join("answer.jsonl");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let line = std::fs::read_to_string(&out_path).expect("the peer records the answer");
+    let answer: Value = serde_json::from_str(&line).expect("one JSON line");
+    assert_eq!(answer["kind"], json!("command_rejected"));
+    assert_eq!(answer["payload"]["code"], json!("closing"));
+    assert_eq!(
+        answer["payload"]["message"],
+        json!("host.drive: the session is closing")
+    );
+}
