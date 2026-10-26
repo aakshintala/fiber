@@ -154,6 +154,9 @@ impl App {
         if matches!(self.session_views.open, Some(Open::Call(_))) {
             return self.call_view_key(key);
         }
+        if matches!(self.session_views.open, Some(Open::Rewind(_))) {
+            return self.rewind_key(key);
+        }
         if *key == Key::Esc {
             self.close_session_view();
             return Some(Effect::None);
@@ -186,11 +189,7 @@ impl App {
             return Some(Effect::None);
         }
         if let Some(
-            Open::Usage(list)
-            | Open::Quota(list)
-            | Open::Context(list)
-            | Open::Status(list)
-            | Open::Rewind(list),
+            Open::Usage(list) | Open::Quota(list) | Open::Context(list) | Open::Status(list),
         ) = self.session_views.open.as_mut()
         {
             list.key(key, rows, height);
@@ -251,6 +250,9 @@ impl App {
             }
             return self.call_view_click(&spot);
         }
+        if let Some(Open::Rewind(_)) = self.session_views.open {
+            return self.rewind_click(spot);
+        }
         if spot == Spot::Close {
             self.close_session_view();
             return Effect::None;
@@ -275,11 +277,7 @@ impl App {
         }
         if let Spot::Row(at) = spot
             && let Some(
-                Open::Usage(list)
-                | Open::Quota(list)
-                | Open::Context(list)
-                | Open::Status(list)
-                | Open::Rewind(list),
+                Open::Usage(list) | Open::Quota(list) | Open::Context(list) | Open::Status(list),
             ) = self.session_views.open.as_mut()
         {
             list.select(at, rows, height);
@@ -412,7 +410,10 @@ impl App {
             Open::Delegates(list) => Some(crate::running_view::delegates_frame(self, *list)),
             Open::Jobs(list) => Some(crate::running_view::jobs_frame(self, *list)),
             Open::Call(view) => Some(view.frame()),
-            Open::Rewind(list) => Some(super::rewind::frame(&self.rewind, *list)),
+            Open::Rewind(list) => {
+                let jobs = self.rewind_stopping();
+                Some(super::rewind::frame(&self.rewind, &jobs, *list))
+            }
         }
     }
 
@@ -569,6 +570,14 @@ impl App {
     pub(in crate::app) fn rewind_list_to(&mut self, at: usize, rows: usize) {
         if let Some(Open::Rewind(list)) = self.session_views.open.as_mut() {
             list.select(at, rows, usize::MAX);
+        }
+    }
+
+    /// The open rewind view's list, to move with the cursor.
+    pub(in crate::app) fn rewind_list_mut(&mut self) -> Option<&mut List> {
+        match self.session_views.open.as_mut() {
+            Some(Open::Rewind(list)) => Some(list),
+            _ => None,
         }
     }
 

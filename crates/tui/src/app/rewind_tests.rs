@@ -146,6 +146,13 @@ fn open(app: &mut crate::app::App, clock: &Arc<fakes::clock::FakeClock>) -> Vec<
     lines
 }
 
+/// The summary checkbox row, unchecked.
+const CHECK: &str = "[ ] Summarise the path after the point";
+/// The summary checkbox row, checked.
+const CHECKED: &str = "[x] Summarise the path after the point";
+/// The Rewind row.
+const ACTION: &str = "Rewind";
+
 /// The rewind rows' text.
 fn rows(app: &crate::app::App) -> Vec<String> {
     app.session_view_screen(80)
@@ -176,7 +183,7 @@ fn rewind_asks_history_on_open() {
     let frame = app.session_view_screen(80).expect("the view is open");
     assert_eq!(frame.title, "Rewind");
     assert_eq!(frame.command, "/rewind");
-    assert!(frame.rows.is_empty());
+    assert_eq!(rows(&app), [CHECK, ACTION]);
 }
 
 #[test]
@@ -188,7 +195,10 @@ fn two_segments_fold_with_the_default_on_the_latest_turn() {
     // session and stopping at the point A continues from: one request
     // on the wire.
     let next = accept(&mut app, &lines[0]["id"], segment_a());
-    assert_eq!(rows(&app), ["before: first", "before: second"]);
+    assert_eq!(
+        rows(&app),
+        ["before: first", "before: second", CHECK, ACTION]
+    );
     assert_eq!(next.len(), 1);
     let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
     assert_eq!(asked["command"], "history");
@@ -201,7 +211,13 @@ fn two_segments_fold_with_the_default_on_the_latest_turn() {
     assert!(done.is_empty());
     assert_eq!(
         rows(&app),
-        ["before: older", "before: first", "before: second"]
+        [
+            "before: older",
+            "before: first",
+            "before: second",
+            CHECK,
+            ACTION
+        ]
     );
     // The default is the start of the latest turn: turn-start seq minus
     // one, distinct from the after-input boundary at turn-start seq.
@@ -281,7 +297,13 @@ fn a_summary_turn_lists_but_does_not_take_the_default() {
     assert!(done.is_empty());
     assert_eq!(
         rows(&app),
-        ["before: first", "before: rewind summary", "before: third"]
+        [
+            "before: first",
+            "before: rewind summary",
+            "before: third",
+            CHECK,
+            ACTION
+        ]
     );
     // The default is the latest turn that is not a summary's, while the
     // summary turn still lists its step boundaries.
@@ -317,7 +339,7 @@ fn an_empty_log_lists_no_turns() {
     ] {
         let done = accept(&mut app, &lines[0]["id"], held);
         assert!(done.is_empty());
-        assert!(rows(&app).is_empty());
+        assert_eq!(rows(&app), [CHECK, ACTION]);
         let frame = app.session_view_screen(80).expect("the view is open");
         assert_eq!(frame.below, ["No turns to rewind."]);
     }
@@ -344,7 +366,10 @@ fn post_point_lines_refuse_the_whole_segment() {
     let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
     let done = accept(&mut app, &asked["id"], past);
     assert!(done.is_empty());
-    assert_eq!(rows(&app), ["before: first", "before: second"]);
+    assert_eq!(
+        rows(&app),
+        ["before: first", "before: second", CHECK, ACTION]
+    );
 }
 
 #[test]
@@ -381,7 +406,13 @@ fn the_point_itself_belongs_to_the_parent() {
     assert!(done.is_empty());
     assert_eq!(
         rows(&app),
-        ["before: older", "before: first", "before: second"]
+        [
+            "before: older",
+            "before: first",
+            "before: second",
+            CHECK,
+            ACTION
+        ]
     );
     assert_eq!(
         app.rewind_turn_bounds(0),
@@ -408,7 +439,7 @@ fn an_unreadable_answer_ends_the_walk_with_the_error() {
     let frame = app.session_view_screen(80).expect("the view is open");
     assert_eq!(frame.below, ["the answer could not be read"]);
     accept(&mut app, &lines[0]["id"], segment_a());
-    assert!(rows(&app).is_empty());
+    assert_eq!(rows(&app), [CHECK, ACTION]);
 }
 
 #[test]
@@ -433,7 +464,7 @@ fn a_gapped_answer_ends_the_walk() {
     older.remove(1);
     let done = accept(&mut app, &asked["id"], older);
     assert!(done.is_empty());
-    assert!(rows(&app).is_empty());
+    assert_eq!(rows(&app), [CHECK, ACTION]);
 }
 
 #[test]
@@ -552,7 +583,7 @@ fn history_wait_times_out_as_a_lost_connection() {
     assert_eq!(app.notice(), Some("Connection lost."));
     assert_eq!(app.take_wake(), None);
     accept(&mut app, &lines[0]["id"], segment_a());
-    assert!(rows(&app).is_empty());
+    assert_eq!(rows(&app), [CHECK, ACTION]);
 }
 
 #[test]
@@ -584,7 +615,7 @@ fn stream_reopened_ends_the_wait_at_once() {
     assert_eq!(app.take_wake(), None);
     // The late answer matches no pending id and folds nowhere.
     accept(&mut app, &lines[0]["id"], segment_a());
-    assert!(rows(&app).is_empty());
+    assert_eq!(rows(&app), [CHECK, ACTION]);
 }
 
 #[test]
@@ -598,10 +629,13 @@ fn close_and_reopen_drops_the_old_answer() {
     assert_ne!(first[0]["id"], second[0]["id"]);
     // The old answer arrives after the reopen: it folds nowhere.
     accept(&mut app, &first[0]["id"], segment_a());
-    assert!(rows(&app).is_empty());
+    assert_eq!(rows(&app), [CHECK, ACTION]);
     // The new answer folds.
     accept(&mut app, &second[0]["id"], segment_a());
-    assert_eq!(rows(&app), ["before: first", "before: second"]);
+    assert_eq!(
+        rows(&app),
+        ["before: first", "before: second", CHECK, ACTION]
+    );
 }
 
 #[test]
@@ -619,5 +653,441 @@ fn a_rejected_history_keeps_the_error() {
     assert_eq!(frame.below, ["from_session_id is off the chain"]);
     // A late answer for the dropped id folds nowhere.
     accept(&mut app, &lines[0]["id"], segment_a());
-    assert!(rows(&app).is_empty());
+    assert_eq!(rows(&app), [CHECK, ACTION]);
+}
+
+/// Moves the list cursor onto visible row `at`, through the public keys.
+fn goto(app: &mut crate::app::App, clock: &Arc<fakes::clock::FakeClock>, at: usize) {
+    for _ in 0..64 {
+        let selected = app
+            .session_view_screen(80)
+            .expect("the view is open")
+            .list
+            .selected();
+        if selected == at {
+            return;
+        }
+        let key = if selected < at {
+            crate::keys::Key::Down
+        } else {
+            crate::keys::Key::Up
+        };
+        app.on_key(key, clock.now());
+    }
+    panic!("never reached row {at}");
+}
+
+/// Sends the rewind from the Rewind row, returning the command lines.
+fn send_rewind(app: &mut crate::app::App, clock: &Arc<fakes::clock::FakeClock>) -> Vec<Value> {
+    let at = app
+        .session_view_screen(80)
+        .expect("the view is open")
+        .rows
+        .len()
+        - 1;
+    goto(app, clock, at);
+    sent(app.on_key(crate::keys::Key::Enter, clock.now()))
+}
+
+/// Refuses the sent rewind with `code`, returning the view's rows.
+fn refuse(app: &mut crate::app::App, id: &Value, code: &str) {
+    app.on_line(session_line(
+        "command_rejected",
+        json!({"command_id": id, "code": code, "message": format!("{code} happened")}),
+    ));
+}
+
+/// One turn holding a writing call, a shell call, and a step's text.
+fn calls_segment() -> Vec<Envelope> {
+    vec![
+        history_line(SESSION, "session_started", 0, None, None, started(None)),
+        history_line(
+            SESSION,
+            "turn_started",
+            1,
+            Some("t_1"),
+            None,
+            message_input("first"),
+        ),
+        history_line(SESSION, "step_started", 2, Some("t_1"), None, json!({})),
+        history_line(
+            SESSION,
+            "tool_call_requested",
+            3,
+            Some("t_1"),
+            Some("a_w"),
+            json!({"name": "write", "arguments": {"path": "/w/a.rs"}}),
+        ),
+        history_line(
+            SESSION,
+            "tool_call_started",
+            4,
+            Some("t_1"),
+            Some("a_w"),
+            json!({"effects": ["writes"], "paths": ["/w/a.rs"], "reversible": true}),
+        ),
+        history_line(
+            SESSION,
+            "tool_call_completed",
+            5,
+            Some("t_1"),
+            Some("a_w"),
+            json!({"status": "completed", "content": []}),
+        ),
+        history_line(
+            SESSION,
+            "tool_call_requested",
+            6,
+            Some("t_1"),
+            Some("a_s"),
+            json!({"name": "shell", "arguments": {"command": "make"}}),
+        ),
+        history_line(
+            SESSION,
+            "tool_call_started",
+            7,
+            Some("t_1"),
+            Some("a_s"),
+            json!({"effects": ["executes"], "reversible": false}),
+        ),
+        history_line(
+            SESSION,
+            "tool_call_completed",
+            8,
+            Some("t_1"),
+            Some("a_s"),
+            json!({"status": "completed", "content": []}),
+        ),
+        history_line(
+            SESSION,
+            "text_completed",
+            9,
+            Some("t_1"),
+            Some("a_m"),
+            json!({"text": "did things"}),
+        ),
+        history_line(SESSION, "step_started", 10, Some("t_1"), None, json!({})),
+        history_line(
+            SESSION,
+            "turn_completed",
+            11,
+            Some("t_1"),
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ]
+}
+
+/// Folds one running job and one running delegate, neither completed.
+fn run_jobs(app: &mut crate::app::App) {
+    app.on_line(session_line(
+        "job_started",
+        json!({"job_id": "j_1", "description": "task one", "output_path": "/tmp/out"}),
+    ));
+    app.on_line(session_line(
+        "job_started",
+        json!({"job_id": "j_2", "description": "delegate work", "output_path": "/tmp/out"}),
+    ));
+    app.on_line(session_line(
+        "delegate_started",
+        json!({"job_id": "j_2", "delegate_session_id": "s_cccccccccccccccc",
+            "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+    ));
+}
+
+/// The view's detail lines under the rows.
+fn below(app: &crate::app::App) -> Vec<String> {
+    app.session_view_screen(80).expect("the view is open").below
+}
+
+#[test]
+fn enter_opens_the_selected_turn_into_its_boundaries() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    // Enter opens the selected turn: its step boundaries draw under it.
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    assert_eq!(
+        rows(&app),
+        [
+            "before: first",
+            "before: second",
+            "  start of turn",
+            "  after input",
+            "  end of turn",
+            CHECK,
+            ACTION,
+        ]
+    );
+    // Enter again closes it back to the turn rows, sending nothing:
+    // the turn row opens, it never sends.
+    assert_eq!(
+        app.on_key(crate::keys::Key::Enter, clock.now()),
+        Effect::None
+    );
+    assert_eq!(
+        rows(&app),
+        ["before: first", "before: second", CHECK, ACTION]
+    );
+    // Enter on a boundary row sends from that point at once.
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    goto(&mut app, &clock, 3);
+    let out = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["command"], "rewind");
+    assert_eq!(out[0]["session_id"], SESSION);
+    assert_eq!(out[0]["args"], json!({"seq": 4, "summarise": false}));
+}
+
+#[test]
+fn the_send_names_an_ancestor_holding_session() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    let next = accept(&mut app, &lines[0]["id"], segment_a());
+    let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
+    accept(&mut app, &asked["id"], segment_b());
+    // The default point is the latest turn's start on the attached
+    // session: open the ancestor's turn and send from its start
+    // boundary. Enter on the boundary sends at once, since reaching the
+    // Rewind row would cross content rows and move the point.
+    goto(&mut app, &clock, 0);
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    goto(&mut app, &clock, 1);
+    let out = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["command"], "rewind");
+    assert_eq!(out[0]["session_id"], SESSION);
+    assert_eq!(
+        out[0]["args"],
+        json!({"from_session_id": OTHER, "seq": 0, "summarise": false})
+    );
+}
+
+#[test]
+fn the_point_past_the_calls_details_nothing() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], calls_segment());
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    // The turn's end sits past every call: the detail empties.
+    goto(&mut app, &clock, 4);
+    assert_eq!(
+        below(&app),
+        [
+            "Files written since the point: none",
+            "Calls that may have changed files: none",
+            "None of it is undone.",
+            "Jobs that stop: none",
+        ]
+    );
+    // The start sits before every call: everything lists.
+    goto(&mut app, &clock, 1);
+    assert_eq!(
+        below(&app),
+        [
+            "Files written since the point: /w/a.rs",
+            "Calls that may have changed files: shell",
+            "None of it is undone.",
+            "Jobs that stop: none",
+        ]
+    );
+}
+
+#[test]
+fn the_detail_names_files_calls_jobs_and_no_restore() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    run_jobs(&mut app);
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], calls_segment());
+    // The default point is the turn's start: everything after it lists.
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    assert_eq!(
+        rows(&app),
+        [
+            "before: first",
+            "  start of turn",
+            "  after input",
+            "  after step 1 · did things",
+            "  end of turn",
+            CHECK,
+            ACTION,
+        ]
+    );
+    assert_eq!(
+        below(&app),
+        [
+            "Files written since the point: /w/a.rs",
+            "Calls that may have changed files: shell",
+            "None of it is undone.",
+            "Jobs that stop: task one, delegate work",
+        ]
+    );
+    // Past the calls the detail empties, while the delegate still lists
+    // with no marker of its own.
+    goto(&mut app, &clock, 4);
+    assert_eq!(
+        below(&app),
+        [
+            "Files written since the point: none",
+            "Calls that may have changed files: none",
+            "None of it is undone.",
+            "Jobs that stop: task one, delegate work",
+        ]
+    );
+}
+
+#[test]
+fn space_toggles_the_summary_checkbox() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    assert!(rows(&app).contains(&CHECK.to_owned()));
+    // Space toggles wherever the cursor sits.
+    app.on_key(crate::keys::Key::Char(' '), clock.now());
+    assert!(rows(&app).contains(&CHECKED.to_owned()));
+    // Enter on the checkbox row toggles it back.
+    let check = rows(&app).len() - 2;
+    goto(&mut app, &clock, check);
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    assert!(rows(&app).contains(&CHECK.to_owned()));
+}
+
+#[test]
+fn each_refusal_replaces_the_rewind_button() {
+    for code in [
+        "busy",
+        "not_step_boundary",
+        "delegate_session",
+        "invalid_arguments",
+        "session_held",
+    ] {
+        let clock = fakes::clock::FakeClock::new();
+        let mut app = attached();
+        let lines = open(&mut app, &clock);
+        accept(&mut app, &lines[0]["id"], segment_a());
+        let out = send_rewind(&mut app, &clock);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["command"], "rewind");
+        refuse(&mut app, &out[0]["id"], code);
+        // The refusal's text stands in place of the button, the view
+        // stays open, and the error row sends nothing more.
+        let grown = rows(&app);
+        let want = format!("{code} happened");
+        assert_eq!(grown.last(), Some(&want));
+        assert!(app.session_view_screen(80).is_some());
+        let again = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
+        assert!(again.is_empty());
+    }
+}
+
+#[test]
+fn esc_closes_only_when_no_send_is_pending() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let out = send_rewind(&mut app, &clock);
+    assert_eq!(out.len(), 1);
+    // Esc while the rewind is pending is ignored: the view stays open.
+    assert_eq!(app.on_key(crate::keys::Key::Esc, clock.now()), Effect::None);
+    assert!(app.session_view_screen(80).is_some());
+    // Once the refusal settles the send, Esc closes the view.
+    refuse(&mut app, &out[0]["id"], "busy");
+    assert_eq!(app.on_key(crate::keys::Key::Esc, clock.now()), Effect::None);
+    assert!(app.session_view_screen(80).is_none());
+}
+
+#[test]
+fn one_rewind_at_a_time() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let out = send_rewind(&mut app, &clock);
+    assert_eq!(out.len(), 1);
+    // A second Enter on the sending row sends nothing more.
+    let again = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
+    assert!(again.is_empty());
+}
+
+#[test]
+fn rewind_is_disabled_with_no_turns() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    open(&mut app, &clock);
+    let frame = app.session_view_screen(80).expect("the view is open");
+    let action = frame.rows.last().expect("the Rewind row");
+    assert_eq!(action[0].0, "Rewind");
+    assert_eq!(action[0].2, crate::swapped::Ink::Muted);
+    // Enter on the disabled row sends nothing.
+    goto(&mut app, &clock, frame.rows.len() - 1);
+    let lines = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
+    assert!(lines.is_empty());
+}
+
+#[test]
+fn clicks_select_toggle_and_close() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    // A click selects the row: the default sat on the second turn.
+    app.session_view_click(crate::swapped::Spot::Row(0));
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.list.selected(), 0);
+    // A click on the checkbox cell toggles it.
+    let at = frame.rows.len() - 2;
+    app.session_view_click(crate::swapped::Spot::Cell(at, 0));
+    assert!(rows(&app).contains(&CHECKED.to_owned()));
+    // The close target closes the view.
+    app.session_view_click(crate::swapped::Spot::Close);
+    assert!(app.session_view_screen(80).is_none());
+}
+
+#[test]
+fn the_opened_view_snapshot() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    run_jobs(&mut app);
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], calls_segment());
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    insta::assert_snapshot!("rewind_opened_80x24", shot(&app));
+}
+
+#[test]
+fn the_refused_view_snapshot() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let out = send_rewind(&mut app, &clock);
+    refuse(&mut app, &out[0]["id"], "session_held");
+    insta::assert_snapshot!("rewind_refused_80x24", shot(&app));
+}
+
+/// The whole open view as text at 80x24.
+fn shot(app: &crate::app::App) -> String {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    let frame = app.session_view_screen(80).expect("the view is open");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buffer = Buffer::empty(area);
+    let mut targets = Vec::new();
+    crate::swapped::render(&frame, area, &mut buffer, &mut targets);
+    (0..24)
+        .map(|y| {
+            (0..80)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
