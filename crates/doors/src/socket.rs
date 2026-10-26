@@ -7,10 +7,7 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
-use contract::ErrorCode;
-use contract::shapes::Failure;
-
-use crate::failure;
+use crate::SessionError;
 
 /// The longest socket path the platform binds: `sun_path` less its
 /// terminating byte (`docs/state.md`, "Sockets").
@@ -19,16 +16,12 @@ pub const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 1
 /// Fails with the session's `FIBER_HOME` sentence when `run/<file_name>`
 /// under `home` is too long to bind. Sessions and doctor share it, so the
 /// report names the same cause a session start would fail with.
-pub fn check_socket_path(home: &Path, file_name: &str) -> Result<(), Failure> {
+pub fn check_socket_path(home: &Path, file_name: &str) -> Result<(), SessionError> {
     let socket = config::run_dir(home).join(file_name);
     if socket.as_os_str().len() > SOCKET_PATH_MAX {
-        return Err(failure(
-            ErrorCode::Usage,
-            format!(
-                "FIBER_HOME is too long: a session's socket path must fit in \
-                 {SOCKET_PATH_MAX} bytes. Set FIBER_HOME to a shorter path."
-            ),
-        ));
+        return Err(SessionError::SocketPathTooLong {
+            max: SOCKET_PATH_MAX,
+        });
     }
     Ok(())
 }
@@ -38,7 +31,7 @@ pub fn check_socket_path(home: &Path, file_name: &str) -> Result<(), Failure> {
 /// live: fail `session_held` and leave it alone; a refusal, a missing path,
 /// or a regular file is removed before binding. Any other error
 /// may hide a live session, so the path stays and this fails `io_failed`.
-pub(crate) fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), Failure> {
+pub(crate) fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), SessionError> {
     let name = dir.file_name().unwrap_or_default();
     // One length check for every session socket: doctor reuses it, so the
     // report names the same cause a session start would fail with.
@@ -49,19 +42,20 @@ pub(crate) fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), F
         .recursive(true)
         .mode(0o700)
         .create(&run)
-        .map_err(|e| io_failed(&run, &e))?;
+        .map_err(|e| io_failed(&run, e))?;
     match UnixStream::connect(&socket) {
         Ok(_) => {
-            let held = format!("{}: another session is running", socket.display());
-            return Err(failure(ErrorCode::SessionHeld, held));
+            return Err(SessionError::SocketHeld {
+                socket: socket.clone(),
+            });
         }
         Err(error) if replaceable(&socket, &error) => remove_socket(&socket),
-        Err(error) => return Err(io_failed(&socket, &error)),
+        Err(error) => return Err(io_failed(&socket, error)),
     }
-    let listener = UnixListener::bind(&socket).map_err(|e| io_failed(&socket, &e))?;
+    let listener = UnixListener::bind(&socket).map_err(|e| io_failed(&socket, e))?;
     if let Err(e) = fs::set_permissions(&socket, Permissions::from_mode(0o600)) {
         remove_socket(&socket);
-        return Err(io_failed(&socket, &e));
+        return Err(io_failed(&socket, e));
     }
     Ok((socket, listener))
 }
@@ -81,6 +75,9 @@ pub(crate) fn remove_socket(socket: &Path) {
     fs::remove_file(socket).unwrap_or(());
 }
 
-fn io_failed(path: &Path, e: &io::Error) -> Failure {
-    failure(ErrorCode::IoFailed, format!("{}: {e}", path.display()))
+fn io_failed(path: &Path, source: io::Error) -> SessionError {
+    SessionError::SocketIo {
+        path: path.to_owned(),
+        source,
+    }
 }

@@ -86,10 +86,17 @@ fn share_names_a_lock_file_it_cannot_open() {
             std::fs::write(&file, "x").unwrap();
             let worktree = file.join("wt");
             let failure = share(&worktree).unwrap_err();
-            assert_eq!(failure.code, ErrorCode::IoFailed);
             let lock = lock_of(&worktree);
+            assert!(
+                matches!(
+                    &failure,
+                    crate::SessionError::SharedIo { path, .. } if path == &lock
+                ),
+                "the failure names the lock file: {failure:?}"
+            );
+            assert_eq!(failure.code(), ErrorCode::IoFailed);
             assert_eq!(
-                failure.message,
+                failure.to_string(),
                 format!("{}: {}.", lock.display(), std::io::ErrorKind::NotADirectory),
                 "the sentence names the lock file and the kind only"
             );
@@ -245,9 +252,16 @@ fn claim_under_a_running_session_fails_after_its_attempts() {
             // No blocking hold is ever taken, so this returns without
             // sleeping.
             let failure = claim(&worktree, &before_wait).unwrap_err();
-            assert_eq!(failure.code, ErrorCode::IoFailed);
+            assert!(
+                matches!(
+                    &failure,
+                    crate::SessionError::WorktreeInUse { path } if path == &worktree
+                ),
+                "an exhausted wait keeps the worktree: {failure:?}"
+            );
+            assert_eq!(failure.code(), ErrorCode::IoFailed);
             assert_eq!(
-                failure.message,
+                failure.to_string(),
                 format!(
                     "The worktree {} is in use by another process, so Fiber did not make it again.",
                     worktree.display()

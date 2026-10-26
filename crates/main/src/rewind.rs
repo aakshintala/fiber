@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::events::Parent;
-use contract::shapes::Point;
+use contract::shapes::{Failure, Point};
 use contract::{ErrorCode, SessionId};
 
 use crate::{ask_failed, failed};
@@ -142,7 +142,7 @@ pub(crate) fn session_forked(
     let _shared = match worktree.as_ref() {
         Some(worktree) => match doors::share(Path::new(&worktree.path)) {
             Ok(shared) => Some(shared),
-            Err(failure) => return crate::session_command::report(signals, failure),
+            Err(failure) => return crate::session_command::report(signals, Failure::from(failure)),
         },
         None => None,
     };
@@ -220,7 +220,7 @@ pub(crate) fn session_rewound(
     let _shared = match forked.worktree.as_ref() {
         Some(worktree) => match doors::share(Path::new(&worktree.path)) {
             Ok(shared) => Some(shared),
-            Err(failure) => return crate::session_command::report(signals, failure),
+            Err(failure) => return crate::session_command::report(signals, Failure::from(failure)),
         },
         None => None,
     };
