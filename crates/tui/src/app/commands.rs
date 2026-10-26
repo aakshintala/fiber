@@ -927,9 +927,6 @@ impl App {
         if name.is_empty() || name.contains('/') {
             return false;
         }
-        if self.completion.extensions.iter().any(|known| known == name) {
-            return false;
-        }
         if slash::is_built_in(name) {
             return false;
         }
