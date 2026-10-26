@@ -16,7 +16,9 @@ use contract::events::{Event, FiberStarted, InputItem, TurnStarted};
 use contract::inbox::Delivery;
 use contract::shapes::{ContentPart, Failure, Origin};
 use contract::{ErrorCode, SessionId, TurnId};
-use doors::{Session, exit_before_session, failure, mint, project, prompt, resolve_project};
+use doors::{
+    Session, SessionError, exit_before_session, failure, mint, project, prompt, resolve_project,
+};
 use fakes::Deadline;
 use log::Log;
 use serde_json::Value;
@@ -38,8 +40,8 @@ impl io::Read for Untouched {
     }
 }
 
-fn failure_of(result: Result<String, Failure>) -> Failure {
-    result.unwrap_err()
+fn failure_of(result: Result<String, SessionError>) -> Failure {
+    Failure::from(result.unwrap_err())
 }
 
 const NO_PROMPT: &str = "No prompt. Run `fiber ask \"<prompt>\"` or `fiber ask < <file>`.";
