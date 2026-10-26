@@ -2128,11 +2128,13 @@ fn reads_stop_at_the_turn_start_that_fills_the_screen() {
     }
 }
 
-/// A filled display still walks the seam: the own run fills the
-/// screen inside one window, yet the next window asks the ancestor
-/// under its session, for the joint total.
+/// A filled display stops pre-frame reads: the own run fills the
+/// screen inside one window, so no older own window and no ancestor is
+/// asked before the first frame. Older own windows and the ancestor
+/// request belong to the post-frame count phase, which carries the
+/// joint total above the installed preview.
 #[test]
-fn a_filled_display_still_walks_the_seam() {
+fn a_filled_display_stops_pre_frame_reads_and_counts_after() {
     let mut child = segment_lines(SESSION, 1, Some((ANCESTOR, 9)));
     let mut seq = 1u64;
     child.extend(envelopes(&roomy_turn(&mut seq, "a_m", "a new reply", 90)));
@@ -2148,19 +2150,162 @@ fn a_filled_display_still_walks_the_seam() {
         fresh.index().total() >= height,
         "the own run fills the screen"
     );
-    // The first window fills the display, yet the seam still asks:
-    // the joint total needs the ancestor.
+    // The first window fills the display, so the pre-frame read stops:
+    // no older window and no ancestor is asked before the first frame.
     app.tail_lines(doors(&child, &json!({})));
+    assert!(
+        app.tail_next().is_none(),
+        "a filled display stops the pre-frame read"
+    );
+    assert!(
+        app.tail_count_next().is_none(),
+        "no count runs before the preview installs"
+    );
+    app.install_tail();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    // Older own windows and the ancestor request belong to the
+    // post-frame count phase, which reaches the chain root.
     let args = app
-        .tail_next()
-        .expect("a filled display still walks the seam");
+        .tail_count_next()
+        .expect("the count continues past the filled display");
     assert_eq!(
         args,
         json!({"session_id": ANCESTOR, "to_seq": 9}),
         "the ancestor under its session"
     );
+    app.tail_count_lines(doors(&ancestor, &args));
+    assert!(
+        app.tail_count_next().is_none(),
+        "the ancestor root ends the count"
+    );
+    app.finish_count();
+    let mut joint = app.attached_screen().pages().fresh();
+    for line in ancestor.iter().chain(&child) {
+        joint.apply(line);
+    }
+    assert_eq!(
+        app.attached_screen().pages().index().total(),
+        joint.index().total(),
+        "the count carries the joint total above the preview"
+    );
+}
+
+/// An unfilled run still walks the seam to the root before the first
+/// frame: the own window leaves the display short, so the read crosses
+/// into the ancestor and installs the joint run, root rows and all.
+#[test]
+fn an_unfilled_display_still_walks_the_seam_to_the_root() {
+    let ancestor = chain_segment(ANCESTOR, None, "root reply", 3);
+    let point = ancestor.len() as u64 - 1;
+    let child = chain_segment(SESSION, Some((ANCESTOR, point)), "child reply", 1);
+    let mut app = reading();
+    // The own window leaves the display short, so the pre-frame read
+    // crosses the seam instead of stopping for the count phase.
+    app.tail_lines(doors(&child, &json!({})));
+    let args = app.tail_next().expect("an unfilled display keeps reading");
+    assert_eq!(
+        args,
+        json!({"session_id": ANCESTOR, "to_seq": point}),
+        "the ancestor under its session"
+    );
     app.tail_lines(doors(&ancestor, &args));
     assert!(app.tail_next().is_none(), "the ancestor root ends the walk");
+    app.install_tail();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    let shown = row_texts(&app);
+    assert!(
+        shown.iter().any(|row| row.contains("root reply 0")),
+        "the preview draws the root"
+    );
+    assert!(
+        shown.iter().any(|row| row.contains("child reply 0")),
+        "the preview draws the child"
+    );
+}
+
+/// A fill past a crossed seam keeps going to the chain root: the
+/// middle segment's start still names its parent, so the pre-frame
+/// read crosses into the root instead of stopping for the count phase.
+#[test]
+fn a_fill_past_a_crossed_seam_keeps_going_to_the_chain_root() {
+    const MID: &str = "s_mmmmmmmmmmmmmm";
+    let root = chain_segment(ANCESTOR, None, "root reply", 1);
+    let rpoint = root.len() as u64 - 1;
+    let mut mid = segment_lines(MID, 1, Some((ANCESTOR, rpoint)));
+    let mut seq = 1u64;
+    for line in roomy_turn(&mut seq, "a_m", "a new reply", 90) {
+        if let Line::Session(mut envelope) = line {
+            envelope.session_id = id(MID);
+            mid.push(envelope);
+        }
+    }
+    assert!(mid.len() <= 256, "the middle run fits one window");
+    let mpoint = mid.len() as u64 - 1;
+    let leaf = chain_segment(SESSION, Some((MID, mpoint)), "leaf reply", 1);
+    let mut app = reading();
+    // The leaf window leaves the display short, so the read crosses
+    // into the middle segment.
+    app.tail_lines(doors(&leaf, &json!({})));
+    let args = app.tail_next().expect("an unfilled display keeps reading");
+    assert_eq!(
+        args,
+        json!({"session_id": MID, "to_seq": mpoint}),
+        "the middle segment under its session"
+    );
+    // The middle window fills the display at its own segment start,
+    // which still names the root: the read crosses again instead of
+    // stopping, for the joint total.
+    app.tail_lines(doors(&mid, &args));
+    let args = app
+        .tail_next()
+        .expect("a fill past a crossed seam keeps going");
+    assert_eq!(
+        args,
+        json!({"session_id": ANCESTOR, "to_seq": rpoint}),
+        "the root under its session"
+    );
+    app.tail_lines(doors(&root, &args));
+    assert!(app.tail_next().is_none(), "the chain root ends the walk");
+    app.install_tail();
+    let shown = row_texts(&app);
+    assert!(
+        shown.iter().any(|row| row.contains("root reply 0")),
+        "the preview draws the root"
+    );
+    assert!(
+        shown.iter().any(|row| row.contains("leaf reply 0")),
+        "the preview draws the leaf"
+    );
+}
+
+/// A count with no shown preview waits: ending the count while the
+/// overlay already went away restores its cursor instead of folding
+/// anything into the screen.
+#[test]
+fn finish_count_without_a_shown_preview_restores_the_count() {
+    let point = chain_segment(ANCESTOR, None, "root reply", 3).len() as u64 - 1;
+    let child = chain_segment(SESSION, Some((ANCESTOR, point)), "child reply", 1);
+    let mut app = reading();
+    app.tail_lines(doors(&child, &json!({})));
+    app.install_tail();
+    let before = app.attached_screen().pages().index().total();
+    app.overlay = Overlay::None;
+    app.finish_count();
+    assert_eq!(
+        app.attached_screen().pages().index().total(),
+        before,
+        "no shown preview folds nothing"
+    );
+    assert!(
+        app.tail_count_next().is_some(),
+        "the count cursor waits for its open"
+    );
 }
 
 /// A tail holding lines cut inside an older turn plus a newest turn
@@ -2993,42 +3138,69 @@ fn chain_segment(
     lines
 }
 
-/// Reads `child` then `ancestor` through `app`'s tail, routing each
-/// answer by the args' `session_id`, and installs the preview.
-fn install_chain(app: &mut App, ancestor: &[contract::Envelope], child: &[contract::Envelope]) {
-    while let Some(args) = app.tail_next() {
-        let pool = if args.get("session_id").is_some() {
-            ancestor
-        } else {
-            child
-        };
-        app.tail_lines(doors(pool, &args));
-    }
-    app.install_tail();
-}
-
-/// The acceptance screen across one continuation point: the preview
-/// the chain walk installs and the screen the pass lands show the
-/// same paged rows, root and child turns both.
+/// The acceptance screen across one continuation point with an
+/// own-log screen fill: the preview installs and draws from the own
+/// run, the count carries the ancestor chain above it, and the pass
+/// landing adds the rows above the preview while its last screenful
+/// stays exactly what the preview drew, root and child turns both.
 #[test]
 fn the_landed_screen_matches_the_preview_across_the_seam() {
     let ancestor = chain_segment(ANCESTOR, None, "root reply", 3);
     let point = ancestor.len() as u64 - 1;
-    let child = chain_segment(SESSION, Some((ANCESTOR, point)), "child reply", 2);
+    let child = chain_segment(SESSION, Some((ANCESTOR, point)), "child reply", 60);
+    assert!(
+        child.len() > 256,
+        "older own windows stand above the preview"
+    );
     let mut app = reading();
-    install_chain(&mut app, &ancestor, &child);
+    let height = app.conversation_height();
+    // The newest window fills the display on its own segment, so the
+    // pre-frame read stops there.
+    app.tail_lines(doors(&child, &json!({})));
+    assert!(
+        app.tail_next().is_none(),
+        "a filled display stops the pre-frame read"
+    );
+    app.install_tail();
     assert!(
         matches!(app.overlay, Overlay::Shown { .. }),
         "the preview shows"
     );
-    let before = row_texts(&app);
+    let preview_rows = row_texts(&app);
+    let drawn = crate::view::text(&rendered(&app));
     assert!(
-        before.iter().any(|row| row.contains("root reply 0")),
-        "the preview draws the root"
+        drawn.contains("child reply 59"),
+        "the draw shows the child's last page"
     );
     assert!(
-        before.iter().any(|row| row.contains("child reply 1")),
-        "the preview draws the child"
+        !drawn.contains("root reply"),
+        "the draw waits for no ancestor"
+    );
+    // Older own windows and the ancestor load through the post-frame
+    // count, reaching the chain root.
+    while let Some(args) = app.tail_count_next() {
+        let pool = if args.get("session_id").is_some() {
+            &ancestor
+        } else {
+            &child
+        };
+        app.tail_count_lines(doors(pool, &args));
+    }
+    app.finish_count();
+    let counted = row_texts(&app);
+    let counted_total = app.attached_screen().pages().index().total();
+    assert!(
+        counted.iter().any(|row| row.contains("root reply 0")),
+        "the count draws the root"
+    );
+    assert!(
+        counted.iter().any(|row| row.contains("child reply 59")),
+        "the count keeps the child"
+    );
+    assert_eq!(
+        counted[counted.len() - height..],
+        preview_rows[preview_rows.len() - height..],
+        "the count keeps the last screenful"
     );
     // Raise, then replay the own run through the pass to its end.
     let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
@@ -3047,10 +3219,35 @@ fn the_landed_screen_matches_the_preview_across_the_seam() {
         app.on_line(Line::Session(envelope.clone()));
     }
     assert!(matches!(app.overlay, Overlay::None), "the pass lands");
+    // The landing settles the screen to its window, trimming resident
+    // rows above it, so totals come from the index while content comes
+    // from the resident last screenful.
+    let landed_total = app.attached_screen().pages().index().total();
+    assert!(
+        landed_total > counted_total,
+        "the landing adds the rows above the preview"
+    );
     let after = row_texts(&app);
     assert_eq!(
-        after, before,
-        "the landing shows the same paged rows across the seam"
+        after[after.len() - height..],
+        counted[counted.len() - height..],
+        "the landing keeps the last screenful"
+    );
+    let held: Vec<String> = app
+        .attached_screen()
+        .pages()
+        .index()
+        .pages()
+        .iter()
+        .map(|page| page.session.0.clone())
+        .collect();
+    assert!(
+        held.iter().any(|session| session == ANCESTOR),
+        "the landing keeps the root under its session: {held:?}"
+    );
+    assert!(
+        after.iter().any(|row| row.contains("child reply 59")),
+        "the landing keeps the child"
     );
 }
 

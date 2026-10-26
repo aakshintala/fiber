@@ -842,6 +842,10 @@ impl<B: Backend> Loop<B> {
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }
+        // The retained count reads after the first frame draws and
+        // before the `full` raise goes out below, so no ancestor window
+        // is asked before the own-segment screen shows.
+        self.count_tail(rx);
         // The display fetches the frame drew go out after it, with the
         // kitty bytes their answers queued (`docs/tui.md`, "Images").
         self.drain_display();
@@ -1004,15 +1008,19 @@ impl<B: Backend> Loop<B> {
         self.search = Some(search);
     }
 
-    /// Reads the open's tail when one is due: the history windows fill
-    /// it, then the preview installs. No stream means the tail ended
-    /// with nothing read; a lost read ends everything through
-    /// `disconnected`, with no install. The tail read stays untimed:
-    /// the attach timers cover the first fetched page below.
+    /// Reads the open's tail when one is due: the own-segment history
+    /// windows fill it, then the preview installs. No stream means the
+    /// tail ended with nothing read; a lost read ends everything
+    /// through `disconnected`, with no install. The tail read stays
+    /// untimed: the attach timers cover the first fetched page below.
+    /// Older windows and ancestors read after the first frame draws,
+    /// through the retained count.
     fn open_tail(&mut self, rx: &Receiver<Input>) {
         let Some(session) = self.app.tail_due() else {
             return;
         };
+        // A new open never installs or counts the old run.
+        self.app.clear_tail_read();
         if !self.hub.has_stream() {
             self.app.tail_ended(None);
             self.app.install_tail();
@@ -1038,6 +1046,36 @@ impl<B: Backend> Loop<B> {
         // hold the same count, and an empty tail still installs its
         // empty preview.
         self.app.install_tail();
+    }
+
+    /// Reads the retained count after the first frame draws: older
+    /// own-segment windows to `seq 0`, then ancestors to the chain
+    /// root, folded once above the preview at its end. A lost read ends
+    /// everything through `disconnected`, with no count. One answered
+    /// request at a time, as before the frame. With no count running
+    /// nothing is asked and the count end is a no-op.
+    fn count_tail(&mut self, rx: &Receiver<Input>) {
+        let Some(session) = self.app.opening_session() else {
+            return;
+        };
+        if self
+            .hub
+            .fetch_count(
+                rx,
+                &session,
+                &mut self.app,
+                &self.tick,
+                self.clock.as_ref(),
+                self.tick.armed(),
+            )
+            .is_err()
+        {
+            return;
+        }
+        // The completed count's fold always runs: the count still runs
+        // here (only a lost connection drops it, and that returns
+        // above).
+        self.app.finish_count();
     }
 
     /// Loads, one page at a time, every page the frame needs and does not

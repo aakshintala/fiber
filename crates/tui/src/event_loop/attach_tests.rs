@@ -4399,9 +4399,10 @@ fn segment_turns(
     lines
 }
 
-/// An open across a continuation point walks the chain: the own
-/// windows, then the ancestor's under its session, and the joint
-/// total matches the joint fold.
+/// An open across a continuation point draws the own screen first,
+/// then walks the chain: the own window draws before the ancestor's
+/// count under its session, and the joint total matches the joint
+/// fold.
 #[test]
 fn the_open_walks_the_chain_and_shows_the_joint_total() {
     const ROOT: &str = "s_arrrrrrrrrrrrrr";
@@ -4412,7 +4413,8 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
     let point = root_seq - 1;
     let mut child = vec![started(CHILD, Some((ROOT, point)))];
     let mut child_seq = 1u64;
-    child.extend(segment_turns(CHILD, "child reply", 200, 2, &mut child_seq));
+    child.extend(segment_turns(CHILD, "child reply", 200, 30, &mut child_seq));
+    assert!(child.len() <= 256, "the own run fits one window");
     let open = tail_open(
         child.clone(),
         Full::Hung,
@@ -4451,8 +4453,14 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
     // The preview follows to the bottom: the last frame shows the
     // child, the joint total counts the chain, and the trimmed
     // ancestor page stays paged under its own session for a scroll up.
+    // The child frame precedes the ancestor count request by
+    // construction here: the own window fills the screen, so the first
+    // frame draws before the count runs. The parked-draw proof of that
+    // order is the_first_frame_draws_before_the_ancestor_count_and_the_raise:
+    // pre- and post-count frames are pixel-identical while following
+    // the bottom, so no frame-content assert can state it.
     let drawn = frames(&open).join("\n");
-    assert!(drawn.contains("child reply 1"), "the child shows: {drawn}");
+    assert!(drawn.contains("child reply 29"), "the child shows: {drawn}");
     let pages = open.lp.app.pages();
     let total = pages.index().total();
     let top_needs = pages.needs(0, total);
@@ -4681,12 +4689,31 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
         "the joint total spans the chain"
     );
     let pages = lp.app.pages();
-    let total = pages.index().total();
-    let top_needs = pages.needs(0, total);
+    // The ancestor stays paged under its own session, before the own
+    // run: the index carries both runs whether or not the window since
+    // trimmed the ancestor's pages out of the frame.
+    let held: Vec<(String, u64, u64)> = pages
+        .index()
+        .pages()
+        .iter()
+        .filter(|page| page.lines > 0)
+        .map(|page| (page.session.0.clone(), page.first_seq.0, page.last_seq.0))
+        .collect();
     assert!(
-        top_needs.iter().any(|(session, range)| session.0 == ROOT
-            && *range == (contract::Seq(0)..=contract::Seq(point))),
-        "the ancestor stays paged under its session: {top_needs:?}"
+        held.iter()
+            .any(|(session, first, last)| session == ROOT && *first == 0 && *last == point),
+        "the ancestor stays paged under its session: {held:?}"
+    );
+    assert!(
+        held.iter()
+            .take_while(|(session, _, _)| session == ROOT)
+            .count()
+            > 0
+            && held
+                .iter()
+                .skip_while(|(session, _, _)| session == ROOT)
+                .all(|(session, _, _)| session == CHILD),
+        "ancestors first, then the own run: {held:?}"
     );
 }
 
