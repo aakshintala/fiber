@@ -2,7 +2,7 @@
 //! lines it sends, the rows it focuses, and the workspace Enter opens.
 
 use super::super::super::{App, Effect};
-use crate::app::testkit::hello;
+use crate::app::testkit::{hello, home_with};
 use crate::home::{Launch, Spot};
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -10,10 +10,9 @@ use contract::clock::Clock;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-/// An app on home at 80x24.
-fn home() -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(Launch {
+/// The launch home opens: local /w with the model chip set.
+fn launch() -> Launch {
+    Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),
             project: "-w".to_owned(),
@@ -29,9 +28,7 @@ fn home() -> App {
         panel_share: 21.0,
         panel_cards: Vec::new(),
         ..Default::default()
-    });
-    app.set_size(80, 24);
-    app
+    }
 }
 
 /// A hub `command_accepted` for `id` with `result`.
@@ -261,7 +258,7 @@ fn answer(app: &mut App, id: &str, names: &[&str], path: &str) {
 }
 
 fn remote() -> App {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.set_home(Launch {
         location: crate::LaunchLocation::Remote {
             hub: "box".to_owned(),
@@ -396,7 +393,7 @@ fn remote_sentinel_is_only_a_hub_row_and_uses_hub_git() {
 
 #[test]
 fn recents_alone_exclude_empty_and_relative_workspaces() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "here", "/w"));
     app.on_line(live("s_bbbbbbbbbbbbbbbb", "empty", ""));
@@ -408,7 +405,7 @@ fn recents_alone_exclude_empty_and_relative_workspaces() {
 
 #[test]
 fn esc_closes_the_typed_picker_keeping_the_workspace() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     type_path(&mut app, "/");
     assert_eq!(key(&mut app, Key::Esc), Effect::None);
@@ -418,7 +415,7 @@ fn esc_closes_the_typed_picker_keeping_the_workspace() {
 
 #[test]
 fn a_click_on_a_recent_while_typing_chooses_it() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "away", "/other"));
     clear_open(&mut app);
@@ -430,7 +427,7 @@ fn a_click_on_a_recent_while_typing_chooses_it() {
 
 #[test]
 fn ctrl_c_passes_through_while_typing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     type_path(&mut app, "/");
     assert_eq!(app.picker_key(&Key::CtrlC), None);
@@ -440,7 +437,7 @@ fn ctrl_c_passes_through_while_typing() {
 
 #[test]
 fn paste_is_swallowed_while_typing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     type_path(&mut app, "/");
     assert_eq!(app.on_edit(Edit::Paste("/pasted".to_owned())), Effect::None);
@@ -450,7 +447,7 @@ fn paste_is_swallowed_while_typing() {
 
 #[test]
 fn slash_sends_one_directories_and_enter_waits_for_its_answer() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
     assert_eq!(
@@ -475,7 +472,7 @@ fn slash_sends_one_directories_and_enter_waits_for_its_answer() {
 
 #[test]
 fn arrows_walk_completions_then_recents_and_clamp() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
     answer(&mut app, &sent[0].0, &["a1", "a2"], "/");
@@ -496,7 +493,7 @@ fn arrows_walk_completions_then_recents_and_clamp() {
 
 #[test]
 fn enter_on_a_completion_chooses_it_for_the_next_start() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
     answer(&mut app, &sent[0].0, &["a1", "a2"], "/");
@@ -518,7 +515,7 @@ fn enter_on_a_completion_chooses_it_for_the_next_start() {
 
 #[test]
 fn tab_completes_the_focused_completion_and_lists_it() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
     answer(&mut app, &sent[0].0, &["a1", "a2"], "/");
@@ -532,7 +529,7 @@ fn tab_completes_the_focused_completion_and_lists_it() {
 
 #[test]
 fn tab_with_a_recent_or_nothing_focused_changes_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/x");
     answer(&mut app, &sent[0].0, &[], "/");
@@ -547,7 +544,7 @@ fn tab_with_a_recent_or_nothing_focused_changes_nothing() {
 
 #[test]
 fn enter_on_a_trailing_slash_reads_existence_from_its_parent() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/a1/");
     assert_eq!(
@@ -563,7 +560,7 @@ fn enter_on_a_trailing_slash_reads_existence_from_its_parent() {
 
 #[test]
 fn enter_on_an_unlisted_trailing_slash_shows_no_such_directory() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/zz/");
     answer(&mut app, &sent[1].0, &[], "/zz/");
@@ -579,7 +576,7 @@ fn enter_on_an_unlisted_trailing_slash_shows_no_such_directory() {
 
 #[test]
 fn enter_on_a_full_name_with_no_match_shows_no_such_directory() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/a1/x");
     answer(&mut app, &sent[1].0, &[], "/a1/");
@@ -589,7 +586,7 @@ fn enter_on_a_full_name_with_no_match_shows_no_such_directory() {
 
 #[test]
 fn enter_on_root_with_an_empty_listing_opens_root() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
     answer(&mut app, &sent[0].0, &[], "/");
@@ -601,7 +598,7 @@ fn enter_on_root_with_an_empty_listing_opens_root() {
 #[test]
 fn enter_on_relative_text_shows_no_such_directory_with_nothing_sent() {
     for text in ["foo", "~x/"] {
-        let mut app = home();
+        let mut app = home_with(80, 24, launch());
         open(&mut app);
         let sent = type_path(&mut app, text);
         assert!(sent.is_empty());
@@ -613,7 +610,7 @@ fn enter_on_relative_text_shows_no_such_directory_with_nothing_sent() {
 
 #[test]
 fn bare_tilde_asks_once_then_opens_home() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     type_path(&mut app, "~");
     // The first Enter asks for the home listing, and nothing else.
@@ -636,7 +633,7 @@ fn bare_tilde_asks_once_then_opens_home() {
 
 #[test]
 fn bare_tilde_opens_root_for_a_home_path_of_slash() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     type_path(&mut app, "~");
     let Effect::Send(lines) = key(&mut app, Key::Enter) else {
@@ -650,7 +647,7 @@ fn bare_tilde_opens_root_for_a_home_path_of_slash() {
 
 #[test]
 fn bare_tilde_with_a_rejected_home_listing_shows_no_such_directory() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     type_path(&mut app, "~");
     let Effect::Send(lines) = key(&mut app, Key::Enter) else {
@@ -666,7 +663,7 @@ fn bare_tilde_with_a_rejected_home_listing_shows_no_such_directory() {
 
 #[test]
 fn a_home_completion_opens_through_the_listed_path() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "~/t");
     assert_eq!(
@@ -682,7 +679,7 @@ fn a_home_completion_opens_through_the_listed_path() {
 
 #[test]
 fn one_listing_per_directory_typed_through_two_path_segments() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let mut sent = Vec::new();
     for ch in "/tmp/fi".chars() {
@@ -704,7 +701,7 @@ fn one_listing_per_directory_typed_through_two_path_segments() {
 
 #[test]
 fn retyping_a_held_directory_sends_nothing_until_tab() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let mut sent = Vec::new();
     for ch in "/tmp/fi".chars() {
@@ -747,7 +744,7 @@ fn retyping_a_held_directory_sends_nothing_until_tab() {
 
 #[test]
 fn a_rejected_listing_shows_no_notice_and_is_never_asked_again() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
     app.on_line(refused(&sent[0].0, "unreadable"));
@@ -769,7 +766,7 @@ fn malformed_answers_keep_the_recents_with_no_notice() {
         json!({"directories": ["a"], "path": "x/"}),
     ];
     for result in malformed {
-        let mut app = home();
+        let mut app = home_with(80, 24, launch());
         open(&mut app);
         let sent = type_path(&mut app, "/");
         app.on_line(accepted(&sent[0].0, result.clone()));
@@ -781,7 +778,7 @@ fn malformed_answers_keep_the_recents_with_no_notice() {
 
 #[test]
 fn foreign_ids_pass_the_picker_untouched() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
     app.on_line(accepted(
@@ -799,7 +796,7 @@ fn foreign_ids_pass_the_picker_untouched() {
 
 #[test]
 fn an_answer_after_esc_matches_nothing_with_no_notice() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
     assert_eq!(key(&mut app, Key::Esc), Effect::None);
@@ -815,7 +812,7 @@ fn an_answer_after_esc_matches_nothing_with_no_notice() {
 
 #[test]
 fn an_answer_for_a_typed_past_directory_waits_until_typed_back() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/a/");
     answer(&mut app, &sent[1].0, &["x"], "/a/");
@@ -833,7 +830,7 @@ fn an_answer_for_a_typed_past_directory_waits_until_typed_back() {
 
 #[test]
 fn a_late_listing_keeps_its_focused_recent() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "away", "/other"));
     clear_open(&mut app);
@@ -850,7 +847,7 @@ fn a_late_listing_keeps_its_focused_recent() {
 
 #[test]
 fn a_late_listing_focuses_its_first_completion_without_a_recent() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/a");
     answer(&mut app, &sent[0].0, &["a1", "a2"], "/");
@@ -859,7 +856,7 @@ fn a_late_listing_focuses_its_first_completion_without_a_recent() {
 
 #[test]
 fn the_picker_queues_while_down_and_asks_at_hello() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     clear_open(&mut app);
     assert_eq!(type_path(&mut app, "/"), Vec::new());
     let lines = commands(app.on_line(hello()));
@@ -874,7 +871,7 @@ fn the_picker_queues_while_down_and_asks_at_hello() {
 
 #[test]
 fn hello_with_no_picker_sends_no_directories() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let lines = commands(app.on_line(hello()));
     assert_eq!(lines.len(), 2);
     assert!(
@@ -884,7 +881,7 @@ fn hello_with_no_picker_sends_no_directories() {
 
 #[test]
 fn a_disconnect_asks_in_flight_directories_once_more() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
     app.disconnected();
@@ -905,7 +902,7 @@ fn a_disconnect_asks_in_flight_directories_once_more() {
 
 #[test]
 fn a_disconnect_requeues_two_directories_in_send_order() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     clear_open(&mut app);
     assert!(type_path(&mut app, "/").is_empty());
     assert!(type_path(&mut app, "a/").is_empty());
@@ -920,7 +917,7 @@ fn a_disconnect_requeues_two_directories_in_send_order() {
 
 #[test]
 fn backspace_to_recents_while_down_sends_nothing_at_hello() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     clear_open(&mut app);
     assert!(type_path(&mut app, "/a").is_empty());
     assert_eq!(key(&mut app, Key::Backspace), Effect::None);
@@ -936,7 +933,7 @@ fn backspace_to_recents_while_down_sends_nothing_at_hello() {
 fn enter_with_a_typed_text_is_inert_while_down() {
     // A focused completion with its listing held: Enter does nothing
     // while down, and chooses once back up.
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
     answer(&mut app, &sent[0].0, &["a1"], "/");
@@ -959,7 +956,7 @@ fn enter_with_a_typed_text_is_inert_while_down() {
 fn enter_on_a_held_or_unheld_text_is_inert_while_down() {
     // A resolvable text with its listings held: Enter does nothing
     // while down, and chooses once back up.
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/a1/");
     answer(&mut app, &sent[1].0, &[], "/a1/");
@@ -972,7 +969,7 @@ fn enter_on_a_held_or_unheld_text_is_inert_while_down() {
     assert_eq!(chips(&app)[0], "[a1]");
     // An unheld text: Enter does nothing while down, and waits for
     // the re-asked listing once back up.
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
     app.disconnected();
@@ -991,7 +988,7 @@ fn enter_on_a_held_or_unheld_text_is_inert_while_down() {
 
 #[test]
 fn enter_on_a_focused_recent_is_inert_while_down() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "away", "/other"));
     clear_open(&mut app);
@@ -1009,7 +1006,7 @@ fn enter_on_a_focused_recent_is_inert_while_down() {
 
 #[test]
 fn enter_with_the_recents_alone_chooses_while_down() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     clear_open(&mut app);
     assert_eq!(key(&mut app, Key::Down), Effect::None);
     assert_eq!(key(&mut app, Key::Enter), Effect::None);
@@ -1018,7 +1015,7 @@ fn enter_with_the_recents_alone_chooses_while_down() {
 
 #[test]
 fn a_new_opening_starts_empty_and_asks_again() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
     answer(&mut app, &sent[0].0, &["a1"], "/");
@@ -1034,7 +1031,7 @@ fn a_new_opening_starts_empty_and_asks_again() {
 
 #[test]
 fn backspace_past_the_text_returns_the_selection_to_the_first_recent() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "here", "/w"));
     app.on_line(live("s_bbbbbbbbbbbbbbbb", "away", "/other"));
@@ -1074,7 +1071,7 @@ fn launch_location_exposes_only_its_own_machine() {
 
 #[test]
 fn the_picker_refills_its_recents_until_a_key_touches_it() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.home_click(Spot::Workspace);
     assert_eq!(recents(&app), ["/w"]);
@@ -1087,7 +1084,7 @@ fn the_picker_refills_its_recents_until_a_key_touches_it() {
 
 #[test]
 fn local_and_remote_pickers_share_one_layout() {
-    let mut local = home();
+    let mut local = home_with(80, 24, launch());
     let mut remote = remote();
     let mut screens = Vec::new();
     for (app, root) in [(&mut local, "/w/"), (&mut remote, "~/")] {
@@ -1238,7 +1235,7 @@ fn a_remote_reopening_lists_home_again_with_its_recents_below() {
 
 #[test]
 fn the_local_picker_opens_on_its_recents_alone() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     open(&mut app);
     assert_eq!(typed_text(&app), None);
     assert_eq!(recents(&app), ["/w"]);
