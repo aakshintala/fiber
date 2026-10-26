@@ -226,7 +226,7 @@ impl Mcp {
         };
         Frame {
             title: "MCP servers".to_owned(),
-            command: "/mcp",
+            command: "/mcp".to_owned(),
             rows,
             list: self.list,
             below,

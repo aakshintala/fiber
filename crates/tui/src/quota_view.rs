@@ -183,9 +183,9 @@ pub(crate) fn frame(
     Frame {
         title: "Quota".to_owned(),
         command: if fetching {
-            "/quota · fetching"
+            "/quota · fetching".to_owned()
         } else {
-            "/quota"
+            "/quota".to_owned()
         },
         rows: out,
         list,

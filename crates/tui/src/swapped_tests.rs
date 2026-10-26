@@ -166,7 +166,7 @@ fn about_groups_thousands() {
 fn frame(rows: usize) -> Frame {
     Frame {
         title: "Settings".to_owned(),
-        command: "/settings",
+        command: "/settings".to_owned(),
         rows: (0..rows)
             .map(|at| vec![(format!("row {at}"), None, Ink::Plain)])
             .collect(),
@@ -225,7 +225,7 @@ fn top_row(title: &str, command: &'static str, width: u16) -> Buffer {
     let mut buf = Buffer::empty(area);
     let frame = Frame {
         title: title.to_owned(),
-        command,
+        command: command.to_owned(),
         rows: Vec::new(),
         list: List::default(),
         below: Vec::new(),
@@ -331,7 +331,7 @@ fn a_narrow_top_row_drops_the_command_before_esc() {
 fn a_heading_cell_is_bold_and_a_muted_cell_is_muted() {
     let frame = Frame {
         title: "Models".to_owned(),
-        command: "/model",
+        command: "/model".to_owned(),
         rows: vec![
             vec![("acme".to_owned(), None, Ink::Heading)],
             vec![
@@ -379,7 +379,7 @@ fn a_heading_cell_is_bold_and_a_muted_cell_is_muted() {
 fn a_role_cell_draws_its_role_and_a_muted_cell_is_faint() {
     let frame = Frame {
         title: "Context".to_owned(),
-        command: "/context",
+        command: "/context".to_owned(),
         rows: vec![
             vec![("■ ".to_owned(), None, Ink::Role(Role::Error))],
             vec![("tail".to_owned(), None, Ink::Muted)],
@@ -676,7 +676,7 @@ fn drag_over(
 fn made_frame(rows: &[&str], below: &[&str], field: Option<(&str, usize)>) -> Frame {
     Frame {
         title: "Keys".to_owned(),
-        command: "/keys",
+        command: "/keys".to_owned(),
         rows: rows
             .iter()
             .map(|row| vec![((*row).to_owned(), None, Ink::Plain)])

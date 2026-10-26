@@ -410,6 +410,7 @@ impl Loop {
                         details
                     }
                 });
+                let separates = hook_artifact.is_some();
                 let replaces = content.is_some();
                 let full = match content {
                     Some(text) => lined(&text),
@@ -423,12 +424,13 @@ impl Loop {
                 // text keeps its notice: cutting it again would report the
                 // notice's bytes as the removed count instead of the
                 // command's missing bytes.
-                let kept = if replaces { None } else { kept };
+                let kept = if replaces || separates { None } else { kept };
                 let (content, kept) = if full.is_empty() {
                     (Vec::new(), None)
                 } else if replaces && full.len() > cap {
                     let (text, ranges) = cut_hook_content(&full, bound, &path);
-                    (vec![ContentPart::Text { text }], Some(ranges))
+                    let kept = if separates { None } else { Some(ranges) };
+                    (vec![ContentPart::Text { text }], kept)
                 } else {
                     (vec![ContentPart::Text { text: full }], kept)
                 };
