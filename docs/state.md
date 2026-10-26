@@ -463,7 +463,7 @@ started with `isolation: worktree`, of `fiber ask --worktree` or of the
 terminal's new-worktree switch (`docs/invocation.md`, "Isolation"). When one
 is removed or kept is `docs/delegates.md` ("Worktrees"). A kept worktree is
 removed only by `fiber sessions prune` (`docs/invocation.md`, "Deleting and
-pruning"). A worktree's lock file coordinates a resume's recreation, and an end-of-run removal, against the processes running in the worktree. Every process that runs in a worktree it did not just create holds the file shared; a recreation holds it exclusively while it checks and makes the worktree again, and a removal takes it exclusively without waiting, keeping the worktree when another process holds it. The file stays whenever its worktree stays, and goes only after a whole removal, not when only the directory is removed and the branch is kept.
+pruning"). A worktree's lock file coordinates a resume's recreation, an end-of-run removal and `fiber sessions prune` against the processes running in the worktree. Every process that runs in a worktree it did not just create holds the file shared; a delegate's parent holds it shared before creation until the child records `session_started` after acquiring its own share; a recreation holds it exclusively while it checks and makes the worktree again, and a removal takes it exclusively without waiting, keeping the worktree when another process holds it. The file stays whenever its worktree stays, and goes only after a whole removal, not when only the directory is removed and the branch is kept.
 
 **Sockets.** `run/<session_id>` is the local socket of a running session
 (`docs/invocation.md`, "Processes"), mode 0600 in a 0700 directory. The hub, a

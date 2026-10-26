@@ -7,7 +7,7 @@
 
 use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -49,6 +49,68 @@ pub enum Watched {
     Closed,
 }
 
+/// The worktree a run ends, or only reports when resuming.
+#[derive(Debug, Clone)]
+pub struct EndWorktree {
+    /// The worktree directory.
+    pub path: PathBuf,
+    /// The recorded branch.
+    pub branch: String,
+    /// The initial commit, absent on resumed runs.
+    pub base: Option<String>,
+    /// Whether this runner owns removal.
+    pub remove: bool,
+}
+
+/// A shared, idempotent release of the parent's worktree lock.
+#[derive(Clone)]
+pub struct WorktreeGuard(Arc<WorktreeHold>);
+
+struct WorktreeHold(Mutex<Option<Box<dyn FnOnce() + Send>>>);
+
+impl WorktreeGuard {
+    /// Keeps the share alive until acknowledgement or failed-start cleanup.
+    /// `release` drops the shared lock; it must not call back into this guard.
+    pub fn new(release: impl FnOnce() + Send + 'static) -> Self {
+        Self(Arc::new(WorktreeHold(Mutex::new(Some(Box::new(release))))))
+    }
+
+    /// Releases once, even when the watcher and runner race.
+    pub fn release(&self) {
+        // Keep the mutex until the fd is closed: teardown must not race
+        // a watcher that took the callback but has not dropped its share.
+        let mut held = lock(&self.0.0);
+        if let Some(release) = held.take() {
+            release();
+        }
+    }
+}
+
+impl Drop for WorktreeHold {
+    fn drop(&mut self) {
+        if let Some(release) = lock(&self.0).take() {
+            release();
+        }
+    }
+}
+
+/// Creates the worktree and its parent's shared hold before child launch.
+pub type CreateWorktree = Arc<
+    dyn Fn(&Path, &SessionId) -> Result<(EndWorktree, WorktreeGuard), crate::JobsError>
+        + Send
+        + Sync,
+>;
+
+/// Inspects, optionally removes, and reports a worktree at run end.
+pub type FinishWorktree =
+    Arc<dyn Fn(EndWorktree) -> contract::events::FinishedWorktree + Send + Sync>;
+
+pub(crate) struct WorktreeRun {
+    pub(crate) end: EndWorktree,
+    pub(crate) guard: Option<WorktreeGuard>,
+    pub(crate) finish: FinishWorktree,
+}
+
 /// What the launcher receives: everything the child's argv needs.
 pub struct Launched {
     /// The child's depth in the delegate tree.
@@ -63,6 +125,8 @@ pub struct Launched {
     pub prompt: String,
     /// The parent's workspace, which the delegate shares.
     pub workspace: PathBuf,
+    /// The parent's pre-created worktree, absent without isolation.
+    pub worktree: Option<contract::shapes::Worktree>,
     /// What this launch starts: a fresh child or a resume of the
     /// delegate's own session. A fresh launch and a resume render
     /// different argv, so the shape is an enum, never flags that can
@@ -288,6 +352,7 @@ pub(crate) struct Runner {
     /// across watches: each watch runs on its own thread, but the poll
     /// interval spans them.
     last_cap_check: Arc<Mutex<Option<Instant>>>,
+    worktree_run: Option<WorktreeRun>,
 }
 
 impl Runner {
@@ -331,9 +396,31 @@ impl Runner {
                 shared,
                 park,
                 last_cap_check: Arc::new(Mutex::new(None)),
+                worktree_run: None,
             },
             stop,
         )
+    }
+
+    /// Attaches the fresh run's cleanup or a resumed run's report-only end.
+    pub(crate) fn with_worktree(mut self, worktree_run: Option<WorktreeRun>) -> Self {
+        self.worktree_run = worktree_run;
+        self
+    }
+
+    /// Ends the worktree before reporting, also used after a failed spawn.
+    pub(crate) fn end_worktree(&self) -> Option<contract::events::FinishedWorktree> {
+        self.worktree_run.as_ref().map(|run| {
+            if let Some(guard) = &run.guard {
+                guard.release();
+            }
+            (run.finish)(EndWorktree {
+                path: run.end.path.clone(),
+                branch: run.end.branch.clone(),
+                base: run.end.base.clone(),
+                remove: run.end.remove,
+            })
+        })
     }
 
     /// Builds the child's command, pipes its stdio, makes it the leader
@@ -462,13 +549,14 @@ impl Runner {
                 };
                 drop(_lifeline);
                 let socket = lock(&fold).socket.clone();
-                let (completed, finished) = outcome(
+                let (completed, mut finished) = outcome(
                     self.shared.reason(),
                     socket.as_ref(),
                     stdout.as_ref(),
                     status,
                     &self.job_id,
                 );
+                finished.worktree = self.end_worktree();
                 finish.report(completed, Some(finished));
                 self.retire(&mut listing);
                 return;
@@ -523,6 +611,7 @@ impl Runner {
                     output_path,
                     wake: Arc::clone(&wake),
                     on_usage: self.on_usage.clone(),
+                    worktree_guard: self.worktree_run.as_ref().and_then(|run| run.guard.clone()),
                 };
                 thread::spawn(|| watcher.run());
             }
@@ -637,12 +726,21 @@ struct Watcher {
     /// Forwards each well-formed `usage_recorded` envelope to the loop.
     /// `None` keeps the existing unwired behavior.
     on_usage: Option<UsageForward>,
+    worktree_guard: Option<WorktreeGuard>,
 }
 
 impl Watcher {
     fn run(self) {
         let after = self.after;
         let result = (self.watch)(&self.session_id, after, &mut |envelope: &Envelope| {
+            // Adoption takes the child's share before its log opens. A full
+            // subscription replays this durable line even after late attach.
+            if envelope.kind == "session_started"
+                && envelope.session_id == self.session_id
+                && let Some(guard) = &self.worktree_guard
+            {
+                guard.release();
+            }
             let exited = {
                 let mut fold = lock(&self.fold);
                 if !note_seq(&mut fold.last_seq, envelope.seq.map(|seq| seq.0)) {

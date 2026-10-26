@@ -180,6 +180,148 @@ fn warn_line(home: &Path, id: &str) -> serde_json::Value {
 }
 
 #[test]
+fn delegate_creation_holds_before_add_and_child_adoption_overlaps() {
+    fakes::within("delegate lock handoff", Deadline::after(BUDGET), || {
+        let home = fakes::TempDir::new("delegate-handoff-home");
+        let repo = repo("delegate-handoff-repo");
+        let id = SessionId("s_0123456789abcdef".into());
+        let path = worktree_path(home.path(), &key_of(repo.path()), &id.0);
+        let (created, parent) =
+            super::create_delegate_worktree(repo.path(), home.path(), &id, &|command| {
+                assert!(!path.exists(), "share precedes git worktree add");
+                assert!(path.with_extension("lock").exists());
+                assert!(super::try_hold_removal(&path).unwrap().is_none());
+                command.output()
+            })
+            .unwrap();
+        let (record, child) = super::adopt_delegate_worktree(&created.path, &id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.branch, created.branch);
+        assert!(record.repository.is_some());
+        drop(parent);
+        assert!(
+            super::try_hold_removal(&created.path).unwrap().is_none(),
+            "child holds independently"
+        );
+        drop(child);
+        assert!(super::try_hold_removal(&created.path).unwrap().is_some());
+        assert!(
+            super::adopt_delegate_worktree(&created.path, &SessionId("s_other".into()))
+                .unwrap()
+                .is_none()
+        );
+    });
+}
+
+#[test]
+fn delegate_end_removes_only_clean_unadvanced_unshared_worktrees() {
+    fakes::within("delegate end matrix", Deadline::after(BUDGET), || {
+        for mode in ["clean", "dirty", "advanced", "shared", "report"] {
+            let home = fakes::TempDir::new("delegate-end-home");
+            let repo = repo("delegate-end-repo");
+            let id = SessionId("s_0123456789abcdef".into());
+            let (created, parent) =
+                super::create_delegate_worktree(repo.path(), home.path(), &id, &direct).unwrap();
+            match mode {
+                "dirty" => fs::write(created.path.join("new.txt"), "keep").unwrap(),
+                "advanced" => {
+                    git(&created.path, &["commit", "--allow-empty", "-m", "child"]);
+                }
+                _ => {}
+            }
+            let child = (mode == "shared").then(|| super::share(&created.path).unwrap());
+            drop(parent);
+            let finished = super::end_delegate_worktree(
+                home.path(),
+                &id,
+                fakes::clock::FakeClock::new(),
+                &created.path,
+                &created.branch,
+                Some(&created.base),
+                mode != "report",
+            );
+            assert_eq!(finished.worktree.path, created.path.to_string_lossy());
+            assert_eq!(finished.worktree.branch, created.branch);
+            assert_eq!(finished.worktree.repository, None);
+            assert_eq!(finished.dirty, mode == "dirty");
+            assert_eq!(created.path.exists(), mode != "clean");
+            drop(child);
+        }
+    });
+}
+
+#[test]
+fn delegate_end_reports_a_missing_worktree_clean_and_keeps_a_non_worktree() {
+    fakes::within("delegate end absent", Deadline::after(BUDGET), || {
+        let home = fakes::TempDir::new("delegate-end-absent-home");
+        let repo = repo("delegate-end-absent-repo");
+        let id = SessionId("s_0123456789abcdef".into());
+        let branch = format!("fiber/{}", id.0);
+        // A recorded path that was never created: the inspection finds
+        // no worktree and the path is absent, so the end reports clean
+        // with nothing to remove.
+        let missing = worktree_path(home.path(), &key_of(repo.path()), &id.0);
+        let finished = super::end_delegate_worktree(
+            home.path(),
+            &id,
+            fakes::clock::FakeClock::new(),
+            &missing,
+            &branch,
+            Some("base"),
+            true,
+        );
+        assert_eq!(finished.worktree.path, missing.to_string_lossy());
+        assert_eq!(finished.worktree.branch, branch);
+        assert!(!finished.dirty);
+        assert!(!missing.exists(), "no removal to attempt");
+        // A present path that is no worktree stays conservative: the end
+        // reports dirty yet still removes nothing.
+        let plain = home.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        let finished = super::end_delegate_worktree(
+            home.path(),
+            &id,
+            fakes::clock::FakeClock::new(),
+            &plain,
+            &branch,
+            Some("base"),
+            true,
+        );
+        assert_eq!(finished.worktree.path, plain.to_string_lossy());
+        assert!(finished.dirty);
+        assert!(plain.exists(), "a non-worktree is never removed");
+    });
+}
+
+#[test]
+fn delegate_creation_preserves_repository_and_git_failure_kinds() {
+    fakes::within("delegate creation errors", Deadline::after(BUDGET), || {
+        let home = fakes::TempDir::new("delegate-create-home");
+        let plain = fakes::TempDir::new("delegate-nonrepo");
+        let id = SessionId("s_0123456789abcdef".into());
+        assert!(matches!(
+            super::create_delegate_worktree(plain.path(), home.path(), &id, &direct),
+            Err(super::DelegateCreateError::NotARepository { .. })
+        ));
+        let repo = repo("delegate-create-repo");
+        let result = super::create_delegate_worktree(repo.path(), home.path(), &id, &|_| {
+            Err(io::Error::other("private output"))
+        });
+        let Err(super::DelegateCreateError::Failed { message }) = result else {
+            panic!("typed git failure");
+        };
+        assert!(!message.contains("private output"));
+        let path = worktree_path(home.path(), &key_of(repo.path()), &id.0);
+        assert!(!path.exists());
+        assert!(
+            super::try_hold_removal(&path).unwrap().is_some(),
+            "failed creation releases its share"
+        );
+    });
+}
+
+#[test]
 fn isolate_makes_the_worktree_under_the_projects_worktrees() {
     fakes::within(
         "isolate_makes_the_worktree_under_the_projects_worktrees",

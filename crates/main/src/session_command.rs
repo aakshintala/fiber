@@ -219,12 +219,27 @@ pub(crate) fn run(
     if parent.is_some() {
         signals.lifeline(Box::new(std::io::stdin()));
     }
+    // Only a fresh delegate can adopt the worktree its parent made. The
+    // share stays live across run_new, including Log::create and the
+    // session_started event that acknowledges the handoff to the parent.
+    let adopted = if parent.is_some() && args.worktree {
+        match doors::adopt_delegate_worktree(&args.workspace, &SessionId(args.id.clone())) {
+            Ok(adopted) => adopted,
+            Err(failure) => return report(&signals, failure),
+        }
+    } else {
+        None
+    };
+    let (adopted, _shared) = adopted
+        .map(|(worktree, shared)| (Some(worktree), Some(shared)))
+        .unwrap_or((None, None));
     new_session(
         SessionId(args.id),
         crate::per_run(args.model, args.overrides),
         args.prompt,
         parent.is_some(),
         args.worktree,
+        adopted,
         clock,
         &signals,
         fiber,
@@ -252,6 +267,7 @@ pub(crate) fn new_session(
     prompt: Option<String>,
     one_turn: bool,
     worktree: bool,
+    adopted: Option<Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
@@ -267,10 +283,10 @@ pub(crate) fn new_session(
     let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
     let clock = case_run.as_ref().map_or(clock, |case| case.session_clock());
     let host = case_run.as_ref().map(|case| case.host_script());
-    if !worktree {
+    if !worktree || adopted.is_some() {
         return match run_new(
-            id, overrides, prompt, one_turn, None, clock, signals, fiber, host, case_run, parent,
-            None, reads, supervised,
+            id, overrides, prompt, one_turn, adopted, clock, signals, fiber, host, case_run,
+            parent, None, reads, supervised,
         ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),
@@ -379,21 +395,23 @@ pub(crate) fn run_new(
             let workspace = std::env::current_dir()
                 .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
             let sessions = log::sessions_dir(&home, &doors::project(&workspace));
-            let folded = r#loop::forked(&sessions.join(&start.from.session_id.0), start.from.seq)
-                .map_err(|e| failed(e.code(), e))?;
+            let from = log::SessionDir::new(&sessions, &start.from.session_id);
+            let folded =
+                r#loop::forked(from.path(), start.from.seq).map_err(|e| failed(e.code(), e))?;
             let thinking = folded
                 .thinking
                 .as_deref()
                 .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
-            let segments =
-                log::history_to(&sessions.join(&start.from.session_id.0), start.from.seq)
-                    .map_err(|error| failed(error.code(), error))?;
+            let segments = log::history_to(from.path(), start.from.seq)
+                .map_err(|error| failed(error.code(), error))?;
             // The fresh terminal has no child on disk yet, so its kind
             // comes from the continuation: a fork folds `Latest` as of the
             // point, a rewind at the parent's end.
             let seed = match &start.how {
-                r#loop::Continuation::Fork { .. } => crate::resume::fork_seed(&segments),
-                r#loop::Continuation::Rewind { .. } => crate::resume::chain_seed(&segments),
+                r#loop::Continuation::Fork { .. } => crate::resume::fork_seed(&sessions, &segments),
+                r#loop::Continuation::Rewind { .. } => {
+                    crate::resume::chain_seed(&sessions, &segments)
+                }
             }
             .map_err(|error| failed(error.code(), error))?;
             parts_with(
@@ -427,10 +445,10 @@ pub(crate) fn run_new(
         }
     };
     log::crash::attach(&id);
-    let dir = parts.sessions.join(&id.0);
+    let dir = log::SessionDir::new(&parts.sessions, &id);
     // The session directory's log: the opening message's environment
     // names it.
-    parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
+    parts.prompt.session_log = dir.events().display().to_string();
     let Parts {
         sources,
         provider,
@@ -517,7 +535,7 @@ pub(crate) fn run_new(
         fiber,
         &home,
         &workspace,
-        &dir.join("artifacts"),
+        &dir.artifacts(),
         &clock,
         &jobs,
         &locks,
@@ -571,7 +589,7 @@ pub(crate) fn run_new(
     };
     let session = match Session::open_with_timing(
         &home,
-        &dir,
+        dir.path(),
         &log,
         Arc::clone(&clock),
         infos,
@@ -598,7 +616,7 @@ pub(crate) fn run_new(
         switching.reacher(Arc::new(crate::connect)),
         budget,
         &retry,
-        dir.clone(),
+        dir.path().to_path_buf(),
         id.clone(),
     ));
     extensions.model_to(host_model.clone());
@@ -672,7 +690,7 @@ pub(crate) fn run_new(
     let reads = switching.reads();
     if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
         servers.stop();
-        close(session, log, &home, &dir, &workspace, &*clock);
+        close(session, log, &home, dir.path(), &workspace, &*clock);
         return Ok(code);
     }
     let inbox_wake = session.inbox_wake();
@@ -699,7 +717,7 @@ pub(crate) fn run_new(
     let code = run_turn(
         &session,
         &log,
-        &dir,
+        dir.path(),
         prompt,
         run_one_turn,
         cancel,
@@ -737,6 +755,7 @@ pub(crate) fn run_new(
                             permissions,
                         },
                         parent,
+                        worktree,
                     ),
                     (None, None) if supervised => Loop::supervised(
                         r#loop::Session {
@@ -837,7 +856,7 @@ pub(crate) fn run_new(
         }
     }
     servers.stop();
-    close(session, log, &home, &dir, &workspace, &*clock);
+    close(session, log, &home, dir.path(), &workspace, &*clock);
     Ok(code)
 }
 

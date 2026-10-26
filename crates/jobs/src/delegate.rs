@@ -1,7 +1,7 @@
 //! A Fiber delegate: spawning the child session, watching it to its end,
 //! and folding how it ended (`docs/delegates.md`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,7 +24,10 @@ pub use models::{DelegateModels, Resolve};
 pub(crate) mod message;
 
 pub use message::{DelegateMessage, LastSeq, Steer, Steered};
-pub use run::{Fresh, Launch, Launched, Start, Watch, Watched};
+pub use run::{
+    CreateWorktree, EndWorktree, FinishWorktree, Fresh, Launch, Launched, Start, Watch, Watched,
+    WorktreeGuard,
+};
 
 use run::Runner;
 
@@ -37,13 +40,18 @@ use crate::registry::{Registry, mint_job_id};
 /// is recorded; the runner thread owns everything after that.
 ///
 /// The fields are wired by `main`: delegates of `parent` share `workspace`
-/// and log under `sessions`; `bound` is the stop bound and `cap` the
-/// output cap.
-// debt: the wiring fields repeat on `DelegateFork` and both `starter()`
-// builders forward them field by field; move them into one shared `Wiring`
-// struct embedded by each tool; the next edit that adds, removes, or
-// renames any wiring field on either tool.
+/// and each child's log resolves through `events_for`; `bound` is the stop
+/// bound and `cap` the output cap.
 pub struct DelegateSpawn {
+    /// The shared launch and lifecycle wiring.
+    pub wiring: DelegateWiring,
+    /// Resolves a `fiber:` reference, or lists the valid ones.
+    pub resolve: Resolve,
+}
+
+/// The launch and lifecycle wiring shared by delegate spawn and fork.
+#[derive(Clone)]
+pub struct DelegateWiring {
     /// This session's depth in the delegate tree.
     pub depth: u32,
     /// The session's jobs.
@@ -52,21 +60,22 @@ pub struct DelegateSpawn {
     pub parent: SessionId,
     /// The parent's workspace, which the delegate shares.
     pub workspace: PathBuf,
-    /// Where delegates log: each child's `events.jsonl` lives under
-    /// `<sessions>/<session id>`.
-    pub sessions: PathBuf,
+    /// Resolves the child's `events.jsonl` from its selected workspace and id.
+    pub events_for: EventsFor,
     /// The session clock.
     pub clock: Arc<dyn contract::clock::Clock>,
     /// How long a stop waits before SIGKILL.
     pub bound: Duration,
     /// The output cap, in bytes of the delegate's `events.jsonl`.
     pub cap: u64,
-    /// Resolves a `fiber:` reference, or lists the valid ones.
-    pub resolve: Resolve,
     /// Builds the child's command.
     pub launch: Launch,
     /// Watches the child's socket.
     pub watch: Watch,
+    /// Creates a worktree with a shared hold before child launch.
+    pub create: CreateWorktree,
+    /// Inspects and ends a run's worktree before reporting completion.
+    pub finish: FinishWorktree,
 }
 
 /// Starts a Fiber fork: a child `fiber session` that continues a point in
@@ -78,35 +87,20 @@ pub struct DelegateSpawn {
 /// admission; the caller wires the reader.
 ///
 /// The fields are wired by `main`: like a spawn's, delegates of `parent`
-/// share `workspace` and log under `sessions`; `bound` is the stop bound
-/// and `cap` the output cap.
+/// share `workspace`, and each child's log resolves through `events_for`;
+/// `bound` is the stop bound and `cap` the output cap.
 pub struct DelegateFork {
-    /// This session's depth in the delegate tree.
-    pub depth: u32,
-    /// The session's jobs.
-    pub registry: Arc<Registry>,
-    /// The parent session: the child's `--parent`.
-    pub parent: SessionId,
-    /// The parent's workspace, which the fork shares.
-    pub workspace: PathBuf,
-    /// Where forks log: each child's `events.jsonl` lives under
-    /// `<sessions>/<session id>`.
-    pub sessions: PathBuf,
-    /// The session clock.
-    pub clock: Arc<dyn contract::clock::Clock>,
-    /// How long a stop waits before SIGKILL.
-    pub bound: Duration,
-    /// The output cap, in bytes of the fork's `events.jsonl`.
-    pub cap: u64,
+    /// The shared launch and lifecycle wiring.
+    pub wiring: DelegateWiring,
     /// Reads the point the fork continues from, with the calling action
     /// when the loop runs the call (`Some`) and without it (`None`) on
     /// any other path.
     pub point: ForkPoint,
-    /// Builds the child's command.
-    pub launch: Launch,
-    /// Watches the child's socket.
-    pub watch: Watch,
 }
+
+/// Resolves a child's `events.jsonl` using the selected workspace's project
+/// identity, without making `jobs` depend on the session directory layout.
+pub type EventsFor = Arc<dyn Fn(&Path, &SessionId) -> PathBuf + Send + Sync>;
 
 /// Reads the point a fork continues from: the caller wires the reader,
 /// and the fork only calls it. The
@@ -256,6 +250,8 @@ impl Tool for DelegateSpawn {
                         "minimum": 1,
                         "description": "Stops the delegate after this many milliseconds; it then ends failed with code timeout. Optional, with no default."
                     },
+                    "isolation": { "type": "string", "enum": ["none", "worktree"] },
+                    "workspace": { "type": "string" },
                     "model": {
                         "description": "The delegate's model: a configured role name or a full `fiber:` reference, checked when the call is made. Required."
                     }
@@ -329,7 +325,7 @@ impl DelegateSpawn {
         arguments: &Map<String, Value>,
         extension: Option<ExtensionStart<'_>>,
     ) -> Result<Started, JobsError> {
-        if let Some(error) = depth_refusal(self.depth, "delegate_spawn") {
+        if let Some(error) = depth_refusal(self.wiring.depth, "delegate_spawn") {
             return Err(error);
         }
         if extension.is_some() {
@@ -338,7 +334,12 @@ impl DelegateSpawn {
                 .filter(|key| {
                     !matches!(
                         key.as_str(),
-                        "description" | "prompt" | "model" | "timeout_ms"
+                        "description"
+                            | "prompt"
+                            | "model"
+                            | "timeout_ms"
+                            | "isolation"
+                            | "workspace"
                     )
                 })
                 .cloned()
@@ -348,6 +349,21 @@ impl DelegateSpawn {
             }
         }
         let (description, prompt, timeout) = check_effects_arguments(arguments)?;
+        let isolated = match arguments.get("isolation") {
+            None => false,
+            Some(Value::String(value)) if value == "none" => false,
+            Some(Value::String(value)) if value == "worktree" => true,
+            Some(_) => return Err(JobsError::IsolationUnknown),
+        };
+        let workspace = match arguments.get("workspace") {
+            None => self.wiring.workspace.clone(),
+            Some(Value::String(value)) => PathBuf::from(value),
+            Some(_) => {
+                return Err(JobsError::ArgumentsNotStrings {
+                    names: vec!["workspace".to_owned()],
+                });
+            }
+        };
         // The schema leaves `model` optional and untyped, so a missing or
         // wrongly typed value reaches this check, which lists the valid
         // roles and references (`docs/delegates.md`, "Choosing a model").
@@ -385,7 +401,7 @@ impl DelegateSpawn {
                 return Err(JobsError::CredentialUnavailable { message });
             }
         };
-        self.starter().start(
+        self.wiring.start(
             "delegate_spawn",
             Origin::Spawn {
                 resolved,
@@ -395,6 +411,8 @@ impl DelegateSpawn {
             prompt,
             timeout,
             extension,
+            isolated,
+            workspace,
         )
     }
 }
@@ -418,67 +436,7 @@ pub(crate) enum Origin {
     },
 }
 
-/// The fields a delegate start admits, spawns and records with: the
-/// admit-to-record tail both delegate tools share. Built per call from
-/// either tool's wired fields, which name the same registry, parent,
-/// paths, clock, bounds and closures.
-pub(crate) struct Starter<'a> {
-    /// The session's jobs.
-    pub registry: &'a Arc<Registry>,
-    /// The parent session: the child's `--parent`.
-    pub parent: &'a SessionId,
-    /// The parent's workspace, which the child shares.
-    pub workspace: &'a PathBuf,
-    /// Where children log.
-    pub sessions: &'a PathBuf,
-    /// The session clock.
-    pub clock: &'a Arc<dyn contract::clock::Clock>,
-    /// How long a stop waits before SIGKILL.
-    pub bound: Duration,
-    /// The output cap, in bytes of the child's `events.jsonl`.
-    pub cap: u64,
-    /// Builds the child's command.
-    pub launch: &'a Launch,
-    /// Watches the child's socket.
-    pub watch: &'a Watch,
-    /// This session's depth in the delegate tree.
-    pub depth: u32,
-}
-
-impl Starter<'_> {
-    /// The shared start, built from either tool's wired fields: the one
-    /// 10-field literal both tools' `starter()` share, so the wiring is
-    /// written once with two users.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "one per wired field both delegate tools share"
-    )]
-    fn wired<'a>(
-        registry: &'a Arc<Registry>,
-        parent: &'a SessionId,
-        workspace: &'a PathBuf,
-        sessions: &'a PathBuf,
-        clock: &'a Arc<dyn contract::clock::Clock>,
-        bound: Duration,
-        cap: u64,
-        launch: &'a Launch,
-        watch: &'a Watch,
-        depth: u32,
-    ) -> Starter<'a> {
-        Starter {
-            registry,
-            parent,
-            workspace,
-            sessions,
-            clock,
-            bound,
-            cap,
-            launch,
-            watch,
-            depth,
-        }
-    }
-
+impl DelegateWiring {
     /// Admits, spawns and records one delegate: the cap check, the spawn
     /// and the record run with `start_gate` held, exactly as
     /// `DelegateSpawn::start` did before the fork shared it. `tool` is
@@ -488,6 +446,10 @@ impl Starter<'_> {
         clippy::result_large_err,
         reason = "every jobs boundary returns the crate's error enum by value"
     )]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the admission carries the validated launch and extension binding"
+    )]
     pub(crate) fn start(
         &self,
         tool: &str,
@@ -496,6 +458,8 @@ impl Starter<'_> {
         prompt: String,
         timeout: Option<Duration>,
         mut extension: Option<ExtensionStart<'_>>,
+        isolated: bool,
+        workspace: PathBuf,
     ) -> Result<Started, JobsError> {
         // The launch's start, and the record's model and point: a spawn
         // resolves its argument and records the resolved reference; a
@@ -541,19 +505,34 @@ impl Starter<'_> {
                     bind(&job_id);
                 }
                 let session_id = run::mint_session_id();
-                let output_path = self
-                    .sessions
-                    .join(&session_id.0)
-                    .join("events.jsonl")
+                let output_path = (self.events_for)(&workspace, &session_id)
                     .to_string_lossy()
                     .into_owned();
+                let created = if isolated {
+                    Some((self.create)(&workspace, &session_id)?)
+                } else {
+                    None
+                };
+                let worktree = created.as_ref().map(|(end, _)| contract::shapes::Worktree {
+                    path: end.path.to_string_lossy().into_owned(),
+                    branch: end.branch.clone(),
+                    repository: None,
+                });
+                let worktree_run = created.map(|(end, guard)| run::WorktreeRun {
+                    end,
+                    guard: Some(guard),
+                    finish: Arc::clone(&self.finish),
+                });
                 let launched = Launched {
                     depth: self.depth.saturating_add(1),
                     session_id: session_id.clone(),
                     job_id: job_id.clone(),
                     parent: self.parent.clone(),
                     prompt,
-                    workspace: self.workspace.clone(),
+                    workspace: worktree
+                        .as_ref()
+                        .map_or(workspace.clone(), |record| PathBuf::from(&record.path)),
+                    worktree,
                     start,
                 };
                 // The stamp covers building the runner, spawning and listing the
@@ -567,17 +546,22 @@ impl Starter<'_> {
                     job_id.clone(),
                     session_id.clone(),
                     PathBuf::from(&output_path),
-                    Arc::clone(self.clock),
+                    Arc::clone(&self.clock),
                     self.bound,
                     self.cap,
-                    Arc::clone(self.watch),
+                    Arc::clone(&self.watch),
                     None,
                     timeout,
                     Some(self.registry.usage_forward()),
                 );
-                let (child, listing) = runner
-                    .spawn(self.launch, &launched)
-                    .map_err(|source| JobsError::SpawnFailed { source })?;
+                let runner = runner.with_worktree(worktree_run);
+                let (child, listing) = match runner.spawn(&self.launch, &launched) {
+                    Ok(started) => started,
+                    Err(source) => {
+                        runner.end_worktree();
+                        return Err(JobsError::SpawnFailed { source });
+                    }
+                };
                 let delegate = DelegateStarted {
                     job_id: job_id.clone(),
                     delegate_session_id: session_id.clone(),
@@ -587,8 +571,8 @@ impl Starter<'_> {
                     // (`docs/events.md`, "`delegate_started`"). A fork
                     // records its point's reference verbatim instead.
                     model: delegate_model,
-                    workspace: self.workspace.to_string_lossy().into_owned(),
-                    worktree: None,
+                    workspace: launched.workspace.to_string_lossy().into_owned(),
+                    worktree: launched.worktree.clone(),
                     forked_from,
                 };
                 let (started, finish) = if let Some((extension, _)) = extension {
@@ -645,41 +629,7 @@ impl Starter<'_> {
     }
 }
 
-impl DelegateSpawn {
-    /// The shared start, built from this tool's wired fields.
-    fn starter(&self) -> Starter<'_> {
-        Starter::wired(
-            &self.registry,
-            &self.parent,
-            &self.workspace,
-            &self.sessions,
-            &self.clock,
-            self.bound,
-            self.cap,
-            &self.launch,
-            &self.watch,
-            self.depth,
-        )
-    }
-}
-
 impl DelegateFork {
-    /// The shared start, built from this tool's wired fields.
-    fn starter(&self) -> Starter<'_> {
-        Starter::wired(
-            &self.registry,
-            &self.parent,
-            &self.workspace,
-            &self.sessions,
-            &self.clock,
-            self.bound,
-            self.cap,
-            &self.launch,
-            &self.watch,
-            self.depth,
-        )
-    }
-
     /// Runs the fork from its checked arguments and calling action:
     /// the depth check, then the argument check, then the point read,
     /// then the start both tools share.
@@ -692,7 +642,7 @@ impl DelegateFork {
         arguments: &Map<String, Value>,
         action: Option<ActionId>,
     ) -> Result<Started, JobsError> {
-        if let Some(error) = depth_refusal(self.depth, "delegate_fork") {
+        if let Some(error) = depth_refusal(self.wiring.depth, "delegate_fork") {
             return Err(error);
         }
         let (description, prompt, timeout) = check_effects_arguments(arguments)?;
@@ -700,13 +650,15 @@ impl DelegateFork {
         // never resolves a point, and a point failure starts nothing.
         let from =
             (self.point)(action.as_ref()).map_err(|failure| JobsError::ForkPoint { failure })?;
-        self.starter().start(
+        self.wiring.start(
             "delegate_fork",
             Origin::Fork { from },
             description,
             prompt,
             timeout,
             None,
+            false,
+            self.wiring.workspace.clone(),
         )
     }
 }
@@ -754,6 +706,26 @@ pub(crate) mod test_rig {
         pub watch: Watch,
     }
 
+    impl Rig {
+        pub(crate) fn wiring(&self) -> super::DelegateWiring {
+            let sessions = self.sessions.clone();
+            super::DelegateWiring {
+                depth: 0,
+                registry: Arc::clone(&self.registry),
+                parent: contract::SessionId("s_parent".into()),
+                workspace: self.sessions.parent().unwrap().to_path_buf(),
+                events_for: Arc::new(move |_, id| sessions.join(&id.0).join("events.jsonl")),
+                clock: Arc::clone(&self.clock) as Arc<dyn contract::clock::Clock>,
+                bound: Duration::from_secs(5),
+                cap: 1024,
+                launch: Arc::clone(&self.launch),
+                watch: Arc::clone(&self.watch),
+                create: crate::support::no_creation(),
+                finish: crate::support::clean_finish(),
+            }
+        }
+    }
+
     pub(crate) fn rig() -> Rig {
         let dir = TempDir::new("fiber-delegate");
         let clock = FakeClock::new();
@@ -781,6 +753,7 @@ pub(crate) mod test_rig {
                 parent: launched.parent.clone(),
                 prompt: launched.prompt.clone(),
                 workspace: launched.workspace.clone(),
+                worktree: launched.worktree.clone(),
                 start: launched.start.clone(),
             });
             let mut command = Command::new("sh");

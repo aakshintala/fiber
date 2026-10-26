@@ -32,6 +32,10 @@ mod usage;
 mod weak_emit;
 mod write;
 
+#[cfg(test)]
+#[path = "session_dir_tests.rs"]
+mod session_dir_tests;
+
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -92,6 +96,54 @@ pub fn session_dir(home: &Path, project: &str, id: &SessionId) -> PathBuf {
 /// [`Path::is_dir`] does.
 pub fn dir_exists(dir: &Path) -> bool {
     dir.is_dir()
+}
+
+/// A session directory: `sessions/<id>`, holding `events.jsonl`,
+/// `session.lock` and `artifacts/` (`docs/events.md`, "The session
+/// directory"). The only shape check is [`SessionDir::require_dir`]; the
+/// join itself is plain, like [`session_dir`].
+pub struct SessionDir(PathBuf);
+
+impl SessionDir {
+    /// The session directory of `id` in `sessions`: `sessions/<id>`, a plain
+    /// join. No existence check happens here.
+    pub fn new(sessions: &Path, id: &SessionId) -> Self {
+        Self(session_path(sessions, id))
+    }
+
+    /// The log in this session directory.
+    pub fn events(&self) -> PathBuf {
+        self.0.join(EVENTS)
+    }
+
+    /// The directory for bytes too large to inline in this session directory.
+    pub fn artifacts(&self) -> PathBuf {
+        self.0.join(ARTIFACTS)
+    }
+
+    /// The session directory itself, for the existing `&Path` boundaries.
+    /// It is never a base for another session-path join.
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+
+    /// Whether the session directory is still there, following links as
+    /// [`Path::is_dir`] does. A missing directory, or a regular file in its
+    /// place, is [`Error::NotFound`] naming the session directory; any other
+    /// metadata failure is [`Error::Io`] naming it.
+    pub fn require_dir(&self) -> Result<(), Error> {
+        match std::fs::metadata(&self.0) {
+            Ok(metadata) if metadata.is_dir() => Ok(()),
+            Ok(_) => Err(Error::NotFound(self.0.clone())),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Err(Error::NotFound(self.0.clone()))
+            }
+            Err(source) => Err(Error::Io {
+                path: self.0.clone(),
+                source,
+            }),
+        }
+    }
 }
 
 /// Where a project's session directories live in Fiber home

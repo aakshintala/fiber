@@ -437,9 +437,18 @@ impl Running {
         args: &[&str],
         stdin: Stdio,
     ) -> (Self, Option<std::process::ChildStdin>) {
+        Self::spawn_stdin_in(setup, args, stdin, setup.root.path())
+    }
+
+    fn spawn_stdin_in(
+        setup: &support::Setup,
+        args: &[&str],
+        stdin: Stdio,
+        workspace: &Path,
+    ) -> (Self, Option<std::process::ChildStdin>) {
         fakes::warm_up(Path::new(env!("CARGO_BIN_EXE_fiber")), &["--bogus"], 2);
         let mut command = setup.fiber(args);
-        command.stdin(stdin);
+        command.stdin(stdin).current_dir(workspace);
         let mut child = command.spawn().unwrap();
         let stdin = child.stdin.take();
         let group = child.id();
@@ -877,6 +886,206 @@ fn a_resumed_depth_two_session_still_refuses_delegate_spawn() {
             .count(),
         2
     );
+}
+
+#[test]
+fn isolated_delegate_outside_a_repository_is_an_argument_error_without_a_child() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let args = json!({"description": "isolated", "prompt": "hello", "model": "fiber:pb/m", "isolation": "worktree", "workspace": setup.workspace()});
+    let parent = ProviderServer::start([
+        support::stream(&[function_call("call_delegate", "delegate_spawn", &args)]),
+        text_reply("allow"),
+        support::hello(),
+    ])
+    .unwrap();
+    let child = ProviderServer::start([support::hello()]).unwrap();
+    providers(&setup, &parent, &child);
+    let (status, lines, stderr) = Running::spawn(&setup, &["ask", "scan"]).wait();
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    // docs/events.md, "Process boundary"/"extensions_loaded"/"Opening message":
+    // the startup prefix precedes the first turn (docs/loop.md, "Starting a
+    // turn"); docs/loop.md, "One step": stream the reply, decide permission,
+    // run the call; "Tool calls that do not run": bad arguments fail the call
+    // with invalid_arguments and the turn continues. The scripted provider
+    // fixes the replies, so the failed validation run holds exactly this
+    // durable order (docs/events.md: the durable lines, in order, are the log).
+    assert_eq!(
+        durable_kinds(&without_copies(&lines)),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let completed = one(&lines, "tool_call_completed");
+    assert_eq!(completed["status"], "failed");
+    assert_eq!(completed["error"]["code"], "invalid_arguments");
+    assert!(
+        completed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not in a git repository")
+    );
+    assert!(child.requests().is_empty());
+}
+
+#[test]
+fn isolated_delegate_spawn_runs_cleans_up_and_reports_the_selected_workspace() {
+    for mode in [
+        "clean", "dirty", "advanced", "ignored", "explicit", "parent",
+    ] {
+        let setup = support::Setup::new();
+        let _guard = arm(&setup);
+        let workspace = setup.workspace();
+        fakes::git::git(&workspace, &["init", "--quiet"]);
+        fs::write(workspace.join("base.txt"), "parent repository").unwrap();
+        fs::write(workspace.join(".gitignore"), "build/\n").unwrap();
+        fakes::git::git(&workspace, &["add", "."]);
+        fakes::git::git(&workspace, &["commit", "--quiet", "-m", "base"]);
+        let second = setup.root.path().join("second");
+        fs::create_dir(&second).unwrap();
+        fakes::git::git(&second, &["init", "--quiet"]);
+        fs::write(second.join("base.txt"), "second repository").unwrap();
+        fakes::git::git(&second, &["add", "."]);
+        fakes::git::git(&second, &["commit", "--quiet", "-m", "second"]);
+        let base_repo = if mode == "explicit" {
+            &second
+        } else {
+            &workspace
+        };
+        let base = fakes::git::git(base_repo, &["rev-parse", "HEAD"]);
+        let mut args = json!({"description": "isolated", "prompt": "hello", "model": "fiber:pb/m", "isolation": "worktree"});
+        if mode == "explicit" {
+            args["workspace"] = json!(second);
+        }
+        let parent = ProviderServer::start([
+            support::stream(&[function_call("call_delegate", "delegate_spawn", &args)]),
+            text_reply("allow"),
+            support::hello(),
+            support::hello(),
+            support::hello(),
+        ])
+        .unwrap();
+        let child = ProviderServer::start([support::hello()]).unwrap();
+        child.hold();
+        providers(&setup, &parent, &child);
+        slow_idle(&setup);
+        let parent_args = if mode == "parent" {
+            vec!["ask", "--worktree", "scan"]
+        } else {
+            vec!["ask", "scan"]
+        };
+        let (mut running, _) =
+            Running::spawn_stdin_in(&setup, &parent_args, Stdio::null(), &workspace);
+        let mut turns = 0;
+        // docs/events.md, `jobs_pending_notified`: the ending notice starts a
+        // turn; docs/delegates.md, "Lifetime": the wake turn waits on the
+        // delegate's finish. While the child is held, exactly two turns end:
+        // the spawn turn, then the ending-notice turn.
+        running.wait_line("parent ending notice while child is held", |line| {
+            turns += usize::from(line["kind"] == "turn_completed");
+            turns == 2
+        });
+        if !child.await_requests(1, fakes::Deadline::after(Duration::from_secs(10))) {
+            child.release();
+            let (status, lines, stderr) = running.wait();
+            panic!(
+                "{mode}: child never requested; status={status:?}; stderr={stderr}; lines={lines:?}"
+            );
+        }
+        let started = one(&running.taken, "delegate_started");
+        let path = PathBuf::from(started["worktree"]["path"].as_str().unwrap());
+        let branch = started["worktree"]["branch"].as_str().unwrap();
+        assert_eq!(
+            branch,
+            format!("fiber/{}", started["delegate_session_id"].as_str().unwrap())
+        );
+        assert_eq!(started["workspace"], started["worktree"]["path"]);
+        assert!(started["worktree"].get("repository").is_none());
+        assert_eq!(
+            fakes::git::git(&path, &["rev-parse", "HEAD"]),
+            base,
+            "{mode}"
+        );
+        assert_eq!(
+            fs::read_to_string(path.join("base.txt")).unwrap(),
+            if mode == "explicit" {
+                "second repository"
+            } else {
+                "parent repository"
+            }
+        );
+        match mode {
+            "dirty" => fs::write(path.join("new.txt"), "keep").unwrap(),
+            "advanced" => {
+                fakes::git::git(&path, &["commit", "--allow-empty", "-m", "delegate"]);
+            }
+            "ignored" => {
+                fs::create_dir(path.join("build")).unwrap();
+                fs::write(path.join("build/output"), "ignored").unwrap();
+            }
+            _ => {}
+        }
+        let child_log = PathBuf::from(
+            one(&running.taken, "job_started")["output_path"]
+                .as_str()
+                .unwrap(),
+        );
+        child.release();
+        let (status, lines, stderr) = running.wait();
+        assert_eq!(status.code(), Some(0), "{mode}: {stderr}");
+        // docs/loop.md, "Starting a turn"/"One step"/"Ending a turn": the
+        // spawn turn, the ending-notice turn, then the wake turn;
+        // docs/delegates.md, "Events": job_started precedes delegate_started,
+        // delegate_finished lands just before job_completed; "Streams": the
+        // delegate's lines stay on its stream, so the parent's own lines are
+        // the role run's order (docs/events.md: the durable lines, in order,
+        // are the log). The scripted providers fix the replies.
+        assert_eq!(
+            durable_kinds(&without_copies(&lines)),
+            ROLE_PARENT_DURABLE,
+            "{mode}"
+        );
+        let child_lines = read_lines(&child_log);
+        // docs/events.md, "Process boundary"/"extensions_loaded"/"Opening
+        // message": the startup prefix precedes the first turn (docs/loop.md,
+        // "Starting a turn"); the held child answers once, so its run holds
+        // exactly this durable order.
+        assert_eq!(durable_kinds(&child_lines), ROLE_CHILD_DURABLE, "{mode}");
+        let child_started = one(&child_lines, "session_started");
+        assert_eq!(child_started["workspace"], started["worktree"]["path"]);
+        assert_eq!(child_started["worktree"]["branch"], branch);
+        assert!(child_started["worktree"]["repository"].is_string());
+        let finished = one(&lines, "delegate_finished");
+        assert_eq!(finished["worktree"]["path"], started["worktree"]["path"]);
+        assert_eq!(finished["worktree"]["branch"], branch);
+        assert_eq!(finished["worktree"]["dirty"], mode == "dirty");
+        assert_eq!(
+            path.exists(),
+            matches!(mode, "dirty" | "advanced"),
+            "{mode}"
+        );
+    }
 }
 
 #[test]

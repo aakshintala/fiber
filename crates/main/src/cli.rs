@@ -881,8 +881,7 @@ pub(crate) struct SessionArgs {
         value_name = "session_id",
         value_parser = parse_session_id,
         requires = "delegate_id",
-        requires = "prompt",
-        conflicts_with = "worktree"
+        requires = "prompt"
     )]
     pub(crate) parent: Option<String>,
 
