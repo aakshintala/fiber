@@ -587,6 +587,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
     let action = envelope.action_id.as_ref().map(|id| id.0.as_str());
     let ts = envelope.ts;
     let kind = envelope.kind.as_str();
+    crash::before_line(fold, envelope);
     // A model call that got through ends the wait to retry.
     if (matches!(
         kind,
@@ -673,7 +674,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
             })
         }),
         "mcp_server_failed" | "fiber_started" | "fiber_exited" | "job_started"
-        | "job_completed" => crash::fold(turns, fold, envelope),
+        | "job_completed" | "rewound" => crash::fold(turns, fold, envelope),
         "preamble_built" | "handoff_started" | "handoff_completed" | "context_nudged" => {
             handoff::fold(turns, fold, envelope)
         }

@@ -72,6 +72,7 @@ const DRAWN_ORDER: &[&str] = &[
     "theme",
     "keys",
     "skills",
+    "rewind",
     "handoff",
     "name",
     "login",
@@ -150,7 +151,6 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
             &"cost",
             &"config",
             &"keybindings",
-            &"rewind",
             &"rename",
             &"exit",
             &"bug"
@@ -254,14 +254,14 @@ fn an_extension_row_takes_its_built_in_slot() {
 
 #[test]
 fn an_extension_row_for_an_undrawn_built_in_stays_in_answer_order() {
-    let all = rows(&[skill("tdd"), extension_row("rewind")]);
-    let rewinds: Vec<&Row> = all.iter().filter(|row| row.name == "rewind").collect();
-    assert_eq!(rewinds.len(), 1);
-    assert_eq!(rewinds[0].tag, "acme");
+    let all = rows(&[skill("tdd"), extension_row("effort")]);
+    let efforts: Vec<&Row> = all.iter().filter(|row| row.name == "effort").collect();
+    assert_eq!(efforts.len(), 1);
+    assert_eq!(efforts[0].tag, "acme");
     let built_ins = rows(&[]).len();
     let (_, answered) = all.split_at(built_ins);
     let answered: Vec<&Row> = answered.iter().collect();
-    assert_eq!(names(&answered), ["tdd", "rewind"]);
+    assert_eq!(names(&answered), ["tdd", "effort"]);
 }
 
 #[test]
@@ -293,6 +293,7 @@ fn prefix_matches_come_before_contains_matches() {
         [
             "resume",
             "reviewer-setup",
+            "rewind",
             "name",
             "reload",
             "Review",
