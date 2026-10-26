@@ -646,6 +646,12 @@ impl DelegateFork {
             return Err(error);
         }
         let (description, prompt, timeout) = check_effects_arguments(arguments)?;
+        let isolated = match arguments.get("isolation") {
+            None => false,
+            Some(Value::String(value)) if value == "none" => false,
+            Some(Value::String(value)) if value == "worktree" => true,
+            Some(_) => return Err(JobsError::IsolationUnknown),
+        };
         // Read after the argument check and before admission: a bad call
         // never resolves a point, and a point failure starts nothing.
         let from =
@@ -657,7 +663,7 @@ impl DelegateFork {
             prompt,
             timeout,
             None,
-            false,
+            isolated,
             self.wiring.workspace.clone(),
         )
     }
