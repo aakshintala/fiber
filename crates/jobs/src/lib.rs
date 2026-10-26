@@ -11,6 +11,7 @@ mod support;
 mod timing_tests;
 mod tool;
 
+pub use delegate::EventsFor;
 pub use delegate::{
     DelegateFork, DelegateMessage, DelegateModels, DelegateSpawn, ForkPoint, Forking, Fresh,
     LastSeq, Launch, Launched, Resolve, Start, Steer, Steered, Watch, Watched,

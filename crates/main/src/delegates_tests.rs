@@ -1959,8 +1959,9 @@ fn no_calling_action_reads_the_latest_message_in_the_log() {
 }
 
 /// The fork tool shares the spawn tool's wiring: depth, registry,
-/// parent, workspace, sessions, clock, bound, cap, launch and watch.
-/// It carries a point reader, not a model resolver.
+/// parent, workspace, clock, bound, cap, launch and watch. Both resolve
+/// a child's log through the same sessions root: the same id names the
+/// same `events.jsonl`. It carries a point reader, not a model resolver.
 #[test]
 fn the_fork_tool_shares_the_spawn_tools_wiring() {
     use contract::tool::Tool as _;
@@ -1972,7 +1973,8 @@ fn the_fork_tool_shares_the_spawn_tools_wiring() {
     assert!(Arc::ptr_eq(&forked.registry, &spawned.registry));
     assert_eq!(forked.parent, spawned.parent);
     assert_eq!(forked.workspace, spawned.workspace);
-    assert_eq!(forked.sessions, spawned.sessions);
+    let id = SessionId("s_child".into());
+    assert_eq!((forked.events_for)(&id), (spawned.events_for)(&id));
     assert!(Arc::ptr_eq(&forked.clock, &spawned.clock));
     assert_eq!(forked.bound, spawned.bound);
     assert_eq!(forked.cap, spawned.cap);

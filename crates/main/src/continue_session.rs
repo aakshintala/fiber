@@ -63,7 +63,12 @@ pub(crate) fn session_continues(
         }
     };
     let sessions = log::sessions_dir(&home, &doors::project(&current));
-    let recorded = match resolve(&new, &old, &sessions.join(&old.0), workspace) {
+    let recorded = match resolve(
+        &new,
+        &old,
+        &log::SessionDir::new(&sessions, &old),
+        workspace,
+    ) {
         Ok(recorded) => recorded,
         Err(e) => return ask_failed(e),
     };
@@ -121,7 +126,7 @@ pub(crate) fn session_continues(
 fn resolve(
     new: &SessionId,
     old: &SessionId,
-    old_dir: &Path,
+    old_dir: &log::SessionDir,
     workspace: &Path,
 ) -> Result<Worktree, Failure> {
     if new == old {
@@ -132,7 +137,7 @@ fn resolve(
     }
     // The first line through the shared scan, exactly as the hub reads
     // it: the workspace is guaranteed by `started_first`.
-    let recorded = match log::started_first(old_dir) {
+    let recorded = match log::started_first(old_dir.path()) {
         Ok(recorded) => recorded,
         Err(log::FirstLineError::Incomplete) => return Err(not_found(old)),
         Err(log::FirstLineError::Corrupt) => return Err(corrupt(old)),
