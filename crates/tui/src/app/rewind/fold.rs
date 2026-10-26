@@ -31,7 +31,7 @@ struct Pending {
 
 /// One step boundary: the point, and what the view says about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Boundary {
+pub(super) struct Boundary {
     /// The log holding the point.
     pub session: SessionId,
     /// The point, in that log.
@@ -60,7 +60,7 @@ pub(crate) enum BoundKind {
 
 /// One folded turn: its prompt and every step boundary it opens into.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TurnRow {
+pub(super) struct TurnRow {
     /// The log holding the turn.
     pub session: SessionId,
     /// The turn's first line minus one: the row's key with its session.
@@ -103,7 +103,7 @@ struct Step {
 /// The files written and the calls that may have changed files since the
 /// chosen point, as folded from the held lines.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct DetailModel {
+pub(super) struct DetailModel {
     /// Paths of calls that declared writes, oldest first.
     pub writes: Vec<String>,
     /// Names of calls that declared executes, oldest first.
@@ -113,7 +113,7 @@ pub(crate) struct DetailModel {
 /// The folded turns and the chain pager: the held lines, the walk state,
 /// the pager wait, and the folded turns with their tool calls.
 #[derive(Debug, Default)]
-pub(crate) struct Fold {
+pub(super) struct Fold {
     /// The session the view opened on: every `history` goes to it, and
     /// it answers from its own read of the chain.
     serving: Option<SessionId>,
@@ -143,33 +143,39 @@ pub(crate) struct Fold {
 
 impl Fold {
     /// An empty fold for `serving`.
-    pub(crate) fn open(serving: SessionId) -> Self {
+    pub(super) fn open(serving: SessionId) -> Self {
         Self {
             serving: Some(serving),
             ..Self::default()
         }
     }
 
-    /// Whether `id` is the `history` request on the wire: only that
-    /// answer folds, and only into the open rewind view.
-    pub(crate) fn pending_is(&self, id: &str) -> bool {
-        self.pending
+    /// Takes the pending `history` request for `id`, dropping its wait.
+    pub(super) fn take_wait(&mut self, id: &str) -> bool {
+        if self
+            .pending
             .as_ref()
             .is_some_and(|pending| pending.id == id)
+        {
+            self.pending = None;
+            true
+        } else {
+            false
+        }
     }
 
     /// Notes the `history` request on the wire.
-    pub(crate) fn begin_wait(&mut self, id: String, sent_at: Option<Instant>) {
+    pub(super) fn begin_wait(&mut self, id: String, sent_at: Option<Instant>) {
         self.pending = Some(Pending { id, sent_at });
     }
 
     /// Drops the `history` request: its late answer folds nowhere.
-    pub(crate) fn abort_wait(&mut self) {
+    pub(super) fn abort_wait(&mut self) {
         self.pending = None;
     }
 
     /// The pending `history`'s deadline: what the frame wakes for.
-    pub(crate) fn wait_deadline(&self) -> Option<Instant> {
+    pub(super) fn wait_deadline(&self) -> Option<Instant> {
         let sent_at = self.pending.as_ref()?.sent_at?;
         sent_at.checked_add(HISTORY_WAIT)
     }
@@ -177,7 +183,7 @@ impl Fold {
     /// Whether the pending `history` wait passed its bound: at or past
     /// ten seconds on checked arithmetic, failing closed when the bound
     /// is unrepresentable.
-    pub(crate) fn wait_due(&self, now: Instant) -> bool {
+    pub(super) fn wait_due(&self, now: Instant) -> bool {
         let Some(pending) = &self.pending else {
             return false;
         };
@@ -192,14 +198,14 @@ impl Fold {
 
     /// Settles the walk as refused or failed with `message`: the walk
     /// ends, and the view shows the message.
-    pub(crate) fn fail_walk(&mut self, message: String) {
+    pub(super) fn fail_walk(&mut self, message: String) {
         self.pending = None;
         self.ended = true;
         self.error = Some(message);
     }
 
     /// Marks a refused page: the walk ends with the turns read so far.
-    pub(crate) fn mark_ended(&mut self) {
+    pub(super) fn mark_ended(&mut self) {
         self.ended = true;
     }
 
@@ -210,7 +216,7 @@ impl Fold {
     /// another session, or that reaches above the named point. Cut-off
     /// turns past each successor's point never fold, because the walk
     /// never asks past them and refuses them here.
-    pub(crate) fn prepend(&mut self, older: Vec<Envelope>) -> Result<(), ()> {
+    pub(super) fn prepend(&mut self, older: Vec<Envelope>) -> Result<(), ()> {
         if older.is_empty() {
             self.start = true;
             if self.forked_from().is_some() {
@@ -269,7 +275,7 @@ impl Fold {
 
     /// Whether the walk reached the chain root: the read ended, or a
     /// segment ended with no onward parent.
-    pub(crate) fn chain_done(&self) -> bool {
+    pub(super) fn chain_done(&self) -> bool {
         self.ended || (self.start && (self.crossed || self.forked_from().is_none()))
     }
 
@@ -277,7 +283,7 @@ impl Fold {
     /// line, or the parent the held run continues from when it reached
     /// its segment's first line. Past the seam every window names its
     /// segment. `None` with nothing held.
-    pub(crate) fn next_args(&self) -> Option<Value> {
+    pub(super) fn next_args(&self) -> Option<Value> {
         let first = self.lines.first()?;
         let Some(serving) = &self.serving else {
             return None;
@@ -305,7 +311,7 @@ impl Fold {
     /// row, each step and the turn's end its boundaries, with every
     /// tool call before each boundary answered. Returns whether this
     /// is the first fold, which takes the default point.
-    pub(crate) fn rebuild(&mut self) -> bool {
+    pub(super) fn rebuild(&mut self) -> bool {
         let fresh = self.turns.is_empty() && self.calls.is_empty();
         let mut turns: Vec<TurnRow> = Vec::new();
         let mut current: Option<Building> = None;
@@ -400,24 +406,24 @@ impl Fold {
     }
 
     /// The folded turns, oldest first.
-    pub(crate) fn turns(&self) -> &[TurnRow] {
+    pub(super) fn turns(&self) -> &[TurnRow] {
         &self.turns
     }
 
     /// Why the view shows no rows, or why a request failed.
-    pub(crate) fn error(&self) -> Option<&str> {
+    pub(super) fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
 
     /// A turn's key by row: its session and start seq.
-    pub(crate) fn turn_key(&self, at: usize) -> Option<(SessionId, u64)> {
+    pub(super) fn turn_key(&self, at: usize) -> Option<(SessionId, u64)> {
         self.turns
             .get(at)
             .map(|turn| (turn.session.clone(), turn.start))
     }
 
     /// A turn's first boundary by row: the default point for its row.
-    pub(crate) fn first_point(&self, at: usize) -> Option<(SessionId, u64)> {
+    pub(super) fn first_point(&self, at: usize) -> Option<(SessionId, u64)> {
         self.turns.get(at).and_then(|turn| {
             turn.bounds
                 .first()
@@ -427,7 +433,7 @@ impl Fold {
 
     /// A boundary's point by rows: its turn's key with its own session
     /// and seq.
-    pub(crate) fn bound_point(
+    pub(super) fn bound_point(
         &self,
         at: usize,
         bound: usize,
@@ -444,17 +450,22 @@ impl Fold {
 
     /// The files written and the calls that may have changed files since
     /// the chosen point, folded from the held lines and calls.
-    pub(crate) fn detail_model(&self, session: &SessionId, seq: u64) -> DetailModel {
+    pub(super) fn detail_model(&self, session: &SessionId, seq: u64) -> DetailModel {
         let mut after: Vec<&Envelope> = Vec::new();
+        let mut passed_session = false;
         let mut past = false;
         for line in &self.lines {
             if !past {
-                if line.session_id != *session {
+                if line.session_id == *session {
+                    passed_session = true;
+                    if line.seq.is_none_or(|held| held.0 <= seq) {
+                        continue;
+                    }
+                } else if !passed_session {
                     continue;
                 }
-                if line.seq.is_none_or(|held| held.0 <= seq) {
-                    continue;
-                }
+                // The next segment continues from this boundary; after
+                // its fork seam, every descendant line follows the point.
                 past = true;
             }
             after.push(line);

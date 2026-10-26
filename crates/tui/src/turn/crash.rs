@@ -29,35 +29,41 @@ pub(crate) struct Crash {
     jobs: HashMap<String, String>,
     /// Descriptions of jobs started on earlier pages and still open.
     earlier: HashMap<String, String>,
-    /// The descriptions this page took from `earlier` for jobs that
-    /// completed orphaned on it: all its seed keeps of job text.
+    /// Descriptions this page took from `earlier` for jobs that ended
+    /// orphaned or stopped on it: all its seed keeps of job text.
     carried: HashMap<String, String>,
+    /// Jobs completed by the contiguous stop run immediately before a
+    /// `rewound` line.
+    rewind_stopped: HashMap<String, String>,
     /// The orphaned-jobs line since the latest `fiber_started`.
     orphans: Option<usize>,
 }
 
 impl Fold {
-    /// The scalar continuation state a page seed keeps. Rendered asides
-    /// stay in resident pages and are folded again from that page's lines
-    /// on reload.
-    pub(crate) fn seed_continuation(&self) -> (usize, bool, Option<u64>, bool) {
+    /// The continuation state a page seed keeps. Rendered asides stay in
+    /// resident pages and are folded again from that page's lines on reload.
+    pub(crate) fn seed_continuation(
+        &self,
+    ) -> (usize, bool, Option<u64>, bool, HashMap<String, String>) {
         (
             self.next,
             self.ledgers,
             self.trigger_at,
             self.crash.suspended,
+            self.crash.rewind_stopped.clone(),
         )
     }
 
     /// A page's starting fold from its seed's continuation state, with no
     /// rendered text: the reload folds the page's own lines into it.
-    /// `carried` names the earlier pages' jobs that complete orphaned on it.
+    /// `carried` names earlier pages' jobs that end on this page.
     pub(crate) fn seeded(
         next: usize,
         ledgers: bool,
         trigger_at: Option<u64>,
         suspended: bool,
         carried: HashMap<String, String>,
+        rewind_stopped: HashMap<String, String>,
     ) -> Self {
         Self {
             next,
@@ -66,6 +72,7 @@ impl Fold {
             crash: Crash {
                 suspended,
                 earlier: carried,
+                rewind_stopped,
                 ..Crash::default()
             },
             ..Self::default()
@@ -81,6 +88,9 @@ impl Fold {
         self.crash
             .earlier
             .extend(std::mem::take(&mut old.crash.earlier));
+        self.crash
+            .rewind_stopped
+            .extend(std::mem::take(&mut old.crash.rewind_stopped));
     }
 
     /// Copies `open`'s open jobs as this candidate page's earlier ones,
@@ -93,10 +103,16 @@ impl Fold {
                 .chain(&open.crash.earlier)
                 .map(|(id, name)| (id.clone(), name.clone())),
         );
+        self.crash.rewind_stopped.extend(
+            open.crash
+                .rewind_stopped
+                .iter()
+                .map(|(id, name)| (id.clone(), name.clone())),
+        );
     }
 
     /// Takes the descriptions this page took from earlier pages for jobs
-    /// that completed orphaned on it.
+    /// that ended on it.
     pub(crate) fn take_carried(&mut self) -> HashMap<String, String> {
         std::mem::take(&mut self.crash.carried)
     }
@@ -209,6 +225,26 @@ fn orphans<'a>(
         })
 }
 
+/// Drops stop completions when a non-job event separates them from a
+/// `rewound` line. The rewind stop wait writes only job records before it.
+pub(crate) fn before_line(fold: &mut Fold, envelope: &Envelope) {
+    if !envelope.is_durable() {
+        return;
+    }
+    if !matches!(
+        envelope.kind.as_str(),
+        "job_started"
+            | "job_completed"
+            | "delegate_started"
+            | "delegate_finished"
+            | "extension_state_set"
+            | "extension_state_unset"
+            | "rewound"
+    ) {
+        fold.crash.rewind_stopped.clear();
+    }
+}
+
 /// Folds `mcp_server_failed`, `fiber_exited`, `fiber_started`,
 /// `job_started` and `job_completed`; false when no card changed.
 pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> bool {
@@ -234,11 +270,13 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             // restored and which jobs stopped (`docs/tui.md`, "Rewind"):
             // a rewind never restores files, and every job still running
             // stops with the old session.
+            let rewind_stopped = std::mem::take(&mut fold.crash.rewind_stopped);
             let mut stopped: Vec<String> = fold
                 .crash
                 .jobs
                 .values()
                 .chain(fold.crash.earlier.values())
+                .chain(rewind_stopped.values())
                 .cloned()
                 .collect();
             stopped.sort();
@@ -284,16 +322,28 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             let id = done.job_id.0;
             let here = fold.crash.jobs.remove(&id);
             let earlier = fold.crash.earlier.remove(&id);
+            let carried = here.is_none() && earlier.is_some();
+            let name = here
+                .or_else(|| earlier.clone())
+                .unwrap_or_else(|| id.clone());
+            let stopped = matches!(done.status, contract::events::Outcome::Cancelled)
+                || matches!(done.status, contract::events::Outcome::Failed)
+                    && done
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| error.code == ErrorCode::Indeterminate);
+            if stopped {
+                fold.crash.rewind_stopped.insert(id.clone(), name.clone());
+            }
+            let orphaned = done
+                .error
+                .as_ref()
+                .is_some_and(|error| error.code == ErrorCode::Orphaned);
+            if carried && (stopped || orphaned) {
+                fold.crash.carried.insert(id, name.clone());
+            }
             let Some(error) = done.error.filter(|error| error.code == ErrorCode::Orphaned) else {
                 return false;
-            };
-            let name = match (here, earlier) {
-                (Some(name), _) => name,
-                (None, Some(name)) => {
-                    fold.crash.carried.insert(id, name.clone());
-                    name
-                }
-                (None, None) => id,
             };
             let job = (name, error.message);
             if let Some(jobs) = fold.crash.orphans.and_then(|id| orphans(turns, fold, id)) {

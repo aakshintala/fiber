@@ -587,6 +587,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
     let action = envelope.action_id.as_ref().map(|id| id.0.as_str());
     let ts = envelope.ts;
     let kind = envelope.kind.as_str();
+    crash::before_line(fold, envelope);
     // A model call that got through ends the wait to retry.
     if (matches!(
         kind,

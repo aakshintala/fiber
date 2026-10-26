@@ -67,7 +67,7 @@ pub(crate) enum EnterAction {
 /// The list cursor: the selected row, the chosen point, and the turn
 /// open into its step boundaries.
 #[derive(Debug, Default)]
-pub(crate) struct Cursor {
+pub(super) struct Cursor {
     /// Where the list cursor sits.
     selected: Sel,
     /// The chosen point's holding session and seq.
@@ -100,12 +100,12 @@ fn has_bound(turns: &[TurnRow], session: &SessionId, seq: u64) -> bool {
 
 impl Cursor {
     /// The chosen point's holding session and seq.
-    pub(crate) fn point(&self) -> Option<(SessionId, u64)> {
+    pub(super) fn point(&self) -> Option<(SessionId, u64)> {
         self.point.clone()
     }
 
     /// Selects a turn's row, with the point on its first boundary.
-    pub(crate) fn select_turn(
+    pub(super) fn select_turn(
         &mut self,
         key: Option<(SessionId, u64)>,
         point: Option<(SessionId, u64)>,
@@ -118,24 +118,24 @@ impl Cursor {
     }
 
     /// Selects a boundary's row, with the point on it.
-    pub(crate) fn select_bound(&mut self, turn: (SessionId, u64), point: (SessionId, u64)) {
+    pub(super) fn select_bound(&mut self, turn: (SessionId, u64), point: (SessionId, u64)) {
         self.selected = Sel::Bound(turn.0, turn.1, point.1);
         self.point = Some(point);
     }
 
     /// Selects a chrome row: the checkbox, the button, or a refusal's
     /// choice.
-    pub(crate) fn select_simple(&mut self, selected: Sel) {
+    pub(super) fn select_simple(&mut self, selected: Sel) {
         self.selected = selected;
     }
 
     /// Sets the point without moving the cursor.
-    pub(crate) fn set_point(&mut self, point: (SessionId, u64)) {
+    pub(super) fn set_point(&mut self, point: (SessionId, u64)) {
         self.point = Some(point);
     }
 
     /// Toggles the turn open into its step boundaries.
-    pub(crate) fn toggle_expanded(&mut self, key: Option<(SessionId, u64)>) {
+    pub(super) fn toggle_expanded(&mut self, key: Option<(SessionId, u64)>) {
         if self.expanded == key {
             self.expanded = None;
         } else {
@@ -161,7 +161,7 @@ impl Cursor {
     /// expansion keeps its turn, the cursor keeps its row's identity,
     /// and the point follows content rows. A missing anchor takes the
     /// default; the first fold always does. Returns the selected row.
-    pub(crate) fn sync_selection(
+    pub(super) fn sync_selection(
         &mut self,
         turns: &[TurnRow],
         fresh: bool,
@@ -248,7 +248,7 @@ impl Cursor {
     /// Every visible row: each turn, the open turn's boundaries under
     /// it, then the checkbox and the Rewind row, then a
     /// `summary_failed` refusal's three choices.
-    pub(crate) fn visible(&self, turns: &[TurnRow], show_choices: bool) -> Vec<Vis> {
+    pub(super) fn visible(&self, turns: &[TurnRow], show_choices: bool) -> Vec<Vis> {
         let mut out = Vec::new();
         for (at, turn) in turns.iter().enumerate() {
             out.push(Vis::Turn(at));
@@ -299,7 +299,7 @@ impl Cursor {
     }
 
     /// The cursor's row among the visible rows.
-    pub(crate) fn selected_index(&self, turns: &[TurnRow], show_choices: bool) -> usize {
+    pub(super) fn selected_index(&self, turns: &[TurnRow], show_choices: bool) -> usize {
         self.visible(turns, show_choices)
             .iter()
             .position(|row| self.matches_selected(row, turns))
@@ -309,7 +309,7 @@ impl Cursor {
 
 /// The frame's rows for the folded turns, the cursor, and the send
 /// state, with the detail under them.
-pub(crate) fn render(
+pub(super) fn render(
     fold: &Fold,
     cursor: &Cursor,
     send: &Send,

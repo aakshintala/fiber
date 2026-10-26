@@ -17,10 +17,7 @@
 //! and coordinates them, and the `App` seam below reaches them only
 //! through the coordinators here.
 
-use std::time::Instant;
-
 use contract::{Envelope, SessionId};
-use serde_json::Value;
 
 use self::fold::Fold;
 use self::send::Send;
@@ -52,67 +49,6 @@ impl Rewind {
         }
     }
 
-    /// Notes the `history` request on the wire.
-    pub(crate) fn begin_wait(&mut self, id: String, sent_at: Option<Instant>) {
-        self.fold.begin_wait(id, sent_at);
-    }
-
-    /// Takes the `history` answer slot for `id`: true when the answer
-    /// folds, clearing the wait.
-    pub(crate) fn take_answer_slot(&mut self, id: &str) -> bool {
-        if self.fold.pending_is(id) {
-            self.fold.abort_wait();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Settles the walk as refused or failed with `message`.
-    pub(crate) fn fail_walk(&mut self, message: String) {
-        self.fold.fail_walk(message);
-    }
-
-    /// Whether `id` is the `rewind` on the wire.
-    pub(crate) fn send_matches(&self, id: &str) -> bool {
-        self.send.matches(id)
-    }
-
-    /// Settles the sent `rewind` as refused.
-    pub(crate) fn refuse_send(&mut self, message: String, summary_failed: bool) {
-        self.send.refuse(message, summary_failed);
-    }
-
-    /// Clears the standing refusal with its choices, if any.
-    pub(crate) fn clear_refusal(&mut self) {
-        self.send.clear_refusal();
-    }
-
-    /// Drops the `history` wait: its late answer folds nowhere.
-    pub(crate) fn abort_wait(&mut self) {
-        self.fold.abort_wait();
-    }
-
-    /// The pending `history`'s deadline: what the frame wakes for.
-    pub(crate) fn wait_deadline(&self) -> Option<Instant> {
-        self.fold.wait_deadline()
-    }
-
-    /// Whether the pending `history` wait passed its bound.
-    pub(crate) fn wait_due(&self, now: Instant) -> bool {
-        self.fold.wait_due(now)
-    }
-
-    /// Whether the walk reached the chain root.
-    pub(crate) fn chain_done(&self) -> bool {
-        self.fold.chain_done()
-    }
-
-    /// The args of the next read down the chain.
-    pub(crate) fn next_args(&self) -> Option<Value> {
-        self.fold.next_args()
-    }
-
     /// Folds a page into the turns and anchors the cursor, returning
     /// the selected row and the row count. A refused page ends the
     /// walk with the turns read so far.
@@ -127,41 +63,6 @@ impl Rewind {
             .cursor
             .sync_selection(self.fold.turns(), fresh, show_choices);
         Ok((at, self.row_count()))
-    }
-
-    /// Whether a `rewind` may go out.
-    pub(crate) fn can_send(&self) -> bool {
-        self.send.can_send()
-    }
-
-    /// Whether a `rewind` waits for its answer.
-    pub(crate) fn is_sending(&self) -> bool {
-        self.send.is_sending()
-    }
-
-    /// The chosen point's holding session and seq.
-    pub(crate) fn point(&self) -> Option<(SessionId, u64)> {
-        self.cursor.point()
-    }
-
-    /// Whether the rewind summarises the path after the point.
-    pub(crate) fn summarise(&self) -> bool {
-        self.send.summarise()
-    }
-
-    /// Flips the summarise checkbox.
-    pub(crate) fn toggle_summarise(&mut self) {
-        self.send.toggle_summarise();
-    }
-
-    /// Sets the summarise checkbox.
-    pub(crate) fn set_summarise(&mut self, summarise: bool) {
-        self.send.set_summarise(summarise);
-    }
-
-    /// Notes the `rewind` request on the wire.
-    pub(crate) fn begin_send(&mut self, id: String) {
-        self.send.begin(id);
     }
 
     /// Every visible row's kind.

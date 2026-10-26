@@ -18,6 +18,21 @@ fn app() -> App {
 }
 
 fn feed(app: &mut App, kind: &str, action: Option<&str>, ts: u64, payload: Value) {
+    feed_with_seq(app, kind, action, ts, None, payload);
+}
+
+fn feed_durable(app: &mut App, kind: &str, ts: u64, payload: Value) {
+    feed_with_seq(app, kind, None, ts, Some(contract::Seq(ts)), payload);
+}
+
+fn feed_with_seq(
+    app: &mut App,
+    kind: &str,
+    action: Option<&str>,
+    ts: u64,
+    seq: Option<contract::Seq>,
+    payload: Value,
+) {
     app.on_line(Line::Session(contract::Envelope {
         kind: kind.to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
@@ -25,7 +40,7 @@ fn feed(app: &mut App, kind: &str, action: Option<&str>, ts: u64, payload: Value
         schema_version: contract::SCHEMA_VERSION,
         turn_id: None,
         action_id: action.map(|id| contract::ActionId(id.to_owned())),
-        seq: None,
+        seq,
         payload: payload.as_object().cloned().unwrap_or_default(),
     }));
 }
@@ -67,10 +82,9 @@ fn resumed(app: &mut App, resumed: bool, ts: u64) {
 
 /// A `rewound` line at `ts`, naming the continuing session.
 fn rewound(app: &mut App, ts: u64) {
-    feed(
+    feed_durable(
         app,
         "rewound",
-        None,
         ts,
         json!({"new_session_id": "s_ccc", "seq": 12}),
     );
@@ -198,19 +212,45 @@ fn a_rewound_session_lists_the_jobs_that_stopped() {
     let mut app = crashed();
     // Two jobs still running when the session is rewound: both stop
     // with it (`docs/tui.md`, "Rewind"; `docs/events.md`, "Rewind").
-    feed(
+    feed_durable(
         &mut app,
         "job_started",
-        None,
         10_000,
         json!({"job_id": "j_2", "description": "second task", "output_path": "/tmp/out"}),
     );
-    feed(
+    feed_durable(
         &mut app,
         "job_started",
-        None,
         11_000,
         json!({"job_id": "j_1", "description": "first task", "output_path": "/tmp/out"}),
+    );
+    // The stop wait writes each cancelled completion before `rewound`.
+    feed_durable(
+        &mut app,
+        "job_completed",
+        12_000,
+        json!({"job_id": "j_2", "status": "cancelled"}),
+    );
+    // Hook notices are ephemeral and may appear between durable stops.
+    feed(
+        &mut app,
+        "notice",
+        None,
+        12_500,
+        json!({"code": "hook_failed", "message": "end hook failed"}),
+    );
+    feed_durable(
+        &mut app,
+        "job_completed",
+        13_000,
+        json!({"job_id": "j_1", "status": "cancelled"}),
+    );
+    // End hooks may also write durable state lines during the stop run.
+    feed_durable(
+        &mut app,
+        "extension_state_set",
+        14_000,
+        json!({"extension": "example", "key": "status", "value": "stopped"}),
     );
     rewound(&mut app, 60_000);
     let lines = texts(&app);

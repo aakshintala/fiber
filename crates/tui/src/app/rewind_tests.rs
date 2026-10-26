@@ -235,7 +235,7 @@ fn rows(app: &crate::app::App) -> Vec<String> {
 fn point(app: &crate::app::App) -> Option<(String, u64)> {
     let frame = app.session_view_screen(80)?;
     let at = frame.list.selected();
-    app.rewind_turn_bounds(at).first().cloned()
+    app.rewind.turn_bounds(at).first().cloned()
 }
 
 #[test]
@@ -305,7 +305,7 @@ fn two_segments_fold_with_the_default_on_the_latest_turn() {
     assert_eq!(frame.list.selected(), 2);
     // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(point(&app), Some((SESSION.to_owned(), 3)));
-    let bounds = app.rewind_turn_bounds(2);
+    let bounds = app.rewind.turn_bounds(2);
     // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(
         bounds,
@@ -397,7 +397,7 @@ fn a_summary_turn_lists_but_does_not_take_the_default() {
     assert_eq!(point(&app), Some((SESSION.to_owned(), 5)));
     // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(
-        app.rewind_turn_bounds(1),
+        app.rewind.turn_bounds(1),
         vec![
             (SESSION.to_owned(), 2),
             (SESSION.to_owned(), 3),
@@ -507,7 +507,7 @@ fn the_point_itself_belongs_to_the_parent() {
     );
     // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(
-        app.rewind_turn_bounds(0),
+        app.rewind.turn_bounds(0),
         vec![
             (OTHER.to_owned(), 0),
             (OTHER.to_owned(), 1),
@@ -607,7 +607,7 @@ fn unanswered_calls_drop_later_boundaries() {
     // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert!(done.is_empty());
     assert_eq!(
-        app.rewind_turn_bounds(0),
+        app.rewind.turn_bounds(0),
         vec![(SESSION.to_owned(), 0), (SESSION.to_owned(), 1)]
     );
 
@@ -656,7 +656,7 @@ fn unanswered_calls_drop_later_boundaries() {
     // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert!(done.is_empty());
     assert_eq!(
-        app.rewind_turn_bounds(0),
+        app.rewind.turn_bounds(0),
         vec![
             (SESSION.to_owned(), 0),
             (SESSION.to_owned(), 1),
@@ -1509,7 +1509,7 @@ fn a_step_from_another_session_does_not_join_the_turn() {
     // Only the session's own step folds: no after-step boundary.
     // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(
-        app.rewind_turn_bounds(0),
+        app.rewind.turn_bounds(0),
         vec![
             (SESSION.to_owned(), 0),
             (SESSION.to_owned(), 1),
@@ -1830,11 +1830,10 @@ fn entering_the_second_turn_keeps_the_cursor_on_its_row() {
     assert_eq!(frame.list.selected(), 2);
 }
 
-/// Re-seating onto a middle boundary keeps its row: the loosened
-/// position match would slide onto the turn's first boundary, whose
-/// session alone matches.
+/// Clicking a boundary row through the view keeps the cursor on the
+/// selected boundary, rather than reseating it onto the turn row.
 #[test]
-fn reseating_a_middle_boundary_keeps_its_row() {
+fn clicking_a_boundary_keeps_its_row_selected() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();
     let lines = open(&mut app, &clock);
@@ -1842,45 +1841,17 @@ fn reseating_a_middle_boundary_keeps_its_row() {
     let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
     let done = accept(&mut app, &asked["id"], segment_b());
     assert!(done.is_empty());
-    // Open the first session turn, then sit on its after-input boundary:
-    // the turn's first boundary shares the session but not the seq.
-    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
-    goto(&mut app, &clock, 1);
-    app.on_key(crate::keys::Key::Enter, clock.now());
-    // Rows: the older turn, the first turn, its three boundaries, the
-    // second turn, the checkbox, Rewind.
-    app.rewind.select_at(3);
-    let (at, rows) = app.rewind.reseat();
-    app.rewind_list_to(at, rows);
-    let frame = app.session_view_screen(80).expect("the view is open");
-    // Step boundaries and the default point (`docs/tui.md`, "Rewind").
-    assert_eq!(frame.list.selected(), 3);
-}
 
-/// Re-seating onto a later boundary keeps its row: the row's identity
-/// is its session and seq, not the session alone.
-#[test]
-fn reseating_a_later_boundary_keeps_its_row() {
-    let clock = fakes::clock::FakeClock::new();
-    let mut app = attached();
-    let lines = open(&mut app, &clock);
-    let next = accept(&mut app, &lines[0]["id"], segment_a());
-    let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
-    let done = accept(&mut app, &asked["id"], segment_b());
-    assert!(done.is_empty());
-    // Open the first session turn, then sit on its last boundary: an
-    // earlier boundary shares the session but not the seq.
-    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+    // Open the first turn, then click two of its visible boundaries as
+    // a person can. The view should keep the clicked rows selected.
     goto(&mut app, &clock, 1);
     app.on_key(crate::keys::Key::Enter, clock.now());
-    // Rows: the older turn, the first turn, its three boundaries, the
-    // second turn, the checkbox, Rewind.
-    app.rewind.select_at(4);
-    let (at, rows) = app.rewind.reseat();
-    app.rewind_list_to(at, rows);
-    let frame = app.session_view_screen(80).expect("the view is open");
-    // Step boundaries and the default point (`docs/tui.md`, "Rewind").
-    assert_eq!(frame.list.selected(), 4);
+    for at in [3, 4] {
+        app.session_view_click(crate::swapped::Spot::Row(at));
+        let frame = app.session_view_screen(80).expect("the view is open");
+        // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+        assert_eq!(frame.list.selected(), at);
+    }
 }
 
 /// The retry choice survives the next page while the walk runs on: a
@@ -2098,7 +2069,7 @@ fn a_call_completed_after_its_boundary_drops_that_boundary() {
     // seq 5 is missing while the turn's end stands.
     // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(
-        app.rewind_turn_bounds(0),
+        app.rewind.turn_bounds(0),
         vec![
             (SESSION.to_owned(), 0),
             (SESSION.to_owned(), 1),
@@ -2209,6 +2180,115 @@ fn the_detail_counts_only_calls_after_the_chosen_point() {
         [
             "Files written since the point: none",
             "Calls that may have changed files: shell",
+            "None of it is undone.",
+            "Jobs that stop: none",
+        ]
+    );
+}
+
+/// The detail crosses from a selected ancestor point into the session
+/// that forked from it, so it includes writes and calls after the seam.
+#[test]
+fn the_detail_includes_descendant_calls_after_an_ancestor_fork_point() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    let child = vec![
+        history_line(
+            SESSION,
+            "session_started",
+            0,
+            None,
+            None,
+            started(Some((OTHER, 3))),
+        ),
+        history_line(
+            SESSION,
+            "turn_started",
+            1,
+            Some("t_child"),
+            None,
+            message_input("child"),
+        ),
+        history_line(SESSION, "step_started", 2, Some("t_child"), None, json!({})),
+        history_line(
+            SESSION,
+            "tool_call_requested",
+            3,
+            Some("t_child"),
+            Some("a_w"),
+            json!({"name": "write", "arguments": {"path": "/w/descendant.rs"}}),
+        ),
+        history_line(
+            SESSION,
+            "tool_call_started",
+            4,
+            Some("t_child"),
+            Some("a_w"),
+            json!({"effects": ["writes", "executes"], "paths": ["/w/descendant.rs"], "reversible": true}),
+        ),
+        history_line(
+            SESSION,
+            "tool_call_completed",
+            5,
+            Some("t_child"),
+            Some("a_w"),
+            json!({"status": "completed", "content": []}),
+        ),
+        history_line(
+            SESSION,
+            "turn_completed",
+            6,
+            Some("t_child"),
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ];
+    let next = accept(&mut app, &lines[0]["id"], child);
+    let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
+    let ancestor = vec![
+        history_line(OTHER, "session_started", 0, None, None, started(None)),
+        history_line(
+            OTHER,
+            "turn_started",
+            1,
+            Some("t_ancestor"),
+            None,
+            message_input("ancestor"),
+        ),
+        history_line(
+            OTHER,
+            "step_started",
+            2,
+            Some("t_ancestor"),
+            None,
+            json!({}),
+        ),
+        history_line(
+            OTHER,
+            "turn_completed",
+            3,
+            Some("t_ancestor"),
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ];
+    assert!(accept(&mut app, &asked["id"], ancestor).is_empty());
+
+    let ancestor_row = rows(&app)
+        .iter()
+        .position(|row| row == "before: ancestor")
+        .expect("the ancestor turn is listed");
+    goto(&mut app, &clock, ancestor_row);
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    // Boundaries: start, after input, after step, end.
+    goto(&mut app, &clock, ancestor_row + 3);
+    assert_eq!(rows(&app)[ancestor_row + 3], "  end of turn");
+    assert_eq!(
+        below(&app),
+        [
+            "Files written since the point: /w/descendant.rs",
+            "Calls that may have changed files: write",
             "None of it is undone.",
             "Jobs that stop: none",
         ]
