@@ -656,6 +656,10 @@ fn a_target_hook_refuses_sibling_senders_and_rewrites_its_children() {
     assert_eq!(input["changed_by"], json!([GATEKEEPER]));
     // The target's log, in full: its own first turn, then the child's
     // message starting the second. The refused sibling leaves nothing.
+    // The child's delivery starts the target's second turn without waiting
+    // for it, so the log holds the whole turn only once its completion
+    // reaches the target's stdout; wait for that line before reading.
+    target.wait_for("turn_completed");
     let t_log = read_log(&setup, &t_id);
     assert_eq!(
         ordered_kinds(&t_log),
