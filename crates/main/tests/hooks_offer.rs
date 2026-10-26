@@ -586,22 +586,29 @@ fn an_unreadable_declaration_faults_the_query_leaving_the_refusal() {
     );
     run.ready();
     // The fault goes in after the pty and hub are ready and before the
-    // start, and stays until the refusal shows.
+    // start, and stays through the query result.
     let lock = setup.home().join("extensions/.lock");
     fs::remove_file(&lock).unwrap_or(());
     fs::create_dir_all(&lock).unwrap();
-    run.write(b"hi\r");
+    run.write(b"faulted-query-draft\r");
     run.wait_screen("the refusal without the offer", |grid| {
         grid.contents.contains("not installed")
             && grid.contents.contains("fiber extension install hooks")
             && !grid.contents.contains("Install hooks?")
     });
-    // The refusal precedes the asynchronous names-query result. Keep
-    // the fault in place through shutdown so a late query cannot succeed
-    // after the screen predicate returns and open the offer.
+    // The refusal screen can precede the asynchronous query result. Its
+    // error restores this start's retained draft; wait for that state
+    // before shutdown, which the open offer would consume.
+    run.wait_screen("the faulted query settled and restored the draft", |grid| {
+        grid.contents.contains("not installed")
+            && grid.contents.contains("fiber extension install hooks")
+            && grid.contents.contains("faulted-query-draft")
+            && !grid.contents.contains("Install hooks?")
+    });
     assert!(!marker.exists(), "no hook point ran");
     assert_no_sessions(&setup, "the faulted query");
     assert_not_installed(&setup, "the faulted query");
+    fs::remove_dir_all(&lock).unwrap();
     drop(server);
     finish_home(hub, guard, run);
 }
