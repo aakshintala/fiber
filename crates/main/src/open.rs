@@ -101,41 +101,74 @@ pub(crate) fn resume(
     )
 }
 
-/// `fiber continue`: the session used most recently in this project. The
-/// tty is checked before any log is read; with no session it is a usage
-/// error naming `fiber`, and the terminal never starts.
-pub(crate) fn continue_latest(fiber: Result<PathBuf, String>) -> i32 {
+/// `fiber continue [--hub <name>]`: the session used most recently in
+/// this project, or on a listed hub the session whose log was last
+/// written across every project. The tty is checked first, then the hub:
+/// an unknown hub fails before the terminal starts and starts no hub. A
+/// local target resolves the selector in this project's log as before; a
+/// listed one resolves it against the hub's `sessions` answer with
+/// `active: true`. With no session it is a usage error naming `fiber`,
+/// and the terminal never starts.
+pub(crate) fn continue_latest(fiber: Result<PathBuf, String>, hub: Option<String>) -> i32 {
     if let Some(code) = needs_tty() {
         return code;
     }
+    let target = match target(hub.as_deref(), Vec::new()) {
+        Ok(target) => target,
+        Err(e) => return crate::fail(e),
+    };
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
         Err(e) => return crate::fail(crate::failed(e.code(), e)),
     };
-    let workspace = match std::env::current_dir() {
-        Ok(workspace) => workspace,
-        Err(e) => {
-            return crate::fail(crate::failed(
+    let clock = crate::clock::System;
+    let mut local = || {
+        let workspace = std::env::current_dir().map_err(|e| {
+            crate::failed(
                 contract::ErrorCode::IoFailed,
                 format!("the current directory: {e}"),
-            ));
-        }
+            )
+        })?;
+        let project = doors::project(&workspace);
+        let sessions = log::sessions_dir(&home, &project);
+        let in_project = in_project(&project, &doors::project);
+        select_latest(&sessions, &in_project)
     };
-    let project = doors::project(&workspace);
-    let sessions = log::sessions_dir(&home, &project);
-    let in_project = in_project(&project, &doors::project);
-    let id = match select_latest(&sessions, &in_project) {
+    let mut listed = |name: &str| {
+        let mut connect = || crate::connect_hub(&home, &target, &fiber, &clock);
+        listed_latest(name, &mut connect)
+    };
+    let id = match route(&target, &mut local, &mut listed) {
         Ok(id) => id,
         Err(e) => return crate::fail(e),
     };
     log::crash::attach(&id);
     crate::terminal(
         fiber,
-        doors::hub::Target::Local,
+        target,
         tui::OpenAt::Session(id, None),
         None,
         Vec::new(),
     )
+}
+
+/// The session `continue --hub <name>` opens: the hub's latest entry
+/// across every project, or the usage error naming `fiber` when the
+/// answer names no eligible entry.
+fn listed_latest(
+    name: &str,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
+) -> Result<SessionId, Failure> {
+    match ::cli::latest_listed(connect) {
+        Ok(Some(id)) => Ok(id),
+        Ok(None) => Err(doors::failure(
+            contract::ErrorCode::Usage,
+            format!(
+                "No session on hub `{name}` to continue; run `fiber` to start one. Run `fiber --help` for usage."
+            ),
+        )),
+        Err(error) => Err(Failure::from(error)),
+    }
 }
 
 /// `fiber` with no arguments on one hub: the tty, then the target, then

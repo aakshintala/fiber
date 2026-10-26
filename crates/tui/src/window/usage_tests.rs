@@ -152,7 +152,7 @@ fn a_late_usage_line_on_a_held_page_counts_its_rows_exactly() {
         log.turn(turn, &format!("g{turn}"), 3);
     }
     let mut pages = folded(&log.lines, 30);
-    assert!(!pages.closed.is_empty(), "the first page closed");
+    assert!(pages.residency.len() > 0, "the first page closed");
     assert!(pages.part(0).is_some(), "the first page holds its cards");
     // A correction for the first turn as large as its ▣ line can grow:
     // at the card's inner width the line already took two padded rows,
@@ -285,13 +285,13 @@ fn a_late_usage_line_on_a_dropped_page_counts_the_padded_closing_rows() {
         }
     }
     let mut pages = folded(&lines, 20);
-    assert!(!pages.closed.is_empty(), "the first page closed");
+    assert!(pages.residency.len() > 0, "the first page closed");
     let head = pages.summaries.first().expect("the first turn's totals");
     let closing = head.closing().expect("a closing line");
     assert_eq!(closing.to_string(), "▣ completed · 1 call");
     assert_eq!(crate::view::rows(closing.clone(), 20), 1);
     assert_eq!(crate::rows::fitted(&closing, crate::surface::inset(20)), 2);
-    pages.closed[0] = None;
+    pages.residency.drop_slot_for_test(0);
     lines.push(Envelope {
         kind: "usage_recorded".to_owned(),
         session_id: SessionId(SESSION.to_owned()),
@@ -371,7 +371,7 @@ fn a_late_usage_line_with_new_rows_on_a_held_page_counts_it_again() {
         }
     }
     let mut pages = folded(&lines, 20);
-    assert!(!pages.closed.is_empty(), "the first page closed");
+    assert!(pages.residency.len() > 0, "the first page closed");
     assert!(
         pages.part(0).is_some(),
         "the first page still holds its cards"

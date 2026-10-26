@@ -101,7 +101,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     ),
     ("models", &[], &["--json", "-h", "--help"]),
     ("resume", &[], &["--credential", "--hub", "-h", "--help"]),
-    ("continue", &[], &["-h", "--help"]),
+    ("continue", &[], &["--hub", "-h", "--help"]),
     (
         "setup",
         &[],
@@ -135,7 +135,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     (
         "sessions delete",
         &[],
-        &["--cascade", "--yes", "-h", "--help"],
+        &["--hub", "--cascade", "--yes", "-h", "--help"],
     ),
     ("sessions export", &[], &["-h", "--help"]),
     ("sessions search", &[], &["--all", "--json", "-h", "--help"]),
@@ -143,6 +143,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
         "sessions prune",
         &[],
         &[
+            "--hub",
             "--older-than",
             "--cascade",
             "--dry-run",

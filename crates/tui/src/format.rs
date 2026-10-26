@@ -57,6 +57,18 @@ pub(crate) fn money(dollars: f64) -> String {
     }
 }
 
+/// Billed spend against a budget (`docs/loop.md`, "Spending budget"): a
+/// set budget draws `"X of Y"`, a cost still `null` reading `"unknown"`.
+/// With no budget there is no comparison to draw, so `None`: each caller
+/// keeps its own no-budget fallback.
+pub(crate) fn spend_against_budget(cost: Option<f64>, budget: Option<f64>) -> Option<String> {
+    let budget = budget?;
+    Some(match cost {
+        Some(cost) => format!("{} of {}", money(cost), money(budget)),
+        None => format!("unknown of {}", money(budget)),
+    })
+}
+
 /// `n` and its noun, singular for one.
 pub(crate) fn count(n: u64, one: &str, many: &str) -> String {
     if n == 1 {

@@ -625,7 +625,7 @@ including a `nil` value, raise `invalid_arguments`; use `state.unset` to remove 
 - **The fork rule rides on each write.** A fork, a rewind or a delegate's fork
   folds its parent's log. For each key, the `on_fork` of its last write
   decides what the new session gets: `at_point`, its value as of the point;
-  `latest`, its value at the end of the parent's log; `fresh`, nothing. A
+  `latest`, its value at the end of the parent's log; `fresh`, nothing. For a delegate's fork, the end of the parent's log is the fork's point, `forked_from.seq`, so the first run and every resume get the same values. A
   test budget is `at_point`. A list of files the person already approved is
   `latest`. A delegate that is not a fork starts with no extension state.
 - **A hook's writes go with its change.** A write made inside a hook is

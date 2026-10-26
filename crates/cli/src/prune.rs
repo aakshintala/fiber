@@ -6,14 +6,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufReader, IsTerminal, Write};
+use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use contract::ErrorCode;
 use contract::SessionId;
 use contract::clock::Clock;
+use contract::commands::hub::{HubCommand, Prune, PruneExpect};
 use contract::shapes::Failure;
 use log::diag::{OldFile, old_diagnostics};
+use serde::Deserialize;
 
 mod ignored;
 mod pinned;
@@ -21,7 +24,7 @@ mod sessions;
 mod worktrees;
 
 use crate::approve::{confirmed, say};
-use crate::sessions::Ask;
+use crate::sessions::{Ask, request_value};
 use crate::{CliError, with_dirs, write_line};
 
 /// What the prompt asks.
@@ -122,9 +125,12 @@ pub struct PruneArgs {
     pub force: bool,
 }
 
-/// `fiber sessions prune` in the current directory.
+/// `fiber sessions prune [--hub <name>] ...` in the current directory:
+/// with a hub the hub prunes its own machine across every project;
+/// without one the local machine is pruned as before.
 pub fn prune(
     args: &PruneArgs,
+    hub: Option<&str>,
     clock: &dyn Clock,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> i32 {
@@ -137,15 +143,186 @@ pub fn prune(
             input: &mut stdin.lock(),
             err: &mut io::stderr(),
         };
-        prune_run(
-            home,
-            workspace,
-            args,
-            clock,
-            ask,
-            &mut io::stdout(),
-            connect,
+        match hub {
+            Some(_) => prune_listed(args, ask, &mut io::stdout(), connect),
+            None => prune_run(
+                home,
+                workspace,
+                args,
+                clock,
+                ask,
+                &mut io::stdout(),
+                connect,
+            ),
+        }
+    })
+}
+
+/// The `id` of the hub `prune` commands this flow sends: one preview
+/// round trip, then one confirm, each answered in turn.
+const PRUNE_ID: &str = "c_prune";
+
+/// `fiber sessions prune --hub <name>` on its hub: the hub prunes its own
+/// machine across every project. `--dry-run` prints the hub's lines and
+/// the space it would free and deletes nothing; `--yes` sends one
+/// confirmed request with no `expect`; otherwise the preview prints, asks,
+/// and the confirm sends the previewed items as `expect`, or nothing is
+/// deleted. Hub refusals keep their codes; `freed` and `failures` print
+/// and exit as a local prune does.
+fn prune_listed(
+    args: &PruneArgs,
+    ask: Ask<'_>,
+    out: &mut dyn Write,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
+) -> Result<(), CliError> {
+    // `--dry-run` never asks and needs no terminal; otherwise nobody to
+    // ask fails before connecting, as locally.
+    if !args.dry_run && !ask.yes && !ask.terminal {
+        return Err(CliError::NobodyToAsk {
+            message: PRUNE_NOBODY.to_owned(),
+        });
+    }
+    let (stream, _) = connect().map_err(CliError::Hub)?;
+    let mut read = BufReader::new(stream);
+    if args.dry_run {
+        let preview = preview(&mut read, args)?;
+        print_lines(out, &preview.lines)?;
+        write_line(
+            out,
+            &format!("would free {}", format_size(preview.would_free)),
         )
+        .map_err(CliError::from)?;
+        return Ok(());
+    }
+    if ask.yes {
+        let confirmed = confirm(&mut read, args, None)?;
+        return finish_listed(out, ask.err, &confirmed);
+    }
+    let preview = preview(&mut read, args)?;
+    print_lines(out, &preview.lines)?;
+    if !confirmed(PRUNE_PROMPT, PRUNE_NOBODY, ask.terminal, ask.input, ask.err)? {
+        say(ask.err, "nothing deleted\n");
+        return Ok(());
+    }
+    let confirmed = confirm(&mut read, args, Some(preview.items))?;
+    finish_listed(out, ask.err, &confirmed)
+}
+
+/// Prints each preview line.
+fn print_lines(out: &mut dyn Write, lines: &[String]) -> Result<(), CliError> {
+    for line in lines {
+        write_line(out, line).map_err(CliError::from)?;
+    }
+    Ok(())
+}
+
+/// The hub's dry-run answer: the lines prune would print, the space it
+/// would free, and the items it would remove.
+#[derive(Deserialize)]
+struct Preview {
+    lines: Vec<String>,
+    would_free: u64,
+    items: PruneExpect,
+}
+
+/// Sends the dry run: the preview lines, the space it would free, and the
+/// items, which the confirm sends back as `expect`. An unreadable
+/// `older_than` fails here with the hub's `invalid_arguments`: duration
+/// validation stays machine-side.
+fn preview(read: &mut BufReader<UnixStream>, args: &PruneArgs) -> Result<Preview, CliError> {
+    let result = request_value(
+        read,
+        PRUNE_ID,
+        HubCommand::Prune(Prune {
+            older_than: args.older_than.clone(),
+            cascade: args.cascade.then_some(true),
+            force: args.force.then_some(true),
+            dry_run: Some(true),
+            expect: None,
+        }),
+    )?;
+    serde_json::from_value::<Preview>(result).map_err(prune_answer)
+}
+
+/// The hub's confirmed answer: the space freed, how many items it tried,
+/// and each item that failed.
+#[derive(Deserialize)]
+struct Confirmed {
+    freed: u64,
+    total: usize,
+    failures: Vec<ConfirmedFailure>,
+}
+
+/// One confirmed item that stayed: what stayed, its code and why.
+#[derive(Deserialize)]
+struct ConfirmedFailure {
+    item: String,
+    code: ErrorCode,
+    message: String,
+}
+
+/// Sends the confirmed run: with `Some` the preview's exact items as
+/// `expect`, with `None` (`--yes`) the current selection, as locally.
+fn confirm(
+    read: &mut BufReader<UnixStream>,
+    args: &PruneArgs,
+    expect: Option<PruneExpect>,
+) -> Result<Confirmed, CliError> {
+    let result = request_value(
+        read,
+        PRUNE_ID,
+        HubCommand::Prune(Prune {
+            older_than: args.older_than.clone(),
+            cascade: args.cascade.then_some(true),
+            force: args.force.then_some(true),
+            dry_run: None,
+            expect,
+        }),
+    )?;
+    serde_json::from_value::<Confirmed>(result).map_err(prune_answer)
+}
+
+/// A hub `prune` answer that did not parse: `io_failed`, naming the
+/// command as the `sessions` answer error does for its own. No new error
+/// variant: the code matches the existing answer error.
+fn prune_answer(error: serde_json::Error) -> CliError {
+    CliError::Forwarded(Failure {
+        code: ErrorCode::IoFailed,
+        message: format!("the hub's answer to `prune`: {error}"),
+        provider: None,
+        retry_after_ms: None,
+    })
+}
+
+/// Prints `freed`, and when any deletion failed the per-item stderr lines
+/// and the `<failed>` of `<total>` failure with the first failure's code:
+/// the local `finish` mapping over the hub's answer.
+fn finish_listed(
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    confirmed: &Confirmed,
+) -> Result<(), CliError> {
+    write_line(out, &format!("freed {}", format_size(confirmed.freed))).map_err(CliError::from)?;
+    if confirmed.failures.is_empty() {
+        return Ok(());
+    }
+    for failure in &confirmed.failures {
+        say(
+            err,
+            &format!(
+                "fiber: {} could not be deleted: {}\n",
+                failure.item, failure.message
+            ),
+        );
+    }
+    let code = confirmed
+        .failures
+        .first()
+        .map_or(ErrorCode::IoFailed, |failure| failure.code.clone());
+    Err(CliError::PruneFailed {
+        code,
+        failed: confirmed.failures.len(),
+        total: confirmed.total,
     })
 }
 

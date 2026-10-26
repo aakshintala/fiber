@@ -27,6 +27,7 @@ use contract::steering;
 use contract::tool::Tool;
 use log::Log;
 use serde_json::{Map, Value};
+use support::lock;
 pub(crate) use util::{ended, mint, variables};
 pub use util::{set_variables_source, variables_source};
 
@@ -803,10 +804,7 @@ impl Loop {
     /// arrivals and at the request-time budget end, never here.
     pub fn budget(mut self, usd: Option<f64>) -> Self {
         self.budget = usd;
-        self.spend_trip
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .set_budget(usd);
+        lock(&self.spend_trip).set_budget(usd);
         self
     }
 

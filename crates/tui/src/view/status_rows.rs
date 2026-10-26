@@ -236,15 +236,14 @@ fn session_segments(app: &App) -> Vec<Segment> {
         // With a budget the segment reads billed spend against it, as
         // the Session card does: a subscription bills nothing per call
         // (`docs/loop.md`, "Spending budget").
-        let text = match (
-            app.panel_state().status().map(|status| status.spend.cost),
-            app.panel_state().budget(),
-        ) {
-            (Some(Some(billed)), Some(budget)) => {
-                format!("{} of {}", format::money(billed), format::money(budget))
+        // Without a parsed status there is no billed cost to compare,
+        // so the segment reads the attached spend plain.
+        let text = match app.panel_state().status() {
+            Some(status) => {
+                format::spend_against_budget(status.spend.cost, app.panel_state().budget())
+                    .unwrap_or_else(|| format::money(spend))
             }
-            (Some(None), Some(budget)) => format!("unknown of {}", format::money(budget)),
-            _ => format::money(spend),
+            None => format::money(spend),
         };
         out.push(Segment::spotted(vec![Span::raw(text)], Spot::Usage));
     }

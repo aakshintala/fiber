@@ -92,6 +92,12 @@ struct Answer {
 struct Live {
     session_id: String,
     status: ListStatus,
+    /// The `ts` of the log's last line, else its opening `ts`, else
+    /// `null` when neither reads: present only when asked for with
+    /// `active: true`. Absent reads as `null`, so a default listing
+    /// without the key still parses.
+    #[serde(default)]
+    active: Option<u64>,
 }
 
 /// An exited session's `recent.jsonl` row.
@@ -102,6 +108,9 @@ struct Exited {
     how: String,
     #[serde(default)]
     status: Option<ListStatus>,
+    /// The entry's activity, as on a live row.
+    #[serde(default)]
+    active: Option<u64>,
 }
 
 /// One printed row. `--json` prints it as is, its fields in this order.
@@ -207,6 +216,39 @@ pub fn resolve_listed(
             Err(CliError::Log(error))
         }
     }
+}
+
+/// `fiber continue --hub <name>`: the latest session on that hub, across
+/// every project: the entry with the greatest (`active`, `id`) among
+/// entries whose `active` is not `null`. `None` when no entry qualifies.
+/// The command carries `active: true` and no `project`, and never reads
+/// the current directory.
+pub fn latest_listed(
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
+) -> Result<Option<SessionId>, CliError> {
+    let (stream, _) = connect().map_err(CliError::Hub)?;
+    let result = request_value(
+        &mut BufReader::new(stream),
+        LIST_ID,
+        HubCommand::Sessions(SessionsArgs {
+            project: None,
+            active: Some(true),
+        }),
+    )?;
+    let answer: Answer = serde_json::from_value(result).map_err(CliError::SessionsAnswer)?;
+    Ok(answer
+        .live
+        .into_iter()
+        .map(|row| (row.session_id, row.active))
+        .chain(
+            answer
+                .exited
+                .into_iter()
+                .map(|row| (row.session_id, row.active)),
+        )
+        .filter_map(|(id, active)| active.map(|active| (active, id)))
+        .max()
+        .map(|(_, id)| SessionId(id)))
 }
 
 /// No session on `hub` answers `selector`: the local sessions path does

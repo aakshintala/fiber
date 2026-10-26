@@ -109,7 +109,9 @@ pub struct LoadedExtension {
 pub enum OnFork {
     /// The value as of the point.
     AtPoint,
-    /// The value at the end of the parent's log.
+    /// The value at the end of the parent's log. For a delegate's fork,
+    /// the end of the parent's log is the fork's point, `forked_from.seq`,
+    /// so the first run and every resume get the same values.
     Latest,
     /// Nothing.
     Fresh,

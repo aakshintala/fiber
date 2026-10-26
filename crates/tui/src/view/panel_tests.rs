@@ -659,7 +659,7 @@ fn budget_preamble(budget: f64) -> Line {
 }
 
 #[test]
-fn cost_against_a_budget() {
+fn cost_reads_billed_spend_against_the_budget() {
     for (cost, row) in [
         (
             serde_json::json!(0.0),
@@ -701,10 +701,6 @@ fn cost_against_a_budget() {
             .iter()
             .any(|row| *row == "cost".to_owned() + &" ".repeat(27) + "$1.25")
     );
-}
-
-#[test]
-fn the_budget_comparison_counts_billed_spend_only() {
     // $1 billed plus $9 on subscription against a $5 budget: the
     // subscription bills nothing per call.
     let mut app = attached(160, 40);
