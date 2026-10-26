@@ -676,7 +676,7 @@ fn drag_over(
 fn made_frame(rows: &[&str], below: &[&str], field: Option<(&str, usize)>) -> Frame {
     Frame {
         title: "Keys".to_owned(),
-        command: "/keys",
+        command: "/keys".to_owned(),
         rows: rows
             .iter()
             .map(|row| vec![((*row).to_owned(), None, Ink::Plain)])
