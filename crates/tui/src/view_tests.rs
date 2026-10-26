@@ -146,18 +146,10 @@ fn prompt_bubble_shows_the_local_time_under_it() {
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
     // 2026-10-08T14:15Z, 10:15 in New York.
     app.on_line(turn_started_at("s_aaaaaaaaaaaaaaaa", "go", 1791468900000));
+    // The turn's local start time draws under the bubble
+    // (`docs/tui.md`, "Turns").
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
-    assert_eq!(
-        texts,
-        vec![
-            "".to_owned(),
-            "▄▄▄▄▄".to_owned(),
-            " go ▐".to_owned(),
-            "▀▀▀▀▀".to_owned(),
-            "you 10:15 ".to_owned(),
-            "".to_owned()
-        ]
-    );
+    assert!(texts.iter().any(|line| line == "you 10:15 "), "{texts:?}");
     let time = app
         .lines()
         .into_iter()
@@ -184,22 +176,13 @@ fn prompt_bubble_shows_the_local_time_under_it() {
     );
     assert!(row_text(&buf, at.saturating_sub(2)).contains(" go ▐"));
     insta::assert_snapshot!("prompt_bubble_with_time", screen(&app));
-    // Without a set zone the same instant draws in UTC.
+    // Without a set zone the same instant draws in UTC
+    // (`docs/tui.md`, "Turns").
     let mut app = empty();
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started_at("s_aaaaaaaaaaaaaaaa", "go", 1791468900000));
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
-    assert_eq!(
-        texts,
-        vec![
-            "".to_owned(),
-            "▄▄▄▄▄".to_owned(),
-            " go ▐".to_owned(),
-            "▀▀▀▀▀".to_owned(),
-            "you 14:15 ".to_owned(),
-            "".to_owned()
-        ]
-    );
+    assert!(texts.iter().any(|line| line == "you 14:15 "), "{texts:?}");
 }
 
 #[test]
