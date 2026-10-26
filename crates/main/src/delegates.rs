@@ -602,10 +602,11 @@ fn worktree_creator(home: &Path) -> jobs::CreateWorktree {
                         }
                     })?;
             Ok((
-                jobs::CreatedWorktree {
+                jobs::EndWorktree {
                     path: created.path,
                     branch: created.branch,
-                    base: created.base,
+                    base: Some(created.base),
+                    remove: true,
                 },
                 jobs::WorktreeGuard::new(move || drop(shared)),
             ))

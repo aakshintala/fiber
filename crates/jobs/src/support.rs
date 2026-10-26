@@ -15,7 +15,7 @@ use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir};
 
 use crate::registry::Registry;
-use crate::{EndWorktree, FinishWorktree};
+use crate::{CreateWorktree, EndWorktree, FinishWorktree};
 
 /// A small usage: some tokens and a known cost.
 pub(crate) fn usage() -> Usage {
@@ -44,6 +44,17 @@ pub(crate) fn exited(text: &str) -> FiberExited {
         suspended_on: None,
         questions: None,
     }
+}
+
+/// A worktree creation that must never run in a test without isolation.
+pub(crate) fn no_creation() -> CreateWorktree {
+    Arc::new(
+        #[allow(
+            clippy::result_large_err,
+            reason = "the jobs boundary returns its typed error by value"
+        )]
+        |_, _| panic!("unexpected worktree creation"),
+    )
 }
 
 /// A clean end for `id`: exited 0 with no output.

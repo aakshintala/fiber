@@ -2438,6 +2438,12 @@ fn session_worktree_conflicts_with_resume() {
         "--workspace",
         "/w",
         "--resume",
+        "--parent",
+        "s_0123456789abcdef",
+        "--delegate-id",
+        "j_0123456789abcdef",
+        "--prompt",
+        "scan",
         "--worktree",
     ]);
     assert!(ask);

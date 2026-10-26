@@ -49,18 +49,8 @@ pub enum Watched {
     Closed,
 }
 
-/// A delegate worktree created before its child starts.
-#[derive(Debug, Clone)]
-pub struct CreatedWorktree {
-    /// The worktree directory.
-    pub path: PathBuf,
-    /// The branch checked out there.
-    pub branch: String,
-    /// The commit before the child ran.
-    pub base: String,
-}
-
 /// The worktree a run ends, or only reports when resuming.
+#[derive(Debug, Clone)]
 pub struct EndWorktree {
     /// The worktree directory.
     pub path: PathBuf,
@@ -106,7 +96,7 @@ impl Drop for WorktreeHold {
 
 /// Creates the worktree and its parent's shared hold before child launch.
 pub type CreateWorktree = Arc<
-    dyn Fn(&Path, &SessionId) -> Result<(CreatedWorktree, WorktreeGuard), crate::JobsError>
+    dyn Fn(&Path, &SessionId) -> Result<(EndWorktree, WorktreeGuard), crate::JobsError>
         + Send
         + Sync,
 >;
@@ -136,7 +126,7 @@ pub struct Launched {
     /// The parent's workspace, which the delegate shares.
     pub workspace: PathBuf,
     /// The parent's pre-created worktree, absent without isolation.
-    pub worktree: Option<CreatedWorktree>,
+    pub worktree: Option<contract::shapes::Worktree>,
     /// What this launch starts: a fresh child or a resume of the
     /// delegate's own session. A fresh launch and a resume render
     /// different argv, so the shape is an enum, never flags that can

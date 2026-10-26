@@ -230,33 +230,16 @@ pub(crate) fn run(
     } else {
         None
     };
-    if let Some((record, _shared)) = adopted {
-        return match run_new(
-            SessionId(args.id),
-            crate::per_run(args.model, args.overrides),
-            args.prompt,
-            true,
-            Some(record),
-            clock,
-            &signals,
-            fiber,
-            None,
-            None,
-            parent,
-            None,
-            Arc::new(crate::switch::Reads::default()),
-            args.supervised,
-        ) {
-            Ok(code) => code,
-            Err(failure) => report(&signals, failure),
-        };
-    }
+    let (adopted, _shared) = adopted
+        .map(|(worktree, shared)| (Some(worktree), Some(shared)))
+        .unwrap_or((None, None));
     new_session(
         SessionId(args.id),
         crate::per_run(args.model, args.overrides),
         args.prompt,
         parent.is_some(),
         args.worktree,
+        adopted,
         clock,
         &signals,
         fiber,
@@ -284,6 +267,7 @@ pub(crate) fn new_session(
     prompt: Option<String>,
     one_turn: bool,
     worktree: bool,
+    adopted: Option<Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
@@ -299,10 +283,10 @@ pub(crate) fn new_session(
     let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
     let clock = case_run.as_ref().map_or(clock, |case| case.session_clock());
     let host = case_run.as_ref().map(|case| case.host_script());
-    if !worktree {
+    if !worktree || adopted.is_some() {
         return match run_new(
-            id, overrides, prompt, one_turn, None, clock, signals, fiber, host, case_run, parent,
-            None, reads, supervised,
+            id, overrides, prompt, one_turn, adopted, clock, signals, fiber, host, case_run,
+            parent, None, reads, supervised,
         ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),

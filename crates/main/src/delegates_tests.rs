@@ -354,10 +354,10 @@ fn launched() -> jobs::Launched {
 fn isolated_launch_carries_the_precreated_workspace_and_worktree_flag() {
     let mut launched = launched();
     launched.workspace = "/fiber/worktrees/s_child".into();
-    launched.worktree = Some(jobs::CreatedWorktree {
-        path: launched.workspace.clone(),
+    launched.worktree = Some(contract::shapes::Worktree {
+        path: launched.workspace.to_string_lossy().into_owned(),
         branch: "fiber/s_child".into(),
-        base: "base".into(),
+        repository: None,
     });
     let command = launcher(std::path::Path::new("/bin/fiber"))(&launched);
     let argv: Vec<_> = command

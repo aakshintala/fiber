@@ -217,13 +217,7 @@ impl Fixture {
         DelegateSpawn {
             resolve: resolve(),
             wiring: crate::DelegateWiring {
-                create: Arc::new(
-                    #[allow(
-                        clippy::result_large_err,
-                        reason = "the jobs boundary returns its typed error by value"
-                    )]
-                    |_, _| panic!("unexpected worktree creation"),
-                ),
+                create: crate::support::no_creation(),
                 finish: crate::support::clean_finish(),
                 depth: 0,
                 registry: Arc::clone(&self.registry),

@@ -25,8 +25,8 @@ pub(crate) mod message;
 
 pub use message::{DelegateMessage, LastSeq, Steer, Steered};
 pub use run::{
-    CreateWorktree, CreatedWorktree, EndWorktree, FinishWorktree, Fresh, Launch, Launched, Start,
-    Watch, Watched, WorktreeGuard,
+    CreateWorktree, EndWorktree, FinishWorktree, Fresh, Launch, Launched, Start, Watch, Watched,
+    WorktreeGuard,
 };
 
 use run::Runner;
@@ -513,14 +513,13 @@ impl DelegateWiring {
                 } else {
                     None
                 };
-                let worktree = created.as_ref().map(|(record, _)| record.clone());
-                let worktree_run = created.map(|(record, guard)| run::WorktreeRun {
-                    end: EndWorktree {
-                        path: record.path,
-                        branch: record.branch,
-                        base: Some(record.base),
-                        remove: true,
-                    },
+                let worktree = created.as_ref().map(|(end, _)| contract::shapes::Worktree {
+                    path: end.path.to_string_lossy().into_owned(),
+                    branch: end.branch.clone(),
+                    repository: None,
+                });
+                let worktree_run = created.map(|(end, guard)| run::WorktreeRun {
+                    end,
                     guard: Some(guard),
                     finish: Arc::clone(&self.finish),
                 });
@@ -532,7 +531,7 @@ impl DelegateWiring {
                     prompt,
                     workspace: worktree
                         .as_ref()
-                        .map_or(workspace.clone(), |record| record.path.clone()),
+                        .map_or(workspace.clone(), |record| PathBuf::from(&record.path)),
                     worktree,
                     start,
                 };
@@ -573,14 +572,7 @@ impl DelegateWiring {
                     // records its point's reference verbatim instead.
                     model: delegate_model,
                     workspace: launched.workspace.to_string_lossy().into_owned(),
-                    worktree: launched
-                        .worktree
-                        .as_ref()
-                        .map(|record| contract::shapes::Worktree {
-                            path: record.path.to_string_lossy().into_owned(),
-                            branch: record.branch.clone(),
-                            repository: None,
-                        }),
+                    worktree: launched.worktree.clone(),
                     forked_from,
                 };
                 let (started, finish) = if let Some((extension, _)) = extension {
@@ -728,13 +720,7 @@ pub(crate) mod test_rig {
                 cap: 1024,
                 launch: Arc::clone(&self.launch),
                 watch: Arc::clone(&self.watch),
-                create: Arc::new(
-                    #[allow(
-                        clippy::result_large_err,
-                        reason = "the jobs boundary returns its typed error by value"
-                    )]
-                    |_, _| panic!("unexpected worktree creation"),
-                ),
+                create: crate::support::no_creation(),
                 finish: crate::support::clean_finish(),
             }
         }

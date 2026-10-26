@@ -191,10 +191,11 @@ fn failed_spawn_releases_the_parent_share_before_finishing_the_creation() {
         move |workspace, id| {
             let release = Arc::clone(&release);
             Ok((
-                super::CreatedWorktree {
+                super::EndWorktree {
                     path: workspace.join(&id.0),
                     branch: format!("fiber/{}", id.0),
-                    base: "base".into(),
+                    base: Some("base".into()),
+                    remove: true,
                 },
                 super::WorktreeGuard::new(move || {
                     release.fetch_add(1, Ordering::SeqCst);
