@@ -598,6 +598,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "import",
     "clear",
     "close",
+    "delete",
     "quit",
     "exit",
     "?",

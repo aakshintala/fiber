@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use super::{App, Effect, Kind, mint};
+use super::commands::NO_SESSION;
+use super::{App, Effect, Kind, Phase, mint};
 use crate::home::{
     Chip, Header, HomeScreen, Launch, Left, ListLine, Section, Sessions, Spot, State, cascade_line,
     delete_line, from_status, import_head, line, recent_rows,
@@ -911,6 +912,18 @@ impl App {
             home.focus_list = Some(ListFocus::FirstExited);
         }
         effect
+    }
+
+    /// `/delete` for the session on screen: goes home on its row. With
+    /// no session on screen, the notice and a cleared draft.
+    pub(in crate::app) fn delete_on_screen(&mut self) -> Effect {
+        if !matches!(self.phase, Phase::Attached { .. }) {
+            self.notices
+                .push("session_not_found", NO_SESSION.to_owned());
+            self.draft.clear();
+            return Effect::None;
+        }
+        self.leave_on_row()
     }
 
     /// Focuses the requested list stop after the next home frame. `/resume`

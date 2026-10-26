@@ -20,7 +20,7 @@ use crate::slash;
 
 /// What the notice says when a command needs a session and none is
 /// attached.
-const NO_SESSION: &str = "No session on screen.";
+pub(crate) const NO_SESSION: &str = "No session on screen.";
 
 /// The `@` panel's state.
 pub(crate) use crate::completion_rows::{Completions, Rows};
@@ -255,6 +255,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_close,
     },
     CommandEntry {
+        name: "delete",
+        description: "Deletes the session on screen.",
+        hint: None,
+        run: run_delete,
+    },
+    CommandEntry {
         name: "feedback",
         description: "Writes a feedback report and prints its path and the issue link.",
         hint: Some("<description>"),
@@ -372,6 +378,10 @@ fn run_close(app: &mut App, rest: &str) -> Option<Effect> {
 
 fn run_clear(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.clear())
+}
+
+fn run_delete(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.delete_on_screen())
 }
 
 /// `/feedback`: with no description, asks for one by leaving the draft
