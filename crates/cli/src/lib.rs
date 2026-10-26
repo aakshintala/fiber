@@ -194,7 +194,7 @@ pub use prune::{PruneArgs, prune};
 pub use release::release_install;
 pub use sessions::{delete, export};
 pub use sessions_list::list as sessions_list;
-pub use sessions_list::resolve_listed;
+pub use sessions_list::{latest_listed, resolve_listed};
 pub use sessions_search::search as sessions_search;
 pub use setup::{Completions, Hub, SetupFlags, setup};
 pub use stop::{stop_local, stop_remote};

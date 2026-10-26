@@ -13,12 +13,12 @@ Sessions:
   fiber [--model <model>] [-c <key>=<value>]...                                                                   Open the terminal
   ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
   resume [<id>] [--credential <label>]                                                                            Open a session in the terminal, or home at the session list
-  continue                                                                                                        Open the most recent session in this project
+  continue [--hub <name>]                                                                                           Open the most recent session in this project
   sessions [--all] [--json]                                                                                       List sessions: id, state, name, what it waits on, spend
   sessions search [--all] [--json] <text>                                                                         Search the logs of past and running sessions for the text
-  sessions delete [--cascade] [--yes] <id>                                                                        Delete a session, and with --cascade the sessions that continue it
+  sessions delete [--hub <name>] [--cascade] [--yes] <id>                                                         Delete a session, and with --cascade the sessions that continue it
   sessions export <id> [<path>]                                                                                   Write the session's log and its artifacts to <path>
-  sessions prune [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]                              Delete old sessions, worktrees and diagnostic logs
+  sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]               Delete old sessions, worktrees and diagnostic logs
   models [<search>] [--json]                                                                                      List the models the installed providers serve
 
 Fiber itself:
@@ -131,10 +131,11 @@ Options:
 ```text
 Open the most recent session in this project
 
-Usage: fiber continue
+Usage: fiber continue [OPTIONS]
 
 Options:
-  -h, --help  Print help
+      --hub <name>  Use a hub from this client's list
+  -h, --help        Print help
 ```
 
 ## fiber sessions
@@ -169,9 +170,10 @@ Arguments:
   <id>  The session: a full id or a unique prefix of one
 
 Options:
-      --cascade  Also delete every session that continues it: its forks and rewinds, and theirs
-      --yes      Delete without asking
-  -h, --help     Print help
+      --hub <name>  Use a hub from this client's list
+      --cascade     Also delete every session that continues it: its forks and rewinds, and theirs
+      --yes         Delete without asking
+  -h, --help        Print help
 ```
 
 ## fiber sessions export
@@ -197,6 +199,7 @@ Delete old sessions, worktrees and diagnostic logs
 Usage: fiber sessions prune [OPTIONS]
 
 Options:
+      --hub <name>             Use a hub from this client's list
       --older-than <duration>  Delete every exited session whose last line is older than this, such as `30d`: a whole number and `s`, `m`, `h` or `d`. Without it no session is deleted
       --cascade                Also delete every session that continues a deleted one
       --dry-run                Print what would be deleted and the space it would free, and delete nothing

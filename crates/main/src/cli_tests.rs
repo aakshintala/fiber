@@ -20,6 +20,9 @@ fn hub_list_commands_and_client_flags_parse() {
         vec!["fiber", "hub", "add", "--default", "box", "unix:/tmp/hub"],
         vec!["fiber", "hub", "remove", "box"],
         vec!["fiber", "sessions", "--hub", "box", "--json"],
+        vec!["fiber", "sessions", "delete", "s_id", "--hub", "box"],
+        vec!["fiber", "sessions", "prune", "--hub", "box"],
+        vec!["fiber", "continue", "--hub", "box"],
         vec!["fiber", "hub", "refresh", "--hub", "box"],
         vec!["fiber", "hub", "pair", "laptop", "--hub", "box"],
         vec!["fiber", "hub", "token", "list", "--hub", "box"],
@@ -31,12 +34,10 @@ fn hub_list_commands_and_client_flags_parse() {
             "{args:?}: {invocation:?}"
         );
     }
-    for args in [
-        vec!["fiber", "sessions", "delete", "s_id", "--hub", "box"],
-        vec!["fiber", "hub", "status", "--hub", "box"],
-    ] {
-        assert!(matches!(parse_from(args), Invocation::Usage { .. }));
-    }
+    assert!(matches!(
+        parse_from(vec!["fiber", "hub", "status", "--hub", "box"]),
+        Invocation::Usage { .. }
+    ));
 }
 
 #[test]
@@ -439,6 +440,7 @@ fn parses_argv_into_its_invocation() {
                 Some(Commands::Sessions(SessionsArgs {
                     hub: None,
                     command: Some(SessionsCommands::Delete {
+                        hub: None,
                         cascade: false,
                         yes: false,
                         id: "s_abc".to_owned(),
@@ -455,8 +457,26 @@ fn parses_argv_into_its_invocation() {
                 Some(Commands::Sessions(SessionsArgs {
                     hub: None,
                     command: Some(SessionsCommands::Delete {
+                        hub: None,
                         cascade: true,
                         yes: true,
+                        id: "s_abc".to_owned(),
+                    }),
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "sessions", "delete", "s_abc", "--hub", "box"],
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
+                    command: Some(SessionsCommands::Delete {
+                        hub: Some("box".to_owned()),
+                        cascade: false,
+                        yes: false,
                         id: "s_abc".to_owned(),
                     }),
                     all: false,
@@ -471,6 +491,7 @@ fn parses_argv_into_its_invocation() {
                 Some(Commands::Sessions(SessionsArgs {
                     hub: None,
                     command: Some(SessionsCommands::Prune {
+                        hub: None,
                         older_than: None,
                         cascade: false,
                         dry_run: false,
@@ -499,11 +520,31 @@ fn parses_argv_into_its_invocation() {
                 Some(Commands::Sessions(SessionsArgs {
                     hub: None,
                     command: Some(SessionsCommands::Prune {
+                        hub: None,
                         older_than: Some("30d".to_owned()),
                         cascade: true,
                         dry_run: true,
                         yes: true,
                         force: true,
+                    }),
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "sessions", "prune", "--hub", "box"],
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
+                    command: Some(SessionsCommands::Prune {
+                        hub: Some("box".to_owned()),
+                        older_than: None,
+                        cascade: false,
+                        dry_run: false,
+                        yes: false,
+                        force: false,
                     }),
                     all: false,
                     json: false,
@@ -1892,9 +1933,17 @@ fn hub_with_a_subcommand_or_without_an_id_is_a_usage_sentence() {
 
 #[test]
 fn continue_takes_no_arguments() {
-    let Invocation::Run(Some(Commands::Continue), _) = parse_from(["fiber", "continue"]) else {
+    let Invocation::Run(Some(Commands::Continue { hub }), _) = parse_from(["fiber", "continue"])
+    else {
         panic!("bare continue");
     };
+    assert_eq!(hub, None);
+    let Invocation::Run(Some(Commands::Continue { hub }), _) =
+        parse_from(["fiber", "continue", "--hub", "box"])
+    else {
+        panic!("continue --hub");
+    };
+    assert_eq!(hub.as_deref(), Some("box"));
     let help = super::render_help(&["continue"]).unwrap();
     assert!(
         help.contains("Open the most recent session in this project"),

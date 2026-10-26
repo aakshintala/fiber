@@ -17,8 +17,8 @@ use std::thread;
 use std::time::Duration;
 
 use super::{
-    HubPruneWant, OldFile, PruneArgs, delete_sessions, format_age, format_size, prune, prune_run,
-    remove_diagnostics, remove_for_hub, select_for_hub,
+    HubPruneWant, OldFile, PruneArgs, delete_sessions, format_age, format_size, prune,
+    prune_listed, prune_run, remove_diagnostics, remove_for_hub, select_for_hub,
 };
 use crate::CliError;
 use crate::sessions::Ask;
@@ -1110,11 +1110,13 @@ fn prune_exits_zero_on_success_two_on_usage_and_one_on_refusal() {
         let code = match case.as_str() {
             "usage" => prune(
                 &args(Some("30d"), false, false, false),
+                None,
                 clock.as_ref(),
                 &mut || hub.connect(),
             ),
             _ => prune(
                 &args(Some("30d"), false, false, true),
+                None,
                 clock.as_ref(),
                 &mut || hub.connect(),
             ),
@@ -1769,4 +1771,302 @@ fn remove_for_hub_without_expect_removes_the_current_selection() {
     assert_eq!(removed.total, 2);
     assert!(removed.failures.is_empty());
     assert_eq!(removed.freed, listed + 10);
+}
+
+/// Runs `prune_listed` against `hub`: its stdout, stderr and result.
+fn run_prune_listed(
+    hub: &mut FakeHub,
+    args: &PruneArgs,
+    yes: bool,
+    terminal: bool,
+    input: &mut dyn BufRead,
+) -> (String, String, Result<(), CliError>) {
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let ask = Ask {
+        yes,
+        terminal,
+        input,
+        err: &mut err,
+    };
+    let got = prune_listed(args, ask, &mut out, &mut || hub.connect());
+    (
+        String::from_utf8(out).unwrap(),
+        String::from_utf8(err).unwrap(),
+        got,
+    )
+}
+
+/// The previewed items a hub dry run answers.
+fn preview_items() -> Value {
+    json!({
+        "sessions": [{"id": "s_11111111111111a1", "cascade": ["s_11111111111111a1"]}],
+        "worktrees": [],
+        "pinned": [],
+        "diagnostics": [],
+    })
+}
+
+/// A hub `prune` dry-run answer: the lines prune would print, the space
+/// it would free, and the items it would remove.
+fn preview_answer() -> Value {
+    json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_prune", "result": {
+            "lines": ["session  s_11111111111111a1  30d  10 B"],
+            "would_free": 10,
+            "items": preview_items()}}})
+}
+
+/// A hub `prune` confirm answer: the space freed, how many items it
+/// tried, and each item that failed.
+fn confirm_answer(freed: u64, total: usize, failures: Vec<Value>) -> Value {
+    json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_prune", "result": {
+            "freed": freed, "total": total, "failures": failures}}})
+}
+
+/// Answers a dry run with the preview and a confirm with an empty
+/// outcome; anything else is `invalid_arguments`, so a wrong send fails
+/// loudly instead of hanging the test.
+fn preview_then_confirm() -> FakeHub {
+    FakeHub::new(|request| {
+        if request["command"] != "prune" {
+            return reject_line("c_prune", "invalid_arguments", "expected prune");
+        }
+        if request["args"].get("dry_run").is_some() {
+            preview_answer()
+        } else {
+            confirm_answer(10, 1, vec![])
+        }
+    })
+}
+
+#[test]
+fn hub_prune_dry_run_prints_the_preview_and_deletes_nothing() {
+    let mut hub = FakeHub::new(|_| preview_answer());
+    let args = PruneArgs {
+        force: true,
+        ..args(Some("30d"), true, true, false)
+    };
+    // A dry run needs no terminal and reads no input.
+    let (out, err, got) = run_prune_listed(&mut hub, &args, false, false, &mut Unread);
+    got.unwrap();
+    assert_eq!(
+        out,
+        "session  s_11111111111111a1  30d  10 B\nwould free 10 B\n"
+    );
+    assert_eq!(err, "");
+    // One request: a dry run prints the preview and deletes nothing
+    // (docs/invocation.md:1474-1476), so it connects once and sends no confirm.
+    assert_eq!(hub.connects, 1);
+    let received = hub.received.lock().unwrap();
+    assert_eq!(received.len(), 1, "a dry run sends no confirm");
+    assert_eq!(
+        received[0]["args"],
+        json!({"older_than": "30d", "cascade": true, "force": true, "dry_run": true})
+    );
+}
+
+#[test]
+fn hub_prune_confirm_sends_the_previewed_items_as_expect() {
+    let mut hub = preview_then_confirm();
+    let (out, err, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("30d"), true, false, false),
+        false,
+        true,
+        &mut io::Cursor::new(b"y\n".to_vec()),
+    );
+    got.unwrap();
+    assert_eq!(out, "session  s_11111111111111a1  30d  10 B\nfreed 10 B\n");
+    assert_eq!(err, "prune? [y/N] ");
+    let received = hub.received.lock().unwrap();
+    // Two requests in order, dry run then confirm
+    // (docs/invocation.md:1479-1483: without `--yes` the command first
+    // asks for the dry run, prints it and asks, then sends those items
+    // back as `expect`).
+    assert_eq!(received.len(), 2);
+    assert!(
+        received[0]["args"].get("expect").is_none(),
+        "the preview carries no expect"
+    );
+    assert_eq!(
+        received[1]["args"]["expect"],
+        preview_items(),
+        "the confirm sends the previewed items back"
+    );
+}
+
+#[test]
+fn hub_prune_decline_deletes_nothing() {
+    let mut hub = preview_then_confirm();
+    let (out, err, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("30d"), true, false, false),
+        false,
+        true,
+        &mut io::Cursor::new(b"n\n".to_vec()),
+    );
+    got.unwrap();
+    assert_eq!(out, "session  s_11111111111111a1  30d  10 B\n");
+    assert_eq!(err, "prune? [y/N] nothing deleted\n");
+    let received = hub.received.lock().unwrap();
+    // A decline stops after the dry run (docs/invocation.md:1479-1480),
+    // so it sends no confirm.
+    assert_eq!(received.len(), 1, "a decline sends no confirm");
+}
+
+#[test]
+fn hub_prune_yes_sends_one_confirm_without_expect() {
+    let mut hub = FakeHub::new(|request| {
+        if request["args"].get("dry_run").is_some() {
+            return reject_line("c_prune", "invalid_arguments", "no dry run with --yes");
+        }
+        confirm_answer(10, 1, vec![])
+    });
+    let (out, err, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("30d"), false, false, true),
+        true,
+        false,
+        &mut Unread,
+    );
+    got.unwrap();
+    assert_eq!(out, "freed 10 B\n");
+    assert_eq!(err, "");
+    let received = hub.received.lock().unwrap();
+    // With `--yes` one confirm and no dry run (docs/invocation.md:1475-1476:
+    // `--yes` confirms without asking; the local `--yes` sends no `expect`,
+    // docs/invocation.md:1415).
+    assert_eq!(received.len(), 1, "--yes sends one confirm");
+    // The exact line proves neither `dry_run` nor `expect` is sent.
+    assert_eq!(
+        received[0],
+        json!({"id": "c_prune", "command": "prune", "args": {"older_than": "30d"}})
+    );
+}
+
+#[test]
+fn hub_prune_stale_preview_keeps_its_code() {
+    let mut hub = FakeHub::new(|request| {
+        if request["args"].get("dry_run").is_some() {
+            preview_answer()
+        } else {
+            reject_line("c_prune", "stale_request", "the prune selection changed")
+        }
+    });
+    let (out, err, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("30d"), true, false, false),
+        false,
+        true,
+        &mut io::Cursor::new(b"y\n".to_vec()),
+    );
+    let error = got.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::Rejected {
+                code: ErrorCode::StaleRequest,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "the prune selection changed");
+    assert_eq!(out, "session  s_11111111111111a1  30d  10 B\n");
+    assert_eq!(err, "prune? [y/N] ");
+    let received = hub.received.lock().unwrap();
+    // Two requests, dry run then confirm (docs/invocation.md:1479-1484:
+    // without `--yes` the dry run comes first, and the hub rejects the
+    // confirm `stale_request` when the set changed, deleting nothing).
+    assert_eq!(received.len(), 2, "preview then one confirm");
+}
+
+#[test]
+fn hub_prune_without_a_terminal_never_connects() {
+    let mut hub = FakeHub::new(|_| panic!("must not connect"));
+    let (_, _, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("30d"), false, false, false),
+        false,
+        false,
+        &mut Unread,
+    );
+    let error = got.unwrap_err();
+    assert!(matches!(&error, CliError::NobodyToAsk { .. }), "{error:?}");
+    assert_eq!(error.code(), ErrorCode::Usage);
+    // Nobody to ask fails before connecting
+    // (docs/invocation.md:1475-1476: prune asks as delete does, and
+    // docs/invocation.md:1418-1420: with no terminal to ask on, asking is
+    // a usage error), so the hub is never reached.
+    assert_eq!(hub.connects, 0);
+}
+
+#[test]
+fn hub_prune_unreadable_duration_surfaces_the_hub_refusal() {
+    // Duration validation stays machine-side: the client sends the raw
+    // string, and the hub's `invalid_arguments` names it.
+    let mut hub = FakeHub::new(|_| reject_line("c_prune", "invalid_arguments", "bad duration"));
+    let (out, _, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("soon"), false, true, false),
+        false,
+        false,
+        &mut Unread,
+    );
+    let error = got.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::Rejected {
+                code: ErrorCode::InvalidArguments,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "bad duration");
+    assert_eq!(out, "");
+    let received = hub.received.lock().unwrap();
+    // A refused preview yields no items to confirm
+    // (docs/invocation.md:1480-1483: the confirm sends the dry run's items
+    // back as `expect`), so nothing follows it.
+    assert_eq!(received.len(), 1, "nothing follows a refused preview");
+    assert_eq!(received[0]["args"]["older_than"], "soon");
+}
+
+#[test]
+fn hub_prune_failures_print_and_exit_through_finish() {
+    let failure = json!({
+        "item": "session  s_11111111111111a1",
+        "code": "io_failed",
+        "message": "gone",
+    });
+    let mut hub = FakeHub::new(move |_| confirm_answer(10, 3, vec![failure.clone()]));
+    let (out, err, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("30d"), false, false, true),
+        true,
+        false,
+        &mut Unread,
+    );
+    let error = got.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::PruneFailed {
+                code: ErrorCode::IoFailed,
+                failed: 1,
+                total: 3,
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "1 of 3 could not be deleted");
+    assert_eq!(out, "freed 10 B\n");
+    assert_eq!(
+        err,
+        "fiber: session  s_11111111111111a1 could not be deleted: gone\n"
+    );
 }
