@@ -3110,41 +3110,38 @@ fn group_line_and_ledger_show_parsed_arguments_never_json() {
     assert!(row.ends_with('▸'), "{row}");
     assert!(crate::format::width(&row) <= 40, "{row}");
     assert!(!shown.contains("{\""), "{shown}");
-}
-
-/// A finished call's ledger row shows its parsed summary, never JSON.
-#[test]
-fn ledger_rows_show_parsed_arguments_never_json() {
-    use serde_json::json;
-    let mut app = empty();
-    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
-    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
-    app.on_line(at("step_started", None, 0, json!({})));
-    for (action, name, arguments) in [
-        ("a_1", "ask_user", four_questions()),
-        ("a_2", "web_fetch", json!({"url": "https://example.com/x"})),
-        ("a_3", "search", json!({"query": "rust errors"})),
-    ] {
-        app.on_line(at(
-            "tool_call_requested",
-            Some(action),
-            0,
-            json!({"name": name, "arguments": arguments}),
-        ));
-        app.on_line(at(
-            "tool_call_completed",
-            Some(action),
-            0,
-            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
-        ));
+    // A finished call's ledger row shows its parsed summary, never JSON.
+    {
+        let mut app = empty();
+        attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+        app.on_line(at("step_started", None, 0, json!({})));
+        for (action, name, arguments) in [
+            ("a_1", "ask_user", four_questions()),
+            ("a_2", "web_fetch", json!({"url": "https://example.com/x"})),
+            ("a_3", "search", json!({"query": "rust errors"})),
+        ] {
+            app.on_line(at(
+                "tool_call_requested",
+                Some(action),
+                0,
+                json!({"name": name, "arguments": arguments}),
+            ));
+            app.on_line(at(
+                "tool_call_completed",
+                Some(action),
+                0,
+                json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+            ));
+        }
+        app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+        let shown = screen(&app);
+        // The kind cells name the kind; the targets show the parsed form.
+        assert!(shown.contains("ask      4 questions"), "{shown}");
+        assert!(shown.contains("https://example.com/x"), "{shown}");
+        assert!(shown.contains("rust errors"), "{shown}");
+        assert!(!shown.contains("{\""), "{shown}");
     }
-    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
-    let shown = screen(&app);
-    // The kind cells name the kind; the targets show the parsed form.
-    assert!(shown.contains("ask      4 questions"), "{shown}");
-    assert!(shown.contains("https://example.com/x"), "{shown}");
-    assert!(shown.contains("rust errors"), "{shown}");
-    assert!(!shown.contains("{\""), "{shown}");
 }
 
 #[test]
