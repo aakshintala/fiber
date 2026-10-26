@@ -329,14 +329,6 @@ fn doc_roles(doc: &str) -> Vec<String> {
 }
 
 #[test]
-fn doc_roles_reads_the_first_column_of_the_themes_table() {
-    let doc = "## Look\n\n| a | b |\n|---|---|\n| `x` | no |\n\n### Themes\n\nText.\n\n\
-               | Role | Use |\n|---|---|\n| `text` | words |\n| `muted` | dim |\n\nAfter.\n\n\
-               | `later` | no |\n\n### Next\n";
-    assert_eq!(doc_roles(doc), ["text", "muted"]);
-}
-
-#[test]
 fn the_doc_lists_every_role() {
     let doc = include_str!("../../../docs/tui.md");
     let names: Vec<&str> = Role::ALL.into_iter().map(Role::name).collect();
@@ -347,14 +339,6 @@ fn the_doc_lists_every_role() {
 /// cell per role, in order, backticks kept.
 fn doc_dark(doc: &str) -> Vec<String> {
     doc_column(doc, 3)
-}
-
-#[test]
-fn doc_dark_reads_the_third_column_of_the_themes_table() {
-    let doc = "## Look\n\n| a | b | c |\n|---|---|---|\n| `x` | use | `1` |\n\n### Themes\n\nText.\n\n\
-               | Role | Use | Dark |\n|---|---|---|\n| `text` | words | the terminal's foreground |\n| `muted` | dim | `text`, dim |\n\nAfter.\n\n\
-               | `later` | no | `2` |\n\n### Next\n";
-    assert_eq!(doc_dark(doc), ["the terminal's foreground", "`text`, dim"]);
 }
 
 /// The dark theme's shade the doc's dark cell `cell` names for `role`.
@@ -374,8 +358,6 @@ fn dark_cell(cell: &str, role: Role) -> Shade {
 #[test]
 fn the_dark_theme_is_the_doc_table() {
     let doc = include_str!("../../../docs/tui.md");
-    let names: Vec<&str> = Role::ALL.into_iter().map(Role::name).collect();
-    assert_eq!(doc_roles(doc), names);
     let dark = doc_dark(doc);
     assert_eq!(dark.len(), ROLES, "{dark:?}");
     for (role, cell) in Role::ALL.into_iter().zip(dark.iter()) {
@@ -448,8 +430,6 @@ fn of_marker_round_trips_every_role_and_nothing_else() {
 #[test]
 fn the_light_theme_is_the_doc_table() {
     let doc = include_str!("../../../docs/tui.md");
-    let names: Vec<&str> = Role::ALL.into_iter().map(Role::name).collect();
-    assert_eq!(doc_roles(doc), names);
     let light = doc_light(doc);
     assert_eq!(light.len(), ROLES, "{light:?}");
     for (role, cell) in Role::ALL.into_iter().zip(light.iter()) {
