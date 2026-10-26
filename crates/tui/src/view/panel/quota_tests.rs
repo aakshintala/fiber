@@ -9,7 +9,7 @@ use crate::app::App;
 use crate::app::items::testkit::{SESSION, commands, hello, session_line};
 use crate::app::panel::Spot;
 use crate::home::Launch;
-use crate::markdown::{Role, style};
+use crate::theme::{Role, style};
 
 fn app(quota: Value, notice_at: f64) -> App {
     let mut app = App::new(std::path::PathBuf::from("/w"));

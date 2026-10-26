@@ -3,7 +3,8 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 
-use super::{CopyTarget, Role, render, style};
+use super::{CopyTarget, render};
+use crate::theme::{Role, style};
 
 /// A line's text.
 fn text(line: &Line<'_>) -> String {

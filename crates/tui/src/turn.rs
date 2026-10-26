@@ -640,7 +640,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
                 None => open(turns),
             };
             turn.is_some_and(|turn| {
-                turn.spend.record(&line);
+                turn.spend.record(None, line);
                 true
             }) || sized
         }),

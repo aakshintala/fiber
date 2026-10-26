@@ -2243,6 +2243,85 @@ fn a_left_file_that_survives_fails_the_turn() {
 }
 
 #[test]
+fn a_spill_inside_the_session_but_outside_artifacts_is_refused_not_written() {
+    let home = fakes::TempDir::new("fiber-spilled-in-session-outside");
+    let path = home.path().join("s_test").join("s_spill.txt");
+    let hooks = FakeHooks::new(changed(None, None, Some("replaced")), &["acme"], Vec::new());
+    let tool = Fixed {
+        output: text("unused"),
+        bound: Bound::DEFAULT,
+        effects: vec![Effect::Reads],
+        cancel: None,
+        shutdown: None,
+        make: Some(Arc::new(move || Output {
+            content: Vec::new(),
+            spilled: Some(Spilled {
+                head_bytes: 4,
+                tail_bytes: 5,
+                head: "raw ".into(),
+                tail: "bytes".into(),
+                removed: 6,
+                file: Ok(SpillFile {
+                    path: path.clone(),
+                    size: 16,
+                }),
+            }),
+            ..Output::default()
+        })),
+    };
+    let ran = run_spilled(home, tool, Some(Arc::clone(&hooks)));
+    let Err(crate::Error::Log(_)) = &ran.turn else {
+        panic!("a spill outside artifacts went on: {:?}", ran.turn);
+    };
+    assert!(!ran.session.join("s_spill.txt").exists());
+}
+
+#[test]
+fn a_left_file_outside_artifacts_is_not_removed_and_fails_the_turn() {
+    let home = fakes::TempDir::new("fiber-spilled-left-outside");
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let tool = {
+        let (message, session) = (
+            message.clone(),
+            home.path().join("s_test").join("s_left.txt"),
+        );
+        Fixed {
+            output: text("unused"),
+            bound: Bound::DEFAULT,
+            effects: vec![Effect::Reads],
+            cancel: None,
+            shutdown: None,
+            make: Some(Arc::new(move || {
+                std::fs::write(&session, b"partial").unwrap();
+                Output {
+                    content: Vec::new(),
+                    spilled: Some(Spilled {
+                        head_bytes: 4,
+                        tail_bytes: 4,
+                        head: "HHHH".into(),
+                        tail: "TTTT".into(),
+                        removed: 92,
+                        file: Err(Unsaved {
+                            message: message.clone(),
+                            left: Some(session.clone()),
+                        }),
+                    }),
+                    ..Output::default()
+                }
+            })),
+        }
+    };
+    let ran = run_spilled(home, tool, None);
+    let Err(crate::Error::Log(_)) = &ran.turn else {
+        panic!("a left file outside artifacts went on: {:?}", ran.turn);
+    };
+    assert_eq!(
+        std::fs::read(ran.session.join("s_left.txt")).unwrap(),
+        b"partial"
+    );
+}
+
+#[test]
 fn a_spill_with_nothing_removed_joins_head_and_tail_with_no_notice() {
     let home = fakes::TempDir::new("fiber-spilled-whole");
     let tool = spilling(

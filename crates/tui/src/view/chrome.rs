@@ -7,7 +7,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::layout::Layout;
-use crate::markdown::{Role, style};
+use crate::theme::{Role, style};
 
 /// The draggable edge's grip, drawn on three rows at mid-height.
 const GRIP: &str = "⋮";

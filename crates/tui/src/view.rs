@@ -12,9 +12,9 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::{App, Surface};
 use crate::completion_rows::Rows;
-use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 use crate::text::to_u16;
+use crate::theme::{Role, style};
 
 pub(crate) mod banner;
 pub(crate) mod chrome;

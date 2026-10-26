@@ -10,9 +10,9 @@ use ratatui::style::Style;
 use crate::app::App;
 use crate::app::items::Spot;
 use crate::format;
-use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
 use crate::text::to_u16;
+use crate::theme::{Role, style};
 
 /// The header's rows: the breadcrumb and the status row.
 pub(crate) const ITEM_HEADER_ROWS: usize = 2;

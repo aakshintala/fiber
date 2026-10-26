@@ -12,8 +12,7 @@ use super::{HINT, Offer, OfferKey, Spot, TUI_FILES};
 use crate::app::App;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
-use crate::markdown::style;
-use crate::theme::Role;
+use crate::theme::{Role, style};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 

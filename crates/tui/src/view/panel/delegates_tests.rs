@@ -208,13 +208,13 @@ fn without_a_status_the_rows_show_the_description_with_harness_and_model_below()
     assert_eq!(glyph.content, "\u{25cf}");
     assert_eq!(
         glyph.style,
-        crate::markdown::style(crate::markdown::Role::Attention)
+        crate::theme::style(crate::theme::Role::Attention)
     );
     let second = &drawn[1];
     assert_eq!(second.line.to_string(), "  claude \u{00b7} opus");
     assert_eq!(
         second.line.spans.first().map(|span| span.style),
-        Some(crate::markdown::style(crate::markdown::Role::Muted))
+        Some(crate::theme::style(crate::theme::Role::Muted))
     );
 }
 
@@ -568,7 +568,7 @@ fn progress_running_rows_show_calls_elapsed_and_the_optional_step() {
         assert_eq!(drawn[1].line.to_string(), expected);
         assert_eq!(
             drawn[1].line.spans[0].style,
-            crate::markdown::style(crate::markdown::Role::Muted)
+            crate::theme::style(crate::theme::Role::Muted)
         );
     }
     let mut app = attached(160, 40);
@@ -634,7 +634,7 @@ fn progress_finished_rows_freeze_the_last_status_at_the_first_end() {
 
 #[test]
 fn with_a_status_the_second_row_shows_its_progress() {
-    use crate::markdown::Role;
+    use crate::theme::Role;
     // The first row keeps the state glyph; progress is dim below it.
     for (state, _word) in [
         (serde_json::json!({"state": "streaming"}), "WORKING"),
@@ -659,12 +659,12 @@ fn with_a_status_the_second_row_shows_its_progress() {
             .first()
             .unwrap_or_else(|| panic!("a glyph span"));
         assert_eq!(glyph.content, "\u{25cf}");
-        assert_eq!(glyph.style, crate::markdown::style(Role::Attention));
+        assert_eq!(glyph.style, crate::theme::style(Role::Attention));
         let second = &drawn[1];
         assert_eq!(second.line.to_string(), "  0 calls · 0s");
         assert_eq!(
             second.line.spans.first().map(|span| span.style),
-            Some(crate::markdown::style(Role::Muted))
+            Some(crate::theme::style(Role::Muted))
         );
     }
     // An unreadable status still runs: `●` with its word below.
@@ -701,7 +701,7 @@ fn the_progress_row_does_not_show_the_model() {
 /// and a dim word. Attention is never used for a finished delegate.
 #[test]
 fn finished_delegates_show_how_they_ended() {
-    use crate::markdown::Role;
+    use crate::theme::Role;
     for (status, glyph, tone, word) in [
         ("completed", "\u{2713}", Role::Success, "done"),
         ("failed", "\u{2717}", Role::Muted, "failed"),
@@ -727,21 +727,17 @@ fn finished_delegates_show_how_they_ended() {
             .first()
             .unwrap_or_else(|| panic!("a glyph span"));
         assert_eq!(mark.content, glyph, "{status}");
-        assert_eq!(mark.style, crate::markdown::style(tone), "{status}");
+        assert_eq!(mark.style, crate::theme::style(tone), "{status}");
         let second = &drawn[1];
         assert_eq!(second.line.to_string(), format!("  {word}"), "{status}");
         assert_eq!(
             second.line.spans.first().map(|span| span.style),
-            Some(crate::markdown::style(Role::Muted)),
+            Some(crate::theme::style(Role::Muted)),
             "{status}"
         );
         for row in &drawn {
             for span in &row.line.spans {
-                assert_ne!(
-                    span.style,
-                    crate::markdown::style(Role::Attention),
-                    "{status}"
-                );
+                assert_ne!(span.style, crate::theme::style(Role::Attention), "{status}");
             }
         }
     }
@@ -752,7 +748,7 @@ fn finished_delegates_show_how_they_ended() {
 /// delegates still draws.
 #[test]
 fn the_title_counts_only_running() {
-    use crate::markdown::Role;
+    use crate::theme::Role;
     // One running, one done: the figure counts one, in attention.
     let mut app = attached_with(160, 40, &["delegates"]);
     fold_fiber(&mut app, 1);
@@ -765,7 +761,7 @@ fn the_title_counts_only_running() {
     let rows = crate::view::panel::rows(&app, panel_width(&app));
     assert_eq!(
         rows[1].line.spans.last().map(|span| span.style),
-        Some(crate::markdown::style(Role::Attention))
+        Some(crate::theme::style(Role::Attention))
     );
     // Only finished ones held: the card draws with a dim `0 running`.
     let mut app = attached_with(160, 40, &["delegates"]);
@@ -778,7 +774,7 @@ fn the_title_counts_only_running() {
     let rows = crate::view::panel::rows(&app, panel_width(&app));
     assert_eq!(
         rows[1].line.spans.last().map(|span| span.style),
-        Some(crate::markdown::style(Role::Muted))
+        Some(crate::theme::style(Role::Muted))
     );
 }
 
