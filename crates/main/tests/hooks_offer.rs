@@ -570,7 +570,7 @@ fn an_unreadable_declaration_faults_the_query_leaving_the_refusal() {
     // The fault goes in after the pty and hub are ready and before the
     // start, and stays until the refusal shows.
     let lock = setup.home().join("extensions/.lock");
-    fs::remove_file(&lock).ok();
+    fs::remove_file(&lock).unwrap_or(());
     fs::create_dir_all(&lock).unwrap();
     run.write(b"hi\r");
     run.wait_screen("the refusal without the offer", |grid| {
@@ -699,7 +699,7 @@ fn losing_the_hub_mid_install_fails_without_retry_or_session() {
     assert_no_sessions(&b, "the client after the loss");
     assert_not_installed(&a, "the hub after the loss");
     assert_not_installed(&b, "the client after the loss");
-    fs::remove_file(&fifo).ok();
+    fs::remove_file(&fifo).unwrap_or(());
     quit_idle(run);
     hub_guard.wait_gone();
     client_guard.wait_gone();
