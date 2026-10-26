@@ -203,6 +203,8 @@ fn peer_pid_inner(stream: &UnixStream) -> Result<u32, PeerCredentialError> {
 }
 
 #[cfg(target_os = "macos")]
+// Mutants run on Linux, where this is not compiled; the macOS test job runs it.
+#[cfg_attr(false, mutants::skip)]
 #[allow(
     unsafe_code,
     reason = "getsockopt LOCAL_PEERPID on a borrowed Unix socket: the fd is open, the option level and name are fixed, and the out buffer is a sized int"
@@ -324,6 +326,8 @@ fn argv_of(pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
 /// `proc_bsdinfo` (`bsd/sys/proc_info.h`): `pbi_ppid` is the parent, and
 /// `pbi_uid` is the effective uid beside the real one.
 #[cfg(target_os = "macos")]
+// Mutants run on Linux, where this is not compiled; the macOS test job runs it.
+#[cfg_attr(false, mutants::skip)]
 #[allow(
     unsafe_code,
     reason = "proc_pidinfo PROC_PIDTBSDINFO into a caller-sized proc_bsdinfo: the pid converts losslessly, the flavor and zero arg are fixed, and the buffer is exactly one structure the kernel fills or fails"
@@ -436,16 +440,22 @@ fn argv_from_sysctl(
 }
 
 #[cfg(target_os = "macos")]
+// Mutants run on Linux, where this is not compiled; the macOS test job runs it.
+#[cfg_attr(false, mutants::skip)]
 fn euid_of(pid: u32) -> Result<u32, ReadError> {
     Ok(bsdinfo_of(pid)?.pbi_uid)
 }
 
 #[cfg(target_os = "macos")]
+// Mutants run on Linux, where this is not compiled; the macOS test job runs it.
+#[cfg_attr(false, mutants::skip)]
 fn parent_of(pid: u32) -> Result<u32, ReadError> {
     Ok(bsdinfo_of(pid)?.pbi_ppid)
 }
 
 #[cfg(target_os = "macos")]
+// Mutants run on Linux, where this is not compiled; the macOS test job runs it.
+#[cfg_attr(false, mutants::skip)]
 #[allow(
     unsafe_code,
     reason = "sysctl KERN_PROCARGS2 with a fixed mib: the name pointer and count are fixed, the size probe passes no buffers, and the fill passes a buffer the first call sized"
