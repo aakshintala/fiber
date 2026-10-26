@@ -162,17 +162,62 @@ fn an_unknown_tool_is_told_which_names_exist() {
 
 #[test]
 fn bad_arguments_fail_invalid_arguments_and_never_start() {
+    // One step makes every call before any runs (`docs/loop.md`, "One
+    // step"); a call the loop cannot run fails and the turn continues
+    // (`docs/loop.md`, "Tool calls that do not run"), never writing
+    // `tool_call_started` (`docs/tools.md`, "Before a call runs").
+    const MALFORMED: &str = "{\"command\":\"ls\"]}";
     let tool = Arc::new(TestTool::reads("get_weather", "Sunny."));
-    let (_, lines) = turn(
+    let malformed = Value::String(MALFORMED.into());
+    let empty_array = json!([]);
+    let pair_array = json!([1, 2]);
+    let (session, lines) = turn(
         vec![tool.clone()],
         &[
             ("get_weather", json!({"days": true, "country": "FR"})),
-            ("get_weather", Value::String("{\"city\": ".into())),
+            ("get_weather", malformed.clone()),
+            ("get_weather", empty_array.clone()),
+            ("get_weather", pair_array.clone()),
         ],
+    );
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
     assert!(!kinds(&lines).contains(&"tool_call_started"));
     assert!(tool.ran().is_empty());
     let done = completed(&lines);
+    assert_eq!(done.len(), 4);
     for line in &done {
         assert_eq!(line.payload["status"], "failed");
         assert_eq!(line.payload["error"]["code"], "invalid_arguments");
@@ -185,6 +230,65 @@ fn bad_arguments_fail_invalid_arguments_and_never_start() {
          `/days`: expected integer, got a boolean"
     );
     assert!(text_first(done[1]).contains("not a JSON object"));
+    assert!(
+        text_first(done[1]).contains(MALFORMED),
+        "the failure quotes the raw text: {}",
+        text_first(done[1])
+    );
+    assert!(
+        text_first(done[2]).contains("[]"),
+        "the failure quotes the array: {}",
+        text_first(done[2])
+    );
+    assert!(
+        text_first(done[3]).contains("[1,2]"),
+        "the failure quotes the array: {}",
+        text_first(done[3])
+    );
+    // The recorded call keeps the arguments as the model sent them.
+    let requested: Vec<&Envelope> = lines
+        .iter()
+        .filter(|line| line.kind == "tool_call_requested")
+        .collect();
+    assert_eq!(requested.len(), 4);
+    assert_eq!(requested[1].payload["arguments"], malformed);
+    assert_eq!(requested[2].payload["arguments"], empty_array);
+    assert_eq!(requested[3].payload["arguments"], pair_array);
+    // The turn continues with a second request pairing each call with its
+    // failed result, which the model is sent (`docs/loop.md`, "What the
+    // model is sent").
+    let requests = session.requests();
+    assert_eq!(requests.len(), 2);
+    let replayed: Vec<&Input> = requests[1]
+        .conversation
+        .iter()
+        .filter(|input| matches!(input, Input::ToolCall { .. }))
+        .collect();
+    assert_eq!(replayed.len(), 4);
+    for (call, arguments) in replayed.iter().zip([
+        &json!({"days": true, "country": "FR"}),
+        &malformed,
+        &empty_array,
+        &pair_array,
+    ]) {
+        let Input::ToolCall { call, .. } = call else {
+            unreachable!()
+        };
+        assert_eq!(&call.arguments, arguments);
+    }
+    let results: Vec<(&str, bool)> = requests[1]
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::ToolResult { text, is_error, .. } => Some((text.as_str(), *is_error)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 4);
+    assert!(results.iter().all(|(_, is_error)| *is_error));
+    assert!(results[1].0.contains(MALFORMED));
+    assert!(results[2].0.contains("[]"));
+    assert!(results[3].0.contains("[1,2]"));
 }
 
 #[test]
