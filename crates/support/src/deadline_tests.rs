@@ -12,8 +12,8 @@ use crate::clock::Manual as FakeClock;
 
 use super::{BUDGET, CLEANUP, Deadline, WAITS};
 
-/// The span `after_five_seconds_left_stays_within_its_span` asserts on.
-const SPAN: Duration = Duration::from_secs(5);
+/// The span `after_fifteen_seconds_left_stays_within_its_span` asserts on.
+const SPAN: Duration = Duration::from_secs(15);
 
 /// A fake clock that lives as long as the test process, as a deadline's
 /// clock must.
@@ -87,7 +87,7 @@ fn after_the_longest_duration_never_panics_and_leaves_years() {
 }
 
 #[test]
-fn after_five_seconds_left_stays_within_its_span() {
+fn after_fifteen_seconds_left_stays_within_its_span() {
     let wait = Deadline::after(SPAN);
     let left = wait.left();
     assert!(left <= SPAN, "no more than it started with");
