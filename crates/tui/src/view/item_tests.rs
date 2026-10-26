@@ -1119,6 +1119,7 @@ fn job_header_draws_the_status_and_live_screen_line() {
     let mut app = home(80, 24);
     opened(&mut app);
     app.set_now(clock.now(), wall_ms(&clock));
+    mark_tty(&mut app);
     // Eleven seconds in: the status row reads whole seconds.
     app.on_line(session_line(
         "job_started",
@@ -1187,6 +1188,32 @@ fn job_header_draws_the_status_and_live_screen_line() {
             assert_eq!(cell.fg, Role::Muted.color(), "dim live screen {x}");
         }
     }
+}
+
+#[test]
+fn plain_job_header_has_no_live_screen_line() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home(80, 24);
+    opened(&mut app);
+    app.set_now(clock.now(), wall_ms(&clock));
+    // Eleven seconds in: the status row reads whole seconds.
+    app.on_line(session_line(
+        "job_started",
+        wall_ms(&clock).saturating_sub(11_000),
+        json!({"job_id": "j_2", "description": "build the workspace",
+            "output_path": "/tmp/out"}),
+    ));
+    open_job(&mut app, "j_2");
+    let (rows, _) = rendered(&app, 80, 24);
+    assert!(rows[0].contains("Job  ◆ build the workspace"));
+    assert!(rows[2].contains("job j_2 · build the workspace · running 11s"));
+    assert!(rows[2].contains("■ stop j_2"));
+    // The live-screen line is pty-only (`docs/tui.md`, "Swapped
+    // views"): a plain job must not claim to have one.
+    assert!(
+        !rows.iter().any(|row| row.contains("live screen")),
+        "no live-screen line for a plain job"
+    );
 }
 
 #[test]

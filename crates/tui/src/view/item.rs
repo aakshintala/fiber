@@ -190,8 +190,9 @@ fn draw_delegate_card(
 
 /// The job's status rows on the `surface` tint: the job, its command,
 /// the elapsed running time and the stop target while it runs, else the
-/// outcome where the stop would be; under it the live-screen line
-/// (`docs/tui.md`, "Swapped views").
+/// outcome where the stop would be; under it the live-screen line for a
+/// `tty` job only (`docs/tui.md`, "Swapped views": a job running under
+/// a pseudo-terminal).
 fn draw_job_rows(
     view: &ItemView,
     area: Rect,
@@ -251,7 +252,7 @@ fn draw_job_rows(
             &[(&status, style(Role::Text).bg(Role::Surface.color()))],
         );
     }
-    if area.height < 4 {
+    if !view.tty || area.height < 4 {
         return;
     }
     card_row(

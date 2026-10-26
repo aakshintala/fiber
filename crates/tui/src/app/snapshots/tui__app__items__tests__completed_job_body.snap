@@ -5,7 +5,7 @@ expression: "rows.join(\"\\n\")"
   Job  ◆ build the workspace                                         Esc returns
  fix the parser › ▸ build the workspace
  job j_2 · build the workspace · completed 5s
- live screen · 80 columns × 24 rows from attach
+
 
  Output since this terminal attached · /tmp/out
  done
