@@ -763,6 +763,23 @@ fn check_cut(name: &str, rows: &[String], orphan: Option<&str>) {
     }
 }
 
+/// One cut case's live and reloaded rows: every page joined before anything
+/// is dropped, then every page dropped and loaded again from history; both
+/// hold what the crash promises and the reload reads what live drew
+/// (`docs/tui.md`, "History and paging").
+fn check_case(name: &str, lines: &[Envelope], orphan: Option<&str>) {
+    let mut pages = Pages::new(80);
+    for line in lines {
+        pages.apply(line);
+    }
+    let live = texts(&joined(&mut pages, lines));
+    check_cut(name, &live, orphan);
+    drop_all(&mut pages);
+    let reloaded = texts(&joined(&mut pages, lines));
+    assert_eq!(reloaded, live, "{name} reloads what live drew");
+    check_cut(&format!("{name} reloaded"), &reloaded, orphan);
+}
+
 #[test]
 fn job_descriptions_stay_on_the_page_that_holds_them() {
     // Ten cut scenarios over the same rendered-output promises: the orphan
@@ -823,18 +840,7 @@ fn job_descriptions_stay_on_the_page_that_holds_them() {
         ("forty done plus one open", done.lines, None),
     ];
     for (name, lines, orphan) in cases {
-        let mut pages = Pages::new(80);
-        for line in &lines {
-            pages.apply(line);
-        }
-        // Every page joined, before anything is dropped.
-        let live = texts(&joined(&mut pages, &lines));
-        check_cut(name, &live, orphan);
-        drop_all(&mut pages);
-        // Every page dropped, then loaded again from history.
-        let reloaded = texts(&joined(&mut pages, &lines));
-        assert_eq!(reloaded, live, "{name} reloads what live drew");
-        check_cut(&format!("{name} reloaded"), &reloaded, orphan);
+        check_case(name, &lines, orphan);
     }
     // Open jobs over one, three and six cuts draw no orphan line, live or
     // reloaded.
@@ -849,16 +855,7 @@ fn job_descriptions_stay_on_the_page_that_holds_them() {
             stream.turn(turn + 1, 1);
         }
         let name = format!("open jobs over {cuts} cuts");
-        let mut pages = Pages::new(80);
-        for line in &stream.lines {
-            pages.apply(line);
-        }
-        let live = texts(&joined(&mut pages, &stream.lines));
-        check_cut(&name, &live, None);
-        drop_all(&mut pages);
-        let reloaded = texts(&joined(&mut pages, &stream.lines));
-        assert_eq!(reloaded, live, "{name} reloads what live drew");
-        check_cut(&format!("{name} reloaded"), &reloaded, None);
+        check_case(&name, &stream.lines, None);
     }
     // A reloaded orphan line still opens to its jobs' messages
     // (`docs/tui.md`, "After a crash").
