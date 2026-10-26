@@ -618,10 +618,10 @@ fn a_different_schema_version_is_session_held_naming_both_versions() {
         "the mismatch names the session and its version: {failed:?}"
     );
     assert_eq!(failed.code(), ErrorCode::SessionHeld);
+    let message = failed.to_string();
     assert!(
-        failed.to_string().contains(&SCHEMA_VERSION.to_string()),
-        "the message names this build's version: {}",
-        failed.to_string()
+        message.contains(&SCHEMA_VERSION.to_string()),
+        "the message names this build's version: {message}"
     );
     assert!(out.is_empty());
     // Attach sent no prompt after the version check: the stand-in saw the
@@ -936,10 +936,10 @@ fn a_different_schema_version_that_is_not_an_envelope_is_still_session_held() {
         "the mismatch names the session and its version: {failed:?}"
     );
     assert_eq!(failed.code(), ErrorCode::SessionHeld);
+    let message = failed.to_string();
     assert!(
-        failed.to_string().contains(&SCHEMA_VERSION.to_string()),
-        "the message names this build's version: {}",
-        failed.to_string()
+        message.contains(&SCHEMA_VERSION.to_string()),
+        "the message names this build's version: {message}"
     );
     assert!(out.is_empty());
     server.join().expect("the listener answered the subscribe");
