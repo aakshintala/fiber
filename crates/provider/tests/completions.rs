@@ -2423,3 +2423,71 @@ fn live_openrouter_web_search_completes_a_turn() {
     };
     assert!(!hosted.completed.hosts_surfaced.is_empty());
 }
+
+/// The malformed text #3017 leaves alone on string-carrying protocols: the
+/// wire keeps the raw text byte for byte, never an empty object.
+const MALFORMED_ARGUMENTS: &str = "{\"command\":\"ls\"]}";
+
+/// The `arguments` string the request sends for one call with `arguments`.
+fn sent_arguments(arguments: Value) -> String {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let request = ModelRequest {
+        conversation: vec![
+            Input::ToolCall {
+                action_id: ActionId("a_1".into()),
+                call: ToolCallRequested {
+                    name: "get_weather".into(),
+                    arguments,
+                    provider_id: None,
+                    repair: None,
+                    ran_by: None,
+                    provider_item: None,
+                },
+                model: "openrouter/z-ai/glm-5.3-flash".into(),
+            },
+            Input::ToolResult {
+                pdfs: Vec::new(),
+                action_id: ActionId("a_1".into()),
+                text: "18 C, clear".into(),
+                is_error: false,
+                images: Vec::new(),
+            },
+        ]
+        .into(),
+        ..request()
+    };
+    send(endpoint(&server), &request);
+    sent_body(&server, 0)["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| {
+            message["tool_calls"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .find(|call| call["id"] == "a_1")
+        .unwrap_or_else(|| panic!("no tool call in {:?}", sent_body(&server, 0)))
+        ["function"]["arguments"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn non_object_arguments_are_sent_as_the_model_sent_them() {
+    // A raw malformed string stays byte-for-byte equal, and an array stays
+    // its serialized array text: neither becomes an empty object.
+    assert_eq!(
+        sent_arguments(Value::String(MALFORMED_ARGUMENTS.into())),
+        MALFORMED_ARGUMENTS
+    );
+    assert_eq!(sent_arguments(json!([1, 2])), "[1,2]");
+    assert_eq!(sent_arguments(json!([])), "[]");
+    // Objects keep their members, serialized the same way.
+    assert_eq!(
+        sent_arguments(json!({"city": "Paris"})),
+        "{\"city\":\"Paris\"}"
+    );
+}
