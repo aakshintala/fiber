@@ -83,9 +83,9 @@ impl Send {
         self.summarise = !self.summarise;
     }
 
-    /// Sets the summarise checkbox, returning what it was.
-    pub(crate) fn swap_summarise(&mut self, summarise: bool) -> bool {
-        std::mem::replace(&mut self.summarise, summarise)
+    /// Sets the summarise checkbox.
+    pub(crate) fn set_summarise(&mut self, summarise: bool) {
+        self.summarise = summarise;
     }
 
     /// Whether `id` is the `rewind` on the wire.
@@ -233,7 +233,7 @@ impl App {
         &mut self,
         accepted: &CommandAccepted,
     ) -> Option<Vec<String>> {
-        if !self.rewind.confirm_send(&accepted.command_id.0) {
+        if !self.rewind.send_matches(&accepted.command_id.0) {
             return None;
         }
         let Some(CommandResult::Rewind { new_session_id }) = accepted.result.as_ref() else {
@@ -425,9 +425,10 @@ impl App {
             return Effect::None;
         }
         self.rewind.clear_refusal();
-        let saved = self.rewind.swap_summarise(summarise);
+        let saved = self.rewind.summarise();
+        self.rewind.set_summarise(summarise);
         let out = self.send_rewind();
-        self.rewind.swap_summarise(saved);
+        self.rewind.set_summarise(saved);
         out
     }
 

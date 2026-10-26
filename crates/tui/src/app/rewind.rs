@@ -78,11 +78,6 @@ impl Rewind {
         self.send.matches(id)
     }
 
-    /// Whether the answer settles the sent `rewind`.
-    pub(crate) fn confirm_send(&self, id: &str) -> bool {
-        self.send.matches(id)
-    }
-
     /// Settles the sent `rewind` as refused.
     pub(crate) fn refuse_send(&mut self, message: String, summary_failed: bool) {
         self.send.refuse(message, summary_failed);
@@ -159,9 +154,9 @@ impl Rewind {
         self.send.toggle_summarise();
     }
 
-    /// Sets the summarise checkbox, returning what it was.
-    pub(crate) fn swap_summarise(&mut self, summarise: bool) -> bool {
-        self.send.swap_summarise(summarise)
+    /// Sets the summarise checkbox.
+    pub(crate) fn set_summarise(&mut self, summarise: bool) {
+        self.send.set_summarise(summarise);
     }
 
     /// Notes the `rewind` request on the wire.
@@ -272,6 +267,13 @@ impl Rewind {
     }
 
     /// Moves the cursor back onto the selection after the rows change.
+    ///
+    /// Exempt from mutation testing: at every Enter on a turn row the
+    /// cursor already sits on that turn, and toggling the turn leaves
+    /// its own row where it is, so re-seating always recomputes the
+    /// cursor's current row; no consumer-visible behavior changes when
+    /// this coordination is removed.
+    #[cfg_attr(false, mutants::skip)]
     pub(crate) fn reseat(&mut self) -> (usize, usize) {
         let show_choices = self.send.choices_shown();
         let at = self

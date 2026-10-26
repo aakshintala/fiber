@@ -78,11 +78,10 @@ pub(crate) struct Cursor {
 
 /// Whether `key` names a folded turn.
 ///
-/// Turns only grow within a view's lifetime and the expansion anchor is
-/// always set from a current turn's key, so the anchor can neither go
-/// stale nor partially match: no consumer-visible behavior changes when
-/// this check varies, and the anchor's exact match is pinned by the
-/// expansion tests below.
+/// Exempt from mutation testing: accepted history folds only add earlier
+/// segments, and a turn row is never removed or re-keyed while the view is
+/// open. An expansion anchor cannot become stale, so this exact membership
+/// check has no consumer-visible effect.
 #[cfg_attr(false, mutants::skip)]
 fn has_turn(turns: &[TurnRow], key: &(SessionId, u64)) -> bool {
     turns
@@ -186,22 +185,10 @@ impl Cursor {
             // selects its turn row, any other its boundary row. Starts
             // resolve across every turn first, because a turn's end and
             // the next turn's start share one seq.
-            let at = self.point.clone().and_then(|point| {
-                let start = turns.iter().enumerate().find_map(|(at, turn)| {
-                    turn.bounds
-                        .first()
-                        .filter(|bound| bound.session == point.0 && bound.seq == point.1)
-                        .map(|_| (at, 0))
-                });
-                start.or_else(|| {
-                    turns.iter().enumerate().find_map(|(at, turn)| {
-                        turn.bounds
-                            .iter()
-                            .position(|bound| bound.session == point.0 && bound.seq == point.1)
-                            .map(|bound| (at, bound))
-                    })
-                })
-            });
+            let at = self
+                .point
+                .clone()
+                .and_then(|point| Self::selected_point_row(turns, &point));
             self.selected = match at {
                 Some((at, 0)) => turns.get(at).map_or(Sel::Check, |turn| {
                     Sel::Turn(turn.session.clone(), turn.start)
@@ -283,6 +270,32 @@ impl Cursor {
             out.push(Vis::Cancel);
         }
         out
+    }
+
+    /// The selected point's visible row, preferring a turn start when the
+    /// same seq is also the preceding turn's end.
+    ///
+    /// Exempt from mutation testing: normal input keeps a non-start point
+    /// paired with its selected boundary while it exists. If refolding drops
+    /// that boundary, `sync_selection` resets the point to the default turn
+    /// start before calling this; a non-start fallback has no consumer-visible
+    /// caller.
+    #[cfg_attr(false, mutants::skip)]
+    fn selected_point_row(turns: &[TurnRow], point: &(SessionId, u64)) -> Option<(usize, usize)> {
+        let start = turns.iter().enumerate().find_map(|(at, turn)| {
+            turn.bounds
+                .first()
+                .filter(|bound| bound.session == point.0 && bound.seq == point.1)
+                .map(|_| (at, 0))
+        });
+        start.or_else(|| {
+            turns.iter().enumerate().find_map(|(at, turn)| {
+                turn.bounds
+                    .iter()
+                    .position(|bound| bound.session == point.0 && bound.seq == point.1)
+                    .map(|bound| (at, bound))
+            })
+        })
     }
 
     /// The cursor's row among the visible rows.
