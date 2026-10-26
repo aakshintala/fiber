@@ -40,7 +40,7 @@ fn quota_segments_use_short_names_colours_and_open_the_view() {
     assert_eq!(shown[0].line.to_string(), "Q codex 20% · openrouter 4.20");
     assert_eq!(
         shown[0].line.spans[0].style,
-        crate::markdown::style(crate::markdown::Role::Muted)
+        crate::theme::style(crate::theme::Role::Muted)
     );
     let codex = shown[0]
         .line
@@ -48,10 +48,7 @@ fn quota_segments_use_short_names_colours_and_open_the_view() {
         .iter()
         .find(|s| s.content.contains("codex"))
         .unwrap();
-    assert_eq!(
-        codex.style,
-        crate::markdown::style(crate::markdown::Role::Error)
-    );
+    assert_eq!(codex.style, crate::theme::style(crate::theme::Role::Error));
     // The whole segment opens the quota view, which fetches every label.
     assert_eq!(shown[0].spots, [(0, 29, Spot::Quota)]);
     app.attach(contract::SessionId(SESSION.to_owned()));
@@ -1089,7 +1086,7 @@ fn style_of(row: &crate::view::status_rows::StatusRow, content: &str) -> ratatui
 /// layout").
 #[test]
 fn status_row_one_lists_every_segment_in_its_roles() {
-    use crate::markdown::{Role, style};
+    use crate::theme::{Role, style};
     let app = full_app();
     let rows = crate::view::status_rows::status(&app, 160);
     assert_eq!(rows.len(), 1);
@@ -1195,7 +1192,7 @@ fn status_row_one_at_the_floors() {
 /// none.
 #[test]
 fn the_narrow_bar_fills_without_a_marker() {
-    use crate::markdown::{Role, style};
+    use crate::theme::{Role, style};
     let mut app = attached(100, 30);
     app.on_line(full_preamble());
     // Five of eight at 268k of the 400k handoff, and no attention

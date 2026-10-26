@@ -8,8 +8,8 @@ use super::Builder;
 use crate::approvals::Title;
 use crate::approvals::form::Spot;
 use crate::format::width;
-use crate::markdown::style;
 use crate::theme::Role;
+use crate::theme::style;
 
 /// "Question" bold in secondary.
 fn head() -> Style {

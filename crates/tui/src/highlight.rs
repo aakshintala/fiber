@@ -3,7 +3,7 @@
 //! "Written ourselves"). The tables are static data, so nothing loads when
 //! a reply has no code.
 
-use crate::markdown::Role;
+use crate::theme::Role;
 
 /// How a language is read.
 #[derive(Clone, Copy, PartialEq, Eq)]

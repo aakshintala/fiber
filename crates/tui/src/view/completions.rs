@@ -12,9 +12,9 @@ use ratatui::text::Span;
 
 use crate::completion_rows::{Completions, Rows};
 use crate::format::width as cells;
-use crate::markdown::Role;
 use crate::mouse::Target;
 use crate::slash;
+use crate::theme::Role;
 use crate::view::overlay::{self, Place, Row};
 
 /// The panels wrap at this content width before shrinking to what the

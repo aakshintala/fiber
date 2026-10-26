@@ -157,14 +157,14 @@ fn the_summary_row_matches_the_doc_mock_in_text_and_order() {
         .iter()
         .find(|span| span.content == "+175")
         .expect("the added count");
-    assert_eq!(plus.style.fg, crate::markdown::style(Role::Added).fg);
+    assert_eq!(plus.style.fg, crate::theme::style(Role::Added).fg);
     let minus = rows[0]
         .0
         .spans
         .iter()
         .find(|span| span.content == "−83")
         .expect("the removed count");
-    assert_eq!(minus.style.fg, crate::markdown::style(Role::Removed).fg);
+    assert_eq!(minus.style.fg, crate::theme::style(Role::Removed).fg);
 }
 
 #[test]
@@ -635,9 +635,9 @@ fn the_ledger_matches_the_doc_mock_column_for_column() {
     }
     assert!(text[4].starts_with("      ○ shell"));
     // The glyphs: ✓ in success, ○ in attention.
-    let success = crate::markdown::style(Role::Success);
-    let attention = crate::markdown::style(Role::Attention);
-    let info = crate::markdown::style(Role::Info);
+    let success = crate::theme::style(Role::Success);
+    let attention = crate::theme::style(Role::Attention);
+    let info = crate::theme::style(Role::Info);
     for row in &rows[1..4] {
         assert_eq!(row.spans[1].style.fg, success.fg, "{row:?}");
         assert_eq!(row.spans[3].style.fg, info.fg, "{row:?}");
@@ -654,11 +654,11 @@ fn the_ledger_matches_the_doc_mock_column_for_column() {
     assert!(is_dim(&rows[1].spans[6]), "212 lines dim");
     assert_eq!(
         rows[3].spans[6].style.fg,
-        crate::markdown::style(Role::Added).fg
+        crate::theme::style(Role::Added).fg
     );
     assert_eq!(
         rows[3].spans[8].style.fg,
-        crate::markdown::style(Role::Removed).fg
+        crate::theme::style(Role::Removed).fg
     );
     let running = &rows[4].spans[6];
     assert_eq!(running.content.as_ref(), "running");
@@ -670,8 +670,8 @@ fn the_ledger_matches_the_doc_mock_column_for_column() {
 /// turn.
 #[test]
 fn ledger_glyphs_name_what_each_call_is_doing() {
-    let attention = crate::markdown::style(Role::Attention);
-    let success = crate::markdown::style(Role::Success);
+    let attention = crate::theme::style(Role::Attention);
+    let success = crate::theme::style(Role::Success);
     let section = |calls: Vec<Call>| Section {
         step: 1,
         calls,
@@ -819,12 +819,12 @@ fn ledger_results_name_what_each_call_did() {
     }
     assert_eq!(
         rows[12].spans[6].style.fg,
-        crate::markdown::style(Role::Added).fg
+        crate::theme::style(Role::Added).fg
     );
     // An ask waiting on the person is in attention.
     assert_eq!(
         rows[11].spans[6].style.fg,
-        crate::markdown::style(Role::Attention).fg
+        crate::theme::style(Role::Attention).fg
     );
 }
 

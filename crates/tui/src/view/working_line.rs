@@ -9,8 +9,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
 use crate::app::App;
-use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
+use crate::theme::{Role, style};
 use crate::working::lay;
 
 /// Draws the working line on the row above `bottom`, above the running

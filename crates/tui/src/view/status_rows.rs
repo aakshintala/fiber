@@ -11,10 +11,10 @@ use ratatui::text::{Line, Span};
 use crate::app::App;
 use crate::app::panel::Spot;
 use crate::format;
-use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
 use crate::text::to_u16;
 use crate::theme;
+use crate::theme::{Role, style};
 use crate::view::panel::{Card, bar_spans, branch_text, cards, fit_spans};
 
 /// One status-line row: its line and the targets on it (column offset,

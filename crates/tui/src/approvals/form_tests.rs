@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use super::{Form, Spot};
 use crate::approvals::{Panel, PanelKey, Queue, Title};
 use crate::keys::{Edit, Key};
-use crate::markdown::style;
 use crate::theme::Role;
+use crate::theme::style;
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 

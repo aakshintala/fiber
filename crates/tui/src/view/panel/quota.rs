@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use super::{Row, sides, title_row};
 use crate::app::App;
 use crate::app::panel::Spot;
-use crate::markdown::{Role, style};
+use crate::theme::{Role, style};
 use contract::events::{QuotaCredit, QuotaWindow};
 
 /// One window's figure, its remaining share and whether little is left,

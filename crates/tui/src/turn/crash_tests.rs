@@ -447,7 +447,7 @@ fn a_warning_reads_its_mark_in_attention_and_its_message_dim() {
     assert_eq!(spans[0].content, "⚠ ");
     assert_eq!(
         spans[0].style,
-        crate::markdown::style(crate::theme::Role::Attention)
+        crate::theme::style(crate::theme::Role::Attention)
     );
     assert_eq!(spans[1].content, "boom");
     assert!(spans[1].style.add_modifier.contains(Modifier::DIM));

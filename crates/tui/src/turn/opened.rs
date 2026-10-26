@@ -10,10 +10,10 @@ use super::group::{Call, dim_span, fit};
 use crate::app::Target;
 use crate::diff::{diff_lines, gutter_prefix, gutter_width, safe_line, styled_spans};
 use crate::format::{count, dim};
-use crate::markdown::style;
 use crate::rows::{RowText, Rows};
 use crate::swapped::Ink;
 use crate::theme::Role;
+use crate::theme::style;
 
 /// An opened call shows at most this many logical lines, then a dim
 /// "… N more lines (Enter to view)" row (`docs/tui.md`, "Tool groups

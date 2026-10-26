@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 
 use crate::app::{App, Target};
 use crate::link::Line;
-use crate::markdown::style;
 use crate::theme::Role;
+use crate::theme::style;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 

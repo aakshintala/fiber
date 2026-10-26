@@ -18,9 +18,9 @@ use super::group::{dim_span, fit, spans_width};
 use super::{Entry, Fold, Turn, open};
 use crate::app::{Target, read};
 use crate::format;
-use crate::markdown::style;
 use crate::rows::{RowText, Rows};
 use crate::theme::Role;
+use crate::theme::style;
 
 /// What the trigger reads for a handoff the model started with its tool,
 /// which writes no `handoff_started`.
