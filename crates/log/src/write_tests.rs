@@ -1416,6 +1416,8 @@ fn replace_and_remove_refuse_paths_outside_artifacts_and_leave_them() {
         nested.clone(),
         events.clone(),
         dir.join("artifacts/../events.jsonl"),
+        dir.join("artifacts/."),
+        dir.join("artifacts/.."),
         dir.join("artifacts"),
         elsewhere.clone(),
     ] {

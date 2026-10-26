@@ -6083,7 +6083,7 @@ fn a_capped_read_never_returns_more_than_the_bound_plus_one() {
     let dir = fakes::TempDir::new("fiber-read");
     let path = dir.path().join("big.log");
     std::fs::write(&path, vec![b'y'; 4 * 1024 * 1024]).unwrap();
-    match crate::deliveries::read_external(&path, || {}) {
+    match crate::deliveries::read_external(&path) {
         Ok(log::OutputRead::Large { size }) => assert_eq!(size, 4 * 1024 * 1024),
         read => panic!("a 4 MiB file reads large, got {read:?}"),
     }

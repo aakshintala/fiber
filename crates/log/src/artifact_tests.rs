@@ -335,11 +335,7 @@ fn output_path_joins_the_recorded_path_to_the_session_directory() {
 
 #[test]
 fn a_name_is_some_only_for_one_file_directly_under_artifacts() {
-    for (good, name) in [
-        ("artifacts/a.log", "a.log"),
-        ("artifacts/a", "a"),
-        ("artifacts/x/", "x"),
-    ] {
+    for (good, name) in [("artifacts/a.log", "a.log"), ("artifacts/a", "a")] {
         assert_eq!(
             direct_artifact_name(Path::new(good)).as_deref(),
             Some(name),
@@ -350,6 +346,10 @@ fn a_name_is_some_only_for_one_file_directly_under_artifacts() {
         "",
         "artifacts",
         "artifacts/",
+        "artifacts/.",
+        "artifacts/..",
+        "artifacts/x/",
+        "artifacts/x/.",
         "events.jsonl",
         "artifacts/sub/a.log",
         "artifacts/../events.jsonl",
@@ -368,7 +368,7 @@ fn read_output_answers_a_small_file_and_hands_a_large_one_as_size() {
     for (size, small) in [(0, true), (8, true), (9, false)] {
         let relative = format!("artifacts/f{size}.log");
         fs::write(log.dir().join(&relative), vec![b'x'; size]).unwrap();
-        match log.read_output(Path::new(&relative), 8, || {}) {
+        match log.read_output(Path::new(&relative), 8) {
             Ok(OutputRead::Small(bytes)) => {
                 assert!(small, "{relative} fits but read large");
                 assert_eq!(bytes.len(), size);
@@ -391,15 +391,14 @@ fn read_output_on_a_missing_file_or_an_invalid_path_is_io() {
         "artifacts/missing.log",
         "artifacts/sub/kept.log",
         "artifacts/../events.jsonl",
+        "artifacts/.",
+        "artifacts/..",
         "events.jsonl",
         "artifacts",
         "/elsewhere/out.log",
     ] {
         assert!(
-            matches!(
-                log.read_output(Path::new(bad), 8, || {}),
-                Err(Unreadable::Io)
-            ),
+            matches!(log.read_output(Path::new(bad), 8), Err(Unreadable::Io)),
             "{bad}"
         );
     }
@@ -428,7 +427,7 @@ fn read_output_on_a_link_a_fifo_a_socket_or_a_directory_is_not_regular() {
     ] {
         assert!(
             matches!(
-                log.read_output(Path::new(bad), 8, || {}),
+                log.read_output(Path::new(bad), 8),
                 Err(Unreadable::NotRegular)
             ),
             "{bad}"
@@ -505,6 +504,8 @@ fn replace_output_refuses_paths_outside_artifacts_and_writes_nothing() {
     for bad in [
         "artifacts/sub/kept.log",
         "artifacts/../events.jsonl",
+        "artifacts/.",
+        "artifacts/..",
         "events.jsonl",
         "artifacts",
     ] {

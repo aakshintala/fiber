@@ -530,13 +530,9 @@ const OUTPUT_LIMIT: u64 = 1_048_576;
 /// follows no link and never blocks on a FIFO
 /// (`OFlags::NOFOLLOW | OFlags::NONBLOCK`); the `fstat` below covers the
 /// descriptor actually opened, so a path swapped for a link or a FIFO
-/// before the open changes nothing about what is read. `between` runs
-/// before the open; it is empty in production and the pause point tests
-/// use to change the file first.
-pub(crate) fn read_external(path: &Path, between: impl FnOnce()) -> Result<OutputRead, Unreadable> {
+/// before the open changes nothing about what is read.
+pub(crate) fn read_external(path: &Path) -> Result<OutputRead, Unreadable> {
     use std::io::Read as _;
-
-    between();
     // No `symlink_metadata` first: the open itself refuses a link, and
     // `NONBLOCK` keeps a FIFO from blocking it. The `fstat` covers the
     // descriptor actually opened, not the path.
@@ -624,7 +620,8 @@ impl Loop {
         }
         let tool = started.tool.clone();
         let path = self.log.output_path(&started.output_path);
-        let read = match self.read_output_file(&path, between) {
+        between();
+        let read = match self.read_output_file(&path) {
             Ok(read) => read,
             Err(Unreadable::Io) => {
                 self.replace_output_file(&path, UNREADABLE_LINE.as_bytes())?;
@@ -699,14 +696,10 @@ impl Loop {
     /// otherwise. A path inside the session directory but outside
     /// `artifacts/` fails as [`Unreadable::Io`], never reaching the
     /// fallback, so the pass cannot hand over another session file.
-    fn read_output_file(
-        &self,
-        path: &Path,
-        between: impl FnOnce(),
-    ) -> Result<OutputRead, Unreadable> {
+    fn read_output_file(&self, path: &Path) -> Result<OutputRead, Unreadable> {
         match path.strip_prefix(self.log.dir()) {
-            Ok(relative) => self.log.read_output(relative, OUTPUT_LIMIT, between),
-            Err(_) => read_external(path, between),
+            Ok(relative) => self.log.read_output(relative, OUTPUT_LIMIT),
+            Err(_) => read_external(path),
         }
     }
 

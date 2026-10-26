@@ -152,17 +152,15 @@ pub fn open_artifact(dir: &Path, path: &str) -> Result<File, Refusal> {
 /// this keeps anything but one direct artifact child from reaching the
 /// fallback or the filesystem.
 pub(crate) fn direct_artifact_name(relative: &Path) -> Option<String> {
-    let mut components = relative.components();
-    if components.next() != Some(Component::Normal(OsStr::new("artifacts"))) {
+    let mut components = relative.to_str()?.split('/');
+    if components.next()? != "artifacts" {
         return None;
     }
-    let Some(Component::Normal(name)) = components.next() else {
-        return None;
-    };
-    if components.next().is_some() {
+    let name = components.next()?;
+    if name.is_empty() || matches!(name, "." | "..") || components.next().is_some() {
         return None;
     }
-    name.to_str().map(str::to_owned)
+    Some(name.to_owned())
 }
 
 /// What one capped output-file read found: the whole file when it fits,
@@ -202,20 +200,12 @@ impl Log {
     /// link and never blocks on a FIFO
     /// (`OFlags::NOFOLLOW | OFlags::NONBLOCK`); the `fstat` below covers
     /// the descriptor actually opened, so a path swapped for a link or a
-    /// FIFO before the open changes nothing about what is read. `between`
-    /// runs before the open; it is empty in production and the pause point
-    /// tests use to change the file first. A path that is not one direct
-    /// artifact child reads as [`Unreadable::Io`], never reaching the
-    /// filesystem.
-    pub fn read_output(
-        &self,
-        relative: &Path,
-        limit: u64,
-        between: impl FnOnce(),
-    ) -> Result<OutputRead, Unreadable> {
+    /// FIFO before the open changes nothing about what is read. A path
+    /// that is not one direct artifact child reads as [`Unreadable::Io`],
+    /// never reaching the filesystem.
+    pub fn read_output(&self, relative: &Path, limit: u64) -> Result<OutputRead, Unreadable> {
         let name = direct_artifact_name(relative).ok_or(Unreadable::Io)?;
         let path = self.dir().join(ARTIFACTS).join(name);
-        between();
         // No `symlink_metadata` first: the open itself refuses a link, and
         // `NONBLOCK` keeps a FIFO from blocking it. The `fstat` covers the
         // descriptor actually opened, not the path.
