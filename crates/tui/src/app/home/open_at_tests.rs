@@ -4,7 +4,7 @@
 
 use super::super::{App, Effect};
 use crate::OpenAt;
-use crate::app::testkit::hello;
+use crate::app::testkit::{hello, home_with};
 use crate::home::{Level, Spot};
 use crate::link::Line;
 use contract::SessionId;
@@ -17,27 +17,28 @@ fn id(session: &str) -> SessionId {
 
 /// An app on home at 80x24, launched to open `open_at`.
 fn home_at(open_at: OpenAt) -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(crate::home::Launch {
-        location: crate::LaunchLocation::Local {
-            workspace: PathBuf::from("/w"),
-            project: "-w".to_owned(),
-            git: false,
+    home_with(
+        80,
+        24,
+        crate::home::Launch {
+            location: crate::LaunchLocation::Local {
+                workspace: PathBuf::from("/w"),
+                project: "-w".to_owned(),
+                git: false,
+            },
+            hover: true,
+            version: "0.0.1".to_owned(),
+            model: None,
+            thinking: None,
+            logo_glyph: "⌇".to_owned(),
+            keys: crate::KeysSetup::default(),
+            rail_share: 15.0,
+            panel_share: 21.0,
+            panel_cards: Vec::new(),
+            open_at,
+            ..Default::default()
         },
-        hover: true,
-        version: "0.0.1".to_owned(),
-        model: None,
-        thinking: None,
-        logo_glyph: "⌇".to_owned(),
-        keys: crate::KeysSetup::default(),
-        rail_share: 15.0,
-        panel_share: 21.0,
-        panel_cards: Vec::new(),
-        open_at,
-        ..Default::default()
-    });
-    app.set_size(80, 24);
-    app
+    )
 }
 
 /// Whether the launch's open is spent: back to home.

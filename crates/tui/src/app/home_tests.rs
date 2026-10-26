@@ -2,7 +2,7 @@
 //! names.
 
 use super::{App, Effect};
-use crate::app::testkit::hello;
+use crate::app::testkit::{hello, home_with};
 use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -15,10 +15,9 @@ use std::sync::Arc;
 use crate::Configure;
 use crate::configure_fake::Fake;
 
-/// An app on home at 80x24.
-fn home() -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(Launch {
+/// The launch home opens: local /w with the model chip set.
+fn launch() -> Launch {
+    Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),
             project: "-w".to_owned(),
@@ -34,9 +33,7 @@ fn home() -> App {
         panel_share: 21.0,
         panel_cards: Vec::new(),
         ..Default::default()
-    });
-    app.set_size(80, 24);
-    app
+    }
 }
 
 /// A `permission_requested` review, which opens the approval panel.
@@ -61,7 +58,7 @@ fn review() -> Line {
 
 #[test]
 fn remote_home_ignores_the_launch_project_in_sections_and_row_text() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.set_home(Launch {
         location: crate::LaunchLocation::Remote {
             hub: "box".to_owned(),
@@ -105,7 +102,7 @@ fn remote_home_ignores_the_launch_project_in_sections_and_row_text() {
 #[test]
 fn remote_project_of_uses_newest_status_then_first_row_on_ties() {
     for (first_since, second_since, expected) in [(1, 2, "q"), (2, 1, "p"), (2, 2, "p")] {
-        let mut app = home();
+        let mut app = home_with(80, 24, launch());
         for (id, project, since) in [
             ("s_aaaaaaaaaaaaaaaa", "p", first_since),
             ("s_bbbbbbbbbbbbbbbb", "q", second_since),
@@ -120,7 +117,7 @@ fn remote_project_of_uses_newest_status_then_first_row_on_ties() {
         assert_eq!(sessions.project_of("/remote"), Some(expected));
         assert_eq!(sessions.project_of("/elsewhere"), None);
     }
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     app.on_line(accepted(
         &recent,
@@ -170,7 +167,7 @@ fn an_app_without_home_draws_the_conversation_screen() {
 
 #[test]
 fn an_attached_app_draws_the_conversation_screen() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     assert!(app.on_home());
     assert!(app.home_screen().is_some());
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
@@ -180,7 +177,7 @@ fn an_attached_app_draws_the_conversation_screen() {
 
 #[test]
 fn the_zone_survives_a_session_switch() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.set_zone(new_york());
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app.go_home();
@@ -203,7 +200,7 @@ fn the_zone_survives_a_session_switch() {
 
 #[test]
 fn the_key_map_draws_over_home() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.open_keymap();
     assert!(!app.on_home());
     assert!(app.home_screen().is_none());
@@ -211,7 +208,7 @@ fn the_key_map_draws_over_home() {
 
 #[test]
 fn an_approval_panel_draws_over_home() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(review());
     assert!(app.panel().is_some());
     assert!(!app.on_home());
@@ -383,7 +380,7 @@ fn listed(app: &App) -> Vec<String> {
 
 #[test]
 fn home_screen_header_counts_follow_the_state_order() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(live("s_wait", "waiting", "/w", "-w", json!({"state":"waiting", "waiting":{"request_id":"r_1", "kind":"approval", "summary":"approve"}})));
     app.on_line(live(
         "s_work",
@@ -435,7 +432,7 @@ fn home_screen_header_counts_follow_the_state_order() {
 
 #[test]
 fn home_screen_header_says_no_sessions_yet_without_live_rows() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_old", "exited")]);
     let screen = app.home_screen().unwrap();
@@ -446,7 +443,7 @@ fn home_screen_header_says_no_sessions_yet_without_live_rows() {
 
 #[test]
 fn section_header_counts_live_spend_and_waiting() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(live("s_wait", "waiting", "/w", "-w", json!({"state":"waiting", "waiting":{"request_id":"r_1", "kind":"approval", "summary":"approve"}, "spend":{"tokens":{"input":1,"cache_read":0,"cache_write":{},"output":2},"cost":1.25,"subscription_cost":0.0}})));
     app.on_line(live("s_other", "other", "/w", "-w", json!({"state":"streaming", "spend":{"tokens":{"input":1,"cache_read":0,"cache_write":{},"output":2},"cost":0.10,"subscription_cost":0.0}})));
     let screen = app.home_screen().unwrap();
@@ -464,7 +461,7 @@ fn section_header_counts_live_spend_and_waiting() {
 
 #[test]
 fn the_header_spend_is_the_sum_of_the_live_rows() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(live("s_a", "a", "/w", "-w", json!({"state":"streaming", "spend":{"tokens":{"input":1,"cache_read":0,"cache_write":{},"output":2},"cost":1.25,"subscription_cost":0.0}})));
     app.on_line(live("s_b", "b", "/other", "-other", json!({"state":"idle", "spend":{"tokens":{"input":1,"cache_read":0,"cache_write":{},"output":2},"cost":2.10,"subscription_cost":0.0}})));
     assert_eq!(
@@ -475,7 +472,7 @@ fn the_header_spend_is_the_sum_of_the_live_rows() {
 
 #[test]
 fn hello_sends_feed_then_recent_once() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let lines = commands(app.on_line(hello()));
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["command"], "feed");
@@ -486,7 +483,7 @@ fn hello_sends_feed_then_recent_once() {
 
 #[test]
 fn no_feed_before_hello_and_none_on_a_refused_schema() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
     let mut newer = hello();
     if let Line::Hub(hello) = &mut newer {
@@ -498,7 +495,7 @@ fn no_feed_before_hello_and_none_on_a_refused_schema() {
 
 #[test]
 fn a_status_after_hello_queues_one_scoped_ask() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     let lines = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
     // `docs/tui.md:268` (one ask in flight per project).
@@ -513,7 +510,7 @@ fn a_status_after_hello_queues_one_scoped_ask() {
 
 #[test]
 fn a_recent_answer_for_an_older_id_changes_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let lines = commands(app.on_line(hello()));
     let recent = lines[1]["id"]
         .as_str()
@@ -540,7 +537,7 @@ fn a_recent_answer_for_an_older_id_changes_nothing() {
 
 #[test]
 fn a_rejected_feed_is_one_notice() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let lines = commands(app.on_line(hello()));
     let feed = lines[0]["id"].as_str().unwrap_or_else(|| panic!("feed id"));
     assert!(app.on_line(refused(feed, "no feed")).is_empty());
@@ -550,7 +547,7 @@ fn a_rejected_feed_is_one_notice() {
 
 #[test]
 fn session_status_for_the_attached_session_still_reaches_the_conversation() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     let now = fakes::clock::FakeClock::new().now();
     for ch in "hi".chars() {
@@ -586,7 +583,7 @@ fn session_status_for_the_attached_session_still_reaches_the_conversation() {
 
 #[test]
 fn an_attention_line_changes_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     let attention = Line::Hub(contract::HubLine {
         kind: "attention".to_owned(),
@@ -617,7 +614,7 @@ fn left(session: &str, how: &str) -> Line {
 
 #[test]
 fn answers_and_a_left_fill_and_mark_the_list() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let lines = commands(app.on_line(hello()));
     let feed = lines[0]["id"].as_str().unwrap_or_else(|| panic!("feed id"));
     let recent = lines[1]["id"]
@@ -653,7 +650,7 @@ fn answers_and_a_left_fill_and_mark_the_list() {
 
 #[test]
 fn a_left_with_an_unknown_how_changes_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     app.on_line(status("s_aaaaaaaaaaaaaaaa"));
     let left = Line::Hub(contract::HubLine {
@@ -675,7 +672,7 @@ fn a_left_with_an_unknown_how_changes_nothing() {
 /// and numbers (`docs/tui.md:242–253, 1936–1937`).
 #[test]
 fn a_closing_row_shows_closing_with_no_number() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     app.on_line(status("s_aaaaaaaaaaaaaaaa"));
     app.on_line(closing("s_bbbbbbbbbbbbbbbb"));
@@ -722,7 +719,7 @@ fn a_closing_row_shows_closing_with_no_number() {
 
 #[test]
 fn start_names_the_launch_workspace() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     let now = fakes::clock::FakeClock::new().now();
     for ch in "hi".chars() {
@@ -987,7 +984,7 @@ fn start_session(app: &mut App, session: &str) -> Vec<Value> {
 
 #[test]
 fn enter_on_a_focused_live_row_subscribes_summary_asks_commands_and_attaches() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1040,7 +1037,7 @@ fn enter_on_a_focused_live_row_subscribes_summary_asks_commands_and_attaches() {
 
 #[test]
 fn opening_an_exited_row_sends_the_same_and_the_hub_resumes() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let lines = open_first(&mut app);
@@ -1060,7 +1057,7 @@ fn opening_an_exited_row_sends_the_same_and_the_hub_resumes() {
 
 #[test]
 fn a_started_session_is_recorded_full_and_leaving_lowers_it() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
@@ -1083,7 +1080,7 @@ fn a_started_session_is_recorded_full_and_leaving_lowers_it() {
 
 #[test]
 fn opening_a_summary_session_sends_no_subscribe_then_raises() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     let started = start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     let full = started[0]["id"]
@@ -1134,7 +1131,7 @@ fn opening_a_summary_session_sends_no_subscribe_then_raises() {
 
 #[test]
 fn opening_a_full_session_sends_summary_then_full() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
@@ -1169,7 +1166,7 @@ fn a_screen_coordinate_click_on_a_home_row_opens_it() {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.set_size(160, 48);
     linked(&mut app);
     app.on_line(live(
@@ -1235,7 +1232,7 @@ fn a_screen_coordinate_click_on_a_home_row_opens_it() {
 
 #[test]
 fn a_click_on_a_row_opens_it() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1282,7 +1279,7 @@ fn a_click_on_a_row_opens_it() {
 
 #[test]
 fn a_click_on_a_key_with_no_row_does_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     assert_eq!(
         app.on_click(crate::mouse::TargetId::Home(Spot::Entry(9999))),
@@ -1294,7 +1291,7 @@ fn a_click_on_a_key_with_no_row_does_nothing() {
 
 #[test]
 fn opening_requires_home() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1311,7 +1308,7 @@ fn opening_requires_home() {
 
 #[test]
 fn opening_needs_the_link_up() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
         "fix the parser",
@@ -1329,7 +1326,7 @@ fn opening_needs_the_link_up() {
 
 #[test]
 fn opening_while_a_start_waits_does_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
         "fix the parser",
@@ -1352,7 +1349,7 @@ fn opening_while_a_start_waits_does_nothing() {
 
 #[test]
 fn an_unreadable_row_does_not_open_and_says_so() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     let mut newer = live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1385,7 +1382,7 @@ fn an_unreadable_row_does_not_open_and_says_so() {
 
 #[test]
 fn lines_before_the_acknowledgement_fold_the_row_and_skip_the_conversation() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1416,7 +1413,7 @@ fn lines_before_the_acknowledgement_fold_the_row_and_skip_the_conversation() {
 
 #[test]
 fn the_acknowledgement_and_lines_after_it_reach_the_conversation() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1450,7 +1447,7 @@ fn the_acknowledgement_and_lines_after_it_reach_the_conversation() {
 
 #[test]
 fn an_approval_before_the_acknowledgement_is_not_queued() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1467,7 +1464,7 @@ fn an_approval_before_the_acknowledgement_is_not_queued() {
 
 #[test]
 fn a_refused_open_goes_home_with_a_note_and_a_notice() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1490,7 +1487,7 @@ fn a_refused_open_goes_home_with_a_note_and_a_notice() {
 
 #[test]
 fn a_session_rejection_of_the_full_subscribe_does_the_same() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1517,7 +1514,7 @@ fn a_session_rejection_of_the_full_subscribe_does_the_same() {
 
 #[test]
 fn a_refused_open_after_going_home_keeps_the_draft() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1550,7 +1547,7 @@ fn a_refused_open_after_going_home_keeps_the_draft() {
 
 #[test]
 fn a_refusal_of_the_pending_subscribe_fails_the_reopen() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1587,7 +1584,7 @@ fn a_refusal_of_the_pending_subscribe_fails_the_reopen() {
 
 #[test]
 fn a_refused_first_stage_leaves_the_level_and_the_next_open_sends_summary_again() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
@@ -1616,7 +1613,7 @@ fn a_refused_first_stage_leaves_the_level_and_the_next_open_sends_summary_again(
 
 #[test]
 fn a_rejected_pending_summary_fails_the_reopen() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
@@ -1645,7 +1642,7 @@ fn a_rejected_pending_summary_fails_the_reopen() {
 
 #[test]
 fn a_refused_two_step_open_fails_the_open() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
@@ -1682,7 +1679,7 @@ fn a_refused_two_step_open_fails_the_open() {
 
 #[test]
 fn a_refused_one_step_open_fails_without_a_retry() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
@@ -1708,7 +1705,7 @@ fn a_refused_one_step_open_fails_without_a_retry() {
 
 #[test]
 fn after_a_refused_open_the_next_open_sends_summary_raises_and_attaches() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
@@ -1775,7 +1772,7 @@ fn after_a_refused_open_the_next_open_sends_summary_raises_and_attaches() {
 
 #[test]
 fn leaving_a_session_that_left_sends_no_subscribe() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
@@ -1792,7 +1789,7 @@ fn leaving_a_session_that_left_sends_no_subscribe() {
 
 #[test]
 fn leaving_with_the_link_down_sends_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
@@ -1809,7 +1806,7 @@ fn leaving_with_the_link_down_sends_nothing() {
 
 #[test]
 fn slash_close_sends_close_now_and_no_subscribe() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     let Effect::Send(lines) = enter_text(&mut app, "/close") else {
@@ -1831,7 +1828,7 @@ fn home_without_home_state_sends_nothing_on_leave() {
 
 #[test]
 fn home_during_an_open_of_a_resuming_session_sends_no_lowering() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
@@ -1856,7 +1853,7 @@ fn home_during_an_open_of_a_resuming_session_sends_no_lowering() {
 
 #[test]
 fn an_accepted_full_for_the_attached_session_sends_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1872,7 +1869,7 @@ fn an_accepted_full_for_the_attached_session_sends_nothing() {
 
 #[test]
 fn no_summary_while_a_subscribe_is_in_flight() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
@@ -1900,7 +1897,7 @@ fn no_summary_while_a_subscribe_is_in_flight() {
 
 #[test]
 fn no_summary_for_a_left_row() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
@@ -1912,7 +1909,7 @@ fn no_summary_for_a_left_row() {
 
 #[test]
 fn the_file_listing_follows_an_opened_row_outside_the_launch_workspace() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1964,7 +1961,7 @@ fn two_rows(app: &mut App) {
 
 #[test]
 fn home_arrows_focus_the_list_and_entry_bar() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -2001,7 +1998,7 @@ fn home_arrows_focus_the_list_and_entry_bar() {
 
 #[test]
 fn up_on_a_home_with_nothing_open_focuses_the_last_row_and_esc_drops_it() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -2020,7 +2017,7 @@ fn typing_into_the_empty_draft_inserts_text_with_rows_present() {
     // Printable keys reach the draft while the box has focus: only ↓
     // enters the list, and j and k move only while it has focus.
     for key in ['j', 'k', 'c', 'x'] {
-        let mut app = home();
+        let mut app = home_with(80, 24, launch());
         two_rows(&mut app);
         drawn(&mut app);
         let now = fakes::clock::FakeClock::new().now();
@@ -2033,7 +2030,7 @@ fn typing_into_the_empty_draft_inserts_text_with_rows_present() {
 #[test]
 fn down_with_a_draft_moves_in_the_draft() {
     // A one-line draft keeps its text while ↓ focuses the chip row.
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     type_text(&mut app, "x");
     drawn(&mut app);
@@ -2045,7 +2042,7 @@ fn down_with_a_draft_moves_in_the_draft() {
     );
     assert_eq!(app.input().expand(), "x");
     // A two-line draft's ↓ moves the cursor first.
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     type_text(&mut app, "a");
     assert_eq!(app.on_edit(crate::keys::Edit::ShiftEnter), Effect::None);
@@ -2060,7 +2057,7 @@ fn down_with_a_draft_moves_in_the_draft() {
 
 #[test]
 fn down_with_the_search_panel_open_moves_its_selection() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     let _ = app.on_key(Key::CtrlR, now);
@@ -2073,7 +2070,7 @@ fn down_with_the_search_panel_open_moves_its_selection() {
 
 #[test]
 fn down_with_no_rows_does_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -2092,7 +2089,7 @@ fn down_with_no_rows_does_nothing() {
 
 #[test]
 fn down_on_the_conversation_screen_is_unchanged() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     let now = fakes::clock::FakeClock::new().now();
@@ -2102,7 +2099,7 @@ fn down_on_the_conversation_screen_is_unchanged() {
 
 #[test]
 fn up_and_j_walk_the_row_stops() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -2131,7 +2128,7 @@ fn up_and_j_walk_the_row_stops() {
 
 #[test]
 fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let rows = [
         exited_in("s_aaaaaaaaaaaaaaaa", "alpha", "/work/alpha", "alpha"),
@@ -2176,7 +2173,7 @@ fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
 
 #[test]
 fn j_from_the_last_list_row_clears_focus_without_skipping() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     for (session, name, workspace, project) in [
         ("s_aaaaaaaaaaaaaaaa", "alpha", "/work/alpha", "alpha"),
@@ -2218,7 +2215,7 @@ fn j_from_the_last_list_row_clears_focus_without_skipping() {
 
 #[test]
 fn up_focuses_the_last_loaded_row_and_scrolls() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     for n in 0..15u8 {
         let session = format!("s_{n:016x}");
@@ -2258,7 +2255,7 @@ fn up_focuses_the_last_loaded_row_and_scrolls() {
 
 #[test]
 fn down_on_the_last_row_of_the_list_focuses_the_entry_bar() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -2278,7 +2275,7 @@ fn down_on_the_last_row_of_the_list_focuses_the_entry_bar() {
 
 #[test]
 fn slash_resume_from_a_session_focuses_the_first_exited_row_after_the_home_frame() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
@@ -2324,7 +2321,7 @@ fn slash_resume_from_a_session_focuses_the_first_exited_row_after_the_home_frame
 
 #[test]
 fn slash_resume_with_no_rows_leaves_the_box_focused() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     drawn(&mut app);
@@ -2336,7 +2333,7 @@ fn slash_resume_with_no_rows_leaves_the_box_focused() {
 
 #[test]
 fn y_on_a_focused_row_copies_its_line() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -2421,7 +2418,7 @@ fn three_workspaces(app: &mut App) {
 
 #[test]
 fn the_chip_defaults_to_the_launch_directory() {
-    let app = home();
+    let app = home_with(80, 24, launch());
     assert_eq!(
         chips(&app),
         [
@@ -2435,7 +2432,7 @@ fn the_chip_defaults_to_the_launch_directory() {
 
 #[test]
 fn the_picker_lists_the_launch_directory_then_row_workspaces_once_each() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     three_workspaces(&mut app);
     open_on_recents(&mut app);
     assert_eq!(
@@ -2449,7 +2446,7 @@ fn the_picker_lists_the_launch_directory_then_row_workspaces_once_each() {
 
 #[test]
 fn the_picker_holds_at_most_ten() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     for n in 0..12u8 {
         let session = format!("s_{n:016x}");
@@ -2472,7 +2469,7 @@ fn the_picker_holds_at_most_ten() {
 
 #[test]
 fn picker_keys_move_choose_and_close() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     three_workspaces(&mut app);
     open_on_recents(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -2503,7 +2500,7 @@ fn picker_keys_move_choose_and_close() {
 
 #[test]
 fn other_keys_do_nothing_in_the_picker() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     three_workspaces(&mut app);
     open_on_recents(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -2516,7 +2513,7 @@ fn other_keys_do_nothing_in_the_picker() {
 
 #[test]
 fn ctrl_c_passes_through_the_picker() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     three_workspaces(&mut app);
     open_on_recents(&mut app);
     assert_eq!(app.picker_key(&Key::CtrlC), None);
@@ -2581,7 +2578,7 @@ fn clicking_plus_chooses_that_projects_workspace_and_focuses_the_entry_bar() {
 
 #[test]
 fn start_names_the_chosen_workspace() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     three_workspaces(&mut app);
     open_on_recents(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -2601,7 +2598,7 @@ fn start_names_the_chosen_workspace() {
 
 #[test]
 fn a_click_on_a_picker_row_chooses_it() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     three_workspaces(&mut app);
     open_on_recents(&mut app);
     assert_eq!(app.home_click(Spot::Pick(2)), Effect::None);
@@ -2611,7 +2608,7 @@ fn a_click_on_a_picker_row_chooses_it() {
 
 #[test]
 fn a_click_past_the_picker_list_does_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     three_workspaces(&mut app);
     open_on_recents(&mut app);
     assert_eq!(app.home_click(Spot::Pick(99)), Effect::None);
@@ -2621,7 +2618,7 @@ fn a_click_past_the_picker_list_does_nothing() {
 
 #[test]
 fn the_file_listing_follows_the_picked_workspace() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     three_workspaces(&mut app);
     assert_eq!(app.workspace(), Some(PathBuf::from("/w")));
     open_on_recents(&mut app);
@@ -2708,7 +2705,7 @@ fn down_from_the_last_row_asks_the_next_page_before_the_last_loaded_recent_row()
 
 #[test]
 fn no_page_is_asked_from_a_feed_row() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -2731,7 +2728,7 @@ fn no_page_is_asked_from_a_feed_row() {
 
 #[test]
 fn down_from_the_last_row_asks_nothing_after_an_empty_page() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -2763,7 +2760,7 @@ fn down_from_the_last_row_asks_nothing_after_an_empty_page() {
 
 #[test]
 fn enter_on_more_expands_in_place_and_focuses_the_first_revealed_row() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(
         &mut app,
@@ -2807,7 +2804,7 @@ fn enter_on_more_expands_in_place_and_focuses_the_first_revealed_row() {
 
 #[test]
 fn a_click_on_more_expands_the_same_project_only() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let rows = [
         ("s_aaaaaaaaaaaaaaaa", "a1", "/w", "-w"),
@@ -2861,7 +2858,7 @@ fn a_click_on_more_expands_the_same_project_only() {
 
 #[test]
 fn y_on_more_copies_its_label() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(
         &mut app,
@@ -2885,7 +2882,7 @@ fn y_on_more_copies_its_label() {
 
 #[test]
 fn y_on_more_copies_a_positive_count_but_not_zero() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(
         &mut app,
@@ -2952,7 +2949,7 @@ fn start_rejected(app: &mut App, id: &str, message: &str) {
 
 #[test]
 fn a_rejected_start_sets_the_blocker_lines() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let Effect::Send(lines) = enter_text(&mut app, "hi") else {
         panic!("Enter sends the start");
@@ -2981,7 +2978,7 @@ fn a_rejected_start_sets_the_blocker_lines() {
 
 #[test]
 fn a_rejected_prompt_sets_none() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     let Effect::Send(lines) = enter_text(&mut app, "yo") else {
@@ -3003,7 +3000,7 @@ fn a_rejected_prompt_sets_none() {
 
 #[test]
 fn the_next_start_clears_them() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     let Effect::Send(lines) = enter_text(&mut app, "hi") else {
         panic!("Enter sends the start");
@@ -3023,7 +3020,7 @@ fn the_next_start_clears_them() {
 
 #[test]
 fn the_feed_arriving_keeps_them() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (feed, recent) = linked(&mut app);
     let Effect::Send(lines) = enter_text(&mut app, "hi") else {
         panic!("Enter sends the start");
@@ -3045,7 +3042,7 @@ fn the_feed_arriving_keeps_them() {
 
 #[test]
 fn x_on_an_unsubscribed_live_row_sends_summary_then_close_now() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     let lines = stop(&mut app);
     assert_eq!(lines.len(), 2);
@@ -3060,7 +3057,7 @@ fn x_on_an_unsubscribed_live_row_sends_summary_then_close_now() {
 
 #[test]
 fn x_on_a_subscribed_row_sends_close_now_only() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     let first = stop(&mut app);
     let summary = first[0]["id"]
@@ -3079,7 +3076,7 @@ fn x_on_a_subscribed_row_sends_close_now_only() {
 
 #[test]
 fn an_accepted_stop_drops_its_kept_line() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     let lines = stop(&mut app);
     let close = lines
@@ -3098,7 +3095,7 @@ fn an_accepted_stop_drops_its_kept_line() {
 fn take_ask_for_an_unknown_command_keeps_its_pending_entry() {
     // Every command answer passes `take_ask` on its way through home:
     // only a taken ask settles anything.
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     app.outbox.insert(
         "c_1".to_owned(),
@@ -3111,7 +3108,7 @@ fn take_ask_for_an_unknown_command_keeps_its_pending_entry() {
 
 #[test]
 fn the_foot_names_the_key_maps_bound_key() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!("f2"));
     app.set_keys(crate::KeysSetup { user });
@@ -3123,7 +3120,7 @@ fn the_foot_names_the_key_maps_bound_key() {
 
 #[test]
 fn the_foot_leaves_the_key_map_out_when_unbound() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!([]));
     app.set_keys(crate::KeysSetup { user });
@@ -3135,7 +3132,7 @@ fn the_foot_leaves_the_key_map_out_when_unbound() {
 
 #[test]
 fn x_with_the_link_down_sends_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.connect_failed("gone".to_owned());
     app.on_line(status("s_aaaaaaaaaaaaaaaa"));
     assert_eq!(click_stop(&mut app), Effect::None);
@@ -3147,7 +3144,7 @@ fn x_with_the_link_down_sends_nothing() {
 
 #[test]
 fn a_refused_close_notes_the_row() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     let lines = stop(&mut app);
     let close = lines[1]["id"]
@@ -3175,7 +3172,7 @@ fn a_refused_close_notes_the_row() {
 
 #[test]
 fn x_on_an_exited_row_asks_to_delete() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     assert_eq!(click_stop(&mut app), Effect::None);
     assert_eq!(
@@ -3186,7 +3183,7 @@ fn x_on_an_exited_row_asks_to_delete() {
 
 #[test]
 fn backspace_on_a_focused_exited_row_asks() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -3200,7 +3197,7 @@ fn backspace_on_a_focused_exited_row_asks() {
 
 #[test]
 fn delete_on_a_focused_crashed_row_asks() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     app.on_line(accepted(
         &recent,
@@ -3218,7 +3215,7 @@ fn delete_on_a_focused_crashed_row_asks() {
 
 #[test]
 fn backspace_on_a_focused_live_row_does_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -3233,7 +3230,7 @@ fn backspace_on_a_focused_live_row_does_nothing() {
 
 #[test]
 fn backspace_with_focus_on_another_stop_is_still_swallowed() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     drawn(&mut app);
     app.focus = Some(crate::mouse::TargetId::Home(Spot::Workspace));
@@ -3250,7 +3247,7 @@ fn backspace_with_focus_on_another_stop_is_still_swallowed() {
 
 #[test]
 fn enter_sends_delete_without_cascade() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -3266,7 +3263,7 @@ fn enter_sends_delete_without_cascade() {
 
 #[test]
 fn esc_sends_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -3287,7 +3284,7 @@ fn drawn_frame(app: &App) -> (String, Vec<crate::mouse::Target>) {
 
 #[test]
 fn clicking_the_drawn_cross_keeps_the_session() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     click_stop(&mut app);
     // The draw holds exactly one ✕ target, ending the title row.
@@ -3334,7 +3331,7 @@ fn clicking_the_drawn_cross_keeps_the_session() {
 
 #[test]
 fn clicking_the_cross_on_the_cascade_question_keeps_everything() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -3379,7 +3376,7 @@ fn clicking_the_cross_on_the_cascade_question_keeps_everything() {
 
 #[test]
 fn a_stale_keep_click_changes_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     assert!(question(&app).is_empty(), "no question is open");
     assert_eq!(
@@ -3391,7 +3388,7 @@ fn a_stale_keep_click_changes_nothing() {
 
 #[test]
 fn a_keep_click_leaves_the_quit_question_open() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(live(
         "s_bbbbbbbbbbbbbbbb",
         "busy work",
@@ -3410,7 +3407,7 @@ fn a_keep_click_leaves_the_quit_question_open() {
 
 #[test]
 fn clicks_on_the_delete_frame_do_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     click_stop(&mut app);
     let asked = question(&app);
@@ -3469,7 +3466,7 @@ fn clicks_on_the_delete_frame_do_nothing() {
 
 #[test]
 fn hovering_the_delete_slab_tints_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     click_stop(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, 80, 24);
@@ -3502,7 +3499,7 @@ fn hovering_the_delete_slab_tints_nothing() {
 
 #[test]
 fn other_keys_do_nothing_in_the_question() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -3516,7 +3513,7 @@ fn other_keys_do_nothing_in_the_question() {
 
 #[test]
 fn ctrl_c_passes_through_the_question() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -3526,7 +3523,7 @@ fn ctrl_c_passes_through_the_question() {
 
 #[test]
 fn up_and_down_scroll_the_delete_question() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     // A small screen: the cascade question wraps past what fits, so the
     // offset scrolls by one row.
     app.set_size(60, 12);
@@ -3566,7 +3563,7 @@ fn up_and_down_scroll_the_delete_question() {
 
 #[test]
 fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     app.on_line(accepted(
         &recent,
@@ -3597,7 +3594,7 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
 
 #[test]
 fn dependents_ask_again_naming_them_and_enter_sends_cascade_with_expect() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -3641,7 +3638,7 @@ fn dependents_ask_again_naming_them_and_enter_sends_cascade_with_expect() {
 
 #[test]
 fn a_stale_cascade_asks_again_with_the_new_set() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -3701,7 +3698,7 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
 
 #[test]
 fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -3749,7 +3746,7 @@ fn a_refusal_code_is_the_payload_code_or_malformed() {
 
 #[test]
 fn a_refused_cascade_delete_notes_the_row() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
     click_stop(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -3791,7 +3788,7 @@ fn a_refused_cascade_delete_notes_the_row() {
 
 #[test]
 fn unreadable_rows_have_no_x() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -3838,7 +3835,7 @@ fn unreadable_rows_have_no_x() {
 
 #[test]
 fn x_on_an_unreadable_row_says_so() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     let mut envelope = status("s_aaaaaaaaaaaaaaaa");
     if let crate::link::Line::Session(status) = &mut envelope {
@@ -3860,7 +3857,7 @@ fn x_on_an_unreadable_row_says_so() {
 
 #[test]
 fn enter_with_the_link_down_keeps_the_question() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     click_stop(&mut app);
     app.disconnected();
@@ -3874,7 +3871,7 @@ fn enter_with_the_link_down_keeps_the_question() {
 
 #[test]
 fn an_accepted_close_changes_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     let lines = stop(&mut app);
     let close = lines[1]["id"]
@@ -3890,7 +3887,7 @@ fn an_accepted_close_changes_nothing() {
 
 #[test]
 fn backspace_with_the_box_focused_edits_the_draft() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     drawn(&mut app);
     type_text(&mut app, "x");
@@ -3905,7 +3902,7 @@ fn backspace_with_the_box_focused_edits_the_draft() {
 
 #[test]
 fn delete_edit_in_the_question_does_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     click_stop(&mut app);
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
@@ -3917,7 +3914,7 @@ fn delete_edit_in_the_question_does_nothing() {
 
 #[test]
 fn stop_on_a_key_with_no_row_does_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     assert_eq!(app.home_click(Spot::Stop(999)), Effect::None);
     assert_eq!(
@@ -3928,7 +3925,7 @@ fn stop_on_a_key_with_no_row_does_nothing() {
 
 #[test]
 fn y_on_a_focused_x_copies_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
@@ -3950,7 +3947,7 @@ fn y_on_a_focused_x_copies_nothing() {
 
 #[test]
 fn a_crashed_left_marks_the_known_row_crashed() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -3976,7 +3973,7 @@ fn a_crashed_left_marks_the_known_row_crashed() {
 
 #[test]
 fn an_accepted_hub_acknowledgement_ends_the_open() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -4003,7 +4000,7 @@ fn an_accepted_hub_acknowledgement_ends_the_open() {
 
 #[test]
 fn statuses_gate_only_the_opening_session() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -4046,7 +4043,7 @@ fn statuses_gate_only_the_opening_session() {
 
 #[test]
 fn a_rejected_lower_while_home_sends_no_subscribe() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -4105,7 +4102,7 @@ fn a_rejected_lower_while_home_sends_no_subscribe() {
 
 #[test]
 fn home_rows_include_an_unscoped_project_below_the_fold() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     for n in 0..9u8 {
         let session = format!("s_{n:016x}");
@@ -4150,7 +4147,7 @@ fn home_rows_include_an_unscoped_project_below_the_fold() {
 
 #[test]
 fn an_accepted_delete_closes_its_question() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     app.on_line(accepted(
         &recent,
@@ -4185,7 +4182,7 @@ fn an_accepted_delete_closes_its_question() {
 
 #[test]
 fn an_answer_for_another_delete_keeps_the_newer_question() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     app.on_line(accepted(
         &recent,
@@ -4285,7 +4282,7 @@ fn shows_switch(app: &App) -> bool {
 fn the_switch_is_hidden_outside_git() {
     // Even with a git row in the launch workspace: outside git the
     // launch directory decides, and it is not in git.
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(git_live("s_aaaaaaaaaaaaaaaa", "fix the parser", "/w"));
     assert!(!shows_switch(&app));
@@ -4382,7 +4379,7 @@ fn a_chosen_workspace_keeps_the_switch_after_its_row_leaves() {
 fn outside_git_choosing_a_plain_workspace_hides_the_switch() {
     // The launch directory is outside git, and a git row elsewhere
     // must not leak its flag into the chosen workspace.
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(git_live("s_aaaaaaaaaaaaaaaa", "git work", "/git-ws"));
     app.on_line(live(
@@ -4466,7 +4463,7 @@ fn start_sends_worktree_only_when_the_switch_is_on_and_shown() {
     let mut app = git_home();
     assert!(app.start_args().get("worktree").is_none());
     // Hidden, even with the switch on: the key is absent.
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     assert_eq!(app.home_click(Spot::Worktree), Effect::None);
     let args = app.start_args();
     assert_eq!(args["workspace"], "/w");
@@ -4476,7 +4473,7 @@ fn start_sends_worktree_only_when_the_switch_is_on_and_shown() {
 #[test]
 fn start_carries_the_terminal_layer_in_overrides() {
     // No layer, no key: the shape every existing start keeps.
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let bare = app.start_args();
     assert_eq!(bare["workspace"], "/w");
     assert!(bare.get("overrides").is_none());
@@ -4597,7 +4594,7 @@ fn exited_row(app: &mut App, session: &str, name: &str) {
 
 #[test]
 fn the_foot_names_the_default_keys() {
-    let app = home();
+    let app = home_with(80, 24, launch());
     assert_eq!(
         foot(&app),
         "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
@@ -4606,7 +4603,7 @@ fn the_foot_names_the_default_keys() {
 
 #[test]
 fn the_foot_bolds_each_key_and_dims_the_rest() {
-    let app = home();
+    let app = home_with(80, 24, launch());
     let screen = app.home_screen().expect("home draws");
     let bold: Vec<String> = screen
         .foot
@@ -4652,7 +4649,7 @@ fn the_foot_bolds_each_key_and_dims_the_rest() {
 
 #[test]
 fn the_foot_uses_rebound_labels_in_their_slots() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!("f2"));
     user.insert("open_focused".to_owned(), json!("ctrl+o"));
@@ -4680,7 +4677,7 @@ fn the_foot_uses_rebound_labels_in_their_slots() {
 
 #[test]
 fn the_foot_lists_only_the_first_key_of_a_multi_key_list() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let mut user = serde_json::Map::new();
     user.insert("delete_session".to_owned(), json!(["f7", "f8"]));
     app.set_keys(crate::KeysSetup { user });
@@ -4692,7 +4689,7 @@ fn the_foot_lists_only_the_first_key_of_a_multi_key_list() {
 
 #[test]
 fn the_foot_leaves_open_focused_out_when_unbound() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let mut user = serde_json::Map::new();
     user.insert("open_focused".to_owned(), json!([]));
     app.set_keys(crate::KeysSetup { user });
@@ -4704,7 +4701,7 @@ fn the_foot_leaves_open_focused_out_when_unbound() {
 
 #[test]
 fn the_foot_leaves_delete_session_out_when_unbound() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let mut user = serde_json::Map::new();
     user.insert("delete_session".to_owned(), json!([]));
     app.set_keys(crate::KeysSetup { user });
@@ -4716,7 +4713,7 @@ fn the_foot_leaves_delete_session_out_when_unbound() {
 
 #[test]
 fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!([]));
     user.insert("open_focused".to_owned(), json!([]));
@@ -4745,7 +4742,7 @@ fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
 
 #[test]
 fn the_foot_with_nothing_bound_shows_only_move_and_quit() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!([]));
     user.insert("open_focused".to_owned(), json!([]));
@@ -4756,7 +4753,7 @@ fn the_foot_with_nothing_bound_shows_only_move_and_quit() {
 
 #[test]
 fn the_foot_shows_the_plain_quit_hint_while_armed() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let now = fakes::clock::FakeClock::new().now();
     app.on_key(Key::CtrlC, now);
     let screen = app.home_screen().expect("home draws");
@@ -4794,7 +4791,7 @@ fn home_from(app: &mut App, session: &str) {
 
 #[test]
 fn the_foot_names_the_back_key_after_home_from_a_live_session() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
@@ -4805,7 +4802,7 @@ fn the_foot_names_the_back_key_after_home_from_a_live_session() {
 
 #[test]
 fn the_foot_names_the_rebound_back_key() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let mut user = serde_json::Map::new();
     user.insert("close_or_interrupt".to_owned(), json!("f5"));
     app.set_keys(crate::KeysSetup { user });
@@ -4819,7 +4816,7 @@ fn the_foot_names_the_rebound_back_key() {
 
 #[test]
 fn the_foot_leaves_the_back_key_out_when_unbound() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let mut user = serde_json::Map::new();
     user.insert("close_or_interrupt".to_owned(), json!([]));
     app.set_keys(crate::KeysSetup { user });
@@ -4833,7 +4830,7 @@ fn the_foot_leaves_the_back_key_out_when_unbound() {
 
 #[test]
 fn the_foot_keeps_quit_named_when_the_key_map_is_unbound() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!([]));
     user.insert("close_or_interrupt".to_owned(), json!([]));
@@ -4848,13 +4845,13 @@ fn the_foot_keeps_quit_named_when_the_key_map_is_unbound() {
 
 #[test]
 fn the_launch_home_foot_names_no_back_key() {
-    let app = home();
+    let app = home_with(80, 24, launch());
     assert!(!foot(&app).contains("back to the session"));
 }
 
 #[test]
 fn opening_a_row_then_closing_names_no_back_key() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert!(foot(&app).contains("→ or Esc back to the session"));
@@ -4887,7 +4884,7 @@ fn opening_a_row_then_closing_names_no_back_key() {
 
 #[test]
 fn a_card_switch_then_closing_names_no_back_key() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert!(foot(&app).contains("→ or Esc back to the session"));
@@ -4920,7 +4917,7 @@ fn a_card_switch_then_closing_names_no_back_key() {
 
 #[test]
 fn closing_straight_from_a_session_names_no_back_key() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     let Effect::Send(_) = enter_text(&mut app, "/close") else {
@@ -4932,7 +4929,7 @@ fn closing_straight_from_a_session_names_no_back_key() {
 
 #[test]
 fn home_on_home_keeps_the_back_key() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     let _ = enter_text(&mut app, "/home");
@@ -4942,7 +4939,7 @@ fn home_on_home_keeps_the_back_key() {
 
 #[test]
 fn new_on_home_keeps_the_back_key() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     let _ = enter_text(&mut app, "/new");
@@ -4952,7 +4949,7 @@ fn new_on_home_keeps_the_back_key() {
 
 #[test]
 fn the_back_hint_bolds_the_key_and_dims_the_rest() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     let screen = app.home_screen().expect("home draws");
@@ -5011,7 +5008,7 @@ fn steering_queue(session: &str) -> Line {
 
 #[test]
 fn slash_new_from_a_session_with_a_focused_steering_row_lands_on_the_entry_bar() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
@@ -5038,7 +5035,7 @@ fn slash_new_from_a_session_with_a_focused_steering_row_lands_on_the_entry_bar()
 
 #[test]
 fn a_left_with_no_ask_in_flight_sends_one_scoped_ask() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     // An unknown session names no row: no trigger.
     assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
@@ -5074,7 +5071,7 @@ fn a_left_with_no_ask_in_flight_sends_one_scoped_ask() {
 
 #[test]
 fn a_reconnect_drops_totals_and_refetches_every_project() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (feed, recent) = linked(&mut app);
     assert!(app.on_line(accepted(&feed, json!({}))).is_empty());
     let lines = answer_value(
@@ -5173,7 +5170,7 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
 
 #[test]
 fn replayed_status_then_left_only_retriggers_without_counting() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let lines = answer_value(
         &mut app,
@@ -5228,7 +5225,7 @@ fn replayed_status_then_left_only_retriggers_without_counting() {
 
 #[test]
 fn an_accepted_delete_asks_the_deleted_projects_scoped_page() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let lines = answer_value(
         &mut app,
@@ -5299,7 +5296,7 @@ fn an_accepted_delete_asks_the_deleted_projects_scoped_page() {
 
 #[test]
 fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let lines = answer_value(
         &mut app,
@@ -5361,7 +5358,7 @@ fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
 
 #[test]
 fn a_new_section_status_queues_one_scoped_ask_for_home_outgoing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     // `home_line` returns `None`, so the status reaches the session.
     assert_eq!(app.home_line(&status("s_aaaaaaaaaaaaaaaa")), None);
@@ -5380,7 +5377,7 @@ fn a_new_section_status_queues_one_scoped_ask_for_home_outgoing() {
 
 #[test]
 fn triggers_send_nothing_while_the_link_is_down() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     assert_eq!(app.home_line(&status("s_aaaaaaaaaaaaaaaa")), None);
     assert!(app.home_outgoing().is_empty());
     assert_eq!(
@@ -5424,7 +5421,7 @@ fn answer_scoped_empty(app: &mut App, lines: &[Value], total: usize) {
 
 #[test]
 fn home_counts_come_from_the_held_total() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -5476,7 +5473,7 @@ fn home_counts_come_from_the_held_total() {
 
 #[test]
 fn home_draws_no_exited_head_at_total_zero() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -5492,7 +5489,7 @@ fn home_draws_no_exited_head_at_total_zero() {
 
 #[test]
 fn home_draws_no_more_when_the_total_meets_the_loaded_rows() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -5514,7 +5511,7 @@ fn home_draws_no_more_when_the_total_meets_the_loaded_rows() {
 
 #[test]
 fn home_more_draws_one_more_at_total_one_above_shown() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -5537,7 +5534,7 @@ fn home_more_draws_one_more_at_total_one_above_shown() {
 
 #[test]
 fn home_draws_no_more_when_the_total_falls_below_loaded() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -5556,7 +5553,7 @@ fn home_draws_no_more_when_the_total_falls_below_loaded() {
 
 #[test]
 fn enter_on_more_with_more_held_asks_the_next_scoped_page() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -5591,7 +5588,7 @@ fn enter_on_more_with_more_held_asks_the_next_scoped_page() {
 
 #[test]
 fn enter_on_more_at_or_below_the_total_sends_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -5610,7 +5607,7 @@ fn enter_on_more_at_or_below_the_total_sends_nothing() {
 
 #[test]
 fn down_on_the_last_row_pages_the_project_while_it_holds_more() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -5646,7 +5643,7 @@ fn row_key(app: &App, session: &str) -> u64 {
 
 #[test]
 fn slash_home_from_a_session_focuses_the_on_screen_sessions_row() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -5668,7 +5665,7 @@ fn slash_home_from_a_session_focuses_the_on_screen_sessions_row() {
 
 #[test]
 fn slash_home_focuses_an_exited_row_hidden_behind_more() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     answer_recent(
         &mut app,
@@ -5695,7 +5692,7 @@ fn slash_home_focuses_an_exited_row_hidden_behind_more() {
 
 #[test]
 fn slash_home_with_no_row_for_the_session_leaves_the_box_focused() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     let _ = enter_text(&mut app, "/home");
@@ -5706,7 +5703,7 @@ fn slash_home_with_no_row_for_the_session_leaves_the_box_focused() {
 
 #[test]
 fn slash_home_on_home_leaves_focus_unchanged() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     drawn(&mut app);
@@ -5721,7 +5718,7 @@ fn slash_home_on_home_leaves_focus_unchanged() {
 
 #[test]
 fn an_exited_came_from_session_hides_the_back_hint() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert!(foot(&app).contains("→ or Esc back to the session"));
@@ -5731,7 +5728,7 @@ fn an_exited_came_from_session_hides_the_back_hint() {
 
 #[test]
 fn slash_new_then_right_returns_to_the_session_left() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(enter_text(&mut app, "/new"), Effect::None);
@@ -5750,7 +5747,7 @@ fn slash_new_then_right_returns_to_the_session_left() {
 
 #[test]
 fn slash_new_then_esc_returns_to_the_session_left() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(enter_text(&mut app, "/new"), Effect::None);
@@ -5770,7 +5767,7 @@ fn slash_new_then_esc_returns_to_the_session_left() {
 
 #[test]
 fn slash_resume_then_right_returns_to_the_session_left() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
@@ -5804,7 +5801,7 @@ fn slash_resume_then_right_returns_to_the_session_left() {
 
 #[test]
 fn slash_resume_then_esc_returns_to_the_session_left() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
@@ -5832,7 +5829,7 @@ fn slash_resume_then_esc_returns_to_the_session_left() {
 
 /// An app on home with `seam` answering configuration reads.
 fn offered(seam: Arc<Fake>) -> App {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.set_configure(Some(seam as Arc<dyn Configure>));
     app
 }
@@ -6160,7 +6157,7 @@ fn a_receipt_landing_mid_run_neither_retracts_nor_blocks_the_offer() {
 
 #[test]
 fn an_accept_arriving_while_its_session_reopens_falls_through_the_gate() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     let started = start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     let full = started[0]["id"]
@@ -6272,7 +6269,7 @@ fn stored(app: &App, project: &str) -> Option<usize> {
 
 #[test]
 fn an_unscoped_answer_fans_out_one_scoped_ask_per_new_project() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (feed, recent) = linked(&mut app);
     assert!(app.on_line(accepted(&feed, json!({}))).is_empty());
     let lines = answer_value(
@@ -6305,7 +6302,7 @@ fn an_unscoped_answer_fans_out_one_scoped_ask_per_new_project() {
 
 #[test]
 fn an_unscoped_answer_carrying_a_total_stores_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let lines = answer_value(
         &mut app,
@@ -6320,7 +6317,7 @@ fn an_unscoped_answer_carrying_a_total_stores_nothing() {
 
 #[test]
 fn scoped_answers_key_rows_and_total_by_project() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let lines = answer_value(
         &mut app,
@@ -6397,7 +6394,7 @@ fn scoped_answers_key_rows_and_total_by_project() {
 
 #[test]
 fn a_dirty_answer_sends_exactly_one_follow_up() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let lines = answer_value(
         &mut app,
@@ -6431,7 +6428,7 @@ fn a_dirty_answer_sends_exactly_one_follow_up() {
 
 #[test]
 fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let lines = answer_value(
         &mut app,
@@ -6468,7 +6465,7 @@ fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
 
 #[test]
 fn a_scoped_malformed_answer_keeps_the_total_notices_once_and_sends_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let lines = answer_value(
         &mut app,
@@ -6514,7 +6511,7 @@ fn a_scoped_answer_missing_sessions_or_total_notices_once_and_folds_nothing() {
         ),
         (json!({"total": 5}), "missing sessions"),
     ] {
-        let mut app = home();
+        let mut app = home_with(80, 24, launch());
         let (_, recent) = linked(&mut app);
         let lines = answer_value(
             &mut app,
@@ -6556,7 +6553,7 @@ fn an_unscoped_older_page_after_a_scoped_refusal_sends_nothing() {
     // A scoped refusal keeps no total with no retry: ordinary pagination
     // must not retry the already-seen project without a new trigger
     // (`docs/tui.md:268`, one ask in flight per project).
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let lines = answer_value(
         &mut app,
@@ -6591,7 +6588,7 @@ fn an_unscoped_older_page_after_a_scoped_refusal_sends_nothing() {
 
 #[test]
 fn unknown_before_on_an_unscoped_page_leaves_totals_alone() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let lines = answer_value(
         &mut app,
@@ -6631,7 +6628,7 @@ fn unknown_before_on_an_unscoped_page_leaves_totals_alone() {
 
 #[test]
 fn out_of_order_scoped_answers_leave_the_unscoped_cursor() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let lines = answer_value(
         &mut app,

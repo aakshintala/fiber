@@ -35,26 +35,27 @@ fn home_with(model: Option<&str>) -> App {
 }
 
 fn home_git(git: bool, model: Option<&str>) -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(Launch {
-        location: crate::LaunchLocation::Local {
-            workspace: PathBuf::from("/w"),
-            project: "-w".to_owned(),
-            git,
+    testkit::home_with(
+        80,
+        24,
+        Launch {
+            location: crate::LaunchLocation::Local {
+                workspace: PathBuf::from("/w"),
+                project: "-w".to_owned(),
+                git,
+            },
+            hover: true,
+            version: "0.0.1".to_owned(),
+            model: model.map(str::to_owned),
+            thinking: None,
+            logo_glyph: "⌇".to_owned(),
+            keys: crate::KeysSetup::default(),
+            rail_share: 15.0,
+            panel_share: 21.0,
+            panel_cards: Vec::new(),
+            ..Default::default()
         },
-        hover: true,
-        version: "0.0.1".to_owned(),
-        model: model.map(str::to_owned),
-        thinking: None,
-        logo_glyph: "⌇".to_owned(),
-        keys: crate::KeysSetup::default(),
-        rail_share: 15.0,
-        panel_share: 21.0,
-        panel_cards: Vec::new(),
-        ..Default::default()
-    });
-    app.set_size(80, 24);
-    app
+    )
 }
 
 /// One catalogue entry for `reference` with `levels`.
