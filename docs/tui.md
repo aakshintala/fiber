@@ -2423,16 +2423,18 @@ as the person scrolls, with the `history` command, which reads by `seq` over
 the session's offset table (`docs/invocation.md`, "Driver commands";
 `docs/events.md`, "Resume").
 
-- **Opening reads the last page, then makes one streaming pass.** The
+- **Opening reads the tail before the first frame, then counts ancestors,
+  then makes one streaming pass.** The
   terminal subscribes at `summary` and asks `history`, with no `from_seq`,
-  for the session's last lines. It cuts them into pages and asks for the
-  lines before them until it holds the pages that fill the screen up from
-  its last row, and begin at a turn's start. When the held run reaches the
-  session's `seq 0`, the read continues past it into each ancestor named
-  by `forked_from`, to the chain root: on its own segment the read stops
-  once the display fills, while past a segment start it keeps going for
-  the joint total. The first frame draws those
-  pages. The terminal then raises the subscription to `full`.
+  for the session's last lines. It folds the run once into the preview and
+  asks for older own-segment windows until the preview fills the screen up
+  from its last row, beginning at a turn's start. The first frame draws the
+  preview. After it, the terminal reads the older windows down to the
+  session's `seq 0` and each ancestor named by `forked_from` to the chain
+  root, carrying the ancestor runs above the preview for the joint total;
+  a run that reaches `seq 0` short of the display crosses into its
+  ancestors before the first frame instead. The terminal then raises the
+  subscription to `full`.
   The pass goes over the session's lines as the `full` subscription sends
   them. It builds the panel's cards and counts every row, keeping each
   row's `seq`. No event is kept: each is applied to the panel's folds and
@@ -2776,12 +2778,12 @@ CPU and time to first frame. The design keeps to them this way:
 - **Nothing runs while nothing happens.** With no turn, delegate or job
   running, there is no timer: no frame, no byte written. A still pointer sends
   nothing under hover.
-- **The first frame waits on nothing but the opening pass and loading TUI
+- **The first frame waits on nothing but the retained run and loading TUI
   extensions.** Keyboard detection, the logo's image and session listing each
   arrive after it. The budget is measured with no TUI extension installed.
-  Attaching to a session reads its whole log once before the first frame
-  ("History and paging"): about 12 ms per MiB of log on macOS arm64, so a
-  large session takes longer to open than a new one.
+  An attach folds twice ("History and paging"): the retained own-segment run
+  before the first frame, and the pass after the raise; about 12 ms per MiB
+  of log on macOS arm64, so a large session takes longer to open than a new one.
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**
 - **Each frame is written inside synchronized output, mode 2026.** The first frame and frames drawn on resize are included; a terminal without support ignores the sequences.
