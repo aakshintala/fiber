@@ -176,11 +176,21 @@ impl Turn {
             }
         }
         let summary_ended = summary.as_ref().and_then(|view| view.ended);
+        // The summary names the closing turn's ending; any other turn
+        // draws its own. One selection, so the error and outcome
+        // formatting below runs once.
+        let done = match summary_ended {
+            Some((done, _)) => Some(done),
+            None => match &self.ended {
+                Some((Ending::Done(done), _)) => Some(done),
+                _ => None,
+            },
+        };
         if summary_ended.is_some() || self.ended.is_some() {
             out.set_source(self.end_seq);
             let drew = block(out, inner, pad, separates, |out| {
-                let head = match summary_ended {
-                    Some((done, _)) => {
+                let head = match done {
+                    Some(done) => {
                         if let (TurnOutcome::Failed, Some(error)) = (done.outcome, &done.error) {
                             format::failure(error, out);
                         }
@@ -190,20 +200,7 @@ impl Turn {
                             TurnOutcome::Failed => "▣ failed",
                         }
                     }
-                    None => match &self.ended {
-                        Some((Ending::Done(done), _)) => {
-                            if let (TurnOutcome::Failed, Some(error)) = (done.outcome, &done.error)
-                            {
-                                format::failure(error, out);
-                            }
-                            match done.outcome {
-                                TurnOutcome::Completed => "▣ completed",
-                                TurnOutcome::Interrupted => "▣ interrupted",
-                                TurnOutcome::Failed => "▣ failed",
-                            }
-                        }
-                        _ => "▣ cut short: Fiber stopped",
-                    },
+                    None => "▣ cut short: Fiber stopped",
                 };
                 let ts = summary_ended.map_or_else(
                     || self.ended.as_ref().map_or(0, |(_, ts)| *ts),

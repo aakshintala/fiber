@@ -363,7 +363,6 @@ fn an_unrelated_large_line_adds_no_image_and_holds_no_payload_sized_allocation()
         .images
         .id(&SessionId(SESSION.to_owned()), "artifacts/a.png")
         .expect("the seeded image draws");
-    let ids = pages.images.parts.len();
     let big = "x".repeat(fakes::alloc::LARGE + 1);
     let unrelated = envelope("text_completed", json!({"text": big}));
     drop(big);
@@ -380,7 +379,13 @@ fn an_unrelated_large_line_adds_no_image_and_holds_no_payload_sized_allocation()
         Some(seeded),
         "the seeded image keeps its id"
     );
-    assert_eq!(pages.images.parts.len(), ids, "no image is added");
+    // The draw path resolves the seeded id to its path: the fold noted
+    // nothing else (`docs/tui.md`, "Images").
+    assert_eq!(
+        pages.image(seeded).map(|part| part.path.clone()),
+        Some("artifacts/a.png".to_owned()),
+        "the seeded image still draws"
+    );
 }
 
 /// An unknown kind adds no image: the fold returns before decoding.
@@ -392,7 +397,6 @@ fn an_unknown_kind_adds_no_image() {
         .images
         .id(&SessionId(SESSION.to_owned()), "artifacts/a.png")
         .expect("the seeded image draws");
-    let ids = pages.images.parts.len();
     pages.note_images(&envelope("some_future_kind", json!({"text": "hi"})));
     assert_eq!(
         pages
@@ -401,7 +405,13 @@ fn an_unknown_kind_adds_no_image() {
         Some(seeded),
         "the seeded image keeps its id"
     );
-    assert_eq!(pages.images.parts.len(), ids, "no image is added");
+    // The draw path resolves the seeded id to its path: the fold noted
+    // nothing else (`docs/tui.md`, "Images").
+    assert_eq!(
+        pages.image(seeded).map(|part| part.path.clone()),
+        Some("artifacts/a.png".to_owned()),
+        "the seeded image still draws"
+    );
 }
 
 /// A malformed image-bearing line adds no image: a payload that fails
@@ -414,7 +424,6 @@ fn a_malformed_image_line_adds_no_image() {
         .images
         .id(&SessionId(SESSION.to_owned()), "artifacts/a.png")
         .expect("the seeded image draws");
-    let ids = pages.images.parts.len();
     pages.note_images(&envelope(
         "tool_call_completed",
         json!({"status": "completed", "content": "not-an-array"}),
@@ -426,5 +435,11 @@ fn a_malformed_image_line_adds_no_image() {
         Some(seeded),
         "the seeded image keeps its id"
     );
-    assert_eq!(pages.images.parts.len(), ids, "no image is added");
+    // The draw path resolves the seeded id to its path: the fold noted
+    // nothing else (`docs/tui.md`, "Images").
+    assert_eq!(
+        pages.image(seeded).map(|part| part.path.clone()),
+        Some("artifacts/a.png".to_owned()),
+        "the seeded image still draws"
+    );
 }

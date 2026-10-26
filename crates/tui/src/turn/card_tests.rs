@@ -293,6 +293,53 @@ fn a_finished_turn_with_no_entries_is_a_card_of_its_closing_line() {
 }
 
 #[test]
+fn the_summary_names_the_closing_line_when_it_differs_from_the_card() {
+    use contract::events::{TurnCompleted, TurnOutcome};
+
+    use crate::turn::DrawSummary;
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    done(&mut cards);
+    // The card closed completed, but the summary closes the same turn
+    // as failed: the summary's ending names the closing line, not the
+    // card's own.
+    let turn = &cards.turns[0];
+    let ended = (
+        TurnCompleted {
+            outcome: TurnOutcome::Failed,
+            error: None,
+            questions: None,
+        },
+        5_000u64,
+    );
+    let summary = DrawSummary {
+        started: turn.started,
+        calls: turn.calls,
+        spend: &turn.spend,
+        ended: Some(&ended),
+    };
+    let mut out = Rows::default();
+    turn.rows_with_summary(
+        WIDTH,
+        &TimeZone::UTC,
+        Edges::BOTH,
+        &crate::image::Layout::default(),
+        Some(summary),
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    let shown = shown_rows(&rows);
+    assert!(
+        shown.iter().any(|row| row.contains("▣ failed")),
+        "the summary's failure names the closing line: {shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|row| row.contains("▣ completed")),
+        "the card's own ending does not draw: {shown:?}"
+    );
+}
+
+#[test]
 fn a_handoff_breaks_the_card_into_two_surfaces() {
     // An edge closes the piece before the band, and one opens the piece
     // after it; the band's line keeps the surface tint
