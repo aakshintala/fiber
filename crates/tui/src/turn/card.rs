@@ -4,7 +4,7 @@
 //! `turn`, so it reads the card's fields.
 
 use contract::Seq;
-use contract::events::TurnOutcome;
+use contract::events::{TurnCompleted, TurnOutcome};
 use jiff::tz::TimeZone;
 
 use super::{Ending, Entry, Turn};
@@ -12,6 +12,15 @@ use crate::format;
 use crate::rows::Rows;
 use crate::surface::{self, Edges};
 use crate::theme::Role;
+
+/// The whole-turn totals a page's draw supplies for the turn they
+/// close: the draw renders them without cloning or mutating the card.
+pub(crate) struct DrawSummary<'a> {
+    pub(crate) started: u64,
+    pub(crate) calls: u64,
+    pub(crate) spend: &'a format::Spend,
+    pub(crate) ended: Option<&'a (TurnCompleted, u64)>,
+}
 
 /// Whether the card's first piece and its last piece drew any row, edges
 /// not counted; one piece with no band. A card with no piece row: both
@@ -83,7 +92,27 @@ impl Turn {
         layout: &crate::image::Layout,
         out: &mut Rows,
     ) -> Pieces {
+        self.rows_with_summary(width, zone, edges, layout, None, out)
+    }
+
+    /// The same card with the whole-turn totals `summary` names drawn in
+    /// place of the card's own, for the turn the summary closes; any
+    /// other turn draws its own fields. The view is borrowed, so recounts
+    /// neither clone nor mutate the open turn.
+    pub(crate) fn rows_with_summary(
+        &self,
+        width: u16,
+        zone: &TimeZone,
+        edges: Edges,
+        layout: &crate::image::Layout,
+        summary: Option<DrawSummary<'_>>,
+        out: &mut Rows,
+    ) -> Pieces {
         crate::work::add(|work| work.turn_rows += 1);
+        let started = summary.as_ref().map_or(self.started, |view| view.started);
+        let calls = summary.as_ref().map_or(self.calls, |view| view.calls);
+        let spend: &format::Spend = summary.as_ref().map_or(&self.spend, |view| view.spend);
+        let open = summary.as_ref().and_then(|view| view.ended).is_none() && self.is_open();
         let prompts_at = out.len();
         out.set_source(self.first_seq);
         for prompt in &self.prompts {
@@ -91,7 +120,7 @@ impl Turn {
             super::images::bubble_rows(prompt, width, layout, out);
             if out.len() > before {
                 out.gap(before);
-                if let Some(time) = crate::local_time::time_of_day(self.started, zone) {
+                if let Some(time) = crate::local_time::time_of_day(started, zone) {
                     out.push((format::dim(format!("you {time} ")).right_aligned(), None));
                 }
             }
@@ -133,12 +162,7 @@ impl Turn {
                 Entry::Steer(steered) => steered.rows(inner, zone, layout, out),
                 Entry::Group(at) => {
                     if let Some(group) = self.groups.get(*at) {
-                        group.rows(
-                            self.is_open() && self.open_group == Some(*at),
-                            inner,
-                            layout,
-                            out,
-                        );
+                        group.rows(open && self.open_group == Some(*at), inner, layout, out);
                     }
                 }
                 Entry::Aside(aside) => aside.rows(inner, out),
@@ -151,11 +175,12 @@ impl Turn {
                 after_band = false;
             }
         }
-        if let Some((ending, ts)) = &self.ended {
+        let summary_ended = summary.as_ref().and_then(|view| view.ended);
+        if summary_ended.is_some() || self.ended.is_some() {
             out.set_source(self.end_seq);
             let drew = block(out, inner, pad, separates, |out| {
-                let head = match ending {
-                    Ending::Done(done) => {
+                let head = match summary_ended {
+                    Some((done, _)) => {
                         if let (TurnOutcome::Failed, Some(error)) = (done.outcome, &done.error) {
                             format::failure(error, out);
                         }
@@ -165,10 +190,27 @@ impl Turn {
                             TurnOutcome::Failed => "▣ failed",
                         }
                     }
-                    Ending::CutShort => "▣ cut short: Fiber stopped",
+                    None => match &self.ended {
+                        Some((Ending::Done(done), _)) => {
+                            if let (TurnOutcome::Failed, Some(error)) = (done.outcome, &done.error)
+                            {
+                                format::failure(error, out);
+                            }
+                            match done.outcome {
+                                TurnOutcome::Completed => "▣ completed",
+                                TurnOutcome::Interrupted => "▣ interrupted",
+                                TurnOutcome::Failed => "▣ failed",
+                            }
+                        }
+                        _ => "▣ cut short: Fiber stopped",
+                    },
                 };
-                let ms = ts.saturating_sub(self.started);
-                let closing = format::closing(head, ms, self.calls, &self.spend.usage());
+                let ts = summary_ended.map_or_else(
+                    || self.ended.as_ref().map_or(0, |(_, ts)| *ts),
+                    |(_, ts)| *ts,
+                );
+                let ms = ts.saturating_sub(started);
+                let closing = format::closing(head, ms, calls, &spend.usage());
                 out.push((format::dim(closing), None));
             });
             piece_drew = piece_drew || drew;

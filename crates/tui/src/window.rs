@@ -19,7 +19,7 @@ use crate::mouse::TargetId;
 use crate::pages::{Cut, Index};
 use crate::rows::{RowText, Rows};
 use crate::surface::Edges;
-use crate::turn::{Entry, Fold, Row, Turn, target_id};
+use crate::turn::{DrawSummary, Entry, Fold, Row, Turn, target_id};
 
 mod images;
 mod live;
@@ -1828,22 +1828,28 @@ impl Pages {
             let Some(card) = part.turns.get(at) else {
                 continue;
             };
-            let summary = self.summaries.get(after);
-            let mut card = card.clone();
-            if let Some(summary) = summary.filter(|summary| summary.closed_on == page) {
-                card.summary(
-                    summary.started,
-                    summary.calls,
-                    &summary.spend,
-                    summary.ended.as_ref(),
-                );
-            }
+            let summary = self
+                .summaries
+                .get(after)
+                .filter(|summary| summary.closed_on == page);
             let first = out.len();
             let edges = Edges {
                 top: !(at == 0 && part.joins_previous),
                 bottom: !(at + 1 == part.turns.len() && part.joins_next),
             };
-            card.rows(self.wrap_width(), &self.zone, edges, &self.images, &mut out);
+            card.rows_with_summary(
+                self.wrap_width(),
+                &self.zone,
+                edges,
+                &self.images,
+                summary.map(|summary| DrawSummary {
+                    started: summary.started,
+                    calls: summary.calls,
+                    spend: &summary.spend,
+                    ended: summary.ended.as_ref(),
+                }),
+                &mut out,
+            );
             if first < out.len() {
                 turns.push((after, first..out.len()));
             }
