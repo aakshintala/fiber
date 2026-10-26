@@ -1135,7 +1135,6 @@ fn an_extension_for_another_api_starts_no_vm_while_a_process_extension_loads_wit
     let mut loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
     loaded.sort();
     assert_eq!(loaded, names(&["lua", "proc"]));
-    assert_eq!(session.lua.len(), 1);
     let mut dirs: Vec<String> = session.dirs().into_iter().map(|(name, _)| name).collect();
     dirs.sort();
     assert_eq!(dirs, names(&["lua", "proc"]));

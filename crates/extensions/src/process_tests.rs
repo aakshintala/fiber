@@ -1235,10 +1235,10 @@ fn shared_registry(runtime: &Runtime, extra: Value) -> (fakes::TempDir, Registry
 
 /// A restart re-registers the owner under a new generation: the old
 /// provider reference no longer resolves, and it never selects the
-/// replacement callback.
+/// replacement callback. Provider calls themselves stay on `LuaExtension`
+/// directly, so the gate is `resolve`, not dispatch.
 #[test]
 fn provider_references_resolve_only_within_their_generation() {
-    use std::sync::Arc as Shared;
     let runtime = Runtime::new(fakes::clock::FakeClock::new());
     let (_dir1, mut first) = shared_registry(&runtime, json!({"providers": {"p": []}}));
     let outcome = register(
@@ -1257,11 +1257,6 @@ fn provider_references_resolve_only_within_their_generation() {
         .unwrap()
         .clone();
     assert_eq!(old.generation, 1);
-    first.set_handler(
-        &CommandId("c1".to_owned()),
-        "models",
-        Shared::new(|_, _| Ok(Some(json!({"generation": 1})))),
-    );
     let (_dir2, mut second) = shared_registry(&runtime, json!({"providers": {"p": []}}));
     let outcome = register(
         &mut second,
@@ -1279,20 +1274,9 @@ fn provider_references_resolve_only_within_their_generation() {
         .unwrap()
         .clone();
     assert_eq!(new.generation, 2);
-    second.set_handler(
-        &CommandId("c1".to_owned()),
-        "models",
-        Shared::new(|_, _| Ok(Some(json!({"generation": 2})))),
-    );
-    let stale = runtime
-        .provider_call(&old, json!({}))
-        .unwrap_err()
-        .to_string();
+    let stale = runtime.resolve(&old).unwrap_err().to_string();
     assert!(stale.contains("generation 1"), "{stale}");
-    assert_eq!(
-        runtime.provider_call(&new, json!({})).unwrap(),
-        json!({"generation": 2})
-    );
+    assert!(runtime.resolve(&new).is_ok());
 }
 
 /// A positional reference shares the triple: its key may be `"1"`, and it

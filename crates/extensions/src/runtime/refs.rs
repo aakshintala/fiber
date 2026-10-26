@@ -100,57 +100,6 @@ pub(crate) enum LuaKind {
         /// The registered command name.
         name: String,
     },
-    /// One provider function.
-    Provider {
-        /// The provider's name.
-        provider: String,
-        /// Which of its functions to run.
-        function: ProviderFunction,
-    },
-    /// One harness function.
-    Harness {
-        /// The harness's name.
-        harness: String,
-        /// Which of its functions to run.
-        function: String,
-    },
-}
-
-/// A provider function a reference can name: the five `fiber.provider`
-/// functions (`docs/extensions.md`, "Registering").
-#[allow(
-    dead_code,
-    reason = "constructed as provider dispatch wires through references in a later part; asserted by tests"
-)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ProviderFunction {
-    /// The provider's `models`.
-    Models,
-    /// The provider's `quota`.
-    Quota,
-    /// The provider's `credential`.
-    Credential,
-    /// The provider's `sign`.
-    Sign,
-    /// The provider's `cost`.
-    Cost,
-}
-
-#[allow(
-    dead_code,
-    reason = "read once provider dispatch resolves references in a later part; asserted by tests"
-)]
-impl ProviderFunction {
-    /// The function's name, as `fiber.provider` registers it.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::Models => "models",
-            Self::Quota => "quota",
-            Self::Credential => "credential",
-            Self::Sign => "sign",
-            Self::Cost => "cost",
-        }
-    }
 }
 
 /// A resolved reference: the owner it named and the current target.

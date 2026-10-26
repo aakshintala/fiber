@@ -58,7 +58,6 @@ const ENTRY: &str = "init.lua";
 
 /// The extensions a session loaded, and the hooks they registered, in the
 /// order they run.
-#[derive(Default)]
 pub struct SessionExtensions {
     state: Arc<crate::host::state::StateRegistry>,
     change_state: Mutex<Vec<StateLine>>,
@@ -100,8 +99,9 @@ pub struct SessionExtensions {
     lua: Vec<Arc<LuaExtension>>,
     /// The session's backend-neutral callback owner: Lua extensions
     /// register their VMs here, process extensions their generations, and
-    /// every hook, watcher, command and provider dispatch resolves
-    /// through it.
+    /// every hook, watcher, tool, search and command dispatch resolves
+    /// through it. Provider and harness calls stay on `LuaExtension`
+    /// directly.
     runtime: Runtime,
     /// Every watcher the loaded extensions registered, in extension-name
     /// order then registration order: what [`SessionExtensions::deliver`]
@@ -155,6 +155,53 @@ pub struct SessionExtensions {
     /// The search backend Fiber's own `web_search` runs, chosen at load
     /// from what is installed and `web_search.backend`.
     search_backend: Option<Arc<dyn SearchBackend>>,
+}
+
+impl Default for SessionExtensions {
+    /// An empty session on the system clock: a load always replaces the
+    /// runtime with the session's clock before dispatch, and tests fold
+    /// registrations into the empty session directly.
+    fn default() -> Self {
+        Self {
+            state: Default::default(),
+            change_state: Default::default(),
+            loaded: Default::default(),
+            dirs: Default::default(),
+            home: Default::default(),
+            host_script: Default::default(),
+            openings: Default::default(),
+            prompts: Default::default(),
+            notices: Default::default(),
+            holds: Default::default(),
+            required: Default::default(),
+            hook_snapshots: Default::default(),
+            hook_failures: Default::default(),
+            has_repository_hooks: Default::default(),
+            lua: Default::default(),
+            runtime: Runtime::new(Arc::new(support::clock::System)),
+            watchers: Default::default(),
+            cursors: Default::default(),
+            watermark: Default::default(),
+            lua_providers: Default::default(),
+            provider_vms: Default::default(),
+            browser: Default::default(),
+            emitter: Default::default(),
+            inbox: Default::default(),
+            #[cfg(test)]
+            late_pause: Default::default(),
+            rejected: Default::default(),
+            before_tool: Default::default(),
+            before_message: Default::default(),
+            after_tool: Default::default(),
+            lifecycle: Default::default(),
+            timing: Default::default(),
+            diagnostics: Default::default(),
+            any: Default::default(),
+            commands: Default::default(),
+            tools: Default::default(),
+            search_backend: Default::default(),
+        }
+    }
 }
 
 #[cfg(test)]

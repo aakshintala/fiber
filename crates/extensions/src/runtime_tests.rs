@@ -258,8 +258,10 @@ fn process_tool_run_asking_runs_without_runner() {
     );
 }
 
-/// Computed callbacks resolve like `run`: an effects function, a search
-/// backend and a provider function each answer through their own reference.
+/// Computed callbacks resolve like `run`: an effects function and a search
+/// backend each answer through their own reference. Provider and harness
+/// functions stay on `LuaExtension` directly, so the runtime carries no
+/// dispatch for them.
 #[test]
 fn process_computed_callbacks_resolve_by_key() {
     let runtime = runtime();
@@ -287,26 +289,6 @@ fn process_computed_callbacks_resolve_by_key() {
             .unwrap(),
         Some(json!([{"title": "t", "url": "https://example.com", "snippet": "s"}]))
     );
-    let sign = runtime.install_process_handler(
-        "fiber.test/proc",
-        command("c3"),
-        "sign",
-        handler(json!({"Authorization": "sig"})),
-    );
-    assert_eq!(
-        runtime.provider_call(&sign, json!({})).unwrap(),
-        json!({"Authorization": "sig"})
-    );
-    let line = runtime.install_process_handler(
-        "fiber.test/proc",
-        command("c4"),
-        "line",
-        handler(json!({"answer": "done"})),
-    );
-    assert_eq!(
-        runtime.harness_call(&line, json!({"text": "x"})).unwrap(),
-        json!({"answer": "done"})
-    );
 }
 
 /// A stale reference fails every dispatch, and never selects the
@@ -327,8 +309,6 @@ fn stale_reference_fails_every_dispatch() {
     assert!(runtime.tool_run(&old, json!({}), &cancel).is_err());
     assert!(runtime.tool_effects(&old, json!({})).is_err());
     assert!(runtime.search_run(&old, json!({}), &cancel).is_err());
-    assert!(runtime.provider_call(&old, json!({})).is_err());
-    assert!(runtime.harness_call(&old, json!({})).is_err());
     assert!(runtime.drain_watcher(&old, json!({})).is_err());
     assert!(!runtime.is_watcher_busy(&old));
     assert!(runtime.push_watcher(&old, json!({})).is_none());
@@ -616,26 +596,30 @@ fn dispatch_on_a_dropped_vm_fails() {
     assert_eq!(runtime.runs_own_command(&made, "turn_end"), None);
 }
 
-/// A process credential call answers through its reference, like any other
-/// provider function: the same generation gate guards the token path.
+/// Provider and harness functions stay on `LuaExtension` directly: the
+/// runtime carries no dispatch for them, so a provider reference is only a
+/// `FunctionRef` the generation gate guards. Resolving one from a past
+/// generation fails, and the current one resolves.
 #[test]
-fn process_provider_credential_answers() {
+fn provider_reference_resolves_only_within_its_generation() {
     let runtime = runtime();
     runtime.register_owner("fiber.test/proc", None);
-    let credential = runtime.install_process_handler(
+    let old = runtime.install_process_handler(
         "fiber.test/proc",
         command("c1"),
-        "credential",
-        handler(json!({"token": "t", "expires_at": 4102444800.0})),
+        "models",
+        handler(json!({"generation": 1})),
     );
-    let pair = crate::lua_provider::CredentialPair {
-        label: "default".to_owned(),
-        credential: "acme".to_owned(),
-    };
-    assert_eq!(
-        runtime.provider_credential(&credential, &pair).unwrap(),
-        json!({"token": "t", "expires_at": 4102444800.0})
-    );
+    assert_eq!(old.generation, 1);
     runtime.register_owner("fiber.test/proc", None);
-    assert!(runtime.provider_credential(&credential, &pair).is_err());
+    let stale = runtime.resolve(&old).unwrap_err().to_string();
+    assert!(stale.contains("generation 1"), "{stale}");
+    let current = runtime.install_process_handler(
+        "fiber.test/proc",
+        command("c1"),
+        "models",
+        handler(json!({"generation": 2})),
+    );
+    assert_eq!(current.generation, 2);
+    assert!(runtime.resolve(&current).is_ok());
 }

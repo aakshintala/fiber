@@ -30,10 +30,8 @@ use contract::emit::Emit;
 use contract::events::Event;
 use contract::hook::{HookFailure, StateLine};
 use contract::tool::{Cancel, InnerCalls};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::lua_provider::{CredentialPair, LoginMethod};
-use crate::oauth::LoginSlot;
 use crate::{Error, LuaExtension};
 
 mod queued;
@@ -73,22 +71,6 @@ struct Inner {
 pub(crate) struct Runtime {
     /// The registry. The lock is a leaf: no callback runs under it.
     inner: Arc<Mutex<Inner>>,
-}
-
-impl Default for Runtime {
-    /// An empty runtime on the system clock, for struct-update syntax: a
-    /// load always replaces it with the session's clock before dispatch.
-    fn default() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(Inner {
-                clock: Arc::new(support::clock::System),
-                order: Vec::new(),
-                owners: BTreeMap::new(),
-                functions: BTreeMap::new(),
-                emit: None,
-            })),
-        }
-    }
 }
 
 impl Runtime {
@@ -492,150 +474,6 @@ impl Runtime {
                 }
             }
             FunctionTarget::Process(_) => None,
-        }
-    }
-
-    /// Runs the provider function behind `func` on `arg`.
-    #[allow(
-        dead_code,
-        reason = "provider and harness dispatch wires through references in a later part; exercised by tests"
-    )]
-    pub(crate) fn provider_call(&self, func: &FunctionRef, arg: Value) -> Result<Value, Error> {
-        let resolved = self.resolve(func)?;
-        match resolved.target {
-            FunctionTarget::Lua(binding) => {
-                if let LuaKind::Provider { provider, function } = &binding.kind {
-                    let extension = binding
-                        .extension
-                        .upgrade()
-                        .ok_or_else(|| gone(func, &resolved.owner))?;
-                    extension.provider_call(provider, function.name(), arg)
-                } else {
-                    Err(unknown(func, Some(resolved.owner.as_str())))
-                }
-            }
-            FunctionTarget::Process(invoke) => {
-                let cancel = support::cancel::Token::new();
-                invoke(arg, &cancel)?.ok_or_else(|| no_answer(func, &resolved.owner))
-            }
-        }
-    }
-
-    /// Runs the `credential` behind `func` for `pair`, passing the session's
-    /// label and the stored credential's name, as `LuaExtension` does.
-    #[allow(
-        dead_code,
-        reason = "provider and harness dispatch wires through references in a later part; exercised by tests"
-    )]
-    pub(crate) fn provider_credential(
-        &self,
-        func: &FunctionRef,
-        pair: &CredentialPair,
-    ) -> Result<Value, Error> {
-        let resolved = self.resolve(func)?;
-        match resolved.target {
-            FunctionTarget::Lua(binding) => {
-                if let LuaKind::Provider { provider, .. } = &binding.kind {
-                    let extension = binding
-                        .extension
-                        .upgrade()
-                        .ok_or_else(|| gone(func, &resolved.owner))?;
-                    extension.provider_credential(provider, pair)
-                } else {
-                    Err(unknown(func, Some(resolved.owner.as_str())))
-                }
-            }
-            FunctionTarget::Process(invoke) => {
-                let cancel = support::cancel::Token::new();
-                let arg = Value::Object(Map::from_iter([
-                    ("label".to_owned(), Value::String(pair.label.clone())),
-                    (
-                        "credential".to_owned(),
-                        Value::String(pair.credential.clone()),
-                    ),
-                ]));
-                invoke(arg, &cancel)?.ok_or_else(|| no_answer(func, &resolved.owner))
-            }
-        }
-    }
-
-    /// Runs the `credential` behind `func` as a login, passing the stored
-    /// credential's name, the `--as` label and the login method, as
-    /// `LuaExtension` does.
-    #[allow(
-        dead_code,
-        reason = "provider and harness dispatch wires through references in a later part; exercised by tests"
-    )]
-    pub(crate) fn provider_login(
-        &self,
-        func: &FunctionRef,
-        credential: &str,
-        label: Option<&str>,
-        method: LoginMethod,
-    ) -> Result<Value, Error> {
-        let resolved = self.resolve(func)?;
-        match resolved.target {
-            FunctionTarget::Lua(binding) => {
-                if let LuaKind::Provider { provider, .. } = &binding.kind {
-                    let extension = binding
-                        .extension
-                        .upgrade()
-                        .ok_or_else(|| gone(func, &resolved.owner))?;
-                    extension.provider_login(
-                        provider,
-                        credential,
-                        label,
-                        method,
-                        LoginSlot::default(),
-                    )
-                } else {
-                    Err(unknown(func, Some(resolved.owner.as_str())))
-                }
-            }
-            FunctionTarget::Process(invoke) => {
-                let cancel = support::cancel::Token::new();
-                let login = match method {
-                    LoginMethod::Browser => "browser",
-                    LoginMethod::Device => "device",
-                };
-                let mut arg = Map::from_iter([
-                    (
-                        "credential".to_owned(),
-                        Value::String(credential.to_owned()),
-                    ),
-                    ("login".to_owned(), Value::String(login.to_owned())),
-                ]);
-                if let Some(label) = label {
-                    arg.insert("label".to_owned(), Value::String(label.to_owned()));
-                }
-                invoke(Value::Object(arg), &cancel)?.ok_or_else(|| no_answer(func, &resolved.owner))
-            }
-        }
-    }
-
-    /// Runs the harness function behind `func` on `arg`: `command`, `line`,
-    /// `models` or the optional `quota`, as the delegate runner asks.
-    #[allow(
-        dead_code,
-        reason = "provider and harness dispatch wires through references in a later part; exercised by tests"
-    )]
-    pub(crate) fn harness_call(&self, func: &FunctionRef, arg: Value) -> Result<Value, Error> {
-        let resolved = self.resolve(func)?;
-        match resolved.target {
-            FunctionTarget::Lua(binding) => {
-                if let LuaKind::Harness { harness, function } = &binding.kind {
-                    Err(Error::UnknownCallback {
-                        extension: resolved.owner,
-                        callback: format!("harness `{harness}` has no `{function}` in Lua"),
-                    })
-                } else {
-                    Err(unknown(func, Some(resolved.owner.as_str())))
-                }
-            }
-            FunctionTarget::Process(invoke) => {
-                let cancel = support::cancel::Token::new();
-                invoke(arg, &cancel)?.ok_or_else(|| no_answer(func, &resolved.owner))
-            }
         }
     }
 

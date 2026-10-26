@@ -251,16 +251,7 @@ impl ProcessTool {
     /// What the tool call returned, as a result: the same contract
     /// `LuaTool` keeps.
     fn output(&self, returned: Result<Option<Value>, Error>) -> Output {
-        let value = match returned {
-            Ok(Some(value)) => value,
-            Ok(None) => return Output::default(),
-            Err(e @ Error::Timeout { .. }) => {
-                return failed_output(failure(ErrorCode::Timeout, e.to_string()));
-            }
-            Err(e) => return failed_output(failure(ErrorCode::ToolError, e.to_string())),
-        };
-        output_from(value)
-            .unwrap_or_else(|why| failed_output_for(&self.owner, &self.declared.name, &why))
+        output_from_returned(returned, &self.owner, &self.declared.name)
     }
 }
 
@@ -269,17 +260,24 @@ impl LuaTool {
     /// and no error, a timeout fails `timeout`, and any other failure
     /// fails `tool_error`.
     fn output(&self, returned: Result<Option<Value>, Error>) -> Output {
-        let value = match returned {
-            Ok(Some(value)) => value,
-            Ok(None) => return Output::default(),
-            Err(e @ Error::Timeout { .. }) => {
-                return failed_output(failure(ErrorCode::Timeout, e.to_string()));
-            }
-            Err(e) => return failed_output(failure(ErrorCode::ToolError, e.to_string())),
-        };
-        output_from(value)
-            .unwrap_or_else(|why| failed_output_for(self.extension(), &self.declared.name, &why))
+        output_from_returned(returned, self.extension(), &self.declared.name)
     }
+}
+
+/// What a tool call returned, as a result: the shared conversion behind
+/// both backends' `output`. No return is no content and no error, a
+/// timeout fails `timeout`, any other failure fails `tool_error`, and a
+/// return that does not read names the tool and its owner.
+fn output_from_returned(returned: Result<Option<Value>, Error>, owner: &str, name: &str) -> Output {
+    let value = match returned {
+        Ok(Some(value)) => value,
+        Ok(None) => return Output::default(),
+        Err(e @ Error::Timeout { .. }) => {
+            return failed_output(failure(ErrorCode::Timeout, e.to_string()));
+        }
+        Err(e) => return failed_output(failure(ErrorCode::ToolError, e.to_string())),
+    };
+    output_from(value).unwrap_or_else(|why| failed_output_for(owner, name, &why))
 }
 
 /// Why a tool call failed, worded for the model and the log: the shared
