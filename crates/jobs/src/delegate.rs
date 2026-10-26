@@ -36,9 +36,9 @@ use crate::registry::{Registry, mint_job_id};
 /// tools"). The call returns as soon as the child has spawned and the job
 /// is recorded; the runner thread owns everything after that.
 ///
-/// The fields are wired by `main`: delegates of `parent` share `workspace`
-/// and log under `sessions`; `bound` is the stop bound and `cap` the
-/// output cap.
+/// The fields are wired by `main`: delegates of `parent` share
+/// `workspace`, and each child's log resolves through `events_for`;
+/// `bound` is the stop bound and `cap` the output cap.
 // debt: the wiring fields repeat on `DelegateFork` and both `starter()`
 // builders forward them field by field; move them into one shared `Wiring`
 // struct embedded by each tool; the next edit that adds, removes, or
@@ -52,9 +52,8 @@ pub struct DelegateSpawn {
     pub parent: SessionId,
     /// The parent's workspace, which the delegate shares.
     pub workspace: PathBuf,
-    /// Where delegates log: each child's `events.jsonl` lives under
-    /// `<sessions>/<session id>`.
-    pub sessions: PathBuf,
+    /// Resolves the child's `events.jsonl` from its session id.
+    pub events_for: EventsFor,
     /// The session clock.
     pub clock: Arc<dyn contract::clock::Clock>,
     /// How long a stop waits before SIGKILL.
@@ -78,8 +77,8 @@ pub struct DelegateSpawn {
 /// admission; the caller wires the reader.
 ///
 /// The fields are wired by `main`: like a spawn's, delegates of `parent`
-/// share `workspace` and log under `sessions`; `bound` is the stop bound
-/// and `cap` the output cap.
+/// share `workspace`, and each child's log resolves through `events_for`;
+/// `bound` is the stop bound and `cap` the output cap.
 pub struct DelegateFork {
     /// This session's depth in the delegate tree.
     pub depth: u32,
@@ -89,9 +88,8 @@ pub struct DelegateFork {
     pub parent: SessionId,
     /// The parent's workspace, which the fork shares.
     pub workspace: PathBuf,
-    /// Where forks log: each child's `events.jsonl` lives under
-    /// `<sessions>/<session id>`.
-    pub sessions: PathBuf,
+    /// Resolves the child's `events.jsonl` from its session id.
+    pub events_for: EventsFor,
     /// The session clock.
     pub clock: Arc<dyn contract::clock::Clock>,
     /// How long a stop waits before SIGKILL.
@@ -113,6 +111,12 @@ pub struct DelegateFork {
 /// argument is the calling action, for the root walk, or `None` where no
 /// call runs.
 pub type ForkPoint = Arc<dyn Fn(Option<&ActionId>) -> Result<Forking, Failure> + Send + Sync>;
+
+/// Resolves a child's `events.jsonl` from its session id: computed by
+/// `main` from the sessions directory, called by the shared start with
+/// the minted id. The resolver keeps the child's log beside its
+/// siblings without the job knowing the sessions layout.
+pub type EventsFor = Arc<dyn Fn(&SessionId) -> PathBuf + Send + Sync>;
 
 /// The resolved point a fork continues from, plus the model reference
 /// the start writes verbatim into `DelegateStarted.model`: a fork takes
@@ -429,8 +433,8 @@ pub(crate) struct Starter<'a> {
     pub parent: &'a SessionId,
     /// The parent's workspace, which the child shares.
     pub workspace: &'a PathBuf,
-    /// Where children log.
-    pub sessions: &'a PathBuf,
+    /// Resolves the child's `events.jsonl` from its session id.
+    pub events_for: &'a EventsFor,
     /// The session clock.
     pub clock: &'a Arc<dyn contract::clock::Clock>,
     /// How long a stop waits before SIGKILL.
@@ -457,7 +461,7 @@ impl Starter<'_> {
         registry: &'a Arc<Registry>,
         parent: &'a SessionId,
         workspace: &'a PathBuf,
-        sessions: &'a PathBuf,
+        events_for: &'a EventsFor,
         clock: &'a Arc<dyn contract::clock::Clock>,
         bound: Duration,
         cap: u64,
@@ -469,7 +473,7 @@ impl Starter<'_> {
             registry,
             parent,
             workspace,
-            sessions,
+            events_for,
             clock,
             bound,
             cap,
@@ -541,10 +545,7 @@ impl Starter<'_> {
                     bind(&job_id);
                 }
                 let session_id = run::mint_session_id();
-                let output_path = self
-                    .sessions
-                    .join(&session_id.0)
-                    .join("events.jsonl")
+                let output_path = (self.events_for)(&session_id)
                     .to_string_lossy()
                     .into_owned();
                 let launched = Launched {
@@ -652,7 +653,7 @@ impl DelegateSpawn {
             &self.registry,
             &self.parent,
             &self.workspace,
-            &self.sessions,
+            &self.events_for,
             &self.clock,
             self.bound,
             self.cap,
@@ -670,7 +671,7 @@ impl DelegateFork {
             &self.registry,
             &self.parent,
             &self.workspace,
-            &self.sessions,
+            &self.events_for,
             &self.clock,
             self.bound,
             self.cap,

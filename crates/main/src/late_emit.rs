@@ -2,7 +2,6 @@
 //! registry is built before its log exists, and job output reaches the log
 //! once it does.
 
-use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use contract::clock::Clock;
@@ -32,13 +31,12 @@ impl Emit for LateEmit {
 /// A new session's one job registry, with its output files in the
 /// session's `artifacts/` (which `Log::create` makes), and the emitter that
 /// reaches the log once it exists. Nothing can start a job before then.
-pub(crate) fn registry(dir: &Path, clock: &Arc<dyn Clock>) -> (Arc<LateEmit>, Arc<jobs::Registry>) {
+pub(crate) fn registry(
+    dir: &log::SessionDir,
+    clock: &Arc<dyn Clock>,
+) -> (Arc<LateEmit>, Arc<jobs::Registry>) {
     let emit = Arc::new(LateEmit::default());
-    let registry = jobs::Registry::new(
-        dir.join("artifacts"),
-        Arc::clone(clock),
-        Arc::clone(&emit) as _,
-    );
+    let registry = jobs::Registry::new(dir.artifacts(), Arc::clone(clock), Arc::clone(&emit) as _);
     (emit, registry)
 }
 

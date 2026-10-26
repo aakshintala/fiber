@@ -26,12 +26,12 @@ use crate::{ask_failed, failed, run_turn};
 /// missing or still-empty log reads as missing, exactly as a history walk
 /// treats it; any other unreadable first line reads as corrupt, failing
 /// the seed closed instead of silently folding a fork's full log.
-fn is_delegate_fork(dir: &Path) -> Result<bool, log::Error> {
-    match log::started_first(dir) {
+fn is_delegate_fork(dir: &log::SessionDir) -> Result<bool, log::Error> {
+    match log::started_first(dir.path()) {
         Ok(started) => Ok(started.delegate),
-        Err(log::FirstLineError::Incomplete) => Err(log::Error::NotFound(dir.to_path_buf())),
+        Err(log::FirstLineError::Incomplete) => Err(log::Error::NotFound(dir.path().to_path_buf())),
         Err(log::FirstLineError::Corrupt) => Err(log::Error::Pointer {
-            path: dir.join("events.jsonl"),
+            path: dir.events(),
             reason: "the delegate's first line is not a session_started with a workspace"
                 .to_owned(),
         }),
@@ -70,13 +70,14 @@ fn fold_segment(
 /// resume-path boundaries classify by the following child's header, while
 /// a bounded terminal with no follower on disk folds as the caller names.
 fn seed_from(
+    sessions: &Path,
     segments: &[log::Segment],
     terminal_fork: bool,
 ) -> Result<extensions::StateSeed, log::Error> {
     let mut carry = log::Ruled::new();
     for (index, segment) in segments.iter().enumerate() {
         let fork = match segments.get(index + 1) {
-            Some(next) => is_delegate_fork(&next.dir)?,
+            Some(next) => is_delegate_fork(&log::SessionDir::new(sessions, &next.session_id))?,
             None => terminal_fork,
         };
         carry = fold_segment(carry, segment, fork)?;
@@ -88,15 +89,21 @@ fn seed_from(
 /// through the point the following child continues from, `Latest` as of the
 /// point when that child carries `parent` (a fork) and at the parent's end
 /// otherwise (a rewind, and any bounded segment with no follower).
-pub(crate) fn chain_seed(segments: &[log::Segment]) -> Result<extensions::StateSeed, log::Error> {
-    seed_from(segments, false)
+pub(crate) fn chain_seed(
+    sessions: &Path,
+    segments: &[log::Segment],
+) -> Result<extensions::StateSeed, log::Error> {
+    seed_from(sessions, segments, false)
 }
 
 /// The extension seed for a fresh fork's first run over `history_to`: the
 /// terminal is bounded by the fork's point with no child on disk yet, so it
 /// folds as a fork; interior boundaries classify as [`chain_seed`] does.
-pub(crate) fn fork_seed(segments: &[log::Segment]) -> Result<extensions::StateSeed, log::Error> {
-    seed_from(segments, true)
+pub(crate) fn fork_seed(
+    sessions: &Path,
+    segments: &[log::Segment],
+) -> Result<extensions::StateSeed, log::Error> {
+    seed_from(sessions, segments, true)
 }
 
 /// `fiber ask --resume <selector>`: resolves the selector, opens the
@@ -158,9 +165,9 @@ pub(crate) fn ask_resume(
     // worktree is recreated from its repository first. A session outside
     // this project is refused exactly as an unknown id: the log is
     // untouched, no lock is taken and nothing attaches.
-    let dir = sessions.join(&id.0);
-    let recorded = recorded_worktree(&dir);
-    if !recreatable(recorded.as_ref()) && !in_launch_project(&dir, &in_project) {
+    let dir = log::SessionDir::new(&sessions, &id);
+    let recorded = recorded_worktree(dir.path());
+    if !recreatable(recorded.as_ref()) && !in_launch_project(dir.path(), &in_project) {
         let e = log::Error::NotFound(sessions.clone());
         return ask_failed(failed(e.code(), e));
     }
@@ -188,9 +195,10 @@ pub(crate) fn ask_resume(
         }
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
-    let dir = sessions.join(&id.0);
+    let dir = log::SessionDir::new(&sessions, &id);
     resume_session(
         log,
+        &sessions,
         &dir,
         id,
         overrides,
@@ -257,10 +265,11 @@ pub(crate) fn session_resume(
         Ok(log) => Arc::new(log),
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
-    let dir = sessions.join(&id.0);
+    let dir = log::SessionDir::new(&sessions, &id);
     let one_turn = prompt.is_some();
     resume_session(
-        log, &dir, id, overrides, credential, prompt, one_turn, true, clock, signals, fiber,
+        log, &sessions, &dir, id, overrides, credential, prompt, one_turn, true, clock, signals,
+        fiber,
     )
 }
 
@@ -276,7 +285,8 @@ pub(crate) fn session_resume(
 )]
 fn resume_session(
     log: Arc<Log>,
-    dir: &Path,
+    sessions: &Path,
+    dir: &log::SessionDir,
     id: SessionId,
     overrides: Vec<String>,
     credential: Option<String>,
@@ -297,7 +307,7 @@ fn resume_session(
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let mut held = match enter_worktree(
-        recorded_worktree(dir),
+        recorded_worktree(dir.path()),
         &home,
         &id,
         &clock,
@@ -353,6 +363,7 @@ fn resume_session(
     }
     let result = resumed_session(
         log,
+        sessions,
         dir,
         id,
         overrides,
@@ -390,7 +401,8 @@ fn resume_session(
 )]
 fn resumed_session(
     log: Arc<Log>,
-    dir: &Path,
+    sessions: &Path,
+    dir: &log::SessionDir,
     id: SessionId,
     overrides: Vec<String>,
     credential: Option<String>,
@@ -402,7 +414,7 @@ fn resumed_session(
     reads: Arc<crate::switch::Reads>,
     opened: Option<doors::WorktreeOpener>,
 ) -> Result<i32, Failure> {
-    let folded = match r#loop::resumed(dir) {
+    let folded = match r#loop::resumed(dir.path()) {
         Ok(folded) => folded,
         Err(e) => return Err(failed(e.code(), e)),
     };
@@ -425,8 +437,11 @@ fn resumed_session(
     } else {
         log::diag::Process::Session
     };
-    let seed = chain_seed(&log::history(dir).map_err(|error| failed(error.code(), error))?)
-        .map_err(|error| failed(error.code(), error))?;
+    let seed = chain_seed(
+        sessions,
+        &log::history(dir.path()).map_err(|error| failed(error.code(), error))?,
+    )
+    .map_err(|error| failed(error.code(), error))?;
     let mut parts = crate::parts_with(
         overrides,
         folded.model.as_deref(),
@@ -444,7 +459,7 @@ fn resumed_session(
     )?;
     // The session directory's log: the opening message's
     // environment names it.
-    parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
+    parts.prompt.session_log = dir.events().display().to_string();
     let parts = parts;
     let crate::Parts {
         sources,
@@ -498,7 +513,7 @@ fn resumed_session(
     // Jobs live and die with the process: a resumed session's registry
     // starts empty (`docs/tools.md`, "Background jobs").
     let jobs = jobs::Registry::new(
-        dir.join("artifacts"),
+        dir.artifacts(),
         Arc::clone(&clock),
         Arc::new(log::WeakEmit::new(&log)) as _,
     );
@@ -514,7 +529,7 @@ fn resumed_session(
             return Err(failed(ErrorCode::IoFailed, message));
         }
     };
-    let Some(sessions) = dir.parent() else {
+    let Some(sessions) = dir.path().parent() else {
         return Err(failed(
             ErrorCode::IoFailed,
             "the session directory has no parent",
@@ -546,7 +561,7 @@ fn resumed_session(
         fiber,
         &home,
         Path::new(&folded.workspace),
-        &dir.join("artifacts"),
+        &dir.artifacts(),
         &clock,
         &jobs,
         &locks,
@@ -584,7 +599,7 @@ fn resumed_session(
     diag.attach(&id);
     let session = match Session::resume_with_timing(
         &home,
-        dir,
+        dir.path(),
         &log,
         Arc::clone(&clock),
         infos,
@@ -611,7 +626,7 @@ fn resumed_session(
         switching.reacher(Arc::new(crate::connect)),
         budget,
         &retry,
-        dir.to_path_buf(),
+        dir.path().to_path_buf(),
         id.clone(),
     ));
     extensions.model_to(host_model.clone());
@@ -688,7 +703,7 @@ fn resumed_session(
     let reads = switching.reads();
     if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
         servers.stop();
-        close(session, log, &home, dir, &workspace, &*clock);
+        close(session, log, &home, dir.path(), &workspace, &*clock);
         return Ok(code);
     }
     match signals.commit(|| {
@@ -703,12 +718,12 @@ fn resumed_session(
     }) {
         Err(code) => {
             servers.stop();
-            close(session, log, &home, dir, &workspace, &*clock);
+            close(session, log, &home, dir.path(), &workspace, &*clock);
             return Ok(code);
         }
         Ok(Err(e)) => {
             servers.stop();
-            close(session, log, &home, dir, &workspace, &*clock);
+            close(session, log, &home, dir.path(), &workspace, &*clock);
             return Err(failed(e.code(), e));
         }
         Ok(Ok(())) => {}
@@ -729,7 +744,7 @@ fn resumed_session(
     let code = run_turn(
         &session,
         &log,
-        dir,
+        dir.path(),
         prompt,
         one_turn,
         cancel,
@@ -803,7 +818,7 @@ fn resumed_session(
         },
     );
     servers.stop();
-    close(session, log, &home, dir, &workspace, &*clock);
+    close(session, log, &home, dir.path(), &workspace, &*clock);
     Ok(code)
 }
 

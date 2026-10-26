@@ -53,13 +53,18 @@ fn resolve() -> Resolve {
     }
 }
 
+fn events_for(rig: &Rig) -> super::EventsFor {
+    let sessions = rig.sessions.clone();
+    Arc::new(move |id: &contract::SessionId| sessions.join(&id.0).join("events.jsonl"))
+}
+
 fn tool(rig: &Rig) -> DelegateSpawn {
     DelegateSpawn {
         depth: 0,
         registry: Arc::clone(&rig.registry),
         parent: contract::SessionId("s_parent".into()),
         workspace: rig.sessions.parent().unwrap().to_path_buf(),
-        sessions: rig.sessions.clone(),
+        events_for: events_for(rig),
         clock: Arc::clone(&rig.clock) as Arc<dyn contract::clock::Clock>,
         bound: Duration::from_secs(5),
         cap: 1024,
@@ -309,7 +314,7 @@ fn a_spawn_error_fails_io_failed_with_no_job() {
         registry: Arc::clone(&rig.registry),
         parent: contract::SessionId("s_parent".into()),
         workspace: rig.sessions.parent().unwrap().to_path_buf(),
-        sessions: rig.sessions.clone(),
+        events_for: events_for(&rig),
         clock: Arc::clone(&rig.clock) as Arc<dyn contract::clock::Clock>,
         bound: Duration::from_secs(5),
         cap: 1024,
