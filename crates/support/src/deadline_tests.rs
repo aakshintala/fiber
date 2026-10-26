@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use crate::clock::FakeClock;
+use crate::clock::Manual as FakeClock;
 
 use super::{BUDGET, CLEANUP, Deadline, WAITS};
 

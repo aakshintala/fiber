@@ -120,3 +120,7 @@ impl Deadline {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "deadline_tests.rs"]
+mod tests;
