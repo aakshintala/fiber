@@ -128,9 +128,7 @@ fn ancestors_name_an_unreadable_owner() {
 #[test]
 fn ancestors_treat_pid_1_as_root_when_its_owner_is_unreadable() {
     let read = Script {
-        parents: [(Pid(100), Pid(1)), (Pid(1), Pid(0))]
-            .into_iter()
-            .collect(),
+        parents: [(Pid(100), Pid(1)), (Pid(1), Pid(0))].into_iter().collect(),
         unreadable_euid: vec![Pid(1)],
         ..Script::default()
     };

@@ -664,10 +664,13 @@ command and, when it targets a session, that session; it never names a
 source session id.
 
 A process owned by another account is never a session process, and its
-arguments are never read; the walk continues through it to PID 1. When the
-walk is incomplete — a parent pid cannot be read, or this account's
-process's arguments cannot be read — the refusals above still apply, and the
-rejection message names the unreadable pid. The second refusal still admits
+arguments are never read; the walk continues through it to PID 1. If the
+kernel will not report PID 1's effective uid, Fiber treats it as root and
+continues the walk. An unreadable effective uid for any other process
+makes the walk incomplete. When the walk is incomplete — a parent pid cannot
+be read, an effective uid other than PID 1's cannot be read, or this
+account's process's arguments cannot be read — the refusals above still apply, and the rejection message names the
+unreadable pid. The second refusal still admits
 its parent-process exemption on an incomplete caller walk, when the peer pid
 was read and the target session's own parent walk reads fully. A live target
 whose process, parent, or parent walk cannot be read fails the second

@@ -134,10 +134,11 @@ pub struct ProcessWalk {
 
 /// Every strict ancestor of `pid` through PID 1, nearest first. Reads each
 /// ancestor's effective uid and parent pid but never an argument vector.
-/// An unreadable effective uid or parent pid ends the walk with that pid,
-/// as does a repeated pid (a kernel-data cycle) or a 4097th ancestor
-/// before PID 1 (an unbounded walk): both fail closed naming the repeated
-/// or excess pid. PID 1 itself always terminates the walk.
+/// PID 1 is treated as root if its effective uid cannot be read. An
+/// unreadable effective uid for any other pid or unreadable parent pid ends
+/// the walk naming that pid, as does a repeated pid (a kernel-data cycle) or
+/// a 4097th ancestor before PID 1 (an unbounded walk). PID 1 itself always
+/// terminates the walk.
 pub fn ancestors(pid: Pid, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, IncompleteWalk> {
     let mut ancestors = Vec::new();
     let mut seen = HashSet::new();
@@ -153,9 +154,11 @@ pub fn ancestors(pid: Pid, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, I
         if !seen.insert(parent) {
             return Err(IncompleteWalk { pid: parent });
         }
-        let euid = read
-            .euid(parent)
-            .map_err(|_| IncompleteWalk { pid: parent })?;
+        let euid = match read.euid(parent) {
+            Ok(euid) => euid,
+            Err(_) if parent == Pid(1) => EffectiveUid(0),
+            Err(_) => return Err(IncompleteWalk { pid: parent }),
+        };
         if parent == Pid(1) {
             ancestors.push(ProcessInfo { pid: parent, euid });
             return Ok(ancestors);
