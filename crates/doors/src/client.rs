@@ -66,6 +66,9 @@ pub(crate) struct Conn {
     pub(crate) sink: Sink,
     pub(crate) full: bool,
     pub(crate) gone: bool,
+    /// The socket peer's session attribution, when the connection arrived
+    /// on the session socket. The in-process driver carries none.
+    pub(crate) attribution: Option<Attribution>,
 }
 
 /// Where a connection's answers go: `Direct` writes its lines straight to
@@ -128,23 +131,31 @@ impl Conn {
 
 /// Reads `stream` until the client hangs up or its ender stops it. `id` is
 /// the slot [`Gate`] stored the reader in, with the ender that stops it and
-/// shuts the socket. The writer is the socket's other clone.
-pub(crate) fn serve(stream: support::stoppable::Reader, gate: Arc<Gate>, id: u64) {
+/// shuts the socket. The writer is the socket's other clone. `peer` is the
+/// kernel peer the accept thread read, kept distinct from a failed read.
+pub(crate) fn serve(
+    stream: support::stoppable::Reader,
+    gate: Arc<Gate>,
+    id: u64,
+    peer: Result<support::peer::Pid, support::peer::PeerCredentialError>,
+) {
     let Some(writer) = stream.get_ref().try_clone().ok() else {
         return;
     };
-    serve_connection(stream, Box::new(writer), gate, id);
+    serve_connection(stream, Box::new(writer), gate, id, peer);
 }
 
 /// Reads `stream` and writes through `writer`. The connection's ender was
 /// stored with its reader, which is how [`crate::session::Session::close`]
 /// stops a blocked reader and reaps it. Production builds the reader and
-/// the writer from one socket.
+/// the writer from one socket. The caller attribution is walked once here;
+/// the target side is read fresh for every command in [`dispatch`].
 pub(crate) fn serve_connection(
     stream: support::stoppable::Reader,
     writer: Box<dyn Write + Send>,
     gate: Arc<Gate>,
     id: u64,
+    peer: Result<support::peer::Pid, support::peer::PeerCredentialError>,
 ) {
     let _finish = Finish {
         gate: Arc::clone(&gate),
@@ -153,12 +164,14 @@ pub(crate) fn serve_connection(
     let Some(direct) = stream.get_ref().try_clone().ok() else {
         return;
     };
+    let attribution = attribute_peer(peer, read_for(&gate).as_ref());
     let mut conn = Conn {
         id,
         gate,
         sink: Sink::Direct { direct, writer },
         full: false,
         gone: false,
+        attribution: Some(attribution),
     };
     let mut read = BufReader::new(stream);
     loop {
@@ -247,6 +260,22 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
 
 pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
     let id = line.id;
+    // A session-owned connection is refused before its command reaches
+    // the inbox. The in-process driver carries no attribution, so its
+    // commands are never refused here.
+    if let Some(attribution) = conn.attribution.as_ref() {
+        let read = read_for(&conn.gate);
+        if let Some(refused) = session_command_refusal(
+            attribution,
+            &line.command,
+            &conn.gate.session_id,
+            support::peer::Pid(std::process::id()),
+            read.as_ref(),
+        ) {
+            reject(conn, Some(id), refused.code, &refused.message);
+            return;
+        }
+    }
     match line.command {
         Command::Subscribe(args) => {
             // `dispatch` pulls the `Direct` halves out and passes them to
@@ -920,6 +949,305 @@ pub(crate) fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResul
             result,
         }),
     );
+}
+
+/// What a socket connection is, for the session-socket refusals
+/// (`docs/permissions.md`, "Sessions on the sockets"): a local connection
+/// carries the kernel peer pid and every session-process pid on its walk,
+/// and a local connection whose peer credential or walk could not be read
+/// carries what is known. An incomplete walk keeps a known peer pid so the
+/// direct-parent exception can still be checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Attribution {
+    /// A local connection with its kernel peer pid and matching
+    /// session-process pids.
+    Local {
+        /// The kernel-reported peer pid.
+        peer_pid: support::peer::Pid,
+        /// Every session-process pid on the peer's strict-ancestor walk,
+        /// nearest first.
+        session_process_pids: Vec<support::peer::Pid>,
+    },
+    /// A local connection whose peer credential or walk could not be
+    /// read, failing closed.
+    Incomplete {
+        /// The kernel-reported peer pid, when the credential read held.
+        peer_pid: Option<support::peer::Pid>,
+        /// The unreadable pid, when the walk failed; `None` when the peer
+        /// credential itself could not be read.
+        pid: Option<support::peer::Pid>,
+        /// The peer-credential read's error text, when the credential
+        /// itself could not be read; the refusal names it.
+        peer_error: Option<String>,
+    },
+}
+
+impl Attribution {
+    /// The kernel peer pid, when the credential read held.
+    pub(crate) fn peer_pid(&self) -> Option<support::peer::Pid> {
+        match self {
+            Attribution::Local { peer_pid, .. } => Some(*peer_pid),
+            Attribution::Incomplete { peer_pid, .. } => *peer_pid,
+        }
+    }
+}
+
+/// The refused command class a `from_session` message names
+/// (`docs/permissions.md`, "Sessions on the sockets").
+pub(crate) enum FromSessionRefusal<'a> {
+    /// An approval answer to a session.
+    Approval {
+        /// The session the approval is for.
+        target: &'a contract::SessionId,
+    },
+    /// `prompt`, `steer` or `reply` to a session on the caller's walk or
+    /// sharing a session process with it.
+    SessionCommand {
+        /// The refused wire command.
+        command: &'a str,
+        /// The refused session.
+        target: &'a contract::SessionId,
+    },
+}
+
+impl FromSessionRefusal<'_> {
+    /// The wire command the refusal names in its fallback messages.
+    fn command(&self) -> &str {
+        match self {
+            FromSessionRefusal::Approval { .. } => "reply",
+            FromSessionRefusal::SessionCommand { command, .. } => command,
+        }
+    }
+}
+
+/// The `from_session` message for a refused command: the exact sentence for
+/// the refusal class when the caller's walk passes a session process, the
+/// unreadable pid on an incomplete caller walk, otherwise the preserved
+/// peer-credential error. No session id of the caller's is ever named:
+/// which session it is, Fiber reads from the process tree, never from the
+/// arguments.
+pub(crate) fn from_session_message(
+    attribution: &Attribution,
+    refusal: FromSessionRefusal<'_>,
+) -> String {
+    match attribution {
+        Attribution::Local { .. } => match refusal {
+            FromSessionRefusal::Approval { target } => format!(
+                "Only a person answers an approval. This connection comes from inside a session, so `reply` to session `{}` is refused.",
+                target.0
+            ),
+            FromSessionRefusal::SessionCommand { command, target } => format!(
+                "A connection from inside a session cannot send `{command}` to session `{}`.",
+                target.0
+            ),
+        },
+        Attribution::Incomplete { pid: Some(pid), .. } => {
+            let command = refusal.command();
+            format!(
+                "The process walk from this connection is incomplete at unreadable pid `{pid}`, so `{command}` is refused."
+            )
+        }
+        Attribution::Incomplete { peer_error, .. } => {
+            let command = refusal.command();
+            format!(
+                "This connection's process could not be identified ({}), so `{command}` is refused.",
+                peer_error.as_deref().unwrap_or("unknown error")
+            )
+        }
+    }
+}
+
+/// The `from_session` message when the refused target session's own process
+/// cannot be read: the target names the session, not the caller.
+pub(crate) fn unreadable_target_message(target: &contract::SessionId, command: &str) -> String {
+    format!(
+        "Session `{}`'s process could not be read, so `{command}` is refused.",
+        target.0
+    )
+}
+
+/// A refused socket command: the `from_session` code with its sentence.
+pub(crate) struct Refused {
+    pub(crate) code: ErrorCode,
+    pub(crate) message: String,
+}
+
+/// The process reads the refusal paths use: the test seam when set,
+/// otherwise the kernel.
+pub(crate) fn read_for(_gate: &Gate) -> Arc<dyn support::peer::ProcessRead + Send + Sync> {
+    #[cfg(test)]
+    if let Some(read) = lock(&_gate.test_read).clone() {
+        return read;
+    }
+    Arc::new(support::peer::KernelProcessRead)
+}
+
+/// The attribution of one accepted local connection: the kernel peer pid
+/// first, then every session-process pid on its walk. A failed peer
+/// credential or walk reads as [`Attribution::Incomplete`], never as
+/// remote. The accepted socket peer's own arguments are never read: only
+/// strict ancestors are walked.
+pub(crate) fn attribute_peer(
+    peer: Result<support::peer::Pid, support::peer::PeerCredentialError>,
+    read: &dyn support::peer::ProcessRead,
+) -> Attribution {
+    match peer {
+        Err(error) => Attribution::Incomplete {
+            peer_pid: None,
+            pid: None,
+            peer_error: Some(error.to_string()),
+        },
+        Ok(peer_pid) => match support::peer::walk_ancestors(
+            peer_pid,
+            read,
+            contract::session_process::is_session_process,
+        ) {
+            Ok(walk) => Attribution::Local {
+                peer_pid,
+                session_process_pids: walk.matched_pids,
+            },
+            Err(incomplete) => Attribution::Incomplete {
+                peer_pid: Some(peer_pid),
+                pid: Some(incomplete.pid),
+                peer_error: None,
+            },
+        },
+    }
+}
+
+/// Whether the parsed socket command answers an approval: a `reply`
+/// carrying the approval answer (`docs/invocation.md`, "Replying").
+fn is_approval_reply(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Reply(reply)
+            if matches!(
+                reply.answer,
+                contract::commands::ReplyAnswer::Approval { .. }
+            )
+    )
+}
+
+/// The `from_session` refusal for one socket command, if any
+/// (`docs/permissions.md`, "Sessions on the sockets"). Refusal 1 rejects
+/// an approval answer from a local connection whose walk passes a session
+/// process, or whose walk could not be read, with no exception. Refusal 2
+/// rejects `prompt`, `steer` and every `reply` when the target pid is on
+/// the caller's walk, or when a session-process pid from this session's
+/// parent walk is also on the caller's walk, unless the caller is this
+/// session's current kernel parent with a readable ancestry. A `message`
+/// is a session message, never a person's words, so it is never refused.
+/// An unreadable target pid, parent, or walk fails closed.
+pub(crate) fn session_command_refusal(
+    attribution: &Attribution,
+    command: &Command,
+    target: &contract::SessionId,
+    target_pid: support::peer::Pid,
+    read: &dyn support::peer::ProcessRead,
+) -> Option<Refused> {
+    let caller_matches: &[support::peer::Pid] = match attribution {
+        Attribution::Local {
+            session_process_pids,
+            ..
+        } => {
+            if session_process_pids.is_empty() {
+                return None;
+            }
+            session_process_pids
+        }
+        // An incomplete caller walk fails closed: only the direct-parent
+        // exception below still lets it through.
+        Attribution::Incomplete { .. } => &[],
+    };
+    if is_approval_reply(command) {
+        return Some(Refused {
+            code: ErrorCode::FromSession,
+            message: from_session_message(attribution, FromSessionRefusal::Approval { target }),
+        });
+    }
+    let command_name = match command {
+        Command::Prompt(_) => "prompt",
+        Command::Steer(_) => "steer",
+        Command::Reply(_) => "reply",
+        Command::Subscribe(_)
+        | Command::SteerDrop(_)
+        | Command::Message(_)
+        | Command::Cancel
+        | Command::JobStop(_)
+        | Command::JobInput(_)
+        | Command::Background
+        | Command::Reload
+        | Command::Import(_)
+        | Command::Tools
+        | Command::McpServers
+        | Command::McpLogin(_)
+        | Command::McpReconnect(_)
+        | Command::Commands
+        | Command::Skills
+        | Command::Quota(_)
+        | Command::Credentials
+        | Command::History(_)
+        | Command::ArtifactPage(_)
+        | Command::Model(_)
+        | Command::Credential(_)
+        | Command::Name(_)
+        | Command::Handoff(_)
+        | Command::Rewind(_)
+        | Command::Shell(_)
+        | Command::ProposeNotes(_)
+        | Command::Command(_)
+        | Command::Call(_)
+        | Command::Ready
+        | Command::Close(_)
+        | Command::OfferedFile(_)
+        | Command::Unknown => return None,
+    };
+    let refusal = || FromSessionRefusal::SessionCommand {
+        command: command_name,
+        target,
+    };
+    // Parent and session-host ancestors come from one kernel walk, so a
+    // second parent read cannot authorize against a different process tree.
+    let target_walk = match support::peer::walk_ancestors(
+        target_pid,
+        read,
+        contract::session_process::is_session_process,
+    ) {
+        Ok(walk) => walk,
+        Err(_) => {
+            return Some(Refused {
+                code: ErrorCode::FromSession,
+                message: unreadable_target_message(target, command_name),
+            });
+        }
+    };
+    // The direct-parent exception: the target's own parent still reaches
+    // it, whatever the peer's arguments say, but never on an unreadable
+    // target ancestry.
+    if target_walk.parent_pid == attribution.peer_pid() {
+        return None;
+    }
+    match attribution {
+        Attribution::Incomplete { .. } => Some(Refused {
+            code: ErrorCode::FromSession,
+            message: from_session_message(attribution, refusal()),
+        }),
+        Attribution::Local { .. } => {
+            if caller_matches.contains(&target_pid)
+                || target_walk
+                    .matched_pids
+                    .iter()
+                    .any(|pid| caller_matches.contains(pid))
+            {
+                Some(Refused {
+                    code: ErrorCode::FromSession,
+                    message: from_session_message(attribution, refusal()),
+                })
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// A rejection frees the id for a retry, except one that never reserved it:

@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 
 use crate::connection::{Hub, Refused, lock};
 use crate::fake::{FakeStarter, failure};
-use crate::relay::{Kept, Relay, Relays, Replayed, attach, attach_rejoin};
+use crate::relay::{Kept, Relay, RelayTarget, Relays, Replayed, attach, attach_rejoin};
 use crate::resume::SHUTDOWN_BOUND;
 use crate::start::{self, Outcome, START_DEADLINE};
 
@@ -1170,6 +1170,7 @@ fn a_failed_transfer_is_stamped_for_the_next_drain() {
         replayed: Replayed::default(),
         thread: None,
         retiring: None,
+        target: RelayTarget::LiveUnreadable,
     });
     assert!(lock(&relays).transfer(REPLAY_SID, &subscribe_line("c_old", "full")));
     assert!(
@@ -1244,6 +1245,7 @@ fn a_refused_admission_releases_the_replay_guard() {
         replayed: Replayed::default(),
         thread: None,
         retiring: None,
+        target: RelayTarget::LiveUnreadable,
     });
     let (hub_end, _session_end) = UnixStream::pair().unwrap();
     crate::relay::attach(
@@ -1434,6 +1436,7 @@ fn follow_with_dead_target(temp: &Temp, old: &str, next: &str) -> (Arc<Hub>, Arc
         replayed: Replayed::default(),
         thread: Some(parked),
         retiring: None,
+        target: RelayTarget::LiveUnreadable,
     });
     // The old session's log continues into the next one, at the kept
     // level the follow transfers.
@@ -1521,6 +1524,7 @@ fn concurrent_failed_follows_emit_each_failure_once() {
             replayed: Replayed::default(),
             thread: Some(parked),
             retiring: None,
+            target: RelayTarget::LiveUnreadable,
         });
         temp.recorded_for(old, &workspace);
         temp.append_line(

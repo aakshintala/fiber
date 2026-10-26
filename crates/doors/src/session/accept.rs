@@ -17,6 +17,11 @@ pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
         }
         match listener.accept() {
             Ok((stream, _)) => {
+                // The kernel peer decides the session-socket refusals, so
+                // it is read here, on the accept thread: a failed read
+                // stays distinct from a read peer through the spawned
+                // client thread.
+                let peer = support::peer::peer_pid(&stream);
                 let (Ok(shutdown_stream), Ok(shut_stream)) =
                     (stream.try_clone(), stream.try_clone())
                 else {
@@ -37,7 +42,7 @@ pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
                     let Ok(id) = rx.recv() else {
                         return;
                     };
-                    client::serve(read, child, id);
+                    client::serve(read, child, id, peer);
                 }) {
                     // Atomic: `push_reader` checks the stop under the same
                     // lock `mark_stopped`/`join_clients` share, so a reader

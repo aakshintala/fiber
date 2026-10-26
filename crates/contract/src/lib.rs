@@ -37,6 +37,7 @@ pub mod rules;
 pub mod search;
 mod secret;
 pub mod session_argv;
+pub mod session_process;
 pub mod session_search;
 pub mod sessions;
 pub mod shapes;

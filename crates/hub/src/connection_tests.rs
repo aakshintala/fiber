@@ -159,6 +159,28 @@ fn command(id: &str, command: &str, args: Value) -> Value {
     json!({"id": id, "command": command, "args": args})
 }
 
+#[test]
+fn accepted_local_connection_retains_its_kernel_attribution() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_status", "status", json!({})));
+    let ack = client.next("the status acknowledgement");
+    assert_eq!(ack.get("kind"), Some(&json!("command_accepted")));
+
+    let ids = hub.rejoins.ids();
+    assert_eq!(ids.len(), 1, "the accepted client is registered");
+    assert!(
+        matches!(
+            hub.rejoins.attribution(ids[0]),
+            Some(Attribution::Local { peer_pid, session_process_pids })
+                if peer_pid == support::peer::Pid(std::process::id()) && session_process_pids.is_empty()
+        ),
+        "reroutes keep the attribution read from this accepted socket"
+    );
+}
+
 fn rejected(line: &Value) -> (String, Option<String>, String) {
     assert_eq!(line.get("kind"), Some(&json!("command_rejected")));
     let payload = line.get("payload").unwrap();
@@ -3615,4 +3637,1249 @@ fn refresh_with_an_argument_is_invalid_arguments() {
     assert_eq!(code, "invalid_arguments");
     assert_eq!(id.as_deref(), Some("c_r"));
     assert_eq!(message, "The arguments do not fit this command.");
+}
+
+/// A scripted process tree for peer attribution: parents, owners and
+/// argument vectors by pid, with unreadable pids and argument vectors
+/// that panic when read.
+struct PeerScript {
+    current: support::peer::EffectiveUid,
+    parents: std::collections::HashMap<support::peer::Pid, support::peer::Pid>,
+    euids: std::collections::HashMap<support::peer::Pid, support::peer::EffectiveUid>,
+    argvs: std::collections::HashMap<support::peer::Pid, Vec<Vec<u8>>>,
+    unreadable_parent: Vec<support::peer::Pid>,
+    unreadable_euid: Vec<support::peer::Pid>,
+    unreadable_argv: Vec<support::peer::Pid>,
+    argv_read: std::cell::Cell<usize>,
+}
+
+impl support::peer::ProcessRead for PeerScript {
+    fn current_euid(&self) -> Result<support::peer::EffectiveUid, support::peer::ReadError> {
+        Ok(self.current)
+    }
+
+    fn euid(
+        &self,
+        pid: support::peer::Pid,
+    ) -> Result<support::peer::EffectiveUid, support::peer::ReadError> {
+        if self.unreadable_euid.contains(&pid) {
+            return Err(support::peer::ReadError::Unreadable { pid, what: "euid" });
+        }
+        self.euids
+            .get(&pid)
+            .copied()
+            .ok_or(support::peer::ReadError::Unreadable { pid, what: "euid" })
+    }
+
+    fn parent(
+        &self,
+        pid: support::peer::Pid,
+    ) -> Result<support::peer::Pid, support::peer::ReadError> {
+        if self.unreadable_parent.contains(&pid) {
+            return Err(support::peer::ReadError::Unreadable {
+                pid,
+                what: "parent",
+            });
+        }
+        self.parents
+            .get(&pid)
+            .copied()
+            .ok_or(support::peer::ReadError::Unreadable {
+                pid,
+                what: "parent",
+            })
+    }
+
+    fn argv(&self, pid: support::peer::Pid) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
+        self.argv_read.set(self.argv_read.get() + 1);
+        if self.unreadable_argv.contains(&pid) {
+            return Err(support::peer::ReadError::Unreadable { pid, what: "argv" });
+        }
+        self.argvs
+            .get(&pid)
+            .cloned()
+            .ok_or(support::peer::ReadError::Unreadable { pid, what: "argv" })
+    }
+}
+
+/// Tests for the hub side of the session-socket refusals: the caller
+/// attribution, the three refusals, the direct-parent exception and the
+/// incomplete-walk failure, on published relays and on the no-relay
+/// first-command path.
+mod session_refusal_tests {
+    use std::collections::HashMap;
+    use std::io::BufRead;
+    use std::os::unix::net::UnixStream;
+
+    use serde_json::{Value, json};
+
+    use super::{Attribution, PeerScript, Temp, attribute_peer};
+    use crate::fake::FakeStarter;
+    use crate::relay::{Kept, Relay, Replayed};
+
+    const PEER: support::peer::Pid = support::peer::Pid(555);
+    const TARGET: support::peer::Pid = support::peer::Pid(777);
+    const UNREADABLE: support::peer::Pid = support::peer::Pid(999);
+    const CALLER_HOST: support::peer::Pid = support::peer::Pid(444);
+    const SHARED_HOST: support::peer::Pid = support::peer::Pid(446);
+    const OWNED: &str = "s_0123456789abcdef";
+    const OTHER: &str = "s_fedcba9876543210";
+
+    /// A session-hosting argument vector with no session id: the argv-only
+    /// predicate recognizes the executable and subcommand alone.
+    fn host_argv() -> Vec<Vec<u8>> {
+        ["/path/to/fiber", "session"]
+            .iter()
+            .map(|word| word.as_bytes().to_vec())
+            .collect()
+    }
+
+    /// The exact refusal sentences (`docs/permissions.md`, "Sessions on the
+    /// sockets"): no caller session id is ever named.
+    fn approval_refusal(target: &str) -> String {
+        format!(
+            "Only a person answers an approval. This connection comes from inside a session, so `reply` to session `{target}` is refused."
+        )
+    }
+    const PAIRING_REFUSAL: &str =
+        "A connection from inside a session cannot ask for a pairing code.";
+
+    fn session_command_refusal(command: &str, target: &str) -> String {
+        format!("A connection from inside a session cannot send `{command}` to session `{target}`.")
+    }
+
+    /// Scripted kernel reads: the hub's test seam answers from these
+    /// tables, and a missing entry reads as unreadable.
+    #[derive(Default)]
+    struct Script {
+        current: support::peer::EffectiveUid,
+        parents: HashMap<support::peer::Pid, support::peer::Pid>,
+        parent_changes: HashMap<support::peer::Pid, (support::peer::Pid, support::peer::Pid)>,
+        parent_reads: std::sync::Arc<std::sync::Mutex<HashMap<support::peer::Pid, usize>>>,
+        euids: HashMap<support::peer::Pid, support::peer::EffectiveUid>,
+        argvs: HashMap<support::peer::Pid, Vec<Vec<u8>>>,
+        /// Pause point: the first `parent` read signals `entered`, then
+        /// waits for `release` (or the deadline) before answering from
+        /// `parents`. Lets a test replace the relay entry mid-walk. The
+        /// receiver sits behind a lock so the script stays shareable.
+        block_first_parent: Option<(
+            std::sync::mpsc::Sender<()>,
+            std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        )>,
+        blocked: std::sync::atomic::AtomicBool,
+    }
+
+    impl support::peer::ProcessRead for Script {
+        fn current_euid(&self) -> Result<support::peer::EffectiveUid, support::peer::ReadError> {
+            Ok(self.current)
+        }
+
+        fn euid(
+            &self,
+            pid: support::peer::Pid,
+        ) -> Result<support::peer::EffectiveUid, support::peer::ReadError> {
+            self.euids
+                .get(&pid)
+                .copied()
+                .ok_or(support::peer::ReadError::Unreadable { pid, what: "euid" })
+        }
+
+        fn parent(
+            &self,
+            pid: support::peer::Pid,
+        ) -> Result<support::peer::Pid, support::peer::ReadError> {
+            if let Some((entered, release)) = &self.block_first_parent
+                && !self.blocked.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                entered.send(()).unwrap_or(());
+                if let Ok(release) = release.lock() {
+                    fakes::Deadline::after(super::DEADLINE)
+                        .recv(&release)
+                        .unwrap_or(());
+                }
+            }
+            let read_number = if let Ok(mut reads) = self.parent_reads.lock() {
+                let number = reads.entry(pid).or_default();
+                let current = *number;
+                *number += 1;
+                current
+            } else {
+                0
+            };
+            if let Some((first, later)) = self.parent_changes.get(&pid) {
+                return Ok(if read_number == 0 { *first } else { *later });
+            }
+            self.parents
+                .get(&pid)
+                .copied()
+                .ok_or(support::peer::ReadError::Unreadable {
+                    pid,
+                    what: "parent",
+                })
+        }
+
+        fn argv(&self, pid: support::peer::Pid) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
+            self.argvs
+                .get(&pid)
+                .cloned()
+                .ok_or(support::peer::ReadError::Unreadable { pid, what: "argv" })
+        }
+    }
+
+    struct Rig {
+        hub: std::sync::Arc<super::Hub>,
+        writer: std::sync::Arc<std::sync::Mutex<UnixStream>>,
+        read: std::io::BufReader<UnixStream>,
+        relays: std::sync::Arc<std::sync::Mutex<crate::relay::Relays>>,
+        _temp: Temp,
+    }
+
+    impl Rig {
+        fn new(script: Script) -> Self {
+            let temp = Temp::new();
+            let hub = temp.hub(FakeStarter::hang(&temp.dir));
+            *crate::connection::lock(&hub.test_read) = Some(std::sync::Arc::new(script));
+            let (write, read) = UnixStream::pair().unwrap();
+            read.set_read_timeout(Some(super::DEADLINE)).unwrap();
+            Self {
+                hub,
+                writer: std::sync::Arc::new(std::sync::Mutex::new(write)),
+                read: std::io::BufReader::new(read),
+                relays: std::sync::Arc::default(),
+                _temp: temp,
+            }
+        }
+
+        fn push_entry(
+            &self,
+            session: &str,
+            target: crate::relay::RelayTarget,
+        ) -> (UnixStream, std::sync::mpsc::Sender<()>) {
+            let (writer, peer) = UnixStream::pair().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let thread = std::thread::spawn(move || {
+                rx.recv().unwrap_err();
+            });
+            crate::connection::lock(&self.relays).entries.push(Relay {
+                session: session.to_owned(),
+                epoch: 1,
+                writer,
+                kept: Kept::default(),
+                replayed: Replayed::default(),
+                thread: Some(thread),
+                retiring: None,
+                target,
+            });
+            peer.set_read_timeout(Some(super::DEADLINE)).unwrap();
+            (peer, tx)
+        }
+
+        fn relay(&mut self, id: &str, session: &str, command: Value, attribution: &Attribution) {
+            crate::relay::relay_command(
+                &contract::CommandId(id.to_owned()),
+                session,
+                &command,
+                &self.hub,
+                &self.writer,
+                &self.relays,
+                attribution,
+            );
+        }
+
+        fn next_client_line(&mut self) -> Value {
+            let mut text = String::new();
+            self.read.read_line(&mut text).unwrap();
+            serde_json::from_str(text.trim_end()).unwrap()
+        }
+    }
+
+    fn reply_with(id: &str, args: Value) -> Value {
+        json!({"command": "reply", "args": args, "id": id})
+    }
+
+    fn steer(id: &str) -> Value {
+        json!({"command": "steer", "args": {"content": [{"type": "text", "text": "hi"}]}, "id": id})
+    }
+
+    fn prompt(id: &str) -> Value {
+        json!({"command": "prompt", "args": {"content": [{"type": "text", "text": "hi"}]}, "id": id})
+    }
+
+    fn message(id: &str) -> Value {
+        json!({"command": "message", "args": {"text": "hi"}, "id": id})
+    }
+
+    fn full_subscribe(id: &str) -> Value {
+        json!({"command": "subscribe", "args": {"level": "full"}, "id": id})
+    }
+
+    fn approval_args(request: &str) -> Value {
+        json!({"request_id": request, "decision": "allow"})
+    }
+
+    fn labels_args(request: &str) -> Value {
+        json!({"request_id": request, "labels": ["a"]})
+    }
+
+    fn session_caller(pids: &[support::peer::Pid]) -> Attribution {
+        Attribution::Local {
+            peer_pid: PEER,
+            session_process_pids: pids.to_vec(),
+        }
+    }
+
+    fn incomplete() -> Attribution {
+        Attribution::Incomplete {
+            peer_pid: Some(PEER),
+            pid: Some(UNREADABLE),
+            peer_error: None,
+        }
+    }
+
+    /// The target's walk: its parent and, through PID 1, no session.
+    fn plain_target() -> Script {
+        Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (TARGET, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [(support::peer::Pid(1), vec![b"/sbin/init".to_vec()])]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn approval_reply_from_a_session_caller_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay(
+            "c_1",
+            OWNED,
+            reply_with("c_1", approval_args("r_1")),
+            &session_caller(&[CALLER_HOST]),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        assert_eq!(line["payload"]["command_id"], "c_1");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert_eq!(message, approval_refusal(OWNED), "{message}");
+    }
+
+    #[test]
+    fn other_answers_from_a_session_caller_are_forwarded() {
+        let mut rig = Rig::new(plain_target());
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay(
+            "c_1",
+            OTHER,
+            reply_with("c_1", labels_args("r_1")),
+            &session_caller(&[CALLER_HOST]),
+        );
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "reply");
+        assert!(sent.get("session_id").is_none());
+    }
+
+    #[test]
+    fn steer_to_an_unrelated_session_is_allowed() {
+        let mut rig = Rig::new(plain_target());
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[CALLER_HOST]));
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+    }
+
+    #[test]
+    fn steer_to_a_target_on_the_caller_walk_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OWNED, steer("c_1"), &session_caller(&[TARGET]));
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert_eq!(
+            message,
+            session_command_refusal("steer", OWNED),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn prompt_to_a_target_on_the_caller_walk_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OWNED, prompt("c_1"), &session_caller(&[TARGET]));
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert_eq!(
+            message,
+            session_command_refusal("prompt", OWNED),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_question_reply_to_a_target_on_the_caller_walk_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay(
+            "c_1",
+            OWNED,
+            reply_with("c_1", labels_args("r_1")),
+            &session_caller(&[TARGET]),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert_eq!(
+            message,
+            session_command_refusal("reply", OWNED),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_approval_reply_to_an_unrelated_session_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay(
+            "c_1",
+            OTHER,
+            reply_with("c_1", approval_args("r_1")),
+            &session_caller(&[CALLER_HOST]),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert_eq!(message, approval_refusal(OTHER), "{message}");
+    }
+
+    #[test]
+    fn steer_sharing_a_session_process_with_the_target_is_refused() {
+        let script = Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET, SHARED_HOST),
+                (SHARED_HOST, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (TARGET, support::peer::EffectiveUid(1000)),
+                (SHARED_HOST, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (SHARED_HOST, host_argv()),
+                (TARGET, vec![b"/sbin/init".to_vec()]),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let mut rig = Rig::new(script);
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[SHARED_HOST]));
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert_eq!(
+            message,
+            session_command_refusal("steer", OTHER),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_question_reply_sharing_a_session_process_with_the_target_is_refused() {
+        let script = Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET, SHARED_HOST),
+                (SHARED_HOST, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (TARGET, support::peer::EffectiveUid(1000)),
+                (SHARED_HOST, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (SHARED_HOST, host_argv()),
+                (TARGET, vec![b"/sbin/init".to_vec()]),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let mut rig = Rig::new(script);
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay(
+            "c_1",
+            OTHER,
+            reply_with("c_1", labels_args("r_1")),
+            &session_caller(&[SHARED_HOST]),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert_eq!(
+            message,
+            session_command_refusal("reply", OTHER),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_message_to_a_target_on_the_caller_walk_is_forwarded() {
+        let mut rig = Rig::new(plain_target());
+        let (peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OWNED, message("c_1"), &session_caller(&[TARGET]));
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "message");
+    }
+
+    #[test]
+    fn a_full_subscribe_to_an_unknown_session_is_not_found_not_refused() {
+        let mut rig = Rig::new(plain_target());
+        rig.relay(
+            "c_1",
+            "s_aaaaaaaaaaaaaaaa",
+            full_subscribe("c_1"),
+            &session_caller(&[CALLER_HOST]),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "session_not_found");
+    }
+
+    #[test]
+    fn approval_reply_to_an_unknown_session_is_not_found_not_refused() {
+        let mut rig = Rig::new(plain_target());
+        rig.relay(
+            "c_1",
+            "s_aaaaaaaaaaaaaaaa",
+            reply_with("c_1", approval_args("r_1")),
+            &session_caller(&[CALLER_HOST]),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "session_not_found");
+    }
+
+    #[test]
+    fn approval_reply_to_a_synthetic_replay_is_not_refused() {
+        let command = reply_with("c_1", approval_args("r_1"));
+        let stripped = command.as_object().unwrap();
+        let target = contract::SessionId(OWNED.to_owned());
+        let read = plain_target();
+        assert!(
+            crate::relay::session_command_refusal(
+                &session_caller(&[CALLER_HOST]),
+                stripped,
+                &target,
+                crate::relay::RelayTarget::SyntheticReplay,
+                &read,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn the_direct_parent_reaches_its_delegate() {
+        let script = Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET, PEER),
+                (PEER, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (TARGET, support::peer::EffectiveUid(1000)),
+                (PEER, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (PEER, vec![b"/bin/sh".to_vec()]),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let mut rig = Rig::new(script);
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[CALLER_HOST]));
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+    }
+
+    #[test]
+    fn exact_parent_and_target_ancestry_share_one_parent_read() {
+        let parent_reads = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let script = Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (PEER, SHARED_HOST),
+                (SHARED_HOST, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            parent_changes: [(TARGET, (PEER, SHARED_HOST))].into_iter().collect(),
+            parent_reads: std::sync::Arc::clone(&parent_reads),
+            euids: [
+                (TARGET, support::peer::EffectiveUid(1000)),
+                (PEER, support::peer::EffectiveUid(1000)),
+                (SHARED_HOST, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (PEER, vec![b"/bin/sh".to_vec()]),
+                (SHARED_HOST, host_argv()),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let mut rig = Rig::new(script);
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[SHARED_HOST]));
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+        assert_eq!(parent_reads.lock().unwrap().get(&TARGET), Some(&1));
+    }
+
+    #[test]
+    fn an_incomplete_caller_with_the_parent_exception_still_reaches() {
+        let script = Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET, PEER),
+                (PEER, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (TARGET, support::peer::EffectiveUid(1000)),
+                (PEER, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (PEER, vec![b"/bin/sh".to_vec()]),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let mut rig = Rig::new(script);
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &incomplete());
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+    }
+
+    #[test]
+    fn an_incomplete_caller_without_the_exception_names_its_pid() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &incomplete());
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(&UNREADABLE.to_string()), "{message}");
+        assert!(message.contains("incomplete"), "{message}");
+        assert!(message.ends_with("`steer` is refused."), "{message}");
+    }
+
+    #[test]
+    fn an_incomplete_target_walk_names_its_pid() {
+        let script = Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: HashMap::new(),
+            euids: HashMap::new(),
+            argvs: HashMap::new(),
+            ..Default::default()
+        };
+        let mut rig = Rig::new(script);
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[CALLER_HOST]));
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(OTHER), "{message}");
+    }
+
+    #[test]
+    fn remote_commands_route_unchanged() {
+        let mut rig = Rig::new(plain_target());
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &Attribution::Remote);
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+    }
+
+    #[test]
+    fn approval_reply_on_a_failed_credential_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+        let attribution = Attribution::Incomplete {
+            peer_pid: None,
+            pid: None,
+            peer_error: Some("injected credential failure".to_owned()),
+        };
+        rig.relay(
+            "c_1",
+            OWNED,
+            reply_with("c_1", approval_args("r_1")),
+            &attribution,
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains("injected credential failure"), "{message}");
+        assert!(message.ends_with("`reply` is refused."), "{message}");
+    }
+
+    /// A live client against a hub whose walk is scripted: the peer is
+    /// this test process, so the script names it.
+    fn pairing_client(script: Script) -> (super::Client, Temp) {
+        let temp = Temp::new();
+        let hub = temp.hub(FakeStarter::hang(&temp.dir));
+        *crate::connection::lock(&hub.test_read) = Some(std::sync::Arc::new(script));
+        let mut client = super::Client::connect(&hub);
+        client.hello();
+        (client, temp)
+    }
+
+    fn session_walk() -> Script {
+        let own = support::peer::Pid(std::process::id());
+        Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (own, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [(support::peer::Pid(1), support::peer::EffectiveUid(1000))]
+                .into_iter()
+                .collect(),
+            argvs: [(
+                support::peer::Pid(1),
+                vec![
+                    b"/path/to/fiber".to_vec(),
+                    b"session".to_vec(),
+                    format!("--id={OWNED}").into_bytes(),
+                ],
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn empty_walk() -> Script {
+        let own = support::peer::Pid(std::process::id());
+        Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (own, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [(support::peer::Pid(1), support::peer::EffectiveUid(0))]
+                .into_iter()
+                .collect(),
+            argvs: HashMap::new(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn pairing_code_from_a_session_caller_is_refused() {
+        let (mut client, _temp) = pairing_client(session_walk());
+        client.send(&json!({"id": "c_p", "command": "pairing_code", "args": {"device": "probe"}}));
+        let line = client.next("the refusal");
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        assert_eq!(line["payload"]["command_id"], "c_p");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert_eq!(message, PAIRING_REFUSAL, "{message}");
+    }
+
+    #[test]
+    fn pairing_code_from_a_caller_passing_no_session_process_is_minted() {
+        let (mut client, _temp) = pairing_client(empty_walk());
+        client.send(&json!({"id": "c_p", "command": "pairing_code", "args": {"device": "probe"}}));
+        let line = client.next("the mint");
+        assert_eq!(line["kind"], "command_accepted", "{line}");
+        assert_eq!(line["payload"]["command_id"], "c_p");
+    }
+
+    #[test]
+    fn pairing_code_with_an_unreadable_caller_walk_fails_closed() {
+        let own = support::peer::Pid(std::process::id());
+        let script = Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (own, support::peer::Pid(50)),
+                (support::peer::Pid(50), support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [(support::peer::Pid(1), support::peer::EffectiveUid(1000))]
+                .into_iter()
+                .collect(),
+            argvs: HashMap::new(),
+            ..Default::default()
+        };
+        let (mut client, _temp) = pairing_client(script);
+        client.send(&json!({"id": "c_p", "command": "pairing_code", "args": {"device": "probe"}}));
+        let line = client.next("the refusal");
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains("`50`"), "{message}");
+    }
+
+    /// The no-relay first command: a listener stands in for the session
+    /// socket, so the hub's opener connects to this test process.
+    fn first_command_rig(script: Script, session: &str) -> (Rig, std::os::unix::net::UnixListener) {
+        let rig = Rig::new(script);
+        let run = rig._temp.dir.join("run");
+        std::fs::create_dir_all(&run).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(run.join(session)).unwrap();
+        (rig, listener)
+    }
+
+    #[test]
+    fn a_first_command_from_a_session_caller_is_refused_before_it_publishes() {
+        let own = support::peer::Pid(std::process::id());
+        let script = Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (own, TARGET),
+                (TARGET, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (TARGET, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [(
+                TARGET,
+                vec![
+                    b"/path/to/fiber".to_vec(),
+                    b"session".to_vec(),
+                    format!("--id={OWNED}").into_bytes(),
+                ],
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let (mut rig, listener) = first_command_rig(script, OTHER);
+        // The opener's peer is this test process, whose walk passes the
+        // session host above it; the target's own walk shares that host
+        // with the caller's, so the command is refused.
+        let accepted = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+        });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[TARGET]));
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        assert!(
+            crate::connection::lock(&rig.relays).entries.is_empty(),
+            "no relay publishes on a refused first command"
+        );
+        drop(accepted.join().unwrap());
+    }
+
+    #[test]
+    fn a_first_command_from_a_remote_peer_publishes() {
+        let script = Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: HashMap::new(),
+            euids: HashMap::new(),
+            argvs: HashMap::new(),
+            ..Default::default()
+        };
+        let (mut rig, listener) = first_command_rig(script, OTHER);
+        // No subscription is kept on this rig, so the opener writes the
+        // command alone: one line, not a subscribe plus the command. The
+        // mock session socket stays open through the publication assertion,
+        // so the relay thread never observes EOF and removes the entry
+        // first; the held stream drops afterward or on unwinding.
+        let accepted = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut read = std::io::BufReader::new(stream);
+            let mut first = String::new();
+            read.read_line(&mut first).unwrap();
+            let stream = read.into_inner();
+            (first, stream)
+        });
+        rig.relay("c_1", OTHER, steer("c_1"), &Attribution::Remote);
+        let (forwarded, _accepted) = accepted.join().unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+        let held = crate::connection::lock(&rig.relays);
+        assert_eq!(held.entries.len(), 1);
+        let entry = held.entries.first().unwrap();
+        assert_eq!(entry.session, OTHER);
+        assert_eq!(
+            entry.target,
+            crate::relay::RelayTarget::Live {
+                pid: support::peer::Pid(std::process::id())
+            }
+        );
+    }
+
+    fn ask_argv() -> Vec<Vec<u8>> {
+        ["/path/to/fiber", "ask", "--prompt=hi"]
+            .iter()
+            .map(|word| word.as_bytes().to_vec())
+            .collect()
+    }
+
+    fn extension_case_argv() -> Vec<Vec<u8>> {
+        ["/path/to/fiber", "extension-case", "casefile"]
+            .iter()
+            .map(|word| word.as_bytes().to_vec())
+            .collect()
+    }
+
+    /// The caller walk with a session-hosting `ask` above the peer: the
+    /// shared predicate marks it without any session id.
+    fn ask_walk() -> PeerScript {
+        PeerScript {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (support::peer::Pid(10), support::peer::Pid(20)),
+                (support::peer::Pid(20), support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (support::peer::Pid(20), support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (support::peer::Pid(20), ask_argv()),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            unreadable_parent: vec![],
+            unreadable_euid: vec![],
+            unreadable_argv: vec![],
+            argv_read: std::cell::Cell::new(0),
+        }
+    }
+
+    #[test]
+    fn ask_argv_on_the_caller_walk_marks_the_session_process_pid() {
+        let attribution = attribute_peer(Ok(support::peer::Pid(10)), &ask_walk());
+        let Attribution::Local {
+            session_process_pids,
+            ..
+        } = attribution
+        else {
+            panic!("an ask descendant is a local session-caller peer");
+        };
+        assert!(session_process_pids.contains(&support::peer::Pid(20)));
+    }
+
+    #[test]
+    fn extension_case_argv_on_the_caller_walk_marks_the_session_process_pid() {
+        let mut walk = ask_walk();
+        walk.argvs
+            .insert(support::peer::Pid(20), extension_case_argv());
+        let attribution = attribute_peer(Ok(support::peer::Pid(10)), &walk);
+        let Attribution::Local {
+            session_process_pids,
+            ..
+        } = attribution
+        else {
+            panic!("an extension-case descendant is a local session-caller peer");
+        };
+        assert!(session_process_pids.contains(&support::peer::Pid(20)));
+    }
+
+    /// The target walk with a session-hosting `ask` above the target: the
+    /// target shares a session process with a caller below that host.
+    fn ask_target() -> Script {
+        const ASK: support::peer::Pid = support::peer::Pid(440);
+        Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET, ASK),
+                (ASK, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (TARGET, support::peer::EffectiveUid(1000)),
+                (ASK, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (ASK, ask_argv()),
+                (TARGET, vec![b"/sbin/init".to_vec()]),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn steer_refused_when_the_target_walk_passes_an_ask_host() {
+        let mut rig = Rig::new(ask_target());
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay(
+            "c_1",
+            OTHER,
+            steer("c_1"),
+            &session_caller(&[support::peer::Pid(440)]),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected", "{line}");
+        assert_eq!(line["payload"]["code"], "from_session", "{line}");
+        assert_eq!(
+            line["payload"]["message"],
+            session_command_refusal("steer", OTHER),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn question_reply_refused_when_the_target_walk_passes_an_ask_host() {
+        let mut rig = Rig::new(ask_target());
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay(
+            "c_1",
+            OTHER,
+            reply_with("c_1", labels_args("r_1")),
+            &session_caller(&[support::peer::Pid(440)]),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected", "{line}");
+        assert_eq!(line["payload"]["code"], "from_session", "{line}");
+        assert_eq!(
+            line["payload"]["message"],
+            session_command_refusal("reply", OTHER),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn no_command_routes_under_stale_authorization() {
+        // The stale entry's target is the caller's own child, so the
+        // direct-parent exception allows the command; the replacement
+        // entry's target has no readable walk, so a fresh check refuses
+        // it. Without the epoch re-check the stale allow would write to
+        // the new entry.
+        const STALE_PID: support::peer::Pid = support::peer::Pid(50);
+        const FRESH_PID: support::peer::Pid = support::peer::Pid(60);
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let mut script = Script {
+            current: support::peer::EffectiveUid(1000),
+            // The fresh target's parent is unreadable, so its check fails
+            // closed; the stale target's parent stays readable for the
+            // direct-parent exception.
+            parents: [
+                (STALE_PID, PEER),
+                (PEER, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (STALE_PID, support::peer::EffectiveUid(1000)),
+                (FRESH_PID, support::peer::EffectiveUid(1000)),
+                (PEER, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (PEER, vec![b"/bin/sh".to_vec()]),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        script.block_first_parent = Some((entered_tx, std::sync::Mutex::new(release_rx)));
+        let mut rig = Rig::new(script);
+        let (mut peer_old, _keep_old) =
+            rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: STALE_PID });
+        peer_old.set_nonblocking(true).unwrap();
+        let hub = std::sync::Arc::clone(&rig.hub);
+        let writer = std::sync::Arc::clone(&rig.writer);
+        let relays = std::sync::Arc::clone(&rig.relays);
+        let routed = std::thread::spawn(move || {
+            crate::relay::relay_command(
+                &contract::CommandId("c_1".to_owned()),
+                OTHER,
+                &steer("c_1"),
+                &hub,
+                &writer,
+                &relays,
+                &session_caller(&[CALLER_HOST]),
+            );
+        });
+        // The route parks in the stale target's parent read; replace the
+        // entry before it is allowed to answer, so the check and the write
+        // see different epochs.
+        fakes::Deadline::after(super::DEADLINE)
+            .recv_or_fail(&entered_rx, "the route to park in the parent read");
+        let (old, mut peer_new) = {
+            let mut held = crate::connection::lock(&rig.relays);
+            let at = held
+                .entries
+                .iter()
+                .position(|entry| entry.session == OTHER)
+                .unwrap();
+            let mut old = held.entries.remove(at);
+            let (writer_new, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            peer.set_nonblocking(true).unwrap();
+            held.entries.push(Relay {
+                session: OTHER.to_owned(),
+                epoch: old.epoch + 1,
+                writer: writer_new,
+                kept: Kept::default(),
+                replayed: Replayed::default(),
+                thread: old.thread.take(),
+                retiring: None,
+                target: crate::relay::RelayTarget::Live { pid: FRESH_PID },
+            });
+            (old, peer)
+        };
+        release_tx.send(()).unwrap();
+        routed.join().unwrap();
+        // The fresh check refused, so neither entry got the command.
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(OTHER), "{message}");
+        for (name, peer) in [("stale", &mut peer_old), ("fresh", &mut peer_new)] {
+            let mut idle = [0u8; 1];
+            let idle = std::io::Read::read(peer, &mut idle);
+            assert!(
+                matches!(idle, Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+                "nothing reaches the {name} entry"
+            );
+        }
+        assert!(
+            crate::connection::lock(&old.kept).is_empty(),
+            "nothing queues on the stale entry"
+        );
+    }
+
+    #[test]
+    fn incomplete_connection_refusal_names_its_command() {
+        let attribution = Attribution::Incomplete {
+            peer_pid: None,
+            pid: None,
+            peer_error: Some("credential denied".to_owned()),
+        };
+        let target = contract::SessionId(OTHER.to_owned());
+        let message = crate::relay::from_session_message(
+            &attribution,
+            crate::relay::FromSessionRefusal::SessionCommand {
+                command: "steer",
+                target: &target,
+            },
+        );
+        assert!(message.ends_with("`steer` is refused."), "{message}");
+    }
 }

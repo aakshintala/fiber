@@ -544,6 +544,7 @@ impl DelegateMessage {
             | ErrorCode::ExtensionUnavailable
             | ErrorCode::FetchFailed
             | ErrorCode::Flooded
+            | ErrorCode::FromSession
             | ErrorCode::HistoryLoading
             | ErrorCode::HookUnapproved
             | ErrorCode::HttpError

@@ -64,6 +64,15 @@ fn a_rejection_list_in_one_doc_matches_the_other() {
 }
 
 #[test]
+fn from_session_is_no_registry_row() {
+    let registry = table_codes("## Registry");
+    assert!(
+        !registry.contains(&"from_session"),
+        "from_session is a driver rejection only, not a Registry row"
+    );
+}
+
+#[test]
 fn an_unknown_code_is_kept_as_it_was_written() {
     let parsed: ErrorCode = serde_json::from_str("\"disk_on_fire\"").unwrap();
     assert_eq!(parsed, ErrorCode::Other("disk_on_fire".into()));
