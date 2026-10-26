@@ -7,8 +7,8 @@ expression: "rows.join(\"\\n\")"
  job j_9 · run the editor · running 11s · ■ stop j_9
  live screen · 80 columns × 24 rows from attach
 
- Output since this terminal attached · /tmp/out
  $ edit file.txt
+
 
 
 

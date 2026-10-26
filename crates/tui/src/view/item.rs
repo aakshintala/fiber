@@ -266,9 +266,11 @@ fn draw_job_rows(
     );
 }
 
-/// Draws the item view's body for a view with no transcript: the output
-/// line, then the job's output since the terminal attached: a `tty` job's
-/// screen, or the tail of any other job's.
+/// Draws the item view's body for a view with no transcript: a `tty`
+/// job's screen on its own `turn` slab, else the output line and the
+/// job's tail (`docs/tui.md`, "Swapped views": the screen sits on a
+/// `turn` slab 80 columns wide; any other body keeps "Output since this
+/// terminal attached · {path}").
 ///
 /// `job_delta` is ephemeral, so output written before the terminal
 /// attached is not shown (`docs/events.md`, `job_delta`).
@@ -277,6 +279,28 @@ pub(crate) fn draw_body(app: &App, area: Rect, buf: &mut Buffer) {
         return;
     };
     if area.height == 0 || area.width == 0 {
+        return;
+    }
+    if view.tty {
+        // The screen keeps its own 80 columns: the slab clips at the
+        // area's edge below 80, with no reflow of its rows.
+        let wide = area.width.min(80);
+        buf.set_style(
+            Rect::new(area.x, area.y, wide, area.height),
+            Style::new().bg(Role::Turn.color()),
+        );
+        let rows = app.item_output_rows(wide, area.height);
+        let tint = style(Role::Text).bg(Role::Turn.color());
+        for (index, row) in rows.iter().enumerate() {
+            let y = area.y.saturating_add(to_u16(index));
+            buf.set_stringn(
+                area.x,
+                y,
+                format::cut(row, usize::from(wide)),
+                usize::from(wide),
+                tint,
+            );
+        }
         return;
     }
     let wide = usize::from(area.width);

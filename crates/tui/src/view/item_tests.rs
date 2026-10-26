@@ -210,6 +210,57 @@ fn raise_id(app: &mut App) -> String {
         .to_owned()
 }
 
+/// Folds a plain job as `job` with `description`: no delegate.
+fn start_job(app: &mut App, job: &str, description: &str) {
+    app.on_line(session_line(
+        "job_started",
+        0,
+        json!({"job_id": job, "description": description, "output_path": "/tmp/out"}),
+    ));
+}
+
+/// Folds a `shell` call asking for a pseudo-terminal on `a_1`, so the
+/// next `job_started` takes a grid.
+fn mark_tty(app: &mut App) {
+    app.on_line(session_line(
+        "tool_call_requested",
+        0,
+        json!({"name": "shell", "arguments": {"tty": true}}),
+    ));
+}
+
+/// Opens `job`'s view through the panel's Jobs row.
+fn open_job(app: &mut App, job: &str) {
+    let serial = app
+        .serial_of_job(&contract::JobId(job.to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    match app.on_click(TargetId::Panel(crate::app::panel::Spot::Job(serial))) {
+        crate::app::Effect::Send(_) => {}
+        crate::app::Effect::None => {}
+        crate::app::Effect::Quit
+        | crate::app::Effect::ListFiles
+        | crate::app::Effect::FindPause { .. }
+        | crate::app::Effect::Search { .. }
+        | crate::app::Effect::Editor { .. }
+        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::Copy(_)
+        | crate::app::Effect::OpenLink(_)
+        | crate::app::Effect::OpenFile(_)
+        | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::Feedback { .. } => panic!("opening sends or nothing"),
+    }
+    assert!(app.item_open());
+}
+
+/// Folds `text` as `job`'s delta.
+fn job_text(app: &mut App, job: &str, text: &str) {
+    app.on_line(session_line(
+        "job_delta",
+        0,
+        json!({"job_id": job, "text": text}),
+    ));
+}
+
 /// Folds a Fiber delegate as `j_1` with its `delegate_started` at `ts`.
 fn start_delegate(app: &mut App, ts: u64) {
     app.on_line(session_line(
@@ -1056,6 +1107,222 @@ fn another_harness_body_shows_the_output_path() {
             .any(|row| row.contains("Output since this terminal attached · /tmp/other.out"))
     );
     insta::assert_snapshot!("another_harness_body", rows.join("\n"));
+}
+
+#[test]
+fn job_header_draws_the_status_and_live_screen_line() {
+    use ratatui::style::Modifier;
+
+    use crate::theme::Role;
+
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home(80, 24);
+    opened(&mut app);
+    app.set_now(clock.now(), wall_ms(&clock));
+    // Eleven seconds in: the status row reads whole seconds.
+    app.on_line(session_line(
+        "job_started",
+        wall_ms(&clock).saturating_sub(11_000),
+        json!({"job_id": "j_2", "description": "build the workspace",
+            "output_path": "/tmp/out"}),
+    ));
+    open_job(&mut app, "j_2");
+    let (rows, targets) = rendered(&app, 80, 24);
+    assert!(rows[0].contains("Job  ◆ build the workspace"));
+    assert!(rows[0].contains("Esc returns"));
+    assert!(!rows[0].contains('✕'));
+    assert!(rows[1].contains("fix the parser › ▸ build the workspace"));
+    assert!(rows[2].contains("job j_2 · build the workspace · running 11s"));
+    assert!(rows[2].contains("■ stop j_2"));
+    assert!(rows[3].contains("live screen · 80 columns × 24 rows from attach"));
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::Item(Spot::Stop))
+    );
+    let buf = rendered_buf(&app, 80, 24);
+    // The top row and the job rows sit on the `surface` tint; the
+    // breadcrumb is bold on the default ground.
+    for y in [0u16, 2, 3] {
+        let first = (0..80)
+            .find(|x| buf[(*x, y)].symbol() != " ")
+            .unwrap_or_else(|| panic!("header row {y}"));
+        let last = (0..80)
+            .rev()
+            .find(|x| buf[(*x, y)].symbol() != " ")
+            .unwrap_or_else(|| panic!("header row {y}"));
+        for x in first..=last {
+            assert_eq!(buf[(x, y)].bg, Role::Surface.color(), "job tint {x},{y}");
+        }
+    }
+    let crumb = row_with(&buf, "› ▸ build the workspace");
+    for x in 0..80 {
+        let cell = &buf[(x, crumb)];
+        if cell.symbol() != " " {
+            assert!(cell.modifier.contains(Modifier::BOLD), "bold crumb {x}");
+        }
+    }
+    // The separator is dim and the stop target is in `error`.
+    let status = row_with(&buf, "■ stop j_2");
+    let stop_at = (0..80)
+        .find(|x| buf[(*x, status)].symbol() == "■")
+        .unwrap_or_else(|| panic!("the stop label"));
+    for x in stop_at.saturating_sub(3)..stop_at {
+        assert_eq!(
+            buf[(x, status)].fg,
+            Role::Muted.color(),
+            "dim separator {x}"
+        );
+    }
+    for x in 0..80 {
+        let cell = &buf[(x, status)];
+        if cell.symbol() != " " && x >= stop_at {
+            assert_eq!(cell.fg, Role::Error.color(), "error stop {x}");
+        }
+    }
+    let live = row_with(&buf, "live screen");
+    for x in 0..80 {
+        let cell = &buf[(x, live)];
+        if cell.symbol() != " " {
+            assert_eq!(cell.fg, Role::Muted.color(), "dim live screen {x}");
+        }
+    }
+}
+
+#[test]
+fn tty_body_sits_on_a_turn_slab_eighty_columns_wide() {
+    use crate::theme::Role;
+
+    let mut app = home(100, 24);
+    opened(&mut app);
+    mark_tty(&mut app);
+    start_job(&mut app, "j_9", "run the editor");
+    job_text(&mut app, "j_9", "$ edit file.txt\n");
+    open_job(&mut app, "j_9");
+    let area = Rect::new(0, 0, 100, 10);
+    let mut buf = Buffer::empty(area);
+    super::draw_body(&app, area, &mut buf);
+    let text = crate::view::text(&buf);
+    assert!(
+        !text.lines().any(|row| row.contains("Output since")),
+        "a tty job draws no output-since line"
+    );
+    let screen = text
+        .lines()
+        .find(|row| row.contains("$ edit file.txt"))
+        .unwrap_or_else(|| panic!("the screen row"));
+    assert!(screen.contains("$ edit file.txt"));
+    // The slab keeps its own 80 columns: tinted within, default past.
+    for y in 0..10 {
+        for x in 0..80 {
+            assert_eq!(buf[(x, y)].bg, Role::Turn.color(), "screen tint {x},{y}");
+        }
+        for x in 80..100 {
+            assert_ne!(buf[(x, y)].bg, Role::Turn.color(), "past the slab {x},{y}");
+        }
+    }
+}
+
+#[test]
+fn tty_body_clips_below_eighty_columns_without_reflow() {
+    use crate::theme::Role;
+
+    let mut app = home(70, 24);
+    opened(&mut app);
+    mark_tty(&mut app);
+    start_job(&mut app, "j_9", "run the editor");
+    job_text(&mut app, "j_9", "$ edit file.txt\n");
+    open_job(&mut app, "j_9");
+    // Narrower than the slab: the screen clips, with no panic and no
+    // reflow of its rows.
+    let area = Rect::new(0, 0, 70, 10);
+    let mut buf = Buffer::empty(area);
+    super::draw_body(&app, area, &mut buf);
+    let text = crate::view::text(&buf);
+    assert!(
+        !text.lines().any(|row| row.contains("Output since")),
+        "a tty job draws no output-since line"
+    );
+    assert!(
+        text.lines().any(|row| row.contains("$ edit file.txt")),
+        "the clipped screen keeps its rows"
+    );
+    for y in 0..10 {
+        for x in 0..70 {
+            assert_eq!(buf[(x, y)].bg, Role::Turn.color(), "screen tint {x},{y}");
+        }
+    }
+}
+
+#[test]
+fn plain_job_body_keeps_the_output_since_line() {
+    use crate::theme::Role;
+
+    let mut app = home(100, 24);
+    opened(&mut app);
+    start_job(&mut app, "j_2", "build the workspace");
+    job_text(&mut app, "j_2", "done\n");
+    open_job(&mut app, "j_2");
+    let area = Rect::new(0, 0, 100, 10);
+    let mut buf = Buffer::empty(area);
+    super::draw_body(&app, area, &mut buf);
+    let text = crate::view::text(&buf);
+    assert!(
+        text.lines()
+            .any(|row| row.contains("Output since this terminal attached · /tmp/out")),
+        "a plain job keeps its path line"
+    );
+    assert!(
+        text.lines().any(|row| row.contains("done")),
+        "a plain job keeps its tail"
+    );
+    // No slab: the tail draws on the default ground.
+    let tail = text
+        .lines()
+        .enumerate()
+        .find_map(|(y, row)| {
+            row.contains("done")
+                .then(|| u16::try_from(y).unwrap_or(u16::MAX))
+        })
+        .unwrap_or_else(|| panic!("the tail row"));
+    for x in 0..100 {
+        let cell = &buf[(x, tail)];
+        if cell.symbol() != " " {
+            assert_ne!(cell.bg, Role::Turn.color(), "no slab {x}");
+        }
+    }
+}
+
+#[test]
+fn a_finished_tty_job_keeps_its_slab_after_its_output_clears() {
+    use crate::theme::Role;
+
+    let mut app = home(80, 24);
+    opened(&mut app);
+    mark_tty(&mut app);
+    start_job(&mut app, "j_9", "run the editor");
+    job_text(&mut app, "j_9", "$ edit file.txt\n");
+    // Finishing while closed clears the live output ...
+    app.on_line(session_line(
+        "job_completed",
+        0,
+        json!({"job_id": "j_9", "status": "completed"}),
+    ));
+    // ... but opening afterward still selects the slab.
+    open_job(&mut app, "j_9");
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+    super::draw_body(&app, area, &mut buf);
+    let text = crate::view::text(&buf);
+    assert!(
+        !text.lines().any(|row| row.contains("Output since")),
+        "a finished tty job draws no output-since line"
+    );
+    for y in 0..10 {
+        for x in 0..80 {
+            assert_eq!(buf[(x, y)].bg, Role::Turn.color(), "screen tint {x},{y}");
+        }
+    }
 }
 
 #[test]
