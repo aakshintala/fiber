@@ -9,9 +9,10 @@
 )]
 
 use fakes::MUST_SUCCEED_WITHIN;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+use contract::CommandId;
 use contract::ErrorCode;
 use contract::clock::Clock as _;
 use contract::search::{Domains, SearchBackend};
@@ -187,31 +188,31 @@ fn choose_table() {
 fn choose_returns_the_chosen_backend() {
     let (_dir, ext) = extension("return nil\n");
     let backends = vec![
-        (
-            "fiber.test/a".to_owned(),
-            "brave".to_owned(),
-            Arc::clone(&ext),
-        ),
-        (
-            "fiber.test/b".to_owned(),
-            "kagi".to_owned(),
-            Arc::clone(&ext),
-        ),
+        SearchSource {
+            extension: "fiber.test/a".to_owned(),
+            name: "brave".to_owned(),
+            backend: SearchBackendKind::Lua(Arc::clone(&ext)),
+        },
+        SearchSource {
+            extension: "fiber.test/b".to_owned(),
+            name: "kagi".to_owned(),
+            backend: SearchBackendKind::Lua(Arc::clone(&ext)),
+        },
     ];
     let (chosen, notices) = choose(backends, Some("kagi"));
     assert!(chosen.is_some());
     assert!(notices.is_empty());
     let backends = vec![
-        (
-            "fiber.test/a".to_owned(),
-            "brave".to_owned(),
-            Arc::clone(&ext),
-        ),
-        (
-            "fiber.test/b".to_owned(),
-            "kagi".to_owned(),
-            Arc::clone(&ext),
-        ),
+        SearchSource {
+            extension: "fiber.test/a".to_owned(),
+            name: "brave".to_owned(),
+            backend: SearchBackendKind::Lua(Arc::clone(&ext)),
+        },
+        SearchSource {
+            extension: "fiber.test/b".to_owned(),
+            name: "kagi".to_owned(),
+            backend: SearchBackendKind::Lua(Arc::clone(&ext)),
+        },
     ];
     let (chosen, notices) = choose(backends, None);
     assert!(chosen.is_none());
@@ -256,6 +257,54 @@ fn the_arguments_arrive_as_query_and_the_domain_filter() {
     assert_eq!(
         blocked[0].snippet,
         "{\"blocked_domains\":[\"example.com\"],\"query\":\"rust\"}"
+    );
+}
+
+#[test]
+fn process_search_receives_the_query_and_returns_its_results() {
+    let runtime = crate::runtime::Runtime::new(FakeClock::new());
+    runtime.register_owner("fiber.test/proc", None);
+    let received = Arc::new(Mutex::new(None));
+    let run = {
+        let received = Arc::clone(&received);
+        runtime.install_process_handler(
+            "fiber.test/proc",
+            CommandId("register-search".to_owned()),
+            "run",
+            Arc::new(move |args, _cancel| {
+                *received.lock().unwrap() = Some(args);
+                Ok(Some(serde_json::json!([
+                    {"title": "Rust", "url": "https://rust-lang.org", "snippet": "Language"}
+                ])))
+            }),
+        )
+    };
+    let backend = ProcessSearch::new(
+        runtime,
+        "fiber.test/proc".to_owned(),
+        "search".to_owned(),
+        run,
+    );
+    let results = backend
+        .search(
+            "rust ownership",
+            &Domains::Allowed(vec!["rust-lang.org".to_owned()]),
+            &fakes::CancelToken::new(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        *received.lock().unwrap(),
+        Some(serde_json::json!({
+            "query": "rust ownership",
+            "allowed_domains": ["rust-lang.org"],
+        }))
+    );
+    assert!(
+        results.iter().any(|result| result.title == "Rust"
+            && result.url == "https://rust-lang.org"
+            && result.snippet == "Language"),
+        "{results:?}"
     );
 }
 

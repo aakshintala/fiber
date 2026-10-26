@@ -3,10 +3,35 @@
 
 #![allow(clippy::unwrap_used, reason = "test code")]
 
-use contract::events::Control;
+use contract::events::{Control, Event};
+use contract::tool::{Answered, Ask, Asking, Tool};
+use contract::{ActionId, CommandId, emit::Emit};
 use serde_json::json;
+use std::time::Duration;
 
 use super::*;
+
+struct NoAsk;
+
+impl Ask for NoAsk {
+    fn action(&self) -> ActionId {
+        ActionId("a_1".to_owned())
+    }
+
+    fn answerable(&self) -> bool {
+        false
+    }
+
+    fn ask(&self, _asking: Asking) -> Answered {
+        Answered::NoAnswer
+    }
+}
+
+struct NoEmit;
+
+impl Emit for NoEmit {
+    fn emit(&self, _event: &Event) {}
+}
 
 fn text(text: &str) -> ContentPart {
     ContentPart::Text {
@@ -56,6 +81,39 @@ fn a_full_table_maps_field_for_field() {
             ..Output::default()
         }
     );
+}
+
+#[test]
+fn process_tool_runs_and_runs_asking_through_the_tool_interface() {
+    let owner = "fiber.test/proc";
+    let runtime = crate::runtime::Runtime::new(fakes::clock::FakeClock::new());
+    runtime.register_owner(owner, None);
+    let run = runtime.install_process_handler(
+        owner,
+        CommandId("register-tool".to_owned()),
+        "run",
+        std::sync::Arc::new(|_args, _cancel| Ok(Some(json!("process result")))),
+    );
+    let tool = ProcessTool::new(
+        runtime,
+        owner.to_owned(),
+        crate::lua::DeclaredTool {
+            name: "lookup".to_owned(),
+            description: "Look something up".to_owned(),
+            input_schema: json!({"type": "object"}),
+            effects: None,
+            timeout: Duration::from_secs(5),
+            keep: contract::tool::Bound::DEFAULT,
+        },
+        run,
+        None,
+    );
+    let args = serde_json::Map::new();
+    let cancel = fakes::CancelToken::new();
+    let regular = tool.run(&args, &cancel, &NoEmit);
+    let asking = tool.run_asking(&args, &cancel, &NoEmit, &NoAsk);
+    assert_eq!(regular.content, vec![text("process result")]);
+    assert_eq!(asking.content, vec![text("process result")]);
 }
 
 #[test]

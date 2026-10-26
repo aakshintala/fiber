@@ -61,11 +61,22 @@ mod lua_cost;
 mod lua_provider;
 mod manage;
 mod oauth;
+mod package;
+#[cfg(test)]
+mod package_tests;
 mod prepare;
+mod process;
+#[cfg(test)]
+#[path = "process_tests.rs"]
+mod process_tests;
 mod providers;
 mod release;
 mod repository;
 mod resolve;
+mod runtime;
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod runtime_tests;
 mod search;
 #[cfg(test)]
 mod stall;
@@ -105,6 +116,7 @@ pub use lua_provider::{
 };
 pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
+pub use package::{Package, PackageOptions};
 pub use prepare::platform;
 pub use providers::{
     Model, Providers, START_ONLY, StartedRefresh, Unconfigured, leave_out_invalid, refresh_lists,
