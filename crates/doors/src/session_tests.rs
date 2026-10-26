@@ -36,6 +36,7 @@ use log::Log;
 use serde_json::{Map, Value};
 
 use super::{Gate, Session};
+use crate::SessionError;
 
 #[allow(
     clippy::duplicate_mod,
@@ -1569,7 +1570,14 @@ fn resume_keeps_the_session_directory_when_the_socket_cannot_bind() {
         Err(error) => error,
     };
 
-    assert_eq!(error.code, ErrorCode::Usage);
+    assert!(
+        matches!(
+            &error,
+            SessionError::SocketPathTooLong { max } if *max == crate::socket::SOCKET_PATH_MAX
+        ),
+        "a path past the limit is too long: {error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::Usage);
     assert!(dir.join("events.jsonl").is_file());
     // Nothing was written: the log holds no lines.
     assert!(log::read(&dir).unwrap().is_empty());
@@ -1593,7 +1601,14 @@ fn open_deletes_a_new_session_directory_when_the_socket_cannot_bind() {
         Err(error) => error,
     };
 
-    assert_eq!(error.code, ErrorCode::Usage);
+    assert!(
+        matches!(
+            &error,
+            SessionError::SocketPathTooLong { max } if *max == crate::socket::SOCKET_PATH_MAX
+        ),
+        "a path past the limit is too long: {error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::Usage);
     assert!(!dir.exists());
 }
 
@@ -1642,7 +1657,11 @@ fn open_refuses_a_socket_a_live_session_holds() {
         Err(error) => error,
     };
 
-    assert_eq!(error.code, ErrorCode::SessionHeld);
+    assert!(
+        matches!(&error, SessionError::SocketHeld { socket: held } if held == &socket),
+        "a held socket is held: {error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::SessionHeld);
     // Nothing the live session owns was removed: its socket still
     // answers. Only the refused session's own directory is cleaned up.
     UnixStream::connect(&socket).unwrap();
@@ -1691,11 +1710,11 @@ fn open_leaves_a_live_socket_it_cannot_connect_to() {
     // Restored before any assert that can fail, so cleanup still unlinks it.
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
 
-    assert_eq!(error.code, ErrorCode::IoFailed);
     assert!(
-        error.message.contains(&socket.display().to_string()),
-        "the failure names the socket path"
+        matches!(&error, SessionError::SocketIo { path, .. } if path == &socket),
+        "the failure names the socket path: {error:?}"
     );
+    assert_eq!(error.code(), ErrorCode::IoFailed);
     assert!(
         fs::symlink_metadata(&socket).is_ok(),
         "a connect error that may hide a live session leaves its path in place"
@@ -1735,7 +1754,11 @@ fn open_leaves_a_symlink_to_a_live_socket_it_cannot_connect_to() {
     // Restored before any assert that can fail, so cleanup still unlinks it.
     fs::set_permissions(&live, fs::Permissions::from_mode(0o600)).unwrap();
 
-    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(
+        matches!(&error, SessionError::SocketIo { .. }),
+        "an unreadable socket is an I/O failure: {error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::IoFailed);
     assert!(
         fs::symlink_metadata(&link).is_ok_and(|meta| meta.file_type().is_symlink()),
         "the symlink stays in place"

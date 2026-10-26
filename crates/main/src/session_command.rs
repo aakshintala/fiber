@@ -225,7 +225,7 @@ pub(crate) fn run(
     let adopted = if parent.is_some() && args.worktree {
         match doors::adopt_delegate_worktree(&args.workspace, &SessionId(args.id.clone())) {
             Ok(adopted) => adopted,
-            Err(failure) => return report(&signals, failure),
+            Err(failure) => return report(&signals, Failure::from(failure)),
         }
     } else {
         None
@@ -313,7 +313,7 @@ pub(crate) fn new_session(
         reads.command(command)
     }) {
         Ok(isolation) => isolation,
-        Err(failure) => return report(signals, failure),
+        Err(failure) => return report(signals, Failure::from(failure)),
     };
     if let Err(e) = std::env::set_current_dir(isolation.path()) {
         let failure = failed(
@@ -599,7 +599,7 @@ pub(crate) fn run_new(
         Ok(session) => session,
         Err(e) => {
             session_servers.servers.stop();
-            return Err(e);
+            return Err(Failure::from(e));
         }
     };
     session.shell(driver);

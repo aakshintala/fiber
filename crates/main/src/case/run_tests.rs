@@ -25,8 +25,8 @@ use contract::inbox::Rejection;
 use contract::shapes::{Tokens, Usage};
 use log::Log;
 use serde_json::{Value, json};
+use support::clock::Manual;
 
-use super::super::clock::CaseClock;
 use super::super::format::{CaseCommand, ClockAdvance, Host, Input, Selector, SessionCase};
 use super::{CaseRun, WaitBounds, session_verdict, write_config};
 use fakes::Deadline;
@@ -657,7 +657,7 @@ struct FakeDrive {
     commands: Mutex<Vec<(String, serde_json::Map<String, Value>)>>,
     reject: Option<Rejection>,
     drop_acks: bool,
-    clock: Option<Arc<CaseClock>>,
+    clock: Option<Arc<Manual>>,
     command_offsets: Mutex<Vec<Duration>>,
     announce_ui_on_command: bool,
 }
