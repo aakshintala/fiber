@@ -54,9 +54,10 @@ impl Timing {
     }
 
     /// Starts the first attach's transcript-build guard, once per process.
-    /// The caller calls it only once the fetched tail is actually
-    /// installed; an empty or abandoned tail builds nothing, leaving the
-    /// latch for the next install.
+    /// The caller holds it across the completed read's preview install,
+    /// which always runs then; a lost read returns before the guard, and
+    /// a streamless open never takes it, so either leaves the latch for
+    /// the next install.
     pub(crate) fn transcript(&mut self) -> Option<log::diag::Timer> {
         if std::mem::replace(&mut self.transcript, true) {
             return None;

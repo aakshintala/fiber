@@ -351,9 +351,11 @@ fn attach_writes_one_log_read_and_transcript() {
                 text.clear();
                 let id = command["id"].clone();
                 match command["command"].as_str() {
-                    // The full raise carries no `last_seq`, as for a
-                    // session with no durable lines: no pass opens, so
-                    // the attach pages the preview in through `page_in`.
+                    // The full raise is acked empty: no pass opens on it
+                    // here. The open's tail read arrives through the
+                    // `history` arm below, from the log's forty turns,
+                    // and the preview installs from that tail, so the
+                    // attach pages nothing in.
                     Some("subscribe") if command["args"]["level"] == "full" => {
                         write(session_ack(&id, json!({})));
                     }

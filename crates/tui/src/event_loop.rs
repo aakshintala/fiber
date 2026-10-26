@@ -1012,36 +1012,40 @@ impl<B: Backend> Loop<B> {
         let Some(session) = self.app.tail_due() else {
             return;
         };
+        // Without a stream no read is attempted, so the empty install
+        // below times nothing and consumes no latch.
         if !self.hub.has_stream() {
             self.app.tail_ended(None);
-        } else {
-            // The first attach's log read is timed once per process, to
-            // completion whatever its outcome: an attempted read is work.
-            let log_read = self.timing.log_read();
-            let failed = self
-                .hub
-                .fetch_tail(
-                    rx,
-                    &session,
-                    &mut self.app,
-                    &self.tick,
-                    self.clock.as_ref(),
-                    self.tick.armed(),
-                )
-                .is_err();
-            drop(log_read);
-            if failed {
-                return;
-            }
+            self.app.install_tail();
+            return;
         }
-        // The first fetched tail's transcript build is timed once per
-        // process; an empty or abandoned tail builds nothing, leaving the
-        // latch for the next install.
-        let before = self.app.pages().index().total();
+        // The first attach's log read is timed once per process, to
+        // completion whatever its outcome: an attempted read is work.
+        let log_read = self.timing.log_read();
+        let failed = self
+            .hub
+            .fetch_tail(
+                rx,
+                &session,
+                &mut self.app,
+                &self.tick,
+                self.clock.as_ref(),
+                self.tick.armed(),
+            )
+            .is_err();
+        drop(log_read);
+        if failed {
+            return;
+        }
+        // The completed read's install always runs: the open still holds
+        // its tail read here (only a lost connection drops it, and that
+        // returns above), so the preview builds and its build is timed
+        // once per process. No page count is compared: a rebuild can
+        // hold the same count, and an empty tail still installs its
+        // empty preview.
+        let transcript = self.timing.transcript();
         self.app.install_tail();
-        if self.app.pages().index().total() > before {
-            drop(self.timing.transcript());
-        }
+        drop(transcript);
     }
 
     /// Loads, one page at a time, every page the frame needs and does not
