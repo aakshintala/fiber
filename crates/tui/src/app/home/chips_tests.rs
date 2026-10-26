@@ -8,9 +8,7 @@ use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
 use crate::model_picker::Mode;
 use crate::mouse::TargetId;
-use contract::clock::Clock;
 use std::path::PathBuf;
-use std::time::Instant;
 
 /// Draws the home frame, so the stops match what is on screen.
 fn drawn(app: &mut App) {
