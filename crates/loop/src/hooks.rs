@@ -644,14 +644,13 @@ fn spill_artifact(log: &Log, path: &std::path::Path) -> String {
 fn replace_spilled(log: &Log, path: &std::path::Path, bytes: &[u8]) -> Result<(), Error> {
     if path.strip_prefix(log.dir()).is_ok() {
         log.replace_artifact_at(path, bytes)?;
-        Ok(())
     } else {
         std::fs::write(path, bytes).map_err(|source| log::Error::Io {
             path: path.to_path_buf(),
             source,
         })?;
-        Ok(())
     }
+    Ok(())
 }
 
 /// `content` a hook returned over the cap, cut with a notice naming the
@@ -714,14 +713,13 @@ fn remove_spilled(log: &Log, spilled: &Spilled) -> Result<(), Error> {
 fn remove_spilled_at(log: &Log, path: &std::path::Path) -> Result<(), Error> {
     if path.strip_prefix(log.dir()).is_ok() {
         log.remove_artifact_at(path)?;
-        Ok(())
     } else {
         std::fs::remove_file(path).map_err(|source| log::Error::Io {
             path: path.to_path_buf(),
             source,
         })?;
-        Ok(())
     }
+    Ok(())
 }
 
 /// The joined text of `parts`, and the parts when they are not that text
