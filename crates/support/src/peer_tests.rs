@@ -367,16 +367,15 @@ fn procargs2_refuses_a_missing_or_empty_count_or_exec() {
     );
 }
 
+type FakeQuery = Box<dyn FnMut(&mut [i32; 3], Option<&mut [u8]>, &mut usize) -> i32>;
+
 fn fake_sysctl(
     data: Vec<u8>,
     probe_result: i32,
     fill_result: i32,
     probe_len: usize,
     fill_len: usize,
-) -> (
-    impl FnMut(&mut [i32; 3], Option<&mut [u8]>, &mut usize) -> i32,
-    std::rc::Rc<std::cell::Cell<usize>>,
-) {
+) -> (FakeQuery, std::rc::Rc<std::cell::Cell<usize>>) {
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let called = std::rc::Rc::clone(&calls);
     let query = move |_mib: &mut [i32; 3], buffer: Option<&mut [u8]>, length: &mut usize| {
@@ -394,7 +393,7 @@ fn fake_sysctl(
             }
         }
     };
-    (query, calls)
+    (Box::new(query), calls)
 }
 
 #[test]

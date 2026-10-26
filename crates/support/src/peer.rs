@@ -357,6 +357,7 @@ fn bsdinfo_of(pid: u32) -> Result<libc::proc_bsdinfo, ReadError> {
 }
 
 /// The next NUL-terminated word and what follows it.
+#[cfg(any(target_os = "macos", test))]
 fn take_word(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
     let end = bytes.iter().position(|byte| *byte == 0)?;
     let word = bytes.get(..end)?;
@@ -369,6 +370,7 @@ fn take_word(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
 /// wordless-first buffer reads as unreadable, never as a shorter vector:
 /// padding zeros are skipped only before the first word, so a corrupt
 /// buffer fails instead of shifting words.
+#[cfg(any(target_os = "macos", test))]
 fn parse_procargs2(bytes: &[u8], pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
     let missing = || ReadError::Unreadable { pid, what: "argv" };
     let argc_at: [u8; 4] = bytes
@@ -406,11 +408,13 @@ fn parse_procargs2(bytes: &[u8], pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
     Ok(argv)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn sysctl_mib(pid: u32, ctl_kern: i32, query: i32) -> Result<[i32; 3], ReadError> {
     let pid = i32::try_from(pid).map_err(|_| ReadError::Unreadable { pid, what: "pid" })?;
     Ok([ctl_kern, query, pid])
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn argv_from_sysctl(
     pid: u32,
     mut mib: [i32; 3],
