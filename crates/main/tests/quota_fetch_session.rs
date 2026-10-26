@@ -343,12 +343,53 @@ fn a_hot_window_notices_rearms_and_notices_again_across_resumes() {
     hub.lock().unwrap().take().unwrap().kill_and_wait();
 }
 
-/// The `/lua-quota` gate: armed after the turn answers, holding the
-/// view's later fetch until the test's release, counting the fetches
-/// held in between.
+/// The `/lua-quota` gate: armed once the settled checks below prove no
+/// fetch is in flight, holding the view's later fetch until the test's
+/// release, counting the fetches held in between.
 struct QuotaGate {
     armed: bool,
     gated: usize,
+}
+
+/// Waits until every recorded `/lua-quota` request has a finished-fetch
+/// record in some session log: each fetch writes one `provider_request`
+/// record with purpose `quota` when its body ends, synchronously before
+/// it stores the value, so equality means no fetch is in flight and the
+/// caches hold values. The test never learns the terminal session's id,
+/// so every `session-*.log` counts. A fetch starting after this returns
+/// would break the equality, so callers place it where no trigger can
+/// start one: caches fresh, loaders checked, no turn running.
+fn wait_quota_settled(setup: &Setup, server: &ProviderServer, what: &str) {
+    loop {
+        let requested = server
+            .requests()
+            .iter()
+            .filter(|request| request.path == "/lua-quota")
+            .count();
+        let mut recorded = 0;
+        for entry in fs::read_dir(setup.home().join("logs")).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.starts_with("session-") || !name.ends_with(".log") {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap_or_default();
+            recorded += complete_lines(&text)
+                .into_iter()
+                .filter(|line| {
+                    line["code"] == "provider_request" && line["data"]["purpose"] == "quota"
+                })
+                .count();
+        }
+        if requested >= 1 && recorded == requested {
+            break;
+        }
+        assert!(
+            !setup.deadline.left().is_zero(),
+            "waited until the deadline for {what} (requested {requested}, recorded {recorded})",
+        );
+        std::thread::yield_now();
+    }
 }
 
 /// Quits the run's terminal and waits for it, as `panel_look.rs` does.
@@ -430,18 +471,25 @@ fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
     // session start's fetch takes longer and stays in flight.
     run.write(b"hi\r");
     run.wait_screen("the answered turn", |grid| grid.contents.contains("Hello."));
-    // The session start's fetch can still be in flight here: the view's
-    // read would share that flight (`docs/invocation.md`, `quota`) and
-    // never reach the gate, so the hold below would time out. Focus in
-    // (the terminal asks for cached quota on focus-in, answered from the
-    // caches without starting a fetch) and wait for the fetched value
-    // before arming: a drawn value means `finish_quota` stored it and
-    // cleared the flight under one lock, and the fresh cache starts no
-    // new flight on its own, so only the view's fetch can arrive now.
+    // Every started fetch has landed once its session-log record matches
+    // its recorded request, and the fetch-less snapshot below is a
+    // one-shot read of the caches (`docs/invocation.md`, `quota`) with
+    // no re-ask when a flight lands after it: waiting here keeps that
+    // snapshot from racing an in-flight flight the way the flake did.
+    wait_quota_settled(&setup, &server, "the session-start quota fetches to land");
+    // Focus in (the terminal asks for cached quota on focus-in, answered
+    // from the caches without starting a fetch) and wait for the fetched
+    // value: the settled check above proves the value is already stored,
+    // so the one-shot answer carries it.
     run.write(b"\x1b[I");
     run.wait_screen("the fetched quota value", |grid| {
         grid.contents.contains("58%")
     });
+    // The drawn value means this session's loader checked every provider
+    // as well; re-check the records once more — instant when quiet — so
+    // the loader's own fetch has landed too and arming finds no flight
+    // in flight: only the view's fetch can arrive now.
+    wait_quota_settled(&setup, &server, "the loader's quota fetch to land");
     quota_gate.lock().unwrap().armed = true;
     run.write(b"/quota\r");
     run.wait_screen("the view's fetching mark", |grid| {
