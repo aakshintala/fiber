@@ -1,9 +1,11 @@
 //! Binary-level terminal timers (`docs/state.md`, "Diagnostic logs"): the
 //! built `fiber resume` on a seeded session over a pty. At `debug` the
-//! attach records `tui.first_render`, `tui.log_read` and `tui.transcript`
-//! with the exact wire shape, once each; at the default no debug line is
-//! written. The seeded tail proves the attach built its preview: the wait
-//! below holds seeded text only the tail read can draw.
+//! attach records `tui.first_render` on its first frame, and the first
+//! fetched page records `tui.log_read` with its successful load recording
+//! `tui.transcript`, each once per process; at the default no debug line
+//! is written. The seeded tail proves the attach built its preview: the
+//! wait below holds seeded text only the tail read can draw, and paging
+//! to the top afterwards proves the first page fetch and load.
 
 #![allow(
     clippy::unwrap_used,
@@ -191,7 +193,36 @@ fn attached_run(setup: &Setup, env: &[(&str, &str)]) -> (u32, Run) {
 fn a_debug_resume_records_first_render_log_read_and_transcript_once_each() {
     let setup = Setup::new();
     seed(&setup, json!({"diagnostics": {"level": "debug"}}));
-    let (pid, run) = attached_run(&setup, &[("FIBER_TEST_FAKE_KEY", "sk-test")]);
+    let mut run = Run::spawn(
+        &setup,
+        COLS,
+        ROWS,
+        &["resume", ID],
+        &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+    );
+    let pid = run.id();
+    // The first frame's title proves the input reader runs, and the
+    // seeded rows prove the tail read built the preview they came from.
+    run.ready();
+    run.wait_screen("the last turn's rows", |grid| grid.contents.contains(LAST));
+    // The preview holds the tail, so nothing pages in yet: paging to the
+    // top fetches the first page, which times `tui.log_read` to
+    // completion, and its successful load times `tui.transcript`.
+    for _ in 0..80 {
+        run.write(b"\x1b[5~");
+    }
+    while ops(&setup, pid, "tui.log_read").is_empty()
+        || ops(&setup, pid, "tui.transcript").is_empty()
+    {
+        if setup.deadline.left().is_zero() {
+            panic!("waited for tui.log_read and tui.transcript");
+        }
+        std::thread::yield_now();
+    }
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
     // No `tui.frame` assertion: a loaded machine can push a real frame

@@ -1007,22 +1007,18 @@ impl<B: Backend> Loop<B> {
     /// Reads the open's tail when one is due: the history windows fill
     /// it, then the preview installs. No stream means the tail ended
     /// with nothing read; a lost read ends everything through
-    /// `disconnected`, with no install.
+    /// `disconnected`, with no install. The tail read stays untimed:
+    /// the attach timers cover the first fetched page below.
     fn open_tail(&mut self, rx: &Receiver<Input>) {
         let Some(session) = self.app.tail_due() else {
             return;
         };
-        // Without a stream no read is attempted, so the empty install
-        // below times nothing and consumes no latch.
         if !self.hub.has_stream() {
             self.app.tail_ended(None);
             self.app.install_tail();
             return;
         }
-        // The first attach's log read is timed once per process, to
-        // completion whatever its outcome: an attempted read is work.
-        let log_read = self.timing.log_read();
-        let failed = self
+        if self
             .hub
             .fetch_tail(
                 rx,
@@ -1032,20 +1028,16 @@ impl<B: Backend> Loop<B> {
                 self.clock.as_ref(),
                 self.tick.armed(),
             )
-            .is_err();
-        drop(log_read);
-        if failed {
+            .is_err()
+        {
             return;
         }
         // The completed read's install always runs: the open still holds
         // its tail read here (only a lost connection drops it, and that
-        // returns above), so the preview builds and its build is timed
-        // once per process. No page count is compared: a rebuild can
+        // returns above). No page count is compared: a rebuild can
         // hold the same count, and an empty tail still installs its
         // empty preview.
-        let transcript = self.timing.transcript();
         self.app.install_tail();
-        drop(transcript);
     }
 
     /// Loads, one page at a time, every page the frame needs and does not
@@ -1059,10 +1051,15 @@ impl<B: Backend> Loop<B> {
             if !self.hub.has_stream() {
                 return;
             }
+            // The first attach's first fetched page is timed once per
+            // process, to completion whatever its outcome: an attempted
+            // read is work. The guards above return before any attempt,
+            // so they consume no latch.
+            let log_read = self.timing.log_read();
             // Each range loads under its own segment's session: ancestor
             // and descendant logs both start at `Seq(0)`, so a bare range
             // names no page on its own.
-            match self.hub.fetch(
+            let fetched = self.hub.fetch(
                 rx,
                 &session,
                 &range,
@@ -1070,9 +1067,16 @@ impl<B: Backend> Loop<B> {
                 &self.tick,
                 self.clock.as_ref(),
                 self.tick.armed(),
-            ) {
+            );
+            drop(log_read);
+            match fetched {
                 Ok(lines) => {
+                    // The first successful load folds the page into the
+                    // transcript, once per process. A failed fetch never
+                    // takes the latch, so it stays for the next load.
+                    let transcript = self.timing.transcript();
                     self.app.load(&session, lines);
+                    drop(transcript);
                     // An answer that folded nothing into the page would
                     // leave it needed, and the frame asking forever.
                     if self.app.needs().first() == Some(&(session.clone(), range.clone())) {

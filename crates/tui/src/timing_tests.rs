@@ -13,7 +13,7 @@ use fakes::clock::FakeClock;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
 
-use super::tests::{DEADLINE, hello, launch, new_loop, once, open};
+use super::tests::{DEADLINE, hello, launch, new_loop, open};
 use crate::pty_watch::{watch, watched};
 
 /// At `info` the terminal records nothing: a refused-connect run writes
@@ -302,136 +302,181 @@ fn window(log: &[Value], from: u64, to: u64) -> Vec<Value> {
         .collect()
 }
 
-/// Attaching through a real `run_with` writes one `tui.log_read` for the
-/// tail read and one `tui.transcript` for the preview it builds, each once
-/// per process.
+/// The first fetched page times `tui.log_read` to completion, and its
+/// successful load times `tui.transcript`, each once per process
+/// (`docs/state.md`, "Diagnostic logs").
 #[test]
-fn attach_writes_one_log_read_and_transcript() {
-    let home = fakes::TempDir::new("tui-timing-attach");
-    let diag = debug_diag(home.path(), {
-        let clock: Arc<dyn Clock> = FakeClock::new();
-        clock
-    });
+fn first_page_fetch_times_log_read_and_successful_load_times_transcript() {
+    let home = fakes::TempDir::new("tui-timing-page-in");
+    let clock = FakeClock::new();
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.clock = dyn_clock(&clock);
+    lp.timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    lp.app.on_line(crate::link::Line::Hub(hello()));
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     let log = Arc::new(session_log(40));
+    for value in log.iter() {
+        lp.app
+            .on_line(crate::link::Line::Session(contract::Envelope {
+                kind: value["kind"].as_str().unwrap_or("").to_owned(),
+                session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: None,
+                seq: value["seq"].as_u64().map(contract::Seq),
+                payload: value["payload"].as_object().cloned().unwrap_or_default(),
+            }));
+    }
+    lp.app.jump(0);
+    assert!(
+        !lp.app.needs().is_empty(),
+        "a page is missing before the first fetch"
+    );
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    let (seen_tx, seen) = mpsc::channel();
-    let (hub_done_tx, hub_done) = mpsc::channel();
+    lp.hub.store(ours);
+    let (tx, rx) = mpsc::channel();
     let worker_log = Arc::clone(&log);
     let worker = std::thread::Builder::new()
-        .name("timing-hub".to_owned())
+        .name("timing-page-in".to_owned())
         .spawn(move || {
             let mut reader = BufReader::new(theirs);
-            let mut writer = reader
-                .get_mut()
-                .try_clone()
-                .unwrap_or_else(|err| panic!("clone: {err}"));
-            let mut write = |value: Value| {
-                let mut bytes =
-                    serde_json::to_string(&value).unwrap_or_else(|err| panic!("encode: {err}"));
-                bytes.push('\n');
-                writer
-                    .write_all(bytes.as_bytes())
-                    .unwrap_or_else(|err| panic!("hub write: {err}"));
-            };
-            let hub_ack = |id: &Value, result: Value| {
-                json!({"kind": "command_accepted", "ts": 0,
-                    "schema_version": contract::SCHEMA_VERSION,
-                    "payload": {"command_id": id, "result": result}})
-            };
-            let session_ack = |id: &Value, result: Value| {
-                json!({"kind": "command_accepted",
-                    "session_id": "s_aaaaaaaaaaaaaaaa", "ts": 0,
-                    "schema_version": contract::SCHEMA_VERSION,
-                    "turn_id": null, "action_id": null, "seq": null,
-                    "payload": {"command_id": id, "result": result}})
-            };
             let mut text = String::new();
             while reader.read_line(&mut text).is_ok_and(|read| read > 0) {
                 let command: Value = serde_json::from_str(&text).unwrap_or_default();
                 text.clear();
-                let id = command["id"].clone();
-                match command["command"].as_str() {
-                    // The full raise is acked empty: no pass opens on it
-                    // here. The open's tail read arrives through the
-                    // `history` arm below, from the log's forty turns,
-                    // and the preview installs from that tail, so the
-                    // attach pages nothing in.
-                    Some("subscribe") if command["args"]["level"] == "full" => {
-                        write(session_ack(&id, json!({})));
-                    }
-                    Some("feed") => write(hub_ack(&id, json!({}))),
-                    Some("recent") => write(hub_ack(&id, json!({"sessions": []}))),
-                    Some("subscribe") => write(session_ack(&id, json!({}))),
-                    Some("commands") => write(session_ack(&id, json!({"commands": []}))),
-                    Some("history") => {
-                        let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
-                        let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
-                        write(session_ack(
-                            &id,
-                            json!({"lines": window(&worker_log, from, to)}),
-                        ));
-                    }
-                    _ => write(hub_ack(&id, json!({}))),
+                if command["command"] != "history" {
+                    continue;
                 }
-                seen_tx.send(command).unwrap_or(());
+                let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
+                let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
+                let id = command["id"].clone();
+                let lines: Vec<contract::Envelope> = window(&worker_log, from, to)
+                    .into_iter()
+                    .map(|v| contract::Envelope {
+                        kind: v["kind"].as_str().unwrap_or("").to_owned(),
+                        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                        ts: 0,
+                        schema_version: contract::SCHEMA_VERSION,
+                        turn_id: None,
+                        action_id: None,
+                        seq: v["seq"].as_u64().map(contract::Seq),
+                        payload: v["payload"].as_object().cloned().unwrap_or_default(),
+                    })
+                    .collect();
+                let payload = json!({"command_id": id, "result": {"lines": lines}});
+                let envelope = contract::Envelope {
+                    kind: "command_accepted".to_owned(),
+                    session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                    ts: 0,
+                    schema_version: contract::SCHEMA_VERSION,
+                    turn_id: None,
+                    action_id: None,
+                    seq: None,
+                    payload: payload.as_object().cloned().unwrap_or_default(),
+                };
+                if tx
+                    .send(crate::Input::Hub(crate::link::Line::Session(envelope)))
+                    .is_err()
+                {
+                    return;
+                }
             }
-            hub_done_tx.send(()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let mut pair = open();
-    let slave = pair
-        .slave
-        .try_clone()
-        .unwrap_or_else(|err| panic!("dup: {err}"));
-    // The watcher drains the terminal past the first frame's title, so no
-    // write blocks. The preview's last reply precedes the title: both
-    // markers prove the first frame drew the attached session.
-    let frames = watch(&pair.main, vec![b"\x1b]2;fiber\x07" as &[u8]]);
-    let (done, finished) = mpsc::channel();
-    let mut launch = launch();
-    launch.open_at =
-        crate::OpenAt::Session(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()), None);
-    std::thread::Builder::new()
-        .name("timing-attach".to_owned())
-        .spawn(move || {
-            let code = super::run_with(
-                slave,
-                launch,
-                once(ours, hello()),
-                Box::new(|_| {}),
-                FakeClock::new(),
-                super::Reader::spawn,
-                |builder, body| builder.spawn(body),
-                diag,
-            )
-            .unwrap_or_else(|error| panic!("run: {error}"));
-            done.send(code).unwrap_or(());
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    watched(&frames, "the first frame title", &Deadline::after(DEADLINE));
-    // The raise goes out over the installed preview, so the full
-    // subscribe proves the tail read and its build both finished: both
-    // lines are already written.
-    let wait = Deadline::after(DEADLINE);
-    loop {
-        let command = wait.recv_or_fail(&seen, "the full subscribe");
-        if command["command"] == "subscribe" && command["args"]["level"] == "full" {
-            break;
-        }
+    lp.page_in(&rx);
+    drop(lp);
+    worker.join().unwrap_or_else(|_| panic!("the hub thread"));
+    let lines = op_lines(home.path());
+    let log_read: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["data"]["op"] == "tui.log_read")
+        .cloned()
+        .collect();
+    assert_terminal_wire(&log_read, "tui.log_read");
+    let transcript: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["data"]["op"] == "tui.transcript")
+        .cloned()
+        .collect();
+    assert_terminal_wire(&transcript, "tui.transcript");
+}
+
+/// A failed first fetch still times `tui.log_read`, but leaves the
+/// `tui.transcript` latch unset for the next successful load: flipping the
+/// success-only guard to take the latch on failure writes a transcript
+/// line here and fails (`docs/state.md`, "Diagnostic logs").
+#[test]
+fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
+    let home = fakes::TempDir::new("tui-timing-page-in-failed");
+    let clock = FakeClock::new();
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.clock = dyn_clock(&clock);
+    lp.timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    lp.app.on_line(crate::link::Line::Hub(hello()));
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let failed_log = session_log(40);
+    for value in failed_log.iter() {
+        lp.app
+            .on_line(crate::link::Line::Session(contract::Envelope {
+                kind: value["kind"].as_str().unwrap_or("").to_owned(),
+                session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: None,
+                seq: value["seq"].as_u64().map(contract::Seq),
+                payload: value["payload"].as_object().cloned().unwrap_or_default(),
+            }));
     }
-    pair.main
-        .write_all(&[0x03, 0x03])
-        .unwrap_or_else(|err| panic!("write: {err}"));
-    pair.main
-        .flush()
-        .unwrap_or_else(|err| panic!("flush: {err}"));
-    let code = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
-    assert_eq!(code, 0);
-    Deadline::after(DEADLINE)
-        .recv(&hub_done)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the hub thread: {err}"));
+    lp.app.jump(0);
+    assert!(
+        !lp.app.needs().is_empty(),
+        "a page is missing before the first fetch"
+    );
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    lp.hub.store(ours);
+    let (tx, rx) = mpsc::channel();
+    let worker = std::thread::Builder::new()
+        .name("timing-page-in-rejected".to_owned())
+        .spawn(move || {
+            let mut reader = BufReader::new(theirs);
+            let mut text = String::new();
+            while reader.read_line(&mut text).is_ok_and(|read| read > 0) {
+                let command: Value = serde_json::from_str(&text).unwrap_or_default();
+                text.clear();
+                if command["command"] != "history" {
+                    continue;
+                }
+                let id = command["id"].clone();
+                let payload = json!({"command_id": id, "message": "injected failure"});
+                let envelope = contract::Envelope {
+                    kind: "command_rejected".to_owned(),
+                    session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                    ts: 0,
+                    schema_version: contract::SCHEMA_VERSION,
+                    turn_id: None,
+                    action_id: None,
+                    seq: None,
+                    payload: payload.as_object().cloned().unwrap_or_default(),
+                };
+                if tx
+                    .send(crate::Input::Hub(crate::link::Line::Session(envelope)))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    lp.page_in(&rx);
+    // The failed fetch consumed no transcript latch: a later successful
+    // load still writes. Dropping the guard here proves the latch stayed
+    // unset; had `page_in` taken it on failure, this would write nothing.
+    drop(lp.timing.transcript());
+    drop(lp);
     worker.join().unwrap_or_else(|_| panic!("the hub thread"));
     let lines = op_lines(home.path());
     let log_read: Vec<Value> = lines

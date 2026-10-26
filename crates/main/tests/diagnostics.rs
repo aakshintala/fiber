@@ -228,7 +228,6 @@ fn mcp_fixture(setup: &Setup) -> Value {
         "command": "/bin/bash",
         "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
         "env": {"MCP_TIMING_SENTINEL": "mcp-timing-sentinel"},
-        "startup_timeout_ms": 600000,
     })
 }
 
@@ -244,29 +243,17 @@ fn journey_config(setup: &Setup, servers: Value) {
     write_json(&setup.home().join("config.json"), &config);
 }
 
-/// Runs `fiber ask` with `prompt` in the workspace to exit and parses
-/// its stdout, as [`ask`] does.
-fn ask_prompt(setup: &Setup, prompt: &str) -> Run {
-    let mut command = setup.fiber(&["ask", prompt]);
-    command.current_dir(setup.workspace());
-    let output = run_to_exit(setup.deadline, "fiber ask", command);
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let lines = stdout
-        .lines()
-        .filter(|l| !is_status(l))
-        .map(|l| serde_json::from_str(l).unwrap())
-        .collect();
-    Run {
-        code: output.status.code(),
-        lines,
-        stderr: String::from_utf8(output.stderr).unwrap(),
-    }
-}
-
 /// At `debug` one `ask` run exercising a tool call, a handoff, one MCP
 /// server and one background job writes every session-core timer: each
 /// listed operation has at least one line, and no `op_timing` line
 /// carries a field outside `op`, `ms` and `tool`.
+/// Each count below is promised by `docs/state.md`, "Diagnostic logs":
+/// startup.* by the startup and routing paragraph, `startup.preamble`,
+/// `turn.*` and `turn.handoff` by the loop paragraph, `tool.*` by the
+/// one-tool-call paragraph, `mcp.connect` by the MCP paragraph,
+/// `jobs.start` by the jobs paragraph, `hook.turn_start` by the hook
+/// chains paragraph, and `log.*` by the session-log paragraph; the
+/// `provider_request` and `peak_memory` lines by their own paragraphs.
 #[test]
 fn a_debug_journey_times_the_session_core_matrix() {
     let setup = Setup::new();
@@ -290,13 +277,15 @@ fn a_debug_journey_times_the_session_core_matrix() {
         ),
     )
     .unwrap();
-    let run = ask_prompt(&setup, "please proceed");
+    let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
         server.await_requests(5, setup.deadline),
         "the journey asked five times: a passing test really called"
     );
     let lines = op_lines(&setup);
+    // (`docs/state.md`, "Diagnostic logs") promises one `op_timing` line
+    // per ended operation; each name below is that paragraph's operation.
     for op in [
         "startup.config",
         "startup.extensions",
@@ -319,6 +308,8 @@ fn a_debug_journey_times_the_session_core_matrix() {
             "one {op} line"
         );
     }
+    // (`docs/state.md`, "Diagnostic logs") promises one `provider_request`
+    // line per ended model call and one `peak_memory` line per turn end.
     assert!(
         log_lines(&setup)
             .iter()

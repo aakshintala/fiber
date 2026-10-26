@@ -43,9 +43,10 @@ impl Timing {
         log::diag::timed(&self.diag, Op::TuiFirstRender, None, None)
     }
 
-    /// Starts the first attach's log-read guard, once per process. The
-    /// caller holds it across the first tail read to completion, whatever
-    /// its outcome: an attempted read is work.
+    /// Starts the first attach's first fetched page guard, once per
+    /// process. The caller holds it across the first actual `page_in`
+    /// `hub.fetch` attempt to completion, whatever its outcome: an
+    /// attempted read is work.
     pub(crate) fn log_read(&mut self) -> Option<log::diag::Timer> {
         if std::mem::replace(&mut self.log_read, true) {
             return None;
@@ -53,11 +54,10 @@ impl Timing {
         log::diag::timed(&self.diag, Op::TuiLogRead, None, None)
     }
 
-    /// Starts the first attach's transcript-build guard, once per process.
-    /// The caller holds it across the completed read's preview install,
-    /// which always runs then; a lost read returns before the guard, and
-    /// a streamless open never takes it, so either leaves the latch for
-    /// the next install.
+    /// Starts the first successful page-load guard, once per process.
+    /// The caller holds it across the first successful `app.load`; a
+    /// failed fetch never takes it, and an attach with no stream returns
+    /// before it, so either leaves the latch for the next load.
     pub(crate) fn transcript(&mut self) -> Option<log::diag::Timer> {
         if std::mem::replace(&mut self.transcript, true) {
             return None;
