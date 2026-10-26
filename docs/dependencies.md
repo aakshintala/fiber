@@ -337,6 +337,18 @@ already.
 
 rusqlite carries SQLite's C source.
 
+When #3027's Linux sandbox policy lands, the crates are `landlock` and
+`seccompiler`, Linux only; no srt, no bubblewrap. The floor is Landlock ABI
+2 (Linux 5.19); below it the sandbox reports unavailable and calls are
+reviewed. Their memory cost and the crates they add are measured and recorded
+here in the same pull request that adds the dependencies ("Admitting a
+crate", "Measuring memory"), not in this docs pull request: the Part 3a PR
+adds workloads shaped like Linux policy construction and application in a
+child and seccomp compilation and application, plus the runtime-together
+workload, and records the median-of-5 runs on Linux x86_64 and arm64, with
+macOS recording these Linux-only crates as not applicable rather than a
+fabricated runtime figure. Until that PR, no row above admits them.
+
 ## Written ourselves
 
 | What | Why not a crate |

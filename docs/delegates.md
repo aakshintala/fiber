@@ -188,6 +188,9 @@ final message, any questions, usage totals and worktree state. Their keys are
   for any unattended run, and the delegate carries on. No model answers a
   delegate's approval, its parent's included, and nothing relays it to a
   person.
+- A delegate inherits its parent's sandbox setting (`docs/sandbox.md`):
+  with the sandbox on in the parent, the delegate's shell calls run
+  confined too.
 - Another harness runs in its own auto mode and is judged by its own rules
   ("Harness extensions"). A harness and model are offered as a delegate only
   when their auto mode is declared to work.
@@ -264,6 +267,13 @@ path is `invalid_arguments` and a git failure is `io_failed`.
 - A resume goes back into the kept worktree, or gets a fresh one from the
   current HEAD if it was removed.
 - `worktree` outside a git repository fails with `invalid_arguments`.
+- A delegate's worktree commits run inside the sandbox when it is on
+  (`docs/sandbox.md`, "Worktrees"): the worktree's git directory and the
+  shared `objects/`, `refs/` and `logs/` are granted, while `hooks/`,
+  `config` and the worktree's `.git` file stay denied. On Linux the
+  before-call record and after-call restore and report cover the delegate's
+  worktree too. A local branch a confined delegate moves by mistake is
+  recovered from the reflog; `git push` stays reviewed.
 
 ## Forks
 
