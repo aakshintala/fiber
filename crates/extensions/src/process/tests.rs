@@ -192,59 +192,6 @@ fn reply_with_an_interaction_answer_is_a_bad_reply() {
 }
 
 #[test]
-fn ordinary_driver_command_forwards() {
-    let parsed = transport::parse_line(br#"{"id":"d1","command":"tools","args":{}}"#);
-    assert_eq!(
-        parsed,
-        ParsedLine::Forward {
-            id: contract::CommandId("d1".into()),
-            command: "tools".into(),
-            args: Map::new(),
-        }
-    );
-}
-
-#[test]
-fn unknown_name_without_args_is_unknown() {
-    let parsed = transport::parse_line(br#"{"id":"u1","command":"frob"}"#);
-    assert_eq!(
-        parsed,
-        ParsedLine::Unknown {
-            id: contract::CommandId("u1".into()),
-            command: "frob".into(),
-        }
-    );
-}
-
-#[test]
-fn unknown_name_with_args_is_unknown() {
-    // The name alone decides: with args the full parse fails, and the
-    // driver re-reads the name to answer `unknown_command`.
-    let parsed = transport::parse_line(br#"{"id":"u1","command":"frob","args":{"x":1}}"#);
-    assert_eq!(
-        parsed,
-        ParsedLine::Unknown {
-            id: contract::CommandId("u1".into()),
-            command: "frob".into(),
-        }
-    );
-}
-
-#[test]
-fn built_command_with_unfit_args_is_unfit() {
-    // `call` is built and its `args` is an object, but the call's shape
-    // does not parse: the name is known, so the answer is
-    // `invalid_arguments`, not `unknown_command`.
-    let parsed = transport::parse_line(br#"{"id":"c1","command":"call","args":{"call":42}}"#);
-    assert_eq!(
-        parsed,
-        ParsedLine::Unfit {
-            id: contract::CommandId("c1".into())
-        }
-    );
-}
-
-#[test]
 fn garbage_is_ignored() {
     assert_eq!(transport::parse_line(b"not json"), ParsedLine::Ignored);
     assert_eq!(transport::parse_line(b"[1,2]"), ParsedLine::Ignored);

@@ -144,7 +144,7 @@ impl Package {
             context,
             drive: None,
             services,
-            oauth: Arc::new(super::process::oauth::FileCredential::new(home)),
+            oauth: super::process::oauth::FileCredential::new(home),
             state: super::host::state::StateRegistry::standalone().store(&package.manifest.name),
             clock,
             limits: super::process::transport::Limits::default(),

@@ -33,26 +33,9 @@ use super::requests::{Answer, Outcome, RequestKind, Table};
 use super::transport::SendError;
 use super::{Shared, answer_off, answer_on, envelope_line, hang_guard};
 
-/// Where a native refresh takes its holder: the stored pair's lock,
-/// waited the way the Lua lock service waits. Tests inject a fake to
-/// return canned holders without touching the filesystem.
-pub(crate) trait RefreshCredential: Send + Sync {
-    /// Waits for the pair's holder until the deadline, the cancel signal
-    /// or retirement, whichever is first. A login slot never reaches
-    /// here: the continuation uses it directly, holding no file.
-    fn resolve(
-        &self,
-        pair: &CredentialPair,
-        clock: &dyn Clock,
-        cancel: &dyn Cancel,
-        deadline: Option<Instant>,
-        live: &dyn Fn() -> bool,
-    ) -> Result<Holder, (ErrorCode, String)>;
-}
-
-/// The production source: the stored pair's file under Fiber home. The
-/// home alone names no pair: the dispatcher carries the session's pair
-/// on the callback, and a login carries its own slot instead.
+/// The stored pair's file under Fiber home. The home alone names no
+/// pair: the dispatcher carries the session's pair on the callback, and
+/// a login carries its own slot instead.
 #[derive(Debug)]
 pub(crate) struct FileCredential {
     home: PathBuf,
@@ -63,10 +46,11 @@ impl FileCredential {
     pub(crate) fn new(home: PathBuf) -> Self {
         Self { home }
     }
-}
 
-impl RefreshCredential for FileCredential {
-    fn resolve(
+    /// Waits for the pair's holder until the deadline, the cancel signal
+    /// or retirement, whichever is first. A login slot never reaches
+    /// here: the continuation uses it directly, holding no file.
+    pub(crate) fn resolve(
         &self,
         pair: &CredentialPair,
         clock: &dyn Clock,
@@ -174,7 +158,7 @@ pub(crate) fn refresh_continue(
     id: &contract::CommandId,
     callback: CallbackContext,
     scope: CredentialFor,
-    credential: &Arc<dyn RefreshCredential>,
+    credential: &FileCredential,
 ) {
     let generation = shared.table.generation();
     let live = || shared.table.generation() == generation;
@@ -219,7 +203,7 @@ fn run_refresh(
     id: &contract::CommandId,
     callback: &CallbackContext,
     scope: CredentialFor,
-    credential: &Arc<dyn RefreshCredential>,
+    credential: &FileCredential,
     live: &dyn Fn() -> bool,
 ) -> End {
     let clock = shared.clock.as_ref();

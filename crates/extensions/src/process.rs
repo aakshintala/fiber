@@ -61,8 +61,8 @@ pub(crate) struct Launch {
     pub drive: Option<Arc<dyn contract::extension::Drive>>,
     /// What answers its host and state calls.
     pub services: Arc<dyn context::ProcessHostServices>,
-    /// What resolves its refresh provider to a stored pair or login slot.
-    pub oauth: Arc<dyn oauth::RefreshCredential>,
+    /// Where its refresh provider's stored pair is held.
+    pub oauth: oauth::FileCredential,
     /// The state store its hook writes join and its calls read.
     pub state: Arc<crate::host::state::ExtensionState>,
     /// The clock its timeouts read.
@@ -87,7 +87,7 @@ pub(crate) struct Shared {
     transport: Mutex<Arc<transport::Transport>>,
     drive: Option<Arc<dyn contract::extension::Drive>>,
     services: Arc<dyn context::ProcessHostServices>,
-    pub(crate) oauth: Arc<dyn oauth::RefreshCredential>,
+    pub(crate) oauth: oauth::FileCredential,
     pub(crate) state: Arc<crate::host::state::ExtensionState>,
     clock: Arc<dyn contract::clock::Clock>,
     /// What the child runs as, behind a lock so the one restart refolds

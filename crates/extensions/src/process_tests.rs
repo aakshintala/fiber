@@ -1499,9 +1499,6 @@ use super::process::{ProcessExtension, Pumped, context::ProcessContext};
 /// instead of hanging it.
 const WITHIN: Duration = Duration::from_secs(10);
 
-/// How long a polling read rests between file checks.
-const POLL: Duration = Duration::from_millis(10);
-
 /// One `host.drive` call the tests observe, answered at once with no
 /// result.
 struct FakeDrive {
@@ -1716,9 +1713,7 @@ impl Harness {
             drive,
             services,
             // The refresh lock resolves pairs from the scratch home.
-            oauth: Arc::new(super::process::oauth::FileCredential::new(
-                dir.path().to_path_buf(),
-            )),
+            oauth: super::process::oauth::FileCredential::new(dir.path().to_path_buf()),
             state: store,
             clock: launch_clock,
             limits: super::process::transport::Limits::default(),
@@ -1774,32 +1769,30 @@ impl Harness {
     }
 }
 
-/// Reads `path` as JSON within the bound, polling: the peer writes it
+/// Reads `path` as JSON within one wall-clock deadline: the peer writes it
 /// once it has what it waits for.
 fn read_json_file(path: &std::path::Path, what: &str) -> Value {
     let owned = path.to_path_buf();
-    let read = move || {
-        std::fs::read_to_string(&owned)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-    };
-    fakes::within(
+    let result = Arc::new(Mutex::new(None));
+    let observed = Arc::clone(&result);
+    fakes::wait_until(
         &format!("the peer to write {what}"),
         fakes::Deadline::after(WITHIN),
         move || {
-            // The held sender keeps the channel live, so each rest ends
-            // only when the slice passes, never from a hangup.
-            let (_held, idle) = std::sync::mpsc::channel::<()>();
-            loop {
-                if let Some(value) = read() {
-                    return value;
-                }
-                match fakes::Deadline::after(POLL).recv(&idle) {
-                    Ok(()) | Err(_) => {}
-                }
+            let value = std::fs::read_to_string(&owned)
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok());
+            if let Some(value) = value {
+                *support::lock(&observed) = Some(value);
+                true
+            } else {
+                false
             }
         },
-    )
+    );
+    support::lock(&result)
+        .take()
+        .expect("the JSON file appeared before its deadline")
 }
 
 /// A valid `fiber.tool` spec with `run`, as JSON: `true` marks the
@@ -3699,7 +3692,6 @@ open(sys.argv[1], "w").write(json.dumps({"saw": saw}))"#;
 #[test]
 fn file_credential_resolve_follows_the_lock_service() {
     use super::process::oauth::FileCredential;
-    use super::process::oauth::RefreshCredential as _;
     let home = fakes::TempDir::new("fiber-process-resolve");
     let pair = test_pair();
     let fake = fakes::clock::FakeClock::new();
@@ -3743,7 +3735,6 @@ fn file_credential_resolve_follows_the_lock_service() {
 #[test]
 fn file_credential_resolve_times_out_on_a_held_lock() {
     use super::process::oauth::FileCredential;
-    use super::process::oauth::RefreshCredential as _;
     let home = fakes::TempDir::new("fiber-process-resolve-timeout");
     let pair = test_pair();
     write_pair(home.path(), "testprov", "test", &expired_pair());
@@ -4079,9 +4070,17 @@ open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
         json!("state.set: value is 65537 JSON bytes; at most 65536 are allowed")
     );
     let shared = owner.extension.shared();
+    let actual = shared.state.get("k").expect("the accepted value is stored");
+    let actual = actual.as_str().expect("state.set stored a JSON string");
+    let expected = "x".repeat(65534);
+    assert_eq!(actual.len(), expected.len(), "state value length");
+    let first_difference = actual
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(actual, expected)| actual != expected);
     assert_eq!(
-        shared.state.get("k"),
-        Some(Value::String("x".repeat(65534)))
+        first_difference, None,
+        "first differing offset: {first_difference:?}"
     );
     assert_eq!(owner.drain(), CloseReason::Eof);
 }
@@ -4183,6 +4182,111 @@ fn lifecycle_deaths(owner: &Harness) -> u32 {
 /// How many restarts the owner ran.
 fn lifecycle_restarts(owner: &Harness) -> u32 {
     support::lock(&owner.extension.shared().lifecycle).restarts()
+}
+
+/// A child `ready` between the startup check and its park wakes the wait.
+#[test]
+fn ready_between_startup_check_and_park_wakes_the_waiter() {
+    let script = r#"import sys, json
+read = lambda: json.loads(sys.stdin.readline())
+read()
+sys.stdout.write('{"id":"ready","command":"ready"}' + chr(10))
+sys.stdout.flush()
+read()"#;
+    let owner = Harness::start(script, &[], serde_json::Map::new(), None);
+    let shared = Arc::clone(owner.extension.shared());
+    let cancel = support::cancel::Token::new();
+    let (checked, checked_rx) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let (answer, answer_rx) = std::sync::mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        let mut pause = || {
+            checked.send(()).expect("the test awaits the pause point");
+            let _ = release_rx.recv();
+        };
+        let result = super::process::lifecycle::await_ready_with_pause(
+            &shared,
+            &shared.ready,
+            None,
+            &cancel,
+            &mut pause,
+        );
+        let _ = answer.send(result);
+    });
+    fakes::Deadline::after(WITHIN)
+        .recv_or_fail(&checked_rx, "startup to reach the pre-park pause point");
+    owner.pump();
+    release.send(()).expect("the startup waiter is paused");
+    let result =
+        fakes::Deadline::after(WITHIN).recv_or_fail(&answer_rx, "startup to observe ready");
+    assert_eq!(result, Ok(()));
+    waiter.join().expect("the startup waiter ends");
+    kill_peer(&owner);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// A concurrent restart waiter observes the ready transition if it lands
+/// after its state check but before its park.
+#[test]
+fn ready_between_restart_check_and_park_wakes_the_waiter() {
+    let script = r#"import sys, json
+read = lambda: json.loads(sys.stdin.readline())
+read()
+read()"#;
+    let owner = Harness::start(script, &[], serde_json::Map::new(), None);
+    let shared = Arc::clone(owner.extension.shared());
+    super::process::lifecycle::set_restarting_for_test(&shared);
+    let cancel = support::cancel::Token::new();
+    let (checked, checked_rx) = std::sync::mpsc::channel();
+    let (answer, answer_rx) = std::sync::mpsc::channel();
+    let mut releases = Vec::new();
+    let mut waiters = Vec::new();
+    for _ in 0..2 {
+        let shared = Arc::clone(&shared);
+        let cancel = cancel.clone();
+        let checked = checked.clone();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        releases.push(release);
+        let answer = answer.clone();
+        waiters.push(std::thread::spawn(move || {
+            let mut pause = || {
+                checked.send(()).expect("the test awaits the pause point");
+                let _ = release_rx.recv();
+            };
+            let result = super::process::lifecycle::ensure_running_with_pause(
+                &shared, None, &cancel, &mut pause,
+            );
+            let _ = answer.send(result);
+        }));
+    }
+    drop(checked);
+    drop(answer);
+    let paused = fakes::Deadline::after(WITHIN);
+    for _ in 0..2 {
+        paused.recv_or_fail(
+            &checked_rx,
+            "restart waiter to reach the pre-park pause point",
+        );
+    }
+    shared
+        .ready
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    super::process::lifecycle::note_ready(&shared);
+    for release in releases {
+        release.send(()).expect("both restart waiters are paused");
+    }
+    let answers = fakes::Deadline::after(WITHIN);
+    for _ in 0..2 {
+        assert_eq!(
+            answers.recv_or_fail(&answer_rx, "restart waiter to observe ready"),
+            Ok(())
+        );
+    }
+    for waiter in waiters {
+        waiter.join().expect("the restart waiter ends");
+    }
+    kill_peer(&owner);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
 }
 
 /// Kills the peer and reaps it: stop its pipes, KILL its group, pump
@@ -4448,83 +4552,37 @@ read()"#;
     assert_eq!(owner.drain(), CloseReason::Stopped);
 }
 
-/// Advances the clock in slices, yielding to the shutdown thread between
-/// them, until `done` holds or the cap passes: the shutdown reads its
-/// start after idling, so one jump could land before it parks and shift
-/// its bound past every later jump. The cap fails a shutdown that never
-/// progresses instead of hanging the test.
-fn advance_until(owner: &Harness, what: &str, mut done: impl FnMut() -> bool) {
-    let (_held, pace) = std::sync::mpsc::channel::<()>();
-    for _ in 0..120 {
-        if done() {
-            return;
-        }
-        owner.clock.advance(Duration::from_secs(1));
-        match fakes::Deadline::after(POLL).recv(&pace) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    assert!(done(), "{what}");
-}
-
 /// Reads `path` as JSON lines once it holds `count` of them, polling
-/// within the bound: each spawn appends exactly one hello, so the count
+/// within one deadline: each spawn appends exactly one hello, so the count
 /// names the spawn the test observes. A respawned child runs the same
 /// script from the top, so rounds share one log instead of one file.
 fn read_json_lines(path: &std::path::Path, count: usize, what: &str) -> Vec<Value> {
     let owned = path.to_path_buf();
-    let read = move || {
-        let text = std::fs::read_to_string(&owned).ok()?;
-        let lines: Vec<Value> = text
-            .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
-        (lines.len() >= count).then_some(lines)
-    };
-    fakes::within(
+    let result = Arc::new(Mutex::new(None));
+    let observed = Arc::clone(&result);
+    fakes::wait_until(
         &format!("the peer to write {what}"),
         fakes::Deadline::after(WITHIN),
         move || {
-            // The held sender keeps the channel live, so each rest ends
-            // only when the slice passes, never from a hangup.
-            let (_held, idle) = std::sync::mpsc::channel::<()>();
-            loop {
-                if let Some(lines) = read() {
-                    return lines;
-                }
-                match fakes::Deadline::after(POLL).recv(&idle) {
-                    Ok(()) | Err(_) => {}
-                }
+            let Some(text) = std::fs::read_to_string(&owned).ok() else {
+                return false;
+            };
+            let lines: Vec<Value> = text
+                .lines()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .collect();
+            if lines.len() >= count {
+                *support::lock(&observed) = Some(lines);
+                true
+            } else {
+                false
             }
         },
-    )
+    );
+    support::lock(&result)
+        .take()
+        .expect("the peer wrote the expected JSON lines")
 }
-
-/// The restart peer: it logs its hello's folded state, registers a tool
-/// and the hook, answers one hook delivery, then blocks for the kill.
-/// A respawn runs the same script from the top, so the log holds one
-/// line per spawn. The first round answers before the kill, so the kill
-/// lands on an idle child and the death is never a race.
-const RESTART_ONE: &str = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-hook = json.loads(sys.argv[1])
-TOOL = json.loads(sys.argv[2])
-hello = read()
-open(sys.argv[3], "a").write(json.dumps(hello["payload"].get("state")) + "\n")
-write({"id": "t1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-answers = [read(), read(), read()]
-assert all(a["kind"] == "command_accepted" for a in answers), answers
-delivery = read()
-assert delivery["kind"] == "extension_request", delivery
-write({"id": "p1", "command": "reply", "args": {"request_id": delivery["payload"]["request_id"], "result": "done"}})
-ack = read()
-assert ack["kind"] == "command_accepted", ack
-read()"#;
 
 /// The shared-restart peer: like the one-round peer, but it answers
 /// every delivery until the kill, so two concurrent dispatches share
@@ -4628,7 +4686,7 @@ fn restart_after_first_death_serves_the_next_dispatch() {
     let log_path = out.path().join("hellos.jsonl");
     let mut initial = serde_json::Map::new();
     initial.insert("k".to_owned(), json!(1));
-    let owner = restart_owner(RESTART_ONE, initial, &log_path);
+    let owner = restart_owner(RESTART_LOOP, initial, &log_path);
     owner.pump();
     owner.pump();
     owner.pump();
@@ -4683,6 +4741,7 @@ fn restart_after_first_death_serves_the_next_dispatch() {
         lifecycle_state(&owner),
         super::process::lifecycle::RunState::Running
     );
+    // docs/extensions.md:222: one that dies is restarted once, on its next call.
     assert_eq!(lifecycle_restarts(&owner), 1);
     assert_eq!(lifecycle_deaths(&owner), 1);
     let tools_after: Vec<String> = support::lock(&owner.registry)
@@ -4752,7 +4811,8 @@ fn concurrent_dispatches_share_the_sole_restart() {
         let outcome = second.join().expect("the hook thread ends");
         assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
     }
-    assert_eq!(lifecycle_restarts(&owner), 1, "one shared restart");
+    // docs/extensions.md:222: one that dies is restarted once, on its next call.
+    assert_eq!(lifecycle_restarts(&owner), 1);
     assert_eq!(lifecycle_deaths(&owner), 1);
     kill_peer(&owner);
     assert_eq!(owner.drain(), CloseReason::Stopped);
@@ -4764,7 +4824,7 @@ fn concurrent_dispatches_share_the_sole_restart() {
 fn second_death_leaves_the_extension_gone() {
     let out = fakes::TempDir::new("fiber-process-restart-gone");
     let log_path = out.path().join("hellos.jsonl");
-    let owner = restart_owner(RESTART_ONE, serde_json::Map::new(), &log_path);
+    let owner = restart_owner(RESTART_LOOP, serde_json::Map::new(), &log_path);
     owner.pump();
     owner.pump();
     owner.pump();
@@ -4786,6 +4846,7 @@ fn second_death_leaves_the_extension_gone() {
     owner.pump();
     let outcome = second.join().expect("the hook thread ends");
     assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    // docs/extensions.md:222: one that dies is restarted once, on its next call.
     assert_eq!(lifecycle_restarts(&owner), 1);
     // The peer blocks after its reply, so the kill lands mid-request.
     kill_peer(&owner);
@@ -4795,7 +4856,8 @@ fn second_death_leaves_the_extension_gone() {
         super::process::lifecycle::RunState::Gone
     );
     assert_eq!(lifecycle_deaths(&owner), 2);
-    assert_eq!(lifecycle_restarts(&owner), 1, "no third spawn runs");
+    // docs/extensions.md:222: one that dies is restarted once, on its next call.
+    assert_eq!(lifecycle_restarts(&owner), 1);
     // Observing the same dead spawn again counts nothing: the stopped
     // pipe stays closed, and the count holds.
     pump_closed(&owner, "the stopped pipe stays closed");
@@ -4810,7 +4872,8 @@ fn second_death_leaves_the_extension_gone() {
         matches!(outcome, Err(crate::Error::Stopped { .. })),
         "the gone extension stops, not {outcome:?}"
     );
-    assert_eq!(lifecycle_restarts(&owner), 1, "no third spawn runs");
+    // docs/extensions.md:222: one that dies is restarted once, on its next call.
+    assert_eq!(lifecycle_restarts(&owner), 1);
 }
 
 /// The restart hello carries the folded state as it stands: the hook's
@@ -4870,6 +4933,7 @@ fn restart_hello_carries_the_current_folded_state() {
     owner.pump();
     let outcome = second.join().expect("the hook thread ends");
     assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    // docs/extensions.md:222: one that dies is restarted once, on its next call.
     assert_eq!(lifecycle_restarts(&owner), 1);
     kill_peer(&owner);
     assert_eq!(owner.drain(), CloseReason::Stopped);
@@ -4955,12 +5019,21 @@ fn finish_acknowledges_the_final_delivery_before_the_exit_allowance() {
         !owner.extension.transport().exited(),
         "no TERM inside the allowance"
     );
-    // The shutdown may read its start late, so one more jump could land
-    // before it parks: advance in slices, yielding between them, until
-    // the TERM lands.
-    advance_until(&owner, "TERM never ends the child", || {
-        owner.extension.transport().exited()
-    });
+    // The fake clock has not moved since the answer, so this is the
+    // shutdown's fixed TERM deadline even if its wait starts later.
+    let term_at = owner.clock.now() + Duration::from_secs(1);
+    owner.clock.advance_when_parked(
+        Some(term_at),
+        None,
+        Duration::from_secs(1),
+        &fakes::Deadline::after(WITHIN),
+    );
+    let extension = Arc::clone(&owner.extension);
+    fakes::wait_until(
+        "TERM to end the child",
+        fakes::Deadline::after(WITHIN),
+        move || extension.transport().exited(),
+    );
     let status = finishing
         .join()
         .expect("the shutdown ends")
@@ -5021,77 +5094,45 @@ fn finish_kills_a_term_ignoring_child_after_grace() {
     };
     // The shutdown stamps its allowance from the frozen clock once it
     // begins, so the TERM and KILL bounds are exact from here on.
-    for _ in 0..10_000 {
-        if lifecycle_state(&owner) == super::process::lifecycle::RunState::Finishing {
-            break;
-        }
-        std::thread::yield_now();
-    }
-    assert_eq!(
-        lifecycle_state(&owner),
-        super::process::lifecycle::RunState::Finishing,
-        "the shutdown begins"
+    let state_extension = Arc::clone(&owner.extension);
+    fakes::wait_until(
+        "shutdown to enter Finishing",
+        fakes::Deadline::after(WITHIN),
+        move || {
+            support::lock(&state_extension.shared().lifecycle).state()
+                == super::process::lifecycle::RunState::Finishing
+        },
     );
     let term_at = owner.clock.now() + allowance;
-    // Slices carry the clock to the allowance end without crossing into
-    // the grace: a whole-allowance jump would fire KILL in the same real
-    // instant as TERM, before the child's handler can run.
-    let marker = marker_path.clone();
-    let present = move || {
-        std::fs::read_to_string(&marker)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .is_some()
-    };
-    let mut advanced = Duration::ZERO;
-    let seek_cap = allowance + grace / 2;
-    let slice = Duration::from_millis(100);
-    // The rest channel paces the slices in real time without sleeping:
-    // each rest ends when its bound passes, never from a hangup.
-    let (_held, pace) = std::sync::mpsc::channel::<()>();
-    let rest = || match fakes::Deadline::after(POLL).recv(&pace) {
-        Ok(()) | Err(_) => {}
-    };
-    while !present() && advanced < seek_cap {
-        owner.clock.advance(slice);
-        advanced += slice;
-        rest();
-    }
-    // The clock freezes below the KILL bound while the child takes real
-    // time to run its TERM handler: KILL cannot fire, so the marker wait
-    // below is a real wait with a hang guard, never a race.
-    assert!(
-        owner.clock.now() < term_at + grace,
-        "the KILL bound stays ahead while the marker lands"
-    );
+    let kill_at = term_at + grace;
+    let wait = fakes::Deadline::after(WITHIN);
+    owner
+        .clock
+        .advance_when_parked(Some(term_at), None, allowance, &wait);
     let seen = read_json_file(&marker_path, "the TERM delivery");
     assert_eq!(seen, json!({"termed": true}));
-    // The grace is still running: the child ignored TERM and lives. Three
-    // more slices reach 100ms before the KILL bound, so the child must
-    // still be alive.
-    let alive_until = seek_cap + slice + slice + slice;
-    while advanced < alive_until {
-        owner.clock.advance(slice);
-        advanced += slice;
-        rest();
-    }
+    assert!(
+        !owner.extension.transport().exited(),
+        "the child survives TERM while its grace remains"
+    );
+    // Move to one millisecond before KILL, then cross the named park.
+    // Reusing `wait` bounds this complete grace wait, not each advance.
+    let before_kill = grace - Duration::from_millis(1);
+    owner
+        .clock
+        .advance_when_parked(Some(kill_at), None, before_kill, &wait);
     assert!(
         !owner.extension.transport().exited(),
         "no KILL inside the grace"
     );
-    // Past the grace the shutdown KILLs and reaps: the latch, not the
-    // join, carries the hang guard.
-    owner.clock.advance(grace);
-    rest();
-    for _ in 0..10_000 {
-        if owner.extension.transport().exited() {
-            break;
-        }
-        std::thread::yield_now();
-    }
-    assert!(
-        owner.extension.transport().exited(),
-        "KILL ends the child past the grace"
+    owner
+        .clock
+        .advance_when_parked(Some(kill_at), None, Duration::from_millis(1), &wait);
+    let extension = Arc::clone(&owner.extension);
+    fakes::wait_until(
+        "KILL to end the child",
+        fakes::Deadline::after(WITHIN),
+        move || extension.transport().exited(),
     );
     let status = finishing
         .join()
@@ -5267,11 +5308,21 @@ fn finish_terms_the_whole_group_despite_a_held_pipe() {
         let waiter = cancel.clone();
         std::thread::spawn(move || extension.finish(Duration::from_secs(5), &waiter))
     };
-    // One jump could land before the shutdown parks: advance in slices,
-    // yielding between them, until the child dies.
-    advance_until(&owner, "TERM never ends the group", || {
-        owner.extension.transport().exited()
-    });
+    // The frozen clock fixes the allowance deadline even if the
+    // shutdown thread enters its wait after this snapshot.
+    let term_at = owner.clock.now() + Duration::from_secs(5);
+    owner.clock.advance_when_parked(
+        Some(term_at),
+        None,
+        Duration::from_secs(5),
+        &fakes::Deadline::after(WITHIN),
+    );
+    let extension = Arc::clone(&owner.extension);
+    fakes::wait_until(
+        "TERM to end the group",
+        fakes::Deadline::after(WITHIN),
+        move || extension.transport().exited(),
+    );
     let status = finishing
         .join()
         .expect("the shutdown ends")
@@ -5359,7 +5410,7 @@ fn retire_at_the_seam_stales_the_in_flight_request() {
 fn finish_after_death_reaps_without_signals() {
     let out = fakes::TempDir::new("fiber-process-finish-dead");
     let log_path = out.path().join("hellos.jsonl");
-    let owner = restart_owner(RESTART_ONE, serde_json::Map::new(), &log_path);
+    let owner = restart_owner(RESTART_LOOP, serde_json::Map::new(), &log_path);
     owner.pump();
     owner.pump();
     owner.pump();

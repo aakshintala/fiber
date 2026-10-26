@@ -116,6 +116,11 @@ pub(crate) fn note_ready(shared: &Shared) {
     shared.lifecycle_park.bump();
 }
 
+#[cfg(test)]
+pub(crate) fn set_restarting_for_test(shared: &Shared) {
+    lock(&shared.lifecycle).state = RunState::Restarting;
+}
+
 /// Makes one dispatch safe to send: running proceeds at once, the next
 /// caller after a death runs the sole restart while the others await
 /// the same generation, and a gone or finishing owner stops. A waiter
@@ -126,7 +131,27 @@ pub(crate) fn ensure_running(
     deadline: Option<Instant>,
     cancel: &dyn Cancel,
 ) -> Result<(), (contract::ErrorCode, String)> {
+    ensure_running_inner(shared, deadline, cancel, &mut || {})
+}
+
+#[cfg(test)]
+pub(crate) fn ensure_running_with_pause(
+    shared: &Shared,
+    deadline: Option<Instant>,
+    cancel: &dyn Cancel,
+    before_park: &mut dyn FnMut(),
+) -> Result<(), (contract::ErrorCode, String)> {
+    ensure_running_inner(shared, deadline, cancel, before_park)
+}
+
+fn ensure_running_inner(
+    shared: &Shared,
+    deadline: Option<Instant>,
+    cancel: &dyn Cancel,
+    before_park: &mut dyn FnMut(),
+) -> Result<(), (contract::ErrorCode, String)> {
     loop {
+        let seen = shared.lifecycle_park.generation();
         let winner = {
             let mut lifecycle = lock(&shared.lifecycle);
             match lifecycle.state {
@@ -148,7 +173,18 @@ pub(crate) fn ensure_running(
         if winner {
             return restart(shared, deadline, cancel);
         }
-        let seen = shared.lifecycle_park.generation();
+        before_park();
+        match lock(&shared.lifecycle).state {
+            RunState::Starting | RunState::Running => return Ok(()),
+            RunState::Gone | RunState::Finishing => {
+                return Err((
+                    contract::ErrorCode::Closing,
+                    format!("{}: the process extension is gone", shared.owner),
+                ));
+            }
+            RunState::Dead => continue,
+            RunState::Restarting => {}
+        }
         shared
             .lifecycle_park
             .park(shared.clock.as_ref(), deadline, seen);
@@ -333,8 +369,30 @@ pub(crate) fn await_ready(
     deadline: Option<Instant>,
     cancel: &dyn Cancel,
 ) -> Result<(), (ErrorCode, String)> {
+    await_ready_inner(shared, ready, deadline, cancel, &mut || {})
+}
+
+#[cfg(test)]
+pub(crate) fn await_ready_with_pause(
+    shared: &Shared,
+    ready: &AtomicBool,
+    deadline: Option<Instant>,
+    cancel: &dyn Cancel,
+    before_park: &mut dyn FnMut(),
+) -> Result<(), (ErrorCode, String)> {
+    await_ready_inner(shared, ready, deadline, cancel, before_park)
+}
+
+fn await_ready_inner(
+    shared: &Shared,
+    ready: &AtomicBool,
+    deadline: Option<Instant>,
+    cancel: &dyn Cancel,
+    before_park: &mut dyn FnMut(),
+) -> Result<(), (ErrorCode, String)> {
     let clock = shared.clock.as_ref();
     loop {
+        let seen = shared.ready_park.generation();
         if ready.load(Ordering::SeqCst) {
             // A late `ready` after a terminal state answers the wait but
             // resurrects nothing: only startup and restart become running.
@@ -373,7 +431,15 @@ pub(crate) fn await_ready(
                 ),
             ));
         }
-        let seen = shared.ready_park.generation();
+        before_park();
+        if ready.load(Ordering::SeqCst)
+            || matches!(
+                lock(&shared.lifecycle).state,
+                RunState::Finishing | RunState::Gone
+            )
+        {
+            continue;
+        }
         shared.ready_park.park(clock, deadline, seen);
     }
 }
