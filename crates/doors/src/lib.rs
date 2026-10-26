@@ -30,6 +30,7 @@ mod reply;
 mod rewind;
 mod run_command;
 mod session;
+mod session_error;
 mod sessions;
 mod shell;
 mod signals;
@@ -54,6 +55,7 @@ pub use isolation::{
     share, try_hold_removal,
 };
 pub use session::{Declare, McpLogin, Replacement, ServersRefresh, Session};
+pub use session_error::SessionError;
 pub use sessions::SessionSockets;
 pub use sessions::session_entries;
 pub use signals::{SHUTDOWN_BOUND, Signals, signal_code};
@@ -92,7 +94,7 @@ pub fn prompt(
     dash: bool,
     stdin: &mut dyn Read,
     terminal: bool,
-) -> Result<String, Failure> {
+) -> Result<String, SessionError> {
     let supplied = arg.is_some();
     let kept = arg.filter(|text| !text.trim().is_empty());
     // An argument and no `-` never reads stdin, even when the argument is blank.
@@ -105,9 +107,9 @@ pub fn prompt(
     let mut piped = String::new();
     stdin.read_to_string(&mut piped).map_err(|e| {
         if e.kind() == io::ErrorKind::InvalidData {
-            failure(ErrorCode::Usage, "stdin is not UTF-8 text.")
+            SessionError::StdinNotUtf8
         } else {
-            failure(ErrorCode::IoFailed, format!("stdin could not be read: {e}"))
+            SessionError::StdinUnreadable { source: e }
         }
     })?;
     let piped = (!piped.trim().is_empty()).then_some(piped);
@@ -118,11 +120,8 @@ pub fn prompt(
     }
 }
 
-fn no_prompt() -> Failure {
-    failure(
-        ErrorCode::Usage,
-        "No prompt. Run `fiber ask \"<prompt>\"` or `fiber ask < <file>`.",
-    )
+fn no_prompt() -> SessionError {
+    SessionError::NoPrompt
 }
 
 /// Ends a process that failed before any session existed: the

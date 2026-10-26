@@ -11,6 +11,7 @@ use config::{
     ScriptRead, Sources, mcp_servers, read_script, read_secret,
 };
 use contract::ErrorCode;
+use contract::shapes::Failure;
 use extensions::{Model, Providers, is_enabled};
 
 use super::files::clean;
@@ -76,7 +77,8 @@ pub(crate) fn startup(
     // regardless of configuration, so it is the first blocker.
     // `doors::mint("s_")` is always the longest session-id form (`s_`
     // plus 16 hex), so a home it passes binds every session id.
-    if let Err(failure) = doors::check_socket_path(home, &doors::mint("s_")) {
+    if let Err(failure) = doors::check_socket_path(home, &doors::mint("s_")).map_err(Failure::from)
+    {
         let line = clean(&failure.message);
         return Startup::blocked(line, failure.code);
     }

@@ -173,7 +173,7 @@ fn resolve(
 fn shared(recorded: &Worktree, old: &SessionId) -> Result<doors::Shared, Failure> {
     match doors::share(Path::new(&recorded.path)) {
         Ok(shared) => Ok(shared),
-        Err(failure) if Path::new(&recorded.path).exists() => Err(failure),
+        Err(failure) if Path::new(&recorded.path).exists() => Err(Failure::from(failure)),
         Err(_) => Err(not_found(old)),
     }
 }

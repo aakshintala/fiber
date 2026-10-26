@@ -15,6 +15,7 @@ use contract::SessionId;
 use contract::clock::{Clock, Wake};
 use contract::commands::{Command, CommandLine, Message, SubscribeArgs, SubscribeLevel};
 use contract::sessions::{ListError, MessageError, Running, Sessions};
+use contract::shapes::Failure;
 use contract::tool::Cancel;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use serde_json::Value;
@@ -450,7 +451,9 @@ impl SessionSockets {
                     return Ok(());
                 }
                 if crate::attach::is_answer(&line, "command_rejected", &command) {
-                    return Err(MessageError::Rejected(crate::attach::rejected(&line)));
+                    return Err(MessageError::Rejected(Failure::from(
+                        crate::attach::rejected(&line),
+                    )));
                 }
             }
             if buffer.len() > MAX_LINE {

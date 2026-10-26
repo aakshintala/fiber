@@ -656,7 +656,7 @@ fn ask(
     let terminal = stdin.is_terminal();
     let prompt = match doors::prompt(arg, dash, &mut stdin.lock(), terminal) {
         Ok(prompt) => prompt,
-        Err(e) => return ask_failed(e),
+        Err(e) => return ask_failed(Failure::from(e)),
     };
     match resume {
         Some(resuming) => resume::ask_resume(resuming, overrides, prompt, clock, &signals, fiber),
@@ -692,10 +692,10 @@ fn feedback(
         // Stdin shapes that yield no description carry `ask`'s no-prompt
         // sentence; the report writer's empty-description sentence names
         // the command the person ran.
-        Err(error) if error.code == ErrorCode::Usage => {
+        Err(error) if error.code() == ErrorCode::Usage => {
             return fail(::cli::FeedbackError::EmptyDescription.into());
         }
-        Err(error) => return fail(error),
+        Err(error) => return fail(Failure::from(error)),
     };
     let home = match config::fiber_home_path_from_env() {
         Ok(home) => home,
