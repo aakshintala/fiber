@@ -573,6 +573,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "cost",
     "quota",
     "status",
+    "doctor",
     "diff",
     "delegates",
     "agents",

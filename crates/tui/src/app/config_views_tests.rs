@@ -15,13 +15,20 @@ use ratatui::style::Color;
 use super::super::{App, Effect};
 use super::ConfigView;
 use crate::Configure;
-use crate::configure::{Layer, Shown, WriteScope};
+use crate::configure::{ConfigureError, Layer, Shown, WriteScope};
 use crate::configure_fake::{Fake, file, row};
 use crate::home::Launch;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::mouse::TargetId;
+use crate::remote::{Remote, Router};
 use crate::swapped::Spot;
+use fakes::Deadline;
+use serde_json::json;
+use std::io::{BufRead, BufReader};
+use std::os::unix::net::UnixStream;
+use std::sync::mpsc;
+use std::thread;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -1643,4 +1650,313 @@ fn slash_theme_name_saves_applies_and_refuses() {
     );
     assert_eq!(seam.writes().len(), writes);
     assert_eq!(app.take_theme_choice(), None);
+}
+
+/// A doctor report reader returning `report`.
+fn doctor_reader(report: &str) -> contract::feedback::ReadDoctor {
+    let report = report.to_owned();
+    Arc::new(move || Ok(report.clone()))
+}
+
+/// An app with `seam` and a doctor reader returning `report`.
+fn doctor_app(seam: Option<Arc<Fake>>, report: &str) -> App {
+    let mut app = home(seam);
+    app.set_doctor(Some(doctor_reader(report)));
+    app
+}
+
+/// Types `/doctor` and presses Enter.
+fn slash_doctor(app: &mut App) -> Effect {
+    for ch in "/doctor".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    app.on_key(Key::Enter, now())
+}
+
+#[test]
+fn slash_doctor_opens_the_report_view_on_home_and_attached() {
+    let report = "fiber 0.0.1\nsecond line\n\nfourth";
+    let mut app = doctor_app(Some(fake()), report);
+    assert_eq!(slash_doctor(&mut app), Effect::None);
+    assert!(app.config_view_open());
+    assert!(app.input().is_empty());
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.title, "Doctor");
+    assert_eq!(frame.command, "/doctor");
+    assert!(frame.below.is_empty());
+    assert!(frame.field.is_none());
+    assert!(frame.footer.is_empty());
+    // One plain row per snapshot line: the view renders the capture
+    // verbatim, so it never differs from the headless door's output.
+    let expected: Vec<String> = report.lines().map(str::to_owned).collect();
+    assert_eq!(expected, ["fiber 0.0.1", "second line", "", "fourth"]);
+    assert_eq!(
+        frame
+            .rows
+            .iter()
+            .map(|cells| cells
+                .iter()
+                .map(|(text, _, _)| text.clone())
+                .collect::<String>())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert!(frame.rows.iter().all(|cells| {
+        cells
+            .iter()
+            .all(|(_, spot, ink)| spot.is_none() && matches!(ink, crate::swapped::Ink::Plain))
+    }));
+    let rows = screen(&app);
+    assert!(rows.first().is_some_and(|row| row.starts_with(" Doctor")));
+    assert!(rows.iter().any(|row| row.contains("second line")));
+
+    let mut app = doctor_app(Some(fake()), report);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    slash_doctor(&mut app);
+    assert!(app.config_view_open());
+    let rows = screen(&app);
+    assert!(rows.iter().any(|row| row.starts_with("  Doctor")));
+    assert!(rows.iter().any(|row| row.contains("second line")));
+}
+
+#[test]
+fn slash_doctor_ignores_extra_args_and_clears_the_draft() {
+    // Extra words change nothing: the view still opens, like
+    // `/status` with rest, and the draft clears.
+    let mut app = doctor_app(Some(fake()), "fiber 0.0.1");
+    for ch in "/doctor extra".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.config_view_open());
+    assert!(app.input().is_empty());
+}
+
+#[test]
+fn slash_doctor_esc_and_the_x_close_it_and_row_clicks_stay() {
+    let mut app = doctor_app(Some(fake()), "fiber 0.0.1");
+    slash_doctor(&mut app);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.config_view_open());
+    slash_doctor(&mut app);
+    assert_eq!(app.on_click(TargetId::View(Spot::Close)), Effect::None);
+    assert!(!app.config_view_open());
+    // A report row takes no action: the view stays open.
+    slash_doctor(&mut app);
+    let selected = app
+        .config_view_screen()
+        .expect("the view is open")
+        .list
+        .selected();
+    assert_eq!(app.on_click(TargetId::View(Spot::Row(0))), Effect::None);
+    assert!(app.config_view_open());
+    assert_eq!(
+        app.config_view_screen()
+            .expect("the view is open")
+            .list
+            .selected(),
+        selected
+    );
+}
+
+#[test]
+fn slash_doctor_pages_a_report_taller_than_the_view() {
+    let report = (0..60).map(|n| format!("line {n:02}")).collect::<Vec<_>>();
+    let mut app = doctor_app(Some(fake()), &report.join("\n"));
+    slash_doctor(&mut app);
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.list.selected(), 0);
+    assert_eq!(frame.list.top(), 0);
+    assert_eq!(frame.rows.len(), 60);
+    // Up at the top stays: the selection clamps at both ends.
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(
+        app.config_view_screen()
+            .expect("the view is open")
+            .list
+            .selected(),
+        0
+    );
+    for _ in 0..3 {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    }
+    let selected = app
+        .config_view_screen()
+        .expect("the view is open")
+        .list
+        .selected();
+    assert_eq!(selected, 3);
+    // Paging down reaches the clamped bottom and scrolls the rows.
+    for _ in 0..4 {
+        assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
+    }
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.list.selected(), 59);
+    assert!(frame.list.top() > 0);
+    assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
+    assert_eq!(
+        app.config_view_screen()
+            .expect("the view is open")
+            .list
+            .selected(),
+        59
+    );
+    // Paging back up returns to the first row.
+    for _ in 0..4 {
+        assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
+    }
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.list.selected(), 0);
+    assert_eq!(frame.list.top(), 0);
+    // The pasted edit changes nothing: the view has no field, and the
+    // draft keeps nothing behind it.
+    assert_eq!(app.on_edit(Edit::Paste("9".to_owned())), Effect::None);
+    assert!(app.input().is_empty());
+    assert!(app.config_view_open());
+}
+
+#[test]
+fn slash_doctor_without_a_reader_says_not_available() {
+    let mut app = home(Some(fake()));
+    slash_doctor(&mut app);
+    assert!(app.config_view_open());
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.title, "Doctor");
+    assert_eq!(frame.command, "/doctor");
+    assert_eq!(
+        frame.below,
+        vec!["Not available in this terminal.".to_owned()]
+    );
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.config_view_open());
+}
+
+#[test]
+fn slash_doctor_capture_failure_keeps_a_notice_and_opens_nothing() {
+    let mut app = home(Some(fake()));
+    let failure = "could not capture the `fiber doctor` output: boom".to_owned();
+    app.set_doctor(Some(Arc::new(move || Err(failure.clone()))));
+    assert_eq!(slash_doctor(&mut app), Effect::None);
+    assert!(!app.config_view_open());
+    // The notice carries the capture text: the same sentence the
+    // headless door prints.
+    assert!(
+        app.notices().iter().any(
+            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if code == "io_failed" && text == "could not capture the `fiber doctor` output: boom")
+        ),
+        "the failure notice names the capture text"
+    );
+}
+
+/// A remote hub whose `global_file` read is rejected: every
+/// no-workspace configuration read through it fails.
+struct FailingHub {
+    router: Arc<Router>,
+    lines: mpsc::Receiver<serde_json::Value>,
+    remote: Arc<Remote>,
+}
+
+impl FailingHub {
+    fn new() -> Self {
+        let router = Router::new();
+        let (client, hub) = UnixStream::pair().unwrap();
+        router.attach(client);
+        let (tx, lines) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(hub).lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                if tx.send(serde_json::from_str(&line).unwrap()).is_err() {
+                    break;
+                }
+            }
+        });
+        let remote = Arc::new(Remote::new(
+            Arc::new(Fake::new(vec![])),
+            PathBuf::from("/client"),
+            Arc::clone(&router),
+        ));
+        Self {
+            router,
+            lines,
+            remote,
+        }
+    }
+
+    /// Rejects the next `global_file` ask and returns its failure.
+    fn reject_global_file(&self) -> ConfigureError {
+        let deadline = Deadline::start();
+        let remote = Arc::clone(&self.remote);
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            tx.send(remote.global_parent()).unwrap_or(());
+        });
+        let line = deadline.recv_or_fail(&self.lines, "global file ask");
+        assert_eq!(line["command"], "configure");
+        assert_eq!(line["args"], json!({"operation": "global_file"}));
+        let response: contract::HubLine = serde_json::from_value(json!({"kind":"command_rejected","ts":1,"schema_version":1,"payload":{"command_id":line["id"],"code":"stale_request","message":"hub message"}})).unwrap();
+        assert!(self.router.route(&Line::Hub(response)));
+        deadline
+            .recv_or_fail(&rx, "global parent answer")
+            .unwrap_err()
+    }
+}
+
+impl Drop for FailingHub {
+    fn drop(&mut self) {
+        self.router.detach();
+    }
+}
+
+/// An app on a listed hub with no local workspace: nothing is
+/// attached and no directory is chosen.
+fn remote_home(remote: Arc<Remote>, report: &str) -> App {
+    let mut app = App::new(PathBuf::from("/client"));
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
+        ..Default::default()
+    });
+    app.set_remote(remote);
+    app.set_doctor(Some(doctor_reader(report)));
+    app.set_size(80, 24);
+    app
+}
+
+#[test]
+fn slash_doctor_on_a_remote_home_needs_no_workspace() {
+    let hub = FailingHub::new();
+    let report = (0..60).map(|n| format!("line {n:02}")).collect::<Vec<_>>();
+    let mut app = remote_home(Arc::clone(&hub.remote), &report.join("\n"));
+    assert_eq!(app.workspace(), None);
+    // The view opens with no hub traffic: no seam read and no
+    // workspace, local or hub-global.
+    app.open_config_view(ConfigView::Doctor);
+    assert!(app.config_view_open());
+    assert!(hub.lines.try_recv().is_err());
+    assert!(app.notices().is_empty());
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.title, "Doctor");
+    assert_eq!(frame.rows.len(), 60);
+    // Scrolling, edits and Esc work through the same route, still
+    // with no hub traffic and no notice.
+    assert_eq!(app.config_view_key(&Key::PageDown), Some(Effect::None));
+    assert!(hub.lines.try_recv().is_err());
+    let frame = app.config_view_screen().expect("the view is open");
+    assert!(frame.list.selected() > 0);
+    assert_eq!(
+        app.config_view_edit(&Edit::Paste("9".to_owned())),
+        Some(Effect::None)
+    );
+    assert!(hub.lines.try_recv().is_err());
+    assert!(app.input().is_empty());
+    assert!(app.config_view_open());
+    assert_eq!(app.config_view_key(&Key::Esc), Some(Effect::None));
+    assert!(!app.config_view_open());
+    assert!(app.notices().is_empty());
+    // And the hub read the view skipped would have failed.
+    let error = hub.reject_global_file();
+    assert_eq!(error.code, contract::ErrorCode::StaleRequest);
 }

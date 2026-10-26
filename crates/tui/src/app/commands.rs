@@ -153,6 +153,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_status,
     },
     CommandEntry {
+        name: "doctor",
+        description: "Opens the doctor report.",
+        hint: None,
+        run: run_doctor,
+    },
+    CommandEntry {
         name: "diff",
         description: "Opens the Changed files view.",
         hint: None,
@@ -487,6 +493,11 @@ fn run_quota(app: &mut App, _rest: &str) -> Option<Effect> {
 fn run_status(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::Status))
+}
+
+fn run_doctor(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_config_view(super::ConfigView::Doctor))
 }
 
 fn run_diff(app: &mut App, _rest: &str) -> Option<Effect> {
