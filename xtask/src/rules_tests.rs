@@ -3086,3 +3086,198 @@ fn raw_advance_table_covers_all_five_reasons() {
         );
     }
 }
+
+#[test]
+fn raw_advance_detects_advance_marked() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t(clock: &FakeClock) { let _mark = clock.advance_marked(D); }\n",
+    )];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): both spellings report.
+    assert_eq!(raw_advance_sites_with(&files, &[]).len(), 1);
+}
+
+#[test]
+fn raw_advance_detects_a_direct_constructor_receiver() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t() { FakeClock::new().advance(D); }\n",
+    )];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): a direct constructor receiver is proved.
+    assert_eq!(
+        raw_advance_sites_with(&files, &[]),
+        [
+            "crates/hub/src/x_tests.rs:1: raw FakeClock advance without an allowance (function t, occurrence 1)"
+        ]
+    );
+}
+
+#[test]
+fn raw_advance_ignores_call_results_outside_the_proof_forms() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn wrap() -> FakeClock { FakeClock::new() }\nfn t() { let clock = FakeClock::new(); clock.wrap().advance(D); helper::wrap(FakeClock::new()).advance(D); }\n",
+    )];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): a method-call result and a qualified non-`FakeClock`
+    // call result are outside the proof, even when a helper of that name
+    // returns a `FakeClock`.
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn raw_advance_proves_a_same_file_helper_return() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn fake_clock() -> Arc<FakeClock> { FakeClock::new() }\nfn t() { let clock = fake_clock(); clock.advance(D); }\n",
+    )];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): a binding built by a helper whose return type names
+    // `FakeClock` is proved.
+    assert_eq!(raw_advance_sites_with(&files, &[]).len(), 1);
+}
+
+#[test]
+fn raw_advance_ignores_a_helper_typed_otherwise_despite_a_fake_argument() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "struct GateClock; fn wrap(_: Arc<FakeClock>) -> GateClock { GateClock }\nfn t() { let c = wrap(FakeClock::new()); c.advance(D); wrap(FakeClock::new()).advance(D); }\n",
+    )];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): the proof follows the helper's declared return type,
+    // never a constructor token inside its arguments.
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn raw_advance_proves_a_helper_return_across_files() {
+    let files = [
+        raw_file(
+            "crates/hub/src/a.rs",
+            "fn wrap() -> FakeClock { FakeClock::new() }\n",
+        ),
+        raw_file(
+            "crates/hub/src/b_tests.rs",
+            "fn t() { wrap(FakeClock::new()).advance(D); }\n",
+        ),
+    ];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): receiver proof follows a typed helper return across the
+    // scanned source set.
+    assert_eq!(
+        raw_advance_sites_with(&files, &[]),
+        [
+            "crates/hub/src/b_tests.rs:1: raw FakeClock advance without an allowance (function t, occurrence 1)"
+        ]
+    );
+}
+
+#[test]
+fn raw_advance_ignores_an_ambiguous_cross_file_helper() {
+    let files = [
+        raw_file(
+            "crates/hub/src/a.rs",
+            "fn wrap() -> FakeClock { FakeClock::new() }\n",
+        ),
+        raw_file(
+            "crates/hub/src/c.rs",
+            "struct GateClock; fn wrap() -> GateClock { GateClock }\n",
+        ),
+        raw_file(
+            "crates/hub/src/b_tests.rs",
+            "fn t() { let c = wrap(); c.advance(D); }\n",
+        ),
+    ];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): when the scanned files type one helper name two ways,
+    // the proof stays silent rather than guessing.
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn raw_advance_ignores_a_method_only_helper_name() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "struct A; struct B; struct GateClock;\nimpl A { fn wrap() -> FakeClock { FakeClock::new() } }\nimpl B { fn wrap() -> GateClock { GateClock } }\nfn t() { let c = wrap(); c.advance(D); }\n",
+    )];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): method definitions do not prove a plain helper call, so
+    // two of them leave the call unproved.
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn raw_advance_proves_only_the_fake_position_of_a_helper_tuple() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn stream() -> (u64, Arc<FakeClock>) { (0, FakeClock::new()) }\nfn t() { let (n, mut clock) = stream();\nclock.advance(D);\nn.advance(D); }\n",
+    )];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): a destructured binding proves only at the return-tuple
+    // position that names `FakeClock`, so the failure names the clock's own
+    // line, not the other binding's.
+    assert_eq!(
+        raw_advance_sites_with(&files, &[]),
+        [
+            "crates/hub/src/x_tests.rs:3: raw FakeClock advance without an allowance (function t, occurrence 1)"
+        ]
+    );
+}
+
+#[test]
+fn raw_advance_ignores_a_whole_tuple_binding() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn stream() -> (u64, Arc<FakeClock>) { (0, FakeClock::new()) }\nfn t() { let both = stream(); both.advance(D); }\n",
+    )];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): binding the whole tuple proves nothing, since the tuple
+    // itself is not a `FakeClock`.
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn raw_advance_proves_a_tuple_binding_past_a_rest_pattern() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn stream() -> (Arc<FakeClock>, u64) { (FakeClock::new(), 0) }\nfn t() { let (clock, ..) = stream(); clock.advance(D); }\n",
+    )];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): a rest pattern skips positions without shifting them.
+    assert_eq!(raw_advance_sites_with(&files, &[]).len(), 1);
+}
+
+#[test]
+fn raw_advance_proves_a_boxed_constructor_binding() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t() { let boxed = Box::new(FakeClock::new()); boxed.advance(A); let leaked = Box::leak(Box::new(FakeClock::new())); leaked.advance(B); }\n",
+    )];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): the standard-library transparent wrappers carry the
+    // constructor proof to the binding.
+    assert_eq!(raw_advance_sites_with(&files, &[]).len(), 2);
+}
+
+#[test]
+fn raw_advance_rejects_a_mismatched_allowance_pair() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t() { let clock = FakeClock::new(); clock.advance(D); }\n",
+    )];
+    let allowances = [RawAdvanceAllowance {
+        path: "crates/hub/src/x_tests.rs",
+        function: "t",
+        occurrence: 1,
+        reason: NO_PARK,
+        ruling: "6261259790",
+    }];
+    // docs/testing.md ("Each kept raw site carries its own allowance with
+    // its reason"): a matching site with an invalid reason/ruling pair still
+    // fails.
+    let failures = raw_advance_sites_with(&files, &allowances);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].contains("invalid"), "{failures:?}");
+}

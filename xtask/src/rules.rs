@@ -388,10 +388,23 @@ pub(crate) const LATE_WAKE: &str =
 pub(crate) const STALL_DRIVER: &str =
     "stall driver: a shared test-support driver whose callers own the bounds";
 
+/// Whether a keep-raw allowance cites one of the five documented
+/// reason/ruling pairs (`docs/testing.md`, "Waits and timeouts"): a matching
+/// site with any other pair still fails, so a wrong ruling cannot silence
+/// the ban.
+fn allowance_pair_valid(reason: &str, ruling: &str) -> bool {
+    (reason == NO_PARK && ruling == "6179406086")
+        || (reason == PANIC_RELEASE && ruling == "6203478697")
+        || (reason == POLL_PAUSE && ruling == "6260728504")
+        || (reason == LATE_WAKE && ruling == "6261259790")
+        || (reason == STALL_DRIVER && ruling == "6263191610")
+}
+
 /// Every kept raw `FakeClock` advance outside `crates/fakes` the checker
 /// proves, emitted by a one-off inventory script and hand-checked at each
-/// non-no-park reason; helper-built and cross-file receivers are outside
-/// the proof and carry no entry (docs/testing.md:254-257).
+/// non-no-park reason. A call the checker cannot prove carries no entry:
+/// an ambiguous helper name, a method-call result, or a field of an
+/// unproved base (docs/testing.md:254-257).
 #[rustfmt::skip]
 pub(crate) const RAW_ADVANCE_ALLOWANCES: &[RawAdvanceAllowance] = &[
     raw_advance!("crates/bench/examples/bench/main_tests.rs", "a_stall_shifts_one_sample_not_a_side", 1, NO_PARK, "6179406086"),
@@ -430,6 +443,7 @@ pub(crate) const RAW_ADVANCE_ALLOWANCES: &[RawAdvanceAllowance] = &[
     raw_advance!("crates/extensions/tests/common/mod.rs", "drive", 1, STALL_DRIVER, "6263191610"),
     raw_advance!("crates/extensions/tests/credential_headers.rs", "a_refresh_replaces_the_token_and_its_headers_together", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/extensions/tests/credential_headers.rs", "a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_history_values", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/tests/credential_pair.rs", "a_background_refresh_of_one_pair_leaves_another_pair_alone", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/extensions/tests/lazy_commands.rs", "stalled_first_run", 1, LATE_WAKE, "6261259790"),
     raw_advance!("crates/extensions/tests/lua.rs", "a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives", 1, LATE_WAKE, "6261259790"),
     raw_advance!("crates/extensions/tests/lua_provider.rs", "a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path", 1, NO_PARK, "6179406086"),
@@ -505,8 +519,28 @@ pub(crate) const RAW_ADVANCE_ALLOWANCES: &[RawAdvanceAllowance] = &[
     raw_advance!("crates/provider/src/http_tests.rs", "an_observed_open_with_timing_times_one_connector_scope", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/provider/src/http_tests.rs", "an_observed_run_with_timing_times_one_scope_and_reads_the_reply", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/provider/src/http_tests.rs", "the_net_scope_ends_while_the_response_is_held", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 3, NO_PARK, "6179406086"),
+    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 4, NO_PARK, "6179406086"),
+    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 5, NO_PARK, "6179406086"),
+    raw_advance!("crates/support/src/deadline_tests.rs", "no_time_left_gives_zero_and_never_renews", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/support/src/deadline_tests.rs", "no_time_left_gives_zero_and_never_renews", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_keeps_its_reserve_after_the_waits_end", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_keeps_its_reserve_after_the_waits_end", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_keeps_its_reserve_after_the_waits_end", 3, NO_PARK, "6179406086"),
+    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_phase_left_is_cleanup_at_three_instants", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_phase_left_is_cleanup_at_three_instants", 2, NO_PARK, "6179406086"),
     raw_advance!("crates/tools/src/job_timing_tests.rs", "through_open", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tools/src/shell/monitor_tests.rs", "flood", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "the_first_change_goes_out_at_once_and_later_ones_collapse", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "the_first_change_goes_out_at_once_and_later_ones_collapse", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "a_large_delta_pushes_the_next_one_out_by_its_size", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "a_large_delta_pushes_the_next_one_out_by_its_size", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "an_incomplete_character_waits_for_its_other_half", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "a_dropped_queue_discards_the_carried_tail", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "a_kept_queue_keeps_the_carried_tail", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "held_text_across_not_yet_due_passes_is_capped_at_the_newest_64_kib", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/app/items/retry_tests.rs", "hub_session_not_found_refusal_retries_the_open_delegate_subscribe", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 2, NO_PARK, "6179406086"),
@@ -524,9 +558,9 @@ pub(crate) const RAW_ADVANCE_ALLOWANCES: &[RawAdvanceAllowance] = &[
     raw_advance!("crates/tui/src/app_tests.rs", "ctrl_c_twice_within_the_window_quits", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/app_tests.rs", "ctrl_c_at_the_window_edge_rearms", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/event_loop/attach_tests.rs", "an_answer_at_the_deadline_is_stashed_and_lost", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/event_loop_rail_tests.rs", "the_loop_gives_the_app_the_wall_time", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/lib_motion_tests.rs", "a_waiting_card_arms_for_ten_seconds_then_stops", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/lib_motion_tests.rs", "a_waiting_card_arms_for_ten_seconds_then_stops", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/lib_rail_tests.rs", "the_loop_gives_the_app_the_wall_time", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/paste_image_tests.rs", "event_wakes_the_worker_before_the_advance", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/view/item_tests.rs", "completed_delegate_header_freezes_the_elapsed_and_drops_the_stop", 1, NO_PARK, "6179406086"),
 ];
@@ -553,11 +587,14 @@ struct RawAdvanceCall {
 /// whose owning struct declares the field with a `FakeClock` type and whose
 /// base proves to be that owner (a parameter, a `let` with an owner type or
 /// an `Owner::...` initializer, or `self` inside an `impl` over the owner),
-/// or `self` inside an `impl` over `FakeClock`. Bindings are scoped: an inner
-/// shadow is undone at its `}`. The proof is local on purpose: it cannot
-/// follow a `FakeClock` value passed through a helper (a fixture constructor
-/// returning the clock itself, a helper's return, a cross-file field), so
-/// such sites are not reported and carry no entry.
+/// or `self` inside an `impl` over `FakeClock`. A direct `FakeClock::...`
+/// constructor result receiving the call proves too. Bindings are scoped: an
+/// inner shadow is undone at its `}`. A helper call proves through its
+/// declared return type: the same file's single definition first, else the
+/// scanned set's single definition; a tuple return proves only the positions
+/// that name `FakeClock`. Zero or conflicting definitions prove nothing, and
+/// a constructor token inside a call's arguments never does, so a helper
+/// that merely takes a clock stays outside the proof.
 ///
 /// The clock's own implementation and self-tests are skipped by path below,
 /// as `crates/fakes` is: they exercise the primitive itself with raw moves,
@@ -569,6 +606,7 @@ pub(crate) fn raw_advance_sites(files: &[RustFile]) -> Vec<String> {
 fn raw_advance_sites_with(files: &[RustFile], allowances: &[RawAdvanceAllowance]) -> Vec<String> {
     let mut remaining: Vec<&RawAdvanceAllowance> = allowances.iter().collect();
     let mut failures = Vec::new();
+    let mut scanned: Vec<(&RustFile, Vec<SourceToken>)> = Vec::new();
     for file in files {
         if file.path == "crates/fakes" || file.path.starts_with("crates/fakes/") {
             continue;
@@ -580,15 +618,26 @@ fn raw_advance_sites_with(files: &[RustFile], allowances: &[RawAdvanceAllowance]
         {
             continue;
         }
-        let tokens = match source_tokens(&file.source) {
-            Ok(tokens) => tokens,
+        match source_tokens(&file.source) {
+            Ok(tokens) => scanned.push((file, tokens)),
             Err(stalled) => {
                 failures.push(stalled_cursor_diagnostic(file, stalled));
                 continue;
             }
-        };
+        }
+    }
+    let mut helpers: BTreeMap<String, Vec<Vec<bool>>> = BTreeMap::new();
+    let mut same_sets: Vec<Vec<(String, Vec<bool>)>> = Vec::new();
+    for (_, tokens) in &scanned {
+        let same = file_helper_returns(tokens);
+        for (name, parts) in &same {
+            helpers.entry(name.clone()).or_default().push(parts.clone());
+        }
+        same_sets.push(same);
+    }
+    for ((file, tokens), same) in scanned.iter().zip(same_sets.iter()) {
         let mut seen: BTreeMap<String, u32> = BTreeMap::new();
-        for call in raw_advance_calls(&tokens) {
+        for call in raw_advance_calls(tokens, same, &helpers) {
             let occurrence = seen
                 .entry(call.function.clone())
                 .and_modify(|count| *count += 1)
@@ -607,7 +656,18 @@ fn raw_advance_sites_with(files: &[RustFile], allowances: &[RawAdvanceAllowance]
             let duplicates = matched.len();
             if duplicates == 1 {
                 if let Some(index) = matched.first() {
-                    remaining.remove(*index);
+                    let allowance = remaining.remove(*index);
+                    if !allowance_pair_valid(allowance.reason, allowance.ruling) {
+                        failures.push(format!(
+                            "{}:{}: raw FakeClock advance allowance is invalid (function {}, occurrence {}; reason {} with ruling {} is not a documented pair)",
+                            file.path,
+                            call.line,
+                            call.function,
+                            occurrence,
+                            allowance.reason,
+                            allowance.ruling
+                        ));
+                    }
                 }
             } else {
                 let reasons = matched
@@ -1170,6 +1230,167 @@ fn fn_signature(
     Some((name, fake, structs))
 }
 
+/// The depth-zero comma-separated spans of `start..end`, so a tuple pattern
+/// and a tuple return type split at the same positions.
+fn split_top_level(tokens: &[SourceToken], start: usize, end: usize) -> Vec<(usize, usize)> {
+    let mut parts = Vec::new();
+    let mut depth: usize = 0;
+    let mut part_start = start;
+    let mut cursor = start;
+    while cursor < end {
+        let kind = tokens.get(cursor).map(|token| &token.kind);
+        if is_open(kind) {
+            depth += 1;
+        } else if is_close(kind) {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0 && matches!(kind, Some(SourceKind::Punct(','))) {
+            parts.push((part_start, cursor));
+            part_start = cursor + 1;
+        }
+        cursor += 1;
+    }
+    if part_start < end {
+        parts.push((part_start, end));
+    }
+    parts
+}
+
+/// A helper's return type as one `FakeClock` flag per top-level tuple part,
+/// or a single flag for a non-tuple return; a missing return type proves
+/// nothing.
+fn helper_return_parts(tokens: &[SourceToken], at: usize) -> Option<(String, Vec<bool>)> {
+    let name = tokens.get(at + 1).and_then(|token| match &token.kind {
+        SourceKind::Ident(name) => Some(name.clone()),
+        SourceKind::String(_) | SourceKind::Punct(_) => None,
+    })?;
+    let mut open = None;
+    let mut cursor = at + 2;
+    while cursor < tokens.len() {
+        let kind = tokens.get(cursor).map(|token| &token.kind);
+        if matches!(kind, Some(SourceKind::Punct('('))) {
+            open = Some(cursor);
+            break;
+        }
+        if matches!(kind, Some(SourceKind::Punct('{') | SourceKind::Punct(';'))) {
+            return None;
+        }
+        cursor += 1;
+    }
+    let open = open?;
+    let mut depth: usize = 1;
+    let mut close = None;
+    cursor = open + 1;
+    while cursor < tokens.len() {
+        let kind = tokens.get(cursor).map(|token| &token.kind);
+        if is_open(kind) {
+            depth += 1;
+        } else if is_close(kind) {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                close = Some(cursor);
+                break;
+            }
+        }
+        cursor += 1;
+    }
+    let close = close?;
+    cursor = close + 1;
+    if !(punct(tokens.get(cursor), '-') && punct(tokens.get(cursor + 1), '>')) {
+        return Some((name, vec![false]));
+    }
+    let start = cursor + 2;
+    let mut end = start;
+    let mut inner: usize = 0;
+    while end < tokens.len() {
+        let kind = tokens.get(end).map(|token| &token.kind);
+        // A return type never holds a brace: the body's `{` always ends it,
+        // so a later constructor token cannot leak into the type.
+        if matches!(kind, Some(SourceKind::Punct('{'))) {
+            break;
+        }
+        if is_open(kind) {
+            inner += 1;
+        } else if is_close(kind) {
+            inner = inner.saturating_sub(1);
+        } else if inner == 0 && matches!(kind, Some(SourceKind::Punct(';'))) {
+            break;
+        }
+        end += 1;
+    }
+    if end <= start {
+        return Some((name, vec![false]));
+    }
+    if punct(tokens.get(start), '(') {
+        let mut nested: usize = 1;
+        cursor = start + 1;
+        while cursor < end {
+            let kind = tokens.get(cursor).map(|token| &token.kind);
+            if is_open(kind) {
+                nested += 1;
+            } else if is_close(kind) {
+                nested = nested.saturating_sub(1);
+                if nested == 0 {
+                    break;
+                }
+            }
+            cursor += 1;
+        }
+        if cursor == end - 1 {
+            let mut parts = Vec::new();
+            for (part_start, part_end) in split_top_level(tokens, start + 1, cursor) {
+                parts.push(range_mentions_fake_clock(tokens, part_start, part_end));
+            }
+            if parts.is_empty() {
+                parts.push(false);
+            }
+            return Some((name, parts));
+        }
+    }
+    Some((name, vec![range_mentions_fake_clock(tokens, start, end)]))
+}
+
+/// Every `fn` name in the file with its return type's `FakeClock` positions,
+/// so a call proves only what its callee declares.
+fn file_helper_returns(tokens: &[SourceToken]) -> Vec<(String, Vec<bool>)> {
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if ident(tokens.get(i), "fn")
+            && let Some(entry) = helper_return_parts(tokens, i)
+        {
+            found.push(entry);
+        }
+        i += 1;
+    }
+    found
+}
+
+/// The return type's `FakeClock` positions for a call to `name`: the same
+/// file's single definition first, else the scanned set's single definition.
+/// Zero or conflicting definitions prove nothing, so a shared helper name
+/// never guesses across files.
+fn helper_proof(
+    name: &str,
+    same: &[(String, Vec<bool>)],
+    helpers: &BTreeMap<String, Vec<Vec<bool>>>,
+) -> Option<Vec<bool>> {
+    let mut local = same
+        .iter()
+        .filter(|(defined, _)| defined == name)
+        .map(|(_, parts)| parts);
+    let first = local.next();
+    if local.next().is_some() {
+        return None;
+    }
+    if let Some(parts) = first {
+        return Some((*parts).clone());
+    }
+    match helpers.get(name) {
+        Some(all) if all.len() == 1 => all.first().cloned(),
+        _ => None,
+    }
+}
+
 /// Whether the receiver atom from `start` up to `end` is proved: a single
 /// proved binding, `self` with a proved receiver, or a `base.field` access
 /// whose owning struct declares the field with a `FakeClock` type and whose
@@ -1243,8 +1464,118 @@ fn atom_proves_fake(
     false
 }
 
+/// The outermost `::`-separated callee path at `start` with its opening
+/// paren, such as `FakeClock::new()` or `wrap(...)`, or None when the span
+/// does not open with a call. The path never reaches into arguments, so a
+/// constructor token inside them proves nothing.
+fn outer_call_path(tokens: &[SourceToken], start: usize) -> Option<(Vec<String>, usize)> {
+    let mut path = Vec::new();
+    let mut cursor = start;
+    loop {
+        match tokens.get(cursor).map(|token| &token.kind) {
+            Some(SourceKind::Ident(word)) => {
+                path.push(word.clone());
+                cursor += 1;
+            }
+            _ => return None,
+        }
+        if punct(tokens.get(cursor), ':') && punct(tokens.get(cursor + 1), ':') {
+            cursor += 2;
+            continue;
+        }
+        break;
+    }
+    if path.is_empty() || !punct(tokens.get(cursor), '(') {
+        return None;
+    }
+    Some((path, cursor))
+}
+
+/// The binding a tuple-pattern part declares when it is a plain name, such
+/// as `clock` or `mut clock`; anything else (a rest pattern, a nested
+/// pattern) binds nothing here.
+fn simple_pattern_name(tokens: &[SourceToken], start: usize, end: usize) -> Option<String> {
+    let mut cursor = start;
+    if ident(tokens.get(cursor), "mut") {
+        cursor += 1;
+    }
+    match tokens.get(cursor).map(|token| &token.kind) {
+        Some(SourceKind::Ident(binding)) if cursor + 1 == end => Some(binding.clone()),
+        _ => None,
+    }
+}
+
+/// Whether the call result receiving `.advance` at `dot` proves a
+/// `FakeClock`: a `FakeClock` constructor result, or a plain helper call
+/// whose single declared return names one. A method result and a qualified
+/// non-`FakeClock` call prove nothing.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one span plus one proof input per source"
+)]
+fn call_result_proves_fake(
+    tokens: &[SourceToken],
+    dot: usize,
+    same: &[(String, Vec<bool>)],
+    helpers: &BTreeMap<String, Vec<Vec<bool>>>,
+) -> bool {
+    if dot == 0 || !punct(tokens.get(dot - 1), ')') {
+        return false;
+    }
+    let mut depth: usize = 0;
+    let mut cursor = dot;
+    while cursor > 0 {
+        cursor -= 1;
+        let kind = tokens.get(cursor).map(|token| &token.kind);
+        if matches!(kind, Some(SourceKind::Punct(')'))) {
+            depth += 1;
+        } else if matches!(kind, Some(SourceKind::Punct('('))) {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                break;
+            }
+        }
+    }
+    if depth != 0 {
+        return false;
+    }
+    let mut path = Vec::new();
+    let mut back = cursor;
+    while let Some(previous) = back.checked_sub(1).and_then(|at| tokens.get(at)) {
+        match &previous.kind {
+            SourceKind::Ident(word) => {
+                path.push(word.clone());
+                back -= 1;
+            }
+            SourceKind::String(_) | SourceKind::Punct(_) => break,
+        }
+        if back >= 2 && punct(tokens.get(back - 1), ':') && punct(tokens.get(back - 2), ':') {
+            back -= 2;
+            continue;
+        }
+        break;
+    }
+    if path.is_empty() {
+        return false;
+    }
+    path.reverse();
+    if back > 0 && punct(tokens.get(back - 1), '.') {
+        return false;
+    }
+    if path.iter().any(|segment| segment == "FakeClock") {
+        return true;
+    }
+    if let [name] = path.as_slice() {
+        return helper_proof(name, same, helpers)
+            .is_some_and(|parts| matches!(parts.as_slice(), [true]));
+    }
+    false
+}
+
 /// Whether the initializer from `start` up to `end` proves a `FakeClock`:
-/// a `FakeClock` constructor, or a clone of an already proved receiver.
+/// a `FakeClock` constructor in the outermost callee, a clone of an already
+/// proved receiver, or a plain helper call whose single declared return
+/// names one.
 #[allow(
     clippy::too_many_arguments,
     reason = "one span plus one proof input per source"
@@ -1258,20 +1589,9 @@ fn init_proves_fake(
     structs: &BTreeMap<String, String>,
     impl_name: Option<&str>,
     self_fake: bool,
+    same: &[(String, Vec<bool>)],
+    helpers: &BTreeMap<String, Vec<Vec<bool>>>,
 ) -> bool {
-    let mut i = start;
-    while i + 2 < end {
-        let first = tokens.get(i).map(|token| &token.kind);
-        let second = tokens.get(i + 1).map(|token| &token.kind);
-        let third = tokens.get(i + 2).map(|token| &token.kind);
-        if matches!(first, Some(SourceKind::Ident(word)) if word.as_str() == "FakeClock")
-            && matches!(second, Some(SourceKind::Punct(':')))
-            && matches!(third, Some(SourceKind::Punct(':')))
-        {
-            return true;
-        }
-        i += 1;
-    }
     // `x.clone()`
     if end.saturating_sub(start) >= 5
         && matches!(
@@ -1294,25 +1614,29 @@ fn init_proves_fake(
             self_fake,
         );
     }
-    // `Arc::clone(&x)`, `Arc::clone(x)`, `Arc::new(x)`
-    if end.saturating_sub(start) >= 6
-        && matches!(
-            tokens.get(start).map(|token| &token.kind),
-            Some(SourceKind::Ident(word)) if word.as_str() == "Arc"
-        )
-        && punct(tokens.get(start + 1), ':')
-        && punct(tokens.get(start + 2), ':')
-        && tokens.get(start + 3).is_some_and(|token| {
-            matches!(
-                &token.kind,
-                SourceKind::Ident(word) if word == "clone" || word == "new"
-            )
-        })
-        && punct(tokens.get(start + 4), '(')
+    let Some((path, open)) = outer_call_path(tokens, start) else {
+        return false;
+    };
+    // A `FakeClock` constructor in the outermost callee, however qualified.
+    if path.iter().any(|segment| segment == "FakeClock") {
+        return true;
+    }
+    // `Arc::clone(&x)`, `Arc::clone(x)`, `Arc::new(x)`, `Box::new(x)` and
+    // `Box::leak(x)`: standard-library wrappers transparent to their
+    // argument's type, so the inner value proves as it would unwrapped.
+    if path.len() == 2
+        && ((path.first().is_some_and(|first| first == "Arc")
+            && path
+                .last()
+                .is_some_and(|last| last == "clone" || last == "new"))
+            || (path.first().is_some_and(|first| first == "Box")
+                && path
+                    .last()
+                    .is_some_and(|last| last == "new" || last == "leak")))
     {
         let mut inner: usize = 1;
         let mut close = end;
-        let mut cursor = start + 5;
+        let mut cursor = open + 1;
         while cursor < end {
             let kind = tokens.get(cursor).map(|token| &token.kind);
             if is_open(kind) {
@@ -1328,21 +1652,43 @@ fn init_proves_fake(
         }
         return atom_proves_fake(
             tokens,
-            start + 5,
+            open + 1,
             close,
             fake,
             fake_fields,
             structs,
             impl_name,
             self_fake,
+        ) || init_proves_fake(
+            tokens,
+            open + 1,
+            close,
+            fake,
+            fake_fields,
+            structs,
+            impl_name,
+            self_fake,
+            same,
+            helpers,
         );
+    }
+    // A plain helper call proves its single `FakeClock` return, if any.
+    if let [name] = path.as_slice() {
+        return helper_proof(name, same, helpers)
+            .is_some_and(|parts| matches!(parts.as_slice(), [true]));
     }
     false
 }
-/// Every `.advance(` or `.advance_marked(` call whose receiver the same file
-/// proves is a `FakeClock`, in source order. Bindings are scoped: an inner
-/// `let` shadow is undone at its closing `}` so the outer proof survives.
-fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
+/// Every `.advance(` or `.advance_marked(` call the scan proves is a
+/// `FakeClock` receiver, in source order: bindings the same file proves,
+/// calls the scanned helpers type, and direct `FakeClock` constructor
+/// results. Bindings are scoped: an inner `let` shadow is undone at its
+/// closing `}` so the outer proof survives.
+fn raw_advance_calls(
+    tokens: &[SourceToken],
+    same: &[(String, Vec<bool>)],
+    helpers: &BTreeMap<String, Vec<Vec<bool>>>,
+) -> Vec<RawAdvanceCall> {
     let fake_fields = fake_clock_fields(tokens);
     let all_structs = in_file_structs(tokens);
     let mut calls = Vec::new();
@@ -1391,7 +1737,69 @@ fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
             if ident(tokens.get(j), "mut") {
                 j += 1;
             }
-            if let Some(name) = tokens.get(j).and_then(|token| match &token.kind {
+            if punct(tokens.get(j), '(') {
+                let mut paren: usize = 1;
+                let mut k = j + 1;
+                while k < tokens.len() {
+                    let kind = tokens.get(k).map(|token| &token.kind);
+                    if is_open(kind) {
+                        paren += 1;
+                    } else if is_close(kind) {
+                        paren = paren.saturating_sub(1);
+                        if paren == 0 {
+                            break;
+                        }
+                    }
+                    k += 1;
+                }
+                if paren != 0 || !punct(tokens.get(k + 1), '=') {
+                    i += 1;
+                    continue;
+                }
+                let mut m = k + 2;
+                let mut inner: usize = 0;
+                while m < tokens.len() {
+                    let kind = tokens.get(m).map(|token| &token.kind);
+                    if is_open(kind) {
+                        inner += 1;
+                    } else if is_close(kind) {
+                        inner = inner.saturating_sub(1);
+                    } else if inner == 0 && matches!(kind, Some(SourceKind::Punct(';'))) {
+                        break;
+                    }
+                    m += 1;
+                }
+                let proof = match tokens.get(k + 2).map(|token| &token.kind) {
+                    Some(SourceKind::Ident(callee)) if punct(tokens.get(k + 3), '(') => {
+                        helper_proof(callee, same, helpers)
+                    }
+                    _ => None,
+                };
+                for (index, (part_start, part_end)) in
+                    split_top_level(tokens, j + 1, k).iter().enumerate()
+                {
+                    let Some(binding) = simple_pattern_name(tokens, *part_start, *part_end) else {
+                        continue;
+                    };
+                    let proved = proof
+                        .as_ref()
+                        .is_some_and(|positions| positions.get(index) == Some(&true));
+                    frame
+                        .fake_undos
+                        .push((depth, binding.clone(), frame.fake.contains(&binding)));
+                    if proved {
+                        frame.fake.insert(binding.clone());
+                    } else {
+                        frame.fake.remove(&binding);
+                    }
+                    frame.struct_undos.push((
+                        depth,
+                        binding.clone(),
+                        frame.structs.get(&binding).cloned(),
+                    ));
+                    frame.structs.remove(&binding);
+                }
+            } else if let Some(name) = tokens.get(j).and_then(|token| match &token.kind {
                 SourceKind::Ident(name) => Some(name.clone()),
                 SourceKind::String(_) | SourceKind::Punct(_) => None,
             }) {
@@ -1445,6 +1853,8 @@ fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
                             &frame_structs,
                             impl_name,
                             frame_self_fake,
+                            same,
+                            helpers,
                         );
                     let init_owner = initializer_owner(tokens, k + 1, m, &all_structs, impl_name);
                     let owner = type_owner.or(init_owner);
@@ -1482,7 +1892,7 @@ fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
                 .last()
                 .map_or((false, None), |(_, fake, name)| (*fake, name.as_deref()));
             let proved = match chain.as_slice() {
-                [] => false,
+                [] => call_result_proves_fake(tokens, i, same, helpers),
                 [base] if base.as_str() == "self" => {
                     self_fake
                         || fn_frames
