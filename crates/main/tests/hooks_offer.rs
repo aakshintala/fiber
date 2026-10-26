@@ -596,10 +596,12 @@ fn an_unreadable_declaration_faults_the_query_leaving_the_refusal() {
             && grid.contents.contains("fiber extension install hooks")
             && !grid.contents.contains("Install hooks?")
     });
+    // The refusal precedes the asynchronous names-query result. Keep
+    // the fault in place through shutdown so a late query cannot succeed
+    // after the screen predicate returns and open the offer.
     assert!(!marker.exists(), "no hook point ran");
     assert_no_sessions(&setup, "the faulted query");
     assert_not_installed(&setup, "the faulted query");
-    fs::remove_dir(&lock).unwrap();
     drop(server);
     finish_home(hub, guard, run);
 }
