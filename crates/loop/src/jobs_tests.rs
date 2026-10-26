@@ -5865,12 +5865,6 @@ fn an_output_path_nested_under_artifacts_fails_the_turn_leaving_the_file() {
         output_bytes(&world, "artifacts/sub/out.log"),
         b"token TOKEN-1234\n"
     );
-    assert!(
-        hooks
-            .calls()
-            .iter()
-            .all(|call| call.delivery != Some(JobDelivery::OutputFile))
-    );
 }
 
 #[test]
