@@ -1173,8 +1173,12 @@ fn a_20_kib_final_message_is_cut_with_its_full_text_in_an_artifact() {
 }
 
 #[test]
-fn delegate_mode_writes_its_parent_and_no_worktree() {
-    fn opened(id: &str, parent: Option<Parent>) -> (fakes::TempDir, std::path::PathBuf) {
+fn delegate_mode_records_its_parent_with_or_without_a_worktree() {
+    fn opened(
+        id: &str,
+        parent: Option<Parent>,
+        worktree: Option<contract::shapes::Worktree>,
+    ) -> (fakes::TempDir, std::path::PathBuf) {
         let home = fakes::TempDir::new("fiber-delegate-open");
         let workspace = home.path().join("workspace");
         let credentials = home.path().join("credentials");
@@ -1218,6 +1222,7 @@ fn delegate_mode_writes_its_parent_and_no_worktree() {
                     permissions,
                 },
                 parent,
+                worktree,
             ),
             None => Loop::start(
                 crate::Session {
@@ -1240,7 +1245,7 @@ fn delegate_mode_writes_its_parent_and_no_worktree() {
         session_id: SessionId("s_parent0000000001".into()),
         delegate_id: JobId("j_de1e6a7e12345678".into()),
     };
-    let (_home, dir) = opened("s_delegate00000001", Some(parent));
+    let (_home, dir) = opened("s_delegate00000001", Some(parent.clone()), None);
     let lines: Vec<Envelope> = log::read(&dir)
         .unwrap()
         .into_iter()
@@ -1255,7 +1260,7 @@ fn delegate_mode_writes_its_parent_and_no_worktree() {
         })
     );
     assert!(lines[0].payload.get("worktree").is_none());
-    let (_home, dir) = opened("s_plain000000000001", None);
+    let (_home, dir) = opened("s_plain000000000001", None, None);
     let lines: Vec<Envelope> = log::read(&dir)
         .unwrap()
         .into_iter()
@@ -1263,6 +1268,35 @@ fn delegate_mode_writes_its_parent_and_no_worktree() {
         .collect();
     assert_eq!(lines[0].kind, "session_started");
     assert!(lines[0].payload.get("parent").is_none());
+    let worktree = contract::shapes::Worktree {
+        path: "/worktrees/s_child".into(),
+        branch: "fiber/s_child".into(),
+        repository: Some("/repo/.git".into()),
+    };
+    let (_home, dir) = opened(
+        "s_isolated00000001",
+        Some(parent.clone()),
+        Some(worktree.clone()),
+    );
+    let lines: Vec<_> = log::read(&dir)
+        .unwrap()
+        .into_iter()
+        .filter(Envelope::is_durable)
+        .collect();
+    // docs/events.md, "Session and turn": session_started is the first line
+    // of every session's log; docs/loop.md, "Starting a turn": a turn starts
+    // on an inbox arrival, and none arrives here, so the opened session's
+    // log holds that line alone. docs/delegates.md, "Events": a delegate's
+    // session_started carries its parent.
+    assert_eq!(kinds(&lines), ["session_started"]);
+    assert_eq!(
+        lines[0].payload["parent"],
+        serde_json::to_value(parent).unwrap()
+    );
+    assert_eq!(
+        lines[0].payload["worktree"],
+        serde_json::to_value(worktree).unwrap()
+    );
 }
 
 #[test]

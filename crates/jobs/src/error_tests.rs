@@ -38,6 +38,38 @@ fn refused(code: ErrorCode, message: &str) -> JobsError {
 fn rows() -> Vec<Row> {
     vec![
         Row {
+            name: "unknown isolation",
+            error: JobsError::IsolationUnknown,
+            code: ErrorCode::InvalidArguments,
+            message: "`isolation` must be `none` or `worktree`.",
+        },
+        Row {
+            name: "worktree creation",
+            error: JobsError::DelegateWorktree {
+                failure: Failure {
+                    code: ErrorCode::IoFailed,
+                    message: "git worktree add failed.".into(),
+                    retry_after_ms: None,
+                    provider: None,
+                },
+            },
+            code: ErrorCode::IoFailed,
+            message: "Starting the delegate failed: git worktree add failed.",
+        },
+        Row {
+            name: "worktree outside repository",
+            error: JobsError::DelegateWorktree {
+                failure: Failure {
+                    code: ErrorCode::InvalidArguments,
+                    message: "not a repository.".into(),
+                    retry_after_ms: None,
+                    provider: None,
+                },
+            },
+            code: ErrorCode::InvalidArguments,
+            message: "Starting the delegate failed: not a repository.",
+        },
+        Row {
             name: "arguments missing, one",
             error: JobsError::ArgumentsMissing {
                 names: vec!["description".to_owned()],

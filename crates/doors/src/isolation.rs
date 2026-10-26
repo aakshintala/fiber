@@ -82,6 +82,152 @@ pub fn isolate(
     }
 }
 
+/// A delegate creation failure, kept typed for the caller's argument check.
+#[derive(Debug, thiserror::Error)]
+pub enum DelegateCreateError {
+    /// The requested workspace is not in a repository.
+    #[error("{path} is not in a git repository, so it cannot have a worktree.")]
+    NotARepository {
+        /// The requested workspace.
+        path: PathBuf,
+    },
+    /// A filesystem or git operation failed; the message excludes git output.
+    #[error("{message}")]
+    Failed {
+        /// A safe sentence describing the failure.
+        message: String,
+    },
+}
+
+/// Creates a delegate's worktree while sharing its lock before git adds it.
+/// The caller keeps the returned share until the child acknowledges adoption.
+pub fn create_delegate_worktree(
+    workspace: &Path,
+    home: &Path,
+    session: &SessionId,
+    add: &dyn Fn(&mut Command) -> io::Result<Output>,
+) -> Result<(worktree::Created, Shared), DelegateCreateError> {
+    let path = home
+        .join("projects")
+        .join(log::project_key(&project(workspace)))
+        .join("worktrees")
+        .join(&session.0);
+    let branch = format!("fiber/{}", session.0);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| DelegateCreateError::Failed {
+            message: format!("{}: {}.", parent.display(), source.kind()),
+        })?;
+    }
+    let hold = share(&path).map_err(|failure| DelegateCreateError::Failed {
+        message: failure.message,
+    })?;
+    let created =
+        worktree::create(workspace, &path, &branch, add).map_err(|error| match error {
+            worktree::Error::NotARepository { path } => {
+                DelegateCreateError::NotARepository { path }
+            }
+            worktree::Error::Exists { .. }
+            | worktree::Error::GitMissing
+            | worktree::Error::Git { .. }
+            | worktree::Error::Io { .. } => DelegateCreateError::Failed {
+                message: sentence(&error, &path),
+            },
+        })?;
+    Ok((created, hold))
+}
+
+/// Shares a parent's pre-created delegate worktree before session startup.
+pub fn adopt_delegate_worktree(
+    path: &Path,
+    session: &SessionId,
+) -> Result<Option<(Worktree, Shared)>, Failure> {
+    let hold = share(path)?;
+    match worktree::inspect(path) {
+        Ok(worktree::Inspection::Worktree(found))
+            if found.branch == format!("fiber/{}", session.0) =>
+        {
+            Ok(Some((
+                Worktree {
+                    path: path.to_string_lossy().into_owned(),
+                    branch: found.branch,
+                    repository: Some(found.common_dir.to_string_lossy().into_owned()),
+                },
+                hold,
+            )))
+        }
+        Ok(
+            worktree::Inspection::Worktree(_)
+            | worktree::Inspection::NotAWorktree
+            | worktree::Inspection::Detached,
+        ) => Ok(None),
+        Err(error) => Err(failure(ErrorCode::IoFailed, sentence(&error, path))),
+    }
+}
+
+/// An exclusive worktree hold for prune, released when dropped.
+pub struct RemovalHold {
+    _file: std::fs::File,
+}
+
+/// Tries to hold a worktree exclusively without waiting. `None` means in use.
+pub fn try_hold_removal(path: &Path) -> Result<Option<RemovalHold>, Failure> {
+    match shared::exclusive(path) {
+        Ok(shared::Removal::Exclusive(file)) => Ok(Some(RemovalHold { _file: file })),
+        Ok(shared::Removal::InUse) => Ok(None),
+        Err(error) => Err(failure(ErrorCode::IoFailed, sentence(&error, path))),
+    }
+}
+
+/// Reports a delegate worktree and ends a fresh run by the session's removal
+/// rules. Resumed runs report only; their session process owns removal.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a run end carries the recorded worktree and its owner"
+)]
+pub fn end_delegate_worktree(
+    home: &Path,
+    session: &SessionId,
+    clock: Arc<dyn Clock>,
+    path: &Path,
+    branch: &str,
+    base: Option<&str>,
+    remove: bool,
+) -> contract::events::FinishedWorktree {
+    let inspected = worktree::inspect(path);
+    let dirty = match &inspected {
+        Ok(worktree::Inspection::Worktree(found)) => found.uncommitted,
+        Ok(worktree::Inspection::NotAWorktree) if !path.exists() => false,
+        _ => true,
+    };
+    if remove
+        && let Some(base) = base
+        && let Ok(worktree::Inspection::Worktree(found)) = inspected
+    {
+        Isolation::new(
+            worktree::Created {
+                path: path.to_owned(),
+                branch: branch.to_owned(),
+                base: base.to_owned(),
+            },
+            session,
+            home,
+            clock,
+            found.common_dir,
+            None,
+            Duration::ZERO,
+        )
+        .end();
+    }
+    contract::events::FinishedWorktree {
+        worktree: Worktree {
+            path: path.to_string_lossy().into_owned(),
+            branch: branch.to_owned(),
+            repository: None,
+        },
+        dirty,
+    }
+}
+
 /// What a recreation found at the recorded path.
 #[allow(
     clippy::large_enum_variant,

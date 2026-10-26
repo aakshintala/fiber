@@ -477,6 +477,7 @@ const HOME_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/cli/src/login/host.rs", "fn masked_by_project|root:home", "join:projects", "#2909"),
     source_allowance!("crates/doors/src/attach.rs", "fn attach|root:home", "join:run", "#1720"),
     source_allowance!("crates/doors/src/isolation.rs", "fn isolate|root:home", "join:projects", "#1720"),
+    source_allowance!("crates/doors/src/isolation.rs", "fn create_delegate_worktree|root:home", "join:projects", "#544"),
     source_allowance!("crates/doors/src/hub.rs", "fn connect_with|root:home", "join:run", "#1720"),
     source_allowance!("crates/doors/src/hub.rs", "fn connect_with|root:home/run", "join:hub", "#1720"),
     source_allowance!("crates/doors/src/hub.rs", "fn attempt|root:home", "join:run", "#1720"),

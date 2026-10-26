@@ -749,6 +749,7 @@ fn ask_new(
         Some(prompt),
         true,
         worktree,
+        None,
         clock,
         signals,
         fiber,

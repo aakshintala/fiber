@@ -137,6 +137,7 @@ impl DelegateMessage {
                 parent: parent.clone(),
                 prompt: message.clone(),
                 workspace: PathBuf::from(&resumable.delegate.workspace),
+                worktree: None,
                 start: Start::Resume,
             };
             let log = resumable.output_path.clone();
@@ -155,6 +156,18 @@ impl DelegateMessage {
                 None,
                 Some(self.registry.usage_forward()),
             );
+            let runner = runner.with_worktree(resumable.delegate.worktree.as_ref().map(|record| {
+                super::super::run::WorktreeRun {
+                    end: super::super::EndWorktree {
+                        path: PathBuf::from(&record.path),
+                        branch: record.branch.clone(),
+                        base: None,
+                        remove: false,
+                    },
+                    guard: None,
+                    finish: Arc::clone(&self.finish),
+                }
+            }));
             let (child, listing) = match runner.spawn(&launch, &launched) {
                 Ok(started) => started,
                 Err(source) => return Err(StartFailed::Spawn(source)),

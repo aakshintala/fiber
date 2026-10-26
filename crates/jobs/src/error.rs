@@ -39,6 +39,15 @@ pub enum JobsError {
         /// The disallowed argument keys, in the call's order.
         keys: Vec<String>,
     },
+    /// The isolation argument is not one of the supported modes.
+    #[error("`isolation` must be `none` or `worktree`.")]
+    IsolationUnknown,
+    /// The delegate's worktree could not be made.
+    #[error("Starting the delegate failed: {}", failure.message)]
+    DelegateWorktree {
+        /// The creation refusal, with its stable code and safe message.
+        failure: Failure,
+    },
     /// `timeout_ms` is not a positive integer.
     #[error("`timeout_ms` must be an integer of 1 or more.")]
     TimeoutNotPositive,
@@ -289,6 +298,8 @@ impl JobsError {
         match self {
             Self::ArgumentsMissing { .. } => ErrorCode::InvalidArguments,
             Self::ArgumentsNotStrings { .. } => ErrorCode::InvalidArguments,
+            Self::IsolationUnknown => ErrorCode::InvalidArguments,
+            Self::DelegateWorktree { failure } => failure.code.clone(),
             Self::ArgumentsNotAllowed { .. } => ErrorCode::InvalidArguments,
             Self::TimeoutNotPositive => ErrorCode::InvalidArguments,
             Self::ModelMissing { .. } => ErrorCode::InvalidArguments,

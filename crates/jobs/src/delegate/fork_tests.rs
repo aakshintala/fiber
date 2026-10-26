@@ -10,7 +10,6 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 use contract::inbox::Delivery;
 use contract::jobs::{JobRecord, Jobs as _};
@@ -45,24 +44,10 @@ fn point_ok(rig: &Rig) -> ForkPoint {
     })
 }
 
-fn events_for(rig: &Rig) -> super::super::EventsFor {
-    let sessions = rig.sessions.clone();
-    Arc::new(move |id: &contract::SessionId| sessions.join(&id.0).join("events.jsonl"))
-}
-
 fn tool_with(rig: &Rig, point: ForkPoint) -> DelegateFork {
     DelegateFork {
-        depth: 0,
-        registry: Arc::clone(&rig.registry),
-        parent: contract::SessionId("s_parent".into()),
-        workspace: rig.sessions.parent().unwrap().to_path_buf(),
-        events_for: events_for(rig),
-        clock: Arc::clone(&rig.clock) as Arc<dyn contract::clock::Clock>,
-        bound: Duration::from_secs(5),
-        cap: 1024,
+        wiring: rig.wiring(),
         point,
-        launch: Arc::clone(&rig.launch),
-        watch: Arc::clone(&rig.watch),
     }
 }
 
@@ -104,7 +89,7 @@ impl Ask for FakeAsk {
 fn a_depth_two_caller_fails_depth_exceeded_without_calling_the_point() {
     let rig = rig();
     let mut forked = tool(&rig);
-    forked.depth = 2;
+    forked.wiring.depth = 2;
     let output = forked.run(
         &arguments(),
         &fakes::CancelToken::new(),
@@ -185,14 +170,7 @@ fn a_started_fork_counts_toward_the_cap() {
     assert_eq!(rig.launch_count.load(Ordering::SeqCst), 1);
     // 9 spawns plus one started fork: the next spawn is refused.
     let spawned = super::super::DelegateSpawn {
-        depth: 0,
-        registry: Arc::clone(&rig.registry),
-        parent: contract::SessionId("s_parent".into()),
-        workspace: rig.sessions.parent().unwrap().to_path_buf(),
-        events_for: events_for(&rig),
-        clock: Arc::clone(&rig.clock) as Arc<dyn contract::clock::Clock>,
-        bound: Duration::from_secs(5),
-        cap: 1024,
+        wiring: rig.wiring(),
         resolve: super::super::models::Resolve {
             lookup: Arc::new(|model: &str| match model {
                 "fiber:fake/m" => Ok("fake/m".to_owned()),
@@ -201,8 +179,6 @@ fn a_started_fork_counts_toward_the_cap() {
             catalogue: Arc::from("References:\nfiber:fake/m"),
             credential: Arc::new(|_| Ok(None)),
         },
-        launch: Arc::clone(&rig.launch),
-        watch: Arc::clone(&rig.watch),
     };
     let refused = spawned.run(
         &serde_json::json!({

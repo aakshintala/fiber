@@ -214,24 +214,31 @@ impl Fixture {
     }
 
     fn spawner(&self, launch: Launch, watch: Watch) -> DelegateSpawn {
-        let sessions = self.sessions.clone();
         DelegateSpawn {
-            depth: 0,
-            registry: Arc::clone(&self.registry),
-            parent: SessionId("s_parent".into()),
-            workspace: self._dir.path().to_path_buf(),
-            events_for: Arc::new(move |id: &SessionId| sessions.join(&id.0).join("events.jsonl")),
-            clock: Arc::clone(&self.clock) as Arc<dyn contract::clock::Clock>,
-            bound: BOUND,
-            cap: 1024,
             resolve: resolve(),
-            launch,
-            watch,
+            wiring: crate::DelegateWiring {
+                create: crate::support::no_creation(),
+                finish: crate::support::clean_finish(),
+                depth: 0,
+                registry: Arc::clone(&self.registry),
+                parent: SessionId("s_parent".into()),
+                workspace: self._dir.path().to_path_buf(),
+                events_for: {
+                    let sessions = self.sessions.clone();
+                    Arc::new(move |_, id| sessions.join(&id.0).join("events.jsonl"))
+                },
+                clock: Arc::clone(&self.clock) as Arc<dyn contract::clock::Clock>,
+                bound: BOUND,
+                cap: 1024,
+                launch,
+                watch,
+            },
         }
     }
 
     fn messenger(&self, launch: Launch, watch: Watch, last_seq: LastSeq) -> DelegateMessage {
         DelegateMessage {
+            finish: crate::support::clean_finish(),
             depth: 0,
             registry: Arc::clone(&self.registry),
             parent: SessionId("s_parent".into()),
