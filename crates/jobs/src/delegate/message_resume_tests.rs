@@ -25,7 +25,16 @@ use super::super::Watched;
 use super::{DelegateMessage, LastSeq, Launch, Steer, Steered, Watch};
 use crate::Start;
 use crate::registry::Registry;
-use crate::support::{delegate_finished, delegate_started, ended_ok, exited};
+use crate::support::{delegate_finished, ended_ok, exited};
+
+fn delegate_started(id: &str) -> contract::events::DelegateStarted {
+    let mut started = crate::support::delegate_started(id);
+    started.workspace = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    started
+}
 use crate::timing_tests::{Step, try_step};
 use contract::Envelope;
 
@@ -65,6 +74,7 @@ struct Launched {
     parent: SessionId,
     prompt: String,
     workspace: std::path::PathBuf,
+    worktree: Option<contract::shapes::Worktree>,
     resume: bool,
 }
 
@@ -167,6 +177,7 @@ fn resume_rig_with_steer(
             parent: launched.parent.clone(),
             prompt: launched.prompt.clone(),
             workspace: launched.workspace.clone(),
+            worktree: launched.worktree.clone(),
             resume: matches!(launched.start, Start::Resume),
         });
         match queued.lock().unwrap().pop_front().expect("a launch reply") {
@@ -221,9 +232,9 @@ fn resume_rig_with_steer(
     let last_seq_calls: Arc<Mutex<Vec<SessionId>>> = Arc::new(Mutex::new(Vec::new()));
     let read = Arc::clone(&last_seq_calls);
     let inner = last_seq;
-    let last_seq: LastSeq = Arc::new(move |id| {
+    let last_seq: LastSeq = Arc::new(move |workspace, id| {
         read.lock().unwrap().push(id.clone());
-        inner(id)
+        inner(workspace, id)
     });
     let steer_calls = Arc::new(Mutex::new(0usize));
     let counted = Arc::clone(&steer_calls);
@@ -265,6 +276,7 @@ fn resume_rig_with_steer(
         launch,
         watch,
         steer,
+        worktree_record: Arc::new(|_, _| Ok(None)),
         last_seq,
     });
     ResumeRig {
@@ -282,11 +294,111 @@ fn resume_rig_with_steer(
 }
 
 #[test]
+fn resume_workspace_recovery_reads_the_childs_record_and_never_sets_worktree() {
+    for mode in [
+        "kept",
+        "removed",
+        "absent",
+        "missing-repository",
+        "missing-workspace",
+        "read-error",
+    ] {
+        let mut rig = resume_rig(
+            vec![LaunchReply::Missing],
+            vec![],
+            Arc::new(|_, _| Ok(Some(7))),
+        );
+        let workspace = rig._dir.path().join("child");
+        let repository = rig._dir.path().join("repository");
+        if mode == "kept" || mode == "absent" {
+            std::fs::create_dir(&workspace).unwrap();
+        }
+        if mode != "missing-repository" {
+            std::fs::create_dir(&repository).unwrap();
+        }
+        let record = contract::shapes::Worktree {
+            path: workspace.to_string_lossy().into_owned(),
+            branch: "fiber/child".into(),
+            repository: Some(repository.to_string_lossy().into_owned()),
+        };
+        let expected_workspace = workspace.clone();
+        let returned = record.clone();
+        Arc::get_mut(&mut rig.tool).unwrap().worktree_record = Arc::new(move |path, id| {
+            assert_eq!(path, expected_workspace);
+            assert_eq!(id.0, "s_d000000000000001");
+            match mode {
+                "absent" | "missing-workspace" => Ok(None),
+                "read-error" => Err("record log unreadable".into()),
+                _ => Ok(Some(returned.clone())),
+            }
+        });
+        let expected_workspace = workspace.clone();
+        Arc::get_mut(&mut rig.tool).unwrap().last_seq = Arc::new(move |path, _| {
+            assert_eq!(path, expected_workspace);
+            Ok(Some(7))
+        });
+        let id = crate::registry::mint_job_id();
+        let mut delegate = delegate_started(&id.0);
+        delegate.workspace = workspace.to_string_lossy().into_owned();
+        let (_, finish) = rig.registry.open_started(
+            id.clone(),
+            "delegate_spawn".into(),
+            "scan".into(),
+            "output".into(),
+            Stop(Box::new(|| {})),
+            delegate,
+        );
+        end_resume_run(finish, &id, "done");
+        let _notice = take_notice(&rig);
+        let output = rig.tool.run(
+            &resume_args(&id.0, "again"),
+            &CancelToken::new(),
+            &Recorder::default(),
+        );
+        match mode {
+            "missing-repository" | "missing-workspace" => {
+                assert_eq!(code_of(&output), ErrorCode::IoFailed, "{mode}");
+                assert!(
+                    content(&output).contains(workspace.to_str().unwrap()),
+                    "{}",
+                    content(&output)
+                );
+                assert!(rig.launched.lock().unwrap().is_empty());
+            }
+            "read-error" => {
+                assert_eq!(code_of(&output), ErrorCode::ToolError);
+                assert!(content(&output).contains("record log unreadable"));
+                assert!(rig.launched.lock().unwrap().is_empty());
+            }
+            _ => {
+                assert_eq!(
+                    code_of(&output),
+                    ErrorCode::ToolError,
+                    "the scripted spawn fails"
+                );
+                let launched = rig.launched.lock().unwrap();
+                assert_eq!(launched.len(), 1);
+                assert_eq!(
+                    launched[0].workspace,
+                    if mode == "removed" {
+                        &repository
+                    } else {
+                        &workspace
+                    }
+                    .to_path_buf()
+                );
+                assert!(launched[0].worktree.is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn a_resume_at_the_concurrency_cap_starts_nothing() {
     let rig = resume_rig(
         vec![],
         vec![],
-        Arc::new(|_| panic!("cap precedes the boundary read")),
+        Arc::new(|_, _| panic!("cap precedes the boundary read")),
     );
     let (id, finish) = open_resume_delegate(&rig, "/unused");
     end_resume_run(finish, &id, "done");
@@ -532,7 +644,7 @@ fn run_and_run_asking_differ_only_in_the_starts_action() {
     let rig = resume_rig(
         vec![LaunchReply::Block("fiber-message-definition-1".into())],
         vec![(Vec::new(), Watched::Closed)],
-        Arc::new(|_| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
     );
     let output_path = format!("{}/sessions/s_1/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
@@ -558,7 +670,7 @@ fn run_and_run_asking_differ_only_in_the_starts_action() {
     let rig = resume_rig(
         vec![LaunchReply::Block("fiber-message-definition-2".into())],
         vec![(Vec::new(), Watched::Closed)],
-        Arc::new(|_| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
     );
     let output_path = format!("{}/sessions/s_2/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
@@ -591,7 +703,7 @@ fn a_resume_reports_its_launch_and_queues_both_runs() {
             vec![exited_line(7, "Old."), exited_line(9, "New.")],
             Watched::Exited,
         )],
-        Arc::new(|_| Ok(Some(7))),
+        Arc::new(|_, _| Ok(Some(7))),
     );
     let output_path = format!("{}/sessions/s_9/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
@@ -621,7 +733,7 @@ fn a_resume_reports_its_launch_and_queues_both_runs() {
     assert_eq!(launched[0].parent.0, "s_parent");
     assert_eq!(launched[0].depth, 1);
     assert_eq!(launched[0].prompt, "tell me more");
-    assert_eq!(launched[0].workspace.display().to_string(), "/w");
+    assert_eq!(launched[0].workspace, std::env::current_dir().unwrap());
     drop(launched);
     // The boundary read ran on the delegate's session.
     assert_eq!(
@@ -659,7 +771,7 @@ fn a_resume_after_a_wait_takes_only_the_new_run_start() {
     let rig = resume_rig(
         vec![LaunchReply::Block("fiber-message-waited".into())],
         vec![(Vec::new(), Watched::Closed)],
-        Arc::new(|_| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
     );
     let output_path = format!("{}/sessions/s_w/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
@@ -689,7 +801,7 @@ fn a_dropped_resume_output_loses_no_start() {
     let rig = resume_rig(
         vec![LaunchReply::Block("fiber-message-dropped".into())],
         vec![(Vec::new(), Watched::Closed)],
-        Arc::new(|_| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
     );
     let output_path = format!("{}/sessions/s_d/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
@@ -725,7 +837,7 @@ fn two_calls_resume_in_turn() {
             LaunchReply::Block("fiber-message-two-2".into()),
         ],
         vec![(Vec::new(), Watched::Closed), (Vec::new(), Watched::Closed)],
-        Arc::new(|_| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
     );
     let output_path = format!("{}/sessions/s_2/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
@@ -787,7 +899,7 @@ fn a_spawn_failure_starts_nothing_and_a_second_call_resumes() {
             LaunchReply::Block("fiber-message-respawn".into()),
         ],
         vec![(Vec::new(), Watched::Closed)],
-        Arc::new(|_| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
     );
     let output_path = format!("{}/sessions/s_f/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
@@ -834,7 +946,7 @@ fn a_boundary_read_that_failed_starts_nothing_though_the_log_is_back_before_the_
     let release_rx = Mutex::new(release_rx);
     let output_path = "/sessions/s_b/events.jsonl".to_owned();
     let log = output_path.clone();
-    let last_seq: LastSeq = Arc::new(move |id: &SessionId| {
+    let last_seq: LastSeq = Arc::new(move |_: &std::path::Path, id: &SessionId| {
         let _ = id;
         if reading.load(Ordering::SeqCst) {
             let _sent = read_tx.send(());
@@ -925,7 +1037,7 @@ fn closing_resumes_once_the_run_ends_before_the_bound() {
     let rig = resume_rig_with_steer(
         vec![LaunchReply::Block("fiber-message-closing".into())],
         vec![(Vec::new(), Watched::Closed)],
-        Arc::new(|_| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
         vec![ResumeSteer::Closing],
     );
     let output_path = format!("{}/sessions/s_c/events.jsonl", rig._dir.path().display());
@@ -953,7 +1065,7 @@ fn gone_resumes_once_the_run_ends_during_the_backoff() {
     let rig = resume_rig_with_steer(
         vec![LaunchReply::Block("fiber-message-gone".into())],
         vec![(Vec::new(), Watched::Closed)],
-        Arc::new(|_| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
         vec![ResumeSteer::GoneUncommitted],
     );
     let output_path = format!("{}/sessions/s_g/events.jsonl", rig._dir.path().display());
@@ -983,7 +1095,7 @@ fn closing_after_a_committed_gone_resumes_once_the_run_ends() {
     let rig = resume_rig_with_steer(
         vec![LaunchReply::Block("fiber-message-closing-gone".into())],
         vec![(Vec::new(), Watched::Closed)],
-        Arc::new(|_| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
         vec![ResumeSteer::Gone, ResumeSteer::Closing],
     );
     let output_path = format!("{}/sessions/s_cg/events.jsonl", rig._dir.path().display());
@@ -1025,7 +1137,7 @@ fn a_cancel_before_the_resume_starts_nothing() {
     let rig = resume_rig(
         vec![LaunchReply::Block("fiber-message-cancelled".into())],
         vec![(Vec::new(), Watched::Closed)],
-        Arc::new(|_| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
     );
     let output_path = format!("{}/sessions/s_q/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
@@ -1062,7 +1174,7 @@ fn a_cancel_inside_the_start_still_commits_the_resume() {
             reached: reached_tx,
         }],
         vec![(Vec::new(), Watched::Closed)],
-        Arc::new(|_| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
     );
     let output_path = format!("{}/sessions/s_cs/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);

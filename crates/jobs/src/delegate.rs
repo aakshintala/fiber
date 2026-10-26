@@ -23,7 +23,7 @@ pub(crate) mod run;
 pub use models::{DelegateModels, Resolve};
 pub(crate) mod message;
 
-pub use message::{DelegateMessage, LastSeq, Steer, Steered};
+pub use message::{DelegateMessage, LastSeq, Steer, Steered, WorktreeRecord};
 pub use run::{
     CreateWorktree, EndWorktree, FinishWorktree, Fresh, Launch, Launched, Start, Watch, Watched,
     WorktreeGuard,

@@ -63,6 +63,8 @@ pub(crate) struct Delegates {
     steer: jobs::Steer,
     /// Reads the child's log boundary for a resume.
     last_seq: jobs::LastSeq,
+    /// Reads the child's durable worktree in its own project.
+    worktree_record: jobs::WorktreeRecord,
     /// Renders the quota section of `delegate_models` on every call.
     quota: Option<ModelQuotaRead>,
     /// The last list `retain` was given: a start whose extension it lacks
@@ -97,7 +99,8 @@ impl Delegates {
         let launch = launcher(&fiber);
         let watch = watcher(&home);
         let steer = steerer(&home);
-        let last_seq = last_seq_reader(&sessions);
+        let last_seq = last_seq_reader(&home);
+        let worktree_record = worktree_record_reader(&home);
         Self {
             depth: depth(),
             home,
@@ -111,6 +114,7 @@ impl Delegates {
             watch,
             steer,
             last_seq,
+            worktree_record,
             quota: None,
             loaded: Mutex::new(None),
         }
@@ -234,6 +238,7 @@ impl Delegates {
             watch: Arc::clone(&self.watch),
             steer: Arc::clone(&self.steer),
             last_seq: Arc::clone(&self.last_seq),
+            worktree_record: Arc::clone(&self.worktree_record),
         }
     }
 
@@ -854,12 +859,42 @@ fn read_fork_point(
 /// Reads the child's log boundary for a resume: the `seq` of the last
 /// complete line of `<sessions>/<delegate session id>/events.jsonl`,
 /// or the reason it could not be read, which names the log's path.
-fn last_seq_reader(sessions: &Path) -> jobs::LastSeq {
-    let sessions = sessions.to_path_buf();
-    Arc::new(move |id| {
+fn last_seq_reader(home: &Path) -> jobs::LastSeq {
+    let home = home.to_path_buf();
+    Arc::new(move |workspace, id| {
+        let sessions = delegate_sessions(&home, workspace);
         log::last_seq(log::SessionDir::new(&sessions, id).path())
             .map(|seq| seq.map(|seq| seq.0))
             .map_err(|error| error.to_string())
+    })
+}
+
+/// A Fiber worktree's path preserves the project key even after removal.
+/// Other workspaces resolve through git, including an explicitly selected repository.
+fn delegate_sessions(home: &Path, workspace: &Path) -> PathBuf {
+    let projects = home.join("projects");
+    let project = workspace
+        .parent()
+        .filter(|parent| parent.file_name() == Some(std::ffi::OsStr::new("worktrees")))
+        .and_then(Path::parent)
+        .filter(|project| project.parent() == Some(projects.as_path()));
+    match project {
+        Some(project) => project.join("sessions"),
+        None => log::sessions_dir(home, &doors::project(workspace)),
+    }
+}
+
+/// Reads only the child's durable first line; a bad record fails closed.
+fn worktree_record_reader(home: &Path) -> jobs::WorktreeRecord {
+    let home = home.to_path_buf();
+    Arc::new(move |workspace, id| {
+        let sessions = delegate_sessions(&home, workspace);
+        let dir = log::SessionDir::new(&sessions, id);
+        let started = log::started_first(dir.path())
+            .map_err(|error| format!("{}: {error:?}", dir.events().display()))?;
+        started
+            .worktree_record()
+            .map_err(|_| format!("{}: malformed worktree record", dir.events().display()))
     })
 }
 

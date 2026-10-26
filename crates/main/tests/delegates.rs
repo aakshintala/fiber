@@ -4929,6 +4929,259 @@ const RESUME_PARENT_DURABLE: &[&str] = &[
 ];
 
 #[test]
+fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
+    for mode in [
+        "kept",
+        "removed-clean",
+        "removed-dirty",
+        "missing-repository",
+        "no-record-missing",
+    ] {
+        let setup = support::Setup::new();
+        let _guard = arm(&setup);
+        support::git(setup.deadline, setup.root.path(), &["init"]);
+        support::git(
+            setup.deadline,
+            setup.root.path(),
+            &["commit", "--allow-empty", "-m", "parent"],
+        );
+        let selected_root = fakes::TempDir::new("selected-project");
+        let repository = selected_root.path().join("repository");
+        fs::create_dir(&repository).unwrap();
+        let isolated = mode != "no-record-missing";
+        if isolated {
+            support::git(setup.deadline, &repository, &["init"]);
+            support::git(
+                setup.deadline,
+                &repository,
+                &["commit", "--allow-empty", "-m", "child"],
+            );
+        }
+        let sessions = log::sessions_dir(&setup.home(), &doors::project(&repository));
+        let worktrees = sessions.parent().unwrap().join("worktrees");
+        let selected = repository.clone();
+        let selected_worktrees = worktrees.clone();
+        let deadline = setup.deadline;
+        let parent = ProviderServer::start_responding(move |request: &Request| {
+            let text = String::from_utf8_lossy(&request.body);
+            if !text.contains(r#""name":"delegate_spawn""#) { return text_reply("allow"); }
+            if text.contains("call_resume") { return support::hello(); }
+            if text.contains("run-one-done") {
+                if mode.starts_with("removed") || mode == "missing-repository" {
+                    let path = fs::read_dir(&selected_worktrees).unwrap().map(|entry| entry.unwrap().path()).find(|path| path.is_dir()).unwrap();
+                    support::git(deadline, &selected, &["worktree", "remove", "--force", path.to_str().unwrap()]);
+                    support::git(deadline, &selected, &["commit", "--allow-empty", "-m", "new HEAD"]);
+                }
+                if mode == "missing-repository" || mode == "no-record-missing" {
+                    fs::rename(&selected, selected.with_extension("moved")).unwrap();
+                }
+                return support::stream(&[function_call("call_resume", "delegate_message", &json!({"id":job_id(&text), "message":RESUME_MARK}))]);
+            }
+            if text.contains("Started delegate") { return support::hello(); }
+            support::stream(&[function_call("call_spawn", "delegate_spawn", &json!({"description":"scan", "prompt":"scan child", "model":"fiber:pb/m", "workspace":selected, "isolation":if isolated {"worktree"} else {"none"}}))])
+        }).unwrap();
+        let child_worktrees = worktrees.clone();
+        let child_repository = repository.clone();
+        let child = ProviderServer::start_responding(move |request: &Request| {
+            let resumed = String::from_utf8_lossy(&request.body).contains(RESUME_MARK);
+            let path = if isolated {
+                fs::read_dir(&child_worktrees)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .find(|path| path.is_dir())
+                    .unwrap()
+            } else {
+                child_repository.clone()
+            };
+            if !resumed || mode == "removed-dirty" {
+                fs::write(path.join("kept.txt"), "dirty fixture").unwrap();
+            }
+            if resumed && mode.starts_with("removed") {
+                assert_eq!(
+                    support::git(deadline, &path, &["rev-parse", "HEAD"]),
+                    support::git(deadline, &child_repository, &["rev-parse", "HEAD"])
+                );
+            }
+            text_reply(if resumed {
+                "run-two-done"
+            } else {
+                "run-one-done"
+            })
+        })
+        .unwrap();
+        child.hold();
+        providers(&setup, &parent, &child);
+        standing_allow(&setup);
+        slow_idle(&setup);
+        let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+        let mut ended = 0;
+        running.wait_line("initial parent turns finish", |line| {
+            ended += usize::from(line["kind"] == "turn_completed");
+            ended == 2
+        });
+        child.release_one();
+        let fails = mode == "missing-repository" || mode == "no-record-missing";
+        let requested = fails || child.await_requests(2, setup.deadline);
+        child.release();
+        if !requested {
+            let sid = fs::read_dir(&sessions)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .file_name()
+                .to_str()
+                .unwrap()
+                .to_owned();
+            let header = one(
+                &read_lines(&sessions.join(&sid).join("events.jsonl")),
+                "session_started",
+            );
+            let mut diagnostic = setup.fiber(&[
+                "session",
+                "--id",
+                &sid,
+                "--workspace",
+                repository.join(".git").to_str().unwrap(),
+                "--resume",
+                "--prompt",
+                RESUME_MARK,
+                "--parent",
+                header["parent"]["session_id"].as_str().unwrap(),
+                "--delegate-id",
+                header["parent"]["delegate_id"].as_str().unwrap(),
+            ]);
+            let (input, _hold) = std::os::unix::net::UnixStream::pair().unwrap();
+            diagnostic.stdin(Stdio::from(std::os::fd::OwnedFd::from(input)));
+            std::os::unix::process::CommandExt::process_group(&mut diagnostic, 0);
+            let diagnostic = support::run_to_exit(
+                Deadline::after(Duration::from_secs(20)),
+                "diagnostic resume",
+                diagnostic,
+            );
+            eprintln!(
+                "[DEBUG-resume] {} {}",
+                String::from_utf8_lossy(&diagnostic.stdout),
+                String::from_utf8_lossy(&diagnostic.stderr)
+            );
+            let logs: Vec<_> = fs::read_dir(&sessions)
+                .unwrap()
+                .map(|entry| {
+                    let path = entry.unwrap().path().join("events.jsonl");
+                    (path.clone(), fs::read_to_string(path))
+                })
+                .collect();
+            let parent_sessions =
+                log::sessions_dir(&setup.home(), &doors::project(setup.root.path()));
+            let parent_logs: Vec<_> = fs::read_dir(parent_sessions)
+                .unwrap()
+                .map(|entry| {
+                    read_lines(&entry.unwrap().path().join("events.jsonl"))
+                        .into_iter()
+                        .filter(|line| {
+                            matches!(
+                                line["kind"].as_str(),
+                                Some(
+                                    "delegate_finished"
+                                        | "job_started"
+                                        | "tool_call_completed"
+                                        | "fiber_exited"
+                                )
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            panic!(
+                "{mode}: no resumed request; parent {parent_logs:?}; child logs {logs:?}; stderr {:?}",
+                running.stderr_snapshot.lock().unwrap()
+            );
+        }
+        let (status, lines, stderr) = running.wait();
+        assert_eq!(status.code(), Some(0), "{mode}: {stderr}");
+        let started = &lines
+            .iter()
+            .find(|line| line["kind"] == "delegate_started")
+            .unwrap()["payload"];
+        let child_id = started["delegate_session_id"].as_str().unwrap();
+        let path = PathBuf::from(started["workspace"].as_str().unwrap());
+        let child_lines = read_lines(&sessions.join(child_id).join("events.jsonl"));
+        assert!(
+            requested,
+            "{mode}: no resumed request; child {child_lines:?}; parent {lines:?}; {stderr}"
+        );
+        let completed = completed_for(&lines, "delegate_message");
+        if fails {
+            assert_eq!(
+                completed["payload"]["error"]["code"], "io_failed",
+                "{mode}: {completed}"
+            );
+            assert!(
+                completed["payload"]["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains(path.to_str().unwrap())
+            );
+            assert_eq!(child.requests().len(), 1);
+            assert_eq!(
+                child_lines
+                    .iter()
+                    .filter(|line| line["kind"] == "fiber_started")
+                    .count(),
+                1
+            );
+        } else {
+            assert_eq!(
+                completed["payload"]["status"], "completed",
+                "{mode}: {completed}"
+            );
+            assert_eq!(child.requests().len(), 2);
+            let process_starts: Vec<_> = child_lines
+                .iter()
+                .filter(|line| line["kind"] == "fiber_started")
+                .collect();
+            assert_eq!(process_starts.len(), 2, "{mode}");
+            assert_eq!(
+                one(&child_lines, "session_started")["workspace"],
+                started["workspace"]
+            );
+            let seqs: Vec<_> = child_lines
+                .iter()
+                .map(|line| line["seq"].as_u64().unwrap())
+                .collect();
+            assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]), "{seqs:?}");
+            for kind in [
+                "job_started",
+                "delegate_started",
+                "job_completed",
+                "delegate_finished",
+            ] {
+                let records: Vec<_> = lines.iter().filter(|line| line["kind"] == kind).collect();
+                assert_eq!(records.len(), 2, "{mode}: {kind}");
+                assert!(
+                    records
+                        .iter()
+                        .all(|record| record["payload"]["job_id"] == started["job_id"])
+                );
+            }
+            assert_eq!(
+                path.exists(),
+                mode != "removed-clean",
+                "{mode}: cleanup follows session rules"
+            );
+            let finishes: Vec<_> = lines
+                .iter()
+                .filter(|line| line["kind"] == "delegate_finished")
+                .collect();
+            assert_eq!(
+                finishes[1]["payload"]["worktree"]["path"],
+                started["worktree"]["path"]
+            );
+        }
+    }
+}
+
+#[test]
 fn delegate_message_resumes_a_finished_delegate_as_a_second_run_of_the_same_job() {
     let setup = support::Setup::new();
     let _guard = arm(&setup);

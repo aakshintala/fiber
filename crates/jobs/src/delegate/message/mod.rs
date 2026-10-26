@@ -23,7 +23,7 @@ use crate::registry::runs::{Target, Waited};
 
 pub(crate) mod resume;
 
-pub use resume::LastSeq;
+pub use resume::{LastSeq, WorktreeRecord};
 
 /// Steers the delegate's session: the jobs-local mirror of `doors::steer`,
 /// as `Watch` mirrors the watch. One connection per message, one command
@@ -83,6 +83,8 @@ pub struct DelegateMessage {
     pub steer: Steer,
     /// Reads the delegate log's boundary.
     pub last_seq: LastSeq,
+    /// Reads the delegate's durable worktree in its own project.
+    pub worktree_record: WorktreeRecord,
     /// Reports a resumed delegate's worktree without removing it.
     pub finish: super::FinishWorktree,
 }

@@ -15,7 +15,7 @@ pub use delegate::EventsFor;
 pub use delegate::{
     CreateWorktree, DelegateFork, DelegateMessage, DelegateModels, DelegateSpawn, DelegateWiring,
     EndWorktree, FinishWorktree, ForkPoint, Forking, Fresh, LastSeq, Launch, Launched, Resolve,
-    Start, Steer, Steered, Watch, Watched, WorktreeGuard,
+    Start, Steer, Steered, Watch, Watched, WorktreeGuard, WorktreeRecord,
 };
 pub use error::JobsError;
 pub use registry::Registry;
