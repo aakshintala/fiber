@@ -268,7 +268,7 @@ fn rig(replies: Vec<SteerReply>) -> Rig {
         launch,
         watch: Arc::new(|_, _, _| panic!("no steering test watches")),
         steer,
-        worktree_record: Arc::new(|_, _| Ok(None)),
+        worktree_record: Arc::new(|_, _| panic!("a live steer never reads the worktree record")),
         last_seq: Arc::new(|_, _| panic!("no steering test reads the log")),
     });
     Rig {

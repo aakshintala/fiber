@@ -4696,136 +4696,164 @@ const STEER_PARENT_DURABLE: &[&str] = &[
 
 #[test]
 fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
-    let setup = support::Setup::new();
-    let _guard = arm(&setup);
-    let parent = ProviderServer::start_responding(answering(
-        support::stream(&[spawn_call("fiber:pb/m")]),
-        text_reply("allow"),
-        "call_message",
-        |job| {
-            support::stream(&[function_call(
-                "call_message",
-                "delegate_message",
-                &json!({"id": job, "message": MARK}),
-            )])
-        },
-        support::hello(),
-    ))
-    .unwrap();
-    parent.hold();
-    let child = ProviderServer::start([text_reply("first"), text_reply("after-steer")]).unwrap();
-    child.hold();
-    providers(&setup, &parent, &child);
-    standing_allow(&setup);
-    slow_idle(&setup);
+    for missing_workspace in [false, true] {
+        let setup = support::Setup::new();
+        let _guard = arm(&setup);
+        let workspace_root = fakes::TempDir::new("live-child");
+        let workspace = workspace_root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let spawn = if missing_workspace {
+            function_call(
+                "call_spawn",
+                "delegate_spawn",
+                &json!({"description":"scan", "prompt":"scan", "model":"fiber:pb/m", "workspace":workspace}),
+            )
+        } else {
+            spawn_call("fiber:pb/m")
+        };
+        let parent = ProviderServer::start_responding(answering(
+            support::stream(&[spawn]),
+            text_reply("allow"),
+            "call_message",
+            |job| {
+                support::stream(&[function_call(
+                    "call_message",
+                    "delegate_message",
+                    &json!({"id": job, "message": MARK}),
+                )])
+            },
+            support::hello(),
+        ))
+        .unwrap();
+        parent.hold();
+        let child =
+            ProviderServer::start([text_reply("first"), text_reply("after-steer")]).unwrap();
+        child.hold();
+        providers(&setup, &parent, &child);
+        standing_allow(&setup);
+        slow_idle(&setup);
 
-    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
-    assert!(
-        parent.await_requests(1, setup.deadline),
-        "the spawn call was requested"
-    );
-    parent.release_one();
-    assert!(
-        parent.await_requests(2, setup.deadline),
-        "the verdict was requested"
-    );
-    parent.release_one();
-    assert!(
-        child.await_requests(1, setup.deadline),
-        "the delegate's first step is in flight"
-    );
-    parent.release();
-    // The delta proves the steer reached the delegate's inbox: the probe
-    // is answered once the delegate's reader queued the message, and the
-    // steer joins at the step boundary after the released reply. A held
-    // stream is no admission point, so the run is released only after it.
-    let mut job = String::new();
-    running.wait_line("the queued delta", |line| {
-        if line["kind"] == "delegate_started" {
-            job = line["payload"]["job_id"].as_str().unwrap().to_owned();
+        let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+        assert!(
+            parent.await_requests(1, setup.deadline),
+            "the spawn call was requested"
+        );
+        parent.release_one();
+        assert!(
+            parent.await_requests(2, setup.deadline),
+            "the verdict was requested"
+        );
+        parent.release_one();
+        assert!(
+            child.await_requests(1, setup.deadline),
+            "the delegate's first step is in flight"
+        );
+        if missing_workspace {
+            fs::rename(&workspace, workspace.with_extension("moved")).unwrap();
         }
-        !job.is_empty()
-            && line["kind"] == "tool_call_delta"
-            && line["payload"]["text"].as_str()
-                == Some(&format!(
-                    "Queued for delegate {job}; it joins at the delegate's next step boundary."
-                ))
-    });
-    child.release_one();
-    assert!(
-        child.await_requests(2, setup.deadline),
-        "the delegate's second model call after the steer"
-    );
-    let mut ended = 0;
-    running.wait_line("the call's and ending notice's turn ends", |line| {
-        ended += usize::from(line["kind"] == "turn_completed");
-        ended == 2
-    });
-    child.release();
-    let (status, lines, stderr) = running.wait();
-    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+        parent.release();
+        // The delta proves the steer reached the delegate's inbox: the probe
+        // is answered once the delegate's reader queued the message, and the
+        // steer joins at the step boundary after the released reply. A held
+        // stream is no admission point, so the run is released only after it.
+        let mut job = String::new();
+        running.wait_line("the queued delta", |line| {
+            if line["kind"] == "delegate_started" {
+                job = line["payload"]["job_id"].as_str().unwrap().to_owned();
+            }
+            !job.is_empty()
+                && line["kind"] == "tool_call_delta"
+                && line["payload"]["text"].as_str()
+                    == Some(&format!(
+                        "Queued for delegate {job}; it joins at the delegate's next step boundary."
+                    ))
+        });
+        if missing_workspace {
+            fs::rename(workspace.with_extension("moved"), &workspace).unwrap();
+        }
+        child.release_one();
+        assert!(
+            child.await_requests(2, setup.deadline),
+            "the delegate's second model call after the steer"
+        );
+        let mut ended = 0;
+        running.wait_line("the call's and ending notice's turn ends", |line| {
+            ended += usize::from(line["kind"] == "turn_completed");
+            ended == 2
+        });
+        child.release();
+        let (status, lines, stderr) = running.wait();
+        assert_eq!(status.code(), Some(0), "stderr: {stderr}");
 
-    assert!(!job.is_empty(), "the run started a delegate");
-    let bodies: Vec<String> = child
-        .requests()
-        .iter()
-        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
-        .collect();
-    assert_eq!(bodies.len(), 2, "{bodies:?}");
-    assert!(
-        !bodies[0].contains(MARK),
-        "the first call predates the steer"
-    );
-    assert!(bodies[1].contains(MARK), "the steer joined the next call");
-    let delegate_id = lines
-        .iter()
-        .find(|line| line["kind"] == "delegate_started")
-        .unwrap()["payload"]["delegate_session_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let child_lines = read_lines(&ask_sessions(&setup).join(&delegate_id).join("events.jsonl"));
-    assert_eq!(durable_kinds(&child_lines), DELEGATE_DURABLE);
-    let applied = one(&child_lines, "steering_applied");
-    assert_eq!(applied["source"], "driver");
-    assert!(
-        serde_json::to_string(&applied["content"])
+        assert!(!job.is_empty(), "the run started a delegate");
+        let bodies: Vec<String> = child
+            .requests()
+            .iter()
+            .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+            .collect();
+        assert_eq!(bodies.len(), 2, "{bodies:?}");
+        assert!(
+            !bodies[0].contains(MARK),
+            "the first call predates the steer"
+        );
+        assert!(bodies[1].contains(MARK), "the steer joined the next call");
+        let delegate_id = lines
+            .iter()
+            .find(|line| line["kind"] == "delegate_started")
+            .unwrap()["payload"]["delegate_session_id"]
+            .as_str()
             .unwrap()
-            .contains(MARK),
-        "{applied}"
-    );
-    let completed = completed_for(&lines, "delegate_message");
-    assert_eq!(completed["payload"]["status"], "completed");
-    assert_eq!(
-        completed["payload"]["content"][0]["text"],
-        format!("Steered delegate {job}: the message joins its turn at its next step boundary.")
-    );
-    let action = completed["action_id"].as_str().unwrap();
-    let started = lines
-        .iter()
-        .find(|line| line["kind"] == "tool_call_started" && line["action_id"] == action)
-        .unwrap();
-    assert_eq!(started["payload"]["effects"], json!(["executes"]));
-    assert_eq!(started["payload"]["reversible"], false);
-    assert!(
-        started["payload"]
-            .get("always_reviewed")
-            .is_none_or(|flag| flag == &json!(true)),
-        "{started}"
-    );
-    let resolved = lines
-        .iter()
-        .find(|line| line["kind"] == "permission_resolved" && line["action_id"] == action)
-        .unwrap();
-    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
-    for kind in ["job_started", "job_completed"] {
-        let found: Vec<&Value> = lines.iter().filter(|line| line["kind"] == kind).collect();
-        assert_eq!(found.len(), 1, "{kind} wrote {:?}", owned_kinds(&lines));
-        assert_eq!(found[0]["payload"]["job_id"], job.as_str());
+            .to_owned();
+        let sessions = if missing_workspace {
+            log::sessions_dir(&setup.home(), &doors::project(&workspace))
+        } else {
+            ask_sessions(&setup)
+        };
+        let child_lines = read_lines(&sessions.join(&delegate_id).join("events.jsonl"));
+        assert_eq!(durable_kinds(&child_lines), DELEGATE_DURABLE);
+        let applied = one(&child_lines, "steering_applied");
+        assert_eq!(applied["source"], "driver");
+        assert!(
+            serde_json::to_string(&applied["content"])
+                .unwrap()
+                .contains(MARK),
+            "{applied}"
+        );
+        let completed = completed_for(&lines, "delegate_message");
+        assert_eq!(completed["payload"]["status"], "completed");
+        assert_eq!(
+            completed["payload"]["content"][0]["text"],
+            format!(
+                "Steered delegate {job}: the message joins its turn at its next step boundary."
+            )
+        );
+        let action = completed["action_id"].as_str().unwrap();
+        let started = lines
+            .iter()
+            .find(|line| line["kind"] == "tool_call_started" && line["action_id"] == action)
+            .unwrap();
+        assert_eq!(started["payload"]["effects"], json!(["executes"]));
+        assert_eq!(started["payload"]["reversible"], false);
+        assert!(
+            started["payload"]
+                .get("always_reviewed")
+                .is_none_or(|flag| flag == &json!(true)),
+            "{started}"
+        );
+        let resolved = lines
+            .iter()
+            .find(|line| line["kind"] == "permission_resolved" && line["action_id"] == action)
+            .unwrap();
+        assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+        for kind in ["job_started", "job_completed"] {
+            let found: Vec<&Value> = lines.iter().filter(|line| line["kind"] == kind).collect();
+            assert_eq!(found.len(), 1, "{kind} wrote {:?}", owned_kinds(&lines));
+            assert_eq!(found[0]["payload"]["job_id"], job.as_str());
+        }
+        let finished = one(&lines, "delegate_finished");
+        assert_eq!(finished["text"], "after-steer");
+        assert_eq!(durable_kinds(&without_copies(&lines)), STEER_PARENT_DURABLE);
     }
-    let finished = one(&lines, "delegate_finished");
-    assert_eq!(finished["text"], "after-steer");
-    assert_eq!(durable_kinds(&without_copies(&lines)), STEER_PARENT_DURABLE);
 }
 
 /// The resume message carried to the delegate's second run: unique to it,
@@ -4968,8 +4996,7 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
             if text.contains("call_resume") { return support::hello(); }
             if text.contains("run-one-done") {
                 if mode.starts_with("removed") || mode == "missing-repository" {
-                    let path = fs::read_dir(&selected_worktrees).unwrap().map(|entry| entry.unwrap().path()).find(|path| path.is_dir()).unwrap();
-                    support::git(deadline, &selected, &["worktree", "remove", "--force", path.to_str().unwrap()]);
+                    assert!(!fs::read_dir(&selected_worktrees).unwrap().any(|entry| entry.unwrap().path().is_dir()), "the first clean run removed its worktree");
                     support::git(deadline, &selected, &["commit", "--allow-empty", "-m", "new HEAD"]);
                 }
                 if mode == "missing-repository" || mode == "no-record-missing" {
@@ -4993,7 +5020,8 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
             } else {
                 child_repository.clone()
             };
-            if !resumed || mode == "removed-dirty" {
+            if mode == "kept" || mode == "no-record-missing" || (resumed && mode == "removed-dirty")
+            {
                 fs::write(path.join("kept.txt"), "dirty fixture").unwrap();
             }
             if resumed && mode.starts_with("removed") {
@@ -5023,80 +5051,7 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
         let fails = mode == "missing-repository" || mode == "no-record-missing";
         let requested = fails || child.await_requests(2, setup.deadline);
         child.release();
-        if !requested {
-            let sid = fs::read_dir(&sessions)
-                .unwrap()
-                .next()
-                .unwrap()
-                .unwrap()
-                .file_name()
-                .to_str()
-                .unwrap()
-                .to_owned();
-            let header = one(
-                &read_lines(&sessions.join(&sid).join("events.jsonl")),
-                "session_started",
-            );
-            let mut diagnostic = setup.fiber(&[
-                "session",
-                "--id",
-                &sid,
-                "--workspace",
-                repository.join(".git").to_str().unwrap(),
-                "--resume",
-                "--prompt",
-                RESUME_MARK,
-                "--parent",
-                header["parent"]["session_id"].as_str().unwrap(),
-                "--delegate-id",
-                header["parent"]["delegate_id"].as_str().unwrap(),
-            ]);
-            let (input, _hold) = std::os::unix::net::UnixStream::pair().unwrap();
-            diagnostic.stdin(Stdio::from(std::os::fd::OwnedFd::from(input)));
-            std::os::unix::process::CommandExt::process_group(&mut diagnostic, 0);
-            let diagnostic = support::run_to_exit(
-                Deadline::after(Duration::from_secs(20)),
-                "diagnostic resume",
-                diagnostic,
-            );
-            eprintln!(
-                "[DEBUG-resume] {} {}",
-                String::from_utf8_lossy(&diagnostic.stdout),
-                String::from_utf8_lossy(&diagnostic.stderr)
-            );
-            let logs: Vec<_> = fs::read_dir(&sessions)
-                .unwrap()
-                .map(|entry| {
-                    let path = entry.unwrap().path().join("events.jsonl");
-                    (path.clone(), fs::read_to_string(path))
-                })
-                .collect();
-            let parent_sessions =
-                log::sessions_dir(&setup.home(), &doors::project(setup.root.path()));
-            let parent_logs: Vec<_> = fs::read_dir(parent_sessions)
-                .unwrap()
-                .map(|entry| {
-                    read_lines(&entry.unwrap().path().join("events.jsonl"))
-                        .into_iter()
-                        .filter(|line| {
-                            matches!(
-                                line["kind"].as_str(),
-                                Some(
-                                    "delegate_finished"
-                                        | "job_started"
-                                        | "tool_call_completed"
-                                        | "fiber_exited"
-                                )
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-            panic!(
-                "{mode}: no resumed request; parent {parent_logs:?}; child logs {logs:?}; stderr {:?}",
-                running.stderr_snapshot.lock().unwrap()
-            );
-        }
+        assert!(requested, "{mode}: the resumed child's request");
         let (status, lines, stderr) = running.wait();
         assert_eq!(status.code(), Some(0), "{mode}: {stderr}");
         let started = &lines
@@ -5106,10 +5061,6 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
         let child_id = started["delegate_session_id"].as_str().unwrap();
         let path = PathBuf::from(started["workspace"].as_str().unwrap());
         let child_lines = read_lines(&sessions.join(child_id).join("events.jsonl"));
-        assert!(
-            requested,
-            "{mode}: no resumed request; child {child_lines:?}; parent {lines:?}; {stderr}"
-        );
         let completed = completed_for(&lines, "delegate_message");
         if fails {
             assert_eq!(
@@ -6710,6 +6661,22 @@ fn an_isolated_fork_records_and_holds_its_own_worktree_and_explains_its_workspac
         "the fork owns a share after session_started"
     );
     drop(probe);
+    let pruned = support::run_to_exit(
+        setup.deadline,
+        "prune skips the live isolated fork",
+        setup.fiber(&["sessions", "prune", "--force", "--yes"]),
+    );
+    assert_eq!(
+        pruned.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&pruned.stderr)
+    );
+    assert!(path.is_dir(), "even forced prune preserves the live fork");
+    assert_eq!(
+        support::git(setup.deadline, &path, &["branch", "--show-current"]),
+        worktree["branch"].as_str().unwrap()
+    );
     release_tx.send(()).unwrap();
     let (status, lines, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "{stderr}");

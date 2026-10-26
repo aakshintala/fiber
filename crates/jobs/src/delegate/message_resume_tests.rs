@@ -301,7 +301,11 @@ fn resume_workspace_recovery_reads_the_childs_record_and_never_sets_worktree() {
         "absent",
         "missing-repository",
         "missing-workspace",
+        "no-repository",
+        "repository-file",
+        "workspace-file",
         "read-error",
+        "read-error-present",
     ] {
         let mut rig = resume_rig(
             vec![LaunchReply::Missing],
@@ -310,16 +314,21 @@ fn resume_workspace_recovery_reads_the_childs_record_and_never_sets_worktree() {
         );
         let workspace = rig._dir.path().join("child");
         let repository = rig._dir.path().join("repository");
-        if mode == "kept" || mode == "absent" {
+        if mode == "kept" || mode == "absent" || mode == "read-error-present" {
             std::fs::create_dir(&workspace).unwrap();
+        } else if mode == "workspace-file" {
+            std::fs::write(&workspace, "not a directory").unwrap();
         }
-        if mode != "missing-repository" {
+        if mode == "repository-file" {
+            std::fs::write(&repository, "not a repository directory").unwrap();
+        } else if mode != "missing-repository" {
             std::fs::create_dir(&repository).unwrap();
         }
         let record = contract::shapes::Worktree {
             path: workspace.to_string_lossy().into_owned(),
             branch: "fiber/child".into(),
-            repository: Some(repository.to_string_lossy().into_owned()),
+            repository: (mode != "no-repository")
+                .then(|| repository.to_string_lossy().into_owned()),
         };
         let expected_workspace = workspace.clone();
         let returned = record.clone();
@@ -328,7 +337,7 @@ fn resume_workspace_recovery_reads_the_childs_record_and_never_sets_worktree() {
             assert_eq!(id.0, "s_d000000000000001");
             match mode {
                 "absent" | "missing-workspace" => Ok(None),
-                "read-error" => Err("record log unreadable".into()),
+                "read-error" | "read-error-present" => Err("record log unreadable".into()),
                 _ => Ok(Some(returned.clone())),
             }
         });
@@ -356,7 +365,7 @@ fn resume_workspace_recovery_reads_the_childs_record_and_never_sets_worktree() {
             &Recorder::default(),
         );
         match mode {
-            "missing-repository" | "missing-workspace" => {
+            "missing-repository" | "missing-workspace" | "no-repository" | "repository-file" => {
                 assert_eq!(code_of(&output), ErrorCode::IoFailed, "{mode}");
                 assert!(
                     content(&output).contains(workspace.to_str().unwrap()),
@@ -365,7 +374,7 @@ fn resume_workspace_recovery_reads_the_childs_record_and_never_sets_worktree() {
                 );
                 assert!(rig.launched.lock().unwrap().is_empty());
             }
-            "read-error" => {
+            "read-error" | "read-error-present" => {
                 assert_eq!(code_of(&output), ErrorCode::ToolError);
                 assert!(content(&output).contains("record log unreadable"));
                 assert!(rig.launched.lock().unwrap().is_empty());
@@ -380,7 +389,7 @@ fn resume_workspace_recovery_reads_the_childs_record_and_never_sets_worktree() {
                 assert_eq!(launched.len(), 1);
                 assert_eq!(
                     launched[0].workspace,
-                    if mode == "removed" {
+                    if mode == "removed" || mode == "workspace-file" {
                         &repository
                     } else {
                         &workspace

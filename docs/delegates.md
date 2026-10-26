@@ -262,7 +262,17 @@ path is `invalid_arguments` and a git failure is `io_failed`.
   pruning").
 - `delegate_finished` reports the path, the branch and whether it is dirty.
 - A resume goes back into the kept worktree, or gets a fresh one from the
-  current HEAD if it was removed.
+  current HEAD if it was removed. It reads the delegate's worktree record and
+  run boundary from the delegate's project, including when `workspace` selected
+  a different repository from the parent's. A removed worktree starts from its
+  recorded repository, then is recreated at the same path and branch before
+  `fiber_started`. The resumed session removes a clean recreated worktree and
+  keeps a dirty one; the parent reports its state without removing it again.
+- If neither the workspace nor its recorded repository is available, resume
+  fails before launch with `io_failed`, naming the missing workspace. Without
+  a recorded worktree, a missing workspace fails the same way. An unreadable
+  worktree record or run boundary fails closed with `tool_error`. A message to
+  a live delegate steers it without checking workspace or repository existence.
 - `worktree` outside a git repository fails with `invalid_arguments`.
 
 ## Forks
