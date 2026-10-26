@@ -126,6 +126,37 @@ fn ancestors_name_an_unreadable_owner() {
 }
 
 #[test]
+fn ancestors_treat_pid_1_as_root_when_its_owner_is_unreadable() {
+    let read = Script {
+        parents: [(Pid(100), Pid(1)), (Pid(1), Pid(0))]
+            .into_iter()
+            .collect(),
+        unreadable_euid: vec![Pid(1)],
+        ..Script::default()
+    };
+    assert_eq!(
+        super::ancestors(Pid(100), &read).unwrap(),
+        [ProcessInfo {
+            pid: Pid(1),
+            euid: EffectiveUid(0),
+        }]
+    );
+}
+
+#[test]
+fn ancestors_still_name_an_unreadable_non_init_owner() {
+    let read = Script {
+        parents: [(Pid(100), Pid(50))].into_iter().collect(),
+        unreadable_euid: vec![Pid(50)],
+        ..Script::default()
+    };
+    assert_eq!(
+        super::ancestors(Pid(100), &read).unwrap_err(),
+        IncompleteWalk { pid: Pid(50) }
+    );
+}
+
+#[test]
 fn ancestors_name_an_unreadable_parent() {
     let read = Script {
         parents: [(Pid(100), Pid(50))].into_iter().collect(),
