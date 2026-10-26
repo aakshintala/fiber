@@ -148,12 +148,25 @@ impl Package {
             state: super::host::state::StateRegistry::standalone().store(&package.manifest.name),
             clock,
             limits: super::process::transport::Limits::default(),
-        })
-        .map_err(|source| Error::Io { path: dir, source })?;
+        });
+        // A missing program leaves an optional extension out, with no
+        // owner for the session to start; a required one fails the
+        // package, as a required MCP server does.
+        let extension = match extension {
+            Ok(extension) => Some(extension),
+            Err(_source) if !process.required => {
+                return Ok(Arc::new(Package {
+                    manifest: package.manifest.clone(),
+                    registry: package.registry.clone(),
+                    extension: None,
+                }));
+            }
+            Err(source) => return Err(Error::Io { path: dir, source }),
+        };
         Ok(Arc::new(Package {
             manifest: package.manifest.clone(),
             registry: package.registry.clone(),
-            extension: Some(extension),
+            extension,
         }))
     }
 

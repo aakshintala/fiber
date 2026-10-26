@@ -1174,6 +1174,41 @@ fn stop_wakes_a_blocked_reader_without_eof() {
 }
 
 #[test]
+fn a_stopped_stream_stays_stopped_past_its_close() {
+    // The reader posts exactly one close: past it the reader is gone, but
+    // the stop still owns the stream's end, so the hangup reads Stopped
+    // instead of an internal error.
+    let dir = scratch();
+    let transport = spawn_shell(dir.path(), "sleep 30", Limits::default());
+    transport.stop();
+    assert!(
+        matches!(transport.recv(), Incoming::Closed(CloseReason::Stopped)),
+        "the stop posts the terminal close"
+    );
+    assert!(
+        matches!(transport.recv(), Incoming::Closed(CloseReason::Stopped)),
+        "the hangup past the close still reads stopped"
+    );
+    kill_and_join(&transport);
+    join_within(transport, "the stopped pipes join");
+}
+
+#[test]
+fn an_unstopped_reader_end_stays_an_error() {
+    // No stop owns the stream's end here: the quick exit posts Eof, and
+    // the hangup past it still reads as an error, not a stop.
+    let dir = scratch();
+    let transport = spawn_shell(dir.path(), "exit 0", Limits::default());
+    assert_eq!(next_close(&transport, "quick exit"), CloseReason::Eof);
+    assert!(
+        matches!(transport.recv(), Incoming::Closed(CloseReason::Io(_))),
+        "the hangup past the close still reads as an error"
+    );
+    kill_and_join(&transport);
+    join_within(transport, "the ended pipes join");
+}
+
+#[test]
 fn full_stderr_drains_and_keeps_its_tail() {
     // Two megabytes on stderr with stdout closed: the drain keeps the
     // child moving, and keeps the tail naming the failure.

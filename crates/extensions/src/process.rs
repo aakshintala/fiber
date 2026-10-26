@@ -29,6 +29,7 @@ mod validate;
 
 pub(crate) mod calls;
 pub(crate) mod context;
+pub(crate) mod lifecycle;
 pub(crate) mod oauth;
 pub(crate) mod requests;
 #[cfg(test)]
@@ -306,6 +307,27 @@ impl Registry {
             self.failure = Some((code.clone(), message.clone()));
         }
         outcome
+    }
+
+    /// Resets the collected registrations for the restart's fresh child:
+    /// every declared tool, hook, watcher, command, provider, search and
+    /// harness registration leaves, with their notices and run
+    /// references, so the new child registers the same set again under
+    /// the bumped generation. Manifest declarations and a latched
+    /// package failure stay: a failed package stays failed.
+    pub(crate) fn restart(&mut self) {
+        self.tools.clear();
+        self.hooks.by_point.clear();
+        self.hooks.problems.clear();
+        self.hook_runs.clear();
+        self.watchers.watchers.clear();
+        self.watch_problems.clear();
+        self.watcher_runs.clear();
+        self.commands.clear();
+        self.providers.clear();
+        self.search.clear();
+        self.harness.clear();
+        self.problems.clear();
     }
 
     /// Installs `invoke` for the function (`command`, `key`): the test and
@@ -611,7 +633,6 @@ impl Registry {
 )]
 pub(crate) struct ProcessExtension {
     shared: Arc<Shared>,
-    ready: std::sync::atomic::AtomicBool,
 }
 
 /// What starting one process extension takes: the program and its
@@ -655,13 +676,27 @@ pub(crate) struct Shared {
     runtime: Runtime,
     registry: Arc<Mutex<Registry>>,
     pub(crate) table: Arc<requests::Table>,
-    pub(crate) transport: transport::Transport,
+    /// The live child behind a lock, so the one restart swaps it while a
+    /// pump holds only its own clone and never blocks a swap.
+    transport: Mutex<Arc<transport::Transport>>,
     drive: Option<Arc<dyn contract::extension::Drive>>,
     services: Arc<dyn context::ProcessHostServices>,
     pub(crate) oauth: Arc<dyn oauth::RefreshCredential>,
     pub(crate) state: Arc<crate::host::state::ExtensionState>,
     clock: Arc<dyn contract::clock::Clock>,
-    context: context::ProcessContext,
+    /// What the child runs as, behind a lock so the one restart refolds
+    /// the state before resending the hello.
+    context: Mutex<context::ProcessContext>,
+    /// Whether the child sent `ready`.
+    pub(crate) ready: std::sync::atomic::AtomicBool,
+    /// Bumped on every `ready`: what startup and restart waits park on.
+    pub(crate) ready_park: support::clock::Parker,
+    /// The lifecycle one synchronized transition owns.
+    pub(crate) lifecycle: Mutex<lifecycle::Lifecycle>,
+    /// Wakes waiters on every lifecycle transition.
+    pub(crate) lifecycle_park: support::clock::Parker,
+    /// What respawns the child, as `Transport::spawn_with` takes it.
+    pub(crate) spawn: lifecycle::Spawn,
 }
 
 /// What one `pump_once` did.
@@ -710,18 +745,27 @@ impl ProcessExtension {
                 runtime,
                 registry,
                 table: Arc::new(requests::Table::new()),
-                transport,
+                transport: Mutex::new(Arc::new(transport)),
                 drive,
                 services,
                 oauth,
                 state,
                 clock,
-                context,
+                context: Mutex::new(context),
+                ready: std::sync::atomic::AtomicBool::new(false),
+                ready_park: support::clock::Parker::new(),
+                lifecycle: Mutex::new(lifecycle::Lifecycle::starting()),
+                lifecycle_park: support::clock::Parker::new(),
+                spawn: lifecycle::Spawn {
+                    program,
+                    args,
+                    limits,
+                },
             }),
-            ready: std::sync::atomic::AtomicBool::new(false),
         };
         let hello = extension.hello_line().map_err(std::io::Error::other)?;
-        extension.shared.transport.send(hello).map_err(|error| {
+        let live = Arc::clone(&support::lock(&extension.shared.transport));
+        live.send(hello).map_err(|error| {
             std::io::Error::other(format!("the first hello never sent: {error:?}"))
         })?;
         Ok(extension)
@@ -734,7 +778,91 @@ impl ProcessExtension {
 
     /// Whether `ready` arrived: registrations stand only before it.
     pub(crate) fn is_ready(&self) -> bool {
-        self.ready.load(std::sync::atomic::Ordering::SeqCst)
+        self.shared.ready.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Waits for the child's `ready` until `deadline`: the startup wait
+    /// the session owns, bounded and cancellable, killing a wedged child
+    /// instead of leaking it.
+    pub(crate) fn await_ready(
+        &self,
+        deadline: Option<std::time::Instant>,
+        cancel: &dyn contract::tool::Cancel,
+    ) -> Result<(), (contract::ErrorCode, String)> {
+        lifecycle::await_ready(&self.shared, &self.shared.ready, deadline, cancel)
+    }
+
+    /// Shuts the owner down: no new dispatches past this point, the
+    /// in-flight requests drain first, and only then does the
+    /// `exit_timeout` allowance start. The child that exits on its own
+    /// or on TERM returns its status; a child that ignores TERM gets
+    /// KILL after the grace. Cancel ends the wait and leaves the child
+    /// for the caller; the owner stays finishing either way.
+    pub(crate) fn finish(
+        &self,
+        exit_timeout: Duration,
+        cancel: &dyn contract::tool::Cancel,
+    ) -> Result<std::process::ExitStatus, (contract::ErrorCode, String)> {
+        if !lifecycle::begin_finish(&self.shared) {
+            return Err((
+                contract::ErrorCode::Closing,
+                format!(
+                    "{}: the process extension is already finishing",
+                    self.shared.owner
+                ),
+            ));
+        }
+        let clock = self.shared.clock.as_ref();
+        if !self.shared.table.wait_idle(clock, cancel) {
+            return Err((
+                contract::ErrorCode::Cancelled,
+                format!("{}: the shutdown wait was cancelled", self.shared.owner),
+            ));
+        }
+        // The final stream request answered: the allowance starts now,
+        // and the input closes with it.
+        let live = self.transport();
+        live.stop();
+        let term_at = clock.now().checked_add(exit_timeout);
+        if let Some(status) = await_exit(&live, clock, term_at, cancel)? {
+            live.join();
+            return Ok(status);
+        }
+        // A group already gone reports Ok; the reaps below, not the
+        // signal call, decide the outcome.
+        match live.signal(rustix::process::Signal::TERM) {
+            Ok(()) | Err(_) => {}
+        }
+        let kill_at = term_at
+            .and_then(|term| term.checked_add(lifecycle::GRACE))
+            .or(term_at);
+        if let Some(status) = await_exit(&live, clock, kill_at, cancel)? {
+            live.join();
+            return Ok(status);
+        }
+        // A group already gone reports Ok; the reap below decides the
+        // outcome.
+        match live.signal(rustix::process::Signal::KILL) {
+            Ok(()) | Err(_) => {}
+        }
+        let status = live.wait_exit().map_err(|source| {
+            (
+                contract::ErrorCode::IoFailed,
+                format!(
+                    "{}: the shutdown never reaped the child: {source}",
+                    self.shared.owner
+                ),
+            )
+        })?;
+        live.join();
+        Ok(status)
+    }
+
+    /// Retires the generation at the process seam: pending requests end
+    /// stale, and the next request mints under a new generation. Reload
+    /// uses this; death uses the lifecycle, which also counts the child.
+    pub(crate) fn retire(&self) {
+        self.shared.table.retire();
     }
 
     /// The request table, for attributing calls and retiring generations.
@@ -749,9 +877,11 @@ impl ProcessExtension {
         &self.shared
     }
 
-    /// The pipes, for stopping, signalling and reaping the child.
-    pub(crate) fn transport(&self) -> &transport::Transport {
-        &self.shared.transport
+    /// The live pipes, for stopping, signalling and reaping the child: a
+    /// clone, so a pump holds its own child while a restart swaps the
+    /// live one.
+    pub(crate) fn transport(&self) -> Arc<transport::Transport> {
+        Arc::clone(&support::lock(&self.shared.transport))
     }
 
     /// The runtime, resolving generation-keyed references.
@@ -759,14 +889,22 @@ impl ProcessExtension {
         &self.shared.runtime
     }
 
-    /// Handles one line or close from the child, answering it.
+    /// Handles one line or close from the child, answering it. A close
+    /// records the death once per child spawn, retiring the generation
+    /// so late calls and replies read stale.
     pub(crate) fn pump_once(&self) -> Pumped {
-        match self.shared.transport.recv() {
+        // The pump holds its own child: the lock drops before the
+        // blocking receive, so a restart swaps the live one freely.
+        let live = Arc::clone(&support::lock(&self.shared.transport));
+        match live.recv() {
             transport::Incoming::Line(bytes) => {
                 self.handle_line(&bytes);
                 Pumped::Handled
             }
-            transport::Incoming::Closed(reason) => Pumped::Closed(reason),
+            transport::Incoming::Closed(reason) => {
+                lifecycle::note_death(&self.shared, live.spawn_id());
+                Pumped::Closed(reason)
+            }
         }
     }
 
@@ -876,7 +1014,11 @@ impl ProcessExtension {
                 request_id,
             } => self.handle_call(id, call, args, request_id),
             transport::ParsedLine::Ready { id } => {
-                self.ready.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.shared
+                    .ready
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                lifecycle::note_ready(&self.shared);
+                self.shared.ready_park.bump();
                 self.answer_accepted(&id, None);
             }
             transport::ParsedLine::Reply {
@@ -1045,6 +1187,9 @@ impl ProcessExtension {
         callback: crate::host::admission::CallbackContext,
     ) {
         let shared = Arc::clone(&self.shared);
+        // The context clones before the worker starts: no service call
+        // holds the owner lock while it runs.
+        let context = support::lock(&shared.context).clone();
         let answer_id = id.clone();
         let spawned = std::thread::Builder::new()
             .name(format!("process host {}", shared.owner))
@@ -1053,7 +1198,7 @@ impl ProcessExtension {
                 let cancel = callback.cancel.clone();
                 match shared
                     .services
-                    .perform(&shared.context, &callback, operation, &cancel)
+                    .perform(&context, &callback, operation, &cancel)
                 {
                     Ok(value) => answer_on(
                         &shared,
@@ -1291,7 +1436,7 @@ impl ProcessExtension {
     /// The `extension_hello` line: the session's identity, why it
     /// started, its workspace, the data directories and the folded state.
     fn hello_line(&self) -> Result<Vec<u8>, serde_json::Error> {
-        let payload = serde_json::to_value(self.shared.context.hello())?;
+        let payload = serde_json::to_value(support::lock(&self.shared.context).hello())?;
         Ok(envelope_line(
             &self.shared,
             "extension_hello",
@@ -1315,7 +1460,7 @@ impl ProcessExtension {
         .and_then(|payload| payload.as_object().cloned())
         .unwrap_or_default();
         let line = envelope_line(&self.shared, "command_accepted", payload);
-        if line.len() > self.shared.transport.max_line() {
+        if line.len() > support::lock(&self.shared.transport).max_line() {
             self.answer_rejected(
                 id,
                 ErrorCode::TooLarge,
@@ -1325,7 +1470,7 @@ impl ProcessExtension {
         }
         // The child may be gone: its answer dies with it, and the
         // table already settled what the answer would settle.
-        match self.shared.transport.send(line) {
+        match support::lock(&self.shared.transport).send(line) {
             Ok(()) | Err(_) => {}
         }
     }
@@ -1343,7 +1488,7 @@ impl ProcessExtension {
         let line = envelope_line(&self.shared, "command_rejected", payload);
         // The child may be gone: its answer dies with it, and the
         // table already settled what the answer would settle.
-        match self.shared.transport.send(line) {
+        match support::lock(&self.shared.transport).send(line) {
             Ok(()) | Err(_) => {}
         }
     }
@@ -1475,6 +1620,24 @@ fn run_request(
     // behind earlier stream items counts against it.
     let clock = shared.clock.as_ref();
     let deadline = clock.now().checked_add(dispatch.timeout);
+    // A dead child restarts under the dispatch before anything mints: the
+    // one restart runs on the next caller, the others await it, and a
+    // gone or finishing owner stops. The restart waits under this same
+    // deadline, so the callback never outlives its own timeout.
+    if let Err((code, _message)) = lifecycle::ensure_running(shared, deadline, caller) {
+        // A missed restart deadline fails as the callback's own timeout;
+        // cancellation and a gone owner stop it, as they do mid-request.
+        if code == contract::ErrorCode::Timeout {
+            return Err(Error::Timeout {
+                extension: shared.owner.clone(),
+                callback: dispatch.key,
+                timeout_ms: dispatch.timeout.as_millis().try_into().unwrap_or(u64::MAX),
+            });
+        }
+        return Err(Error::Stopped {
+            extension: shared.owner.clone(),
+        });
+    }
     // No dispatcher behind the package seam runs a provider's
     // `credential()`: dispatches carry no credential scope, and a
     // `host.oauth.refresh` under them is refused. The session sets the
@@ -1514,7 +1677,7 @@ fn run_request(
         "extension_request",
         payload.as_object().cloned().unwrap_or_default(),
     );
-    match shared.transport.send(line) {
+    match support::lock(&shared.transport).send(line) {
         Ok(()) => {}
         Err(transport::SendError::TooLarge) => {
             shared.table.cancel(&id);
@@ -1659,6 +1822,44 @@ fn wire_args(value: Value) -> Vec<Value> {
     }
 }
 
+/// Waits for the live child's exit until `until`: the poll slice ends a
+/// voluntary exit promptly, the clock bound ends the wait without a
+/// blind sleep, and cancel ends it with the child left for the caller.
+/// `Some` carries the exit when the child ends; `None` means the bound
+/// passed and the shutdown moves to its next signal.
+#[allow(
+    dead_code,
+    reason = "asserted by tests; production use lands in a later part"
+)]
+fn await_exit(
+    live: &transport::Transport,
+    clock: &dyn contract::clock::Clock,
+    until: Option<std::time::Instant>,
+    cancel: &dyn contract::tool::Cancel,
+) -> Result<Option<std::process::ExitStatus>, (contract::ErrorCode, String)> {
+    let park = support::clock::Parker::new();
+    loop {
+        if let Some(status) = live.poll_exit() {
+            return Ok(Some(status));
+        }
+        if cancel.is_cancelled() {
+            return Err((
+                contract::ErrorCode::Cancelled,
+                "the shutdown wait was cancelled".to_owned(),
+            ));
+        }
+        if until.is_some_and(|end| clock.now() >= end) {
+            return Ok(None);
+        }
+        park.park_polled(
+            clock,
+            until,
+            Some(requests::Table::WAIT_POLL),
+            park.generation(),
+        );
+    }
+}
+
 /// The hang guard one request waits under: the callback's deadline with
 /// slack for the settlement to land, or a backstop without one. This is no
 /// timer call's timeout, only the bound that fails a wedged wait instead
@@ -1700,7 +1901,7 @@ pub(crate) fn envelope_line(
 ) -> Vec<u8> {
     let envelope = contract::Envelope {
         kind: kind.to_owned(),
-        session_id: shared.context.session_id.clone(),
+        session_id: support::lock(&shared.context).session_id.clone(),
         ts: contract::clock::wall_ms(shared.clock.wall()),
         schema_version: contract::SCHEMA_VERSION,
         turn_id: None,
@@ -1729,7 +1930,7 @@ pub(crate) fn answer_on(
     .and_then(|payload| payload.as_object().cloned())
     .unwrap_or_default();
     let line = envelope_line(shared, "command_accepted", payload);
-    if line.len() > shared.transport.max_line() {
+    if line.len() > support::lock(&shared.transport).max_line() {
         answer_off(
             shared,
             id,
@@ -1742,7 +1943,7 @@ pub(crate) fn answer_on(
     }
     // The child may be gone: its answer dies with it, and the
     // table already settled what the answer would settle.
-    match shared.transport.send(line) {
+    match support::lock(&shared.transport).send(line) {
         Ok(()) | Err(_) => {}
     }
 }
@@ -1766,9 +1967,7 @@ pub(crate) fn answer_off(
     .and_then(|payload| payload.as_object().cloned())
     .unwrap_or_default();
     // The child may be gone: its answer dies with it.
-    match shared
-        .transport
-        .send(envelope_line(shared, "command_rejected", payload))
+    match support::lock(&shared.transport).send(envelope_line(shared, "command_rejected", payload))
     {
         Ok(()) | Err(_) => {}
     }

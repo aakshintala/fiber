@@ -395,3 +395,54 @@ fn package_lazy_commands_restrict_registrations() {
         "Command `nope` is not declared under `commands`; `fiber.test/proc` registers only the commands its manifest declares"
     );
 }
+
+/// A missing program leaves an optional extension out: the package
+/// loads with no owner for the session to start.
+#[test]
+fn load_process_without_a_program_leaves_an_optional_extension_out() {
+    let dir = package_dir(json!({"process": {
+        "program": "fiber-definitely-missing-program",
+        "exit_timeout_ms": 1000,
+    }}));
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let package = Package::load_process_with(
+        PackageOptions {
+            dir: dir.path().to_path_buf(),
+            clock: Arc::clone(&clock),
+        },
+        super::runtime::Runtime::new(clock),
+        process_context(&dir),
+        Arc::new(FakeServices {
+            calls: std::sync::Mutex::new(Vec::new()),
+        }),
+    )
+    .expect("an optional extension loads without its program");
+    assert!(package.extension().is_none());
+}
+
+/// A missing program fails a required extension: the package never
+/// loads, as a required MCP server does.
+#[test]
+fn load_process_without_a_program_fails_a_required_extension() {
+    let dir = package_dir(json!({"process": {
+        "program": "fiber-definitely-missing-program",
+        "required": true,
+        "exit_timeout_ms": 1000,
+    }}));
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let outcome = Package::load_process_with(
+        PackageOptions {
+            dir: dir.path().to_path_buf(),
+            clock: Arc::clone(&clock),
+        },
+        super::runtime::Runtime::new(clock),
+        process_context(&dir),
+        Arc::new(FakeServices {
+            calls: std::sync::Mutex::new(Vec::new()),
+        }),
+    );
+    assert!(
+        outcome.is_err(),
+        "a required extension loads without its program"
+    );
+}

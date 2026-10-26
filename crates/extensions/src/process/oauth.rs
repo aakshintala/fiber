@@ -288,7 +288,7 @@ fn run_refresh(
         "extension_request",
         payload.as_object().cloned().unwrap_or_default(),
     );
-    match shared.transport.send(line) {
+    match lock(&shared.transport).send(line) {
         Ok(()) => {}
         Err(SendError::TooLarge) => {
             // The stored pair does not fit the wire cap: fail the

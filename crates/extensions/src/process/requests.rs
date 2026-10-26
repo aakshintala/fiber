@@ -288,6 +288,34 @@ impl Table {
         }
     }
 
+    /// Waits until no request is still live, or the caller cancels: the
+    /// final stream request's answer ends the shutdown's wait, and
+    /// retirement settles the rest. Every settle, cancel, timeout and
+    /// retire notifies the gate, so the wait rechecks instead of hanging;
+    /// the poll slice bounds a missed notify. True when the table idles,
+    /// false on cancel.
+    pub(crate) fn wait_idle(&self, clock: &dyn Clock, cancel: &dyn Cancel) -> bool {
+        let mut inner = support::lock(&self.inner);
+        while inner.pending.values().any(|pending| !pending.done) {
+            if cancel.is_cancelled() {
+                return false;
+            }
+            let parked = support::clock::park(
+                clock,
+                None,
+                Some(Self::WAIT_POLL),
+                &self.stream_gate,
+                inner,
+                |_| false,
+            );
+            inner = match parked {
+                Some(guard) => guard,
+                None => support::lock(&self.inner),
+            };
+        }
+        true
+    }
+
     /// The live request's callback context, for attributing a call made
     /// under it. A stale id names none.
     pub(crate) fn context(&self, id: &RequestId) -> Option<CallbackContext> {

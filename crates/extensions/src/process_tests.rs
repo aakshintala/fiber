@@ -10,6 +10,7 @@
     reason = "test code; a failure is the test's"
 )]
 
+use std::os::unix::process::ExitStatusExt as _;
 use std::time::Duration;
 
 use contract::{CommandId, ErrorCode};
@@ -2962,7 +2963,7 @@ fn dispatch_provider(
         "extension_request",
         payload.as_object().cloned().unwrap_or_default(),
     );
-    shared.transport.send(line).unwrap();
+    owner.extension.transport().send(line).unwrap();
     minted
 }
 
@@ -4147,4 +4148,1213 @@ open(sys.argv[1], "w").write(json.dumps({"nested": nested, "answer": answer}))"#
     assert_eq!(owner.drain(), CloseReason::Eof);
 }
 
-// TEMPORARY debug probe.
+// Startup, death and restart behind the package seam: one synchronized
+// transition covers deaths, restart admission and retirement.
+
+/// The lifecycle state the owner stands in.
+fn lifecycle_state(owner: &Harness) -> super::process::lifecycle::RunState {
+    support::lock(&owner.extension.shared().lifecycle).state()
+}
+
+/// How many child deaths the owner counted.
+fn lifecycle_deaths(owner: &Harness) -> u32 {
+    support::lock(&owner.extension.shared().lifecycle).deaths()
+}
+
+/// How many restarts the owner ran.
+fn lifecycle_restarts(owner: &Harness) -> u32 {
+    support::lock(&owner.extension.shared().lifecycle).restarts()
+}
+
+/// Kills the peer and reaps it: stop its pipes, KILL its group, pump
+/// the close and reap the child.
+fn kill_peer(owner: &Harness) {
+    owner.extension.transport().stop();
+    match owner
+        .extension
+        .transport()
+        .signal(rustix::process::Signal::KILL)
+    {
+        Ok(()) | Err(_) => {}
+    }
+}
+
+/// Pumps the one close a kill leaves behind, naming what it proves: a
+/// second pump observes the same dead spawn, which counts nothing.
+fn pump_closed(owner: &Harness, what: &str) {
+    assert!(
+        matches!(owner.extension.pump_once(), Pumped::Closed(_)),
+        "{what}"
+    );
+}
+
+/// Ready before the deadline answers Ok: the startup wait owns nothing
+/// beyond the observation.
+#[test]
+fn startup_ready_before_the_deadline_answers_ok() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+read()
+write({"id": "ready", "command": "ready"})
+read()"#;
+    let owner = Harness::start(script, &[], serde_json::Map::new(), None);
+    owner.pump();
+    let cancel = support::cancel::Token::new();
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    assert_eq!(owner.extension.await_ready(deadline, &cancel), Ok(()));
+    assert!(owner.extension.is_ready());
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Running
+    );
+    kill_peer(&owner);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// A missed ready deadline kills the wedged child and retires its
+/// generation: startup never restarts, it leaves the extension out.
+#[test]
+fn startup_missed_ready_kills_and_retires() {
+    let script = r#"import sys, json
+def read():
+    return json.loads(sys.stdin.readline())
+read()
+read()"#;
+    let owner = Harness::start(script, &[], serde_json::Map::new(), None);
+    let cancel = support::cancel::Token::new();
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    // No pump: the child's ready, if any, stays unread.
+    owner.clock.advance(Duration::from_secs(61));
+    assert_eq!(
+        owner.extension.await_ready(deadline, &cancel),
+        Err((
+            contract::ErrorCode::Timeout,
+            "fiber.test/proc: the process did not send ready before the startup deadline"
+                .to_owned()
+        ))
+    );
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Gone
+    );
+    assert_eq!(owner.extension.shared().table.generation(), 1);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// Cancelling the startup wait kills the child and retires, as a missed
+/// deadline does.
+#[test]
+fn startup_cancel_kills_and_retires() {
+    let script = r#"import sys, json
+def read():
+    return json.loads(sys.stdin.readline())
+read()
+read()"#;
+    let owner = Harness::start(script, &[], serde_json::Map::new(), None);
+    let cancel = support::cancel::Token::new();
+    cancel.cancel();
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    assert_eq!(
+        owner.extension.await_ready(deadline, &cancel),
+        Err((
+            contract::ErrorCode::Cancelled,
+            "fiber.test/proc: startup was cancelled".to_owned()
+        ))
+    );
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Gone
+    );
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// Registrations without `ready` do not meet the deadline: the registry
+/// keeps what arrived, and the wedged child still goes.
+#[test]
+fn startup_registrations_without_ready_do_not_meet_the_deadline() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+hook = json.loads(sys.argv[1])
+read()
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+read()"#;
+    let owner = Harness::start(
+        script,
+        &[&wire_hook_spec().to_string()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    {
+        let registry = support::lock(&owner.registry);
+        assert!(
+            registry
+                .hook_runs()
+                .contains_key(&("turn_end".to_owned(), 0))
+        );
+    }
+    let cancel = support::cancel::Token::new();
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    owner.clock.advance(Duration::from_secs(61));
+    assert!(owner.extension.await_ready(deadline, &cancel).is_err());
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Gone
+    );
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// Death retires the generation: the in-flight hook ends stopped, late
+/// ids read stale, and the death counts once no matter how it is
+/// observed.
+#[test]
+fn death_retires_the_generation_and_stales_pending_calls() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+hook = json.loads(sys.argv[1])
+read()
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+registered = read()
+assert registered["kind"] == "command_accepted", registered
+read()
+delivery = read()
+assert delivery["kind"] == "extension_request", delivery
+open(sys.argv[2], "w").write(json.dumps({"delivered": True}))
+read()"#;
+    let out = fakes::TempDir::new("fiber-process-death-delivery");
+    let marker_path = out.path().join("delivered.json");
+    let owner = Harness::start(
+        script,
+        &[&wire_hook_spec().to_string(), marker_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let extension = Arc::clone(&owner.extension);
+    let delivered = std::thread::spawn(move || {
+        let caller = support::cancel::Token::new();
+        extension.dispatch_stream(
+            &hook,
+            json!({"event": "turn_end"}),
+            Duration::from_secs(60),
+            None,
+            &caller,
+        )
+    });
+    // The delivery is a direct write, and the child sends nothing after
+    // it, so no pump can observe it: the marker proves it landed.
+    let seen = read_json_file(&marker_path, "the hook delivery");
+    assert_eq!(seen, json!({"delivered": true}));
+    kill_peer(&owner);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+    let outcome = delivered.join().expect("the hook thread ends");
+    assert!(outcome.is_err(), "a dead hook answers: {outcome:?}");
+    assert_eq!(lifecycle_deaths(&owner), 1);
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Dead
+    );
+    assert_eq!(owner.extension.shared().table.generation(), 1);
+}
+
+/// A hook timeout retires only its request: the child lives on, and the
+/// death counter stays at zero.
+#[test]
+fn hook_timeout_leaves_the_child_death_counter_alone() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+hook = json.loads(sys.argv[1])
+read()
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+registered = read()
+assert registered["kind"] == "command_accepted", registered
+read()
+delivery = read()
+assert delivery["kind"] == "extension_request", delivery
+open(sys.argv[2], "w").write(json.dumps({"delivered": True}))
+read()"#;
+    let out = fakes::TempDir::new("fiber-process-hook-timeout");
+    let marker_path = out.path().join("delivered.json");
+    let owner = Harness::start(
+        script,
+        &[&wire_hook_spec().to_string(), marker_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let extension = Arc::clone(&owner.extension);
+    let delivered = std::thread::spawn(move || {
+        let caller = support::cancel::Token::new();
+        extension.dispatch_stream(
+            &hook,
+            json!({"event": "turn_end"}),
+            Duration::from_secs(10),
+            None,
+            &caller,
+        )
+    });
+    // The in-flight request must land before the clock jumps past it.
+    let seen = read_json_file(&marker_path, "the hook delivery");
+    assert_eq!(seen, json!({"delivered": true}));
+    owner.clock.advance(Duration::from_secs(11));
+    let outcome = delivered.join().expect("the hook thread ends");
+    assert!(outcome.is_err(), "a timed-out hook answers: {outcome:?}");
+    assert_eq!(lifecycle_deaths(&owner), 0);
+    assert!(!owner.extension.transport().exited());
+    kill_peer(&owner);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// Advances the clock in slices, yielding to the shutdown thread between
+/// them, until `done` holds or the cap passes: the shutdown reads its
+/// start after idling, so one jump could land before it parks and shift
+/// its bound past every later jump. The cap fails a shutdown that never
+/// progresses instead of hanging the test.
+fn advance_until(owner: &Harness, what: &str, mut done: impl FnMut() -> bool) {
+    let (_held, pace) = std::sync::mpsc::channel::<()>();
+    for _ in 0..120 {
+        if done() {
+            return;
+        }
+        owner.clock.advance(Duration::from_secs(1));
+        match fakes::Deadline::after(POLL).recv(&pace) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    assert!(done(), "{what}");
+}
+
+/// Reads `path` as JSON lines once it holds `count` of them, polling
+/// within the bound: each spawn appends exactly one hello, so the count
+/// names the spawn the test observes. A respawned child runs the same
+/// script from the top, so rounds share one log instead of one file.
+fn read_json_lines(path: &std::path::Path, count: usize, what: &str) -> Vec<Value> {
+    let owned = path.to_path_buf();
+    let read = move || {
+        let text = std::fs::read_to_string(&owned).ok()?;
+        let lines: Vec<Value> = text
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        (lines.len() >= count).then_some(lines)
+    };
+    fakes::within(
+        &format!("the peer to write {what}"),
+        fakes::Deadline::after(WITHIN),
+        move || {
+            // The held sender keeps the channel live, so each rest ends
+            // only when the slice passes, never from a hangup.
+            let (_held, idle) = std::sync::mpsc::channel::<()>();
+            loop {
+                if let Some(lines) = read() {
+                    return lines;
+                }
+                match fakes::Deadline::after(POLL).recv(&idle) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+        },
+    )
+}
+
+/// The restart peer: it logs its hello's folded state, registers a tool
+/// and the hook, answers one hook delivery, then blocks for the kill.
+/// A respawn runs the same script from the top, so the log holds one
+/// line per spawn. The first round answers before the kill, so the kill
+/// lands on an idle child and the death is never a race.
+const RESTART_ONE: &str = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+hook = json.loads(sys.argv[1])
+TOOL = json.loads(sys.argv[2])
+hello = read()
+open(sys.argv[3], "a").write(json.dumps(hello["payload"].get("state")) + "\n")
+write({"id": "t1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+answers = [read(), read(), read()]
+assert all(a["kind"] == "command_accepted" for a in answers), answers
+delivery = read()
+assert delivery["kind"] == "extension_request", delivery
+write({"id": "p1", "command": "reply", "args": {"request_id": delivery["payload"]["request_id"], "result": "done"}})
+ack = read()
+assert ack["kind"] == "command_accepted", ack
+read()"#;
+
+/// The shared-restart peer: like the one-round peer, but it answers
+/// every delivery until the kill, so two concurrent dispatches share
+/// one respawn.
+const RESTART_LOOP: &str = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+hook = json.loads(sys.argv[1])
+TOOL = json.loads(sys.argv[2])
+hello = read()
+open(sys.argv[3], "a").write(json.dumps(hello["payload"].get("state")) + "\n")
+write({"id": "t1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+answers = [read(), read(), read()]
+assert all(a["kind"] == "command_accepted" for a in answers), answers
+while True:
+    delivery = read()
+    assert delivery["kind"] == "extension_request", delivery
+    write({"id": "p1", "command": "reply", "args": {"request_id": delivery["payload"]["request_id"], "result": "done"}})
+    ack = read()
+    assert ack["kind"] == "command_accepted", ack"#;
+
+/// The refold peer: like the one-round peer, but the first hello's
+/// child writes `k` under its delivery, so the restart hello carries
+/// the committed write back. The respawn reads the refold instead.
+const RESTART_FOLD: &str = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+hook = json.loads(sys.argv[1])
+TOOL = json.loads(sys.argv[2])
+hello = read()
+open(sys.argv[3], "a").write(json.dumps(hello["payload"].get("state")) + "\n")
+write({"id": "t1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+answers = [read(), read(), read()]
+assert all(a["kind"] == "command_accepted" for a in answers), answers
+delivery = read()
+assert delivery["kind"] == "extension_request", delivery
+rid = delivery["payload"]["request_id"]
+if hello["payload"].get("state", {}).get("k") == 1:
+    write({"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 2], "request_id": rid}})
+    answer = read()
+    assert answer["kind"] == "command_accepted", answer
+write({"id": "p1", "command": "reply", "args": {"request_id": rid, "result": "done"}})
+ack = read()
+assert ack["kind"] == "command_accepted", ack
+read()"#;
+
+/// Starts a restart peer with `state` as its first hello's fold,
+/// logging each spawn's hello to `log`.
+fn restart_owner(
+    script: &str,
+    state: serde_json::Map<String, Value>,
+    log: &std::path::Path,
+) -> Harness {
+    Harness::start(
+        script,
+        &[
+            &wire_hook_spec().to_string(),
+            &wire_tool_spec().to_string(),
+            log.to_str().unwrap(),
+        ],
+        state,
+        None,
+    )
+}
+
+/// Dispatches `hook` on its own thread: the caller owns the wait, and
+/// the test pumps the peer's lines.
+fn dispatch_hook(
+    owner: &Harness,
+    hook: super::runtime::FunctionRef,
+    timeout: Duration,
+    state_call: Option<u64>,
+) -> std::thread::JoinHandle<Result<Option<Value>, crate::Error>> {
+    let extension = Arc::clone(&owner.extension);
+    std::thread::spawn(move || {
+        let caller = support::cancel::Token::new();
+        extension.dispatch_stream(
+            &hook,
+            json!({"event": "turn_end"}),
+            timeout,
+            state_call,
+            &caller,
+        )
+    })
+}
+
+/// A dead child restarts once under the next dispatch: the respawned
+/// child re-registers the same tools, answers under a new generation,
+/// and the old reference resolves no longer.
+#[test]
+fn restart_after_first_death_serves_the_next_dispatch() {
+    let out = fakes::TempDir::new("fiber-process-restart-basic");
+    let log_path = out.path().join("hellos.jsonl");
+    let mut initial = serde_json::Map::new();
+    initial.insert("k".to_owned(), json!(1));
+    let owner = restart_owner(RESTART_ONE, initial, &log_path);
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let tools_before: Vec<String> = support::lock(&owner.registry)
+        .tools()
+        .keys()
+        .cloned()
+        .collect();
+    let generation_before = owner
+        .extension
+        .runtime()
+        .generation("fiber.test/proc")
+        .expect("the owner registers a generation");
+    let first = dispatch_hook(&owner, hook.clone(), Duration::from_secs(60), None);
+    // The reply arrives on its own pump: the first round answers before
+    // the kill, so the death is never a race with the answer.
+    owner.pump();
+    let outcome = first.join().expect("the hook thread ends");
+    assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    kill_peer(&owner);
+    pump_closed(&owner, "the kill closes the pipe");
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Dead
+    );
+    assert_eq!(lifecycle_deaths(&owner), 1);
+    // A second observation of the same dead spawn counts nothing: the
+    // stopped pipe stays closed, and the death still counts once.
+    pump_closed(&owner, "the stopped pipe stays closed");
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Dead
+    );
+    assert_eq!(lifecycle_deaths(&owner), 1);
+    // The old reference still resolves before the restart bumps the
+    // generation: the next caller starts the sole restart.
+    let second = dispatch_hook(&owner, hook.clone(), Duration::from_secs(60), None);
+    let hellos = read_json_lines(&log_path, 2, "the restart hello");
+    assert_eq!(
+        hellos,
+        vec![json!({"k": 1}), json!({})],
+        "the restart refolds the empty store"
+    );
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Running
+    );
+    assert_eq!(lifecycle_restarts(&owner), 1);
+    assert_eq!(lifecycle_deaths(&owner), 1);
+    let tools_after: Vec<String> = support::lock(&owner.registry)
+        .tools()
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(tools_after, tools_before, "the tools stand again");
+    assert_eq!(
+        owner
+            .extension
+            .runtime()
+            .generation("fiber.test/proc")
+            .expect("the restart re-registers"),
+        generation_before + 1,
+        "one restart bumps the generation once"
+    );
+    owner.pump();
+    let outcome = second.join().expect("the hook thread ends");
+    assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    // The bumped generation retires the old reference: it resolves no
+    // longer, and no pump is needed to prove it.
+    let stale = dispatch_hook(&owner, hook, Duration::from_secs(60), None);
+    let outcome = stale.join().expect("the hook thread ends");
+    assert!(
+        matches!(outcome, Err(crate::Error::UnknownCallback { .. })),
+        "the old generation resolves no longer, not {outcome:?}"
+    );
+    kill_peer(&owner);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// Concurrent dispatches after a death share the sole restart: one
+/// respawn answers both, and the restart counts once.
+#[test]
+fn concurrent_dispatches_share_the_sole_restart() {
+    let out = fakes::TempDir::new("fiber-process-restart-shared");
+    let log_path = out.path().join("hellos.jsonl");
+    let owner = restart_owner(RESTART_LOOP, serde_json::Map::new(), &log_path);
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let first = dispatch_hook(&owner, hook.clone(), Duration::from_secs(60), None);
+    owner.pump();
+    let outcome = first.join().expect("the hook thread ends");
+    assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    kill_peer(&owner);
+    pump_closed(&owner, "the kill closes the pipe");
+    let second_a = dispatch_hook(&owner, hook.clone(), Duration::from_secs(60), None);
+    let second_b = dispatch_hook(&owner, hook.clone(), Duration::from_secs(60), None);
+    let hellos = read_json_lines(&log_path, 2, "the restart hello");
+    assert_eq!(
+        hellos,
+        vec![json!({}), json!({})],
+        "one respawn reads one hello"
+    );
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    for second in [second_a, second_b] {
+        let outcome = second.join().expect("the hook thread ends");
+        assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    }
+    assert_eq!(lifecycle_restarts(&owner), 1, "one shared restart");
+    assert_eq!(lifecycle_deaths(&owner), 1);
+    kill_peer(&owner);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// A second death leaves the extension gone: no third spawn runs, the
+/// restart still counts once, and dispatches stop.
+#[test]
+fn second_death_leaves_the_extension_gone() {
+    let out = fakes::TempDir::new("fiber-process-restart-gone");
+    let log_path = out.path().join("hellos.jsonl");
+    let owner = restart_owner(RESTART_ONE, serde_json::Map::new(), &log_path);
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let first = dispatch_hook(&owner, hook.clone(), Duration::from_secs(60), None);
+    owner.pump();
+    let outcome = first.join().expect("the hook thread ends");
+    assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    kill_peer(&owner);
+    pump_closed(&owner, "the kill closes the pipe");
+    let second = dispatch_hook(&owner, hook.clone(), Duration::from_secs(60), None);
+    read_json_lines(&log_path, 2, "the restart hello");
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    let outcome = second.join().expect("the hook thread ends");
+    assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    assert_eq!(lifecycle_restarts(&owner), 1);
+    // The peer blocks after its reply, so the kill lands mid-request.
+    kill_peer(&owner);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Gone
+    );
+    assert_eq!(lifecycle_deaths(&owner), 2);
+    assert_eq!(lifecycle_restarts(&owner), 1, "no third spawn runs");
+    // Observing the same dead spawn again counts nothing: the stopped
+    // pipe stays closed, and the count holds.
+    pump_closed(&owner, "the stopped pipe stays closed");
+    assert_eq!(lifecycle_deaths(&owner), 2);
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let third = dispatch_hook(&owner, hook, Duration::from_secs(60), None);
+    let outcome = third.join().expect("the hook thread ends");
+    assert!(
+        matches!(outcome, Err(crate::Error::Stopped { .. })),
+        "the gone extension stops, not {outcome:?}"
+    );
+    assert_eq!(lifecycle_restarts(&owner), 1, "no third spawn runs");
+}
+
+/// The restart hello carries the folded state as it stands: the hook's
+/// committed write lands in the store before the death, and the new
+/// child reads it back.
+#[test]
+fn restart_hello_carries_the_current_folded_state() {
+    let out = fakes::TempDir::new("fiber-process-restart-fold");
+    let log_path = out.path().join("hellos.jsonl");
+    let mut initial = serde_json::Map::new();
+    initial.insert("k".to_owned(), json!(1));
+    // The write must land in the store, so this peer answers through the
+    // native services instead of the recording fake.
+    let owner = Harness::start_with_services(
+        RESTART_FOLD,
+        &[
+            &wire_hook_spec().to_string(),
+            &wire_tool_spec().to_string(),
+            log_path.to_str().unwrap(),
+        ],
+        initial,
+        None,
+        production_services,
+        FakeServices::new(),
+    );
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let first = dispatch_hook(&owner, hook.clone(), Duration::from_secs(60), Some(7));
+    // Two pumps answer the round: the state write, then the reply that
+    // commits it.
+    owner.pump();
+    owner.pump();
+    let outcome = first.join().expect("the hook thread ends");
+    assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    assert_eq!(
+        owner.extension.shared().state.get("k"),
+        Some(json!(2)),
+        "the hook's write commits before the death"
+    );
+    kill_peer(&owner);
+    pump_closed(&owner, "the kill closes the pipe");
+    let second = dispatch_hook(&owner, hook, Duration::from_secs(60), None);
+    let hellos = read_json_lines(&log_path, 2, "the restart hello");
+    assert_eq!(
+        hellos,
+        vec![json!({"k": 1}), json!({"k": 2})],
+        "the refold reads the store as it stands"
+    );
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    let outcome = second.join().expect("the hook thread ends");
+    assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    assert_eq!(lifecycle_restarts(&owner), 1);
+    kill_peer(&owner);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// The ordering peer: it answers one delivery, then sleeps past end of
+/// input, so TERM ends it. The log records the reply, proving the final
+/// delivery answered.
+const FINISH_ORDER: &str = r#"import sys, json, time
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+hook = json.loads(sys.argv[1])
+hello = read()
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+answers = [read(), read()]
+assert all(a["kind"] == "command_accepted" for a in answers), answers
+delivery = read()
+assert delivery["kind"] == "extension_request", delivery
+open(sys.argv[2], "w").write(json.dumps({"replied": True}))
+# Fire-and-forget: the shutdown may stop the writer before the reply's
+# own answer flushes, and the test needs no answer to its reply.
+write({"id": "p1", "command": "reply", "args": {"request_id": delivery["payload"]["request_id"], "result": "done"}})
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        while True:
+            time.sleep(60)"#;
+
+/// The shutdown starts the exit allowance only after the final delivery
+/// answers: advancing past the allowance with the reply outstanding
+/// terms nothing, and TERM follows the allowance past the answer.
+#[test]
+fn finish_acknowledges_the_final_delivery_before_the_exit_allowance() {
+    let out = fakes::TempDir::new("fiber-process-finish-order");
+    let log_path = out.path().join("replied.json");
+    let owner = Harness::start(
+        FINISH_ORDER,
+        &[&wire_hook_spec().to_string(), log_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let first = dispatch_hook(&owner, hook, Duration::from_secs(60), None);
+    let seen = read_json_file(&log_path, "the final reply");
+    assert_eq!(seen, json!({"replied": true}));
+    // The reply is sent but unpumped: the final delivery is outstanding.
+    let cancel = support::cancel::Token::new();
+    let finishing = {
+        let extension = Arc::clone(&owner.extension);
+        let waiter = cancel.clone();
+        std::thread::spawn(move || extension.finish(Duration::from_secs(60), &waiter))
+    };
+    // Past the allowance with no answer, the child lives on: the
+    // allowance never started.
+    owner.clock.advance(Duration::from_secs(120));
+    assert!(
+        !owner.extension.transport().exited(),
+        "no TERM before the answer"
+    );
+    // The answer lands: the allowance starts now.
+    owner.pump();
+    let outcome = first.join().expect("the hook thread ends");
+    assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    owner.clock.advance(Duration::from_secs(59));
+    assert!(
+        !owner.extension.transport().exited(),
+        "no TERM inside the allowance"
+    );
+    // The shutdown may read its start late, so one more jump could land
+    // before it parks: advance in slices, yielding between them, until
+    // the TERM lands.
+    advance_until(&owner, "TERM never ends the child", || {
+        owner.extension.transport().exited()
+    });
+    let status = finishing
+        .join()
+        .expect("the shutdown ends")
+        .expect("TERM ends the child");
+    assert_eq!(
+        status.signal(),
+        Some(rustix::process::Signal::TERM.as_raw()),
+        "TERM ends the child, not KILL"
+    );
+    assert_eq!(lifecycle_deaths(&owner), 0);
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Finishing
+    );
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// The grace peer: it answers registrations, then ignores TERM with a
+/// logged handler and sleeps on, so only KILL ends it.
+const FINISH_GRACE: &str = r#"import sys, json, signal, time
+def on_term(signum, frame):
+    open(sys.argv[2], "w").write(json.dumps({"termed": True}))
+signal.signal(signal.SIGTERM, on_term)
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+hook = json.loads(sys.argv[1])
+hello = read()
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+answers = [read(), read()]
+assert all(a["kind"] == "command_accepted" for a in answers), answers
+while True:
+    time.sleep(60)"#;
+
+/// A child that ignores TERM is KILLed after the grace: the TERM lands
+/// first, the child lives through the grace, and KILL ends it.
+#[test]
+fn finish_kills_a_term_ignoring_child_after_grace() {
+    let out = fakes::TempDir::new("fiber-process-finish-grace");
+    let marker_path = out.path().join("termed.json");
+    let owner = Harness::start(
+        FINISH_GRACE,
+        &[&wire_hook_spec().to_string(), marker_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    owner.pump();
+    let allowance = Duration::from_secs(5);
+    let grace = super::process::lifecycle::GRACE;
+    let cancel = support::cancel::Token::new();
+    let finishing = {
+        let extension = Arc::clone(&owner.extension);
+        let waiter = cancel.clone();
+        std::thread::spawn(move || extension.finish(allowance, &waiter))
+    };
+    // The shutdown stamps its allowance from the frozen clock once it
+    // begins, so the TERM and KILL bounds are exact from here on.
+    for _ in 0..10_000 {
+        if lifecycle_state(&owner) == super::process::lifecycle::RunState::Finishing {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Finishing,
+        "the shutdown begins"
+    );
+    let term_at = owner.clock.now() + allowance;
+    // Slices carry the clock to the allowance end without crossing into
+    // the grace: a whole-allowance jump would fire KILL in the same real
+    // instant as TERM, before the child's handler can run.
+    let marker = marker_path.clone();
+    let present = move || {
+        std::fs::read_to_string(&marker)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .is_some()
+    };
+    let mut advanced = Duration::ZERO;
+    let seek_cap = allowance + grace / 2;
+    let slice = Duration::from_millis(100);
+    // The rest channel paces the slices in real time without sleeping:
+    // each rest ends when its bound passes, never from a hangup.
+    let (_held, pace) = std::sync::mpsc::channel::<()>();
+    let rest = || match fakes::Deadline::after(POLL).recv(&pace) {
+        Ok(()) | Err(_) => {}
+    };
+    while !present() && advanced < seek_cap {
+        owner.clock.advance(slice);
+        advanced += slice;
+        rest();
+    }
+    // The clock freezes below the KILL bound while the child takes real
+    // time to run its TERM handler: KILL cannot fire, so the marker wait
+    // below is a real wait with a hang guard, never a race.
+    assert!(
+        owner.clock.now() < term_at + grace,
+        "the KILL bound stays ahead while the marker lands"
+    );
+    let seen = read_json_file(&marker_path, "the TERM delivery");
+    assert_eq!(seen, json!({"termed": true}));
+    // The grace is still running: the child ignored TERM and lives. Three
+    // more slices reach 100ms before the KILL bound, so the child must
+    // still be alive.
+    let alive_until = seek_cap + slice + slice + slice;
+    while advanced < alive_until {
+        owner.clock.advance(slice);
+        advanced += slice;
+        rest();
+    }
+    assert!(
+        !owner.extension.transport().exited(),
+        "no KILL inside the grace"
+    );
+    // Past the grace the shutdown KILLs and reaps: the latch, not the
+    // join, carries the hang guard.
+    owner.clock.advance(grace);
+    rest();
+    for _ in 0..10_000 {
+        if owner.extension.transport().exited() {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(
+        owner.extension.transport().exited(),
+        "KILL ends the child past the grace"
+    );
+    let status = finishing
+        .join()
+        .expect("the shutdown ends")
+        .expect("KILL ends the child");
+    assert_eq!(
+        status.signal(),
+        Some(rustix::process::Signal::KILL.as_raw()),
+        "KILL ends the ignorer, not TERM"
+    );
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// A child that exits on its own returns its status with no signals:
+/// the shutdown reaps the voluntary exit inside the allowance.
+#[test]
+fn finish_returns_a_voluntary_exit_without_signals() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+hook = json.loads(sys.argv[1])
+hello = read()
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+answers = [read(), read()]
+assert all(a["kind"] == "command_accepted" for a in answers), answers
+delivery = read()
+assert delivery["kind"] == "extension_request", delivery
+write({"id": "p1", "command": "reply", "args": {"request_id": delivery["payload"]["request_id"], "result": "done"}})
+ack = read()
+assert ack["kind"] == "command_accepted", ack
+sys.exit(0)"#;
+    let owner = Harness::start(
+        script,
+        &[&wire_hook_spec().to_string()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let first = dispatch_hook(&owner, hook, Duration::from_secs(60), None);
+    owner.pump();
+    let outcome = first.join().expect("the hook thread ends");
+    assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    // No clock moves: the exit is already there, so the allowance never
+    // runs and no signal fires.
+    let status = owner
+        .extension
+        .finish(Duration::from_secs(60), &support::cancel::Token::new())
+        .expect("the child exits on its own");
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(lifecycle_deaths(&owner), 0);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// The waiting peer: it answers registrations, then sleeps past end of
+/// input, so the shutdown's allowance owns it until cancel.
+const FINISH_WAIT: &str = r#"import sys, json, time
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+hook = json.loads(sys.argv[1])
+hello = read()
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+answers = [read(), read()]
+assert all(a["kind"] == "command_accepted" for a in answers), answers
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        while True:
+            time.sleep(60)"#;
+
+/// Cancelling the shutdown ends the wait and leaves the child: the
+/// owner stays finishing, and a second finish refuses at once.
+#[test]
+fn finish_cancelled_during_the_exit_allowance_leaves_the_child() {
+    let owner = Harness::start(
+        FINISH_WAIT,
+        &[&wire_hook_spec().to_string()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    owner.pump();
+    let cancel = support::cancel::Token::new();
+    let finishing = {
+        let extension = Arc::clone(&owner.extension);
+        let waiter = cancel.clone();
+        std::thread::spawn(move || extension.finish(Duration::from_secs(60), &waiter))
+    };
+    owner.clock.advance(Duration::from_secs(1));
+    cancel.cancel();
+    let outcome = finishing.join().expect("the shutdown ends");
+    assert!(
+        matches!(outcome, Err((ErrorCode::Cancelled, _))),
+        "cancel ends the wait, not {outcome:?}"
+    );
+    assert!(
+        !owner.extension.transport().exited(),
+        "cancel leaves the child"
+    );
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Finishing
+    );
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let refused = dispatch_hook(&owner, hook, Duration::from_secs(60), None);
+    let outcome = refused.join().expect("the hook thread ends");
+    assert!(
+        matches!(outcome, Err(crate::Error::Stopped { .. })),
+        "a finishing owner stops, not {outcome:?}"
+    );
+    let outcome = owner
+        .extension
+        .finish(Duration::from_secs(60), &support::cancel::Token::new());
+    assert!(
+        matches!(outcome, Err((ErrorCode::Closing, _))),
+        "a second finish refuses, not {outcome:?}"
+    );
+    kill_peer(&owner);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// The descendant peer: it holds a grandchild on its own stdout pipe,
+/// then sleeps past end of input, so only a group TERM ends both.
+const FINISH_GROUP: &str = r#"import subprocess, sys, json, time
+grandchild = subprocess.Popen(
+    ["python3", "-c", "import time; time.sleep(60)"],
+    stdout=sys.stdout,
+)
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+hook = json.loads(sys.argv[1])
+hello = read()
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+answers = [read(), read()]
+assert all(a["kind"] == "command_accepted" for a in answers), answers
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        while True:
+            time.sleep(60)"#;
+
+/// The shutdown terms the whole group: a grandchild holding the pipes
+/// open dies with the child, and the group reads empty after.
+#[test]
+fn finish_terms_the_whole_group_despite_a_held_pipe() {
+    let owner = Harness::start(
+        FINISH_GROUP,
+        &[&wire_hook_spec().to_string()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    owner.pump();
+    let cancel = support::cancel::Token::new();
+    let finishing = {
+        let extension = Arc::clone(&owner.extension);
+        let waiter = cancel.clone();
+        std::thread::spawn(move || extension.finish(Duration::from_secs(5), &waiter))
+    };
+    // One jump could land before the shutdown parks: advance in slices,
+    // yielding between them, until the child dies.
+    advance_until(&owner, "TERM never ends the group", || {
+        owner.extension.transport().exited()
+    });
+    let status = finishing
+        .join()
+        .expect("the shutdown ends")
+        .expect("TERM ends the group");
+    assert_eq!(
+        status.signal(),
+        Some(rustix::process::Signal::TERM.as_raw()),
+        "TERM ends the group"
+    );
+    assert!(
+        !owner.extension.transport().group_alive(),
+        "no descendant survives the group TERM"
+    );
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// The retire peer: it answers one delivery, reads its answer's fate,
+/// then answers a second one. A retirement between the two stales only
+/// the first.
+const RETIRE_TWO: &str = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+hook = json.loads(sys.argv[1])
+hello = read()
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+answers = [read(), read()]
+assert all(a["kind"] == "command_accepted" for a in answers), answers
+delivery = read()
+assert delivery["kind"] == "extension_request", delivery
+open(sys.argv[2], "w").write(json.dumps({"first": True}))
+write({"id": "p1", "command": "reply", "args": {"request_id": delivery["payload"]["request_id"], "result": "done"}})
+ack = read()
+assert ack["kind"] == "command_rejected", ack
+assert ack["payload"]["code"] == "stale_request", ack
+delivery = read()
+assert delivery["kind"] == "extension_request", delivery
+write({"id": "p1", "command": "reply", "args": {"request_id": delivery["payload"]["request_id"], "result": "done"}})
+ack = read()
+assert ack["kind"] == "command_accepted", ack
+read()"#;
+
+/// Retiring the generation at the seam stales only the in-flight
+/// request: the late reply reads stale, and the next request answers.
+#[test]
+fn retire_at_the_seam_stales_the_in_flight_request() {
+    let out = fakes::TempDir::new("fiber-process-retire");
+    let marker_path = out.path().join("first.json");
+    let owner = Harness::start(
+        RETIRE_TWO,
+        &[&wire_hook_spec().to_string(), marker_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let first = dispatch_hook(&owner, hook.clone(), Duration::from_secs(60), None);
+    let seen = read_json_file(&marker_path, "the first delivery");
+    assert_eq!(seen, json!({"first": true}));
+    // The reply is on its way but unpumped: retiring first retires it.
+    owner.extension.retire();
+    owner.pump();
+    let outcome = first.join().expect("the hook thread ends");
+    assert!(
+        matches!(outcome, Err(crate::Error::Stopped { .. })),
+        "the retired request stops, not {outcome:?}"
+    );
+    let second = dispatch_hook(&owner, hook, Duration::from_secs(60), None);
+    owner.pump();
+    let outcome = second.join().expect("the hook thread ends");
+    assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    kill_peer(&owner);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// Finishing a dead child reaps without signals: the exit is already
+/// there, so the allowance never runs.
+#[test]
+fn finish_after_death_reaps_without_signals() {
+    let out = fakes::TempDir::new("fiber-process-finish-dead");
+    let log_path = out.path().join("hellos.jsonl");
+    let owner = restart_owner(RESTART_ONE, serde_json::Map::new(), &log_path);
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    kill_peer(&owner);
+    pump_closed(&owner, "the kill closes the pipe");
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Dead
+    );
+    // No clock moves: the zombie is already there, so the allowance
+    // never runs and no signal fires.
+    let status = owner
+        .extension
+        .finish(Duration::from_secs(60), &support::cancel::Token::new())
+        .expect("the dead child reaps");
+    assert_eq!(
+        status.signal(),
+        Some(rustix::process::Signal::KILL.as_raw()),
+        "the test's own KILL is what reaps"
+    );
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Finishing
+    );
+    assert_eq!(owner.drain(), CloseReason::Stopped);
+}

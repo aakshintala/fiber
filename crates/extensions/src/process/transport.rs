@@ -665,6 +665,16 @@ pub(crate) struct Transport {
     stderr_stop: PipeStop,
     max_line: usize,
     threads: Mutex<Vec<thread::JoinHandle<()>>>,
+    /// Which child spawn this transport holds: bumped on every respawn,
+    /// so an observed death attributes to the spawn that died.
+    spawn_id: std::sync::atomic::AtomicU64,
+    /// Whether the child exited, set by the reap and never cleared: a
+    /// reap consumes the child handle, so only a latch keeps the death
+    /// observable after `poll_exit` or `wait_exit` takes it.
+    exited: std::sync::atomic::AtomicBool,
+    /// Whether the owner stopped the stream: once stopped, every end of
+    /// the stream reads `Stopped`, even past the one terminal close.
+    stopped: std::sync::atomic::AtomicBool,
 }
 
 #[allow(
@@ -756,6 +766,9 @@ impl Transport {
             stderr_stop,
             max_line: limits.max_line,
             threads: Mutex::new(threads),
+            spawn_id: std::sync::atomic::AtomicU64::new(0),
+            exited: std::sync::atomic::AtomicBool::new(false),
+            stopped: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -767,6 +780,33 @@ impl Transport {
     /// The child's process group id.
     pub(crate) fn pgid(&self) -> u32 {
         self.pgid
+    }
+
+    /// Which child spawn this transport holds.
+    pub(crate) fn spawn_id(&self) -> u64 {
+        self.spawn_id.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Moves to the next spawn id after a respawn: ids never repeat
+    /// across the owner's spawns, so one observation counts once.
+    pub(crate) fn set_spawn_id(&self, id: u64) {
+        self.spawn_id.store(id, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether the child exited, without reaping it: the exit stays for
+    /// `poll_exit` or `wait_exit`, so observing death never consumes the
+    /// status a later reap reports. Sticky: a reap takes the child
+    /// handle, so the latch keeps the death observable afterwards.
+    pub(crate) fn exited(&self) -> bool {
+        if self.exited.load(Ordering::Relaxed) {
+            return true;
+        }
+        matches!(
+            support::lock(&self.child)
+                .as_mut()
+                .and_then(|child| child.try_wait().ok()),
+            Some(Some(_))
+        )
     }
 
     /// Sends one complete line, without its line feed, in queue order. A
@@ -786,8 +826,11 @@ impl Transport {
 
     /// Receives the next line or close, accounting queued bytes down. The
     /// reader posts exactly one terminal `Closed`, so a stop wakes this
-    /// even when the child never closes its end. Only the pump thread
-    /// receives; the lock only makes the shared owner compile.
+    /// even when the child never closes its end. Past that one close the
+    /// reader is gone: the hangup reads `Stopped` when the owner stopped,
+    /// since the stop owns the stream's end, and `Io` when it did not.
+    /// Only the pump thread receives; the lock only makes the shared
+    /// owner compile.
     pub(crate) fn recv(&self) -> Incoming {
         match support::lock(&self.incoming).recv() {
             Ok(Incoming::Line(bytes)) => {
@@ -795,6 +838,9 @@ impl Transport {
                 Incoming::Line(bytes)
             }
             Ok(Incoming::Closed(reason)) => Incoming::Closed(reason),
+            Err(_) if self.stopped.load(Ordering::Relaxed) => {
+                Incoming::Closed(CloseReason::Stopped)
+            }
             Err(_) => Incoming::Closed(CloseReason::Io("the reader ended".into())),
         }
     }
@@ -811,6 +857,7 @@ impl Transport {
         self.reader_stop.stop();
         self.stderr_stop.stop();
         drop(support::lock(&self.writer).take());
+        self.stopped.store(true, Ordering::Relaxed);
     }
 
     /// Sends `signal` to the child's process group: the child and
@@ -831,6 +878,7 @@ impl Transport {
         let status = child.as_mut()?.try_wait().ok()??;
         drop(child.take());
         self.unlist();
+        self.exited.store(true, Ordering::Relaxed);
         Some(status)
     }
 
@@ -843,6 +891,7 @@ impl Transport {
         let status = taken.wait();
         drop(child);
         self.unlist();
+        self.exited.store(true, Ordering::Relaxed);
         status
     }
 
