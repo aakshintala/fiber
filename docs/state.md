@@ -403,6 +403,17 @@ What is recorded:
   worktree writes none. A failed creation or recreation, a recreation that
   finds the path present, and `fiber sessions prune` write none. Their
   `data` holds only `op` and `ms`.
+  Installed for the terminal are `tui.first_render`, `tui.log_read`,
+  `tui.transcript` and `tui.frame`. `tui.first_render` covers entry through
+  the first draw; a setup failure before the draw discards it and writes
+  none. `tui.log_read` covers the first attach's tail read, the first
+  session-log read, to completion whatever its outcome, and
+  `tui.transcript` covers that read's preview build once the preview
+  installs; each is written at most once per process, and an open with no
+  stream writes neither. `tui.frame` covers one frame over its 16 ms
+  budget; a frame within budget writes none, so the log stays small while
+  scrolling. Their `data` holds only `op` and `ms`. The terminal's file
+  stays pid-named across the attach.
   Request, model, hook and network timings may overlap as nested
   measurements, never additive phases.
 - **A session close that stopped waiting for a running command:** one `warn`
