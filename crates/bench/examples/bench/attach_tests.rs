@@ -1,12 +1,19 @@
+use std::process::Stdio;
+use std::time::Duration;
+
+use contract::clock::Clock;
+use fakes::clock::FakeClock;
 use serde_json::json;
 
 use crate::busy::filler;
+use crate::pty::Terminal;
+use crate::run::{Proc, System};
 
 use super::{
-    ATTACH_TAIL, FIXTURE_COUNT, MEMORY_FIXTURE, OPEN_HEIGHT, OPEN_WIDTH, OpenFigures, PLANS,
-    PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, attach_stage_rows, feed_step, memory_rows,
-    open_command, open_error_samples, parse_open_line, plan_turns, replay_finished, size_note,
-    stage_rows,
+    ATTACH_PASS, ATTACH_TAIL, FIXTURE_COUNT, MEMORY_FIXTURE, OPEN_HEIGHT, OPEN_WIDTH, OpenFigures,
+    PLANS, PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, attach_stage_rows, await_pass_end, feed_step,
+    memory_rows, open_command, open_error_samples, parse_open_line, pass_entry, plan_turns,
+    replay_finished, size_note, stage_rows,
 };
 
 #[test]
@@ -493,4 +500,126 @@ fn a_failing_open_run_keeps_the_terminal_and_hub_rows_with_a_note() {
         note,
         open_error_samples("1 MiB", 1_050_231, 31.0, 20.0, "other").1
     );
+}
+
+/// A terminal around `sleep` on a fresh pty, with a second slave handle
+/// for drawing: the child ignores its input, and whatever the test draws
+/// on `drawer` reaches the screen like a child drawing. The slave keeps
+/// echo but not `ECHOCTL`, so Esc echoes literally instead of as `^[`.
+fn loopback() -> (Terminal, std::fs::File) {
+    let (main, name) = fakes::pty::open().expect("opening a pty for the test");
+    let slave = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&name)
+        .expect("opening the pty slave for the test");
+    let mut modes = rustix::termios::tcgetattr(&slave).expect("reading the pty flags");
+    modes
+        .local_modes
+        .remove(rustix::termios::LocalModes::ECHOCTL);
+    rustix::termios::tcsetattr(&slave, rustix::termios::OptionalActions::Now, &modes)
+        .expect("clearing ECHOCTL on the pty");
+    let drawer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&name)
+        .expect("opening the pty drawer for the test");
+    let side = || {
+        slave
+            .try_clone()
+            .map(Stdio::from)
+            .expect("cloning the pty slave for the test")
+    };
+    let mut command = std::process::Command::new("sleep");
+    command
+        .arg("30")
+        .stdin(side())
+        .stdout(side())
+        .stderr(side());
+    let proc = Proc::spawn(&mut command, &System).expect("spawning sleep for the test");
+    (
+        Terminal::watch(proc, main, 60, 12).expect("watching the pty for the test"),
+        drawer,
+    )
+}
+
+#[test]
+fn pass_end_fails_when_the_thumb_never_arrives() {
+    use std::io::Write;
+
+    // The tail on screen with no thumb: the pass never ends.
+    let clock = FakeClock::new();
+    let (terminal, mut drawer) = loopback();
+    drawer
+        .write_all(ATTACH_TAIL.as_bytes())
+        .expect("showing the tail");
+    terminal
+        .wait_for(
+            &*clock,
+            clock
+                .now()
+                .checked_add(Duration::from_secs(1))
+                .expect("fake deadline is representable"),
+            ATTACH_TAIL,
+        )
+        .expect("the tail draws");
+    let started = clock.now();
+    clock.advance(Duration::from_secs(1));
+    let until = clock
+        .now()
+        .checked_sub(Duration::from_secs(1))
+        .expect("fake clock has advanced past its origin");
+    let err = await_pass_end(&terminal, &*clock, started, until).expect_err("no thumb ever shows");
+    assert!(err.contains(ATTACH_PASS), "{err}");
+}
+
+#[test]
+fn pass_end_returns_once_the_thumb_shows() {
+    use std::io::Write;
+
+    let clock = FakeClock::new();
+    let (terminal, mut drawer) = loopback();
+    drawer
+        .write_all(format!("{ATTACH_TAIL}{ATTACH_PASS}").as_bytes())
+        .expect("showing the tail and the thumb");
+    terminal
+        .wait_for(
+            &*clock,
+            clock
+                .now()
+                .checked_add(Duration::from_secs(1))
+                .expect("fake deadline is representable"),
+            ATTACH_PASS,
+        )
+        .expect("the thumb draws");
+    let started = clock.now();
+    clock.advance(Duration::from_secs(1));
+    let until = clock
+        .now()
+        .checked_add(Duration::from_secs(1))
+        .expect("fake deadline is representable");
+    let ms = await_pass_end(&terminal, &*clock, started, until).expect("the thumb shows");
+    assert!(ms.is_finite() && ms >= 0.0, "{ms}");
+}
+
+#[test]
+fn the_pass_end_entries_carry_the_fixture_and_log_size() {
+    // One entry per fixture per run, shaped like the first-frame entry.
+    for label in ["1 MiB", "10 MiB"] {
+        let (metric, entry) = pass_entry(label, 1_050_231, 41.0);
+        assert_eq!(metric, "terminal_attach_pass_ms");
+        assert_eq!(entry.get("fixture"), Some(&json!(label)));
+        assert_eq!(entry.get("log_bytes"), Some(&json!(1_050_231)));
+        assert_eq!(entry.get("ms"), Some(&json!(41.0)));
+        // A different pass time is a different sample, so equal medians
+        // never hide a swapped moment.
+        assert_ne!(entry, pass_entry(label, 1_050_231, 42.0).1);
+        // The pass id carries no memory rows: memory reports only the
+        // terminal RSS ids, and only on the 10 MiB fixture.
+        assert!(
+            memory_rows(label, 51200, 48000)
+                .iter()
+                .all(|(metric, _)| *metric != "terminal_attach_pass_ms"),
+            "{label}"
+        );
+    }
 }
