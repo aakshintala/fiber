@@ -295,10 +295,11 @@ impl Fixture {
 
     /// Runs the reload preparation, dumping the prepare stall line and
     /// every fake MCP server's `stderr.log` and `requests.log` into the
-    /// failure when the wait expires or the preparation panics: the
-    /// stall line names how far this prepare's own server traffic got,
-    /// so the failure shows whether the prepare stopped before its
-    /// server traffic or at or past it.
+    /// failure when the wait expires or the preparation panics: the logs
+    /// are read after `fakes::within` expires, which never joins its work
+    /// thread, so the stall line and dump include post-timeout traffic.
+    /// The stall line reports only the observed traffic, never why the
+    /// prepare stopped.
     #[track_caller]
     fn prepare(&self) -> r#loop::ReloadPrepared {
         let state = self.state.clone();
@@ -369,13 +370,18 @@ fn fake_server_dirs(root: &std::path::Path) -> Vec<(String, std::path::PathBuf)>
 }
 
 /// Every fake server directory under the rig's root, sorted by name.
-/// Each entry shows the server's stderr and every line it received.
+/// Each entry shows the server's stderr and every line it received as
+/// read after the prepare wait expired: `fakes::within` never joins its
+/// work thread, so the dump includes post-timeout traffic.
 fn dump_fake_servers(root: &std::path::Path) -> String {
     let servers = fake_server_dirs(root);
     if servers.is_empty() {
         return format!("fake MCP servers: none under {}", root.display());
     }
-    let mut dump = String::from("fake MCP servers at the prepare timeout:");
+    let mut dump = String::from(
+        "fake MCP servers read after the prepare wait expired \
+         (the wait leaves its work thread running, so this includes post-timeout traffic):",
+    );
     for (name, dir) in &servers {
         dump.push_str(&dump_fake_server(dir, name));
     }
@@ -383,9 +389,9 @@ fn dump_fake_servers(root: &std::path::Path) -> String {
 }
 
 /// The `requests.log` lengths before the prepare runs, by server name:
-/// the timeout dump reports only the requests that arrived during the
-/// failed prepare, so earlier phases' handshakes cannot pass as this
-/// prepare's progress.
+/// the timeout dump cuts earlier phases' handshakes at this length, so
+/// they cannot pass as this prepare's progress. The cut is still read
+/// after the wait expires, so the tail includes post-timeout traffic.
 fn snapshot_request_lengths(root: &std::path::Path) -> Vec<(String, usize)> {
     fake_server_dirs(root)
         .iter()
@@ -423,9 +429,10 @@ fn request_method(line: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// What one fake server received during the failed prepare: the count
-/// of new `requests.log` lines and the furthest handshake method among
-/// them, which bounds how far the sync's server exchange got.
+/// What one fake server's `requests.log` held after the snapshot cut,
+/// as read after the wait expired: the count of new lines and the
+/// furthest handshake method among them, which bounds the observed
+/// exchange. The count includes post-timeout traffic.
 #[derive(Debug)]
 struct ServerTraffic {
     name: String,
@@ -434,8 +441,9 @@ struct ServerTraffic {
 }
 
 /// Cuts each fake server's `requests.log` at its snapshot length: only
-/// the requests that arrived during the failed prepare count, and the
-/// furthest handshake method among them bounds the exchange.
+/// the lines after the cut count, and the furthest handshake method
+/// among them bounds the observed exchange. The file is read after the
+/// wait expires, so the tail includes post-timeout traffic.
 fn prepare_traffic(root: &std::path::Path, before: &[(String, usize)]) -> Vec<ServerTraffic> {
     fake_server_dirs(root)
         .iter()
@@ -467,15 +475,17 @@ fn prepare_traffic(root: &std::path::Path, before: &[(String, usize)]) -> Vec<Se
         .collect()
 }
 
-/// Names the unfinished prepare step from the traffic that arrived
-/// during the failed prepare: no new request means the prepare stopped
-/// before the MCP sync's server traffic, otherwise the furthest method
-/// reached bounds how far past its start the prepare got. Both lines
-/// only restate what the fake servers saw, never why it stopped.
+/// Reports what the fake servers saw after the prepare wait expired,
+/// without inferring why the prepare stopped: no new request means no
+/// server traffic arrived, otherwise the furthest handshake method
+/// reached bounds the observed traffic. The logs are read after
+/// `fakes::within` expires, and that helper never joins its work thread,
+/// so the traffic includes post-timeout lines.
 fn describe_prepare_stall(traffic: &[ServerTraffic]) -> String {
     let mut stall = if traffic.iter().all(|server| server.new_requests == 0) {
         String::from(
-            "prepare stall: no fake server received a request during this prepare; \
+            "prepare stall: no fake server received a request as read after the prepare wait expired \
+             (the wait leaves its work thread running, so this includes post-timeout traffic); \
              the prepare stopped before the MCP sync's server traffic",
         )
     } else {
@@ -485,12 +495,14 @@ fn describe_prepare_stall(traffic: &[ServerTraffic]) -> String {
             .max_by_key(|method| handshake_step(method));
         match furthest {
             Some(method) => format!(
-                "prepare stall: server traffic during this prepare reached {method}; \
-                 the prepare stopped at or past the MCP sync's server traffic"
+                "prepare stall: server traffic read after the prepare wait expired reached {method}; \
+                 the prepare stopped at or past the MCP sync's server traffic \
+                 (requests.log was read after the wait expired, so this includes post-timeout traffic)"
             ),
             None => String::from(
-                "prepare stall: server traffic during this prepare named no handshake method; \
-                 the prepare stopped inside the MCP sync's server traffic",
+                "prepare stall: server traffic read after the prepare wait expired named no handshake method; \
+                 the observed traffic does not name a handshake step \
+                 (requests.log was read after the wait expired, so this includes post-timeout traffic)",
             ),
         }
     };
@@ -510,7 +522,7 @@ fn describe_prepare_stall(traffic: &[ServerTraffic]) -> String {
                 server.name
             )),
             None => stall.push_str(&format!(
-                "\nprepare traffic {}: no new request during this prepare",
+                "\nprepare traffic {}: no new request read after the wait expired",
                 server.name
             )),
         }
@@ -2885,7 +2897,7 @@ fn describe_prepare_stall_names_the_unfinished_step() {
         "silence means the exchange never started: {stall}"
     );
     assert!(
-        stall.contains("prepare traffic fx: no new request during this prepare"),
+        stall.contains("prepare traffic fx: no new request read after the wait expired"),
         "names the quiet server: {stall}"
     );
     let traffic = [
@@ -2931,6 +2943,77 @@ fn describe_prepare_stall_names_the_unfinished_step() {
     assert!(
         stall.contains("stopped before the MCP sync's server traffic"),
         "no servers means no exchange: {stall}"
+    );
+}
+
+#[test]
+fn describe_prepare_stall_keeps_unknown_traffic_observational() {
+    // An unrecognized method proves traffic arrived, not where the
+    // prepare stalled: the line must restate the observation without
+    // placing the stall inside the MCP sync.
+    let odd = [ServerTraffic {
+        name: "fx".to_owned(),
+        new_requests: 2,
+        furthest: None,
+    }];
+    let stall = describe_prepare_stall(&odd);
+    assert!(
+        stall.contains("does not name a handshake step"),
+        "unknown traffic stays observational: {stall}"
+    );
+    assert!(
+        !stall.contains("stopped inside"),
+        "unknown traffic never places the stall: {stall}"
+    );
+}
+
+#[test]
+fn prepare_stall_and_dump_name_post_timeout_traffic() {
+    // `fakes::within` never joins its work thread, so every timeout read
+    // may hold lines the prepare wrote after the wait expired: each
+    // headline must say so.
+    let quiet = [ServerTraffic {
+        name: "fx".to_owned(),
+        new_requests: 0,
+        furthest: None,
+    }];
+    let stall = describe_prepare_stall(&quiet);
+    assert!(
+        stall.contains("post-timeout traffic"),
+        "silence is still a post-expiry read: {stall}"
+    );
+    let reached = [ServerTraffic {
+        name: "fx".to_owned(),
+        new_requests: 1,
+        furthest: Some("tools/list".to_owned()),
+    }];
+    let stall = describe_prepare_stall(&reached);
+    assert!(
+        stall.contains("post-timeout traffic"),
+        "a furthest step is still a post-expiry read: {stall}"
+    );
+    let odd = [ServerTraffic {
+        name: "fx".to_owned(),
+        new_requests: 1,
+        furthest: None,
+    }];
+    let stall = describe_prepare_stall(&odd);
+    assert!(
+        stall.contains("post-timeout traffic"),
+        "unknown traffic is still a post-expiry read: {stall}"
+    );
+    let rig = Rig::new("fiber-reload-post-timeout-label");
+    let dir = rig.root.path().join("fx");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("tools.json"), "[]").unwrap();
+    let dump = dump_fake_servers(rig.root.path());
+    assert!(
+        dump.contains("post-timeout traffic"),
+        "the dump names its post-expiry read: {dump}"
+    );
+    assert!(
+        dump.contains("after the prepare wait expired"),
+        "the dump names when it was read: {dump}"
     );
 }
 
