@@ -304,135 +304,136 @@ impl ModelPicker {
         let old = std::mem::replace(&mut self.catalogue, incoming);
         self.error = None;
         self.prune_focus();
-        let Some(open) = self.open.as_mut() else {
-            return;
-        };
         let on_screen = target
             .as_ref()
             .map(|(model, level)| (model.as_str(), level.as_deref()));
-        let models = &self.catalogue.models;
-        let mut chips = Vec::with_capacity(models.len());
-        let mut touched = Vec::with_capacity(models.len());
-        for entry in models {
-            let old_at = old
-                .models
-                .iter()
-                .position(|old_entry| old_entry.reference == entry.reference);
-            let was_touched = old_at
-                .and_then(|at| open.touched.get(at).copied())
-                .unwrap_or(false);
-            let chip = if !was_touched {
-                preselect(entry, on_screen)
-            } else {
-                let level = old_at.and_then(|at| {
-                    open.chips
-                        .get(at)
-                        .copied()
-                        .flatten()
-                        .and_then(|chip| {
-                            old.models
-                                .get(at)
-                                .and_then(|old_entry| old_entry.levels.get(chip))
-                        })
-                        .cloned()
-                });
-                level
-                    .as_ref()
-                    .and_then(|level| entry.levels.iter().position(|declared| declared == level))
-                    .or_else(|| preselect(entry, on_screen))
+        // Reconcile the answered catalogue under one short borrow: each
+        // touched chip stays on its level's name, every other row
+        // preselects, the selection keeps its model, and the checklist
+        // keeps each kept mark. The rows computation waits until the
+        // borrow ends.
+        let (chips, touched, kept, old_empty, open_selected, model_count, toggled, marks) = {
+            let Some(open) = self.open.as_mut() else {
+                return;
             };
-            chips.push(chip);
-            touched.push(was_touched);
-        }
-        let selected_reference = old
-            .models
-            .get(open.selected)
-            .map(|entry| entry.reference.clone());
-        let mut selected = selected_reference
-            .and_then(|reference| models.iter().position(|entry| entry.reference == reference))
-            .unwrap_or_else(|| {
-                if old.models.is_empty() {
-                    // An open before the first catalogue answered has no
-                    // model to keep: it lands on the on-screen model, else
-                    // the first row.
-                    let rows = shown_in(
-                        &self.catalogue.models,
-                        &self.scoped,
-                        open.show_all,
-                        open.mode,
-                        open.target.as_ref(),
-                        &open.query,
-                    );
-                    on_screen
-                        .and_then(|(model, _)| {
-                            rows.iter().copied().find(|index| {
-                                self.catalogue
-                                    .models
-                                    .get(*index)
-                                    .is_some_and(|entry| entry.reference == model)
-                            })
-                        })
-                        .or(rows.first().copied())
-                        .unwrap_or(0)
+            let models = &self.catalogue.models;
+            let mut chips = Vec::with_capacity(models.len());
+            let mut touched = Vec::with_capacity(models.len());
+            for entry in models {
+                let old_at = old
+                    .models
+                    .iter()
+                    .position(|old_entry| old_entry.reference == entry.reference);
+                let was_touched = old_at
+                    .and_then(|at| open.touched.get(at).copied())
+                    .unwrap_or(false);
+                let chip = if !was_touched {
+                    preselect(entry, on_screen)
                 } else {
-                    open.selected.min(models.len().saturating_sub(1))
-                }
+                    let level = old_at.and_then(|at| {
+                        open.chips
+                            .get(at)
+                            .copied()
+                            .flatten()
+                            .and_then(|chip| {
+                                old.models
+                                    .get(at)
+                                    .and_then(|old_entry| old_entry.levels.get(chip))
+                            })
+                            .cloned()
+                    });
+                    level
+                        .as_ref()
+                        .and_then(|level| {
+                            entry.levels.iter().position(|declared| declared == level)
+                        })
+                        .or_else(|| preselect(entry, on_screen))
+                };
+                chips.push(chip);
+                touched.push(was_touched);
+            }
+            let kept = old.models.get(open.selected).and_then(|kept| {
+                models
+                    .iter()
+                    .position(|entry| entry.reference == kept.reference)
             });
+            (
+                chips,
+                touched,
+                kept,
+                old.models.is_empty(),
+                open.selected,
+                models.len(),
+                // A read answering over the checklist keeps each kept
+                // model's mark, and a new row starts marked from the saved
+                // list, even when the open began with no catalogue. Any
+                // other open keeps no marks. The touches carry the same
+                // way, except a new row starts untouched: the person never
+                // touched it.
+                if open.mode == Mode::Scope {
+                    self.catalogue
+                        .models
+                        .iter()
+                        .map(|entry| {
+                            old.models
+                                .iter()
+                                .position(|old_entry| old_entry.reference == entry.reference)
+                                .and_then(|at| open.toggled.get(at).copied())
+                                .unwrap_or(false)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                if open.mode == Mode::Scope {
+                    let mut marks = Vec::with_capacity(models.len());
+                    for entry in models {
+                        marks.push(
+                            old.models
+                                .iter()
+                                .position(|old_entry| old_entry.reference == entry.reference)
+                                .and_then(|at| open.marks.get(at).copied())
+                                .unwrap_or_else(|| self.scoped.contains(&entry.reference)),
+                        );
+                    }
+                    marks
+                } else {
+                    Vec::new()
+                },
+            )
+        };
+        let rows = {
+            let Some(open) = self.open.as_ref() else {
+                return;
+            };
+            self.shown(open)
+        };
+        let mut selected = if old_empty {
+            // An open before the first catalogue answered has no model
+            // to keep: it lands on the on-screen model, else the first
+            // row.
+            self.selected_for(on_screen, &rows)
+        } else {
+            kept.unwrap_or(open_selected)
+                .min(model_count.saturating_sub(1))
+        };
         // A refresh that drops the selected row can leave the selection
         // on a hidden catalogue index while the frame highlights the
         // first shown row: move it onto the shown rows, so choosing
         // takes the highlighted row.
-        let rows = shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            open.show_all,
-            open.mode,
-            open.target.as_ref(),
-            &open.query,
-        );
         if !rows.contains(&selected)
             && let Some(first) = rows.first()
         {
             selected = *first;
         }
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
         open.selected = selected;
         open.chips = chips;
         open.touched = touched;
-        // A read answering over the checklist keeps each kept model's
-        // mark, and a new row starts marked from the saved list, even
-        // when the open began with no catalogue. Any other open keeps
-        // no marks. The touches carry the same way, except a new row
-        // starts untouched: the person never touched it.
-        open.toggled = if open.mode == Mode::Scope {
-            self.catalogue
-                .models
-                .iter()
-                .map(|entry| {
-                    old.models
-                        .iter()
-                        .position(|old_entry| old_entry.reference == entry.reference)
-                        .and_then(|at| open.toggled.get(at).copied())
-                        .unwrap_or(false)
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        open.marks = if open.mode == Mode::Scope {
-            let mut marks = Vec::with_capacity(models.len());
-            for entry in models {
-                marks.push(
-                    old.models
-                        .iter()
-                        .position(|old_entry| old_entry.reference == entry.reference)
-                        .and_then(|at| open.marks.get(at).copied())
-                        .unwrap_or_else(|| self.scoped.contains(&entry.reference)),
-                );
-            }
-            marks
-        } else {
-            Vec::new()
-        };
+        open.toggled = toggled;
+        open.marks = marks;
     }
 
     /// The read the loop owes, if one is owed. Taking a read counts one
@@ -478,25 +479,6 @@ impl ModelPicker {
     /// `Stale`, keeping a wider `Every`.
     pub(crate) fn open(&mut self, mode: Mode, on_screen: Option<(&str, Option<&str>)>) {
         let target = on_screen.map(|(model, level)| (model.to_owned(), level.map(str::to_owned)));
-        let rows = shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            false,
-            mode,
-            target.as_ref(),
-            "",
-        );
-        let selected = on_screen
-            .and_then(|(model, _)| {
-                rows.iter().copied().find(|index| {
-                    self.catalogue
-                        .models
-                        .get(*index)
-                        .is_some_and(|entry| entry.reference == model)
-                })
-            })
-            .or(rows.first().copied())
-            .unwrap_or(0);
         let chips = self
             .catalogue
             .models
@@ -535,9 +517,12 @@ impl ModelPicker {
         {
             *touched = true;
         }
-        self.open = Some(Open {
+        // The rows and selection read the staged open: "show all" off
+        // with an empty query, the selection on the on-screen model, else
+        // the first row.
+        let mut open = Open {
             mode,
-            selected,
+            selected: 0,
             chips,
             touched,
             marks,
@@ -546,7 +531,10 @@ impl ModelPicker {
             target,
             // Every open starts with an empty query.
             query: String::new(),
-        });
+        };
+        let rows = self.shown(&open);
+        open.selected = self.selected_for(on_screen, &rows);
+        self.open = Some(open);
         self.installs.reset();
         self.ask_stale();
     }
@@ -594,41 +582,41 @@ impl ModelPicker {
         if matches!(self.focus(), Some(Stop::Install(_))) {
             return;
         }
+        let (selected, chip) = {
+            let Some(open) = self.open.as_ref() else {
+                return;
+            };
+            // Checklist rows have no level chips to move.
+            if open.mode == Mode::Scope {
+                return;
+            }
+            let rows = self.shown(open);
+            if !rows.contains(&open.selected) {
+                return;
+            }
+            let selected = open.selected;
+            let Some(entry) = self.catalogue.models.get(selected) else {
+                return;
+            };
+            if entry.levels.is_empty() {
+                return;
+            }
+            let chip = match open.chips.get(selected).copied().flatten() {
+                Some(chip) => chip
+                    .saturating_add_signed(delta)
+                    .clamp(0, entry.levels.len().saturating_sub(1)),
+                None if delta >= 0 => 0,
+                None => entry.levels.len().saturating_sub(1),
+            };
+            (selected, chip)
+        };
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        // Checklist rows have no level chips to move.
-        if open.mode == Mode::Scope {
-            return;
-        }
-        let rows = shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            open.show_all,
-            open.mode,
-            open.target.as_ref(),
-            &open.query,
-        );
-        if !rows.contains(&open.selected) {
-            return;
-        }
-        let Some(entry) = self.catalogue.models.get(open.selected) else {
-            return;
-        };
-        if entry.levels.is_empty() {
-            return;
-        }
-        let chip = match open.chips.get(open.selected).copied().flatten() {
-            Some(chip) => chip
-                .saturating_add_signed(delta)
-                .clamp(0, entry.levels.len().saturating_sub(1)),
-            None if delta >= 0 => 0,
-            None => entry.levels.len().saturating_sub(1),
-        };
-        if let Some(slot) = open.chips.get_mut(open.selected) {
+        if let Some(slot) = open.chips.get_mut(selected) {
             *slot = Some(chip);
         }
-        if let Some(touched) = open.touched.get_mut(open.selected) {
+        if let Some(touched) = open.touched.get_mut(selected) {
             *touched = true;
         }
     }
@@ -667,27 +655,26 @@ impl ModelPicker {
     /// nothing. Only the checklist keeps marks, so everywhere else this
     /// changes nothing.
     pub(crate) fn toggle_mark(&mut self) {
+        let selected = {
+            let Some(open) = self.open.as_ref() else {
+                return;
+            };
+            let rows = self.shown(open);
+            if !rows.contains(&open.selected) {
+                return;
+            }
+            open.selected
+        };
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        let rows = shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            open.show_all,
-            open.mode,
-            open.target.as_ref(),
-            &open.query,
-        );
-        if !rows.contains(&open.selected) {
-            return;
-        }
         // Every toggle flips the mark and touches the row: a touched
         // row keeps the person's mark against later lists, even
         // flipped twice back to marked.
-        if let Some(mark) = open.marks.get_mut(open.selected) {
+        if let Some(mark) = open.marks.get_mut(selected) {
             *mark = !*mark;
         }
-        if let Some(touched) = open.toggled.get_mut(open.selected) {
+        if let Some(touched) = open.toggled.get_mut(selected) {
             *touched = true;
         }
     }
@@ -695,26 +682,29 @@ impl ModelPicker {
     /// Flips "show all", only when a scope is set. The selection stays on
     /// its model when shown, else moves to the first row.
     pub(crate) fn toggle_show_all(&mut self) {
+        {
+            let Some(open) = self.open.as_mut() else {
+                return;
+            };
+            // The checklist already shows every installed model: the toggle
+            // has nothing to show.
+            if open.mode == Mode::Scope {
+                return;
+            }
+            if self.scoped.is_empty() {
+                return;
+            }
+            open.show_all = !open.show_all;
+        }
+        let rows = {
+            let Some(open) = self.open.as_ref() else {
+                return;
+            };
+            self.shown(open)
+        };
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        // The checklist already shows every installed model: the toggle
-        // has nothing to show.
-        if open.mode == Mode::Scope {
-            return;
-        }
-        if self.scoped.is_empty() {
-            return;
-        }
-        open.show_all = !open.show_all;
-        let rows = shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            open.show_all,
-            open.mode,
-            open.target.as_ref(),
-            &open.query,
-        );
         restick(open, &rows);
     }
 
@@ -722,19 +712,22 @@ impl ModelPicker {
     /// on every letter. The selection stays on its model when it still
     /// shows, else moves to the first shown row. Nothing while closed.
     pub(crate) fn push_query(&mut self, c: char) {
+        {
+            let Some(open) = self.open.as_mut() else {
+                return;
+            };
+            open.query.push(c);
+        }
+        self.installs.focus = None;
+        let rows = {
+            let Some(open) = self.open.as_ref() else {
+                return;
+            };
+            self.shown(open)
+        };
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        open.query.push(c);
-        self.installs.focus = None;
-        let rows = shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            open.show_all,
-            open.mode,
-            open.target.as_ref(),
-            &open.query,
-        );
         restick(open, &rows);
     }
 
@@ -742,21 +735,24 @@ impl ModelPicker {
     /// The selection stays on its model when it still shows, else moves
     /// to the first shown row. Nothing while closed or already empty.
     pub(crate) fn pop_query(&mut self) {
+        {
+            let Some(open) = self.open.as_mut() else {
+                return;
+            };
+            if open.query.pop().is_none() {
+                return;
+            }
+        }
+        self.installs.focus = None;
+        let rows = {
+            let Some(open) = self.open.as_ref() else {
+                return;
+            };
+            self.shown(open)
+        };
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        if open.query.pop().is_none() {
-            return;
-        }
-        self.installs.focus = None;
-        let rows = shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            open.show_all,
-            open.mode,
-            open.target.as_ref(),
-            &open.query,
-        );
         restick(open, &rows);
     }
 
@@ -764,22 +760,25 @@ impl ModelPicker {
     /// selection stays on its model when it still shows, else moves to
     /// the first shown row. Nothing while closed or already empty.
     pub(crate) fn clear_query(&mut self) {
+        {
+            let Some(open) = self.open.as_mut() else {
+                return;
+            };
+            if open.query.is_empty() {
+                return;
+            }
+            open.query.clear();
+        }
+        self.installs.focus = None;
+        let rows = {
+            let Some(open) = self.open.as_ref() else {
+                return;
+            };
+            self.shown(open)
+        };
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        if open.query.is_empty() {
-            return;
-        }
-        open.query.clear();
-        self.installs.focus = None;
-        let rows = shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            open.show_all,
-            open.mode,
-            open.target.as_ref(),
-            &open.query,
-        );
         restick(open, &rows);
     }
 
@@ -790,6 +789,36 @@ impl ModelPicker {
             .as_ref()
             .map(|open| open.query.as_str())
             .unwrap_or("")
+    }
+
+    /// The rows the open picker shows, by catalogue index: the open's
+    /// scope toggle, mode, target and query over the catalogue and its
+    /// scope.
+    pub(crate) fn shown(&self, open: &Open) -> Vec<usize> {
+        shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+            &open.query,
+        )
+    }
+
+    /// The selection for an open: the on-screen model's row when it
+    /// shows, else the first shown row, else `0` with nothing shown.
+    fn selected_for(&self, on_screen: Option<(&str, Option<&str>)>, rows: &[usize]) -> usize {
+        on_screen
+            .and_then(|(model, _)| {
+                rows.iter().copied().find(|index| {
+                    self.catalogue
+                        .models
+                        .get(*index)
+                        .is_some_and(|entry| entry.reference == model)
+                })
+            })
+            .or(rows.first().copied())
+            .unwrap_or(0)
     }
 
     /// Asks `Every`: the refresh button refreshes every list, keeping
@@ -825,14 +854,7 @@ impl ModelPicker {
             return None;
         }
         let open = self.open.as_ref()?;
-        let rows = shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            open.show_all,
-            open.mode,
-            open.target.as_ref(),
-            &open.query,
-        );
+        let rows = self.shown(open);
         // The selection can sit off the shown rows: choosing takes the
         // first shown row, the one the frame highlights.
         let selected = if rows.contains(&open.selected) {
@@ -1096,14 +1118,7 @@ impl ModelPicker {
     /// empty-filter line. `None` while closed.
     fn layout(&self) -> Option<Vec<RowAt>> {
         let open = self.open.as_ref()?;
-        let rows = shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            open.show_all,
-            open.mode,
-            open.target.as_ref(),
-            &open.query,
-        );
+        let rows = self.shown(open);
         // The filter row is first in every mode, so the buttons row
         // is 1 everywhere.
         let mut layout = vec![RowAt::Filter, RowAt::Buttons];

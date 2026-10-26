@@ -523,14 +523,11 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             // cost still null counts as zero until it settles
             // (`docs/loop.md`, "Spending budget"). A known billed cost
             // draws whenever known, `$0.00` included.
-            let cost = match (status.spend.cost, panel.budget()) {
-                (Some(cost), Some(budget)) => {
-                    format!("{} of {}", format::money(cost), format::money(budget))
-                }
-                (None, Some(budget)) => format!("unknown of {}", format::money(budget)),
-                (Some(cost), None) => format::money(cost),
-                (None, None) => "unknown".to_owned(),
-            };
+            let cost = format::spend_against_budget(status.spend.cost, panel.budget())
+                .unwrap_or_else(|| match status.spend.cost {
+                    Some(cost) => format::money(cost),
+                    None => "unknown".to_owned(),
+                });
             out.push(figure_row("cost", cost, Some(Spot::Usage), text));
             // The subscription sum draws on every frame once a status
             // holds it, `$0.00` included.
