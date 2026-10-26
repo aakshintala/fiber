@@ -113,54 +113,54 @@ pub(crate) fn start_hooks_with(
         Box<dyn FnOnce() + Send + 'static>,
     ) -> io::Result<thread::JoinHandle<()>>,
 ) {
-    let ticket = match &job {
-        HooksJob::Query(query) => query.ticket,
-        HooksJob::Install(install) => install.ticket,
-    };
-    let is_query = matches!(job, HooksJob::Query(_));
-    let spawned = match job {
+    match job {
         HooksJob::Query(query) => {
-            let out = out.clone();
-            spawn(
+            let ticket = query.ticket;
+            let thread_out = out.clone();
+            let spawned = spawn(
                 crate::sources::builder("tui-install"),
                 Box::new(move || {
                     let result = query
                         .seam
                         .blocking_hooks(&query.workspace, &query.overrides);
-                    drop(out.send(Input::HooksOfferNames {
+                    drop(thread_out.send(Input::HooksOfferNames {
                         ticket: query.ticket,
                         result,
                     }));
                 }),
-            )
+            );
+            if let Err(source) = spawned {
+                drop(out.send(Input::HooksOfferNames {
+                    ticket,
+                    result: Err(ConfigureError {
+                        code: ErrorCode::IoFailed,
+                        message: format!("terminal: could not start the names query: {source}"),
+                    }),
+                }));
+            }
         }
         HooksJob::Install(install) => {
-            let out = out.clone();
-            spawn(
+            let ticket = install.ticket;
+            let thread_out = out.clone();
+            let spawned = spawn(
                 crate::sources::builder("tui-install"),
                 Box::new(move || {
                     let result = install.seam.install_hooks(clock);
-                    drop(out.send(Input::HooksInstalled {
+                    drop(thread_out.send(Input::HooksInstalled {
                         ticket: install.ticket,
                         result,
                     }));
                 }),
-            )
-        }
-    };
-    if let Err(source) = spawned {
-        if is_query {
-            let result = Err(ConfigureError {
-                code: ErrorCode::IoFailed,
-                message: format!("terminal: could not start the names query: {source}"),
-            });
-            drop(out.send(Input::HooksOfferNames { ticket, result }));
-        } else {
-            let result = Err(ConfigureError {
-                code: ErrorCode::IoFailed,
-                message: format!("terminal: could not start the install: {source}"),
-            });
-            drop(out.send(Input::HooksInstalled { ticket, result }));
+            );
+            if let Err(source) = spawned {
+                drop(out.send(Input::HooksInstalled {
+                    ticket,
+                    result: Err(ConfigureError {
+                        code: ErrorCode::IoFailed,
+                        message: format!("terminal: could not start the install: {source}"),
+                    }),
+                }));
+            }
         }
     }
 }

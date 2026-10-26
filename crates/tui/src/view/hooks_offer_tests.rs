@@ -215,6 +215,44 @@ fn the_offer_draws_nothing_while_the_query_runs() {
     assert!(!crate::view::text(&buf).contains("Install hooks?"));
 }
 
+/// Every frame cell outside the choices and the ✕ swallows its click:
+/// the draw lays one slab-wide question target under the frame's own
+/// targets, so background clicks never reach the rows beneath.
+#[test]
+fn the_frame_background_swallows_clicks() {
+    let (mut app, _) = home(80, 24);
+    enter(&mut app, "hi");
+    offer(&mut app, vec!["fmt".to_owned()]);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    let slab = draw(&app, area, &mut buf, &mut targets);
+    assert!(!slab.is_empty(), "the offer draws its frame");
+    let swallowed = targets
+        .iter()
+        .find(|target| target.id == TargetId::Home(crate::home::Spot::Question))
+        .copied()
+        .unwrap_or_else(|| panic!("the frame background swallows clicks"));
+    assert_eq!(swallowed.rect, slab);
+    // A background cell of the frame hits the swallower, not a choice.
+    let over = |col: u16, row: u16| {
+        targets.iter().any(|target| {
+            target
+                .rect
+                .contains(ratatui::layout::Position::new(col, row))
+                && !matches!(target.id, TargetId::Home(crate::home::Spot::Question))
+        })
+    };
+    let background = (slab.y..slab.bottom())
+        .flat_map(|row| (slab.x..slab.right()).map(move |col| (col, row)))
+        .find(|(col, row)| !over(*col, *row))
+        .expect("the frame has a background cell");
+    assert_eq!(
+        crate::mouse::hit(&targets, background.0, background.1),
+        Some(TargetId::Home(crate::home::Spot::Question))
+    );
+}
+
 /// Clicking the drawn install choice commits the install; clicking the
 /// drawn cancel choice cancels.
 #[test]

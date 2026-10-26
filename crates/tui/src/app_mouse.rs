@@ -248,6 +248,13 @@ impl App {
         if order.contains(&Surface::ReviewerSetup) {
             return;
         }
+        // The hooks offer consumes the wheel while it is on top: its
+        // names query draws no frame, so the frame-only guard below
+        // would let the wheel reach the home list, the panel or the
+        // rail.
+        if self.top_surface() == Surface::HooksOffer {
+            return;
+        }
         // The quit, hooks offer and clear questions and the notice
         // overlay have nothing to scroll, and their frames cover the
         // rows beneath: the wheel over a frame is theirs and moves

@@ -30,6 +30,20 @@ use contract::ErrorCode;
 const MISSING_HOOKS: &str =
     "The `hooks` extension is not installed. Run `fiber extension install hooks`.";
 
+/// The offer's stage: waiting on the names query, showing the names,
+/// or committed to the install. The install commits only from the
+/// shown offer, so no installing-without-names state exists.
+#[derive(Debug, Clone)]
+enum Stage {
+    /// The names query is on the worker: the offer shows nothing yet.
+    Querying,
+    /// The query answered with names: the offer shows them.
+    Offered(Vec<String>),
+    /// Enter committed the install: keys, clicks, paste and the wheel
+    /// cannot start, cancel or alter it.
+    Installing(Vec<String>),
+}
+
 /// The refused start behind the install offer, until one path settles
 /// it: a query answer, a committed install, a decline, or a dropped
 /// connection.
@@ -39,17 +53,23 @@ pub(in crate::app::home) struct State {
     refused_id: String,
     /// The worker ticket: only results carrying it fold.
     ticket: u64,
-    /// The query's names, once they arrive: the offer shows then.
-    names: Option<Vec<String>>,
-    /// Whether the install is committed: keys, clicks, paste and the
-    /// wheel cannot start, cancel or alter it.
-    installing: bool,
+    /// The offer's stage: what shows and what input may do.
+    stage: Stage,
     /// The original refusal, for the decline and query-error paths.
     code: String,
     message: String,
     /// The refused start's args, read before settlement: the retry
     /// resends them unchanged under a fresh command id.
     args: Value,
+}
+
+impl State {
+    /// Whether the open offer committed its install: further keys,
+    /// paste, close and outside clicks cannot start, cancel or alter
+    /// it, and a duplicate or stale result cannot retry it.
+    fn installing(&self) -> bool {
+        matches!(self.stage, Stage::Installing(_))
+    }
 }
 
 /// The install failure's text: the install's own error, naming
@@ -59,11 +79,10 @@ fn install_failure_text(error: &ConfigureError) -> String {
     if error.message.contains(COMMAND) {
         return error.message.clone();
     }
-    if error.message.ends_with('.') {
-        format!("{} Run `{COMMAND}`.", error.message)
-    } else {
-        format!("{}. Run `{COMMAND}`.", error.message)
-    }
+    format!(
+        "{}. Run `{COMMAND}`.",
+        error.message.strip_suffix('.').unwrap_or(&error.message)
+    )
 }
 
 impl App {
@@ -83,19 +102,23 @@ impl App {
         self.home.as_ref().is_some_and(|home| {
             matches!(
                 home.questions.prompt(),
-                Some(Prompt::HooksOffer(state)) if state.installing
+                Some(Prompt::HooksOffer(state)) if state.installing()
             )
         })
     }
 
     /// The offer's names, once the query answered with a nonempty list:
     /// the draw shows the offer only then. Raw and unsorted here; the
-    /// draw sorts and sanitizes for display.
+    /// draw sorts and sanitizes for display. The committed install
+    /// keeps showing them while it runs.
     pub(crate) fn hooks_offer_names(&self) -> Option<Vec<String>> {
         self.home
             .as_ref()
             .and_then(|home| match home.questions.prompt() {
-                Some(Prompt::HooksOffer(state)) => state.names.clone(),
+                Some(Prompt::HooksOffer(state)) => match &state.stage {
+                    Stage::Querying => None,
+                    Stage::Offered(names) | Stage::Installing(names) => Some(names.clone()),
+                },
                 _ => None,
             })
     }
@@ -120,7 +143,7 @@ impl App {
             matches!(
                 home.questions.prompt(),
                 Some(Prompt::HooksOffer(state))
-                    if state.ticket == ticket && state.installing == installing
+                    if state.ticket == ticket && state.installing() == installing
             )
         })
     }
@@ -199,8 +222,7 @@ impl App {
         let state = State {
             refused_id: id.to_owned(),
             ticket,
-            names: None,
-            installing: false,
+            stage: Stage::Querying,
             code: code.to_owned(),
             message: message.to_owned(),
             args,
@@ -285,7 +307,9 @@ impl App {
         // still on the worker there is nothing to install yet, so it
         // holds like every other key.
         let ticket = match self.home.as_ref().and_then(|home| home.questions.prompt()) {
-            Some(Prompt::HooksOffer(state)) if state.names.is_some() => state.ticket,
+            Some(Prompt::HooksOffer(state)) if matches!(state.stage, Stage::Offered(_)) => {
+                state.ticket
+            }
             _ => return Effect::None,
         };
         let Some(seam) = self.configure_seam() else {
@@ -310,10 +334,22 @@ impl App {
             && let Some(Prompt::HooksOffer(state)) = home.questions.prompt.as_mut()
             && state.ticket == ticket
         {
-            state.installing = true;
+            state.stage = match std::mem::replace(&mut state.stage, Stage::Querying) {
+                Stage::Offered(names) => Stage::Installing(names),
+                stage @ (Stage::Querying | Stage::Installing(_)) => stage,
+            };
         }
         self.hooks_job = Some(HooksJob::Install(HooksInstall { ticket, seam }));
         Effect::None
+    }
+
+    /// Settles the refused start behind the offer through the existing
+    /// rejected paths: the clear-staged start through its clear path,
+    /// anything else through the ordinary refusal. Exactly one notice.
+    fn settle_refused(&mut self, state: &State) {
+        if !self.clear_rejected(&state.refused_id, &state.code, &state.message) {
+            self.rejected(&state.refused_id, &state.code, state.message.clone());
+        }
     }
 
     /// Esc, the ✕ or a click outside in the hooks install offer: no
@@ -326,9 +362,7 @@ impl App {
             return;
         };
         self.hooks_job = None;
-        if !self.clear_rejected(&state.refused_id, &state.code, &state.message) {
-            self.rejected(&state.refused_id, &state.code, state.message.clone());
-        }
+        self.settle_refused(&state);
     }
 
     /// Closes the offer on an install that never runs — no seam, or no
@@ -383,20 +417,19 @@ impl App {
                     return;
                 };
                 self.hooks_job = None;
-                if !self.clear_rejected(&state.refused_id, &state.code, &state.message) {
-                    self.rejected(&state.refused_id, &state.code, state.message.clone());
-                }
+                self.settle_refused(&state);
                 return;
             }
         };
         // The query's answer folds once: a duplicate or late result for
-        // the live ticket finds the names already there and does nothing.
+        // the live ticket finds the offer past its query and does
+        // nothing.
         if let Some(home) = self.home.as_mut()
             && let Some(Prompt::HooksOffer(state)) = home.questions.prompt.as_mut()
             && state.ticket == ticket
-            && state.names.is_none()
+            && matches!(state.stage, Stage::Querying)
         {
-            state.names = Some(names);
+            state.stage = Stage::Offered(names);
         }
     }
 
@@ -462,7 +495,7 @@ impl App {
             return;
         };
         self.hooks_job = None;
-        if state.installing {
+        if state.installing() {
             let error = ConfigureError {
                 code: ErrorCode::ConnectionFailed,
                 message: "Connection lost while installing hooks.".to_owned(),

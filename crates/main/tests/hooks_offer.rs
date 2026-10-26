@@ -80,12 +80,22 @@ fn stored_at(dir: &Path) -> Option<Vec<String>> {
     Some(ids)
 }
 
-/// Waits for exactly `count` sessions to be stored before reading their ids.
+/// Whether `id`'s stored events carry its `session_started` line: the
+/// completion signal proving the session started.
+fn has_started(dir: &Path, id: &str) -> bool {
+    std::fs::read_to_string(dir.join(id).join("events.jsonl"))
+        .is_ok_and(|events| events.lines().any(|line| line.contains("session_started")))
+}
+
+/// Waits for exactly `count` stored sessions, each carrying its
+/// `session_started` event, before reading their ids: the event proves
+/// the session started, where the directory alone does not.
 fn wait_stored(setup: &support::Setup, count: usize) -> Vec<String> {
     let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
     let waiting = dir.clone();
-    fakes::wait_until("the stored session rows", setup.deadline, move || {
-        stored_at(&waiting).is_some_and(|ids| ids.len() == count)
+    fakes::wait_until("the stored session start", setup.deadline, move || {
+        stored_at(&waiting)
+            .is_some_and(|ids| ids.len() == count && ids.iter().all(|id| has_started(&waiting, id)))
     });
     stored_at(&dir).unwrap()
 }
@@ -505,7 +515,9 @@ fn real_git() -> PathBuf {
 /// A `git` wrapper that gates only the install's external `clone`: the
 /// clone's full arguments go to `signal` and the call blocks reading
 /// `fifo`, while every other invocation — the hub's boot-time probes —
-/// delegates to the absolute real `git` at once.
+/// delegates to the absolute real `git` at once. The `signal` file only
+/// records the gated arguments; the wait that proves the clone is held
+/// is the test's fifo rendezvous below, never the file.
 fn write_git_gate(dir: &Path, signal: &Path, fifo: &Path, real: &Path) {
     let script = format!(
         "#!/bin/sh\ncase \" $* \" in\n*\" clone \"*)\nprintf '%s\\n' \"$*\" >> '{}'\nread -r _ < '{}'\n;;\nesac\nexec '{}' \"$@\"\n",
@@ -676,11 +688,26 @@ fn losing_the_hub_mid_install_fails_without_retry_or_session() {
     });
     run.write(b"\r");
     // The install is in flight once the hub's clone reaches the gate:
-    // the gated arguments name the clone, proving install_hooks runs.
-    let entered = signal.clone();
-    fakes::wait_until("the clone to enter the gate", a.deadline, move || {
-        entered.is_file()
+    // opening the fifo for writing rendezvouses with the gate's blocked
+    // read, so the open returning proves install_hooks holds the clone
+    // there. The held writer keeps the read blocked until the hub dies;
+    // a dropped `release` (the test failed) frees the holder too.
+    let (held, opened) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let gate_fifo = fifo.clone();
+    let holder = std::thread::spawn(move || {
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&gate_fifo)
+            .expect("the gate opens its fifo");
+        held.send(()).unwrap();
+        // Hold the write end open until the test releases it: closing
+        // it would release the gate's blocked read.
+        released.recv().unwrap_or(());
+        drop(writer);
     });
+    a.deadline
+        .recv_or_fail(&opened, "the clone to enter the gate");
     assert!(
         fs::read_to_string(&signal).unwrap().contains("clone"),
         "the gate held the install's clone"
@@ -699,6 +726,8 @@ fn losing_the_hub_mid_install_fails_without_retry_or_session() {
     assert_no_sessions(&b, "the client after the loss");
     assert_not_installed(&a, "the hub after the loss");
     assert_not_installed(&b, "the client after the loss");
+    drop(release);
+    holder.join().expect("the gate holder joins");
     fs::remove_file(&fifo).unwrap_or(());
     quit_idle(run);
     hub_guard.wait_gone();

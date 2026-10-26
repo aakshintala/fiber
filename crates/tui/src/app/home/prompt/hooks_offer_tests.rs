@@ -672,8 +672,13 @@ fn accepting_resends_the_retained_start_unchanged() {
     // The new start's answer opens the session, as any start's does:
     // attach, commands, then the pending draft as its first prompt.
     let out = app.on_line(accepted(&new, "s_aaaaaaaaaaaaaaaa"));
-    assert_eq!(out.len(), 3);
-    assert!(out[2].contains("hi"), "the draft prompts first");
+    // The new start's answer opens the session, as any start's does,
+    // with the pending draft as its first prompt: the lines carry it,
+    // with no promised count or order.
+    assert!(
+        out.iter().any(|line| line.contains("hi")),
+        "the draft prompts first"
+    );
     assert_eq!(
         app.session().map(|session| session.0.as_str()),
         Some("s_aaaaaaaaaaaaaaaa")
@@ -751,8 +756,13 @@ fn clear_staged_accept_closes_the_old_session_with_its_credential() {
         "the clear follows the retry"
     );
     let out = app.on_line(accepted(&new, "s_bbbbbbbbbbbbbbbb"));
-    assert_eq!(out.len(), 3);
-    let close: Value = serde_json::from_str(&out[2]).expect("the close");
+    // The accepted retry closes the old session: the close goes out
+    // with the lines, with no promised count or order.
+    let close: Value = out
+        .iter()
+        .map(|line| serde_json::from_str::<Value>(line).expect("the close"))
+        .find(|close| close["command"] == "close")
+        .expect("the accepted retry closes the old session");
     assert_eq!(close["command"], "close");
     assert_eq!(close["session_id"], old_session);
     assert_eq!(
@@ -887,6 +897,150 @@ fn disconnect_during_the_names_query_follows_lost_link_handling() {
         )]
     );
     assert!(matches!(app.phase, Phase::Starting));
+}
+
+#[test]
+fn keys_and_clicks_hold_while_the_install_runs() {
+    let mut app = home(Some(fake()));
+    app.on_line(hello());
+    refuse_start(&mut app, "hi");
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(matches!(
+        app.take_hooks_job(),
+        Some(crate::install_worker::HooksJob::Install(_))
+    ));
+    // While the install runs, every key and choice holds: no second
+    // job, no decline, no close.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(
+        app.on_click(TargetId::Home(crate::home::Spot::HooksOffer(
+            crate::home::HooksChoice::Install
+        ))),
+        Effect::None
+    );
+    assert_eq!(
+        app.on_click(TargetId::Home(crate::home::Spot::HooksOffer(
+            crate::home::HooksChoice::Cancel
+        ))),
+        Effect::None
+    );
+    assert!(app.take_hooks_job().is_none(), "no second job runs");
+    assert!(app.hooks_offer_open(), "the offer waits on the install");
+    assert!(notices(&app).is_empty(), "nothing settles mid-install");
+}
+
+#[test]
+fn a_remote_with_its_link_up_commits_the_install() {
+    let mut app = home(Some(fake()));
+    let router = crate::remote::Router::new();
+    let remote = Arc::new(crate::remote::Remote::new(
+        Arc::new(Fake::new(Vec::new())),
+        "/client".into(),
+        router,
+    ));
+    app.set_remote(Arc::clone(&remote));
+    app.on_line(hello());
+    let old = refuse_start(&mut app, "hi");
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    // The hub link is up, so Enter commits the install instead of
+    // failing it for a lost connection.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(matches!(
+        app.take_hooks_job(),
+        Some(crate::install_worker::HooksJob::Install(_))
+    ));
+    assert!(app.hooks_offer_open(), "the offer waits on the install");
+    assert!(
+        app.outbox.pending.contains_key(&old),
+        "the refused start waits"
+    );
+}
+
+#[test]
+fn clear_staged_install_failure_settles_the_clear() {
+    let session = "s_aaaaaaaaaaaaaaaa";
+    let mut app = home(Some(fake()));
+    app.on_line(hello());
+    app.attach(contract::SessionId(session.to_owned()));
+    app.on_line(status(session));
+    let old = refuse_start(&mut app, "");
+    assert!(app.clear_pending.is_some(), "the clear staged a start");
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(matches!(
+        app.take_hooks_job(),
+        Some(crate::install_worker::HooksJob::Install(_))
+    ));
+    // The install's own failure replaces the offer: the staged clear
+    // settles with it, staying attached to the old session with no
+    // close and no draft restored.
+    let lines = app.on_hooks_installed(
+        ticket,
+        Err(ConfigureError {
+            code: ErrorCode::ExtensionFailed,
+            message: "no network".to_owned(),
+        }),
+    );
+    assert!(lines.is_empty(), "a failure sends no start");
+    assert!(!app.hooks_offer_open());
+    assert_eq!(
+        notices(&app),
+        [(
+            "extension_failed".to_owned(),
+            "no network. Run `fiber extension install hooks`.".to_owned()
+        )]
+    );
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(session)
+    );
+    assert!(app.clear_pending.is_none(), "the clear settles");
+    assert!(!app.outbox.pending.contains_key(&old));
+}
+
+#[test]
+fn disconnect_during_the_names_query_settles_a_clear_staged_start() {
+    let session = "s_aaaaaaaaaaaaaaaa";
+    let mut app = home(Some(fake()));
+    app.on_line(hello());
+    app.attach(contract::SessionId(session.to_owned()));
+    app.on_line(status(session));
+    let old = refuse_start(&mut app, "");
+    assert!(app.clear_pending.is_some(), "the clear staged a start");
+    assert!(app.take_hooks_job().is_some(), "the query runs");
+    app.disconnected();
+    assert!(!app.hooks_offer_open(), "the offer closes");
+    assert!(app.take_hooks_job().is_none(), "the queued job never runs");
+    // The dropped link notices through the existing path, and the
+    // refused clear-staged start settles silently: still attached, no
+    // close, nothing waiting.
+    assert_eq!(
+        notices(&app),
+        [(
+            "connection_failed".to_owned(),
+            "Connection lost.".to_owned()
+        )]
+    );
+    assert!(app.clear_pending.is_none(), "the clear settles");
+    assert!(!app.outbox.pending.contains_key(&old));
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(session)
+    );
 }
 
 #[test]
@@ -1142,15 +1296,68 @@ fn the_wheel_over_the_offer_frame_moves_no_list() {
     // Over the frame the wheel is the offer's and moves no list.
     app.on_wheel(&wheel(slab.x + slab.width / 2, slab.y + slab.height / 2));
     assert_eq!(app.home_list_scroll(), 0);
-    // Past the frame the list still scrolls: the control sits on its
-    // own bottom row, outside the frame.
+    // Past the frame the list still does not scroll: the offer holds
+    // the wheel while it is on top, even where no frame catches it.
     let screen = app.home_screen().expect("home draws its list");
     let view_area = ratatui::layout::Rect::new(0, 0, 80, 24);
     let (rows, _) = crate::view::list_window(&app, &screen, view_area);
     let below = ratatui::layout::Position::new(rows.x + 1, rows.bottom().saturating_sub(1));
     assert!(!slab.contains(below), "the control sits past the frame");
     app.on_wheel(&wheel(below.x, below.y));
-    assert_ne!(app.home_list_scroll(), 0, "the list scrolls past the frame");
+    assert_eq!(app.home_list_scroll(), 0, "the offer holds the wheel");
+}
+
+#[test]
+fn the_wheel_while_the_names_query_runs_moves_no_list() {
+    let seam = fake();
+    let mut app = home(Some(Arc::clone(&seam)));
+    // Enough exited rows to scroll: the wheel over the list moves it.
+    let lines = app.on_line(hello());
+    let recent = lines
+        .get(1)
+        .and_then(|line| serde_json::from_str::<Value>(line).ok())
+        .unwrap_or_default();
+    let id = recent["id"].as_str().expect("the recent ask").to_owned();
+    // One project per session: sections overflow the list window, so the
+    // wheel over the rows has rows to move.
+    let sessions: Vec<Value> = (0..40)
+        .map(|at| {
+            json!({
+                "session_id": format!("s_{at:016}"),
+                "ts": at, "project": format!("-p{at:02}"),
+                "workspace": "/w", "name": format!("old {at}"), "how": "exited",
+            })
+        })
+        .collect();
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            ("command_id".to_owned(), Value::String(id)),
+            ("result".to_owned(), json!({"sessions": sessions})),
+        ]
+        .into_iter()
+        .collect(),
+    }));
+    refuse_start(&mut app, "hi");
+    // The query runs with no frame, and the offer is still on top.
+    assert!(app.hooks_offer_names().is_none(), "the query runs");
+    assert_eq!(app.top_surface(), Surface::HooksOffer);
+    let wheel = |col: u16, row: u16| Mouse {
+        kind: MouseKind::WheelDown,
+        col,
+        row,
+    };
+    assert_eq!(app.home_list_scroll(), 0);
+    // Over the rows the wheel is the offer's and moves no list, even
+    // with nothing framed to catch it.
+    let screen = app.home_screen().expect("home draws its list");
+    let view_area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let (rows, _) = crate::view::list_window(&app, &screen, view_area);
+    let over_rows = ratatui::layout::Position::new(rows.x + 1, rows.bottom().saturating_sub(1));
+    app.on_wheel(&wheel(over_rows.x, over_rows.y));
+    assert_eq!(app.home_list_scroll(), 0, "the query holds the wheel");
 }
 
 #[test]

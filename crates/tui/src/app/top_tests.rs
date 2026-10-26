@@ -28,9 +28,11 @@ use contract::{JobId, SessionId};
 
 pub(in crate::app) const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
-/// The 20 surfaces, top first, as the ticket orders them.
-const ORDER: [Surface; 20] = [
-    Surface::HooksOffer,
+/// The 19 surfaces, top first, as the ticket orders them. The hooks
+/// offer asserts apart below: the ticket needs it only above the
+/// delete question and the input box, and `docs/tui.md`, "Contexts"
+/// promises no order past that.
+const ORDER: [Surface; 19] = [
     Surface::Quit,
     Surface::Report,
     Surface::KeysScreen,
@@ -378,6 +380,10 @@ fn the_declared_order_is_the_tickets() {
     for pair in ORDER.windows(2) {
         assert!(pair[0] < pair[1], "{:?} above {:?}", pair[0], pair[1]);
     }
+    // The offer's only required precedence: above the delete question
+    // and the input box, whose keys it takes while open.
+    assert!(Surface::HooksOffer < Surface::DeleteQuestion);
+    assert!(Surface::HooksOffer < Surface::Draft);
 }
 
 #[test]
