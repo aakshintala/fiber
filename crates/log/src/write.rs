@@ -399,6 +399,42 @@ impl Log {
         (head, tail)
     }
 
+    /// Replaces the file at absolute `path` with `bytes`, which must name
+    /// exactly one file directly under this log's `artifacts/`. A path
+    /// anywhere else inside the session directory — a nested artifact
+    /// path, a traversal, or a session file — is [`Error::Io`] naming the
+    /// supplied path, so the caller never falls back to writing it
+    /// directly. A name that is not one plain file name is refused.
+    pub fn replace_artifact_at(&self, path: &Path, bytes: &[u8]) -> Result<(), Error> {
+        let name = self.direct_child(path)?;
+        self.write_artifact(&name, bytes).map(|_| ())
+    }
+
+    /// Removes the file at absolute `path`, which must name exactly one
+    /// file directly under this log's `artifacts/`. A path anywhere else
+    /// inside the session directory is [`Error::Io`] naming the supplied
+    /// path, so the caller never falls back to removing it directly.
+    pub fn remove_artifact_at(&self, path: &Path) -> Result<(), Error> {
+        let _name = self.direct_child(path)?;
+        fs::remove_file(path).map_err(io_at(path))
+    }
+
+    /// The file name when absolute `path` names exactly one file directly
+    /// under this log's `artifacts/`: [`Error::Io`] naming `path`
+    /// otherwise.
+    fn direct_child(&self, path: &Path) -> Result<String, Error> {
+        let name = path
+            .strip_prefix(&self.dir)
+            .ok()
+            .and_then(crate::artifact::direct_artifact_name);
+        name.ok_or_else(|| {
+            io_at(path)(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not one file directly under the session's `artifacts/`",
+            ))
+        })
+    }
+
     /// Writes `bytes` to the file `name` in the session's `artifacts/`,
     /// replacing any file of that name, and returns its path relative to the
     /// session directory (`docs/events.md`, "Conventions") and its absolute

@@ -190,7 +190,7 @@ pub(crate) fn ask_resume(
                 failed(e.code(), e),
             ) {
                 Ok(code) => code,
-                Err(e) => ask_failed(e),
+                Err(e) => ask_failed(Failure::from(e)),
             };
         }
         Err(e) => return ask_failed(failed(e.code(), e)),
@@ -338,7 +338,7 @@ fn resume_session(
                         isolation.end();
                     }
                 },
-                Err(error.failure),
+                Err(Failure::from(error.failure)),
                 |failure| crate::session_command::report(signals, failure),
             );
         }
@@ -622,7 +622,7 @@ fn resumed_session(
         Ok(session) => session,
         Err(e) => {
             session_servers.servers.stop();
-            return Err(e);
+            return Err(Failure::from(e));
         }
     };
     session.shell(driver);
@@ -953,10 +953,10 @@ fn enter(
 ) -> Result<Held, doors::RecreateError> {
     if enter_present && let Err(source) = std::env::set_current_dir(path) {
         return Err(doors::RecreateError {
-            failure: failed(
+            failure: doors::SessionError::Forwarded(failed(
                 ErrorCode::IoFailed,
                 format!("{}: {}.", path.display(), source.kind()),
-            ),
+            )),
             isolation: None,
         });
     }

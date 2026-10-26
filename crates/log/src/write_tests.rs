@@ -1373,3 +1373,84 @@ fn an_append_after_the_end_writes_nothing_and_returns_ended() {
         "no new line before the end"
     );
 }
+
+fn artifact_log(name: &str) -> (fakes::TempDir, Log) {
+    let sessions = fakes::TempDir::new(name);
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    (sessions, log)
+}
+
+#[test]
+fn replace_artifact_at_replaces_one_direct_child() {
+    let (sessions, log) = artifact_log("log-unit-replace-at");
+    let path = sessions.path().join("s_1/artifacts/a.txt");
+    fs::write(&path, b"old").unwrap();
+    log.replace_artifact_at(&path, b"new").unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"new");
+}
+
+#[test]
+fn replace_artifact_at_creates_a_missing_direct_child() {
+    let (sessions, log) = artifact_log("log-unit-replace-at-missing");
+    let path = sessions.path().join("s_1/artifacts/a.txt");
+    log.replace_artifact_at(&path, b"new").unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"new");
+}
+
+#[test]
+fn replace_and_remove_refuse_paths_outside_artifacts_and_leave_them() {
+    let (sessions, log) = artifact_log("log-unit-at-refused");
+    let dir = sessions.path().join("s_1");
+    fs::create_dir_all(dir.join("artifacts/sub")).unwrap();
+    let nested = dir.join("artifacts/sub/out.log");
+    fs::write(&nested, b"kept").unwrap();
+    let events = dir.join("events.jsonl");
+    let before = fs::read(&events).unwrap();
+    let elsewhere = sessions.path().join("elsewhere.txt");
+    for bad in [
+        nested.clone(),
+        events.clone(),
+        dir.join("artifacts/../events.jsonl"),
+        dir.join("artifacts/."),
+        dir.join("artifacts/.."),
+        dir.join("artifacts"),
+        elsewhere.clone(),
+    ] {
+        let replaced = log.replace_artifact_at(&bad, b"x");
+        assert!(
+            matches!(&replaced, Err(Error::Io { path, .. }) if path == &bad),
+            "{bad:?}: {replaced:?}"
+        );
+        assert_eq!(replaced.unwrap_err().code(), ErrorCode::IoFailed);
+        let removed = log.remove_artifact_at(&bad);
+        assert!(
+            matches!(&removed, Err(Error::Io { path, .. }) if path == &bad),
+            "{bad:?}: {removed:?}"
+        );
+        assert_eq!(removed.unwrap_err().code(), ErrorCode::IoFailed);
+    }
+    assert_eq!(fs::read(&nested).unwrap(), b"kept");
+    assert_eq!(fs::read(&events).unwrap(), before);
+    assert!(!elsewhere.exists());
+}
+
+#[test]
+fn remove_artifact_at_removes_one_direct_child_and_names_a_missing_one() {
+    let (sessions, log) = artifact_log("log-unit-remove-at");
+    let path = sessions.path().join("s_1/artifacts/gone.txt");
+    fs::write(&path, b"x").unwrap();
+    log.remove_artifact_at(&path).unwrap();
+    assert!(!path.exists());
+    let missing = sessions.path().join("s_1/artifacts/missing.txt");
+    let error = log.remove_artifact_at(&missing).unwrap_err();
+    assert!(
+        matches!(&error, Error::Io { path, .. } if path == &missing),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+}

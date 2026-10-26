@@ -355,7 +355,8 @@ fn resolved(
     provider: &str,
     home: &std::path::Path,
 ) -> Option<String> {
-    let clock: Arc<dyn contract::clock::Clock> = crate::case::clock::CaseClock::new();
+    let clock: Arc<dyn contract::clock::Clock> =
+        support::clock::Manual::with_sleep(support::clock::Sleep::Waits);
     let host = extensions::HostScript::new(Vec::new(), Vec::new(), Vec::new());
     provider_extension(installed, provider, home, &clock, &host, true)
         .map(|extension| extension.name().to_owned())
@@ -386,7 +387,8 @@ fn selecting_a_declared_provider_needs_its_file_and_runs_no_lua() {
     )
     .unwrap();
     let installed = [installed("different-package")];
-    let clock: Arc<dyn contract::clock::Clock> = crate::case::clock::CaseClock::new();
+    let clock: Arc<dyn contract::clock::Clock> =
+        support::clock::Manual::with_sleep(support::clock::Sleep::Waits);
     let host = extensions::HostScript::new(Vec::new(), Vec::new(), Vec::new());
     let selected = provider_extension(&installed, "p", &home, &clock, &host, true).unwrap();
     assert_eq!(selected.name(), "different-package");
@@ -452,7 +454,8 @@ fn selected(
     provider: &str,
     home: &std::path::Path,
 ) -> std::sync::Arc<extensions::LuaExtension> {
-    let clock: Arc<dyn contract::clock::Clock> = crate::case::clock::CaseClock::new();
+    let clock: Arc<dyn contract::clock::Clock> =
+        support::clock::Manual::with_sleep(support::clock::Sleep::Waits);
     let host = extensions::HostScript::new(Vec::new(), Vec::new(), Vec::new());
     super::provider_extension(installed, provider, home, &clock, &host, true).unwrap()
 }

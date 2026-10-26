@@ -181,7 +181,7 @@ fn diagnose_with(
 ) -> Diagnostic {
     // A `FIBER_HOME` too long for the hub socket names its cause and fix
     // instead of the connect's raw operating-system error.
-    if let Err(failure) = doors::check_socket_path(home, "hub") {
+    if let Err(failure) = doors::check_socket_path(home, "hub").map_err(Failure::from) {
         return Diagnostic::Failed(CliError::Forwarded(failure).into());
     }
     let deadline = clock.now() + answer_within;
