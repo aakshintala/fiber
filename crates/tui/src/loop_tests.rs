@@ -2785,7 +2785,22 @@ fn hooks_results_waiting_on_history_are_stashed_then_folded_stale() {
         .map(|input| match input {
             Input::HooksOfferNames { .. } => "names".to_owned(),
             Input::HooksInstalled { .. } => "installed".to_owned(),
-            _ => "other".to_owned(),
+            Input::Bytes(_)
+            | Input::Hub(_)
+            | Input::Connected(..)
+            | Input::ConnectFailed(_)
+            | Input::Disconnected
+            | Input::Resize
+            | Input::Files { .. }
+            | Input::FindDue(_)
+            | Input::Image { .. }
+            | Input::Viewed { .. }
+            | Input::Models(_)
+            | Input::Feedback(_)
+            | Input::Login { .. }
+            | Input::Install { .. }
+            | Input::Tick
+            | Input::Signal(_) => "other".to_owned(),
         })
         .collect();
     assert_eq!(held, ["names", "installed"]);

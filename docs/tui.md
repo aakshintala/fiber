@@ -2214,7 +2214,7 @@ tui       212   9,804
 ### Overlays
 
 Every surface drawn over the screen shares one frame: the
-key map, the quit question, the close-all question, the stop question, home's delete question and workspace picker, the
+key map, the quit question, the close-all question, the stop question, the hooks install offer, home's delete question and workspace picker, the
 `/login` overlay, the Ctrl+R panel, a notice's whole text, the import report, the reviewer setup, the `/` and `@` completion panels, and
 the model picker inside its view.
 

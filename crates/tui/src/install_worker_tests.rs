@@ -266,7 +266,22 @@ fn a_hooks_thread_that_cannot_start_posts_the_failure_as_the_result() {
                 assert_eq!(got, ticket);
                 result.unwrap_err()
             }
-            _ => unreachable!("the worker posts a hooks answer"),
+            Input::Bytes(_)
+            | Input::Hub(_)
+            | Input::Connected(..)
+            | Input::ConnectFailed(_)
+            | Input::Disconnected
+            | Input::Resize
+            | Input::Files { .. }
+            | Input::FindDue(_)
+            | Input::Image { .. }
+            | Input::Viewed { .. }
+            | Input::Models(_)
+            | Input::Feedback(_)
+            | Input::Login { .. }
+            | Input::Install { .. }
+            | Input::Tick
+            | Input::Signal(_) => unreachable!("the worker posts a hooks answer"),
         };
         assert_eq!(error.code, ErrorCode::IoFailed);
         assert_eq!(error.message, message);
