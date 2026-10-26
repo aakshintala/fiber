@@ -8,12 +8,13 @@
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use crate::clock::FakeClock;
+use crate::clock::Manual as FakeClock;
 
 use super::{BUDGET, CLEANUP, Deadline, WAITS};
 
-/// The span `after_five_seconds_left_stays_within_its_span` asserts on.
-const SPAN: Duration = Duration::from_secs(5);
+/// The span `after_ten_seconds_left_stays_within_its_span` asserts on: the
+/// must-succeed floor, with the base's one-second slack kept below.
+const SPAN: Duration = Duration::from_secs(10);
 
 /// A fake clock that lives as long as the test process, as a deadline's
 /// clock must.
@@ -87,11 +88,11 @@ fn after_the_longest_duration_never_panics_and_leaves_years() {
 }
 
 #[test]
-fn after_five_seconds_left_stays_within_its_span() {
+fn after_ten_seconds_left_stays_within_its_span() {
     let wait = Deadline::after(SPAN);
     let left = wait.left();
     assert!(left <= SPAN, "no more than it started with");
-    assert!(left > Duration::from_secs(4), "all but an instant of it");
+    assert!(left > Duration::from_secs(9), "all but an instant of it");
 }
 
 #[test]

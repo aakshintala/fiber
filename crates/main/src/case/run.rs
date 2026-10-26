@@ -12,9 +12,9 @@ use contract::extension::Drive;
 use contract::inbox::{Ack, Rejection};
 use log::{Log, Watcher};
 use serde_json::{Map, Value};
+use support::clock::{Manual, Sleep};
 use support::group::GROUP_POLL;
 
-use super::clock::CaseClock;
 use super::format::{Case, CaseCommand, ClockAdvance, Input, Selector, SessionCase};
 
 pub(super) const ADVANCE_WAIT: Duration = Duration::from_secs(10);
@@ -39,7 +39,7 @@ pub(crate) struct CaseRun {
     name: String,
     expected: Vec<Value>,
     host: Arc<extensions::HostScript>,
-    clock: Arc<CaseClock>,
+    clock: Arc<Manual>,
     advances: Vec<ClockAdvance>,
     until: Option<Selector>,
     command: Option<CaseCommand>,
@@ -69,7 +69,7 @@ impl CaseRun {
             name,
             expected: case.expect,
             host: extensions::HostScript::new(case.host.http, case.host.exec, case.host.oauth),
-            clock: CaseClock::new(),
+            clock: Manual::with_sleep(Sleep::Waits),
             advances: case.clock,
             until: case.until,
             command,
@@ -323,7 +323,10 @@ impl CaseRun {
                 }
             }
             let duration = Duration::from_millis(entry.advance_ms);
-            if let Err(reason) = self.clock.advance_when_parked(duration, self.waits.advance) {
+            if let Err(reason) = self
+                .clock
+                .advance_when_parked_in(duration, self.waits.advance)
+            {
                 failures.push(format!("clock advance[{index}]: {reason}"));
                 return false;
             }
@@ -432,7 +435,7 @@ impl CaseRun {
             if wait.is_zero() {
                 continue;
             }
-            if let Err(reason) = self.clock.advance_when_parked(wait, self.waits.advance) {
+            if let Err(reason) = self.clock.advance_when_parked_in(wait, self.waits.advance) {
                 failures.push(format!("host.exec[{entry}]: {reason}"));
             }
         }

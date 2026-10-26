@@ -2,19 +2,13 @@
 //! and every arrow, Enter and edit on them (`docs/tui.md`, "Home").
 
 use super::super::super::{App, Effect};
+use crate::app::testkit;
 use crate::catalogue::{Catalogue, ModelEntry};
 use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
 use crate::model_picker::Mode;
 use crate::mouse::TargetId;
-use contract::clock::Clock;
 use std::path::PathBuf;
-use std::time::Instant;
-
-/// The injected clock's now.
-fn now() -> Instant {
-    fakes::clock::FakeClock::new().now()
-}
 
 /// Draws the home frame, so the stops match what is on screen.
 fn drawn(app: &mut App) {
@@ -26,7 +20,7 @@ fn drawn(app: &mut App) {
 
 /// Types `text` without pressing Enter.
 fn type_text(app: &mut App, text: &str) {
-    let now = now();
+    let now = testkit::now();
     for ch in text.chars() {
         assert_eq!(app.on_key(Key::Char(ch), now), Effect::None);
     }
@@ -39,26 +33,27 @@ fn home_with(model: Option<&str>) -> App {
 }
 
 fn home_git(git: bool, model: Option<&str>) -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(Launch {
-        location: crate::LaunchLocation::Local {
-            workspace: PathBuf::from("/w"),
-            project: "-w".to_owned(),
-            git,
+    testkit::home_with(
+        80,
+        24,
+        Launch {
+            location: crate::LaunchLocation::Local {
+                workspace: PathBuf::from("/w"),
+                project: "-w".to_owned(),
+                git,
+            },
+            hover: true,
+            version: "0.0.1".to_owned(),
+            model: model.map(str::to_owned),
+            thinking: None,
+            logo_glyph: "⌇".to_owned(),
+            keys: crate::KeysSetup::default(),
+            rail_share: 15.0,
+            panel_share: 21.0,
+            panel_cards: Vec::new(),
+            ..Default::default()
         },
-        hover: true,
-        version: "0.0.1".to_owned(),
-        model: model.map(str::to_owned),
-        thinking: None,
-        logo_glyph: "⌇".to_owned(),
-        keys: crate::KeysSetup::default(),
-        rail_share: 15.0,
-        panel_share: 21.0,
-        panel_cards: Vec::new(),
-        ..Default::default()
-    });
-    app.set_size(80, 24);
-    app
+    )
 }
 
 /// One catalogue entry for `reference` with `levels`.
@@ -141,7 +136,7 @@ fn is_chip_names_the_chip_row() {
 fn down_from_the_entry_bar_focuses_the_workspace_chip_at_first() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
 }
 
@@ -157,7 +152,7 @@ fn left_and_right_stop_at_the_ends_of_the_chip_row() {
     // Inside git the row holds four chips.
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     for chip in [Spot::Worktree, Spot::Model, Spot::Thinking] {
         assert_eq!(app.on_edit(Edit::Right), Effect::None);
         assert_eq!(app.focused(), Some(TargetId::Home(chip)));
@@ -175,7 +170,7 @@ fn left_and_right_stop_at_the_ends_of_the_chip_row() {
     // Outside git the switch is hidden: three chips.
     let mut app = home_git(false, Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Model)));
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
@@ -188,10 +183,10 @@ fn left_and_right_stop_at_the_ends_of_the_chip_row() {
 fn up_from_a_chip_returns_to_the_entry_bar() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
 }
 
@@ -199,12 +194,12 @@ fn up_from_a_chip_returns_to_the_entry_bar() {
 fn down_from_the_entry_bar_focuses_the_chip_focused_last() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
 }
 
@@ -213,7 +208,7 @@ fn down_keeps_the_draft_and_focuses_the_chip() {
     let mut app = home_with(Some("acme/m1"));
     type_text(&mut app, "x");
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
     assert_eq!(app.input().expand(), "x");
 }
@@ -226,18 +221,18 @@ fn down_in_a_two_line_draft_moves_the_cursor_first() {
     type_text(&mut app, "b");
     drawn(&mut app);
     // On the last wrapped row ↓ leaves for the chip row.
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
     // Above the last row ↑ moves the cursor first, then ↓ moves it
     // back down before leaving.
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
     assert_eq!(app.input().expand(), "a\nb");
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
 }
 
@@ -280,7 +275,7 @@ fn down_while_browsing_a_recalled_prompt_stays_in_recall() {
     seed_recalled_prompt(&mut app, "hi");
     drawn(&mut app);
     // ↓ browses newer, back to the empty draft, and stays in the box.
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
     assert!(app.input().expand().is_empty());
 }
@@ -291,7 +286,7 @@ fn down_with_the_completion_panel_open_moves_its_selection() {
     type_text(&mut app, "/");
     assert!(app.completions().is_some());
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
     assert!(app.completions().is_some());
 }
@@ -300,7 +295,7 @@ fn down_with_the_completion_panel_open_moves_its_selection() {
 fn a_hidden_remembered_chip_falls_back_to_the_workspace_chip() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
     // Outside git the switch hides: ↓ lands on the workspace chip.
@@ -311,9 +306,9 @@ fn a_hidden_remembered_chip_falls_back_to_the_workspace_chip() {
     };
     *git = false;
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
 }
 
@@ -321,8 +316,8 @@ fn a_hidden_remembered_chip_falls_back_to_the_workspace_chip() {
 fn enter_on_the_workspace_chip_opens_the_picker_and_keeps_focus() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, testkit::now()), Effect::None);
     let picker = app.home.as_ref().and_then(|home| home.chooser.picker());
     assert_eq!(
         picker.map(|picker| (picker.recents().to_vec(), picker.selected())),
@@ -333,14 +328,14 @@ fn enter_on_the_workspace_chip_opens_the_picker_and_keeps_focus() {
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
     // Esc closes the picker with the chip still focused; a second Esc
     // returns to the entry bar.
-    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, testkit::now()), Effect::None);
     assert!(
         app.home
             .as_ref()
             .is_some_and(|home| home.chooser.picker().is_none())
     );
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
-    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
 }
 
@@ -348,12 +343,12 @@ fn enter_on_the_workspace_chip_opens_the_picker_and_keeps_focus() {
 fn enter_on_the_switch_toggles_it() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, testkit::now()), Effect::None);
     assert!(chips(&app).contains(&"[x] new worktree".to_owned()));
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, testkit::now()), Effect::None);
     assert!(chips(&app).contains(&"[ ] new worktree".to_owned()));
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
 }
@@ -363,11 +358,11 @@ fn enter_on_the_model_chip_opens_the_picker_and_keeps_focus() {
     let mut app = home_with(Some("acme/m1"));
     app.on_models(Ok(catalogue()));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Model)));
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, testkit::now()), Effect::None);
     assert!(app.model_picker_open());
     assert_eq!(
         app.model_picker.open.as_ref().map(|open| open.mode),
@@ -378,7 +373,7 @@ fn enter_on_the_model_chip_opens_the_picker_and_keeps_focus() {
     drawn(&mut app);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Model)));
     // Esc closes the picker and focus stays on the chip.
-    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, testkit::now()), Effect::None);
     assert!(!app.model_picker_open());
     drawn(&mut app);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Model)));
@@ -389,12 +384,12 @@ fn enter_on_the_thinking_chip_opens_the_level_chips() {
     let mut app = home_with(Some("acme/m1"));
     app.on_models(Ok(catalogue()));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     for _ in 0..3 {
         assert_eq!(app.on_edit(Edit::Right), Effect::None);
     }
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, testkit::now()), Effect::None);
     assert!(app.model_picker_open());
     assert_eq!(
         app.model_picker.open.as_ref().map(|open| open.mode),
@@ -409,10 +404,10 @@ fn enter_on_a_chip_with_a_draft_clicks_the_chip() {
     let mut app = home_with(None);
     type_text(&mut app, "hi");
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     // The chip's click wins over `start`: the picker opens, nothing is
     // sent, and the draft stays.
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, testkit::now()), Effect::None);
     assert!(
         app.home
             .as_ref()
@@ -420,16 +415,6 @@ fn enter_on_a_chip_with_a_draft_clicks_the_chip() {
     );
     assert_eq!(app.input().expand(), "hi");
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> crate::link::Line {
-    crate::link::Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
 }
 
 /// A live `session_status` for `session`, named `name`, in `workspace` of
@@ -482,7 +467,7 @@ fn left(session: &str, how: &str) -> crate::link::Line {
 }
 
 fn linked(app: &mut App) -> (String, String) {
-    let lines = app.on_line(hello());
+    let lines = app.on_line(testkit::hello());
     assert_eq!(lines.len(), 2);
     let lines: Vec<serde_json::Value> = lines
         .iter()
@@ -539,7 +524,7 @@ fn up_from_an_empty_entry_bar_focuses_the_last_row_and_recalls_no_prompt() {
     linked(&mut app);
     seed_recalled_prompt(&mut app, "previous answer");
     for _ in 0.."previous answer".len() {
-        assert_eq!(app.on_key(Key::Backspace, now()), Effect::None);
+        assert_eq!(app.on_key(Key::Backspace, testkit::now()), Effect::None);
     }
     assert!(app.input().expand().is_empty());
     app.on_line(live(
@@ -551,7 +536,7 @@ fn up_from_an_empty_entry_bar_focuses_the_last_row_and_recalls_no_prompt() {
     ));
     drawn(&mut app);
 
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(
         app.focused(),
         Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
@@ -564,7 +549,7 @@ fn up_on_the_entry_bar_with_no_rows_does_nothing() {
     let mut app = home_with(Some("acme/m1"));
     linked(&mut app);
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
 }
 
@@ -576,7 +561,7 @@ fn up_keeps_the_box_with_a_multiline_draft() {
     type_text(&mut app, "b");
     let before = app.input().cursor(20);
     assert_eq!(before.0, 1);
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(app.input().cursor(20).0, 0);
     assert_eq!(app.focused(), None);
 }
@@ -588,7 +573,7 @@ fn up_keeps_the_box_with_completions() {
     type_text(&mut app, "/");
     assert!(app.completions().is_some());
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
     assert!(app.completions().is_some());
 }
@@ -599,7 +584,7 @@ fn up_keeps_the_box_browsing_a_recalled_prompt() {
     two_rows(&mut app);
     seed_recalled_prompt(&mut app, "previous answer");
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
     assert_eq!(app.input().expand(), "previous answer");
 }
@@ -749,30 +734,30 @@ fn arrows_from_a_cross_move_by_its_row() {
     let mut app = home_with(Some("acme/m1"));
     two_rows(&mut app);
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     // j steps onto the row's ✕, where ↓ moves by its row.
-    assert_eq!(app.on_key(Key::Char('j'), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Char('j'), testkit::now()), Effect::None);
     assert_eq!(
         app.focused(),
         Some(TargetId::Home(Spot::Stop(keys(&app)[0])))
     );
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(
         app.focused(),
         Some(TargetId::Home(Spot::Entry(keys(&app)[1])))
     );
-    assert_eq!(app.on_key(Key::Char('j'), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Char('j'), testkit::now()), Effect::None);
     assert_eq!(
         app.focused(),
         Some(TargetId::Home(Spot::Stop(keys(&app)[1])))
     );
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(
         app.focused(),
         Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
     );
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(
         app.focused(),
         Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
@@ -785,7 +770,7 @@ fn down_on_the_last_chip_leaves_focus_where_it_is() {
     two_rows(&mut app);
     type_text(&mut app, "draft");
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     for _ in 0..3 {
         assert_eq!(app.on_edit(Edit::Right), Effect::None);
     }
@@ -823,9 +808,9 @@ fn down_on_the_chip_row_with_no_session_does_nothing() {
     let mut app = home_with(Some("acme/m1"));
     linked(&mut app);
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
 }
 
@@ -834,7 +819,7 @@ fn shift_tab_reaches_the_last_chip() {
     let mut app = home_with(Some("acme/m1"));
     two_rows(&mut app);
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
+    assert_eq!(app.on_key(Key::BackTab, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
 }
 
@@ -855,28 +840,28 @@ fn up_and_down_below_the_fold_follow_the_rows() {
     let expected = keys(&app);
     assert_eq!(expected.len(), 15);
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(
         app.focused(),
         Some(TargetId::Home(Spot::Entry(expected[14])))
     );
     drawn(&mut app);
     for key in expected.iter().rev().skip(1) {
-        assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+        assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
         assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(*key))));
         drawn(&mut app);
     }
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(
         app.focused(),
         Some(TargetId::Home(Spot::Entry(expected[0])))
     );
     for key in expected.iter().skip(1) {
-        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+        assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
         assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(*key))));
         drawn(&mut app);
     }
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
 }
 
@@ -893,9 +878,9 @@ fn row_moves_do_nothing_when_no_row_fits() {
         serde_json::json!({"state": "idle"}),
     ));
     drawn_at(&mut app, 80, 10);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
 }
 
@@ -904,23 +889,23 @@ fn f1_over_the_model_picker_drops_chip_focus() {
     let mut app = home_with(Some("acme/m1"));
     app.on_models(Ok(catalogue()));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, testkit::now()), Effect::None);
     assert!(app.model_picker_open());
     // The key map opens above the picker; the next frame drops the chip
     // focus, as any other cover drops a row's.
-    assert_eq!(app.on_key(Key::F1, now()), Effect::None);
+    assert_eq!(app.on_key(Key::F1, testkit::now()), Effect::None);
     assert!(app.keymap_top().is_some());
     drawn(&mut app);
     assert_eq!(app.focused(), None);
     // Closing the key map leaves the picker open with the entry bar
     // focused; closing the picker leaves the entry bar focused.
-    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, testkit::now()), Effect::None);
     assert!(app.keymap_top().is_none());
     assert!(app.model_picker_open());
-    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, testkit::now()), Effect::None);
     assert!(!app.model_picker_open());
     assert_eq!(app.focused(), None);
 }
@@ -928,16 +913,16 @@ fn f1_over_the_model_picker_drops_chip_focus() {
 #[test]
 fn the_remembered_chip_survives_a_session() {
     let mut app = home_with(Some("acme/m1"));
-    app.on_line(hello());
+    app.on_line(testkit::hello());
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Model)));
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     // Starting a session and leaving home keeps the remembered chip.
     type_text(&mut app, "hi");
-    let Effect::Send(lines) = app.on_key(Key::Enter, now()) else {
+    let Effect::Send(lines) = app.on_key(Key::Enter, testkit::now()) else {
         panic!("Enter sends the start");
     };
     let start: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
@@ -947,7 +932,7 @@ fn the_remembered_chip_survives_a_session() {
     app.leave();
     drawn(&mut app);
     assert_eq!(app.focused(), None);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Model)));
 }
 
@@ -956,13 +941,13 @@ fn typing_on_a_chip_goes_to_the_entry_bar() {
     for key in ['f', 'j', 'k', 'y', 'q'] {
         let mut app = home_with(Some("acme/m1"));
         drawn(&mut app);
-        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+        assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
         assert_eq!(
             app.focused(),
             Some(TargetId::Home(Spot::Workspace)),
             "{key} starts on the chip"
         );
-        assert_eq!(app.on_key(Key::Char(key), now()), Effect::None);
+        assert_eq!(app.on_key(Key::Char(key), testkit::now()), Effect::None);
         assert_eq!(app.focused(), None, "{key} returns to the entry bar");
         assert_eq!(app.input().expand(), key.to_string());
     }
@@ -973,8 +958,8 @@ fn backspace_on_a_chip_goes_to_the_entry_bar() {
     let mut app = home_with(Some("acme/m1"));
     type_text(&mut app, "ab");
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.on_key(Key::Backspace, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
+    assert_eq!(app.on_key(Key::Backspace, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
     assert_eq!(app.input().expand(), "a");
 }
@@ -984,13 +969,13 @@ fn delete_and_paste_on_a_chip_go_to_the_entry_bar() {
     let mut app = home_with(Some("acme/m1"));
     type_text(&mut app, "ab");
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     // Delete applies at the cursor once focus returns to the entry bar.
     assert_eq!(app.on_edit(Edit::Delete), Effect::None);
     assert_eq!(app.focused(), None);
     assert_eq!(app.input().expand(), "ab");
     // A paste joins the draft the same way.
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_edit(Edit::Paste("XY".to_owned())), Effect::None);
     assert_eq!(app.focused(), None);
     assert_eq!(app.input().expand(), "abXY");
@@ -1000,8 +985,8 @@ fn delete_and_paste_on_a_chip_go_to_the_entry_bar() {
 fn esc_on_a_chip_returns_to_the_entry_bar() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
 }
 
@@ -1012,11 +997,11 @@ fn a_chip_is_the_input_context() {
     user.insert("copy_focused".to_owned(), serde_json::json!("c"));
     app.set_keys(crate::KeysSetup { user });
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     // `y` types even though the person bound a `copy_focused` key: the
     // chip is the input box's keyboard, not the conversation's.
     let stroke = crate::stroke::Stroke::parse("y").unwrap();
-    assert_eq!(app.on_press(stroke, now()), Effect::None);
+    assert_eq!(app.on_press(stroke, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
     assert_eq!(app.input().expand(), "y");
 }
@@ -1033,7 +1018,7 @@ fn keyed(app: &mut App, entries: &[(&str, serde_json::Value)]) {
 /// Presses the stroke `name` names.
 fn press(app: &mut App, name: &str) -> Effect {
     let stroke = crate::stroke::Stroke::parse(name).unwrap();
-    app.on_press(stroke, now())
+    app.on_press(stroke, testkit::now())
 }
 
 #[test]
@@ -1041,7 +1026,7 @@ fn rebound_recall_prompt_leaves_up_on_a_chip_to_home() {
     let mut app = home_with(Some("acme/m1"));
     keyed(&mut app, &[("recall_prompt", serde_json::json!("ctrl+p"))]);
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     // ↑ on the chip reaches the entry bar, though the binding moved.
     assert_eq!(press(&mut app, "up"), Effect::None);
     assert_eq!(app.focused(), None);
@@ -1095,8 +1080,8 @@ fn left_and_right_on_a_chip_ignore_a_person_binding() {
 fn arrows_with_the_picker_open_leave_the_chip_alone() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, testkit::now()), Effect::None);
     assert!(
         app.home
             .as_ref()
@@ -1119,7 +1104,7 @@ fn arrows_with_the_picker_open_leave_the_chip_alone() {
             .is_some_and(|home| home.chooser.picker().is_some())
     );
     // Esc closes the picker with the chip still focused.
-    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, testkit::now()), Effect::None);
     assert!(
         app.home
             .as_ref()
@@ -1132,8 +1117,8 @@ fn arrows_with_the_picker_open_leave_the_chip_alone() {
 fn paste_with_the_picker_open_keeps_focus_and_draft() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, testkit::now()), Effect::None);
     drawn(&mut app);
     assert_eq!(app.on_edit(Edit::Paste("XY".to_owned())), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
@@ -1149,15 +1134,15 @@ fn paste_with_the_picker_open_keeps_focus_and_draft() {
 fn right_then_typing_then_down_returns_to_the_moved_chip() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
     // Typing returns to the entry bar; the chip focused last stays
     // the worktree chip.
-    assert_eq!(app.on_key(Key::Char('x'), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Char('x'), testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
     assert_eq!(app.input().expand(), "x");
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
 }
 
@@ -1165,12 +1150,12 @@ fn right_then_typing_then_down_returns_to_the_moved_chip() {
 fn right_then_esc_then_down_returns_to_the_moved_chip() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
-    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
 }
 
@@ -1180,11 +1165,11 @@ fn up_from_a_chip_reached_by_shift_tab_remembers_that_chip() {
     drawn(&mut app);
     // Shift+Tab lands on the last chip without going through the chip
     // row's arrows, so only ↑ remembers it.
-    assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
+    assert_eq!(app.on_key(Key::BackTab, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
 }
 
@@ -1194,9 +1179,12 @@ fn an_open_file_panel_keeps_up_from_a_focused_chip() {
     // Ctrl+P takes the recall binding, so ↑ in the box is unbound.
     keyed(&mut app, &[("recall_prompt", serde_json::json!("ctrl+p"))]);
     // An `@` opens the file panel before its search answers.
-    assert_eq!(app.on_key(Key::Char('@'), now()), Effect::ListFiles);
+    assert_eq!(
+        app.on_key(Key::Char('@'), testkit::now()),
+        Effect::ListFiles
+    );
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
+    assert_eq!(app.on_key(Key::BackTab, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
     app.on_files(
         app.generation(),
@@ -1219,13 +1207,13 @@ fn a_session_attached_before_a_frame_keeps_the_arrows_for_the_conversation() {
         &mut app,
         &[("focus_next_prev", serde_json::json!(["j", "k"]))],
     );
-    app.on_line(hello());
+    app.on_line(testkit::hello());
     type_text(&mut app, "hi");
     drawn(&mut app);
-    let Effect::Send(lines) = app.on_key(Key::Enter, now()) else {
+    let Effect::Send(lines) = app.on_key(Key::Enter, testkit::now()) else {
         panic!("Enter sends the start");
     };
-    assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
+    assert_eq!(app.on_key(Key::BackTab, testkit::now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
     let start: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
     let result = serde_json::json!({"session_id": "s_aaaaaaaaaaaaaaaa"});

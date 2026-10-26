@@ -1590,6 +1590,35 @@ const CRASH_ORDERED: &[&str] = &[
     "turn_completed",
     "fiber_exited",
 ];
+
+/// Asserts the crash stream's kinds equal `CRASH_ORDERED` without dumping
+/// both lists on failure: the lengths first, then the first differing index
+/// with the neighbouring kinds on each side (`docs/testing.md`,
+/// "Event streams"). A length mismatch reports the missing side as `<end>`
+/// at the first position beyond its end.
+#[track_caller]
+fn assert_crash_ordered(actual: &[&str]) {
+    if actual == CRASH_ORDERED {
+        return;
+    }
+    let end = actual.len().max(CRASH_ORDERED.len());
+    let first = (0..end)
+        .find(|&i| actual.get(i) != CRASH_ORDERED.get(i))
+        .unwrap_or(end);
+    let lo = first.saturating_sub(3);
+    let actual_hi = (first + 4).min(actual.len());
+    let expected_hi = (first + 4).min(CRASH_ORDERED.len());
+    let actual_at = actual.get(first).copied().unwrap_or("<end>");
+    let expected_at = CRASH_ORDERED.get(first).copied().unwrap_or("<end>");
+    panic!(
+        "crash stream differs at index {first}: actual len {}, expected len {}; actual[{first}] = {actual_at:?}, expected[{first}] = {expected_at:?}; actual[{lo}..{actual_hi}] = {:?}, expected[{lo}..{expected_hi}] = {:?}",
+        actual.len(),
+        CRASH_ORDERED.len(),
+        &actual[lo.min(actual.len())..actual_hi],
+        &CRASH_ORDERED[lo.min(CRASH_ORDERED.len())..expected_hi],
+    );
+}
+
 #[test]
 fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     let setup = support::Setup::new();
@@ -1711,7 +1740,7 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     // The crash is contained to the dead delegate: it ends failed with
     // the signal named, never a `failed signal` status; its sibling and
     // the late delegate complete, and every parent turn completes.
-    assert_eq!(support::kinds(&lines), CRASH_ORDERED);
+    assert_crash_ordered(&support::kinds(&lines));
     assert_eq!(
         lines
             .iter()

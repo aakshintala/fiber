@@ -110,6 +110,32 @@ fn tally_sums_op_timing_lines_by_operation() {
     assert_eq!(provider, json!({"count": 0, "total_ms": 0}));
 }
 
+/// `docs/performance.md`, "Measuring": the terminal's four operations
+/// land as one row each, like every other `op_timing` operation. The
+/// tally reads names from the log, so no bench production change covers
+/// the new rows.
+#[test]
+fn tally_sums_terminal_operations_by_operation() {
+    let logs = [text(vec![
+        op("tui.first_render", 7),
+        op("tui.log_read", 3),
+        op("tui.transcript", 5),
+        op("tui.frame", 21),
+        op("tui.frame", 19),
+    ])];
+    let (ops, provider, _) = tally(&logs);
+    assert_eq!(
+        ops,
+        json!({
+            "tui.first_render": {"count": 1, "ms": 7},
+            "tui.log_read": {"count": 1, "ms": 3},
+            "tui.transcript": {"count": 1, "ms": 5},
+            "tui.frame": {"count": 2, "ms": 40}
+        })
+    );
+    assert_eq!(provider, json!({"count": 0, "total_ms": 0}));
+}
+
 /// `docs/performance.md`, "Measuring": `provider_request`'s count and total
 /// `total_ms`.
 #[test]

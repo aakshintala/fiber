@@ -1069,3 +1069,78 @@ fn another_protocol_never_takes_the_request_id_as_its_generation() {
     assert_eq!(reply.text(), "hi");
     assert_eq!(reply.generation_id, None);
 }
+
+/// The malformed text #3017 replays safely: it parses as neither an object
+/// nor an array, so the decoder keeps the raw text for the loop to quote.
+const MALFORMED_ARGUMENTS: &str = "{\"command\":\"ls\"]}";
+
+/// The replayed `toolUse` block and its paired `toolResult` for one call
+/// with `arguments` beside a completed result.
+fn replayed_tool_use(arguments: Value, provider_id: Option<&str>) -> (Value, Value) {
+    let request = ModelRequest {
+        conversation: vec![
+            call("a_1", provider_id, "read", arguments),
+            result("a_1", "contents", false, Vec::new()),
+        ]
+        .into(),
+        ..harness::request()
+    };
+    let body = body_of(endpoint, &request);
+    let mut blocks = Vec::new();
+    for message in body["messages"].as_array().unwrap() {
+        blocks.extend(message["content"].as_array().unwrap().clone());
+    }
+    let tool_use = blocks
+        .iter()
+        .find(|block| block.get("toolUse").is_some())
+        .unwrap_or_else(|| panic!("no toolUse in {body}"))
+        .clone();
+    let tool_result = blocks
+        .iter()
+        .find(|block| block.get("toolResult").is_some())
+        .unwrap_or_else(|| panic!("no toolResult in {body}"))
+        .clone();
+    (tool_use, tool_result)
+}
+
+#[test]
+fn non_object_tool_arguments_replay_as_an_empty_object() {
+    // Every non-object class replays as exactly the empty object, while
+    // objects keep their members.
+    for (label, arguments) in [
+        (
+            "malformed string",
+            Value::String(MALFORMED_ARGUMENTS.into()),
+        ),
+        ("empty array", json!([])),
+        ("nonempty array", json!([1, 2])),
+        ("null", Value::Null),
+        ("boolean", json!(true)),
+        ("number", json!(3)),
+    ] {
+        let (tool_use, tool_result) = replayed_tool_use(arguments, None);
+        assert_eq!(tool_use["toolUse"]["input"], json!({}), "{label}");
+        assert_eq!(
+            tool_use["toolUse"]["toolUseId"], tool_result["toolResult"]["toolUseId"],
+            "{label}"
+        );
+    }
+    for (label, arguments) in [
+        ("empty object", json!({})),
+        ("nonempty object", json!({"path": "a.md"})),
+    ] {
+        let (tool_use, _) = replayed_tool_use(arguments.clone(), None);
+        assert_eq!(tool_use["toolUse"]["input"], arguments, "{label}");
+    }
+}
+
+#[test]
+fn a_non_object_call_replays_under_its_provider_id_with_its_paired_result() {
+    let (tool_use, tool_result) = replayed_tool_use(
+        Value::String(MALFORMED_ARGUMENTS.into()),
+        Some("tooluse_Ab12Cd34Ef"),
+    );
+    assert_eq!(tool_use["toolUse"]["toolUseId"], "tooluse_Ab12Cd34Ef");
+    assert_eq!(tool_use["toolUse"]["input"], json!({}));
+    assert_eq!(tool_result["toolResult"]["toolUseId"], "tooluse_Ab12Cd34Ef");
+}
