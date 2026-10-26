@@ -152,6 +152,42 @@ const CHECK: &str = "[ ] Summarise the path after the point";
 const CHECKED: &str = "[x] Summarise the path after the point";
 /// The Rewind row.
 const ACTION: &str = "Rewind";
+/// The session an accepted `rewind` names.
+const NEW: &str = "s_cccccccccccccccc";
+/// A `summary_failed` refusal's first choice: try the summary again.
+const RETRY: &str = "Retry with summary";
+/// A `summary_failed` refusal's second choice: rewind with no summary.
+const WITHOUT: &str = "Rewind without summary";
+/// A `summary_failed` refusal's third choice: back to the list.
+const CANCEL: &str = "Cancel";
+
+/// A hub `command_rejected` for `id` with `code` and `message`.
+fn hub_refused(id: &Value, code: &str, message: &str) -> crate::link::Line {
+    crate::link::Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            ("command_id".to_owned(), id.clone()),
+            ("code".to_owned(), Value::String(code.to_owned())),
+            ("message".to_owned(), Value::String(message.to_owned())),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// A hub `stream_closed` naming `session`.
+fn hub_closed(session: &str) -> crate::link::Line {
+    crate::link::Line::Hub(contract::HubLine {
+        kind: "stream_closed".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [("session_id".to_owned(), Value::String(session.to_owned()))]
+            .into_iter()
+            .collect(),
+    })
+}
 
 /// The rewind rows' text.
 fn rows(app: &crate::app::App) -> Vec<String> {
@@ -1069,6 +1105,217 @@ fn the_refused_view_snapshot() {
     let out = send_rewind(&mut app, &clock);
     refuse(&mut app, &out[0]["id"], "session_held");
     insta::assert_snapshot!("rewind_refused_80x24", shot(&app));
+}
+
+#[test]
+fn the_send_line_names_the_point_exactly() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let out = send_rewind(&mut app, &clock);
+    assert_eq!(out.len(), 1);
+    let id = out[0]["id"].clone();
+    // The whole line on the wire: the attached session, the point's
+    // seq, and no holding session of its own.
+    assert_eq!(
+        out[0],
+        json!({
+            "id": id,
+            "command": "rewind",
+            "session_id": SESSION,
+            "args": {"seq": 3, "summarise": false},
+        })
+    );
+}
+
+#[test]
+fn accepted_rewind_attaches_subscribes_and_closes_the_view() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let out = send_rewind(&mut app, &clock);
+    let answered = app.on_line(session_line(
+        "command_accepted",
+        json!({"command_id": out[0]["id"], "result": {"new_session_id": NEW}}),
+    ));
+    let answered: Vec<Value> = answered
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    // The new session is subscribed full and asked its commands.
+    assert_eq!(answered.len(), 2);
+    assert!(answered.iter().any(|line| line["command"] == "subscribe"
+        && line["session_id"] == NEW
+        && line["args"] == json!({"level": "full"})));
+    assert!(
+        answered
+            .iter()
+            .any(|line| line["command"] == "commands" && line["session_id"] == NEW)
+    );
+    // The terminal attaches to the new session; the view closes.
+    assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
+    assert!(app.session_view_screen(80).is_none());
+}
+
+#[test]
+fn an_accept_for_another_command_or_shape_keeps_waiting() {
+    for accept_result in [
+        // Another command's accept carrying a new session.
+        (json!("c_other"), json!({"new_session_id": NEW})),
+        // The sent rewind answered with another command's shape.
+        (json!("c_send"), json!({"commands": []})),
+    ] {
+        let clock = fakes::clock::FakeClock::new();
+        let mut app = attached();
+        let lines = open(&mut app, &clock);
+        accept(&mut app, &lines[0]["id"], segment_a());
+        let out = send_rewind(&mut app, &clock);
+        let id = if accept_result.0 == "c_send" {
+            out[0]["id"].clone()
+        } else {
+            accept_result.0.clone()
+        };
+        let answered = app.on_line(session_line(
+            "command_accepted",
+            json!({"command_id": id, "result": accept_result.1}),
+        ));
+        assert!(answered.is_empty());
+        // No attach, no close: the send still waits, so Esc is ignored.
+        assert_eq!(
+            app.session().map(|session| session.0.as_str()),
+            Some(SESSION)
+        );
+        assert!(app.session_view_screen(80).is_some());
+        assert_eq!(app.on_key(crate::keys::Key::Esc, clock.now()), Effect::None);
+        assert!(app.session_view_screen(80).is_some());
+    }
+}
+
+#[test]
+fn a_hub_relayed_rejection_settles_with_the_start_code() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let out = send_rewind(&mut app, &clock);
+    // The failed new-session start arrives relayed by the hub.
+    let answered = app.on_line(hub_refused(&out[0]["id"], "busy", "start failed"));
+    assert!(answered.is_empty());
+    // The start's code stands in place of the button, the terminal
+    // never moves, and the settled send lets Esc close the view.
+    assert_eq!(rows(&app).last(), Some(&"start failed".to_owned()));
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    assert!(app.session_view_screen(80).is_some());
+    assert_eq!(app.on_key(crate::keys::Key::Esc, clock.now()), Effect::None);
+    assert!(app.session_view_screen(80).is_none());
+}
+
+#[test]
+fn a_hub_rejection_for_another_command_leaves_the_send_pending() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let out = send_rewind(&mut app, &clock);
+    app.on_line(hub_refused(&json!("c_other"), "busy", "start failed"));
+    // The rejection names another command: the rows still show the
+    // sending state, and Esc stays ignored while the rewind waits.
+    let _ = out;
+    assert_eq!(rows(&app).last(), Some(&"Sending…".to_owned()));
+    assert_eq!(app.on_key(crate::keys::Key::Esc, clock.now()), Effect::None);
+    assert!(app.session_view_screen(80).is_some());
+}
+
+#[test]
+fn summary_failed_offers_retry_without_summary_and_cancel() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let out = send_rewind(&mut app, &clock);
+    let first = out[0]["id"].clone();
+    refuse(&mut app, &out[0]["id"], "summary_failed");
+    // The reason stands with its three choices under it.
+    let grown = rows(&app);
+    assert_eq!(
+        grown[grown.len() - 4..],
+        [
+            "summary_failed happened".to_owned(),
+            RETRY.to_owned(),
+            WITHOUT.to_owned(),
+            CANCEL.to_owned(),
+        ]
+    );
+    // Retry sends a fresh rewind with the summary on, whatever the
+    // checkbox says: it is off here.
+    goto(&mut app, &clock, grown.len() - 3);
+    let out = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
+    assert_eq!(out.len(), 1);
+    assert_ne!(out[0]["id"], first);
+    assert_eq!(
+        out[0]["args"],
+        json!({"seq": 3, "summarise": true}),
+        "retry keeps the summary on"
+    );
+    // Esc stays ignored while the fresh rewind waits.
+    assert_eq!(app.on_key(crate::keys::Key::Esc, clock.now()), Effect::None);
+    // Rewind without summary sends a fresh rewind with it off, even
+    // with the checkbox on.
+    refuse(&mut app, &out[0]["id"], "summary_failed");
+    app.on_key(crate::keys::Key::Char(' '), clock.now());
+    assert!(rows(&app).contains(&CHECKED.to_owned()));
+    let grown = rows(&app);
+    goto(&mut app, &clock, grown.len() - 2);
+    let out = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
+    assert_eq!(out.len(), 1);
+    assert_eq!(
+        out[0]["args"],
+        json!({"seq": 3, "summarise": false}),
+        "without summary turns it off"
+    );
+    // Cancel closes the error: the view stays open on its point with
+    // the button back.
+    refuse(&mut app, &out[0]["id"], "summary_failed");
+    let grown = rows(&app);
+    goto(&mut app, &clock, grown.len() - 1);
+    assert_eq!(
+        app.on_key(crate::keys::Key::Enter, clock.now()),
+        Effect::None
+    );
+    let grown = rows(&app);
+    assert_eq!(
+        grown[grown.len() - 2..],
+        [CHECKED.to_owned(), ACTION.to_owned()]
+    );
+    assert!(app.session_view_screen(80).is_some());
+}
+
+#[test]
+fn stream_closed_while_pending_keeps_the_old_session_with_its_notice() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let out = send_rewind(&mut app, &clock);
+    let _ = out;
+    let answered = app.on_line(hub_closed(SESSION));
+    assert!(answered.is_empty());
+    // The terminal keeps the old session, the notice stands, and the
+    // send still waits: Esc stays ignored.
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    assert!(app.notices().iter().any(|line| matches!(line,
+        crate::app::NoticeLine::Notice { code, .. } if code == "stream_closed")));
+    assert!(app.session_view_screen(80).is_some());
+    assert_eq!(app.on_key(crate::keys::Key::Esc, clock.now()), Effect::None);
+    assert!(app.session_view_screen(80).is_some());
 }
 
 /// The whole open view as text at 80x24.

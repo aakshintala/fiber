@@ -9,7 +9,9 @@
 
 use std::collections::HashMap;
 
-use contract::events::{FiberExited, FiberStarted, JobCompleted, JobStarted, McpServerFailed};
+use contract::events::{
+    FiberExited, FiberStarted, JobCompleted, JobStarted, McpServerFailed, Rewound,
+};
 use contract::{Envelope, ErrorCode};
 use ratatui::text::Line;
 
@@ -227,6 +229,14 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             }
             false
         }
+        "rewound" => read!(envelope, Rewound).is_some_and(|rewound| {
+            place(
+                turns,
+                fold,
+                Aside::Line(Line::raw(format!("⟲ {}", rewound.new_session_id.0))),
+            );
+            true
+        }),
         "fiber_started" => read!(envelope, FiberStarted).is_some_and(|started| {
             let suspended = std::mem::take(&mut fold.crash.suspended);
             fold.crash.orphans = None;

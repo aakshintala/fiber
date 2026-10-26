@@ -13,13 +13,15 @@ use std::time::{Duration, Instant};
 
 use contract::commands::RewindArgs;
 use contract::events::{
-    CommandAccepted, CommandRejected, InputItem, ToolCallRequested, ToolCallStarted, TurnStarted,
+    CommandAccepted, CommandRejected, CommandResult, InputItem, ToolCallRequested, ToolCallStarted,
+    TurnStarted,
 };
 use contract::shapes::{ContentPart, Effect as Declared, Origin, Point};
-use contract::{ActionId, Envelope, Seq, SessionId};
+use contract::{ActionId, CommandId, Envelope, ErrorCode, Seq, SessionId};
 use serde_json::Value;
 
 use super::{App, Effect, history_args, mint, session_command};
+use crate::home::Level;
 use crate::keys::Key;
 use crate::link::history_answer;
 use crate::swapped::{Frame, Ink, List, Spot};
@@ -95,6 +97,12 @@ enum Sel {
     Check,
     /// On the Rewind row.
     Action,
+    /// On the retry row a `summary_failed` refusal offers.
+    Retry,
+    /// On the rewind-without-summary row it offers.
+    NoSummary,
+    /// On the cancel row it offers.
+    Cancel,
 }
 
 /// A `rewind` request waiting for its answer.
@@ -153,6 +161,9 @@ pub(crate) struct Rewind {
     send: Option<SendPending>,
     /// Why the last `rewind` failed, standing in place of the button.
     send_error: Option<String>,
+    /// The standing error is a `summary_failed`: its three choices draw
+    /// under the Rewind row.
+    summary_failed: bool,
     /// Why the view shows no rows, or why a request failed.
     error: Option<String>,
 }
@@ -168,6 +179,12 @@ enum Vis {
     Check,
     /// The Rewind row.
     Action,
+    /// The retry row a `summary_failed` refusal offers.
+    Retry,
+    /// The rewind-without-summary row it offers.
+    NoSummary,
+    /// The cancel row it offers.
+    Cancel,
 }
 
 /// A turn taking shape while its lines fold.
@@ -490,6 +507,7 @@ impl Rewind {
                     && turn.bounds.iter().any(|bound| bound.seq == *seq)
             }),
             Sel::Check | Sel::Action => true,
+            Sel::Retry | Sel::NoSummary | Sel::Cancel => true,
         }
     }
 
@@ -511,12 +529,16 @@ impl Rewind {
                 })
             }
             (Vis::Check, Sel::Check) | (Vis::Action, Sel::Action) => true,
+            (Vis::Retry, Sel::Retry)
+            | (Vis::NoSummary, Sel::NoSummary)
+            | (Vis::Cancel, Sel::Cancel) => true,
             _ => false,
         }
     }
 
     /// Every visible row: each turn, the open turn's boundaries under
-    /// it, then the checkbox and the Rewind row.
+    /// it, then the checkbox and the Rewind row, then a
+    /// `summary_failed` refusal's three choices.
     fn visible(&self) -> Vec<Vis> {
         let mut out = Vec::new();
         for (at, turn) in self.turns.iter().enumerate() {
@@ -533,6 +555,11 @@ impl Rewind {
         }
         out.push(Vis::Check);
         out.push(Vis::Action);
+        if self.summary_failed {
+            out.push(Vis::Retry);
+            out.push(Vis::NoSummary);
+            out.push(Vis::Cancel);
+        }
         out
     }
 
@@ -731,7 +758,8 @@ impl App {
 
     /// A `command_rejected` for a pending request settles it with the
     /// rejection's text: the walk ends for `history`, the button shows
-    /// it for `rewind`. Any other id reaches no rewind state.
+    /// it for `rewind`, with its three choices for a `summary_failed`.
+    /// Any other id reaches no rewind state.
     pub(in crate::app) fn rewind_refused(&mut self, rejected: &CommandRejected) {
         let Some(id) = rejected.command_id.as_ref() else {
             return;
@@ -748,7 +776,63 @@ impl App {
         {
             self.rewind.send = None;
             self.rewind.send_error = Some(rejected.message.clone());
+            self.rewind.summary_failed = rejected.code == ErrorCode::SummaryFailed;
         }
+    }
+
+    /// A hub-relayed `command_rejected` for the sent `rewind` settles
+    /// it with the start's code: the terminal never moves. True when
+    /// the id was the send's; any other id reaches no rewind state.
+    pub(in crate::app) fn rewind_hub_refused(
+        &mut self,
+        id: &str,
+        code: &str,
+        message: &str,
+    ) -> bool {
+        if !self.rewind.send.as_ref().is_some_and(|send| send.id == id) {
+            return false;
+        }
+        // The hub carries the code as text; an unknown one still
+        // settles, read as itself.
+        let code = serde_json::from_value(Value::String(code.to_owned()))
+            .unwrap_or_else(|_| ErrorCode::Other(code.to_owned()));
+        self.rewind_refused(&CommandRejected {
+            command_id: Some(CommandId(id.to_owned())),
+            code,
+            message: message.to_owned(),
+        });
+        true
+    }
+
+    /// A `command_accepted` answering the sent `rewind` with its new
+    /// session subscribes full to it, asks its commands, attaches, and
+    /// closes the view. The reset attachment settles the send. Any
+    /// other id, or another command's shape, falls through to the
+    /// history path.
+    pub(in crate::app) fn rewind_send_accepted(
+        &mut self,
+        accepted: &CommandAccepted,
+    ) -> Option<Vec<String>> {
+        let send = self.rewind.send.as_ref()?;
+        if send.id != accepted.command_id.0 {
+            return None;
+        }
+        let Some(CommandResult::Rewind { new_session_id }) = accepted.result.as_ref() else {
+            return None;
+        };
+        let new = new_session_id.clone();
+        // A new attachment asks the new session's commands, as a clear
+        // `start` accept does for its session.
+        let lines = vec![self.subscribe(&new, Level::Full), self.ask_commands(&new)];
+        self.attach(new);
+        self.close_session_view();
+        Some(lines)
+    }
+
+    /// Clears the standing refusal with its choices, if any.
+    fn clear_send_error(&mut self) {
+        self.rewind.send_error = None;
+        self.rewind.summary_failed = false;
     }
 
     /// The connection ended: the pending `history` drops, and its late
@@ -862,6 +946,9 @@ impl App {
             Spot::Cell(at, _) => match self.rewind.visible().get(at) {
                 Some(Vis::Check) => self.rewind.summarise = !self.rewind.summarise,
                 Some(Vis::Action) => return self.send_rewind(),
+                Some(Vis::Retry) => return self.send_rewind_as(true),
+                Some(Vis::NoSummary) => return self.send_rewind_as(false),
+                Some(Vis::Cancel) => self.clear_send_error(),
                 _ => self.rewind_select_at(at),
             },
             Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_) => {}
@@ -909,6 +996,11 @@ impl App {
                 self.rewind.summarise = !self.rewind.summarise;
             }
             Some(Vis::Action) => return self.send_rewind(),
+            // A `summary_failed` refusal's choices: retry with the
+            // summary on, rewind with it off, or back to the list.
+            Some(Vis::Retry) => return self.send_rewind_as(true),
+            Some(Vis::NoSummary) => return self.send_rewind_as(false),
+            Some(Vis::Cancel) => self.clear_send_error(),
             None => {}
         }
         Effect::None
@@ -964,6 +1056,18 @@ impl App {
                 self.rewind.selected = Sel::Action;
                 self.reseat_at(at);
             }
+            Vis::Retry => {
+                self.rewind.selected = Sel::Retry;
+                self.reseat_at(at);
+            }
+            Vis::NoSummary => {
+                self.rewind.selected = Sel::NoSummary;
+                self.reseat_at(at);
+            }
+            Vis::Cancel => {
+                self.rewind.selected = Sel::Cancel;
+                self.reseat_at(at);
+            }
         }
     }
 
@@ -996,6 +1100,9 @@ impl App {
             }
             Some(Vis::Check) => self.rewind.selected = Sel::Check,
             Some(Vis::Action) => self.rewind.selected = Sel::Action,
+            Some(Vis::Retry) => self.rewind.selected = Sel::Retry,
+            Some(Vis::NoSummary) => self.rewind.selected = Sel::NoSummary,
+            Some(Vis::Cancel) => self.rewind.selected = Sel::Cancel,
             None => {}
         }
     }
@@ -1045,6 +1152,21 @@ impl App {
         let line = session_command(&id, "rewind", &serving, Some(args));
         self.rewind.send = Some(SendPending { id: id.clone() });
         Effect::Send(vec![line.to_string()])
+    }
+
+    /// Sends a fresh `rewind` for the chosen point with the summary
+    /// flag the choice names, clearing the standing refusal first: a
+    /// retry keeps the summary on, a rewind without summary turns it
+    /// off, whatever the checkbox says.
+    fn send_rewind_as(&mut self, summarise: bool) -> Effect {
+        if self.rewind.send.is_some() {
+            return Effect::None;
+        }
+        self.clear_send_error();
+        let saved = std::mem::replace(&mut self.rewind.summarise, summarise);
+        let out = self.send_rewind();
+        self.rewind.summarise = saved;
+        out
     }
 
     /// One turn's step boundaries, oldest first, as holding sessions
@@ -1107,6 +1229,30 @@ pub(crate) fn frame(state: &Rewind, jobs: &[String], list: List) -> Frame {
                 let at = rows.len();
                 let (text, ink) = action_row(state);
                 rows.push(vec![(text, Some(Spot::Cell(at, 0)), ink)]);
+            }
+            Vis::Retry => {
+                let at = rows.len();
+                rows.push(vec![(
+                    "Retry with summary".to_owned(),
+                    Some(Spot::Cell(at, 0)),
+                    Ink::Plain,
+                )]);
+            }
+            Vis::NoSummary => {
+                let at = rows.len();
+                rows.push(vec![(
+                    "Rewind without summary".to_owned(),
+                    Some(Spot::Cell(at, 0)),
+                    Ink::Plain,
+                )]);
+            }
+            Vis::Cancel => {
+                let at = rows.len();
+                rows.push(vec![(
+                    "Cancel".to_owned(),
+                    Some(Spot::Cell(at, 0)),
+                    Ink::Plain,
+                )]);
             }
         }
     }

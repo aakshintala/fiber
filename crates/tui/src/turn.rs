@@ -688,7 +688,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
             })
         }),
         "mcp_server_failed" | "fiber_started" | "fiber_exited" | "job_started"
-        | "job_completed" => crash::fold(turns, fold, envelope),
+        | "job_completed" | "rewound" => crash::fold(turns, fold, envelope),
         "preamble_built" | "handoff_started" | "handoff_completed" | "context_nudged" => {
             handoff::fold(turns, fold, envelope)
         }

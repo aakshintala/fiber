@@ -65,6 +65,17 @@ fn resumed(app: &mut App, resumed: bool, ts: u64) {
     );
 }
 
+/// A `rewound` line at `ts`, naming the continuing session.
+fn rewound(app: &mut App, ts: u64) {
+    feed(
+        app,
+        "rewound",
+        None,
+        ts,
+        json!({"new_session_id": "s_ccc", "seq": 12}),
+    );
+}
+
 fn exited(app: &mut App, suspended_on: Option<&str>, ts: u64) {
     let mut payload = json!({"exit_code": 0, "usage": {"tokens": {"input": 0, "cache_read": 0,
         "cache_write": {}, "output": 0}, "cost": 0, "subscription_cost": 0}});
@@ -163,6 +174,17 @@ fn a_resumed_process_closes_the_cut_short_turn() {
         lines[lines.len() - 6..],
         ["", "▄▄▄▄▄", " go ▐", "▀▀▀▀▀", "you 00:01 ", ""]
     );
+}
+
+#[test]
+fn a_rewound_session_places_the_line_naming_the_new_session() {
+    let mut app = crashed();
+    rewound(&mut app, 60_000);
+    let lines = texts(&app);
+    // The old session's `rewound` folds through `turn.rs` into the
+    // crash fold's aside, naming the session that continues it; the
+    // open card indents it.
+    assert!(lines.iter().any(|line| line.trim_start() == "⟲ s_ccc"));
 }
 
 #[test]

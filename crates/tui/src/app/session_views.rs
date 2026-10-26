@@ -493,6 +493,9 @@ impl App {
                         return self.call_view_answered(&accepted);
                     }
                     if matches!(self.session_views.open, Some(Open::Rewind(_))) {
+                        if let Some(lines) = self.rewind_send_accepted(&accepted) {
+                            return lines;
+                        }
                         return self.rewind_answered(envelope, &accepted);
                     }
                     self.session_views_answered(&accepted);

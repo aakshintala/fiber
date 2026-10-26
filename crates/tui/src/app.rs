@@ -1732,6 +1732,12 @@ impl App {
                     if self.image_rejected(&id, &message) {
                         return Vec::new();
                     }
+                    // A hub-relayed failed new-session start settles
+                    // the sent `rewind` with the start's code, and goes
+                    // no further: no generic notice names it.
+                    if self.rewind_hub_refused(&id, &code, &message) {
+                        return Vec::new();
+                    }
                     self.offer.file_refused(
                         &id,
                         &serde_json::from_value(Value::String(code.clone()))
