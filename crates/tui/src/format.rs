@@ -530,12 +530,10 @@ impl Spend {
         log::usage(self.calls.values().map(|(_, line)| line))
     }
 
-    /// The kept generation, its first turn, and its latest line, in
+    /// The first turn and latest line per generation, in
     /// generation order.
-    pub(crate) fn iter(
-        &self,
-    ) -> impl Iterator<Item = (&GenerationId, &Option<TurnId>, &UsageRecorded)> + '_ {
-        self.calls.iter().map(|(id, (turn, line))| (id, turn, line))
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &(Option<TurnId>, UsageRecorded)> + '_ {
+        self.calls.values()
     }
 }
 

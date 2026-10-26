@@ -63,7 +63,7 @@ impl UsageFold {
 /// (`docs/tui.md`, "Swapped views").
 pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame {
     let mut rows = Vec::new();
-    let calls: Vec<&UsageRecorded> = fold.spend.iter().map(|(_, _, line)| line).collect();
+    let calls: Vec<&UsageRecorded> = fold.spend.iter().map(|(_, line)| line).collect();
     if calls.is_empty() {
         rows.push(row("No model calls yet.", Ink::Muted));
         budget_row(&mut rows, budget, 0.0);
@@ -73,7 +73,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
         let known_turns: BTreeSet<TurnId> = fold.turns.iter().cloned().collect();
         let mut turns: BTreeMap<TurnId, Vec<&UsageRecorded>> = BTreeMap::new();
         let mut outside = Vec::new();
-        for (_, turn, line) in fold.spend.iter() {
+        for (turn, line) in fold.spend.iter() {
             match turn.as_ref().filter(|turn| known_turns.contains(*turn)) {
                 Some(turn) => turns.entry(turn.clone()).or_default().push(line),
                 None => outside.push(line),
