@@ -355,8 +355,6 @@ fn is_ident(tree: Option<&TokenTree>, word: &str) -> bool {
     matches!(tree, Some(TokenTree::Ident(ident)) if ident == word)
 }
 
-/// Whether `tree` is the `"kill"` argument: the command's name on its
-/// own, not a longer string that merely mentions it.
 /// One kept raw fake-clock advance outside `crates/fakes`: the checker
 /// reports every raw `FakeClock::advance` or `advance_marked` call it can
 /// prove, and each proved call needs exactly one of these entries.
@@ -557,12 +555,15 @@ struct RawAdvanceCall {
 /// A receiver counts as `FakeClock` when the same file proves it: a function
 /// parameter or `let` binding with a `FakeClock` type, a binding initialized
 /// by a `FakeClock` constructor, a clone of a proved receiver
-/// (`x.clone()`, `Arc::clone(&x)`, `Arc::new(x)`), a field access whose field
-/// an in-file struct declares with a `FakeClock` type, or `self` inside an
-/// `impl` over `FakeClock`. The proof is local on purpose: it cannot follow
-/// a `FakeClock` value passed through a helper (a fixture constructor, a
-/// helper's return, a cross-file field), so such sites are not reported and
-/// carry no entry.
+/// (`x.clone()`, `Arc::clone(&x)`, `Arc::new(x)`), a `base.field` access
+/// whose owning struct declares the field with a `FakeClock` type and whose
+/// base proves to be that owner (a parameter, a `let` with an owner type or
+/// an `Owner::...` initializer, or `self` inside an `impl` over the owner),
+/// or `self` inside an `impl` over `FakeClock`. Bindings are scoped: an inner
+/// shadow is undone at its `}`. The proof is local on purpose: it cannot
+/// follow a `FakeClock` value passed through a helper (a fixture constructor
+/// returning the clock itself, a helper's return, a cross-file field), so
+/// such sites are not reported and carry no entry.
 ///
 /// The clock's own implementation and self-tests are skipped by path below,
 /// as `crates/fakes` is: they exercise the primitive itself with raw moves,
@@ -700,6 +701,165 @@ fn last_field_name(tokens: &[SourceToken], start: usize, colon: usize) -> Option
     name
 }
 
+/// Every `struct` the file declares, owners and non-owners alike, so a
+/// proved non-owner base (`g: G` where `G.clock` is not a `FakeClock`)
+/// stays distinct from an unproved base (docs/testing.md:254-257).
+fn in_file_structs(tokens: &[SourceToken]) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if ident(tokens.get(i), "struct") {
+            let mut j = i + 1;
+            while j < tokens.len()
+                && !punct(tokens.get(j), '{')
+                && !punct(tokens.get(j), ';')
+                && !punct(tokens.get(j), '(')
+            {
+                if let Some(word) = tokens.get(j).and_then(|token| match &token.kind {
+                    SourceKind::Ident(word) => Some(word.clone()),
+                    SourceKind::String(_) | SourceKind::Punct(_) => None,
+                }) {
+                    names.insert(word);
+                    break;
+                }
+                j += 1;
+            }
+        }
+        i += 1;
+    }
+    names
+}
+
+/// Whether the `base.field` access proves a `FakeClock`: `field` belongs to
+/// `owner` and `base` proves to be that `owner` (`self` through the enclosing
+/// `impl`, any other base through its tracked struct type). A base whose
+/// type the file does not prove falls back to the field name, so a raw move
+/// through a helper return or a cross-file type cannot evade the gate
+/// (docs/testing.md:254-257).
+fn field_proves_fake(
+    fields: &BTreeSet<(String, String)>,
+    base: &str,
+    field: &str,
+    structs: &BTreeMap<String, String>,
+    impl_name: Option<&str>,
+) -> bool {
+    if base == "self" {
+        let Some(owner) = impl_name else {
+            return false;
+        };
+        return fields.contains(&(owner.to_owned(), field.to_owned()));
+    }
+    let Some(owner) = structs.get(base) else {
+        return fields.iter().any(|(_, known)| known == field);
+    };
+    fields.contains(&(owner.clone(), field.to_owned()))
+}
+
+/// The first in-file struct name mentioned from `start` up to `end`, if any.
+fn type_mentions_owner(
+    tokens: &[SourceToken],
+    start: usize,
+    end: usize,
+    known: &BTreeSet<String>,
+) -> Option<String> {
+    let mut i = start;
+    while i < end && i < tokens.len() {
+        if let Some(word) = tokens.get(i).and_then(|token| match &token.kind {
+            SourceKind::Ident(word) => Some(word.as_str()),
+            SourceKind::String(_) | SourceKind::Punct(_) => None,
+        }) && known.contains(word)
+        {
+            return Some(word.to_owned());
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The owning struct a `let` initializer proves for its binding: `Owner::...`
+/// or `Owner { ... }`, or `Self::...` inside an `impl` over an in-file struct.
+fn initializer_owner(
+    tokens: &[SourceToken],
+    start: usize,
+    end: usize,
+    known: &BTreeSet<String>,
+    impl_name: Option<&str>,
+) -> Option<String> {
+    let mut i = start;
+    while i < end && i < tokens.len() {
+        match tokens.get(i).map(|token| &token.kind) {
+            Some(SourceKind::Ident(word)) => {
+                if word == "Self" {
+                    return impl_name
+                        .filter(|name| known.contains(*name))
+                        .map(str::to_owned);
+                }
+                if known.contains(word.as_str()) {
+                    return Some(word.clone());
+                }
+                return None;
+            }
+            Some(SourceKind::Punct('&' | '*' | '(')) => {
+                i += 1;
+                continue;
+            }
+            Some(SourceKind::String(_)) | Some(SourceKind::Punct(_)) => {
+                return None;
+            }
+            None => return None,
+        }
+    }
+    None
+}
+
+/// The `impl` self type at `tokens[at]`: the type after `for` when present,
+/// else the type after `impl`, skipping generics (docs/testing.md:254-257).
+fn impl_self_name(tokens: &[SourceToken], at: usize) -> Option<String> {
+    let mut brace = None;
+    let mut j = at + 1;
+    while j < tokens.len() {
+        if punct(tokens.get(j), '{') {
+            brace = Some(j);
+            break;
+        }
+        j += 1;
+    }
+    let brace = brace?;
+    let mut angle: usize = 0;
+    let mut for_pos = None;
+    let mut k = at + 1;
+    while k < brace {
+        if punct(tokens.get(k), '<') {
+            angle += 1;
+        } else if punct(tokens.get(k), '>') {
+            angle = angle.saturating_sub(1);
+        } else if angle == 0 && ident(tokens.get(k), "for") {
+            for_pos = Some(k);
+            break;
+        }
+        k += 1;
+    }
+    let mut m = for_pos.map_or(at + 1, |pos| pos + 1);
+    let mut inner: usize = 0;
+    while m < brace {
+        if punct(tokens.get(m), '<') {
+            inner += 1;
+        } else if punct(tokens.get(m), '>') {
+            inner = inner.saturating_sub(1);
+        } else if inner == 0
+            && let Some(word) = tokens.get(m).and_then(|token| match &token.kind {
+                SourceKind::Ident(word) => Some(word.as_str()),
+                SourceKind::String(_) | SourceKind::Punct(_) => None,
+            })
+            && word.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        {
+            return Some(word.to_owned());
+        }
+        m += 1;
+    }
+    None
+}
+
 /// Whether the field type after `colon` names `FakeClock` before its
 /// closing comma or brace.
 fn type_mentions_fake_clock(tokens: &[SourceToken], mut m: usize) -> bool {
@@ -723,12 +883,31 @@ fn type_mentions_fake_clock(tokens: &[SourceToken], mut m: usize) -> bool {
     false
 }
 
-/// Names of fields an in-file `struct` declares with a `FakeClock` type.
-fn fake_clock_fields(tokens: &[SourceToken]) -> BTreeSet<String> {
+/// (`owner`, `field`) pairs an in-file `struct` declares with a `FakeClock`
+/// type, so a `base.field` receiver with a proved `base` proves only for its
+/// `owner`; an unproved `base` falls back to the field name
+/// (docs/testing.md:254-257).
+fn fake_clock_fields(tokens: &[SourceToken]) -> BTreeSet<(String, String)> {
     let mut fields = BTreeSet::new();
     let mut i = 0;
     while i < tokens.len() {
         if ident(tokens.get(i), "struct") {
+            let mut owner = None;
+            let mut s = i + 1;
+            while s < tokens.len()
+                && !punct(tokens.get(s), '{')
+                && !punct(tokens.get(s), ';')
+                && !punct(tokens.get(s), '(')
+            {
+                if let Some(word) = tokens.get(s).and_then(|token| match &token.kind {
+                    SourceKind::Ident(word) => Some(word.clone()),
+                    SourceKind::String(_) | SourceKind::Punct(_) => None,
+                }) && owner.is_none()
+                {
+                    owner = Some(word);
+                }
+                s += 1;
+            }
             let mut j = i + 1;
             while j < tokens.len()
                 && !punct(tokens.get(j), '{')
@@ -753,8 +932,9 @@ fn fake_clock_fields(tokens: &[SourceToken]) -> BTreeSet<String> {
                         && let Some(name) = last_field_name(tokens, segment_start, k)
                         && name != "pub"
                         && type_mentions_fake_clock(tokens, k + 1)
+                        && let Some(owner) = owner.clone()
                     {
-                        fields.insert(name);
+                        fields.insert((owner, name));
                     }
                     if depth == 1 && punct(tokens.get(k), ',') {
                         segment_start = k + 1;
@@ -841,6 +1021,9 @@ struct AdvanceFnFrame {
     name: String,
     depth: usize,
     fake: BTreeSet<String>,
+    fake_undos: Vec<(usize, String, bool)>,
+    structs: BTreeMap<String, String>,
+    struct_undos: Vec<(usize, String, Option<String>)>,
 }
 /// The parameter from `start` up to `end`: its name when its type names
 /// `FakeClock`, `self` included only with its own `FakeClock` type.
@@ -881,9 +1064,54 @@ fn param_proves_fake(tokens: &[SourceToken], start: usize, end: usize) -> Option
     Some(first.to_owned())
 }
 
-/// The `fn` signature at `tokens[at]`: its name and the parameters with a
-/// `FakeClock` type, `self` included when its own type names one.
-fn fn_signature(tokens: &[SourceToken], at: usize) -> Option<(String, BTreeSet<String>)> {
+/// The `base` variable and owning struct for the parameter from `start` up
+/// to `end`, when its type names an owner of a `FakeClock` field.
+fn param_struct_owner(
+    tokens: &[SourceToken],
+    start: usize,
+    end: usize,
+    known: &BTreeSet<String>,
+) -> Option<(String, String)> {
+    let mut colon = None;
+    let mut c = start;
+    while c < end {
+        if punct(tokens.get(c), ':') {
+            colon = Some(c);
+            break;
+        }
+        c += 1;
+    }
+    let colon = colon?;
+    let mut words = Vec::new();
+    let mut i = start;
+    while i < colon {
+        if let Some(word) = tokens.get(i).and_then(|token| match &token.kind {
+            SourceKind::Ident(word) => Some(word.as_str()),
+            SourceKind::String(_) | SourceKind::Punct(_) => None,
+        }) {
+            words.push(word);
+        }
+        i += 1;
+    }
+    if words.first().is_some_and(|word| *word == "mut") {
+        words.remove(0);
+    }
+    let first = (*words.first()?).to_owned();
+    if first == "self" {
+        return None;
+    }
+    let owner = type_mentions_owner(tokens, colon + 1, end, known)?;
+    Some((first, owner))
+}
+
+/// The `fn` signature at `tokens[at]`: its name, the parameters with a
+/// `FakeClock` type (`self` included when its own type names one), and the
+/// parameters whose type names an in-file struct.
+fn fn_signature(
+    tokens: &[SourceToken],
+    at: usize,
+    known: &BTreeSet<String>,
+) -> Option<(String, BTreeSet<String>, BTreeMap<String, String>)> {
     let name = tokens.get(at + 1).and_then(|token| match &token.kind {
         SourceKind::Ident(name) => Some(name.clone()),
         SourceKind::String(_) | SourceKind::Punct(_) => None,
@@ -920,6 +1148,7 @@ fn fn_signature(tokens: &[SourceToken], at: usize) -> Option<(String, BTreeSet<S
     }
     let close = close?;
     let mut fake = BTreeSet::new();
+    let mut structs = BTreeMap::new();
     let mut start = open + 1;
     let mut inner: usize = 0;
     let mut end = open + 1;
@@ -935,22 +1164,32 @@ fn fn_signature(tokens: &[SourceToken], at: usize) -> Option<(String, BTreeSet<S
             if let Some(param) = param_proves_fake(tokens, start, end) {
                 fake.insert(param);
             }
+            if let Some((var, owner)) = param_struct_owner(tokens, start, end, known) {
+                structs.insert(var, owner);
+            }
             start = end + 1;
         }
         end += 1;
     }
-    Some((name, fake))
+    Some((name, fake, structs))
 }
 
 /// Whether the receiver atom from `start` up to `end` is proved: a single
-/// proved binding, `self` with a proved receiver, or a field access whose
-/// field an in-file struct declares with a `FakeClock` type.
+/// proved binding, `self` with a proved receiver, or a `base.field` access
+/// whose owning struct declares the field with a `FakeClock` type and whose
+/// base proves to be that owner.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one span plus one proof input per source"
+)]
 fn atom_proves_fake(
     tokens: &[SourceToken],
     start: usize,
     end: usize,
     fake: &BTreeSet<String>,
-    fake_fields: &BTreeSet<String>,
+    fake_fields: &BTreeSet<(String, String)>,
+    structs: &BTreeMap<String, String>,
+    impl_name: Option<&str>,
     self_fake: bool,
 ) -> bool {
     let mut cursor = start;
@@ -999,19 +1238,29 @@ fn atom_proves_fake(
             fake.contains(only.as_str()) || (only.as_str() == "self" && self_fake)
         });
     }
-    parts
-        .last()
-        .is_some_and(|last| fake_fields.contains(last.as_str()))
+    if parts.len() == 2 {
+        let (Some(base), Some(field)) = (parts.first(), parts.last()) else {
+            return false;
+        };
+        return field_proves_fake(fake_fields, base, field, structs, impl_name);
+    }
+    false
 }
 
 /// Whether the initializer from `start` up to `end` proves a `FakeClock`:
 /// a `FakeClock` constructor, or a clone of an already proved receiver.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one span plus one proof input per source"
+)]
 fn init_proves_fake(
     tokens: &[SourceToken],
     start: usize,
     end: usize,
     fake: &BTreeSet<String>,
-    fake_fields: &BTreeSet<String>,
+    fake_fields: &BTreeSet<(String, String)>,
+    structs: &BTreeMap<String, String>,
+    impl_name: Option<&str>,
     self_fake: bool,
 ) -> bool {
     let mut i = start;
@@ -1038,7 +1287,16 @@ fn init_proves_fake(
         && punct(tokens.get(start + 3), '(')
         && punct(tokens.get(start + 4), ')')
     {
-        return atom_proves_fake(tokens, start, start + 1, fake, fake_fields, self_fake);
+        return atom_proves_fake(
+            tokens,
+            start,
+            start + 1,
+            fake,
+            fake_fields,
+            structs,
+            impl_name,
+            self_fake,
+        );
     }
     // `Arc::clone(&x)`, `Arc::clone(x)`, `Arc::new(x)`
     if end.saturating_sub(start) >= 6
@@ -1072,19 +1330,30 @@ fn init_proves_fake(
             }
             cursor += 1;
         }
-        return atom_proves_fake(tokens, start + 5, close, fake, fake_fields, self_fake);
+        return atom_proves_fake(
+            tokens,
+            start + 5,
+            close,
+            fake,
+            fake_fields,
+            structs,
+            impl_name,
+            self_fake,
+        );
     }
     false
 }
 /// Every `.advance(` or `.advance_marked(` call whose receiver the same file
-/// proves is a `FakeClock`, in source order.
+/// proves is a `FakeClock`, in source order. Bindings are scoped: an inner
+/// `let` shadow is undone at its closing `}` so the outer proof survives.
 fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
     let fake_fields = fake_clock_fields(tokens);
+    let all_structs = in_file_structs(tokens);
     let mut calls = Vec::new();
     let mut depth: usize = 0;
-    let mut pending_impl_fake: Option<bool> = None;
-    let mut pending_fn: Option<(String, BTreeSet<String>)> = None;
-    let mut impl_frames: Vec<(usize, bool)> = Vec::new();
+    let mut pending_impl: Option<(bool, Option<String>)> = None;
+    let mut pending_fn: Option<(String, BTreeSet<String>, BTreeMap<String, String>)> = None;
+    let mut impl_frames: Vec<(usize, bool, Option<String>)> = Vec::new();
     let mut fn_frames: Vec<AdvanceFnFrame> = Vec::new();
     let mut i = 0;
     while i < tokens.len() {
@@ -1097,17 +1366,27 @@ fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
                 }
                 j += 1;
             }
-            pending_impl_fake = Some(header_fake);
+            pending_impl = Some((header_fake, impl_self_name(tokens, i)));
         } else if ident(tokens.get(i), "fn") {
-            if let Some((name, fake)) = fn_signature(tokens, i) {
-                pending_fn = Some((name, fake));
+            if let Some((name, fake, structs)) = fn_signature(tokens, i, &all_structs) {
+                pending_fn = Some((name, fake, structs));
             }
         } else if ident(tokens.get(i), "let") && !fn_frames.is_empty() {
-            let frame_fake = fn_frames
-                .last()
-                .map_or_else(BTreeSet::new, |frame| frame.fake.clone());
-            let frame_self_fake =
-                impl_frames.last().is_some_and(|(_, fake)| *fake) || frame_fake.contains("self");
+            let (frame_fake, frame_structs, frame_impl_name, frame_self_fake) =
+                fn_frames.last().map_or_else(
+                    || (BTreeSet::new(), BTreeMap::new(), None, false),
+                    |frame| {
+                        let self_fake = impl_frames.last().is_some_and(|(_, fake, _)| *fake)
+                            || frame.fake.contains("self");
+                        (
+                            frame.fake.clone(),
+                            frame.structs.clone(),
+                            impl_frames.last().and_then(|(_, _, name)| name.clone()),
+                            self_fake,
+                        )
+                    },
+                );
+            let impl_name = frame_impl_name.as_deref();
             let Some(frame) = fn_frames.last_mut() else {
                 i += 1;
                 continue;
@@ -1122,6 +1401,7 @@ fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
             }) {
                 let mut k = j + 1;
                 let mut typed_fake = false;
+                let mut type_owner: Option<String> = None;
                 if punct(tokens.get(k), ':') {
                     let mut m = k + 1;
                     let mut inner: usize = 0;
@@ -1142,6 +1422,7 @@ fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
                         }
                         m += 1;
                     }
+                    type_owner = type_mentions_owner(tokens, k + 1, m, &all_structs);
                     k = m;
                 }
                 if punct(tokens.get(k), '=') {
@@ -1165,12 +1446,29 @@ fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
                             m,
                             &frame_fake,
                             &fake_fields,
+                            &frame_structs,
+                            impl_name,
                             frame_self_fake,
                         );
+                    let init_owner = initializer_owner(tokens, k + 1, m, &all_structs, impl_name);
+                    let owner = type_owner.or(init_owner);
+                    frame
+                        .fake_undos
+                        .push((depth, name.clone(), frame.fake.contains(&name)));
                     if proved {
-                        frame.fake.insert(name);
+                        frame.fake.insert(name.clone());
                     } else {
                         frame.fake.remove(&name);
+                    }
+                    frame.struct_undos.push((
+                        depth,
+                        name.clone(),
+                        frame.structs.get(&name).cloned(),
+                    ));
+                    if let Some(owner) = owner {
+                        frame.structs.insert(name, owner);
+                    } else {
+                        frame.structs.remove(&name);
                     }
                 }
             }
@@ -1184,7 +1482,9 @@ fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
             && punct(tokens.get(i + 2), '(')
         {
             let chain = receiver_chain(tokens, i);
-            let self_fake = impl_frames.last().is_some_and(|(_, fake)| *fake);
+            let (self_fake, impl_name) = impl_frames
+                .last()
+                .map_or((false, None), |(_, fake, name)| (*fake, name.as_deref()));
             let proved = match chain.as_slice() {
                 [] => false,
                 [base] if base.as_str() == "self" => {
@@ -1196,9 +1496,10 @@ fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
                 [base] => fn_frames
                     .last()
                     .is_some_and(|frame| frame.fake.contains(base.as_str())),
-                [_, _, ..] => chain
-                    .last()
-                    .is_some_and(|last| fake_fields.contains(last.as_str())),
+                [base, field] => fn_frames.last().is_some_and(|frame| {
+                    field_proves_fake(&fake_fields, base, field, &frame.structs, impl_name)
+                }),
+                [_, _, ..] => false,
             };
             if proved && let Some(dot) = tokens.get(i) {
                 calls.push(RawAdvanceCall {
@@ -1210,15 +1511,50 @@ fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
             }
         } else if punct(tokens.get(i), '{') {
             depth += 1;
-            if let Some(fake) = pending_impl_fake.take() {
-                impl_frames.push((depth, fake));
+            if let Some((fake, name)) = pending_impl.take() {
+                impl_frames.push((depth, fake, name));
             }
-            if let Some((name, fake)) = pending_fn.take() {
-                fn_frames.push(AdvanceFnFrame { name, depth, fake });
+            if let Some((name, fake, structs)) = pending_fn.take() {
+                fn_frames.push(AdvanceFnFrame {
+                    name,
+                    depth,
+                    fake,
+                    fake_undos: Vec::new(),
+                    structs,
+                    struct_undos: Vec::new(),
+                });
             }
         } else if punct(tokens.get(i), '}') {
             depth = depth.saturating_sub(1);
-            impl_frames.retain(|(frame_depth, _)| *frame_depth <= depth);
+            impl_frames.retain(|(frame_depth, _, _)| *frame_depth <= depth);
+            for frame in fn_frames.iter_mut() {
+                while frame
+                    .fake_undos
+                    .last()
+                    .is_some_and(|(undo_depth, _, _)| *undo_depth > depth)
+                {
+                    if let Some((_, var, was_present)) = frame.fake_undos.pop() {
+                        if was_present {
+                            frame.fake.insert(var);
+                        } else {
+                            frame.fake.remove(&var);
+                        }
+                    }
+                }
+                while frame
+                    .struct_undos
+                    .last()
+                    .is_some_and(|(undo_depth, _, _)| *undo_depth > depth)
+                {
+                    if let Some((_, var, was_owner)) = frame.struct_undos.pop() {
+                        if let Some(owner) = was_owner {
+                            frame.structs.insert(var, owner);
+                        } else {
+                            frame.structs.remove(&var);
+                        }
+                    }
+                }
+            }
             fn_frames.retain(|frame| frame.depth <= depth);
         } else if punct(tokens.get(i), ';') {
             pending_fn = None;
@@ -1228,6 +1564,8 @@ fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
     calls
 }
 
+/// Whether `tree` is the `"kill"` argument: the command's name on its
+/// own, not a longer string that merely mentions it.
 fn is_kill_literal(tree: Option<&TokenTree>) -> bool {
     match tree {
         Some(TokenTree::Group(group)) => group

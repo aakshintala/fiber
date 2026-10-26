@@ -3319,17 +3319,12 @@ fn prompts(starter: &FakeStarter) -> usize {
 
 /// The first-prompt thread re-checked after an advance of `by` and is
 /// still waiting for `due`.
-fn still_waiting(
-    clock: &fakes::clock::FakeClock,
-    due: std::time::Instant,
-    by: Duration,
-) -> fakes::clock::Mark {
+fn still_waiting(clock: &fakes::clock::FakeClock, due: std::time::Instant, by: Duration) {
     let mark = clock.advance_when_parked(Some(due), None, by, &fakes::Deadline::after(DEADLINE));
     assert!(
         clock.await_parked_since(&mark, Some(due), fakes::Deadline::after(DEADLINE)),
         "the first prompt re-checked and still waits"
     );
-    mark
 }
 
 #[test]

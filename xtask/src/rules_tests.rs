@@ -2853,6 +2853,7 @@ fn raw_advance_detects_a_typed_parameter_receiver() {
         "crates/hub/src/x_tests.rs",
         "fn drive(clock: &FakeClock) { clock.advance(D); }\n",
     )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
     assert_eq!(
         raw_advance_sites_with(&files, &[]),
         [
@@ -2867,11 +2868,13 @@ fn raw_advance_detects_a_constructor_binding() {
         "crates/hub/src/x_tests.rs",
         "fn t() { let clock = FakeClock::new(); clock.advance(D); }\n",
     )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
     assert_eq!(raw_advance_sites_with(&files, &[]).len(), 1);
     let files = [raw_file(
         "crates/hub/src/x_tests.rs",
         "fn t() { let clock = Arc::new(FakeClock::new()); clock.advance(D); }\n",
     )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
     assert_eq!(raw_advance_sites_with(&files, &[]).len(), 1);
 }
 
@@ -2882,6 +2885,7 @@ fn raw_advance_detects_a_clone_and_a_struct_field_receiver() {
         "struct F { clock: Arc<FakeClock> }\nfn t(f: F) { let c = Arc::clone(&f.clock); c.advance(D); f.clock.advance(D); }\n",
     )];
     let failures = raw_advance_sites_with(&files, &[]);
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
     assert_eq!(failures.len(), 2, "{failures:?}");
 }
 
@@ -2891,6 +2895,7 @@ fn raw_advance_ignores_advance_when_parked() {
         "crates/hub/src/x_tests.rs",
         "fn t() { let clock = FakeClock::new(); clock.advance_when_parked(Some(e), None, D, &dl); clock.try_advance_when_parked(Some(e), None, D, p); }\n",
     )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
     assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
 }
 
@@ -2902,6 +2907,7 @@ fn raw_advance_skips_crates_fakes() {
         rel: "src/clock.rs".to_owned(),
         source: "fn t() { let clock = FakeClock::new(); clock.advance(D); }\n".to_owned(),
     }];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
     assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
 }
 
@@ -2917,6 +2923,7 @@ fn raw_advance_skips_the_support_clock_itself() {
             rel: "src/clock_tests.rs".to_owned(),
             source: "fn t() { let clock = FakeClock::new(); clock.advance(D); }\n".to_owned(),
         }];
+        // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
         assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
     }
 }
@@ -2927,6 +2934,7 @@ fn raw_advance_ignores_unrelated_receivers() {
         "crates/hub/src/x_tests.rs",
         "struct GateClock; impl GateClock { fn advance(&self) {} }\nstruct Home; impl Home { fn advance(&self) {} }\nstruct CaseClock; impl CaseClock { fn advance(&self) {} }\nstruct SourceCursor; impl SourceCursor { fn advance(&mut self) {} }\nstruct Run; impl Run { fn advance(&mut self) {} }\nfn t(g: GateClock, h: Home, c: CaseClock, s: SourceCursor) { g.advance(); h.advance(); c.advance(); s.advance(); }\nimpl Run { fn key(&mut self) { self.advance(); } }\n",
     )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
     assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
 }
 
@@ -2936,6 +2944,7 @@ fn raw_advance_ignores_strings_and_comments() {
         "crates/hub/src/x_tests.rs",
         "fn t() { let _ = \"clock.advance(D)\"; /* clock.advance(D); */ // clock.advance(D);\n }\n",
     )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
     assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
 }
 
@@ -2949,6 +2958,7 @@ fn raw_advance_matches_an_allowlist_entry() {
         raw_allowance("crates/hub/src/x_tests.rs", "t", 1),
         raw_allowance("crates/hub/src/x_tests.rs", "t", 2),
     ];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
     assert_eq!(
         raw_advance_sites_with(&files, &allowances),
         Vec::<String>::new()
@@ -2979,10 +2989,38 @@ fn raw_advance_matches_each_allowlist_reason() {
             ruling,
         })
         .collect();
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
     assert_eq!(
         raw_advance_sites_with(&files, &allowances),
         Vec::<String>::new()
     );
+}
+
+#[test]
+fn raw_advance_keeps_outer_binding_after_inner_shadow() {
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance"):
+    // a later raw advance must not evade the gate when an inner block shadows
+    // the proved binding with a non-`FakeClock` one.
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t(clock: &FakeClock) { { let clock = 1; } clock.advance(D); }\n",
+    )];
+    let failures = raw_advance_sites_with(&files, &[]);
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
+    assert_eq!(failures.len(), 1, "{failures:?}");
+}
+
+#[test]
+fn raw_advance_ignores_a_same_named_field_of_another_type() {
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance"):
+    // the checker proves the receiver's type, so a same-named field of
+    // another type is not a `FakeClock` advance.
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "struct F { clock: Arc<FakeClock> }\nstruct G { clock: u64 }\nfn t(g: G) { g.clock.advance(D); }\n",
+    )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
 }
 
 #[test]
@@ -2996,6 +3034,7 @@ fn raw_advance_rejects_duplicate_allowances() {
         raw_allowance("crates/hub/src/x_tests.rs", "t", 1),
     ];
     let failures = raw_advance_sites_with(&files, &allowances);
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
     assert_eq!(failures.len(), 1, "{failures:?}");
     assert!(failures[0].contains("want exactly one"), "{failures:?}");
 }
@@ -3008,6 +3047,7 @@ fn raw_advance_rejects_unused_allowances() {
     )];
     let allowances = [raw_allowance("crates/hub/src/x_tests.rs", "t", 1)];
     let failures = raw_advance_sites_with(&files, &allowances);
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
     assert_eq!(failures.len(), 1, "{failures:?}");
     assert!(
         failures[0].contains("matches no raw FakeClock advance"),
