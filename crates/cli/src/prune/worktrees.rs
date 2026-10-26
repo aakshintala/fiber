@@ -175,6 +175,31 @@ pub(crate) fn select_scoped(
             }
             let dir = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
+            // Probe without waiting and drop before the confirmation prompt.
+            // Removal retakes the same hold after that prompt.
+            let _hold = match doors::try_hold_removal(&dir) {
+                Ok(Some(hold)) => hold,
+                Ok(None) => {
+                    listed.push(Listed {
+                        row: WorktreeRow::Uncertain {
+                            name,
+                            reason: "in use".to_owned(),
+                        },
+                        removal: None,
+                    });
+                    continue;
+                }
+                Err(failure) => {
+                    listed.push(Listed {
+                        row: WorktreeRow::Uncertain {
+                            name,
+                            reason: failure.message,
+                        },
+                        removal: None,
+                    });
+                    continue;
+                }
+            };
             let Ok(canonical) = std::fs::canonicalize(&dir) else {
                 listed.push(Listed {
                     row: WorktreeRow::Uncertain {
@@ -290,6 +315,27 @@ pub(crate) fn remove_planned(
     let total = removals.len();
     for removal in &removals {
         before_remove(&removal.dir);
+        // A delegate can acquire its share after selection. Keep this
+        // exclusive hold through revalidation and git removal, even forced.
+        let _hold = match doors::try_hold_removal(&removal.dir) {
+            Ok(Some(hold)) => hold,
+            Ok(None) => {
+                failures.push((
+                    format!("worktree {}", removal.name),
+                    ErrorCode::IoFailed,
+                    "in use".to_owned(),
+                ));
+                continue;
+            }
+            Err(failure) => {
+                failures.push((
+                    format!("worktree {}", removal.name),
+                    failure.code,
+                    failure.message,
+                ));
+                continue;
+            }
+        };
         let stopped = revalidate(home, planned, removal);
         if let Err(message) = stopped {
             failures.push((

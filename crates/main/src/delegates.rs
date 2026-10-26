@@ -40,6 +40,7 @@ pub(crate) const OUTPUT_CAP: u64 = 5_000_000_000;
 /// session id differs for a new and a resumed session.
 pub(crate) struct Delegates {
     depth: u32,
+    home: PathBuf,
     /// The parent session: the child's `--parent`.
     parent: SessionId,
     /// The parent's workspace, which the delegate shares.
@@ -99,6 +100,7 @@ impl Delegates {
         let last_seq = last_seq_reader(&sessions);
         Self {
             depth: depth(),
+            home,
             parent,
             workspace,
             sessions,
@@ -129,35 +131,37 @@ impl Delegates {
     /// calling message's model, so nothing resolves here.
     pub(crate) fn fork(&self) -> jobs::DelegateFork {
         jobs::DelegateFork {
-            depth: self.depth,
-            registry: Arc::clone(&self.jobs),
-            parent: self.parent.clone(),
-            workspace: self.workspace.clone(),
-            sessions: self.sessions.clone(),
-            clock: Arc::clone(&self.clock),
-            bound: doors::SHUTDOWN_BOUND,
-            cap: OUTPUT_CAP,
+            wiring: self.wiring(),
             point: fork_point_reader(&self.sessions, &self.parent),
-            launch: Arc::clone(&self.launch),
-            watch: Arc::clone(&self.watch),
         }
     }
 
     /// The `delegate_spawn` tool this session declares.
     pub(crate) fn tool(&self) -> jobs::DelegateSpawn {
         jobs::DelegateSpawn {
+            wiring: self.wiring(),
+            resolve: self.resolve.clone(),
+        }
+    }
+
+    fn wiring(&self) -> jobs::DelegateWiring {
+        let home = self.home.clone();
+        jobs::DelegateWiring {
+            create: worktree_creator(&self.home),
+            finish: worktree_finisher(&self.home, &self.clock),
             depth: self.depth,
             registry: Arc::clone(&self.jobs),
             parent: self.parent.clone(),
             workspace: self.workspace.clone(),
-            sessions: self.sessions.clone(),
+            sessions: Arc::new(move |workspace| {
+                log::sessions_dir(&home, &doors::project(workspace))
+            }),
             clock: Arc::clone(&self.clock),
             // A stop waits for the delegate's own shutdown before SIGKILL,
             // as the parent's shutdown bound does (`docs/invocation.md`,
             // "Shutdown").
             bound: doors::SHUTDOWN_BOUND,
             cap: OUTPUT_CAP,
-            resolve: self.resolve.clone(),
             launch: Arc::clone(&self.launch),
             watch: Arc::clone(&self.watch),
         }
@@ -216,6 +220,7 @@ impl Delegates {
     /// and no other session's.
     pub(crate) fn message(&self) -> jobs::DelegateMessage {
         jobs::DelegateMessage {
+            finish: worktree_finisher(&self.home, &self.clock),
             depth: self.depth,
             registry: Arc::clone(&self.jobs),
             parent: self.parent.clone(),
@@ -569,6 +574,66 @@ pub(crate) fn launcher(fiber: &Path) -> jobs::Launch {
     Arc::new(move |launched: &jobs::Launched| command(&fiber, launched))
 }
 
+fn worktree_creator(home: &Path) -> jobs::CreateWorktree {
+    let home = home.to_owned();
+    Arc::new(
+        #[allow(
+            clippy::result_large_err,
+            reason = "the jobs boundary returns its typed error by value"
+        )]
+        move |workspace, session| {
+            let (created, shared) =
+                doors::create_delegate_worktree(workspace, &home, session, &Command::output)
+                    .map_err(|error| {
+                        let code = match &error {
+                            doors::DelegateCreateError::NotARepository { .. } => {
+                                ErrorCode::InvalidArguments
+                            }
+                            doors::DelegateCreateError::Failed { .. } => ErrorCode::IoFailed,
+                        };
+                        jobs::JobsError::DelegateWorktree {
+                            failure: Failure {
+                                code,
+                                message: error.to_string(),
+                                retry_after_ms: None,
+                                provider: None,
+                            },
+                        }
+                    })?;
+            Ok((
+                jobs::CreatedWorktree {
+                    path: created.path,
+                    branch: created.branch,
+                    base: created.base,
+                },
+                jobs::WorktreeGuard::new(move || drop(shared)),
+            ))
+        },
+    )
+}
+
+fn worktree_finisher(home: &Path, clock: &Arc<dyn Clock>) -> jobs::FinishWorktree {
+    let home = home.to_owned();
+    let clock = Arc::clone(clock);
+    Arc::new(move |end| {
+        let session = SessionId(
+            end.branch
+                .strip_prefix("fiber/")
+                .unwrap_or_default()
+                .to_owned(),
+        );
+        doors::end_delegate_worktree(
+            &home,
+            &session,
+            Arc::clone(&clock),
+            &end.path,
+            &end.branch,
+            end.base.as_deref(),
+            end.remove,
+        )
+    })
+}
+
 fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
     // What the child runs as: a spawn carries its resolved model and an
     // optional credential override, a fork carries its point and neither
@@ -615,7 +680,7 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
         prompt: Some(launched.prompt.clone()),
         resume,
         credential: None,
-        worktree: false,
+        worktree: launched.worktree.is_some(),
         rewound_from: None,
         continues: None,
         forked_from,

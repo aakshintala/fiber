@@ -215,22 +215,50 @@ impl Fixture {
 
     fn spawner(&self, launch: Launch, watch: Watch) -> DelegateSpawn {
         DelegateSpawn {
-            depth: 0,
-            registry: Arc::clone(&self.registry),
-            parent: SessionId("s_parent".into()),
-            workspace: self._dir.path().to_path_buf(),
-            sessions: self.sessions.clone(),
-            clock: Arc::clone(&self.clock) as Arc<dyn contract::clock::Clock>,
-            bound: BOUND,
-            cap: 1024,
             resolve: resolve(),
-            launch,
-            watch,
+            wiring: crate::DelegateWiring {
+                create: Arc::new(
+                    #[allow(
+                        clippy::result_large_err,
+                        reason = "the jobs boundary returns its typed error by value"
+                    )]
+                    |_, _| panic!("unexpected worktree creation"),
+                ),
+                finish: Arc::new(|end| contract::events::FinishedWorktree {
+                    worktree: contract::shapes::Worktree {
+                        path: end.path.to_string_lossy().into_owned(),
+                        branch: end.branch,
+                        repository: None,
+                    },
+                    dirty: false,
+                }),
+                depth: 0,
+                registry: Arc::clone(&self.registry),
+                parent: SessionId("s_parent".into()),
+                workspace: self._dir.path().to_path_buf(),
+                sessions: {
+                    let sessions = self.sessions.clone();
+                    Arc::new(move |_| sessions.clone())
+                },
+                clock: Arc::clone(&self.clock) as Arc<dyn contract::clock::Clock>,
+                bound: BOUND,
+                cap: 1024,
+                launch,
+                watch,
+            },
         }
     }
 
     fn messenger(&self, launch: Launch, watch: Watch, last_seq: LastSeq) -> DelegateMessage {
         DelegateMessage {
+            finish: Arc::new(|end| contract::events::FinishedWorktree {
+                worktree: contract::shapes::Worktree {
+                    path: end.path.to_string_lossy().into_owned(),
+                    branch: end.branch,
+                    repository: None,
+                },
+                dirty: false,
+            }),
             depth: 0,
             registry: Arc::clone(&self.registry),
             parent: SessionId("s_parent".into()),

@@ -55,17 +55,8 @@ fn resolve() -> Resolve {
 
 fn tool(rig: &Rig) -> DelegateSpawn {
     DelegateSpawn {
-        depth: 0,
-        registry: Arc::clone(&rig.registry),
-        parent: contract::SessionId("s_parent".into()),
-        workspace: rig.sessions.parent().unwrap().to_path_buf(),
-        sessions: rig.sessions.clone(),
-        clock: Arc::clone(&rig.clock) as Arc<dyn contract::clock::Clock>,
-        bound: Duration::from_secs(5),
-        cap: 1024,
+        wiring: rig.wiring(),
         resolve: resolve(),
-        launch: Arc::clone(&rig.launch),
-        watch: Arc::clone(&rig.watch),
     }
 }
 
@@ -83,6 +74,131 @@ fn arguments(model: &str) -> serde_json::Map<String, serde_json::Value> {
 /// The stub catalogue, shared with the refusal tests below: every
 /// model refusal lists it after its reason.
 const CATALOGUE: &str = "Roles:\ndeep: fiber:fake/m:high\nReferences:\nfiber:fake/m";
+
+#[test]
+fn isolation_and_workspace_are_validated_before_model_or_credentials() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    let lookups = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&lookups);
+    spawned.resolve.lookup = Arc::new(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        Err("must not resolve".into())
+    });
+    spawned.resolve.credential = Arc::new(|_| panic!("must not resolve credentials"));
+    let schema = spawned.definition().input_schema;
+    assert_eq!(
+        schema["properties"]["isolation"]["enum"],
+        serde_json::json!(["none", "worktree"])
+    );
+    assert_eq!(schema["properties"]["workspace"]["type"], "string");
+    for (key, value) in [
+        ("isolation", serde_json::json!(1)),
+        ("isolation", serde_json::json!("sometimes")),
+        ("workspace", serde_json::json!(1)),
+    ] {
+        let mut args = arguments("unresolvable");
+        args.insert(key.into(), value);
+        let output = spawned.run(&args, &fakes::CancelToken::new(), &Recorder::default());
+        assert_eq!(
+            output.error.unwrap().code,
+            contract::ErrorCode::InvalidArguments
+        );
+    }
+    assert_eq!(lookups.load(Ordering::SeqCst), 0);
+    assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn extension_isolation_and_workspace_use_the_shared_creation_path() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    let called = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&called);
+    spawned.wiring.create = Arc::new(
+        #[allow(
+            clippy::result_large_err,
+            reason = "the jobs boundary returns its typed error by value"
+        )]
+        move |workspace, id| {
+            assert_eq!(workspace, std::path::Path::new("/explicit/repository"));
+            assert!(id.0.starts_with("s_"));
+            counted.fetch_add(1, Ordering::SeqCst);
+            Err(crate::JobsError::DelegateWorktree {
+                failure: contract::shapes::Failure {
+                    code: contract::ErrorCode::IoFailed,
+                    message: "creation reached".into(),
+                    retry_after_ms: None,
+                    provider: None,
+                },
+            })
+        },
+    );
+    let mut args = arguments("fiber:fake/m");
+    args.insert("isolation".into(), serde_json::json!("worktree"));
+    args.insert(
+        "workspace".into(),
+        serde_json::json!("/explicit/repository"),
+    );
+    let failure = spawned
+        .start_extension("extension", &args, &mut |_| {})
+        .unwrap_err();
+    assert!(matches!(failure, crate::JobsError::DelegateWorktree { .. }));
+    assert_eq!(called.load(Ordering::SeqCst), 1);
+    assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn failed_spawn_releases_the_parent_share_before_finishing_the_creation() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    let released = Arc::new(AtomicUsize::new(0));
+    let ended = Arc::new(AtomicUsize::new(0));
+    let release = Arc::clone(&released);
+    spawned.wiring.create = Arc::new(
+        #[allow(
+            clippy::result_large_err,
+            reason = "the jobs boundary returns its typed error by value"
+        )]
+        move |workspace, id| {
+            let release = Arc::clone(&release);
+            Ok((
+                super::CreatedWorktree {
+                    path: workspace.join(&id.0),
+                    branch: format!("fiber/{}", id.0),
+                    base: "base".into(),
+                },
+                super::WorktreeGuard::new(move || {
+                    release.fetch_add(1, Ordering::SeqCst);
+                }),
+            ))
+        },
+    );
+    let release = Arc::clone(&released);
+    let end = Arc::clone(&ended);
+    spawned.wiring.finish = Arc::new(move |record| {
+        assert_eq!(release.load(Ordering::SeqCst), 1);
+        assert!(record.remove);
+        assert_eq!(record.base.as_deref(), Some("base"));
+        end.fetch_add(1, Ordering::SeqCst);
+        contract::events::FinishedWorktree {
+            worktree: contract::shapes::Worktree {
+                path: record.path.to_string_lossy().into_owned(),
+                branch: record.branch,
+                repository: None,
+            },
+            dirty: false,
+        }
+    });
+    spawned.wiring.launch = Arc::new(|_| Command::new("/no/such/fiber"));
+    let mut args = arguments("fiber:fake/m");
+    args.insert("isolation".into(), serde_json::json!("worktree"));
+    let output = spawned.run(&args, &fakes::CancelToken::new(), &Recorder::default());
+    assert_eq!(output.error.unwrap().code, contract::ErrorCode::ToolError);
+    assert_eq!(released.load(Ordering::SeqCst), 1);
+    assert_eq!(ended.load(Ordering::SeqCst), 1);
+    assert!(output.jobs.is_empty());
+}
 
 #[test]
 fn a_non_fiber_model_and_an_unknown_one_fail_without_spawning() {
@@ -304,19 +420,8 @@ fn text_of(part: &contract::shapes::ContentPart) -> String {
 fn a_spawn_error_fails_io_failed_with_no_job() {
     let rig = rig();
     let failing: Launch = Arc::new(|_: &Launched| Command::new("/nonexistent/fiber-test-binary"));
-    let spawned = DelegateSpawn {
-        depth: 0,
-        registry: Arc::clone(&rig.registry),
-        parent: contract::SessionId("s_parent".into()),
-        workspace: rig.sessions.parent().unwrap().to_path_buf(),
-        sessions: rig.sessions.clone(),
-        clock: Arc::clone(&rig.clock) as Arc<dyn contract::clock::Clock>,
-        bound: Duration::from_secs(5),
-        cap: 1024,
-        resolve: resolve(),
-        launch: failing,
-        watch: Arc::clone(&rig.watch),
-    };
+    let mut spawned = tool(&rig);
+    spawned.wiring.launch = failing;
     let output = spawned.run(
         &arguments("fiber:fake/m"),
         &fakes::CancelToken::new(),
@@ -360,7 +465,7 @@ fn concurrent_spawn_cap_is_checked_after_model_validation() {
             }));
         } else {
             let mut failing = tool(&rig);
-            failing.launch = Arc::new(|_| Command::new("/nonexistent/fiber-cap-test"));
+            failing.wiring.launch = Arc::new(|_| Command::new("/nonexistent/fiber-cap-test"));
             let output = failing.run(
                 &arguments("fiber:fake/m"),
                 &fakes::CancelToken::new(),
@@ -458,7 +563,7 @@ fn absent_timeout_keeps_the_delegate_running_after_a_poll() {
     let mut spawned = tool(&rig);
     let (release, held) = mpsc::channel::<()>();
     let held = std::sync::Mutex::new(held);
-    spawned.watch = Arc::new(move |_, _, _| {
+    spawned.wiring.watch = Arc::new(move |_, _, _| {
         let _released = held.lock().unwrap().recv();
         Err(std::io::Error::other("released"))
     });
@@ -517,7 +622,7 @@ fn eof_before_exit_reports_without_a_clock_move() {
     fakes::fifo(&fifo);
     let pid = rig._dir.path().join("child.pid");
     let fifo_arg = fifo.clone();
-    spawned.launch = Arc::new(move |_: &Launched| {
+    spawned.wiring.launch = Arc::new(move |_: &Launched| {
         let mut command = Command::new("sh");
         command.args([
             "-c",
@@ -581,7 +686,7 @@ fn depth_precedes_arguments_and_model_lookup_without_changing_the_definition() {
             let rig = rig();
             let mut spawned = tool(&rig);
             let definition = serde_json::to_value(spawned.definition()).unwrap();
-            spawned.depth = depth;
+            spawned.wiring.depth = depth;
             assert_eq!(
                 serde_json::to_value(spawned.definition()).unwrap(),
                 definition
@@ -606,7 +711,7 @@ fn depth_precedes_arguments_and_model_lookup_without_changing_the_definition() {
     }
     let rig = rig();
     let mut spawned = tool(&rig);
-    spawned.depth = 1;
+    spawned.wiring.depth = 1;
     let output = spawned.run(
         &arguments("unknown"),
         &fakes::CancelToken::new(),
@@ -627,10 +732,10 @@ fn extension_starts_validate_depth_and_keys_before_binding_or_launching() {
     ] {
         let rig = rig();
         let mut spawned = tool(&rig);
-        spawned.depth = depth;
+        spawned.wiring.depth = depth;
         let mut args = arguments("fiber:fake/m");
         if extra {
-            args.insert("isolation".into(), serde_json::json!(true));
+            args.insert("not_allowed".into(), serde_json::json!(true));
         }
         let mut bound = Vec::new();
         let error = spawned
@@ -643,7 +748,7 @@ fn extension_starts_validate_depth_and_keys_before_binding_or_launching() {
             );
         } else {
             assert!(
-                matches!(&error, crate::JobsError::ArgumentsNotAllowed { keys } if keys == &["isolation".to_owned()]),
+                matches!(&error, crate::JobsError::ArgumentsNotAllowed { keys } if keys == &["not_allowed".to_owned()]),
                 "depth {depth}"
             );
         }
@@ -659,7 +764,7 @@ fn start_extension_refuses_with_no_inbox() {
     let rig = rig();
     let _guard = Watchdog::matching(&rig.sessions.display().to_string());
     let mut spawned = tool(&rig);
-    spawned.registry = Registry::new(
+    spawned.wiring.registry = Registry::new(
         rig.sessions.clone(),
         rig.clock.clone(),
         Arc::new(Recorder::default()),
@@ -674,9 +779,9 @@ fn start_extension_refuses_with_no_inbox() {
     assert_eq!(error.code(), contract::ErrorCode::ToolError);
     assert!(bound.is_empty());
     assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
-    assert!(contract::jobs::Jobs::running(spawned.registry.as_ref()).is_empty());
+    assert!(contract::jobs::Jobs::running(spawned.wiring.registry.as_ref()).is_empty());
     let counted = rig.launch_count.clone();
-    spawned.launch = Arc::new(move |_| {
+    spawned.wiring.launch = Arc::new(move |_| {
         counted.fetch_add(1, Ordering::SeqCst);
         Command::new("/no/such/fiber")
     });
@@ -703,7 +808,7 @@ fn start_extension_refuses_with_no_inbox() {
 fn extension_spawn_failure_binds_once_but_records_nothing() {
     let rig = rig();
     let mut spawned = tool(&rig);
-    spawned.launch = Arc::new(|_| Command::new("/no/such/fiber"));
+    spawned.wiring.launch = Arc::new(|_| Command::new("/no/such/fiber"));
     let mut bound = Vec::new();
     let error = spawned
         .start_extension("a", &arguments("fiber:fake/m"), &mut |id| {
@@ -754,7 +859,7 @@ fn held_children(rig: &Rig) -> (Launch, Releases) {
 fn an_immediate_exit_still_delivers_the_extension_start_before_its_end() {
     let rig = rig();
     let mut spawned = tool(&rig);
-    spawned.launch = Arc::new(|_| {
+    spawned.wiring.launch = Arc::new(|_| {
         let mut command = Command::new("sh");
         command.args(["-c", "exit 0"]);
         command
@@ -779,11 +884,11 @@ fn an_immediate_exit_still_delivers_the_extension_start_before_its_end() {
 fn extension_start_binds_before_launch_and_sends_start_before_end_at_depth_one() {
     let rig = rig();
     let mut spawned = tool(&rig);
-    spawned.depth = 1;
+    spawned.wiring.depth = 1;
     let bound = Arc::new(std::sync::Mutex::new(Vec::new()));
     let checked = bound.clone();
     let (launch, releases) = held_children(&rig);
-    spawned.launch = Arc::new(move |child| {
+    spawned.wiring.launch = Arc::new(move |child| {
         assert_eq!(child.depth, 2);
         assert_eq!(*checked.lock().unwrap(), vec![child.job_id.clone()]);
         launch(child)
@@ -821,7 +926,7 @@ fn both_starts_share_the_nine_ten_eleven_boundary_and_release_slots() {
         let mut spawned = tool(&rig);
         let (launch, releases) = held_children(&rig);
         let counted = rig.launch_count.clone();
-        spawned.launch = Arc::new(move |child| {
+        spawned.wiring.launch = Arc::new(move |child| {
             counted.fetch_add(1, Ordering::SeqCst);
             launch(child)
         });

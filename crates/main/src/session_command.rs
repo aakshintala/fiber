@@ -219,6 +219,38 @@ pub(crate) fn run(
     if parent.is_some() {
         signals.lifeline(Box::new(std::io::stdin()));
     }
+    // Only a fresh delegate can adopt the worktree its parent made. The
+    // share stays live across run_new, including Log::create and the
+    // session_started event that acknowledges the handoff to the parent.
+    let adopted = if parent.is_some() && args.worktree {
+        match doors::adopt_delegate_worktree(&args.workspace, &SessionId(args.id.clone())) {
+            Ok(adopted) => adopted,
+            Err(failure) => return report(&signals, failure),
+        }
+    } else {
+        None
+    };
+    if let Some((record, _shared)) = adopted {
+        return match run_new(
+            SessionId(args.id),
+            crate::per_run(args.model, args.overrides),
+            args.prompt,
+            true,
+            Some(record),
+            clock,
+            &signals,
+            fiber,
+            None,
+            None,
+            parent,
+            None,
+            Arc::new(crate::switch::Reads::default()),
+            args.supervised,
+        ) {
+            Ok(code) => code,
+            Err(failure) => report(&signals, failure),
+        };
+    }
     new_session(
         SessionId(args.id),
         crate::per_run(args.model, args.overrides),
@@ -737,6 +769,7 @@ pub(crate) fn run_new(
                             permissions,
                         },
                         parent,
+                        worktree,
                     ),
                     (None, None) if supervised => Loop::supervised(
                         r#loop::Session {

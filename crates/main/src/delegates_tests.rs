@@ -336,6 +336,7 @@ fn lookup_and_catalogue_agree_for_every_role() {
 /// The launch the runner receives for one delegate.
 fn launched() -> jobs::Launched {
     jobs::Launched {
+        worktree: None,
         depth: 1,
         session_id: SessionId("s_child".into()),
         job_id: contract::JobId("j_1".into()),
@@ -347,6 +348,64 @@ fn launched() -> jobs::Launched {
             credential: None,
         }),
     }
+}
+
+#[test]
+fn isolated_launch_carries_the_precreated_workspace_and_worktree_flag() {
+    let mut launched = launched();
+    launched.workspace = "/fiber/worktrees/s_child".into();
+    launched.worktree = Some(jobs::CreatedWorktree {
+        path: launched.workspace.clone(),
+        branch: "fiber/s_child".into(),
+        base: "base".into(),
+    });
+    let command = launcher(std::path::Path::new("/bin/fiber"))(&launched);
+    let argv: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        argv,
+        [
+            "session",
+            "--id=s_child",
+            "--workspace=/fiber/worktrees/s_child",
+            "--model=fake/m:high",
+            "--prompt=scan the tree",
+            "--worktree",
+            "--parent=s_parent",
+            "--delegate-id=j_1",
+            "--depth=1"
+        ]
+    );
+}
+
+#[test]
+fn delegate_worktree_creation_maps_nonrepository_and_git_failure_codes() {
+    fakes::within(
+        "delegate creation mapping",
+        fakes::Deadline::after(std::time::Duration::from_secs(30)),
+        || {
+            let home = fakes::TempDir::new("delegate-map-home");
+            let workspace = fakes::TempDir::new("delegate-map-workspace");
+            let create = super::worktree_creator(home.path());
+            let id = SessionId("s_0123456789abcdef".into());
+            let Err(error) = create(workspace.path(), &id) else {
+                panic!("nonrepository must fail");
+            };
+            assert_eq!(error.code(), ErrorCode::InvalidArguments);
+            assert!(
+                error
+                    .to_string()
+                    .contains(&workspace.path().to_string_lossy().to_string())
+            );
+            fakes::git::git(workspace.path(), &["init", "--quiet"]);
+            let Err(error) = create(workspace.path(), &id) else {
+                panic!("unborn HEAD must fail");
+            };
+            assert_eq!(error.code(), ErrorCode::IoFailed);
+        },
+    );
 }
 
 #[test]
@@ -411,6 +470,7 @@ fn tool_depth() -> u32 {
         },
     )
     .tool()
+    .wiring
     .depth
 }
 
@@ -542,6 +602,7 @@ fn watch_bounded(
 
 fn resumed() -> jobs::Launched {
     jobs::Launched {
+        worktree: None,
         depth: 1,
         session_id: SessionId("s_child".into()),
         job_id: contract::JobId("j_1".into()),
@@ -581,6 +642,7 @@ fn a_resume_builds_the_resume_argv_with_the_message_whole_and_no_model() {
 #[test]
 fn a_fork_builds_the_fork_argv_with_no_model_or_credential() {
     let fork = jobs::Launched {
+        worktree: None,
         start: jobs::Start::Fresh(jobs::Fresh::Fork {
             from: jobs::Forking {
                 point: contract::shapes::Point {
@@ -619,6 +681,7 @@ fn a_fork_builds_the_fork_argv_with_no_model_or_credential() {
     // Side by side, the same launch as a spawn carries the model, the
     // credential pair and the label, none of which the fork emits.
     let spawned = jobs::Launched {
+        worktree: None,
         start: jobs::Start::Fresh(jobs::Fresh::Spawn {
             model: "fake/m:high".to_owned(),
             credential: Some("work".to_owned()),
@@ -988,11 +1051,11 @@ fn the_message_tool_shares_the_spawn_tools_registry_launch_watch_and_depth() {
     let (delegates, jobs) = message_rig();
     let message = delegates.message();
     let spawned = delegates.tool();
-    assert_eq!(message.depth, spawned.depth);
+    assert_eq!(message.depth, spawned.wiring.depth);
     assert_eq!(message.depth, 0);
     assert!(Arc::ptr_eq(&message.registry, &jobs));
-    assert!(Arc::ptr_eq(&message.launch, &spawned.launch));
-    assert!(Arc::ptr_eq(&message.watch, &spawned.watch));
+    assert!(Arc::ptr_eq(&message.launch, &spawned.wiring.launch));
+    assert!(Arc::ptr_eq(&message.watch, &spawned.wiring.watch));
     assert!(Arc::ptr_eq(&message.steer, &delegates.steer));
     assert!(Arc::ptr_eq(&message.last_seq, &delegates.last_seq));
     assert_eq!(message.parent, SessionId("s_parent".into()));
@@ -1967,17 +2030,23 @@ fn the_fork_tool_shares_the_spawn_tools_wiring() {
     let (delegates, jobs) = message_rig();
     let forked = delegates.fork();
     let spawned = delegates.tool();
-    assert_eq!(forked.depth, spawned.depth);
-    assert!(Arc::ptr_eq(&forked.registry, &jobs));
-    assert!(Arc::ptr_eq(&forked.registry, &spawned.registry));
-    assert_eq!(forked.parent, spawned.parent);
-    assert_eq!(forked.workspace, spawned.workspace);
-    assert_eq!(forked.sessions, spawned.sessions);
-    assert!(Arc::ptr_eq(&forked.clock, &spawned.clock));
-    assert_eq!(forked.bound, spawned.bound);
-    assert_eq!(forked.cap, spawned.cap);
-    assert!(Arc::ptr_eq(&forked.launch, &spawned.launch));
-    assert!(Arc::ptr_eq(&forked.watch, &spawned.watch));
+    assert_eq!(forked.wiring.depth, spawned.wiring.depth);
+    assert!(Arc::ptr_eq(&forked.wiring.registry, &jobs));
+    assert!(Arc::ptr_eq(
+        &forked.wiring.registry,
+        &spawned.wiring.registry
+    ));
+    assert_eq!(forked.wiring.parent, spawned.wiring.parent);
+    assert_eq!(forked.wiring.workspace, spawned.wiring.workspace);
+    assert_eq!(
+        (forked.wiring.sessions)(&forked.wiring.workspace),
+        (spawned.wiring.sessions)(&spawned.wiring.workspace)
+    );
+    assert!(Arc::ptr_eq(&forked.wiring.clock, &spawned.wiring.clock));
+    assert_eq!(forked.wiring.bound, spawned.wiring.bound);
+    assert_eq!(forked.wiring.cap, spawned.wiring.cap);
+    assert!(Arc::ptr_eq(&forked.wiring.launch, &spawned.wiring.launch));
+    assert!(Arc::ptr_eq(&forked.wiring.watch, &spawned.wiring.watch));
     assert_eq!(forked.definition().name, "delegate_fork");
 }
 

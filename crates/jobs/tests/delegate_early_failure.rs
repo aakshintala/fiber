@@ -83,14 +83,29 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
     // Refused, as for a child that never bound its socket.
     let watch: jobs::Watch = Arc::new(|_, _, _| Err(std::io::Error::other("refused")));
     let spawn = DelegateSpawn {
-        depth: 0,
-        registry: Arc::clone(&registry),
-        parent: SessionId("s_parent".into()),
-        workspace: dir.path().to_path_buf(),
-        sessions: sessions.clone(),
-        clock: Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-        bound: Duration::from_secs(5),
-        cap: 1024,
+        wiring: jobs::DelegateWiring {
+            create: Arc::new(
+                #[allow(
+                    clippy::result_large_err,
+                    reason = "the jobs boundary returns its typed error by value"
+                )]
+                |_, _| panic!("unexpected worktree creation"),
+            ),
+            finish: Arc::new(|_| panic!("unexpected worktree end")),
+            depth: 0,
+            registry: Arc::clone(&registry),
+            parent: SessionId("s_parent".into()),
+            workspace: dir.path().to_path_buf(),
+            sessions: {
+                let sessions = sessions.clone();
+                Arc::new(move |_| sessions.clone())
+            },
+            clock: Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+            bound: Duration::from_secs(5),
+            cap: 1024,
+            launch,
+            watch,
+        },
         resolve: Resolve {
             lookup: Arc::new(|model: &str| match model {
                 "fiber:fake/m" => Ok("fake/m".to_owned()),
@@ -99,8 +114,6 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
             catalogue: Arc::from("Roles: none\nReferences:\nfiber:fake/m"),
             credential: Arc::new(|_| Ok(None)),
         },
-        launch,
-        watch,
     };
 
     // Backstop armed before the spawn: the child exits on its own in
