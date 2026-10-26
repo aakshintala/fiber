@@ -1023,7 +1023,7 @@ fn resume_readers_use_the_child_project_even_after_its_worktree_was_removed() {
         root.path().join("other/worktrees/s_child"),
     ] {
         assert_eq!(
-            super::delegate_sessions(&home, &other),
+            super::delegate_sessions(&home, &other).unwrap(),
             log::sessions_dir(&home, &doors::project(&other))
         );
     }
@@ -1054,6 +1054,33 @@ fn resume_readers_use_the_child_project_even_after_its_worktree_was_removed() {
             .unwrap_err()
             .contains("worktree")
     );
+}
+
+#[test]
+fn removed_worktree_readers_name_a_worktree_with_no_usable_project_key() {
+    let root = fakes::TempDir::new("dm-bad-key");
+    let home = root.path().join("home");
+    // Shaped like a removed Fiber worktree, but the project slot holds
+    // `..`, so no key survives: `file_name` is `None` past `..`.
+    let workspace = home.join("projects").join("..").join("worktrees/s_child");
+    let shown = workspace.to_string_lossy().into_owned();
+    let id = SessionId("s_child".into());
+    let Err(reason) = super::last_seq_reader(&home)(&workspace, &id) else {
+        panic!("a worktree with no project key reads a boundary");
+    };
+    assert!(
+        reason.contains("not a worktree of a Fiber project"),
+        "{reason}"
+    );
+    assert!(reason.contains(&shown), "{reason}");
+    let Err(reason) = super::worktree_record_reader(&home)(&workspace, &id) else {
+        panic!("a worktree with no project key reads a record");
+    };
+    assert!(
+        reason.contains("not a worktree of a Fiber project"),
+        "{reason}"
+    );
+    assert!(reason.contains(&shown), "{reason}");
 }
 
 #[test]

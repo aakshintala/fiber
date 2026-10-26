@@ -862,7 +862,7 @@ fn read_fork_point(
 fn last_seq_reader(home: &Path) -> jobs::LastSeq {
     let home = home.to_path_buf();
     Arc::new(move |workspace, id| {
-        let sessions = delegate_sessions(&home, workspace);
+        let sessions = delegate_sessions(&home, workspace)?;
         log::last_seq(log::SessionDir::new(&sessions, id).path())
             .map(|seq| seq.map(|seq| seq.0))
             .map_err(|error| error.to_string())
@@ -871,16 +871,29 @@ fn last_seq_reader(home: &Path) -> jobs::LastSeq {
 
 /// A Fiber worktree's path preserves the project key even after removal.
 /// Other workspaces resolve through git, including an explicitly selected repository.
-fn delegate_sessions(home: &Path, workspace: &Path) -> PathBuf {
-    let projects = home.join("projects");
+/// The removed-worktree branch reads the key off the path and resolves it
+/// through `log`; no session path is built here (`docs/architecture.md`,
+/// rule 3).
+fn delegate_sessions(home: &Path, workspace: &Path) -> Result<PathBuf, String> {
     let project = workspace
         .parent()
         .filter(|parent| parent.file_name() == Some(std::ffi::OsStr::new("worktrees")))
         .and_then(Path::parent)
-        .filter(|project| project.parent() == Some(projects.as_path()));
+        .filter(|project| {
+            project.parent().is_some_and(|projects| {
+                projects.file_name() == Some(std::ffi::OsStr::new("projects"))
+                    && projects.parent() == Some(home)
+            })
+        });
     match project {
-        Some(project) => project.join("sessions"),
-        None => log::sessions_dir(home, &doors::project(workspace)),
+        Some(project) => {
+            let key = project.file_name().and_then(|key| key.to_str());
+            key.and_then(|key| log::sessions_dir_for_key(home, key))
+                .ok_or_else(|| {
+                    format!("{}: not a worktree of a Fiber project", workspace.display())
+                })
+        }
+        None => Ok(log::sessions_dir(home, &doors::project(workspace))),
     }
 }
 
@@ -888,7 +901,7 @@ fn delegate_sessions(home: &Path, workspace: &Path) -> PathBuf {
 fn worktree_record_reader(home: &Path) -> jobs::WorktreeRecord {
     let home = home.to_path_buf();
     Arc::new(move |workspace, id| {
-        let sessions = delegate_sessions(&home, workspace);
+        let sessions = delegate_sessions(&home, workspace)?;
         let dir = log::SessionDir::new(&sessions, id);
         let started = log::started_first(dir.path())
             .map_err(|error| format!("{}: {error:?}", dir.events().display()))?;

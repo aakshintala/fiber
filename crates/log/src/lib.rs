@@ -164,6 +164,21 @@ pub fn sessions_dir(home: &Path, project: &Path) -> PathBuf {
         .join("sessions")
 }
 
+/// Where the sessions of the project named by `key` live in Fiber home:
+/// `projects/<key>/sessions`. `None` when `key` is not one normal path
+/// component, so a path never leaves `projects/`. Callers holding only a
+/// worktree path use this after reading the key off it; the join stays in
+/// `log` (`docs/architecture.md`, rule 3).
+pub fn sessions_dir_for_key(home: &Path, key: &str) -> Option<PathBuf> {
+    // Checked before any path is built from it, so a path never leaves
+    // `projects/`.
+    let mut parts = Path::new(key).components();
+    if !matches!(parts.next(), Some(std::path::Component::Normal(_))) || parts.next().is_some() {
+        return None;
+    }
+    Some(sessions_dir(home, Path::new(key)))
+}
+
 /// What can go wrong opening, writing or reading a session.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

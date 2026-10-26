@@ -17,6 +17,43 @@ fn sessions_in(home: &std::path::Path) -> std::path::PathBuf {
     home.join("sessions")
 }
 
+#[test]
+fn sessions_dir_for_key_resolves_a_plain_key_under_projects() {
+    let home = fakes::TempDir::new("log-sessions-dir-key");
+    assert_eq!(
+        sessions_dir_for_key(home.path(), "-tmp-repo"),
+        Some(
+            home.path()
+                .join("projects")
+                .join("-tmp-repo")
+                .join("sessions")
+        )
+    );
+}
+
+#[test]
+fn sessions_dir_for_key_matches_sessions_dir_for_a_real_project_key() {
+    let home = fakes::TempDir::new("log-sessions-dir-key-match");
+    let workspace = home.path().join("somewhere/repo");
+    let key = project_key(&workspace);
+    assert_eq!(
+        sessions_dir_for_key(home.path(), &key),
+        Some(sessions_dir(home.path(), &workspace))
+    );
+}
+
+#[test]
+fn sessions_dir_for_key_refuses_a_key_that_leaves_projects() {
+    let home = fakes::TempDir::new("log-sessions-dir-key-bad");
+    for key in ["", ".", "..", "a/b", "/abs", "a/../b"] {
+        assert_eq!(
+            sessions_dir_for_key(home.path(), key),
+            None,
+            "key {key:?} must not resolve"
+        );
+    }
+}
+
 fn id() -> SessionId {
     SessionId("s_1".to_owned())
 }
