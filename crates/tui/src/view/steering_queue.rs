@@ -9,8 +9,8 @@ use ratatui::text::{Line, Span};
 
 use crate::app::App;
 use crate::format;
-use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
+use crate::theme::{Role, style};
 
 /// The queue's heading above its rows (`docs/tui.md`, "Steering").
 const HEADING: &str = "• Steering, joins the turn at the next step";

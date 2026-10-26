@@ -556,15 +556,18 @@ impl Loop {
 
     /// A Fiber delegate's loop: as [`Loop::start`], but the session's
     /// `session_started` names its parent (`docs/delegates.md`, "Events").
-    /// A delegate never runs in a worktree of its own.
-    pub fn delegate(session: Session, parent: Parent) -> Result<Self, Error> {
-        Self::open(session, Some(parent), None, false)
+    /// `worktree` is the isolated workspace the parent prepared for it.
+    pub fn delegate(
+        session: Session,
+        parent: Parent,
+        worktree: Option<Worktree>,
+    ) -> Result<Self, Error> {
+        Self::open(session, Some(parent), worktree, false)
     }
 
     /// [`Loop::start`], [`Loop::supervised`] and [`Loop::delegate`]
     /// through one writer: the session's `session_started` carries
-    /// `parent` (`None` for a plain start), `supervised` and `worktree`
-    /// (`None` for a delegate).
+    /// `parent` (`None` for a plain start), `supervised` and `worktree`.
     fn open(
         mut session: Session,
         parent: Option<Parent>,

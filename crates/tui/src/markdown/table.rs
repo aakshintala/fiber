@@ -9,7 +9,7 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use super::wrap::{Cell, link_cols, spans_of, wrap_joined_indices};
-use super::{Role, style};
+use crate::theme::{Role, style};
 
 /// Cells between columns.
 const GAP: usize = 3;

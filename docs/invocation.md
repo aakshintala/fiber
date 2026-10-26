@@ -488,7 +488,7 @@ Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `not_found`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`, `indeterminate`,
 `duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`,
-`io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_failed`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`.
+`io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_failed`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`, `from_session`.
 
 A prompt or steer that a hook refuses is rejected `message_refused`, with the
 hook's reason and extension in the message. One whose blocking hook failed is
@@ -793,11 +793,12 @@ and [Control center](https://github.com/aakshintala/fiber/issues/256); the
 rationale and the rejected layouts are
 [ADR 0009](adr/0009-each-session-is-one-process.md).
 
-- **Every session is one process**, running the internal session command. The
-  hub starts one for a client; `fiber ask` is one; a parent starts one for each
-  Fiber delegate. Each session starts its own MCP servers and process
-  extensions, so nothing is shared between sessions (`docs/mcp.md`,
-  `docs/extensions.md`).
+- **Every session is one process**, running a command that hosts a session in
+  that process: the internal `session` command, in-process `ask`, or the case
+  runner's `extension-case` child. The hub starts one for a client; a parent
+  starts one for each Fiber delegate. Each session starts its own MCP servers
+  and process extensions, so nothing is shared between sessions
+  (`docs/mcp.md`, `docs/extensions.md`).
 - **No session has a pipe driver.** Every driver is a client over the
   session's socket. `fiber ask`'s stdout is a watcher.
 - **A Fiber delegate is a child process of its parent.** The parent is an
@@ -1245,6 +1246,11 @@ to session artifacts.
   (`ssh -L /tmp/fiber-hub.sock:/home/me/.fiber/run/hub host`) and add it as a
   `unix:` address. Only their account can open either end, so being that
   account stays the authentication.
+- **A session-owned process gets no pairing code on the local socket.** The
+  hub refuses `pairing_code` with `from_session` when the kernel walk places
+  the connection inside a session (`docs/permissions.md`, "Sessions on the
+  sockets"). Websocket and port behavior is unchanged: a paired client
+  holding a device token reaches `pairing_code` as before.
 - **Any paired client manages devices, and every change is announced.**
   `pairing_code`, `devices` and `revoke` are answered on the port as on the
   local socket. Limiting them to the hub's machine would stop no one holding a
@@ -1369,7 +1375,7 @@ delegate's `isolation: worktree` (`docs/delegates.md`), by the terminal's
 All three use the same rules (`docs/delegates.md`, "Worktrees"): a new branch
 from the workspace's HEAD in a worktree under
 `~/.fiber/projects/<key>/worktrees/<id>`, removed at the end when it holds
-nothing uncommitted and no commits beyond its base, kept otherwise. A session that ends `rewound` keeps its worktree whatever it holds: the session that continues it runs there, records the same `worktree`, and never removes it either; `fiber sessions prune` removes it later. The session a `start` `continues` names keeps its worktree the same way: the new session runs in that worktree, records the same `worktree`, and never removes it either. A resume whose worktree was removed makes it again at the same path and branch from the repository's current HEAD, before `fiber_started`, and ends it by the same rules. When the repository is gone, the resume is rejected the same way. A worktree's lock file, `~/.fiber/projects/<key>/worktrees/<id>.lock`, is held shared by every process that runs in a worktree it did not just create, exclusively while a resume checks for the worktree and makes it again, and taken exclusively without waiting by an end-of-run removal, which keeps the worktree when another process holds it; the file stays whenever its worktree stays, and goes only when a whole removal succeeds, so a dirty, never-shared worktree keeps one too, and `fiber sessions prune` leaves lock files alone. Outside a
+nothing uncommitted and no commits beyond its base, kept otherwise. A session that ends `rewound` keeps its worktree whatever it holds: the session that continues it runs there, records the same `worktree`, and never removes it either; `fiber sessions prune` removes it later. The session a `start` `continues` names keeps its worktree the same way: the new session runs in that worktree, records the same `worktree`, and never removes it either. A resume whose worktree was removed makes it again at the same path and branch from the repository's current HEAD, before `fiber_started`, and ends it by the same rules. When the repository is gone, the resume is rejected the same way. A worktree's lock file, `~/.fiber/projects/<key>/worktrees/<id>.lock`, is held shared by every process that runs in a worktree it did not just create and by a delegate's parent from before it makes the worktree until the child's `session_started` proves it holds its own share. If startup fails before that event, the parent keeps its share through child exit. The file is held exclusively while a resume checks for the worktree and makes it again, and taken exclusively without waiting by an end-of-run removal, which keeps the worktree when another process holds it; the file stays whenever its worktree stays, and goes only when a whole removal succeeds, so a dirty, never-shared worktree keeps one too, and `fiber sessions prune` leaves lock files alone. Prune takes the same exclusive non-waiting hold before inspection and removal, skipping a worktree whose lock is held, even with `--force`. Outside a
 git repository a delegate's `isolation: worktree` fails with
 `invalid_arguments`, and `fiber ask --worktree` is a usage error. The session
 records the worktree on `session_started` (`docs/events.md`). The `worktree`
@@ -1459,7 +1465,8 @@ that hold nothing to lose:
   such as "target/ 3.1 GiB, .env". Any other worktree is skipped, and its line names
   what removing it would lose: uncommitted files, commits found nowhere else,
   or both. `--force` removes it anyway. A worktree a running session works in
-  is never removed.
+  is never removed, even with `--force`: prune skips a worktree whose lock
+  is held, and its line says "in use".
 - **Pinned copies.** It removes each copy in `pinned/` of this repository's
   code that no worktree's files match any more (`docs/extensions.md`, "Code a
   repository ships"). A server copy is judged exactly as an extension copy

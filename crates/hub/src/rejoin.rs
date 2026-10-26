@@ -281,6 +281,19 @@ impl Connections {
             .retain(|(_, writer, relays)| writer.upgrade().is_some() && relays.upgrade().is_some());
         inner.conns.iter().map(|(id, _, _)| *id).collect()
     }
+
+    /// The attribution retained by a live accepted connection.
+    #[cfg(test)]
+    pub(crate) fn attribution(&self, n: u64) -> Option<crate::connection::Attribution> {
+        let inner = lock(&self.inner);
+        let relays = inner
+            .conns
+            .iter()
+            .find(|(id, _, _)| *id == n)?
+            .2
+            .upgrade()?;
+        lock(&relays).attribution.clone()
+    }
 }
 
 /// Sets `hub.feed.on_scan`, holding the hub weakly; a dropped hub makes the hook a no-op.

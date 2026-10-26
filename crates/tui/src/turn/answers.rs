@@ -19,9 +19,8 @@ use super::{Entry, Turn};
 use crate::app::read;
 use crate::format::{self, answer_parts};
 use crate::local_time::time_of_day;
-use crate::markdown::style;
 use crate::rows::{RowText, Rows};
-use crate::theme::Role;
+use crate::theme::{Role, style};
 
 /// The form a call raised, and how it was resolved.
 #[derive(Debug, Clone)]

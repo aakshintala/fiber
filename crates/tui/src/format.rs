@@ -15,9 +15,8 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 use crate::app::Target;
-use crate::markdown::style;
 use crate::rows::{Join, Rows};
-use crate::theme::Role;
+use crate::theme::{Role, style};
 
 /// A span of milliseconds, truncated to whole seconds: `38s` under a
 /// minute, `4m 05s` under an hour, else `1h 02m`.

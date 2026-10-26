@@ -13,7 +13,7 @@ use crate::app::{App, Effect};
 use crate::completion_rows::Completions;
 use crate::keys::Key;
 use crate::link::Line;
-use crate::markdown::Role;
+use crate::theme::Role;
 use contract::clock::Clock;
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";

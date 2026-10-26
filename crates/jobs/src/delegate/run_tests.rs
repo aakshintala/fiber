@@ -281,6 +281,7 @@ struct Rig {
     script: Arc<Script>,
     job: JobId,
     events: std::path::PathBuf,
+    worktree_run: Mutex<Option<super::WorktreeRun>>,
 }
 
 fn rig(replies: Vec<WatchReply>) -> Rig {
@@ -307,6 +308,7 @@ fn rig(replies: Vec<WatchReply>) -> Rig {
         script,
         job: crate::registry::mint_job_id(),
         events,
+        worktree_run: Mutex::new(None),
     }
 }
 
@@ -365,7 +367,9 @@ impl Rig {
             timeout,
             on_usage,
         );
+        let runner = runner.with_worktree(self.worktree_run.lock().unwrap().take());
         let launched = Launched {
+            worktree: None,
             depth: 1,
             session_id: SessionId("s_child".into()),
             job_id: self.job.clone(),
@@ -858,6 +862,155 @@ fn kills(pgid: u32) -> usize {
             *signalled == pgid && *signal == rustix::process::Signal::KILL
         })
         .count()
+}
+
+#[test]
+fn worktree_parent_releases_at_child_acknowledgement_or_failed_start_cleanup() {
+    within(
+        "worktree handoff",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        || {
+            for acknowledged in [true, false] {
+                let lines = if acknowledged {
+                    vec![envelope(0, "session_started", serde_json::json!({}))]
+                } else {
+                    Vec::new()
+                };
+                let rig = rig(vec![WatchReply::Closed(lines)]);
+                let _guard = Watchdog::matching(&rig._dir.path().display().to_string());
+                let (release_tx, release_rx) = mpsc::channel();
+                let released = Arc::new(AtomicBool::new(false));
+                let release = Arc::clone(&released);
+                let guard = super::WorktreeGuard::new(move || {
+                    assert!(
+                        !release.swap(true, Ordering::SeqCst),
+                        "one release despite watcher/runner race"
+                    );
+                    release_tx.send(()).unwrap();
+                });
+                let ended = Arc::new(AtomicBool::new(false));
+                let end = Arc::clone(&ended);
+                let release = Arc::clone(&released);
+                *rig.worktree_run.lock().unwrap() = Some(super::WorktreeRun {
+                    end: super::EndWorktree {
+                        path: rig.events.parent().unwrap().to_owned(),
+                        branch: "fiber/s_child".into(),
+                        base: Some("base".into()),
+                        remove: true,
+                    },
+                    guard: Some(guard),
+                    finish: Arc::new(move |record| {
+                        assert!(release.load(Ordering::SeqCst), "release precedes finish");
+                        assert!(record.remove);
+                        assert_eq!(record.base.as_deref(), Some("base"));
+                        end.store(true, Ordering::SeqCst);
+                        contract::events::FinishedWorktree {
+                            worktree: contract::shapes::Worktree {
+                                path: record.path.to_string_lossy().into_owned(),
+                                branch: record.branch,
+                                repository: None,
+                            },
+                            dirty: true,
+                        }
+                    }),
+                });
+                // The child cannot exit until stopped: the runner holds its
+                // stdin lifeline open (docs/delegates.md, "Lifetime").
+                let shell = format!("# {}\nread line", rig._dir.path().display());
+                let done = rig.start(&shell, BOUND, u64::MAX);
+                wait_folded(&rig, 1);
+                if acknowledged {
+                    Deadline::after(MUST_SUCCEED_WITHIN)
+                        .recv_or_fail(&release_rx, "parent release before child exit");
+                } else {
+                    assert!(
+                        !released.load(Ordering::SeqCst),
+                        "no acknowledgement keeps the parent share"
+                    );
+                }
+                assert!(!ended.load(Ordering::SeqCst), "child is still alive");
+                assert_eq!(
+                    contract::jobs::Jobs::running(rig.registry.as_ref()).len(),
+                    1
+                );
+                assert!(contract::jobs::Jobs::stop(rig.registry.as_ref(), &rig.job));
+                let notice = reported(&rig);
+                assert!(ended.load(Ordering::SeqCst), "finish precedes report");
+                assert!(notice.delegate.unwrap().worktree.unwrap().dirty);
+                if !acknowledged {
+                    Deadline::after(MUST_SUCCEED_WITHIN)
+                        .recv_or_fail(&release_rx, "failed-start release after child exit");
+                }
+                Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "runner teardown");
+            }
+        },
+    );
+}
+
+#[test]
+fn a_second_guard_release_waits_until_the_first_has_closed_the_share() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (approached_tx, approached_rx) = mpsc::channel::<()>();
+    let guard = super::WorktreeGuard::new(move || {
+        entered_tx.send(()).unwrap();
+        let _released = release_rx.recv();
+    });
+    let watcher = guard.clone();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        // Drop the release sender before joining either releaser, including
+        // on panic (docs/testing.md, "Waits and timeouts").
+        let release_tx = release_tx;
+        scope.spawn(move || watcher.release());
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "watcher starts closing its share");
+        scope.spawn(move || {
+            approached_tx.send(()).unwrap();
+            guard.release();
+            done_tx.send(()).unwrap();
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&approached_rx, "cleanup attempts its release");
+        // No clock: the watcher is parked inside its close holding the
+        // release lock, which only the sender below releases, so the
+        // cleanup's send cannot have happened yet.
+        assert!(
+            done_rx.try_recv().is_err(),
+            "cleanup cannot pass an unfinished release"
+        );
+        drop(release_tx);
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&done_rx, "cleanup observes the closed share");
+    });
+}
+
+#[test]
+fn worktree_guard_releases_once_across_clones_and_drop() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let guard = super::WorktreeGuard::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
+    let watcher = guard.clone();
+    guard.release();
+    watcher.release();
+    drop(guard);
+    drop(watcher);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let counted = Arc::clone(&calls);
+    let guard = super::WorktreeGuard::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
+    let watcher = guard.clone();
+    drop(guard);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "a remaining handle keeps the hold"
+    );
+    drop(watcher);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -2582,6 +2735,7 @@ fn run_watch(
         output_path: std::path::PathBuf::from("missing.log"),
         wake: waker,
         on_usage: None,
+        worktree_guard: None,
     }
     .run();
 }
@@ -2741,6 +2895,7 @@ fn the_fold_starts_from_the_run_boundary() {
         None,
     );
     let launched = Launched {
+        worktree: None,
         depth: 1,
         session_id: SessionId("s_child".into()),
         job_id: rig.job.clone(),
@@ -3057,6 +3212,7 @@ fn run_backfill(
         output_path: path,
         wake: waker,
         on_usage: Some(on_usage),
+        worktree_guard: None,
     }
     .run();
     let seen = seen.lock().unwrap().clone();

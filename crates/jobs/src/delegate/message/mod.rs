@@ -83,6 +83,8 @@ pub struct DelegateMessage {
     pub steer: Steer,
     /// Reads the delegate log's boundary.
     pub last_seq: LastSeq,
+    /// Reports a resumed delegate's worktree without removing it.
+    pub finish: super::FinishWorktree,
 }
 
 /// What one steer attempt sends the call's thread.
@@ -542,6 +544,7 @@ impl DelegateMessage {
             | ErrorCode::ExtensionUnavailable
             | ErrorCode::FetchFailed
             | ErrorCode::Flooded
+            | ErrorCode::FromSession
             | ErrorCode::HistoryLoading
             | ErrorCode::HookUnapproved
             | ErrorCode::HttpError

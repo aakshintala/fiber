@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use super::Row;
 use crate::app::App;
 use crate::app::panel::Spot;
-use crate::markdown::{Role, style};
+use crate::theme::{Role, style};
 
 /// How many delegates the card shows at once: two rows each, at most 6
 /// rows (`docs/tui.md`, "The panel").
