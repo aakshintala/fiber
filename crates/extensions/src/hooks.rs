@@ -1261,11 +1261,10 @@ impl SessionExtensions {
         // it still queued or running. One wait per owner; the hub wakes
         // on every finish and on the stop, which ends the wait and is then
         // refused as `Stopped` by the drain's own push, never lost silent.
-        let mut owners = Vec::new();
-        let mut seen = BTreeSet::new();
+        let mut owners: Vec<String> = Vec::new();
         for watcher in &self.watchers {
             if let Some(owner) = self.runtime.owner_name(&watcher.watcher)
-                && seen.insert(owner.clone())
+                && !owners.iter().any(|held| held == &owner)
             {
                 owners.push(owner);
             }

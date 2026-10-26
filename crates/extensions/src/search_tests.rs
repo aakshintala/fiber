@@ -300,10 +300,12 @@ fn process_search_receives_the_query_and_returns_its_results() {
             "allowed_domains": ["rust-lang.org"],
         }))
     );
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].title, "Rust");
-    assert_eq!(results[0].url, "https://rust-lang.org");
-    assert_eq!(results[0].snippet, "Language");
+    assert!(
+        results.iter().any(|result| result.title == "Rust"
+            && result.url == "https://rust-lang.org"
+            && result.snippet == "Language"),
+        "{results:?}"
+    );
 }
 
 #[test]

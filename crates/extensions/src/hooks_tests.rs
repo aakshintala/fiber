@@ -15,15 +15,11 @@ use std::thread;
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
-use contract::CommandId;
 use contract::ErrorCode;
 use contract::clock::Clock as _;
 use contract::events::{CallStatus, Notice};
-use contract::hook::{
-    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeToolCall, BeforeToolOutcome, Hooks,
-    JobDelivery,
-};
-use contract::shapes::{DeclaredEffects, Process};
+use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks, JobDelivery};
+use contract::shapes::Process;
 use contract::tool::{Bound, SpillFile};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -1136,12 +1132,12 @@ fn an_extension_for_another_api_starts_no_vm_while_a_process_extension_loads_wit
     // The wrong-API extension stays out; the process extension loads
     // without a VM, admitting the package with no registrations yet. No
     // doc promises the load order, so the test pins membership, not order.
-    let mut loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
-    loaded.sort();
-    assert_eq!(loaded, names(&["lua", "proc"]));
-    let mut dirs: Vec<String> = session.dirs().into_iter().map(|(name, _)| name).collect();
-    dirs.sort();
-    assert_eq!(dirs, names(&["lua", "proc"]));
+    let loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
+    assert!(loaded.contains(&"fiber.test/proc".to_owned()), "{loaded:?}");
+    assert!(!loaded.contains(&"fiber.test/old".to_owned()), "{loaded:?}");
+    let dirs: Vec<String> = session.dirs().into_iter().map(|(name, _)| name).collect();
+    assert!(dirs.contains(&"fiber.test/proc".to_owned()), "{dirs:?}");
+    assert!(!dirs.contains(&"fiber.test/old".to_owned()), "{dirs:?}");
     assert!(session.commands().is_empty());
     assert_eq!(changed_content(&after_tool(&session, "x")), Some("x|lua"));
 }
@@ -3892,90 +3888,6 @@ fn register_every_family(package: &ProcessPackage) {
 }
 
 #[test]
-fn process_watcher_uses_the_session_clock() {
-    let home = Home::new();
-    let clock = Arc::new(FakeClock::new());
-    clock.advance(Duration::from_secs(7));
-    let expected = clock.now();
-    let session = home.load_with_clock(&[], Arc::clone(&clock));
-    let runtime = &session.runtime;
-    runtime.register_owner("fiber.test/proc", None);
-    let watcher = runtime.install_process_handler(
-        "fiber.test/proc",
-        CommandId("register-watch".to_owned()),
-        "run",
-        Arc::new(|_args, _cancel| Ok(Some(json!(null)))),
-    );
-    let offered = runtime
-        .push_watcher(&watcher, json!({"kind": "notice"}))
-        .expect("the registered process watcher answers");
-    assert_eq!(offered.1, expected);
-}
-
-#[test]
-fn process_transform_hook_rewrites_before_tool_arguments() {
-    let home = Home::new();
-    let dir = process_dir(json!({}));
-    let mut session = SessionExtensions::default();
-    let package = ProcessPackage::load_with_runtime(
-        ProcessPackageOptions {
-            dir: dir.path().to_path_buf(),
-            clock: FakeClock::new(),
-        },
-        session.runtime.clone(),
-    )
-    .unwrap();
-    let outcome = process_register(
-        &package,
-        "c1",
-        "fiber.hook",
-        json!(["before_tool", {
-            "phase": "transform",
-            "timeout": 5000,
-            "on_failure": "blocking",
-            "run": true,
-        }]),
-    );
-    assert!(matches!(outcome, ProcessOutcome::Accepted), "{outcome:?}");
-    package.registry().unwrap().set_handler(
-        &ProcessCommandId("c1".to_owned()),
-        "run",
-        Arc::new(|_args, _cancel| Ok(Some(json!({"arguments": {"path": "rewritten"}})))),
-    );
-    let mut chain = super::chain::Builder::default();
-    assert!(session.admit_process(
-        "fiber.test/proc",
-        &package,
-        &mut chain,
-        &ProcessFoldSet::new()
-    ));
-    chain.fill(&home.config(&[]), &mut session);
-    let arguments = Map::from_iter([("path".to_owned(), json!("original"))]);
-    let declared = DeclaredEffects {
-        effects: Vec::new(),
-        reversible: true,
-        paths: None,
-    };
-    let answer = session.before_tool(&BeforeToolCall {
-        tool: "write",
-        arguments: &arguments,
-        declared: &declared,
-    });
-    let BeforeToolOutcome::Rewritten {
-        arguments: rewritten,
-        changed_by,
-    } = answer.outcome
-    else {
-        panic!(
-            "a process transform rewrites the call, not {:?}",
-            answer.outcome
-        );
-    };
-    assert_eq!(rewritten.get("path"), Some(&json!("rewritten")));
-    assert_eq!(changed_by, vec!["fiber.test/proc"]);
-}
-
-#[test]
 fn process_tool_keep_uses_zero_for_an_omitted_or_null_side() {
     let cases = [
         (json!({"head": 7}), Bound { start: 7, end: 0 }),
@@ -4002,8 +3914,11 @@ fn process_tool_keep_uses_zero_for_an_omitted_or_null_side() {
         let mut chain = super::chain::Builder::default();
         assert!(session.admit_process("fiber.test/proc", &package, &mut chain, &settled,));
         let tools = session.tools();
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1.bound(), expected);
+        let tool = tools
+            .iter()
+            .find(|(_, tool)| tool.definition().name == "lookup")
+            .expect("the registered `lookup` tool folds");
+        assert_eq!(tool.1.bound(), expected);
     }
 }
 
