@@ -52,6 +52,8 @@ fn viewed(rx: &mpsc::Receiver<Input>) -> Result<(), String> {
             | Input::Feedback(_)
             | Input::Models(_)
             | Input::Install { .. }
+            | Input::HooksOfferNames { .. }
+            | Input::HooksInstalled { .. }
             | Input::Login { .. }
             | Input::Tick,
         ) => panic!("the worker answered something else"),

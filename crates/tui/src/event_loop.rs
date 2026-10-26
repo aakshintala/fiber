@@ -644,6 +644,15 @@ impl<B: Backend> Loop<B> {
         if let Some(start) = self.app.take_install_start() {
             crate::install_worker::start(start, Arc::clone(&self.clock), self.files_out.clone());
         }
+        // The hooks offer's query or install, if one waits: its end
+        // arrives as `Input::HooksOfferNames` or `Input::HooksInstalled`.
+        if let Some(job) = self.app.take_hooks_job() {
+            crate::install_worker::start_hooks(
+                job,
+                Arc::clone(&self.clock),
+                self.files_out.clone(),
+            );
+        }
         self.save_shares();
         None
     }
@@ -719,6 +728,13 @@ impl<B: Backend> Loop<B> {
             // tick again below.
             Input::Tick => self.tick.ack(),
             Input::Install { provider, result } => self.app.on_install(provider, result),
+            Input::HooksOfferNames { ticket, result } => {
+                self.app.on_hooks_offer_names(ticket, result)
+            }
+            Input::HooksInstalled { ticket, result } => {
+                let lines = self.app.on_hooks_installed(ticket, result);
+                self.hub.send(&lines, &mut self.app);
+            }
             Input::Login { ticket, step } => {
                 // Only the waiting ticket's `Open` opens anything: any
                 // other ticket changes nothing and opens nothing.

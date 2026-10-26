@@ -204,7 +204,7 @@ impl DeclaredWatchers {
 /// payload reads as a known event (or fails its payload), while an
 /// unknown kind reads as `None`. Probing the real `Event` keeps the
 /// check exact when a kind is added, with no second list to drift.
-fn is_known_kind(kind: &str) -> bool {
+pub(crate) fn is_known_kind(kind: &str) -> bool {
     let line = Envelope {
         kind: kind.to_owned(),
         session_id: SessionId(String::new()),

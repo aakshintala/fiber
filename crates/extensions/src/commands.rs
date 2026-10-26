@@ -14,6 +14,7 @@ use contract::tool::Tool;
 
 use crate::Error;
 use crate::lua::LuaExtension;
+use crate::runtime::{CommandWait, FunctionRef, Runtime};
 
 /// One extension's registrations, before final names are settled.
 pub(crate) struct CommandSource {
@@ -23,8 +24,29 @@ pub(crate) struct CommandSource {
     pub(crate) replaces: Vec<String>,
     /// Each registered `(name, description)`.
     pub(crate) commands: Vec<(String, String)>,
-    /// The started extension, for admission and failure notices.
-    pub(crate) lua: Arc<LuaExtension>,
+    /// How the extension runs an admitted command.
+    pub(crate) runner: CommandRunner,
+}
+
+/// How an admitted command runs: a Lua command in its VM, or a process
+/// command through its runtime reference.
+#[derive(Clone)]
+pub(crate) enum CommandRunner {
+    /// A Lua command, queued in its extension's VM.
+    Lua(Arc<LuaExtension>),
+    /// A process command, queued behind the session's runtime.
+    Process(ProcessCommandRunner),
+}
+
+/// A process command's run: the runtime holding its references, and each
+/// registered name beside its function reference. The admitted command
+/// carries the extension; the runner needs no owner.
+#[derive(Clone)]
+pub(crate) struct ProcessCommandRunner {
+    /// The session's runtime, holding the command's reference.
+    pub(crate) runtime: Runtime,
+    /// Each registered name beside its function reference.
+    pub(crate) commands: BTreeMap<String, FunctionRef>,
 }
 
 /// One admitted command: the final name the session lists and admits, and
@@ -33,7 +55,7 @@ struct Admitted {
     extension: String,
     registered: String,
     description: String,
-    lua: Arc<LuaExtension>,
+    runner: CommandRunner,
     /// The manifest's hint; only a lazy extension's commands have one.
     argument_hint: Option<String>,
     /// Set for a command of a lazy extension: the start its first run owes.
@@ -231,7 +253,7 @@ impl SessionCommands {
                     extension: src.extension.clone(),
                     registered: p.registered,
                     description: p.description,
-                    lua: Arc::clone(&src.lua),
+                    runner: src.runner.clone(),
                     argument_hint: None,
                     lazy: None,
                 },
@@ -310,30 +332,55 @@ impl SessionCommands {
             message: format!("`{name}` names no extension command."),
         })?;
         // A lazy extension starts first, so a failed start rejects the
-        // command before it is accepted.
+        // command before it is accepted. A process command is never lazy:
+        // it registers at session start.
         if let Some(lazy) = &cmd.lazy {
             lazy.ensure(&cmd.registered)?;
         }
-        let queued = cmd
-            .lua
-            .queue_command(id.clone(), &cmd.registered, text)
-            .map_err(|e| match cmd.lazy {
-                // `ensure` found the command registered, so it cannot be
-                // unknown here: the extension stopped or failed.
-                Some(_) => Rejection {
-                    code: ErrorCode::ExtensionFailed,
-                    message: format!("Command `{name}` did not run: {e}"),
-                },
-                None => Rejection {
-                    code: ErrorCode::UnknownCommand,
-                    message: format!("`{name}` names no extension command."),
-                },
-            })?;
-        Ok(AdmittedCall {
-            extension: cmd.extension.clone(),
-            lua: Arc::clone(&cmd.lua),
-            queued: std::sync::Arc::new(queued),
-        })
+        match &cmd.runner {
+            CommandRunner::Lua(lua) => {
+                let queued = lua
+                    .queue_command(id.clone(), &cmd.registered, text)
+                    .map_err(|e| match cmd.lazy {
+                        // `ensure` found the command registered, so it cannot be
+                        // unknown here: the extension stopped or failed.
+                        Some(_) => Rejection {
+                            code: ErrorCode::ExtensionFailed,
+                            message: format!("Command `{name}` did not run: {e}"),
+                        },
+                        None => Rejection {
+                            code: ErrorCode::UnknownCommand,
+                            message: format!("`{name}` names no extension command."),
+                        },
+                    })?;
+                Ok(AdmittedCall {
+                    extension: cmd.extension.clone(),
+                    wait: CommandWait::Lua(Arc::new(queued)),
+                    emit: CommandEmit::Lua(Arc::clone(lua)),
+                })
+            }
+            CommandRunner::Process(runner) => {
+                let func = runner
+                    .commands
+                    .get(&cmd.registered)
+                    .ok_or_else(|| Rejection {
+                        code: ErrorCode::UnknownCommand,
+                        message: format!("`{name}` names no extension command."),
+                    })?;
+                let queued = runner
+                    .runtime
+                    .queue_command(func, id.clone(), text)
+                    .map_err(|e| Rejection {
+                        code: e.code(),
+                        message: format!("Command `{name}` did not run: {e}"),
+                    })?;
+                Ok(AdmittedCall {
+                    extension: cmd.extension.clone(),
+                    wait: queued,
+                    emit: CommandEmit::Process(runner.runtime.clone()),
+                })
+            }
+        }
     }
 }
 
@@ -492,19 +539,39 @@ impl Lazy {
 /// An admitted command: the held queued call, its release, and its waiter.
 pub(crate) struct AdmittedCall {
     extension: String,
-    lua: Arc<LuaExtension>,
-    queued: std::sync::Arc<crate::lua::Queued>,
+    wait: CommandWait,
+    emit: CommandEmit,
+}
+
+/// Where an admitted command's failure notice goes: the extension's VM,
+/// or the session's runtime sink for a process command with no VM.
+#[derive(Clone)]
+pub(crate) enum CommandEmit {
+    /// A Lua command reports through its VM's late-bound emitter.
+    Lua(Arc<LuaExtension>),
+    /// A process command reports through the runtime's sink.
+    Process(Runtime),
+}
+
+impl CommandEmit {
+    /// Emits a failure notice through the late-bound sink.
+    pub(crate) fn emit(&self, event: contract::events::Event) {
+        match self {
+            Self::Lua(extension) => extension.emit(event),
+            Self::Process(runtime) => runtime.emit(&event),
+        }
+    }
 }
 
 impl AdmittedCall {
     /// The queued call, shared with the waiter thread.
-    pub(crate) fn queued(&self) -> &std::sync::Arc<crate::lua::Queued> {
-        &self.queued
+    pub(crate) fn wait(&self) -> &CommandWait {
+        &self.wait
     }
 
-    /// The extension's VM, for failure notices.
-    pub(crate) fn lua(&self) -> &Arc<LuaExtension> {
-        &self.lua
+    /// Where the waiter's failure notice goes.
+    pub(crate) fn emit_target(&self) -> CommandEmit {
+        self.emit.clone()
     }
 
     /// The extension this call runs in.

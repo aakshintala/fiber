@@ -13,18 +13,18 @@ impl contract::extension::ExtensionDoor for SessionExtensions {
         text: &str,
     ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
         let admitted = self.commands.admit_with(id, name, text)?;
-        let queued = std::sync::Arc::clone(admitted.queued());
-        let lua = std::sync::Arc::clone(admitted.lua());
+        let wait = admitted.wait().clone();
+        let emit = admitted.emit_target();
         let extension = admitted.extension().to_owned();
         let command = name.to_owned();
         // One waiter thread per admitted command waits for the call's end;
         // an `Err` gives a `notice` naming the extension through the
-        // extension's late-bound emitter.
+        // late-bound emitter.
         std::thread::Builder::new()
             .name(format!("command {name}"))
             .spawn(move || {
-                if let Err(e) = queued.wait() {
-                    lua.emit(contract::events::Event::Notice(notice(
+                if let Err(e) = wait.wait() {
+                    emit.emit(contract::events::Event::Notice(notice(
                         ErrorCode::ExtensionFailed,
                         format!("Command `{command}` failed: {e}"),
                         Some(&extension),
@@ -35,8 +35,8 @@ impl contract::extension::ExtensionDoor for SessionExtensions {
                 code: ErrorCode::IoFailed,
                 message: format!("cannot start a thread: {e}"),
             })?;
-        let release_queued = std::sync::Arc::clone(admitted.queued());
-        Ok(Box::new(move || release_queued.release()))
+        let release = admitted.wait().clone();
+        Ok(Box::new(move || release.release()))
     }
 
     fn seal(&self) {
@@ -50,14 +50,12 @@ impl contract::extension::ExtensionDoor for SessionExtensions {
 
     fn reply(
         &self,
-        mut reply: contract::commands::Reply,
-        mut ack: contract::inbox::Ack,
+        reply: contract::commands::Reply,
+        ack: contract::inbox::Ack,
     ) -> Option<(contract::commands::Reply, contract::inbox::Ack)> {
-        // In load order: the extension holding the request takes it.
-        for extension in &self.lua {
-            (reply, ack) = extension.answer(reply, ack)?;
-        }
-        Some((reply, ack))
+        // In load order: the owner holding the request takes it. Process
+        // owners hold no requests yet, so the reply passes them by.
+        self.runtime.answer(reply, ack)
     }
 }
 
