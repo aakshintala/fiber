@@ -302,12 +302,11 @@ fn window(log: &[Value], from: u64, to: u64) -> Vec<Value> {
         .collect()
 }
 
-/// Attaching through a real `run_with` writes one `tui.log_read` and one
-/// `tui.transcript`; a second page fetched after scrolling writes neither
-/// again.
-#[ignore = "no page is fetched on attach: the tail preview lands resident, so page_in finds nothing to fetch and the latches never fire; design question on #1212"]
+/// Attaching through a real `run_with` writes one `tui.log_read` for the
+/// tail read and one `tui.transcript` for the preview it builds, each once
+/// per process.
 #[test]
-fn attach_writes_one_log_read_and_transcript_and_scroll_writes_none() {
+fn attach_writes_one_log_read_and_transcript() {
     let home = fakes::TempDir::new("tui-timing-attach");
     let diag = debug_diag(home.path(), {
         let clock: Arc<dyn Clock> = FakeClock::new();
@@ -408,35 +407,14 @@ fn attach_writes_one_log_read_and_transcript_and_scroll_writes_none() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     watched(&frames, "the first frame title", &Deadline::after(DEADLINE));
-    // The first attach fetch starts after the full subscribe: the pass is
-    // closed, so a scroll now lands on the loaded pages, never before the
-    // attach.
+    // The raise goes out over the installed preview, so the full
+    // subscribe proves the tail read and its build both finished: both
+    // lines are already written.
     let wait = Deadline::after(DEADLINE);
-    let mut full = false;
-    let mut histories = 0u32;
-    while histories < 1 {
-        let command = wait.recv_or_fail(&seen, "the full subscribe and first history");
+    loop {
+        let command = wait.recv_or_fail(&seen, "the full subscribe");
         if command["command"] == "subscribe" && command["args"]["level"] == "full" {
-            full = true;
-        }
-        if full && command["command"] == "history" {
-            histories += 1;
-        }
-    }
-    // Ten screens up leaves the loaded last page: the next frame fetches
-    // an older one. The key waits behind the fetch's answer or is stashed
-    // inside it, so the scroll always lands after the first load.
-    pair.main
-        .write_all(b"\x1b[5~".repeat(10).as_slice())
-        .unwrap_or_else(|err| panic!("write: {err}"));
-    pair.main
-        .flush()
-        .unwrap_or_else(|err| panic!("flush: {err}"));
-    let wait = Deadline::after(DEADLINE);
-    while histories < 2 {
-        let command = wait.recv_or_fail(&seen, "the second page's history");
-        if command["command"] == "history" {
-            histories += 1;
+            break;
         }
     }
     pair.main

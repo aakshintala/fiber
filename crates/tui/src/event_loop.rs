@@ -1014,21 +1014,34 @@ impl<B: Backend> Loop<B> {
         };
         if !self.hub.has_stream() {
             self.app.tail_ended(None);
-        } else if self
-            .hub
-            .fetch_tail(
-                rx,
-                &session,
-                &mut self.app,
-                &self.tick,
-                self.clock.as_ref(),
-                self.tick.armed(),
-            )
-            .is_err()
-        {
-            return;
+        } else {
+            // The first attach's log read is timed once per process, to
+            // completion whatever its outcome: an attempted read is work.
+            let log_read = self.timing.log_read();
+            let failed = self
+                .hub
+                .fetch_tail(
+                    rx,
+                    &session,
+                    &mut self.app,
+                    &self.tick,
+                    self.clock.as_ref(),
+                    self.tick.armed(),
+                )
+                .is_err();
+            drop(log_read);
+            if failed {
+                return;
+            }
         }
+        // The first fetched tail's transcript build is timed once per
+        // process; an empty or abandoned tail builds nothing, leaving the
+        // latch for the next install.
+        let before = self.app.pages().index().total();
         self.app.install_tail();
+        if self.app.pages().index().total() > before {
+            drop(self.timing.transcript());
+        }
     }
 
     /// Loads, one page at a time, every page the frame needs and does not
@@ -1045,9 +1058,6 @@ impl<B: Backend> Loop<B> {
             // Each range loads under its own segment's session: ancestor
             // and descendant logs both start at `Seq(0)`, so a bare range
             // names no page on its own.
-            // The first attach's log read is timed once per process, to
-            // completion whatever its outcome: an attempted read is work.
-            let log_read = self.timing.log_read();
             match self.hub.fetch(
                 rx,
                 &session,
@@ -1058,12 +1068,7 @@ impl<B: Backend> Loop<B> {
                 self.tick.armed(),
             ) {
                 Ok(lines) => {
-                    // The first successful attach load's transcript build
-                    // is timed once per process; a failed first fetch
-                    // leaves its latch for the next successful load.
-                    let transcript = self.timing.transcript();
                     self.app.load(&session, lines);
-                    drop(transcript);
                     // An answer that folded nothing into the page would
                     // leave it needed, and the frame asking forever.
                     if self.app.needs().first() == Some(&(session.clone(), range.clone())) {
@@ -1073,7 +1078,6 @@ impl<B: Backend> Loop<B> {
                 }
                 Err(message) => self.app.load_failed(&session, &range, &message),
             }
-            drop(log_read);
         }
     }
 

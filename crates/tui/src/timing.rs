@@ -44,8 +44,8 @@ impl Timing {
     }
 
     /// Starts the first attach's log-read guard, once per process. The
-    /// caller holds it across the first fetch to completion, whatever its
-    /// outcome: an attempted read is work.
+    /// caller holds it across the first tail read to completion, whatever
+    /// its outcome: an attempted read is work.
     pub(crate) fn log_read(&mut self) -> Option<log::diag::Timer> {
         if std::mem::replace(&mut self.log_read, true) {
             return None;
@@ -53,9 +53,10 @@ impl Timing {
         log::diag::timed(&self.diag, Op::TuiLogRead, None, None)
     }
 
-    /// Starts the first successful attach load's transcript guard, once per
-    /// process. The caller holds it across the load; a failed first fetch
-    /// leaves the latch for the next successful load.
+    /// Starts the first attach's transcript-build guard, once per process.
+    /// The caller calls it only once the fetched tail is actually
+    /// installed; an empty or abandoned tail builds nothing, leaving the
+    /// latch for the next install.
     pub(crate) fn transcript(&mut self) -> Option<log::diag::Timer> {
         if std::mem::replace(&mut self.transcript, true) {
             return None;
