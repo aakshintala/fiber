@@ -18,8 +18,11 @@ use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::clock::Clock as _;
 use contract::events::{CallStatus, Notice};
-use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks, JobDelivery};
-use contract::shapes::Process;
+use contract::hook::{
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeToolCall, CheckOutcome, Hooks,
+    JobDelivery, Refusal,
+};
+use contract::shapes::{DeclaredEffects, Process};
 use contract::tool::{Bound, SpillFile};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -3885,6 +3888,77 @@ fn register_every_family(package: &ProcessPackage) {
             "{call}: {outcome:?}"
         );
     }
+}
+
+#[test]
+fn process_watcher_uses_the_session_clock() {
+    let home = Home::new();
+    let clock = Arc::new(FakeClock::new());
+    clock.advance(Duration::from_secs(7));
+    let expected = clock.now();
+    let session = home.load_with_clock(&[], Arc::clone(&clock));
+    let runtime = &session.runtime;
+    runtime.register_owner("fiber.test/proc", None);
+    let watcher = runtime.install_process_handler(
+        "fiber.test/proc",
+        ProcessCommandId("register-watch".to_owned()),
+        "run",
+        Arc::new(|_args, _cancel| Ok(Some(json!(null)))),
+    );
+    let offered = runtime
+        .push_watcher(&watcher, json!({"kind": "notice"}))
+        .expect("the registered process watcher answers");
+    assert_eq!(offered.1, expected);
+}
+
+#[test]
+fn process_check_hook_refuses_the_tool() {
+    let dir = process_dir(json!({}));
+    let mut session = SessionExtensions::default();
+    let package = ProcessPackage::load_with_runtime(
+        ProcessPackageOptions {
+            dir: dir.path().to_path_buf(),
+            clock: FakeClock::new(),
+        },
+        session.runtime.clone(),
+    )
+    .unwrap();
+    let mut spec = process_hook_spec();
+    spec["phase"] = json!("check");
+    let outcome = process_register(&package, "c1", "fiber.hook", json!(["before_tool", spec]));
+    assert!(matches!(outcome, ProcessOutcome::Accepted), "{outcome:?}");
+    package.registry().unwrap().set_handler(
+        &ProcessCommandId("c1".to_owned()),
+        "run",
+        Arc::new(|_args, _cancel| Ok(Some(json!({"refuse": "process check refused"})))),
+    );
+    let mut chain = super::chain::Builder::default();
+    assert!(session.admit_process(
+        "fiber.test/proc",
+        &package,
+        &mut chain,
+        &ProcessFoldSet::new()
+    ));
+    let home = Home::new();
+    chain.fill(&home.config(&[]), &mut session);
+    let arguments = Map::new();
+    let declared = DeclaredEffects {
+        effects: Vec::new(),
+        reversible: true,
+        paths: None,
+    };
+    let answer = session.check_tool(&BeforeToolCall {
+        tool: "write",
+        arguments: &arguments,
+        declared: &declared,
+    });
+    assert_eq!(
+        answer.outcome,
+        CheckOutcome::Refused(Refusal {
+            extension: "fiber.test/proc".to_owned(),
+            reason: "process check refused".to_owned(),
+        })
+    );
 }
 
 #[test]
