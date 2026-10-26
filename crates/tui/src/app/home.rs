@@ -914,16 +914,21 @@ impl App {
         effect
     }
 
-    /// `/delete` for the session on screen: goes home on its row. With
-    /// no session on screen, the notice and a cleared draft.
+    /// `/delete` for the session on screen: goes home on its row with
+    /// the session list's delete question open for it, so Enter deletes
+    /// through the hub and Esc keeps the session. With no session on
+    /// screen, the notice and a cleared draft.
     pub(in crate::app) fn delete_on_screen(&mut self) -> Effect {
-        if !matches!(self.phase, Phase::Attached { .. }) {
+        let Phase::Attached { session, .. } = &self.phase else {
             self.notices
                 .push("session_not_found", NO_SESSION.to_owned());
             self.draft.clear();
             return Effect::None;
-        }
-        self.leave_on_row()
+        };
+        let session = session.clone();
+        let effect = self.leave_on_row();
+        self.ask_delete_session(&session);
+        effect
     }
 
     /// Focuses the requested list stop after the next home frame. `/resume`

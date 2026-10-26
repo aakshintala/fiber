@@ -312,6 +312,20 @@ impl App {
         }
     }
 
+    /// Opens the delete question for `id`'s row: `/delete` reaches the
+    /// session list's existing question from the session on screen. An
+    /// id with no row opens nothing.
+    pub(super) fn ask_delete_session(&mut self, id: &SessionId) {
+        let key = self
+            .home
+            .as_ref()
+            .and_then(|home| home.sessions.row(id))
+            .map(|row| row.key);
+        if let Some(key) = key {
+            self.ask_delete(key);
+        }
+    }
+
     /// Closes the foot's question, keeping the session.
     fn close_prompt(&mut self) {
         if let Some(home) = self.home.as_mut() {
