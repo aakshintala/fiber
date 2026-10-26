@@ -205,7 +205,7 @@ pub(crate) struct Frame {
     /// The slash command that opened the view, or what did for a view
     /// with no slash command: always non-empty, drawn dim on the top
     /// row after the title (`docs/tui.md`, "Swapped views").
-    pub(crate) command: &'static str,
+    pub(crate) command: String,
     /// The rows, each in cells drawn left to right, some with a click
     /// target of their own, each with how it draws.
     pub(crate) rows: Vec<Vec<(String, Option<Spot>, Ink)>>,
@@ -441,7 +441,7 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
         buf,
         area,
         &frame.title,
-        frame.command,
+        &frame.command,
         TargetId::View(Spot::Close),
         targets,
     );

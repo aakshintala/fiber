@@ -1675,47 +1675,70 @@ fn cut_of(path: &std::path::Path) -> String {
 }
 
 #[test]
-fn spilled_kept_ranges_index_raw_bytes_and_survive_artifact_only_hooks() {
-    for hook in [
-        None,
-        Some(FakeHooks::new(
-            changed(None, None, Some("new artifact")),
-            &["acme"],
-            Vec::new(),
-        )),
-    ] {
-        let home = fakes::TempDir::new("fiber-spilled-ranges");
-        let dir = home.path().join("s_test/artifacts");
-        let tool = Fixed {
-            make: Some(Arc::new(move || {
-                let bytes = b"\xffa123456z\xff";
-                std::fs::write(dir.join(SPILL_NAME), bytes).unwrap();
-                Output {
-                    spilled: Some(Spilled {
-                        head: "�a".into(),
-                        tail: "z�".into(),
-                        head_bytes: 2,
-                        tail_bytes: 2,
-                        removed: 6,
-                        file: Ok(SpillFile {
-                            path: dir.join(SPILL_NAME),
-                            size: 10,
-                        }),
+fn spilled_kept_ranges_index_raw_bytes_and_drop_on_separate_artifact() {
+    let home = fakes::TempDir::new("fiber-spilled-ranges");
+    let dir = home.path().join("s_test/artifacts");
+    let tool = Fixed {
+        make: Some(Arc::new(move || {
+            let bytes = b"\xffa123456z\xff";
+            std::fs::write(dir.join(SPILL_NAME), bytes).unwrap();
+            Output {
+                spilled: Some(Spilled {
+                    head: "�a".into(),
+                    tail: "z�".into(),
+                    head_bytes: 2,
+                    tail_bytes: 2,
+                    removed: 6,
+                    file: Ok(SpillFile {
+                        path: dir.join(SPILL_NAME),
+                        size: 10,
                     }),
-                    ..Output::default()
-                }
-            })),
-            ..fixed(text("unused"))
-        };
-        let no_hook = hook.is_none();
-        let ran = run_spilled(home, tool, hook);
-        assert_eq!(ran.completed().payload["kept"], json!([[0, 2], [8, 10]]));
-        if no_hook {
-            let bytes = std::fs::read(ran.session.join("artifacts").join(SPILL_NAME)).unwrap();
-            assert_eq!(&bytes[..2], b"\xffa");
-            assert_eq!(&bytes[8..], b"z\xff");
-        }
-    }
+                }),
+                ..Output::default()
+            }
+        })),
+        ..fixed(text("unused"))
+    };
+    let ran = run_spilled(home, tool, None);
+    assert_eq!(ran.completed().payload["kept"], json!([[0, 2], [8, 10]]));
+    let bytes = std::fs::read(ran.session.join("artifacts").join(SPILL_NAME)).unwrap();
+    assert_eq!(&bytes[..2], b"\xffa");
+    assert_eq!(&bytes[8..], b"z\xff");
+}
+
+#[test]
+fn spilled_kept_is_absent_when_a_hook_returns_separate_artifact_text() {
+    let home = fakes::TempDir::new("fiber-spilled-artifact-only");
+    let dir = home.path().join("s_test/artifacts");
+    let tool = Fixed {
+        make: Some(Arc::new(move || {
+            let bytes = b"\xffa123456z\xff";
+            std::fs::write(dir.join(SPILL_NAME), bytes).unwrap();
+            Output {
+                spilled: Some(Spilled {
+                    head: "�a".into(),
+                    tail: "z�".into(),
+                    head_bytes: 2,
+                    tail_bytes: 2,
+                    removed: 6,
+                    file: Ok(SpillFile {
+                        path: dir.join(SPILL_NAME),
+                        size: 10,
+                    }),
+                }),
+                ..Output::default()
+            }
+        })),
+        ..fixed(text("unused"))
+    };
+    let hook = FakeHooks::new(
+        changed(None, None, Some("new artifact")),
+        &["acme"],
+        Vec::new(),
+    );
+    let ran = run_spilled(home, tool, Some(hook));
+    let completed = ran.completed();
+    assert!(completed.payload.get("kept").is_none(), "{completed:?}");
 }
 
 #[test]

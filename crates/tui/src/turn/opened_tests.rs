@@ -1004,6 +1004,27 @@ fn details_that_fail_to_parse_show_plain_content() {
     assert_eq!(lines(&parts), vec!["        actual"]);
 }
 
+/// The swapped view copies a search's raw result text, not the
+/// rendered match rows: the path header the draw adds never reaches
+/// the clipboard.
+#[test]
+fn a_search_snapshot_copies_raw_content_not_rendered_matches() {
+    let content = "a:x\nExit code 0.";
+    let call = made_call(
+        Some(json!({
+            "command": "grep -n x a",
+            "exit_code": 0,
+            "matches": [{"path": "a", "lines": [
+                {"line": 2, "text": "x", "spans": [[0, 1]]},
+            ]}],
+        })),
+        "",
+        content,
+    );
+    let snapshot = super::snapshot(std::iter::once(&call), call.id).expect("the call draws");
+    assert_eq!(snapshot.copy, content);
+}
+
 #[test]
 fn json_array_indents() {
     let call = made_call(None, "", "[1,{\"a\":2}]");

@@ -582,7 +582,7 @@ impl Settings {
                 list,
             } => Frame {
                 title: format!("Settings › {THEME}"),
-                command: "/settings",
+                command: "/settings".to_owned(),
                 rows: names
                     .iter()
                     .map(|name| {
@@ -609,7 +609,7 @@ impl Settings {
                 };
                 Frame {
                     title: "Settings".to_owned(),
-                    command: "/settings",
+                    command: "/settings".to_owned(),
                     rows: self.lines(width),
                     list: self.rows_list(),
                     below,
@@ -629,7 +629,7 @@ impl Settings {
                 ));
                 Frame {
                     title: "Settings".to_owned(),
-                    command: "/settings",
+                    command: "/settings".to_owned(),
                     rows: self.lines(width),
                     list: self.rows_list(),
                     below,

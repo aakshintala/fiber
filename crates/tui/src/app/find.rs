@@ -42,6 +42,7 @@ pub(super) fn search_incomplete_text() -> String {
 }
 
 /// The search bar as drawn: its query and its match count.
+#[derive(Debug)]
 pub(crate) struct FindBar {
     /// What was typed into the bar.
     pub(crate) query: String,
@@ -88,8 +89,12 @@ impl App {
                 Some(Effect::None)
             }
             // A second Ctrl+F opens the results view; until then the
-            // bar stays open.
+            // bar stays open. While the call's view is open the results
+            // stay closed, so matches never leave the view.
             Key::CtrlF => {
+                if self.call_view_open() {
+                    return Some(Effect::None);
+                }
                 self.open_results();
                 Some(Effect::None)
             }
@@ -148,15 +153,31 @@ impl App {
             return Some(self.find.type_query(&joined));
         }
         if *edit == Edit::ShiftEnter {
+            // While the call's view is open the step moves inside it.
+            if self.call_view_open() {
+                self.step_call_view_match(&Key::Up);
+                return Some(Effect::None);
+            }
             self.find.step(false);
             return Some(Effect::None);
         }
         Some(Effect::None)
     }
 
-    /// The bar as drawn, while it is open.
+    /// The bar as drawn, while it is open. While the call's view is
+    /// open the count names the view's matches, never the
+    /// conversation's.
     pub(crate) fn find_bar(&self) -> Option<FindBar> {
-        self.find.is_open().then(|| FindBar {
+        if !self.find.is_open() {
+            return None;
+        }
+        if let Some(count) = self.call_view_count() {
+            return Some(FindBar {
+                query: self.find.query().to_owned(),
+                count,
+            });
+        }
+        Some(FindBar {
             query: self.find.query().to_owned(),
             count: self.find.count(self.screen.pages()),
         })
@@ -177,6 +198,12 @@ impl App {
         &self,
         area: ratatui::layout::Rect,
     ) -> Vec<(ratatui::layout::Rect, bool)> {
+        // While the call's view is open its frame paints the view's own
+        // scoped marks; the hidden conversation rows would map to wrong
+        // cells over it, so no marks come from here.
+        if self.call_view_open() {
+            return Vec::new();
+        }
         if !self.find.is_open()
             || !self.find.due()
             || self.find.query().is_empty()
@@ -266,6 +293,12 @@ impl App {
             || !self.find.is_open()
             || self.find.query().is_empty()
         {
+            return Vec::new();
+        }
+        // While the call's view is open the scan stays inside it: no
+        // conversation page reads, and the view rebuilds its matches.
+        if self.call_view_open() {
+            self.refresh_call_view_matches();
             return Vec::new();
         }
         if self.find.due() {
@@ -387,6 +420,11 @@ impl App {
     /// on the wire, whatever the generation.
     fn pump_find(&mut self) {
         if !self.find.due() {
+            return;
+        }
+        // While the call's view is open nothing fetches for the
+        // conversation's scan: its matches would leak outside the view.
+        if self.call_view_open() {
             return;
         }
         let count = self.screen.pages().page_count();
@@ -590,6 +628,13 @@ impl App {
     /// dropped, and reveals the current match.
     pub(in crate::app) fn settle_find(&mut self) {
         if !self.find.due() {
+            return;
+        }
+        // While the call's view is open the scan stays inside it: its
+        // matches rebuild, and the conversation neither scans nor
+        // fetches nor reveals.
+        if self.call_view_open() {
+            self.refresh_call_view_matches();
             return;
         }
         // Another session since the scan started resets the search:
