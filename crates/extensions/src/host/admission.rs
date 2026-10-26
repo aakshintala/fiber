@@ -369,13 +369,3 @@ pub(crate) fn decode_bytes(
 pub(crate) fn encode_bytes(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
 }
-
-/// Whether `len` bytes fit under the framing cap: a result that does not
-/// is answered `command_rejected` `too_large` in place of the result.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
-pub(crate) fn fits_framing(len: usize, max: usize) -> bool {
-    len <= max
-}

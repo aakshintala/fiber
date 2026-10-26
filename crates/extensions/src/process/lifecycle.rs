@@ -17,7 +17,7 @@ use contract::ErrorCode;
 use support::cancel::Cancel;
 use support::lock;
 
-use super::Shared;
+use super::{Shared, requests, transport};
 
 /// How long the shutdown waits between TERM and KILL: a child that
 /// ignores TERM gets 800ms before KILL ends it.
@@ -389,5 +389,43 @@ fn kill_gone(shared: &Shared) {
     live.stop();
     match live.signal(rustix::process::Signal::KILL) {
         Ok(()) | Err(_) => {}
+    }
+}
+
+/// Waits for the live child's exit until `until`: the poll slice ends a
+/// voluntary exit promptly, the clock bound ends the wait without a
+/// blind sleep, and cancel ends it with the child left for the caller.
+/// `Some` carries the exit when the child ends; `None` means the bound
+/// passed and the shutdown moves to its next signal.
+#[allow(
+    dead_code,
+    reason = "asserted by tests; production use lands in a later part"
+)]
+pub(super) fn await_exit(
+    live: &transport::Transport,
+    clock: &dyn contract::clock::Clock,
+    until: Option<std::time::Instant>,
+    cancel: &dyn contract::tool::Cancel,
+) -> Result<Option<std::process::ExitStatus>, (contract::ErrorCode, String)> {
+    let park = support::clock::Parker::new();
+    loop {
+        if let Some(status) = live.poll_exit() {
+            return Ok(Some(status));
+        }
+        if cancel.is_cancelled() {
+            return Err((
+                contract::ErrorCode::Cancelled,
+                "the shutdown wait was cancelled".to_owned(),
+            ));
+        }
+        if until.is_some_and(|end| clock.now() >= end) {
+            return Ok(None);
+        }
+        park.park_polled(
+            clock,
+            until,
+            Some(requests::Table::WAIT_POLL),
+            park.generation(),
+        );
     }
 }

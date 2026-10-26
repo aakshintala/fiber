@@ -23,6 +23,12 @@ use contract::RequestId;
 use contract::clock::Clock;
 use contract::tool::Cancel;
 
+use crate::Error;
+use crate::runtime::FunctionRef;
+use serde_json::Value;
+
+use super::{Shared, envelope_line, hang_guard, lifecycle, transport};
+
 use super::super::host::admission::CallbackContext;
 
 /// What one pending request asks the child to run.
@@ -521,5 +527,201 @@ impl Table {
                 continue;
             }
         }
+    }
+}
+
+/// Sends one request and waits for its answer: the stream gate first
+/// for stream items, then the line, then the reply, the deadline, the
+/// cancel or the hang guard, whichever is first. The request settles
+/// exactly once on every path, releasing the stream gate. A free function
+/// over the shared owner, so installed handlers own it beside the
+/// dispatches.
+#[allow(
+    dead_code,
+    reason = "asserted by tests; production use lands in a later part"
+)]
+pub(crate) fn run_request(
+    shared: &Shared,
+    dispatch: Dispatch,
+    caller: &dyn contract::tool::Cancel,
+) -> Result<Option<Value>, Error> {
+    // The callback's clock starts when Fiber asks, so time spent waiting
+    // behind earlier stream items counts against it.
+    let clock = shared.clock.as_ref();
+    let deadline = clock.now().checked_add(dispatch.timeout);
+    // A dead child restarts under the dispatch before anything mints: the
+    // one restart runs on the next caller, the others await it, and a
+    // gone or finishing owner stops. The restart waits under this same
+    // deadline, so the callback never outlives its own timeout.
+    if let Err((code, _message)) = lifecycle::ensure_running(shared, deadline, caller) {
+        // A missed restart deadline fails as the callback's own timeout;
+        // cancellation and a gone owner stop it, as they do mid-request.
+        if code == contract::ErrorCode::Timeout {
+            return Err(Error::Timeout {
+                extension: shared.owner.clone(),
+                callback: dispatch.key,
+                timeout_ms: dispatch.timeout.as_millis().try_into().unwrap_or(u64::MAX),
+            });
+        }
+        return Err(Error::Stopped {
+            extension: shared.owner.clone(),
+        });
+    }
+    // No dispatcher behind the package seam runs a provider's
+    // `credential()`: dispatches carry no credential scope, and a
+    // `host.oauth.refresh` under them is refused. The session sets the
+    // scope when it dispatches provider functions.
+    let minted = shared.table.mint(
+        dispatch.kind,
+        &shared.owner,
+        dispatch.ran_by,
+        deadline,
+        dispatch.state_call,
+        None,
+    );
+    let id = minted.id;
+    if dispatch.kind == RequestKind::Stream {
+        let generation = shared.table.generation();
+        if !shared.table.acquire_stream(&id, generation) {
+            shared.table.cancel(&id);
+            return Err(Error::Stopped {
+                extension: shared.owner.clone(),
+            });
+        }
+    }
+    shared.table.watch_caller(caller, &id);
+    let payload = serde_json::to_value(&contract::events::ExtensionRequest {
+        request_id: id.clone(),
+        registration: dispatch.registration,
+        key: dispatch.key.clone(),
+        args: dispatch.args,
+    })
+    .map_err(|error| Error::BadReturn {
+        extension: shared.owner.clone(),
+        callback: dispatch.key.clone(),
+        why: format!("the request never serialized: {error}"),
+    })?;
+    let line = envelope_line(
+        shared,
+        "extension_request",
+        payload.as_object().cloned().unwrap_or_default(),
+    );
+    match support::lock(&shared.transport).send(line) {
+        Ok(()) => {}
+        Err(transport::SendError::TooLarge) => {
+            shared.table.cancel(&id);
+            return Err(Error::BadReturn {
+                extension: shared.owner.clone(),
+                callback: dispatch.key.clone(),
+                why: "the request does not fit the 64 MiB wire cap".to_owned(),
+            });
+        }
+        Err(transport::SendError::Gone) => {
+            shared.table.cancel(&id);
+            return Err(Error::Stopped {
+                extension: shared.owner.clone(),
+            });
+        }
+    }
+    let hang = hang_guard(clock, deadline);
+    let outcome = match Table::wait_for(&minted.wait, deadline, &minted.cancel, clock, hang) {
+        Some(Outcome::Answered(answer)) => Outcome::Answered(answer),
+        Some(Outcome::TimedOut) => shared.table.end_race(&id, &minted.wait, Outcome::TimedOut),
+        Some(Outcome::Cancelled) | None => {
+            shared.table.end_race(&id, &minted.wait, Outcome::Cancelled)
+        }
+    };
+    match outcome {
+        Outcome::Answered(Answer::Value(value)) => Ok(Some(value)),
+        Outcome::Answered(Answer::Failure { code, message }) => Err(Error::Lua {
+            extension: shared.owner.clone(),
+            message: format!(
+                "`{key}` failed with {code:?}: {message}",
+                key = dispatch.key
+            ),
+        }),
+        Outcome::TimedOut => Err(Error::Timeout {
+            extension: shared.owner.clone(),
+            callback: dispatch.key,
+            timeout_ms: dispatch.timeout.as_millis().try_into().unwrap_or(u64::MAX),
+        }),
+        Outcome::Cancelled => Err(Error::Stopped {
+            extension: shared.owner.clone(),
+        }),
+    }
+}
+
+/// What one dispatch sends: the request's kind, whom it answers, what it
+/// runs as, its arguments, its timeout and its hook transaction. One
+/// value carries the dispatch so the send path stays narrow.
+#[derive(Debug, Clone)]
+pub(crate) struct Dispatch {
+    /// Ordered behind the stream gate, or concurrent with everything.
+    pub kind: RequestKind,
+    /// The registering call: the request answers under its generation.
+    pub registration: contract::CommandId,
+    /// The function key within the registration: `run`, `effects` or a
+    /// numbered function.
+    pub key: String,
+    /// What the callback runs as, naming its attribution.
+    pub ran_by: String,
+    /// The arguments the Lua function receives, as a JSON array.
+    pub args: Vec<Value>,
+    /// How long the callback may run before it fails.
+    pub timeout: Duration,
+    /// The hook state transaction the call's writes join, when the
+    /// request is a hook delivery.
+    pub state_call: Option<u64>,
+}
+
+impl Dispatch {
+    /// One ordered stream item: a hook, a watcher delivery or a command.
+    pub(crate) fn stream(
+        func: &FunctionRef,
+        ran_by: String,
+        args: Value,
+        timeout: Duration,
+        state_call: Option<u64>,
+    ) -> Self {
+        Self {
+            kind: RequestKind::Stream,
+            registration: func.command.clone(),
+            key: func.key.clone(),
+            ran_by,
+            args: wire_args(args),
+            timeout,
+            state_call,
+        }
+    }
+
+    /// One tool call: concurrent with everything.
+    pub(crate) fn tool(func: &FunctionRef, ran_by: String, args: Value, timeout: Duration) -> Self {
+        Self {
+            kind: RequestKind::Tool,
+            registration: func.command.clone(),
+            key: func.key.clone(),
+            ran_by,
+            args: wire_args(args),
+            timeout,
+            state_call: None,
+        }
+    }
+}
+
+/// The arguments the Lua function receives, as a JSON array: a function
+/// taking one value receives it alone, and an array value spreads, so a
+/// multi-argument function receives each element.
+#[allow(
+    dead_code,
+    reason = "asserted by tests; production use lands in a later part"
+)]
+pub(crate) fn wire_args(value: Value) -> Vec<Value> {
+    match value {
+        Value::Array(items) => items,
+        other @ (Value::Null
+        | Value::Bool(_)
+        | Value::Number(_)
+        | Value::String(_)
+        | Value::Object(_)) => vec![other],
     }
 }

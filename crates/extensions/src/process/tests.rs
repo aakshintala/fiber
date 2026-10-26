@@ -351,13 +351,6 @@ fn decode_bytes_round_trips_and_names_failures() {
     );
 }
 
-#[test]
-fn fits_framing_holds_at_the_edge() {
-    assert!(admission::fits_framing(8, 8));
-    assert!(admission::fits_framing(7, 8));
-    assert!(!admission::fits_framing(9, 8));
-}
-
 // Call routing and handler keys.
 
 #[test]
@@ -1038,7 +1031,6 @@ fn watch_caller_fires_when_the_caller_cancels() {
 
 #[test]
 fn default_limits_share_the_wire_cap() {
-    assert_eq!(transport::default_max_line(), support::framing::MAX_LINE);
     assert_eq!(Limits::default().max_line, support::framing::MAX_LINE);
 }
 
