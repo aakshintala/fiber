@@ -207,6 +207,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_skills,
     },
     CommandEntry {
+        name: "rewind",
+        description: "Opens the rewind view.",
+        hint: None,
+        run: run_rewind,
+    },
+    CommandEntry {
         name: "handoff",
         description: "Starts a handoff.",
         hint: Some("[instructions]"),
@@ -429,6 +435,11 @@ fn run_mcp(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_skills(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Skills))
+}
+
+fn run_rewind(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::Rewind))
 }
 
 fn run_context(app: &mut App, _rest: &str) -> Option<Effect> {

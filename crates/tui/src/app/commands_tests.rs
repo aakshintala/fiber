@@ -1108,12 +1108,13 @@ fn a_skill_named_like_a_built_in_keeps_the_built_in() {
 }
 
 #[test]
-fn undrawn_built_ins_without_an_extension_go_out_as_typed() {
+fn rewind_opens_the_rewind_view_and_sends_nothing() {
     let mut app = attached();
-    let lines = sent(enter(&mut app, "/rewind"));
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "prompt");
-    assert!(app.keymap().is_none());
+    assert_eq!(enter(&mut app, "/rewind"), Effect::None);
+    assert_eq!(app.draft(), "");
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.title, "Rewind");
+    assert_eq!(frame.command, "/rewind");
 }
 
 #[test]
@@ -1124,7 +1125,7 @@ fn every_table_row_dispatches_and_undrawn_built_ins_fall_through() {
         assert!(app.built_in().is_some(), "/{}", entry.name);
     }
     let mut app = attached();
-    type_text(&mut app, "/rewind");
+    type_text(&mut app, "/foo");
     assert!(app.built_in().is_none());
 }
 

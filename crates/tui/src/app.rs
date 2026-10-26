@@ -81,6 +81,7 @@ pub(crate) mod rail;
 mod reconnect;
 pub(crate) mod results;
 mod reviewer_setup;
+mod rewind;
 mod screen;
 mod select;
 mod session_views;
@@ -318,6 +319,8 @@ pub(crate) struct App {
     config_views: config_views::ConfigViews,
     /// The attached session's views (`docs/tui.md`, "Swapped views").
     session_views: session_views::SessionViews,
+    /// The `/rewind` view's state (`docs/tui.md`, "Rewind").
+    rewind: rewind::Rewind,
     /// The open delegate or job view and the per-job fold (`docs/tui.md`,
     /// "Swapped views").
     items: items::Items,
@@ -411,6 +414,7 @@ impl App {
             attention: attention::State::default(),
             config_views: config_views::ConfigViews::default(),
             session_views: session_views::SessionViews::default(),
+            rewind: rewind::Rewind,
             items: items::Items::default(),
             reconnect: reconnect::Reconnect::default(),
             launch_overrides: Vec::new(),
@@ -455,6 +459,9 @@ impl App {
             busy: false,
         };
         self.panel_state.attached();
+        // A new attachment folds no old rewind state: the next open
+        // pages the new session's chain from its tip.
+        self.rewind = rewind::Rewind;
         // A new session's images start over: a late answer or viewer
         // completion from the last one is dropped.
         self.forget_images();
