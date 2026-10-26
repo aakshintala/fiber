@@ -47,7 +47,7 @@ ephemeral event where it is display-only.
 | Module | Job |
 |---|---|
 | `contract` | The vocabulary every other module speaks: what an event looks like, what a command looks like, and what a tool, a provider and a hook must each be able to do, and the clock seam and the `Cancel` trait, re-exported from `support`. It contains no behaviour beyond checking that a value fits the vocabulary, and pure conversions of its own values, such as a wall time to milliseconds or to a UTC date. Parsing a command line (`CommandLine::deserialize`) and matching an answer to an interaction (`Interaction::fit`) count as checking that a value fits. |
-| `support` | Small shared mechanisms with no domain knowledge: the `Clock` and `Wake` traits, which `contract::clock` re-exports, the `Cancel` trait, which `contract::tool` re-exports, and its token, the process clock, the clock-parked wait, the process-group guard, the process ancestry reader (a socket's peer pid, and a process's parent and arguments), the poison-ignoring `lock`, the admission lock, the stoppable read, the line framing, the lowercase `hex` and the SHA-256 `sha256_hex`, and the `mint` id, the atomic file write `write_atomic`, and the scrubbed `git` command builder. |
+| `support` | Small shared mechanisms with no domain knowledge: the `Clock` and `Wake` traits, which `contract::clock` re-exports, the `Cancel` trait, which `contract::tool` re-exports, and its token, the process clock, the manual clock, the test deadline, the clock-parked wait, the process-group guard, the process ancestry reader (a socket's peer pid, and a process's parent and arguments), the poison-ignoring `lock`, the admission lock, the stoppable read, the line framing, the lowercase `hex` and the SHA-256 `sha256_hex`, and the `mint` id, the atomic file write `write_atomic`, and the scrubbed `git` command builder. |
 | `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching, and writes the diagnostic files in `logs/`. Its `diag` module holds the operation timer (`log::diag::timed`) every timed place goes through. |
 | `loop` | Runs turns and steps (`docs/loop.md`). The only thing that decides what happens next. |
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
@@ -102,9 +102,9 @@ both `extensions` and `provider`; only `main` depends on it. `main` depends on
 everything, and nothing depends on `main`.
 
 `fakes` holds the shared fakes that tests and jigs run against
-(`docs/testing.md`, "Fakes" and "Jigs"). It is not a module. It depends only
-on `contract`. Any crate may take it as a test-only dependency, none takes it
-as a normal one, and no release binary contains it.
+(`docs/testing.md`, "Fakes" and "Jigs"). It is not a module. It depends on
+`contract` and `support`. Any crate may take it as a test-only dependency,
+none takes it as a normal one, and no release binary contains it.
 
 `bench` holds the benchmark harness behind `docs/performance.md` as its
 `bench` example. It is not a module and nothing ships in it. It takes the
