@@ -1928,6 +1928,62 @@ fn an_answer_that_leaves_a_gap_is_refused() {
     );
 }
 
+/// An answer disordered within itself is refused: a descending,
+/// duplicate, or gapped seq pair inside one window ends the tail as
+/// failed with the out-of-order notice, even when the window's newest
+/// seq still sits one below the held run.
+#[test]
+fn an_answer_disordered_within_itself_is_refused() {
+    use crate::app::overlay::Tail;
+    // A contiguous window is accepted: the control beside the refusals.
+    let mut tail = Tail::new();
+    tail.prepend(plain(100))
+        .unwrap_or_else(|_| panic!("a contiguous answer"));
+    // Each disorder below keeps the boundary: the older window's newest
+    // seq still sits one below the held run, so only the internal order
+    // refuses it.
+    let disordered = [
+        // A descending pair inside the window.
+        {
+            let mut lines = plain(100);
+            lines.swap(50, 51);
+            lines
+        },
+        // A duplicate seq inside the window.
+        {
+            let mut lines = plain(100);
+            lines[51].seq = lines[50].seq;
+            lines
+        },
+        // A gap inside the window.
+        {
+            let mut lines = plain(100);
+            lines.remove(50);
+            lines
+        },
+    ];
+    for older in disordered {
+        let mut tail = Tail::new();
+        tail.prepend(plain(200).drain(100..).collect())
+            .unwrap_or_else(|_| panic!("the first answer"));
+        assert!(
+            tail.prepend(older).is_err(),
+            "a disordered answer is refused"
+        );
+    }
+    // The open reports the refusal with the out-of-order notice.
+    let mut app = reading();
+    app.tail_lines(plain(200).drain(100..).collect());
+    assert_eq!(app.notice(), None);
+    let mut older = plain(100);
+    older.swap(50, 51);
+    app.tail_lines(older);
+    assert_eq!(
+        app.notice(),
+        Some("Could not load history: the answer was out of order")
+    );
+}
+
 // ---- Task 7: turn-boundary reading ----
 
 /// A turn from `seq` with `texts` reply lines.

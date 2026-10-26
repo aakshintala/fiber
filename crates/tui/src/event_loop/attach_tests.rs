@@ -4463,6 +4463,233 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
     );
 }
 
+/// The first frame draws the own-log screen before any ancestor count
+/// request and before the `full` raise: the own window fills the
+/// display, so the frame shows the child's last page without waiting
+/// for the ancestor; the ancestor count follows the frame, and the
+/// raise goes last with the joint total exact.
+#[test]
+fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    const ROOT: &str = "s_arrrrrrrrrrrrrr";
+    const CHILD: &str = "s_aaaaaaaaaaaaaaaa";
+    let mut root_seq = 1u64;
+    let mut ancestor = vec![started(ROOT, None)];
+    ancestor.extend(segment_turns(ROOT, "root reply", 100, 3, &mut root_seq));
+    let point = root_seq - 1;
+    let mut child_seq = 1u64;
+    let mut child = vec![started(CHILD, Some((ROOT, point)))];
+    child.extend(segment_turns(CHILD, "child reply", 200, 30, &mut child_seq));
+    assert!(child.len() <= 256, "the own run fits one window");
+    let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: false,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        open_at: crate::OpenAt::Session(contract::SessionId(CHILD.to_owned()), None),
+        ..Default::default()
+    });
+    app.set_size(60, 12);
+    let (events_tx, events) = mpsc::channel();
+    let block = std::sync::Arc::new(AtomicBool::new(false));
+    let (release_tx, release) = mpsc::channel();
+    let backend = RecordBackend {
+        inner: ratatui::backend::TestBackend::new(60, 12),
+        events: events_tx,
+        block: std::sync::Arc::clone(&block),
+        release,
+    };
+    let screen = super::Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = super::super::Loop::for_test(app, screen);
+    lp.hover = false;
+    let (ours, theirs) = pair();
+    theirs
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    let mut reader = std::io::BufReader::new(theirs);
+    let socket_line = |reader: &mut std::io::BufReader<UnixStream>| {
+        let mut text = String::new();
+        match std::io::BufRead::read_line(reader, &mut text) {
+            Ok(0) => panic!("the hub hung up"),
+            Ok(_) => Some(text),
+            Err(_) => None,
+        }
+    };
+    let (tx, rx) = mpsc::channel();
+    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    // The launch open's lines: feed, recent and the summary subscribe.
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        seen.push(socket_line(&mut reader).unwrap_or_else(|| panic!("an open line")));
+    }
+    let lines: Vec<serde_json::Value> = seen
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let summary = lines
+        .iter()
+        .find(|line| line["command"] == "subscribe")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a summary subscribe: {lines:?}"))
+        .to_owned();
+    while events.try_recv().is_ok() {}
+    // The own window fills the display on its own segment.
+    let height = lp.app.conversation_height();
+    let mut filled = crate::window::Pages::new(60);
+    for line in doors_window(&child, &json!({})) {
+        filled.apply(&line);
+    }
+    assert!(
+        filled.index().total() >= height,
+        "the own window fills the screen"
+    );
+    // Acking the summary starts the tail read on a worker; the first
+    // frame parks in its flush once the preview installs.
+    block.store(true, Ordering::SeqCst);
+    let ack = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(CHILD.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("command_id".to_owned(), serde_json::Value::String(summary))]
+            .into_iter()
+            .collect(),
+    });
+    let worker = std::thread::Builder::new()
+        .name("first-frame".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            let out = lp.step(Input::Hub(ack), &rx);
+            (lp, out)
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let commands = socket_line(&mut reader).unwrap_or_else(|| panic!("commands after acceptance"));
+    let commands: serde_json::Value = serde_json::from_str(&commands).unwrap_or_default();
+    assert_eq!(commands["command"], "commands");
+    let read = socket_line(&mut reader).unwrap_or_else(|| panic!("the tail read"));
+    let read: serde_json::Value = serde_json::from_str(&read).unwrap_or_default();
+    assert_eq!(read["command"], "history");
+    assert_eq!(read["args"], json!({}), "the newest own window first");
+    let history = read["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a history id"))
+        .to_owned();
+    let window = doors_window(&child, &json!({}));
+    let mut answer = serde_json::to_value(super::line("command_accepted", None, None, json!({})))
+        .unwrap_or_default();
+    answer["payload"] = json!({"command_id": history, "result": {"lines": window}});
+    let answer: contract::Envelope =
+        serde_json::from_value(answer).unwrap_or_else(|err| panic!("an answer: {err}"));
+    tx.send(Input::Hub(Line::Session(answer)))
+        .unwrap_or_else(|err| panic!("answer: {err}"));
+    // The first frame draws before any ancestor read: the parked flush
+    // reports, while any hub command on the socket fails: the ancestor
+    // count and the raise both follow the frame.
+    reader
+        .get_mut()
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("non-blocking: {err}"));
+    let wait = Deadline::after(DEADLINE);
+    let mut drawn = Vec::new();
+    loop {
+        while let Ok(event) = events.try_recv() {
+            drawn.push(event);
+        }
+        if drawn.iter().any(|event| event == "frame-enter") {
+            break;
+        }
+        if let Some(text) = socket_line(&mut reader) {
+            let command: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+            panic!("a hub command went out before the first frame drew: {command:?}");
+        }
+        if wait.left().is_zero() {
+            panic!("waited {DEADLINE:?} for the first frame");
+        }
+        std::thread::yield_now();
+    }
+    reader
+        .get_mut()
+        .set_nonblocking(false)
+        .unwrap_or_else(|err| panic!("blocking: {err}"));
+    let first = drawn
+        .iter()
+        .find(|event| event.starts_with("frame\n"))
+        .unwrap_or_else(|| panic!("a first frame"));
+    assert!(
+        first.contains("child reply 29"),
+        "the first frame shows the child's last page: {first}"
+    );
+    // One release: the frame finishes, the ancestor count follows it,
+    // and the raise goes last.
+    block.store(false, Ordering::SeqCst);
+    release_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    let count = socket_line(&mut reader).unwrap_or_else(|| panic!("the ancestor count"));
+    let count: serde_json::Value = serde_json::from_str(&count).unwrap_or_default();
+    assert_eq!(count["command"], "history");
+    assert_eq!(
+        count["args"],
+        json!({"session_id": ROOT, "to_seq": point}),
+        "the ancestor count follows the frame"
+    );
+    let count_id = count["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a count id"))
+        .to_owned();
+    let window = doors_window(&ancestor, &count["args"]);
+    let mut answer = serde_json::to_value(super::line("command_accepted", None, None, json!({})))
+        .unwrap_or_default();
+    answer["payload"] = json!({"command_id": count_id, "result": {"lines": window}});
+    let answer: contract::Envelope =
+        serde_json::from_value(answer).unwrap_or_else(|err| panic!("an answer: {err}"));
+    tx.send(Input::Hub(Line::Session(answer)))
+        .unwrap_or_else(|err| panic!("answer: {err}"));
+    let raise = socket_line(&mut reader).unwrap_or_else(|| panic!("the raise"));
+    let raise: serde_json::Value = serde_json::from_str(&raise).unwrap_or_default();
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(
+        raise["args"],
+        json!({"level": "full"}),
+        "the raise follows the count"
+    );
+    let (lp, out) = worker.join().unwrap_or_else(|_| panic!("the worker"));
+    assert_eq!(out, None);
+    // The ancestor count is included: the joint total spans the chain,
+    // and the ancestor stays paged under its own session.
+    let mut joint = crate::window::Pages::new(60);
+    for line in ancestor.iter().chain(&child) {
+        joint.apply(line);
+    }
+    assert_eq!(
+        lp.app.scroll().1,
+        joint.index().total(),
+        "the joint total spans the chain"
+    );
+    let pages = lp.app.pages();
+    let total = pages.index().total();
+    let top_needs = pages.needs(0, total);
+    assert!(
+        top_needs.iter().any(|(session, range)| session.0 == ROOT
+            && *range == (contract::Seq(0)..=contract::Seq(point))),
+        "the ancestor stays paged under its session: {top_needs:?}"
+    );
+}
+
 /// The history wait's bound in milliseconds, beside the production
 /// constant it pins.
 const WAIT_MS: u64 = 10_000;
