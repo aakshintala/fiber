@@ -96,17 +96,6 @@ impl ProcessRead for KernelProcessRead {
     }
 }
 
-/// What the walk does after the predicate sees one ancestor's argument
-/// vector. The caller decides per ancestor whether to keep walking, so one
-/// walk serves both a first-match probe and a collect-every-match scan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Visit {
-    /// Not a match: keep walking toward PID 1.
-    Skip,
-    /// A match: record the pid and keep walking toward PID 1.
-    Match,
-}
-
 /// A single kernel ancestry read, with the target's parent and every
 /// matching strict ancestor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,7 +155,7 @@ pub fn walk_ancestors<F>(
     mut predicate: F,
 ) -> Result<ProcessWalk, IncompleteWalk>
 where
-    F: FnMut(&[Vec<u8>]) -> Visit,
+    F: FnMut(&[Vec<u8>]) -> bool,
 {
     let current = read
         .current_euid()
@@ -181,9 +170,8 @@ where
         let argv = read
             .argv(ancestor.pid)
             .map_err(|_| IncompleteWalk { pid: ancestor.pid })?;
-        match predicate(&argv) {
-            Visit::Skip => {}
-            Visit::Match => matched_pids.push(ancestor.pid),
+        if predicate(&argv) {
+            matched_pids.push(ancestor.pid);
         }
     }
     Ok(ProcessWalk {

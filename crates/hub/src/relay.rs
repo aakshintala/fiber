@@ -130,16 +130,6 @@ pub(crate) enum FromSessionRefusal<'a> {
     PairingCode,
 }
 
-/// The shared session-host predicate as a walk visit: every match is
-/// collected, nearest first.
-fn is_session_host(argv: &[Vec<u8>]) -> support::peer::Visit {
-    if contract::session_process::is_session_process(argv) {
-        support::peer::Visit::Match
-    } else {
-        support::peer::Visit::Skip
-    }
-}
-
 impl FromSessionRefusal<'_> {
     /// The wire command the refusal names in its fallback messages.
     fn command(&self) -> &str {
@@ -275,7 +265,11 @@ pub(crate) fn session_command_refusal(
         }
         RelayTarget::Live { pid } => pid,
     };
-    let target_walk = match support::peer::walk_ancestors(target_pid, read, is_session_host) {
+    let target_walk = match support::peer::walk_ancestors(
+        target_pid,
+        read,
+        contract::session_process::is_session_process,
+    ) {
         Ok(walk) => walk,
         Err(_) => {
             return Some(Refused {

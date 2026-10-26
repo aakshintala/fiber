@@ -825,13 +825,11 @@ pub(crate) fn attribute_peer(
             peer_error: Some(error.to_string()),
         },
         Ok(peer_pid) => {
-            match support::peer::walk_ancestors(peer_pid, read, |argv| {
-                if contract::session_process::is_session_process(argv) {
-                    support::peer::Visit::Match
-                } else {
-                    support::peer::Visit::Skip
-                }
-            }) {
+            match support::peer::walk_ancestors(
+                peer_pid,
+                read,
+                contract::session_process::is_session_process,
+            ) {
                 Ok(walk) => Attribution::Local {
                     peer_pid,
                     session_process_pids: walk.matched_pids,

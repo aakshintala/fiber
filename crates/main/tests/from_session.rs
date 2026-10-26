@@ -889,9 +889,10 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
 
 /// R starts D, D starts G: D's `delegate_message` to G is accepted and
 /// steers it, while D's shell child is refused `steer` to G and to R. G's
-/// first turn runs a slow tool so its run stays open and bound while the
-/// probes run, and D waits out its delegate's job; neither gate seals
-/// mid-probe. The queued steer reaches G's next model call.
+/// first turn runs a shell the test holds on a fifo, so its run stays open
+/// and bound while the probes run, and D waits out its delegate's job;
+/// neither gate seals mid-probe. The queued steer reaches G's next model
+/// call once the test releases the hold.
 #[test]
 fn nested_delegate_message_accepted_while_shell_steers_refused() {
     const G_MARK: &str = "nested-message-marker-71ac";
@@ -907,12 +908,18 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
         stream(&[spawn_call("fiber:pb/m")])
     })
     .unwrap();
-    // The grandchild's first turn runs a slow tool call, so the turn and
-    // the run stay open while the probes run: the grandchild is never
-    // resumed, stays bound, and stays reachable. The steered message joins
-    // the open turn, and the next model call carries it. A question would
-    // not hold the run: the turn ends with questions pending and the
-    // socket goes away with it.
+    // The grandchild's first turn runs a shell held on a fifo, so the
+    // turn and the run stay open while the probes run: the grandchild is
+    // never resumed, stays bound, and stays reachable. The shell signals
+    // start by writing to the fifo, then blocks reading the release the
+    // test writes after the probes. The steered message joins the open
+    // turn, and the next model call carries it. A question would not hold
+    // the run: the turn ends with questions pending and the socket goes
+    // away with it. A real `sleep` would hold the run on the wall clock
+    // instead (`docs/testing.md`, "Waits and timeouts").
+    let hold = setup.workspace().join("grandchild.hold.fifo");
+    fakes::fifo(&hold);
+    let hold_arg = hold.to_string_lossy().into_owned();
     let marked = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let seen_mark = Arc::clone(&marked);
     let server_g = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
@@ -922,9 +929,9 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
             return text_reply("g-two-done");
         }
         stream(&[function_call(
-            "call_sleep",
+            "call_hold",
             "shell",
-            &json!({"command": "sleep 5"}),
+            &json!({"command": format!("echo started > '{hold_arg}'; read line < '{hold_arg}'")}),
         )])
     })
     .unwrap();
@@ -983,6 +990,16 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
         server_g.await_requests(1, setup.deadline),
         "the grandchild is running"
     );
+    // The held shell signals start itself: the first model call only proves
+    // the provider was hit, not that the hold runs.
+    let hold_start = hold.clone();
+    let started = support::bounded(setup.deadline, "the grandchild shell to hold", move || {
+        fs::read_to_string(&hold_start).unwrap_or_default()
+    });
+    assert!(
+        started.contains("started"),
+        "the grandchild shell holds before the probes run"
+    );
     // The grandchild's start is durable once it runs: read its id from the
     // delegate's log. Delegates run closed to prompts, so no prompt is
     // sent: the delegate_message goes out on the spawn receipt instead.
@@ -1012,7 +1029,7 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
         .as_str()
         .unwrap()
         .to_owned();
-    // The probes run while the grandchild waits on its question: it is
+    // The probes run while the grandchild waits on its held shell: it is
     // alive, bound, and reachable, and the delegate's gate stays open.
     for (id, target, what) in [
         ("c_probe_steer_g", &grandchild, "to the grandchild"),
@@ -1042,8 +1059,16 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
             "a shell steer {what} is refused for its target: {answer}"
         );
     }
-    // The sleep ends on its own: the open turn continues, and its next
-    // model call carries the steered message.
+    // The test releases the hold after the probes: the open turn
+    // continues, and its next model call carries the steered message.
+    let hold_release = hold.clone();
+    support::bounded(
+        setup.deadline,
+        "the grandchild shell to release",
+        move || {
+            fs::write(&hold_release, "go\n").unwrap();
+        },
+    );
     assert!(
         server_g.await_requests(2, setup.deadline),
         "the nested delegate_message steers the grandchild"
@@ -1216,8 +1241,15 @@ fn ask_descendant_reply_to_approval_is_refused_from_session() {
     subscribe(&client, &session);
     assert!(
         server.await_requests(1, setup.deadline),
-        "the ask starts its sleeping shell call"
+        "the ask reaches its provider"
     );
+    // The provider request only proves the model was hit: the sleeping
+    // shell call announces itself, and the probe runs once it has started.
+    let _started = until(&client, "the ask starts its sleeping shell call", |line| {
+        line["kind"] == "tool_call_requested"
+            && line["session_id"] == session
+            && line["payload"]["name"] == "shell"
+    });
 
     let answer = probe_answer_to(
         &client,
@@ -1285,8 +1317,15 @@ fn ask_descendant_prompt_to_own_ask_socket_is_refused_from_session() {
     subscribe(&client, &session);
     assert!(
         server.await_requests(1, setup.deadline),
-        "the ask starts its sleeping shell call"
+        "the ask reaches its provider"
     );
+    // The provider request only proves the model was hit: the sleeping
+    // shell call announces itself, and the probe runs once it has started.
+    let _started = until(&client, "the ask starts its sleeping shell call", |line| {
+        line["kind"] == "tool_call_requested"
+            && line["session_id"] == session
+            && line["payload"]["name"] == "shell"
+    });
 
     let answer = probe_answer_to(
         &client,

@@ -1020,16 +1020,6 @@ impl FromSessionRefusal<'_> {
     }
 }
 
-/// The shared session-host predicate as a walk visit: every match is
-/// collected, nearest first.
-fn is_session_host(argv: &[Vec<u8>]) -> support::peer::Visit {
-    if contract::session_process::is_session_process(argv) {
-        support::peer::Visit::Match
-    } else {
-        support::peer::Visit::Skip
-    }
-}
-
 /// The `from_session` message for a refused command: the exact sentence for
 /// the refusal class when the caller's walk passes a session process, the
 /// unreadable pid on an incomplete caller walk, otherwise the preserved
@@ -1107,7 +1097,11 @@ pub(crate) fn attribute_peer(
             pid: None,
             peer_error: Some(error.to_string()),
         },
-        Ok(peer_pid) => match support::peer::walk_ancestors(peer_pid, read, is_session_host) {
+        Ok(peer_pid) => match support::peer::walk_ancestors(
+            peer_pid,
+            read,
+            contract::session_process::is_session_process,
+        ) {
             Ok(walk) => Attribution::Local {
                 peer_pid,
                 session_process_pids: walk.matched_pids,
@@ -1214,7 +1208,11 @@ pub(crate) fn session_command_refusal(
     };
     // Parent and session-host ancestors come from one kernel walk, so a
     // second parent read cannot authorize against a different process tree.
-    let target_walk = match support::peer::walk_ancestors(target_pid, read, is_session_host) {
+    let target_walk = match support::peer::walk_ancestors(
+        target_pid,
+        read,
+        contract::session_process::is_session_process,
+    ) {
         Ok(walk) => walk,
         Err(_) => {
             return Some(Refused {

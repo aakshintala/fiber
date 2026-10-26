@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
 
-use super::{IncompleteWalk, KernelProcessRead, ProcessInfo, ProcessRead, ReadError, Visit};
+use super::{IncompleteWalk, KernelProcessRead, ProcessInfo, ProcessRead, ReadError};
 
 /// A scripted process tree: parents, owners and argument vectors by pid,
 /// with named unreadable pids and a count of argument-vector reads.
@@ -227,6 +227,38 @@ fn the_caller_reads_its_own_kernel_identity() {
         .map(|arg| arg.as_encoded_bytes().to_vec())
         .collect();
     assert_eq!(argv, expected);
+    // A spawned child reads the same way: its parent is the caller and
+    // its owner matches the caller's. Both are set at fork, so they need
+    // no wait. The argument vector is exact only once the child execs: a
+    // read mid-exec sees an empty vector, and a pre-exec read sees the
+    // spawner's own, so the test polls for the spawned words within a wall
+    // deadline (`docs/testing.md`, "Waits and timeouts").
+    let mut child = std::process::Command::new("sleep")
+        .arg("60")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the kernel reader test spawns a helper child");
+    let child_pid = child.id();
+    assert_eq!(read.parent(child_pid).unwrap(), pid);
+    assert_eq!(read.euid(child_pid).unwrap(), caller_euid);
+    let wanted = [b"sleep".to_vec(), b"60".to_vec()];
+    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(10));
+    let argv = loop {
+        let argv = read.argv(child_pid).unwrap_or_default();
+        if argv == wanted || deadline.left().is_zero() {
+            break argv;
+        }
+        std::thread::yield_now();
+    };
+    assert_eq!(argv, wanted);
+    child
+        .kill()
+        .expect("the kernel reader test kills its helper child");
+    child
+        .wait()
+        .expect("the kernel reader test reaps its helper child");
 }
 
 #[cfg(target_os = "linux")]
@@ -485,12 +517,8 @@ fn wanted_walk() -> Script {
     }
 }
 
-fn is_wanted(argv: &[Vec<u8>]) -> Visit {
-    if argv.iter().any(|word| word == b"wanted") {
-        Visit::Match
-    } else {
-        Visit::Skip
-    }
+fn is_wanted(argv: &[Vec<u8>]) -> bool {
+    argv.iter().any(|word| word == b"wanted")
 }
 
 #[test]
@@ -533,7 +561,7 @@ fn walk_never_reads_a_foreign_owned_argv() {
 fn walk_returns_no_matches_for_a_plain_walk() {
     let read = wanted_walk();
     assert_eq!(
-        super::walk_ancestors(10, &read, |_| Visit::Skip).unwrap(),
+        super::walk_ancestors(10, &read, |_| false).unwrap(),
         super::ProcessWalk {
             parent_pid: Some(20),
             matched_pids: Vec::new(),
