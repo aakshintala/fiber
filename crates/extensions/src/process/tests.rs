@@ -312,6 +312,7 @@ fn entry_registers_while_timer_and_request_do_not() {
         None,
         support::cancel::Token::new(),
         None,
+        None,
     );
     assert!(!request.registration_allowed());
     assert_eq!(
@@ -677,7 +678,14 @@ fn handler_keys_cover_every_family() {
 
 /// Mints one stream request, returning the table with it.
 fn minted(table: &Table, ran_by: &str) -> requests::Minted {
-    table.mint(RequestKind::Stream, "e", ran_by.to_owned(), None, None)
+    table.mint(
+        RequestKind::Stream,
+        "e",
+        ran_by.to_owned(),
+        None,
+        None,
+        None,
+    )
 }
 
 #[test]
@@ -758,7 +766,7 @@ fn timeout_does_not_fire_the_cancel_signal() {
 fn retire_cancels_everything_and_bumps_the_generation() {
     let table = Table::new();
     let first = minted(&table, "tool a");
-    let second = table.mint(RequestKind::Tool, "e", "tool b".into(), None, None);
+    let second = table.mint(RequestKind::Tool, "e", "tool b".into(), None, None, None);
     let before = table.generation();
     let after = table.retire();
     assert_eq!(after, before + 1, "retirement bumps the generation once");
@@ -790,7 +798,7 @@ fn stream_items_wait_for_the_last_reply() {
     // The next stream item blocks while the held one waits.
     let waiter = Arc::clone(&table);
     let (done_tx, done_rx) = mpsc::channel();
-    let next = table.mint(RequestKind::Stream, "e", "hook b".into(), None, None);
+    let next = table.mint(RequestKind::Stream, "e", "hook b".into(), None, None, None);
     std::thread::spawn(move || {
         let acquired = waiter.acquire_stream(&next.id, waiter.generation());
         match done_tx.send((acquired, next.id.clone())) {
@@ -801,7 +809,7 @@ fn stream_items_wait_for_the_last_reply() {
         }
     });
     // Tools never take the gate: one mints and settles while the stream waits.
-    let tool = table.mint(RequestKind::Tool, "e", "tool t".into(), None, None);
+    let tool = table.mint(RequestKind::Tool, "e", "tool t".into(), None, None, None);
     assert_eq!(
         table.settle(&tool.id, Outcome::Answered(Answer::Value(json!(true)))),
         Settled::Completed
@@ -830,7 +838,7 @@ fn retirement_releases_a_waiting_stream_item_stale() {
     assert!(table.acquire_stream(&held.id, table.generation()));
     let waiter = Arc::clone(&table);
     let (done_tx, done_rx) = mpsc::channel();
-    let next = table.mint(RequestKind::Stream, "e", "hook b".into(), None, None);
+    let next = table.mint(RequestKind::Stream, "e", "hook b".into(), None, None, None);
     let next_id = next.id.clone();
     std::thread::spawn(move || {
         let acquired = waiter.acquire_stream(&next.id, 0);
@@ -916,7 +924,7 @@ fn a_settle_wakes_a_parked_wait() {
     // end it: the answer arrives without any clock advance.
     let clock = clock();
     let table = Table::new();
-    let minted = table.mint(RequestKind::Tool, "e", "tool t".into(), None, None);
+    let minted = table.mint(RequestKind::Tool, "e", "tool t".into(), None, None, None);
     let waiter = minted.wait.clone();
     let parked = clock.clone();
     let (done_tx, done_rx) = mpsc::channel();

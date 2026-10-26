@@ -210,11 +210,13 @@ impl Table {
 
     /// Mints one pending request of `kind`, run as `ran_by` for
     /// `extension` and ending at `deadline`, joining hook transaction
-    /// `state_call` when the request is a hook delivery. The stored
-    /// context is what calls made under this request run under, with the
-    /// request's own id and cancel signal. The id is unique within the
-    /// generation: minted ids never repeat while pending, and retirement
-    /// clears the table, so no id resolves across generations.
+    /// `state_call` when the request is a hook delivery. `credential` is
+    /// what a `host.oauth.refresh` under this request refreshes, set only
+    /// by the dispatcher that runs a provider's `credential()`. The
+    /// stored context is what calls made under this request run under,
+    /// with the request's own id and cancel signal. The id is unique
+    /// within the generation: minted ids never repeat while pending, and
+    /// retirement clears the table, so no id resolves across generations.
     pub(crate) fn mint(
         &self,
         kind: RequestKind,
@@ -222,6 +224,7 @@ impl Table {
         ran_by: String,
         deadline: Option<Instant>,
         state_call: Option<u64>,
+        credential: Option<crate::lua::CredentialFor>,
     ) -> Minted {
         let mut inner = support::lock(&self.inner);
         let id = loop {
@@ -238,6 +241,7 @@ impl Table {
             deadline,
             cancel.clone(),
             state_call,
+            credential,
         );
         let wait = WaitCell::new();
         inner.pending.insert(

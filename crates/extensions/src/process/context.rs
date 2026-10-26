@@ -270,14 +270,6 @@ pub(crate) enum HostOperation {
         /// The seconds between polls.
         interval: u64,
     },
-    /// `host.oauth.refresh`: run the nested function the call passed and
-    /// refresh the held credential with its result, releasing the lock
-    /// after. The nested request is minted before the service runs, so the
-    /// pump routes it while the refresh awaits it.
-    OAuthRefresh {
-        /// The nested function's request, already sent to the child.
-        nested: NestedCall,
-    },
     /// `state.get`: the key, answered with the value or null.
     StateGet {
         /// The key.
@@ -325,26 +317,6 @@ pub(crate) enum DataScope {
     Machine,
     /// The project directory.
     Project,
-}
-
-/// The nested function call a `host.oauth.refresh` runs in the child: its
-/// minted request, whose answer the service reads after the pump routes
-/// it. The call inherits the outer callback's `ran_by`, deadline and hook
-/// transaction, and ends when the outer request ends.
-#[derive(Debug, Clone)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
-pub(crate) struct NestedCall {
-    /// The nested request's id.
-    pub id: contract::RequestId,
-    /// What the nested callback runs as, inheriting the outer callback.
-    pub ran_by: String,
-    /// The nested callback's end, inheriting the outer deadline.
-    pub deadline: Option<std::time::Instant>,
-    /// The hook transaction the nested writes join, if any.
-    pub state_call: Option<u64>,
 }
 
 /// One inner tool call: what the runner service runs, inheriting the
@@ -1210,23 +1182,6 @@ impl NativeHostServices {
         }
     }
 
-    /// Runs `host.oauth.refresh`: without a provider credential the call
-    /// fails naming the callback, after the nested function answers. The
-    /// nested request is already sent; its answer is dropped with the
-    /// refusal, and nothing is held.
-    fn oauth_refresh(
-        &self,
-        callback: &CallbackContext,
-        nested: &NestedCall,
-        cancel: &dyn Cancel,
-    ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
-        let _ = (nested, cancel);
-        Err((
-            contract::ErrorCode::InvalidArguments,
-            crate::host::admission::lock_arg_error("host.oauth.refresh", callback.ran_by()),
-        ))
-    }
-
     /// Whether the callback ended: its deadline passed. Cancellation is
     /// the caller's own watch; a passed deadline ends every wait here.
     fn ended(&self, callback: &CallbackContext) -> bool {
@@ -1370,7 +1325,6 @@ impl ProcessHostServices for NativeHostServices {
                 interval,
                 cancel,
             ),
-            HostOperation::OAuthRefresh { nested } => self.oauth_refresh(callback, &nested, cancel),
             HostOperation::StateGet { key } => Ok(self.state_get(&key)),
             HostOperation::StateKeys => Ok(Some(self.state_keys())),
             HostOperation::StateSet {

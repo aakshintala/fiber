@@ -1588,7 +1588,6 @@ fn service_variant(operation: &super::process::context::HostOperation) -> &'stat
         Op::OAuthShow { .. } => "oauth.show",
         Op::OAuthPkcs => "oauth.pkce",
         Op::OAuthPoll { .. } => "oauth.poll",
-        Op::OAuthRefresh { .. } => "oauth.refresh",
         Op::StateGet { .. } => "state.get",
         Op::StateKeys => "state.keys",
         Op::StateSet { .. } => "state.set",
@@ -1635,6 +1634,38 @@ impl Harness {
         state: serde_json::Map<String, Value>,
         drive: Option<Arc<dyn contract::extension::Drive>>,
     ) -> Self {
+        let recorded = FakeServices::new();
+        Self::start_with_services(
+            script,
+            args,
+            state,
+            drive,
+            {
+                let recorded = Arc::clone(&recorded);
+                move |_, _, _| -> Arc<dyn super::process::context::ProcessHostServices> { recorded }
+            },
+            recorded,
+        )
+    }
+
+    /// Starts as [`Harness::start`], with the services the owner answers
+    /// host and state calls through: the fake records, while production
+    /// services prove the store behind the seam. The maker receives the
+    /// state store, the clock and the runtime the launch wires; the
+    /// harness keeps `recorded`, which is the fake for `start` and an
+    /// unrecorded stand-in otherwise.
+    fn start_with_services(
+        script: &str,
+        args: &[&str],
+        state: serde_json::Map<String, Value>,
+        drive: Option<Arc<dyn contract::extension::Drive>>,
+        services: impl FnOnce(
+            Arc<super::host::state::ExtensionState>,
+            Arc<dyn contract::clock::Clock>,
+            Runtime,
+        ) -> Arc<dyn super::process::context::ProcessHostServices>,
+        recorded: Arc<FakeServices>,
+    ) -> Self {
         let dir = fakes::TempDir::new("fiber-process-owner");
         std::fs::write(
             dir.path().join("extension.json"),
@@ -1670,7 +1701,10 @@ impl Harness {
         let mut argv = vec!["-c".to_owned(), script.to_owned()];
         argv.extend(args.iter().map(|arg| (*arg).to_owned()));
         let launch_clock: Arc<dyn contract::clock::Clock> = clock.clone();
-        let services = FakeServices::new();
+        // One standalone store behind both the launch and the services,
+        // as the package seam's, before the session folds it.
+        let store = super::host::state::StateRegistry::standalone().store("fiber.test/proc");
+        let services = services(store.clone(), launch_clock.clone(), runtime.clone());
         let extension = ProcessExtension::start(super::process::Launch {
             owner: "fiber.test/proc".to_owned(),
             runtime,
@@ -1679,7 +1713,12 @@ impl Harness {
             args: argv,
             context,
             drive,
-            services: services.clone(),
+            services,
+            // The refresh lock resolves pairs from the scratch home.
+            oauth: Arc::new(super::process::oauth::FileCredential::new(
+                dir.path().to_path_buf(),
+            )),
+            state: store,
             clock: launch_clock,
             limits: super::process::transport::Limits::default(),
         })
@@ -1689,7 +1728,7 @@ impl Harness {
             registry,
             extension: Arc::new(extension),
             clock,
-            services,
+            services: recorded,
         }
     }
 
@@ -1845,6 +1884,11 @@ def write(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
 def read():
     return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
 def call(cid, call, args, rid=None):
     a = {"call": call, "args": args}
     if rid is not None:
@@ -1920,6 +1964,11 @@ def write(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
 def read():
     return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
 read()
 write({"id": "c1", "command": "call", "args": {"call": "fiber.provider", "args": ["p", PROVIDER]}})
 write({"id": "c2", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
@@ -1986,6 +2035,11 @@ def write(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
 def read():
     return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
 def call(cid, call, args):
     write({"id": cid, "command": "call", "args": {"call": call, "args": args}})
 read()
@@ -2203,6 +2257,11 @@ def write(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
 def read():
     return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
 def call(cid, call, args):
     write({"id": cid, "command": "call", "args": {"call": call, "args": args}})
 read()
@@ -2310,6 +2369,11 @@ def write(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
 def read():
     return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
 def call(cid, call, args):
     write({"id": cid, "command": "call", "args": {"call": call, "args": args}})
 read()
@@ -2382,6 +2446,11 @@ def write(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
 def read():
     return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
 read()
 sys.stdout.write("not json\n"); sys.stdout.flush()
 write({"id": "u1", "command": "frob"})
@@ -2442,6 +2511,11 @@ fn drive_without_a_driver_closes() {
     let script = r#"import sys, json
 def read():
     return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
 read()
 sys.stdout.write(json.dumps({"id": "v1", "command": "tools", "args": {}}) + "\n")
 sys.stdout.flush()
@@ -2527,6 +2601,11 @@ def write(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
 def read():
     return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
 read()
 calls = json.loads(sys.argv[2])
 write({"id": "ready", "command": "ready"})
@@ -2627,6 +2706,11 @@ def write(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
 def read():
     return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
 read()
 write({"id": "ready", "command": "ready"})
 write({"id": "c1", "command": "call", "args": {"call": "host.log", "args": ["hi"]}})
@@ -2663,6 +2747,11 @@ def write(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
 def read():
     return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
 read()
 write({"id": "ready", "command": "ready"})
 write({"id": "c1", "command": "call", "args": {"call": "host.exec", "args": [7]}})
@@ -2702,6 +2791,11 @@ def write(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
 def read():
     return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
 read()
 write({"id": "c1", "command": "call", "args": {"call": "host.exec", "args": ["prog"]}})
 answer = read()
@@ -2740,6 +2834,11 @@ def write(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
 def read():
     return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
 read()
 write({"id": "c1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
 write({"id": "ready", "command": "ready"})
@@ -2793,3 +2892,1259 @@ open(sys.argv[1], "w").write(json.dumps(answer))"#;
     let answer = read_json_file(&out_path, "the inner call answer");
     assert_eq!(answer["kind"], json!("command_accepted"));
 }
+
+// OAuth refresh and state retirement behind the package seam: the native
+// continuation holds the lock or slot around its nested function request,
+// and hook writes commit on success and discard on failure.
+
+/// A browser that never attaches: production services need one, and no
+/// test here logs in.
+struct ClosedBrowser;
+
+impl crate::oauth::Browser for ClosedBrowser {
+    fn open(&self, _url: &str) {}
+    fn show(&self, _url: &str, _code: &str) {}
+    fn attended(&self) -> bool {
+        false
+    }
+}
+
+/// Writes `value` as the stored pair for `credential` under `label` in
+/// `home`, holding no lock after.
+fn write_pair(home: &std::path::Path, credential: &str, label: &str, value: &Value) {
+    let file = config::CredentialFile::new(home, credential, label).unwrap();
+    let held = file.try_lock().unwrap().expect("a free test pair locks");
+    held.write(value).unwrap();
+}
+
+/// Reads the stored pair back, unlocked.
+fn read_pair(home: &std::path::Path, credential: &str, label: &str) -> Option<Value> {
+    config::CredentialFile::new(home, credential, label)
+        .unwrap()
+        .read_unlocked()
+        .unwrap()
+}
+
+/// The test pair the refresh tests refresh.
+fn test_pair() -> crate::lua_provider::CredentialPair {
+    crate::lua_provider::CredentialPair {
+        credential: "testprov".to_owned(),
+        label: "test".to_owned(),
+    }
+}
+
+/// Mints a provider `credential()` request with `scope` on the owner's
+/// table and sends its dispatch line to the child, as the session will:
+/// the child answers it by calling `host.oauth.refresh` with its id.
+fn dispatch_provider(
+    owner: &Harness,
+    scope: Option<crate::lua::CredentialFor>,
+    deadline: Option<std::time::Instant>,
+) -> super::process::requests::Minted {
+    let shared = owner.extension.shared();
+    let minted = shared.table.mint(
+        super::process::requests::RequestKind::Function,
+        "fiber.test/proc",
+        "provider testprov.credential".to_owned(),
+        deadline,
+        None,
+        scope,
+    );
+    let payload = serde_json::to_value(&contract::events::ExtensionRequest {
+        request_id: minted.id.clone(),
+        registration: contract::CommandId("c_prov".into()),
+        key: "credential".into(),
+        args: vec![json!({"label": "test", "credential": "testprov"})],
+    })
+    .unwrap();
+    let line = super::process::envelope_line(
+        shared,
+        "extension_request",
+        payload.as_object().cloned().unwrap_or_default(),
+    );
+    shared.transport.send(line).unwrap();
+    minted
+}
+
+/// The far-future expiry the tests mint: past any test clock.
+const FRESH_EXPIRES: i64 = 2_000_000_000;
+
+/// A stored pair long expired on any test clock.
+fn expired_pair() -> Value {
+    json!({"token": "tok-old", "expires_at": 1})
+}
+
+/// A refresh the child answers, seeing the protocol positions.
+#[test]
+fn refresh_runs_its_function_nested_and_stores_what_it_returns() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+read()
+parent = read()
+rid = parent["payload"]["request_id"]
+write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+nested = read()
+assert nested["kind"] == "extension_request", nested
+payload = nested["payload"]
+assert payload["registration"] == "c1", payload
+assert payload["key"] == "1", payload
+assert payload["args"] == [{"token": "tok-old", "expires_at": 1}], payload
+fresh = {"token": "tok-fresh", "expires_at": 2000000000}
+write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": fresh}})
+answer = read_answer("c1")
+assert answer["kind"] == "command_accepted", answer
+assert answer["payload"]["result"]["value"] == fresh, answer
+open(sys.argv[1], "w").write(json.dumps({"nested": payload, "answer": answer["payload"]}))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-nested");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    write_pair(owner.workspace(), "testprov", "test", &expired_pair());
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    dispatch_provider(
+        &owner,
+        Some(crate::lua::CredentialFor::Stored(test_pair())),
+        deadline,
+    );
+    owner.pump();
+    owner.pump();
+    let seen = read_json_file(&out_path, "the refresh answer");
+    assert_eq!(seen["nested"]["registration"], json!("c1"));
+    assert_eq!(seen["nested"]["key"], json!("1"));
+    // The stored write landed, and the lock is released: a test lock
+    // takes it at once.
+    assert_eq!(
+        read_pair(owner.workspace(), "testprov", "test"),
+        Some(json!({"token": "tok-fresh", "expires_at": FRESH_EXPIRES}))
+    );
+    let file = config::CredentialFile::new(owner.workspace(), "testprov", "test").unwrap();
+    assert!(file.try_lock().unwrap().is_some(), "the lock leaked");
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// A fresh stored pair answers at once, with no nested call: the one
+/// line the child reads is the acceptance, not an `extension_request`.
+#[test]
+fn refresh_returns_a_fresh_pair_without_a_nested_call() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+read()
+parent = read()
+rid = parent["payload"]["request_id"]
+write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+answer = read()
+assert answer["kind"] == "command_accepted", answer
+open(sys.argv[1], "w").write(json.dumps(answer["payload"]["result"]["value"]))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-fresh");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    let stored = json!({"token": "tok-stored", "expires_at": FRESH_EXPIRES});
+    write_pair(owner.workspace(), "testprov", "test", &stored);
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    dispatch_provider(
+        &owner,
+        Some(crate::lua::CredentialFor::Stored(test_pair())),
+        deadline,
+    );
+    owner.pump();
+    let answer = read_json_file(&out_path, "the refresh answer");
+    assert_eq!(answer, stored);
+    assert_eq!(
+        read_pair(owner.workspace(), "testprov", "test"),
+        Some(stored)
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// Two refreshes serialize on the lock: the second sees the first's
+/// write and sends no nested call of its own.
+#[test]
+fn concurrent_refreshes_serialize_on_the_credential_lock() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+read()
+parent = read()
+rid = parent["payload"]["request_id"]
+write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+nested = read()
+payload = nested["payload"]
+assert payload["registration"] == "c1", payload
+fresh = {"token": "tok-fresh", "expires_at": 2000000000}
+write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": fresh}})
+first = read_answer("c1")
+assert first["kind"] == "command_accepted", first
+write({"id": "c2", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+second = read_answer("c2")
+assert second["kind"] == "command_accepted", second
+open(sys.argv[1], "w").write(json.dumps({"first": first["payload"]["result"]["value"], "second": second["payload"]["result"]["value"]}))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-serial");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    write_pair(owner.workspace(), "testprov", "test", &expired_pair());
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    dispatch_provider(
+        &owner,
+        Some(crate::lua::CredentialFor::Stored(test_pair())),
+        deadline,
+    );
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    let seen = read_json_file(&out_path, "the refresh answers");
+    let fresh = json!({"token": "tok-fresh", "expires_at": FRESH_EXPIRES});
+    assert_eq!(seen["first"], fresh);
+    assert_eq!(seen["second"], fresh);
+    assert_eq!(
+        read_pair(owner.workspace(), "testprov", "test"),
+        Some(fresh)
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// What the function returns is validated before anything is stored: an
+/// unusable shape fails the refresh and leaves the stored pair alone.
+#[test]
+fn refresh_refuses_an_unusable_function_result() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+read()
+parent = read()
+rid = parent["payload"]["request_id"]
+write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+nested = read()
+payload = nested["payload"]
+write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": {"nope": True}}})
+answer = read_answer("c1")
+assert answer["kind"] == "command_rejected", answer
+open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-unusable");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    let stored = expired_pair();
+    write_pair(owner.workspace(), "testprov", "test", &stored);
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    dispatch_provider(
+        &owner,
+        Some(crate::lua::CredentialFor::Stored(test_pair())),
+        deadline,
+    );
+    owner.pump();
+    owner.pump();
+    let seen = read_json_file(&out_path, "the refresh rejection");
+    assert_eq!(seen["code"], json!("invalid_arguments"));
+    assert_eq!(
+        seen["message"],
+        json!(
+            "host.oauth.refresh: the function must return a table with a `token` string and an `expires_at` whole number of seconds"
+        )
+    );
+    assert_eq!(
+        read_pair(owner.workspace(), "testprov", "test"),
+        Some(stored)
+    );
+    let file = config::CredentialFile::new(owner.workspace(), "testprov", "test").unwrap();
+    assert!(file.try_lock().unwrap().is_some(), "the lock leaked");
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// An expired function result is refused before it is stored, by a
+/// refresh as by a login.
+#[test]
+fn refresh_refuses_an_expired_function_result() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+read()
+parent = read()
+rid = parent["payload"]["request_id"]
+write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+nested = read()
+payload = nested["payload"]
+write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": {"token": "tok-dead", "expires_at": 1}}})
+answer = read_answer("c1")
+assert answer["kind"] == "command_rejected", answer
+open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-expired");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    let stored = expired_pair();
+    write_pair(owner.workspace(), "testprov", "test", &stored);
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    dispatch_provider(
+        &owner,
+        Some(crate::lua::CredentialFor::Stored(test_pair())),
+        deadline,
+    );
+    owner.pump();
+    owner.pump();
+    let seen = read_json_file(&out_path, "the refresh rejection");
+    assert_eq!(seen["code"], json!("authentication_failed"));
+    assert_eq!(
+        seen["message"],
+        json!("host.oauth.refresh: the refreshed token has already expired")
+    );
+    assert_eq!(
+        read_pair(owner.workspace(), "testprov", "test"),
+        Some(stored)
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// A function that raises fails the refresh with its own failure, as a
+/// raised table passes through the Lua attempt unchanged.
+#[test]
+fn refresh_passes_the_function_failure_through() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+read()
+parent = read()
+rid = parent["payload"]["request_id"]
+write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+nested = read()
+payload = nested["payload"]
+write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "error": {"code": "extension_failed", "message": "the vendor said no"}}})
+answer = read_answer("c1")
+assert answer["kind"] == "command_rejected", answer
+open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-raises");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    let stored = expired_pair();
+    write_pair(owner.workspace(), "testprov", "test", &stored);
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    dispatch_provider(
+        &owner,
+        Some(crate::lua::CredentialFor::Stored(test_pair())),
+        deadline,
+    );
+    owner.pump();
+    owner.pump();
+    let seen = read_json_file(&out_path, "the refresh rejection");
+    assert_eq!(seen["code"], json!("extension_failed"));
+    assert_eq!(seen["message"], json!("the vendor said no"));
+    assert_eq!(
+        read_pair(owner.workspace(), "testprov", "test"),
+        Some(stored)
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// A function that never answers fails the refresh unreached: the
+/// deadline ends the wait, and the stored pair stands.
+#[test]
+fn refresh_times_out_when_its_function_never_answers() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+read()
+parent = read()
+rid = parent["payload"]["request_id"]
+write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+nested = read()
+assert nested["kind"] == "extension_request", nested
+open(sys.argv[2], "w").write(json.dumps({"nested": True}))
+answer = read_answer("c1")
+assert answer["kind"] == "command_rejected", answer
+open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-timeout");
+    let out_path = out.path().join("answer.json");
+    let nested_path = out.path().join("nested.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap(), nested_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    let stored = expired_pair();
+    write_pair(owner.workspace(), "testprov", "test", &stored);
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    dispatch_provider(
+        &owner,
+        Some(crate::lua::CredentialFor::Stored(test_pair())),
+        deadline,
+    );
+    owner.pump();
+    // The nested line reached the child, so the refresh waits on its
+    // function: advancing ends that wait, not the lock wait.
+    read_json_file(&nested_path, "the nested request");
+    owner.clock.advance(Duration::from_secs(61));
+    let seen = read_json_file(&out_path, "the refresh rejection");
+    assert_eq!(seen["code"], json!("credential_failed"));
+    assert_eq!(
+        seen["message"],
+        json!("host.oauth.refresh: the refresh function timed out")
+    );
+    assert_eq!(
+        read_pair(owner.workspace(), "testprov", "test"),
+        Some(stored)
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// Cancelling the refresh ends its nested wait: the function never
+/// answered, so the refresh fails unreached.
+#[test]
+fn refresh_cancel_ends_its_nested_wait() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+read()
+parent = read()
+rid = parent["payload"]["request_id"]
+write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+nested = read()
+assert nested["kind"] == "extension_request", nested
+open(sys.argv[2], "w").write(json.dumps({"nested": True}))
+answer = read()
+assert answer["kind"] == "command_rejected", answer
+open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-cancel");
+    let out_path = out.path().join("answer.json");
+    let nested_path = out.path().join("nested");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap(), nested_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    let stored = expired_pair();
+    write_pair(owner.workspace(), "testprov", "test", &stored);
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    let parent = dispatch_provider(
+        &owner,
+        Some(crate::lua::CredentialFor::Stored(test_pair())),
+        deadline,
+    );
+    owner.pump();
+    // The nested line reached the child, so the refresh linked its
+    // cancel to the nested request: ending the parent ends both.
+    read_json_file(&nested_path, "the nested request");
+    parent.cancel.cancel();
+    let seen = read_json_file(&out_path, "the refresh rejection");
+    assert_eq!(seen["code"], json!("credential_failed"));
+    assert_eq!(
+        seen["message"],
+        json!("host.oauth.refresh: the refresh ended before its function answered")
+    );
+    assert_eq!(
+        read_pair(owner.workspace(), "testprov", "test"),
+        Some(stored)
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// A login holds no file: its function sees nil, and what it returns is
+/// kept in the slot and answered.
+#[test]
+fn refresh_in_a_login_fills_the_slot_without_a_file() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+read()
+parent = read()
+rid = parent["payload"]["request_id"]
+write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+nested = read()
+payload = nested["payload"]
+assert payload["args"] == [None], payload
+fresh = {"token": "tok-login", "expires_at": 2000000000}
+write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": fresh}})
+answer = read_answer("c1")
+assert answer["kind"] == "command_accepted", answer
+assert answer["payload"]["result"]["value"] == fresh, answer
+open(sys.argv[1], "w").write(json.dumps(answer["payload"]["result"]["value"]))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-login");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    let slot: crate::oauth::held::LoginSlot = Arc::new(Mutex::new(None));
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    dispatch_provider(
+        &owner,
+        Some(crate::lua::CredentialFor::Login(Arc::clone(&slot))),
+        deadline,
+    );
+    owner.pump();
+    owner.pump();
+    let seen = read_json_file(&out_path, "the refresh answer");
+    let fresh = json!({"token": "tok-login", "expires_at": FRESH_EXPIRES});
+    assert_eq!(seen, fresh);
+    assert_eq!(*support::lock(&slot), Some(fresh));
+    // No file was touched: the home holds no credential.
+    assert!(!owner.workspace().join("credentials").exists());
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// A login that returns an unusable shape fails, and the slot stays
+/// empty: nothing is stored from a failed login.
+#[test]
+fn refresh_in_a_login_refuses_an_unusable_function_result() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+read()
+parent = read()
+rid = parent["payload"]["request_id"]
+write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+nested = read()
+payload = nested["payload"]
+write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": {"nope": True}}})
+answer = read_answer("c1")
+assert answer["kind"] == "command_rejected", answer
+open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-login-bad");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    let slot: crate::oauth::held::LoginSlot = Arc::new(Mutex::new(None));
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    dispatch_provider(
+        &owner,
+        Some(crate::lua::CredentialFor::Login(Arc::clone(&slot))),
+        deadline,
+    );
+    owner.pump();
+    owner.pump();
+    let seen = read_json_file(&out_path, "the refresh rejection");
+    assert_eq!(seen["code"], json!("invalid_arguments"));
+    assert_eq!(*support::lock(&slot), None);
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// Without a credential scope no callback refreshes: the refusal names
+/// the callback, as the Lua lock arm does.
+#[test]
+fn refresh_without_a_scope_names_the_callback() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+def call(cid, call, args, rid=None):
+    line = {"id": cid, "command": "call", "args": {"call": call, "args": args}}
+    if rid is not None:
+        line["args"]["request_id"] = rid
+    write(line)
+answers = {}
+read()
+call("e1", "host.oauth.refresh", [True])
+call("ready", "ready", [])
+answers["e1"] = read()["payload"]
+read()
+go = read()
+for index, rid in enumerate(go["payload"]["rids"]):
+    call("r%d" % index, "host.oauth.refresh", [True], rid)
+for _ in go["payload"]["rids"]:
+    answer = read()
+    answers[answer["payload"]["command_id"]] = answer["payload"]
+open(sys.argv[1], "w").write(json.dumps(answers))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-refusals");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    // The entry refusal and the `ready` acknowledgment arrive first.
+    owner.pump();
+    owner.pump();
+    let ran_bys = [
+        "tool t",
+        "command go",
+        "hook turn_end",
+        "watcher 3",
+        "delegate",
+        "provider testprov.sign",
+        "provider testprov.credential",
+    ];
+    let mut rids = Vec::new();
+    for ran_by in ran_bys {
+        let minted = owner.extension.shared().table.mint(
+            super::process::requests::RequestKind::Function,
+            "fiber.test/proc",
+            ran_by.to_owned(),
+            None,
+            None,
+            None,
+        );
+        rids.push(Value::String(minted.id.0.clone()));
+    }
+    // Hand the script its request ids: fiber never parses this line.
+    let line = super::process::envelope_line(
+        owner.extension.shared(),
+        "extension_request",
+        serde_json::Map::from_iter([("rids".to_owned(), Value::Array(rids))]),
+    );
+    owner.extension.transport().send(line).unwrap();
+    for _ in 0..ran_bys.len() {
+        owner.pump();
+    }
+    let seen = read_json_file(&out_path, "the refresh refusals");
+    assert_eq!(seen["e1"]["code"], json!("invalid_arguments"));
+    assert_eq!(
+        seen["e1"]["message"],
+        json!("host.oauth.refresh: needs a running callback, not the entry script")
+    );
+    let expected = [
+        "host.oauth.refresh: a tool has no provider credential to refresh",
+        "host.oauth.refresh: a command has no provider credential to refresh",
+        "host.oauth.refresh: a hook has no provider credential to refresh",
+        "host.oauth.refresh: a watcher has no provider credential to refresh",
+        "host.oauth.refresh: a delegate run has no provider credential to refresh",
+        "host.oauth.refresh: testprov.sign has no credential to refresh; only credential() refreshes",
+        "host.oauth.refresh: testprov.credential has no credential to refresh; only credential() refreshes",
+    ];
+    for (index, message) in expected.iter().enumerate() {
+        let id = format!("r{index}");
+        assert_eq!(seen[&id]["code"], json!("invalid_arguments"), "{id}");
+        assert_eq!(seen[&id]["message"], json!(message), "{id}");
+    }
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// Retiring the generation ends the refresh with no answer: a late
+/// answer would leak an old request context into the new generation.
+#[test]
+fn refresh_retired_mid_wait_answers_nothing() {
+    let script = r#"import sys, json, select
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+read()
+parent = read()
+rid = parent["payload"]["request_id"]
+write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+nested = read()
+assert nested["kind"] == "extension_request", nested
+open(sys.argv[2], "w").write(json.dumps({"nested": True}))
+ready, _, _ = select.select([sys.stdin], [], [], 3)
+saw = read()["kind"] if ready else "silent"
+open(sys.argv[1], "w").write(json.dumps({"saw": saw}))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-retire");
+    let out_path = out.path().join("answer.json");
+    let nested_path = out.path().join("nested.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap(), nested_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    write_pair(owner.workspace(), "testprov", "test", &expired_pair());
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    dispatch_provider(
+        &owner,
+        Some(crate::lua::CredentialFor::Stored(test_pair())),
+        deadline,
+    );
+    owner.pump();
+    // The nested line reached the child, so the refresh waits on its
+    // function: retiring ends that wait with no answer.
+    read_json_file(&nested_path, "the nested request");
+    owner.extension.shared().table.retire();
+    let seen = read_json_file(&out_path, "the retired refresh");
+    assert_eq!(seen, json!({"saw": "silent"}));
+    // The worker released the lock on its way out.
+    let file = config::CredentialFile::new(owner.workspace(), "testprov", "test").unwrap();
+    assert!(file.try_lock().unwrap().is_some(), "the lock leaked");
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// The lock service behind the continuation: a held lock waits, a
+/// cancelled or retired wait ends at once, and a missed deadline times
+/// out with the lock sentence.
+#[test]
+fn file_credential_resolve_follows_the_lock_service() {
+    use super::process::oauth::FileCredential;
+    use super::process::oauth::RefreshCredential as _;
+    let home = fakes::TempDir::new("fiber-process-resolve");
+    let pair = test_pair();
+    let fake = fakes::clock::FakeClock::new();
+    let clock: Arc<dyn contract::clock::Clock> = fake.clone();
+    let cancel = support::cancel::Token::new();
+    let live = || true;
+    // A free lock resolves at once, and dropping the holder releases it.
+    write_pair(home.path(), "testprov", "test", &expired_pair());
+    let credential = FileCredential::new(home.path().to_path_buf());
+    {
+        let holder = credential
+            .resolve(&pair, clock.as_ref(), &cancel, None, &live)
+            .expect("a free lock resolves");
+        assert!(matches!(holder, crate::oauth::held::Holder::File(_)));
+    }
+    let file = config::CredentialFile::new(home.path(), "testprov", "test").unwrap();
+    assert!(file.try_lock().unwrap().is_some(), "the lock leaked");
+    // A cancelled wait ends cancelled, holding nothing.
+    let held = file.try_lock().unwrap().expect("a free test pair locks");
+    cancel.cancel();
+    let Err((code, message)) = credential.resolve(&pair, clock.as_ref(), &cancel, None, &live)
+    else {
+        panic!("a cancelled lock wait ends cancelled");
+    };
+    assert_eq!(code, contract::ErrorCode::Cancelled);
+    assert_eq!(message, "host.oauth.refresh: the refresh was cancelled");
+    // A retired generation ends the same way.
+    let cancel = support::cancel::Token::new();
+    let retired = || false;
+    let Err((code, message)) = credential.resolve(&pair, clock.as_ref(), &cancel, None, &retired)
+    else {
+        panic!("a retired lock wait ends cancelled");
+    };
+    assert_eq!(code, contract::ErrorCode::Cancelled);
+    assert_eq!(message, "host.oauth.refresh: the refresh was cancelled");
+    drop(held);
+}
+
+/// The lock wait ends at the deadline with the lock sentence when the
+/// holder never lets go.
+#[test]
+fn file_credential_resolve_times_out_on_a_held_lock() {
+    use super::process::oauth::FileCredential;
+    use super::process::oauth::RefreshCredential as _;
+    let home = fakes::TempDir::new("fiber-process-resolve-timeout");
+    let pair = test_pair();
+    write_pair(home.path(), "testprov", "test", &expired_pair());
+    let _held = config::CredentialFile::new(home.path(), "testprov", "test")
+        .unwrap()
+        .try_lock()
+        .unwrap()
+        .expect("a free test pair locks");
+    let fake = fakes::clock::FakeClock::new();
+    let clock: Arc<dyn contract::clock::Clock> = fake.clone();
+    let credential = FileCredential::new(home.path().to_path_buf());
+    let deadline = fake.now() + Duration::from_secs(5);
+    let (done, wait) = std::sync::mpsc::channel();
+    std::thread::spawn({
+        let clock = Arc::clone(&clock);
+        move || {
+            let cancel = support::cancel::Token::new();
+            let live = || true;
+            match done.send(credential.resolve(
+                &pair,
+                clock.as_ref(),
+                &cancel,
+                Some(deadline),
+                &live,
+            )) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    });
+    fake.advance(Duration::from_secs(6));
+    // The lock wait ends at the deadline; the ten-second bound only
+    // fails a broken wait instead of hanging the test.
+    let answer =
+        fakes::Deadline::after(Duration::from_secs(10)).recv_or_fail(&wait, "the lock wait");
+    let Err((code, message)) = answer else {
+        panic!("a held lock times out, not {answer:?}");
+    };
+    assert_eq!(code, contract::ErrorCode::Timeout);
+    assert_eq!(message, "host.oauth.refresh: the credential lock timed out");
+}
+
+/// Production services behind the seam: the state store, the clock and
+/// the runtime the launch wires, with no session dispatcher.
+fn production_services(
+    store: Arc<super::host::state::ExtensionState>,
+    clock: Arc<dyn contract::clock::Clock>,
+    runtime: super::runtime::Runtime,
+) -> Arc<dyn super::process::context::ProcessHostServices> {
+    Arc::new(super::process::context::NativeHostServices {
+        runtime,
+        state: store,
+        clock,
+        browser: Arc::new(ClosedBrowser),
+        model: None,
+        delegate: None,
+        tool_runner: None,
+        secrets: Vec::new(),
+    })
+}
+
+/// A hook delivery commits its state writes on success: the set joins
+/// the hook's transaction, and the reply commits it.
+#[test]
+fn hook_state_writes_commit_on_success() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+hook = json.loads(sys.argv[2])
+read()
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+registered = read()
+assert registered["kind"] == "command_accepted", registered
+read()
+delivery = read()
+assert delivery["kind"] == "extension_request", delivery
+rid = delivery["payload"]["request_id"]
+write({"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 1], "request_id": rid}})
+answer = read()
+assert answer["kind"] == "command_accepted", answer
+write({"id": "p1", "command": "reply", "args": {"request_id": rid, "result": "done"}})
+ack = read()
+assert ack["kind"] == "command_accepted", ack
+open(sys.argv[1], "w").write(json.dumps({"done": True}))"#;
+    let out = fakes::TempDir::new("fiber-process-state-commit");
+    let out_path = out.path().join("done.json");
+    let owner = Harness::start_with_services(
+        script,
+        &[out_path.to_str().unwrap(), &wire_hook_spec().to_string()],
+        serde_json::Map::new(),
+        None,
+        production_services,
+        FakeServices::new(),
+    );
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let extension = Arc::clone(&owner.extension);
+    let delivered = std::thread::spawn(move || {
+        let caller = support::cancel::Token::new();
+        extension.dispatch_stream(
+            &hook,
+            json!({"event": "turn_end"}),
+            Duration::from_secs(10),
+            Some(7),
+            &caller,
+        )
+    });
+    owner.pump();
+    owner.pump();
+    let outcome = delivered.join().expect("the hook thread ends");
+    assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    let seen = read_json_file(&out_path, "the hook delivery");
+    assert_eq!(seen, json!({"done": true}));
+    assert_eq!(owner.extension.shared().state.get("k"), Some(json!(1)));
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// A hook delivery discards its state writes when it times out: the set
+/// joined the hook's transaction, and the missed reply drops it.
+#[test]
+fn hook_state_writes_discard_on_timeout() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+hook = json.loads(sys.argv[2])
+read()
+write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
+write({"id": "ready", "command": "ready"})
+registered = read()
+assert registered["kind"] == "command_accepted", registered
+read()
+delivery = read()
+assert delivery["kind"] == "extension_request", delivery
+rid = delivery["payload"]["request_id"]
+write({"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 1], "request_id": rid}})
+answer = read()
+assert answer["kind"] == "command_accepted", answer"#;
+    let out = fakes::TempDir::new("fiber-process-state-discard");
+    let out_path = out.path().join("done.json");
+    let owner = Harness::start_with_services(
+        script,
+        &[out_path.to_str().unwrap(), &wire_hook_spec().to_string()],
+        serde_json::Map::new(),
+        None,
+        production_services,
+        FakeServices::new(),
+    );
+    owner.pump();
+    owner.pump();
+    let hook = {
+        let registry = support::lock(&owner.registry);
+        registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
+    };
+    let extension = Arc::clone(&owner.extension);
+    let delivered = std::thread::spawn(move || {
+        let caller = support::cancel::Token::new();
+        extension.dispatch_stream(
+            &hook,
+            json!({"event": "turn_end"}),
+            Duration::from_secs(10),
+            Some(7),
+            &caller,
+        )
+    });
+    owner.pump();
+    // The set joined transaction 7, and no reply ever comes: the
+    // deadline fails the hook, and the failure discards its writes.
+    owner.clock.advance(Duration::from_secs(11));
+    let outcome = delivered.join().expect("the hook thread ends");
+    assert!(outcome.is_err(), "a timed-out hook answers: {outcome:?}");
+    assert_eq!(owner.extension.shared().state.get("k"), None);
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// Commands and watchers never join a transaction: their writes land at
+/// once, with no hook call open.
+#[test]
+fn command_and_watcher_writes_land_without_a_transaction() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+command = json.loads(sys.argv[2])
+watch = json.loads(sys.argv[3])
+read()
+write({"id": "c1", "command": "call", "args": {"call": "fiber.command", "args": ["go", command]}})
+write({"id": "w1", "command": "call", "args": {"call": "fiber.watch", "args": [["turn_started"], watch]}})
+write({"id": "ready", "command": "ready"})
+for _ in range(3):
+    ack = read()
+    assert ack["kind"] == "command_accepted", ack
+first = read()
+assert first["kind"] == "extension_request", first
+rid = first["payload"]["request_id"]
+write({"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 1], "request_id": rid}})
+answer = read()
+assert answer["kind"] == "command_accepted", answer
+write({"id": "p1", "command": "reply", "args": {"request_id": rid, "result": "done"}})
+ack = read()
+assert ack["kind"] == "command_accepted", ack
+second = read()
+assert second["kind"] == "extension_request", second
+rid = second["payload"]["request_id"]
+write({"id": "s2", "command": "call", "args": {"call": "state.set", "args": ["j", 2], "request_id": rid}})
+answer = read()
+assert answer["kind"] == "command_accepted", answer
+write({"id": "p2", "command": "reply", "args": {"request_id": rid, "result": "done"}})
+ack = read()
+assert ack["kind"] == "command_accepted", ack
+open(sys.argv[1], "w").write(json.dumps({"done": True}))"#;
+    let out = fakes::TempDir::new("fiber-process-state-direct");
+    let out_path = out.path().join("done.json");
+    let owner = Harness::start_with_services(
+        script,
+        &[
+            out_path.to_str().unwrap(),
+            &wire_command_spec().to_string(),
+            &watcher_spec().to_string(),
+        ],
+        serde_json::Map::new(),
+        None,
+        production_services,
+        FakeServices::new(),
+    );
+    for _ in 0..3 {
+        owner.pump();
+    }
+    let (command, watcher) = {
+        let registry = support::lock(&owner.registry);
+        (
+            registry.commands()["go"].run.clone(),
+            registry
+                .watcher_runs()
+                .values()
+                .next()
+                .cloned()
+                .expect("a watcher registers"),
+        )
+    };
+    let extension = Arc::clone(&owner.extension);
+    let command_thread = std::thread::spawn(move || {
+        let caller = support::cancel::Token::new();
+        extension.dispatch_stream(&command, json!({}), Duration::from_secs(10), None, &caller)
+    });
+    owner.pump();
+    owner.pump();
+    let outcome = command_thread.join().expect("the command thread ends");
+    assert_eq!(outcome.expect("the command answers"), Some(json!("done")));
+    let extension = Arc::clone(&owner.extension);
+    let watcher_thread = std::thread::spawn(move || {
+        let caller = support::cancel::Token::new();
+        extension.dispatch_stream(&watcher, json!({}), Duration::from_secs(10), None, &caller)
+    });
+    owner.pump();
+    owner.pump();
+    let outcome = watcher_thread.join().expect("the watcher thread ends");
+    assert_eq!(outcome.expect("the watcher answers"), Some(json!("done")));
+    let seen = read_json_file(&out_path, "the deliveries");
+    assert_eq!(seen, json!({"done": true}));
+    let shared = owner.extension.shared();
+    assert_eq!(shared.state.get("k"), Some(json!(1)));
+    assert_eq!(shared.state.get("j"), Some(json!(2)));
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// The state size bound holds on the wire: 65,536 serialized bytes
+/// stand, and 65,537 are refused with the bound's sentence.
+#[test]
+fn state_set_holds_the_size_bound() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+write({"id": "ready", "command": "ready"})
+read()
+read()
+ok = "x" * 65534
+write({"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", ok]}})
+answer = read()
+assert answer["kind"] == "command_accepted", answer
+big = "x" * 65535
+write({"id": "s2", "command": "call", "args": {"call": "state.set", "args": ["k", big]}})
+answer = read()
+assert answer["kind"] == "command_rejected", answer
+open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let out = fakes::TempDir::new("fiber-process-state-bound");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start_with_services(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+        production_services,
+        FakeServices::new(),
+    );
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    let seen = read_json_file(&out_path, "the bound rejection");
+    assert_eq!(seen["code"], json!("state_too_large"));
+    assert_eq!(
+        seen["message"],
+        json!("state.set: value is 65537 JSON bytes; at most 65536 are allowed")
+    );
+    let shared = owner.extension.shared();
+    assert_eq!(
+        shared.state.get("k"),
+        Some(Value::String("x".repeat(65534)))
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// Held credentials travel only the protocol's own positions: the
+/// nested arguments, the nested accepted value and the refresh answer.
+/// Nothing else the refresh touches names them.
+#[test]
+fn refresh_keeps_tokens_out_of_everything_but_the_protocol() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+def read_answer(cid):
+    while True:
+        line = read()
+        if line.get("payload", {}).get("command_id") == cid:
+            return line
+read()
+parent = read()
+rid = parent["payload"]["request_id"]
+write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
+nested = read()
+payload = nested["payload"]
+fresh = {"token": "tok-fresh", "expires_at": 2000000000}
+write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": fresh}})
+answer = read_answer("c1")
+assert answer["kind"] == "command_accepted", answer
+open(sys.argv[1], "w").write(json.dumps({"nested": nested, "answer": answer}))"#;
+    let out = fakes::TempDir::new("fiber-process-refresh-redacted");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    write_pair(owner.workspace(), "testprov", "test", &expired_pair());
+    let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    dispatch_provider(
+        &owner,
+        Some(crate::lua::CredentialFor::Stored(test_pair())),
+        deadline,
+    );
+    owner.pump();
+    owner.pump();
+    let seen = read_json_file(&out_path, "the refresh exchange");
+    // The token rides exactly the three protocol positions: the nested
+    // arguments, the nested accepted value and the refresh answer.
+    assert_eq!(
+        seen["nested"]["payload"]["args"],
+        json!([{"token": "tok-old", "expires_at": 1}])
+    );
+    assert_eq!(
+        seen["answer"]["payload"]["result"]["value"],
+        json!({"token": "tok-fresh", "expires_at": FRESH_EXPIRES})
+    );
+    // Nothing else on the line names it: the envelope, the request and
+    // reply ids, the registration and the key are bare.
+    for path in [
+        &seen["nested"]["kind"],
+        &seen["nested"]["payload"]["request_id"],
+        &seen["nested"]["payload"]["registration"],
+        &seen["nested"]["payload"]["key"],
+        &seen["answer"]["kind"],
+        &seen["answer"]["payload"]["command_id"],
+    ] {
+        let text = path.as_str().unwrap_or_default();
+        assert!(!text.contains("tok-"), "{path}");
+    }
+    // Nothing Debug-printable around the refresh names it either: the
+    // credential source prints only its home, and the held lock only
+    // which file it locks, never the pair itself.
+    let file = config::CredentialFile::new(owner.workspace(), "testprov", "test").unwrap();
+    let held = file.try_lock().unwrap().expect("a free test pair locks");
+    let debug = format!(
+        "{:?}{:?}",
+        super::process::oauth::FileCredential::new(owner.workspace().to_path_buf()),
+        crate::oauth::held::Holder::File(held)
+    );
+    assert!(!debug.contains("tok-"), "{debug}");
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+// TEMPORARY debug probe.

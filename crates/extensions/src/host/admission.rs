@@ -15,6 +15,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use contract::{ErrorCode, RequestId};
 
+use crate::lua::CredentialFor;
+
 /// Where an admitted call runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(
@@ -58,6 +60,11 @@ pub(crate) struct CallbackContext {
     /// The hook state transaction the call's writes join, when the call
     /// runs inside a hook callback.
     pub state_call: Option<u64>,
+    /// What a `host.oauth.refresh` in this callback refreshes: a stored
+    /// pair's file, or a login's result slot. Only the dispatcher that
+    /// runs a provider's `credential()` sets it, carrying the session's
+    /// pair; every other callback holds no provider credential.
+    pub credential: Option<CredentialFor>,
 }
 
 #[allow(
@@ -73,6 +80,7 @@ impl CallbackContext {
             deadline: None,
             cancel: support::cancel::Token::new(),
             state_call: None,
+            credential: None,
         }
     }
 
@@ -84,12 +92,15 @@ impl CallbackContext {
             deadline: None,
             cancel: support::cancel::Token::new(),
             state_call: None,
+            credential: None,
         }
     }
 
     /// A call made while answering `request_id` as `ran_by`, ending at
     /// `deadline` and joining hook transaction `state_call`, when the
-    /// request is a hook delivery.
+    /// request is a hook delivery. `credential` is what a
+    /// `host.oauth.refresh` in this callback refreshes, set only by the
+    /// dispatcher that runs a provider's `credential()`.
     pub(crate) fn request(
         extension: &str,
         request_id: RequestId,
@@ -97,6 +108,7 @@ impl CallbackContext {
         deadline: Option<Instant>,
         cancel: support::cancel::Token,
         state_call: Option<u64>,
+        credential: Option<CredentialFor>,
     ) -> Self {
         Self {
             extension: extension.to_owned(),
@@ -104,6 +116,7 @@ impl CallbackContext {
             deadline,
             cancel,
             state_call,
+            credential,
         }
     }
 

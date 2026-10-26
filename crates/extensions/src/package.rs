@@ -130,6 +130,11 @@ impl Package {
         } else {
             dir.join(program)
         };
+        // Refresh resolves stored pairs from the home credential files;
+        // the session wires its account choice in Part D. State opens on
+        // a standalone store; the session folds its state into the store
+        // in Part D.
+        let home = context.home.clone();
         let extension = super::process::ProcessExtension::start(super::process::Launch {
             owner: package.manifest.name.clone(),
             runtime,
@@ -139,6 +144,8 @@ impl Package {
             context,
             drive: None,
             services,
+            oauth: Arc::new(super::process::oauth::FileCredential::new(home)),
+            state: super::host::state::StateRegistry::standalone().store(&package.manifest.name),
             clock,
             limits: super::process::transport::Limits::default(),
         })

@@ -29,6 +29,7 @@ mod validate;
 
 pub(crate) mod calls;
 pub(crate) mod context;
+pub(crate) mod oauth;
 pub(crate) mod requests;
 #[cfg(test)]
 mod tests;
@@ -633,6 +634,10 @@ pub(crate) struct Launch {
     pub drive: Option<Arc<dyn contract::extension::Drive>>,
     /// What answers its host and state calls.
     pub services: Arc<dyn context::ProcessHostServices>,
+    /// What resolves its refresh provider to a stored pair or login slot.
+    pub oauth: Arc<dyn oauth::RefreshCredential>,
+    /// The state store its hook writes join and its calls read.
+    pub state: Arc<crate::host::state::ExtensionState>,
     /// The clock its timeouts read.
     pub clock: Arc<dyn contract::clock::Clock>,
     /// The pipe limits; the tests inject small ones.
@@ -645,14 +650,16 @@ pub(crate) struct Launch {
     dead_code,
     reason = "asserted by tests; production use lands in a later part"
 )]
-struct Shared {
+pub(crate) struct Shared {
     owner: String,
     runtime: Runtime,
     registry: Arc<Mutex<Registry>>,
-    table: Arc<requests::Table>,
-    transport: transport::Transport,
+    pub(crate) table: Arc<requests::Table>,
+    pub(crate) transport: transport::Transport,
     drive: Option<Arc<dyn contract::extension::Drive>>,
     services: Arc<dyn context::ProcessHostServices>,
+    pub(crate) oauth: Arc<dyn oauth::RefreshCredential>,
+    pub(crate) state: Arc<crate::host::state::ExtensionState>,
     clock: Arc<dyn contract::clock::Clock>,
     context: context::ProcessContext,
 }
@@ -690,6 +697,8 @@ impl ProcessExtension {
             context,
             drive,
             services,
+            oauth,
+            state,
             clock,
             limits,
         } = launch;
@@ -704,6 +713,8 @@ impl ProcessExtension {
                 transport,
                 drive,
                 services,
+                oauth,
+                state,
                 clock,
                 context,
             }),
@@ -729,6 +740,13 @@ impl ProcessExtension {
     /// The request table, for attributing calls and retiring generations.
     pub(crate) fn table(&self) -> &Arc<requests::Table> {
         &self.shared.table
+    }
+
+    /// The shared owner, for tests that mint requests, send lines and
+    /// read the stores behind the seam.
+    #[cfg(test)]
+    pub(crate) fn shared(&self) -> &Arc<Shared> {
+        &self.shared
     }
 
     /// The pipes, for stopping, signalling and reaping the child.
@@ -765,16 +783,38 @@ impl ProcessExtension {
     ) -> Result<Option<Value>, Error> {
         self.shared.runtime.resolve(func)?;
         match self.family_of(func) {
-            Some(Family::Hook { point }) => self.send_request(
-                Dispatch::stream(func, format!("hook {point}"), args, timeout, state_call),
-                caller,
-            ),
+            // A hook delivery joins its state transaction: the run begins
+            // it, success commits it, and any failure discards it, as the
+            // Lua scheduler does around its hook calls. Watchers and
+            // commands never join a transaction: their `state_call`, if
+            // one arrived, would write into no open call. The committed
+            // lines go to the session fold in Part D; the store applies
+            // them here.
+            Some(Family::Hook { point }) => {
+                if let Some(call) = state_call {
+                    self.shared.state.begin(call);
+                }
+                let outcome = self.send_request(
+                    Dispatch::stream(func, format!("hook {point}"), args, timeout, state_call),
+                    caller,
+                );
+                match (state_call, &outcome) {
+                    (Some(call), Ok(_)) => {
+                        self.shared.state.take_call(call);
+                    }
+                    (Some(call), Err(_)) => {
+                        self.shared.state.discard_call(call);
+                    }
+                    (None, _) => {}
+                }
+                outcome
+            }
             Some(Family::Watcher { index }) => self.send_request(
-                Dispatch::stream(func, format!("watcher {index}"), args, timeout, state_call),
+                Dispatch::stream(func, format!("watcher {index}"), args, timeout, None),
                 caller,
             ),
             Some(Family::Command { name }) => self.send_request(
-                Dispatch::stream(func, format!("command {name}"), args, timeout, state_call),
+                Dispatch::stream(func, format!("command {name}"), args, timeout, None),
                 caller,
             ),
             _ => Err(Error::UnknownCallback {
@@ -990,13 +1030,7 @@ impl ProcessExtension {
                 self.serve_ask(id, callback.clone());
             }
             calls::DecodedCall::Refresh => {
-                // No holder exists yet: every refresh refuses as a call
-                // with no provider credential does, in the shared words.
-                self.answer_rejected(
-                    &id,
-                    ErrorCode::InvalidArguments,
-                    crate::host::admission::lock_arg_error("host.oauth.refresh", callback.ran_by()),
-                );
+                self.serve_refresh(id, callback.clone());
             }
         }
     }
@@ -1040,6 +1074,43 @@ impl ProcessExtension {
                 &id,
                 ErrorCode::IoFailed,
                 format!("{call}: Fiber could not start the host call"),
+            );
+        }
+    }
+
+    /// Answers one `host.oauth.refresh`: without a credential scope the
+    /// callback holds no provider credential, refused with the shared
+    /// policy's sentence, as in Lua; with one the native continuation
+    /// holds the lock or slot around its nested function request on a
+    /// worker, so a slow refresh never holds up the pump.
+    fn serve_refresh(
+        &self,
+        id: contract::CommandId,
+        callback: crate::host::admission::CallbackContext,
+    ) {
+        let Some(scope) = callback.credential.clone() else {
+            // No dispatcher set what this refresh refreshes: the refusal
+            // names the callback, as the Lua lock arm does.
+            self.answer_rejected(
+                &id,
+                ErrorCode::InvalidArguments,
+                crate::host::admission::lock_arg_error("host.oauth.refresh", callback.ran_by()),
+            );
+            return;
+        };
+        let shared = Arc::clone(&self.shared);
+        let answer_id = id.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("process refresh {}", shared.owner))
+            .spawn(move || {
+                let id = answer_id;
+                oauth::refresh_continue(&shared, &id, callback, scope, &shared.oauth);
+            });
+        if spawned.is_err() {
+            self.answer_rejected(
+                &id,
+                ErrorCode::IoFailed,
+                "host.oauth.refresh: Fiber could not start the host call".to_owned(),
             );
         }
     }
@@ -1404,12 +1475,17 @@ fn run_request(
     // behind earlier stream items counts against it.
     let clock = shared.clock.as_ref();
     let deadline = clock.now().checked_add(dispatch.timeout);
+    // No dispatcher behind the package seam runs a provider's
+    // `credential()`: dispatches carry no credential scope, and a
+    // `host.oauth.refresh` under them is refused. The session sets the
+    // scope when it dispatches provider functions.
     let minted = shared.table.mint(
         dispatch.kind,
         &shared.owner,
         dispatch.ran_by,
         deadline,
         dispatch.state_call,
+        None,
     );
     let id = minted.id;
     if dispatch.kind == requests::RequestKind::Stream {
@@ -1592,7 +1668,7 @@ fn wire_args(value: Value) -> Vec<Value> {
     dead_code,
     reason = "asserted by tests; production use lands in a later part"
 )]
-fn hang_guard(
+pub(crate) fn hang_guard(
     clock: &dyn contract::clock::Clock,
     deadline: Option<std::time::Instant>,
 ) -> Duration {
@@ -1617,7 +1693,11 @@ fn not_built(command: &str) -> String {
     dead_code,
     reason = "asserted by tests; production use lands in a later part"
 )]
-fn envelope_line(shared: &Shared, kind: &str, payload: serde_json::Map<String, Value>) -> Vec<u8> {
+pub(crate) fn envelope_line(
+    shared: &Shared,
+    kind: &str,
+    payload: serde_json::Map<String, Value>,
+) -> Vec<u8> {
     let envelope = contract::Envelope {
         kind: kind.to_owned(),
         session_id: shared.context.session_id.clone(),
@@ -1636,7 +1716,7 @@ fn envelope_line(shared: &Shared, kind: &str, payload: serde_json::Map<String, V
     dead_code,
     reason = "asserted by tests; production use lands in a later part"
 )]
-fn answer_on(
+pub(crate) fn answer_on(
     shared: &Shared,
     id: &contract::CommandId,
     result: Option<contract::events::CommandResult>,
@@ -1672,7 +1752,11 @@ fn answer_on(
     dead_code,
     reason = "asserted by tests; production use lands in a later part"
 )]
-fn answer_off(shared: &Shared, id: &contract::CommandId, rejection: contract::inbox::Rejection) {
+pub(crate) fn answer_off(
+    shared: &Shared,
+    id: &contract::CommandId,
+    rejection: contract::inbox::Rejection,
+) {
     let payload = serde_json::to_value(&contract::events::CommandRejected {
         command_id: Some(id.clone()),
         code: rejection.code,

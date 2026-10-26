@@ -28,7 +28,7 @@ use mlua::{Lua, LuaSerdeExt, Table, Value as LuaValue};
 use ring::digest;
 use ring::rand::{SecureRandom, SystemRandom};
 
-mod held;
+pub(crate) mod held;
 
 pub(crate) use held::{Held, Holder, LoginSlot};
 

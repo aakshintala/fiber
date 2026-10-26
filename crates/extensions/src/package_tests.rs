@@ -219,7 +219,6 @@ fn service_variant(operation: &super::process::context::HostOperation) -> &'stat
         Op::OAuthShow { .. } => "oauth.show",
         Op::OAuthPkcs => "oauth.pkce",
         Op::OAuthPoll { .. } => "oauth.poll",
-        Op::OAuthRefresh { .. } => "oauth.refresh",
         Op::StateGet { .. } => "state.get",
         Op::StateKeys => "state.keys",
         Op::StateSet { .. } => "state.set",
