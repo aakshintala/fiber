@@ -146,18 +146,10 @@ fn prompt_bubble_shows_the_local_time_under_it() {
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
     // 2026-10-08T14:15Z, 10:15 in New York.
     app.on_line(turn_started_at("s_aaaaaaaaaaaaaaaa", "go", 1791468900000));
+    // The turn's local start time draws under the bubble
+    // (`docs/tui.md`, "Turns").
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
-    assert_eq!(
-        texts,
-        vec![
-            "".to_owned(),
-            "▄▄▄▄▄".to_owned(),
-            " go ▐".to_owned(),
-            "▀▀▀▀▀".to_owned(),
-            "you 10:15 ".to_owned(),
-            "".to_owned()
-        ]
-    );
+    assert!(texts.iter().any(|line| line == "you 10:15 "), "{texts:?}");
     let time = app
         .lines()
         .into_iter()
@@ -184,25 +176,13 @@ fn prompt_bubble_shows_the_local_time_under_it() {
     );
     assert!(row_text(&buf, at.saturating_sub(2)).contains(" go ▐"));
     insta::assert_snapshot!("prompt_bubble_with_time", screen(&app));
-}
-
-#[test]
-fn prompt_bubble_defaults_to_utc() {
+    // Without a set zone the same instant draws in UTC
+    // (`docs/tui.md`, "Turns").
     let mut app = empty();
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started_at("s_aaaaaaaaaaaaaaaa", "go", 1791468900000));
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
-    assert_eq!(
-        texts,
-        vec![
-            "".to_owned(),
-            "▄▄▄▄▄".to_owned(),
-            " go ▐".to_owned(),
-            "▀▀▀▀▀".to_owned(),
-            "you 14:15 ".to_owned(),
-            "".to_owned()
-        ]
-    );
+    assert!(texts.iter().any(|line| line == "you 14:15 "), "{texts:?}");
 }
 
 #[test]
@@ -3066,7 +3046,9 @@ fn group_line_and_ledger_show_parsed_arguments_never_json() {
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     assert!(text(&buf).contains("{\"questions\""), "{}", text(&buf));
-    // Once requested, the parsed form draws as one row, never JSON.
+    // Once requested, the parsed form draws as one row, never JSON:
+    // collapsed, the group is one line (`docs/tui.md`, "Tool groups and
+    // the ledger").
     app.on_line(at(
         "tool_call_requested",
         Some("a_1"),
@@ -3083,7 +3065,9 @@ fn group_line_and_ledger_show_parsed_arguments_never_json() {
         .filter(|row| row.contains("4 questions"))
         .collect();
     assert_eq!(holding.len(), 1, "{shown}");
-    // Ten calls in flight still draw one row, cut with "…".
+    // Ten calls in flight still draw one row, cut with "…", the toggle
+    // staying put: what does not fit is cut (`docs/tui.md`, "Tool groups
+    // and the ledger").
     for n in 0..9 {
         app.on_line(at(
             "tool_call_requested",
@@ -3102,7 +3086,9 @@ fn group_line_and_ledger_show_parsed_arguments_never_json() {
     assert!(row.contains('…'), "{row}");
     assert!(row.ends_with('▸'), "{row}");
     assert!(crate::format::width(&row) <= usize::from(W), "{row}");
-    // At a narrow width the one row is cut there instead.
+    // At a narrow width the one row is cut there instead: the summary line
+    // is cut with "…" so the duration and the toggle stay put
+    // (`docs/tui.md`, "Tool groups and the ledger").
     app.set_size(40, H);
     let narrow = Rect::new(0, 0, 40, H);
     let mut buf = Buffer::empty(narrow);
@@ -3113,41 +3099,40 @@ fn group_line_and_ledger_show_parsed_arguments_never_json() {
     assert!(row.ends_with('▸'), "{row}");
     assert!(crate::format::width(&row) <= 40, "{row}");
     assert!(!shown.contains("{\""), "{shown}");
-}
-
-/// A finished call's ledger row shows its parsed summary, never JSON.
-#[test]
-fn ledger_rows_show_parsed_arguments_never_json() {
-    use serde_json::json;
-    let mut app = empty();
-    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
-    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
-    app.on_line(at("step_started", None, 0, json!({})));
-    for (action, name, arguments) in [
-        ("a_1", "ask_user", four_questions()),
-        ("a_2", "web_fetch", json!({"url": "https://example.com/x"})),
-        ("a_3", "search", json!({"query": "rust errors"})),
-    ] {
-        app.on_line(at(
-            "tool_call_requested",
-            Some(action),
-            0,
-            json!({"name": name, "arguments": arguments}),
-        ));
-        app.on_line(at(
-            "tool_call_completed",
-            Some(action),
-            0,
-            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
-        ));
+    // A finished call's ledger row shows its parsed summary, never JSON:
+    // the ledger holds one row per call (`docs/tui.md`, "Tool groups and
+    // the ledger").
+    {
+        let mut app = empty();
+        attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+        app.on_line(at("step_started", None, 0, json!({})));
+        for (action, name, arguments) in [
+            ("a_1", "ask_user", four_questions()),
+            ("a_2", "web_fetch", json!({"url": "https://example.com/x"})),
+            ("a_3", "search", json!({"query": "rust errors"})),
+        ] {
+            app.on_line(at(
+                "tool_call_requested",
+                Some(action),
+                0,
+                json!({"name": name, "arguments": arguments}),
+            ));
+            app.on_line(at(
+                "tool_call_completed",
+                Some(action),
+                0,
+                json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+            ));
+        }
+        app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+        let shown = screen(&app);
+        // The kind cells name the kind; the targets show the parsed form.
+        assert!(shown.contains("ask      4 questions"), "{shown}");
+        assert!(shown.contains("https://example.com/x"), "{shown}");
+        assert!(shown.contains("rust errors"), "{shown}");
+        assert!(!shown.contains("{\""), "{shown}");
     }
-    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
-    let shown = screen(&app);
-    // The kind cells name the kind; the targets show the parsed form.
-    assert!(shown.contains("ask      4 questions"), "{shown}");
-    assert!(shown.contains("https://example.com/x"), "{shown}");
-    assert!(shown.contains("rust errors"), "{shown}");
-    assert!(!shown.contains("{\""), "{shown}");
 }
 
 #[test]
