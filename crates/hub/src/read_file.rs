@@ -86,6 +86,11 @@ fn resolve(home: &Path, session: &SessionId, path: &str) -> Result<File, Refused
     // matches. The session directory's own canonicalization lives in
     // `log`; a failure there is not placed, so it refuses as outside.
     // An open file is dropped with the refusal.
+    // `dir` is built from a project directory entry and a validated
+    // session id, so `relative` has only normal components. Joining it to
+    // the canonical home gives the expected location without following a
+    // link in the project/session path; canonicalizing that candidate
+    // would accept the link this guard must refuse.
     let placed = dir
         .strip_prefix(home)
         .ok()

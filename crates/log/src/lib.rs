@@ -99,8 +99,10 @@ pub fn dir_exists(dir: &Path) -> bool {
 }
 
 /// Whether `dir` sits at `expected`: `dir` canonicalized inside `log`
-/// equals the expected canonical path. A failed canonicalization is not
-/// placed, so the caller keeps its own refusal for it.
+/// equals the expected path, expressed under a canonical root with normal
+/// path components. Do not canonicalize a possibly linked candidate to
+/// form `expected`: that would accept a link at or above `dir`. A failed
+/// canonicalization is not placed, so the caller keeps its own refusal.
 pub fn dir_is_at(dir: &Path, expected: &Path) -> bool {
     std::fs::canonicalize(dir).is_ok_and(|real| real.as_path() == expected)
 }
