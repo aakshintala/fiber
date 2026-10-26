@@ -388,8 +388,10 @@ pub(crate) const LATE_WAKE: &str =
 pub(crate) const STALL_DRIVER: &str =
     "stall driver: a shared test-support driver whose callers own the bounds";
 
-/// Every kept raw `FakeClock` advance outside `crates/fakes`, emitted by a
-/// one-off inventory script and hand-checked at each non-no-park reason.
+/// Every kept raw `FakeClock` advance outside `crates/fakes` the checker
+/// proves, emitted by a one-off inventory script and hand-checked at each
+/// non-no-park reason; helper-built and cross-file receivers are outside
+/// the proof and carry no entry (docs/testing.md:254-257).
 #[rustfmt::skip]
 pub(crate) const RAW_ADVANCE_ALLOWANCES: &[RawAdvanceAllowance] = &[
     raw_advance!("crates/bench/examples/bench/main_tests.rs", "a_stall_shifts_one_sample_not_a_side", 1, NO_PARK, "6179406086"),
@@ -467,14 +469,7 @@ pub(crate) const RAW_ADVANCE_ALLOWANCES: &[RawAdvanceAllowance] = &[
     raw_advance!("crates/log/tests/writing.rs", "a_line_carries_the_envelope_the_log_fills_in", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/loop/src/inbox/session_message_tests.rs", "a_hook_parked_past_its_registered_timeout_answers_hook_failed", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/loop/src/retry_tests.rs", "now", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/src/timing_tests.rs", "a_warming_refresh_runs_but_adds_no_turn_scope", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/src/wire_tests.rs", "a_warming_refresh_uses_the_session_factory_at_the_first_attempt", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/src/wire_tests.rs", "a_cancelled_turn_cancels_its_warming_refresh", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/src/wire_tests.rs", "a_switch_moves_session_reviewer_and_warm_to_the_new_factories", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/tests/changes.rs", "a_later_date_appends_one_line", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/loop/tests/support/mod.rs", "run", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/tests/warm.rs", "a_refresh_reached_only_at_the_cap_is_not_sent", 1, LATE_WAKE, "6261259790"),
-    raw_advance!("crates/loop/tests/warm.rs", "no_refresh_while_a_job_runs_and_one_at_once_when_it_ends_in_time", 1, LATE_WAKE, "6261259790"),
     raw_advance!("crates/loop/tests/warm.rs", "call", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/main/src/switch/read_tests.rs", "timeout_leaves_a_stubborn_group_listed_at_its_bound", 1, POLL_PAUSE, "6260728504"),
     raw_advance!("crates/main/src/switch/read_tests.rs", "timeout_with_a_live_leader_answers_at_the_bound_without_the_reap", 1, POLL_PAUSE, "6260728504"),
@@ -512,7 +507,6 @@ pub(crate) const RAW_ADVANCE_ALLOWANCES: &[RawAdvanceAllowance] = &[
     raw_advance!("crates/provider/src/http_tests.rs", "the_net_scope_ends_while_the_response_is_held", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tools/src/job_timing_tests.rs", "through_open", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tools/src/shell/monitor_tests.rs", "flood", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tools/src/web_fetch_tests.rs", "a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/app/items/retry_tests.rs", "hub_session_not_found_refusal_retries_the_open_delegate_subscribe", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 2, NO_PARK, "6179406086"),
@@ -702,8 +696,10 @@ fn last_field_name(tokens: &[SourceToken], start: usize, colon: usize) -> Option
 }
 
 /// Every `struct` the file declares, owners and non-owners alike, so a
-/// proved non-owner base (`g: G` where `G.clock` is not a `FakeClock`)
-/// stays distinct from an unproved base (docs/testing.md:254-257).
+/// proved base resolves to its declared owner and only an (`owner`, `field`)
+/// pair with a `FakeClock` field proves; a proved non-owner base
+/// (`g: G` where `G.clock` is not a `FakeClock`) and an unproved base both
+/// prove nothing (docs/testing.md:254-257).
 fn in_file_structs(tokens: &[SourceToken]) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     let mut i = 0;
@@ -733,8 +729,8 @@ fn in_file_structs(tokens: &[SourceToken]) -> BTreeSet<String> {
 /// Whether the `base.field` access proves a `FakeClock`: `field` belongs to
 /// `owner` and `base` proves to be that `owner` (`self` through the enclosing
 /// `impl`, any other base through its tracked struct type). A base whose
-/// type the file does not prove falls back to the field name, so a raw move
-/// through a helper return or a cross-file type cannot evade the gate
+/// type the file does not prove proves nothing, so a same-named field of a
+/// helper return or a cross-file type is never reported
 /// (docs/testing.md:254-257).
 fn field_proves_fake(
     fields: &BTreeSet<(String, String)>,
@@ -750,7 +746,7 @@ fn field_proves_fake(
         return fields.contains(&(owner.to_owned(), field.to_owned()));
     }
     let Some(owner) = structs.get(base) else {
-        return fields.iter().any(|(_, known)| known == field);
+        return false;
     };
     fields.contains(&(owner.clone(), field.to_owned()))
 }
@@ -885,7 +881,7 @@ fn type_mentions_fake_clock(tokens: &[SourceToken], mut m: usize) -> bool {
 
 /// (`owner`, `field`) pairs an in-file `struct` declares with a `FakeClock`
 /// type, so a `base.field` receiver with a proved `base` proves only for its
-/// `owner`; an unproved `base` falls back to the field name
+/// `owner`; an unproved `base` proves nothing
 /// (docs/testing.md:254-257).
 fn fake_clock_fields(tokens: &[SourceToken]) -> BTreeSet<(String, String)> {
     let mut fields = BTreeSet::new();

@@ -3024,6 +3024,20 @@ fn raw_advance_ignores_a_same_named_field_of_another_type() {
 }
 
 #[test]
+fn raw_advance_ignores_a_field_of_an_unproved_base() {
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance"):
+    // the checker proves the receiver's binding, so a field access on a
+    // helper-built binding is not a `FakeClock` advance even when the
+    // in-file owner declares the same field name with a `FakeClock` type.
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "struct F { clock: Arc<FakeClock> }\nfn t() { let other = helper(); other.clock.advance(D); }\n",
+    )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
 fn raw_advance_rejects_duplicate_allowances() {
     let files = [raw_file(
         "crates/hub/src/x_tests.rs",
