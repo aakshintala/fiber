@@ -951,6 +951,7 @@ fn worktree_parent_releases_at_child_acknowledgement_or_failed_start_cleanup() {
 fn a_second_guard_release_waits_until_the_first_has_closed_the_share() {
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (approached_tx, approached_rx) = mpsc::channel::<()>();
     let guard = super::WorktreeGuard::new(move || {
         entered_tx.send(()).unwrap();
         let _released = release_rx.recv();
@@ -965,13 +966,17 @@ fn a_second_guard_release_waits_until_the_first_has_closed_the_share() {
         Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&entered_rx, "watcher starts closing its share");
         scope.spawn(move || {
+            approached_tx.send(()).unwrap();
             guard.release();
             done_tx.send(()).unwrap();
         });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&approached_rx, "cleanup attempts its release");
+        // No clock: the watcher is parked inside its close holding the
+        // release lock, which only the sender below releases, so the
+        // cleanup's send cannot have happened yet.
         assert!(
-            Deadline::after(Duration::from_millis(50))
-                .recv(&done_rx)
-                .is_err(),
+            done_rx.try_recv().is_err(),
             "cleanup cannot pass an unfinished release"
         );
         drop(release_tx);

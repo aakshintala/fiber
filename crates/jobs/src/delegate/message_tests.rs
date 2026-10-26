@@ -258,14 +258,7 @@ fn rig(replies: Vec<SteerReply>) -> Rig {
         panic!("no steering test launches");
     });
     let tool = Arc::new(DelegateMessage {
-        finish: Arc::new(|end| contract::events::FinishedWorktree {
-            worktree: contract::shapes::Worktree {
-                path: end.path.to_string_lossy().into_owned(),
-                branch: end.branch,
-                repository: None,
-            },
-            dirty: false,
-        }),
+        finish: crate::support::clean_finish(),
         depth: 0,
         registry: Arc::clone(&registry),
         parent: SessionId("s_parent".into()),

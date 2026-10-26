@@ -1,7 +1,7 @@
 //! One definition for each test helper the jobs tests share
 //! (`docs/code-quality.md` allows shared test support): the zero-adjacent
-//! `usage` and `exited` fixtures and the registry builders. Test-only;
-//! production never reads this module.
+//! `usage` and `exited` fixtures, the registry builders, and the inert
+//! worktree finish. Test-only; production never reads this module.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -15,6 +15,7 @@ use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir};
 
 use crate::registry::Registry;
+use crate::{EndWorktree, FinishWorktree};
 
 /// A small usage: some tokens and a known cost.
 pub(crate) fn usage() -> Usage {
@@ -88,6 +89,19 @@ pub(crate) fn delegate_started(job_id: &str) -> DelegateStarted {
         worktree: None,
         forked_from: None,
     }
+}
+
+/// A worktree finish that reports the recorded path and branch as clean:
+/// the inert mock for tests that never isolate.
+pub(crate) fn clean_finish() -> FinishWorktree {
+    Arc::new(|end: EndWorktree| contract::events::FinishedWorktree {
+        worktree: contract::shapes::Worktree {
+            path: end.path.to_string_lossy().into_owned(),
+            branch: end.branch,
+            repository: None,
+        },
+        dirty: false,
+    })
 }
 
 /// A registry on the given clock, with its temp directory.

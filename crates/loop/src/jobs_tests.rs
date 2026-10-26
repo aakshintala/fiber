@@ -1283,6 +1283,11 @@ fn delegate_mode_records_its_parent_with_or_without_a_worktree() {
         .into_iter()
         .filter(Envelope::is_durable)
         .collect();
+    // docs/events.md, "Session and turn": session_started is the first line
+    // of every session's log; docs/loop.md, "Starting a turn": a turn starts
+    // on an inbox arrival, and none arrives here, so the opened session's
+    // log holds that line alone. docs/delegates.md, "Events": a delegate's
+    // session_started carries its parent.
     assert_eq!(kinds(&lines), ["session_started"]);
     assert_eq!(
         lines[0].payload["parent"],

@@ -903,6 +903,13 @@ fn isolated_delegate_outside_a_repository_is_an_argument_error_without_a_child()
     providers(&setup, &parent, &child);
     let (status, lines, stderr) = Running::spawn(&setup, &["ask", "scan"]).wait();
     assert_eq!(status.code(), Some(0), "{stderr}");
+    // docs/events.md, "Process boundary"/"extensions_loaded"/"Opening message":
+    // the startup prefix precedes the first turn (docs/loop.md, "Starting a
+    // turn"); docs/loop.md, "One step": stream the reply, decide permission,
+    // run the call; "Tool calls that do not run": bad arguments fail the call
+    // with invalid_arguments and the turn continues. The scripted provider
+    // fixes the replies, so the failed validation run holds exactly this
+    // durable order (docs/events.md: the durable lines, in order, are the log).
     assert_eq!(
         durable_kinds(&without_copies(&lines)),
         [
@@ -991,6 +998,10 @@ fn isolated_delegate_spawn_runs_cleans_up_and_reports_the_selected_workspace() {
         let (mut running, _) =
             Running::spawn_stdin_in(&setup, &parent_args, Stdio::null(), &workspace);
         let mut turns = 0;
+        // docs/events.md, `jobs_pending_notified`: the ending notice starts a
+        // turn; docs/delegates.md, "Lifetime": the wake turn waits on the
+        // delegate's finish. While the child is held, exactly two turns end:
+        // the spawn turn, then the ending-notice turn.
         running.wait_line("parent ending notice while child is held", |line| {
             turns += usize::from(line["kind"] == "turn_completed");
             turns == 2
@@ -1043,12 +1054,23 @@ fn isolated_delegate_spawn_runs_cleans_up_and_reports_the_selected_workspace() {
         child.release();
         let (status, lines, stderr) = running.wait();
         assert_eq!(status.code(), Some(0), "{mode}: {stderr}");
+        // docs/loop.md, "Starting a turn"/"One step"/"Ending a turn": the
+        // spawn turn, the ending-notice turn, then the wake turn;
+        // docs/delegates.md, "Events": job_started precedes delegate_started,
+        // delegate_finished lands just before job_completed; "Streams": the
+        // delegate's lines stay on its stream, so the parent's own lines are
+        // the role run's order (docs/events.md: the durable lines, in order,
+        // are the log). The scripted providers fix the replies.
         assert_eq!(
             durable_kinds(&without_copies(&lines)),
             ROLE_PARENT_DURABLE,
             "{mode}"
         );
         let child_lines = read_lines(&child_log);
+        // docs/events.md, "Process boundary"/"extensions_loaded"/"Opening
+        // message": the startup prefix precedes the first turn (docs/loop.md,
+        // "Starting a turn"); the held child answers once, so its run holds
+        // exactly this durable order.
         assert_eq!(durable_kinds(&child_lines), ROLE_CHILD_DURABLE, "{mode}");
         let child_started = one(&child_lines, "session_started");
         assert_eq!(child_started["workspace"], started["worktree"]["path"]);

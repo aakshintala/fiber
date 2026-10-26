@@ -110,6 +110,34 @@ fn isolation_and_workspace_are_validated_before_model_or_credentials() {
 }
 
 #[test]
+fn explicit_none_isolation_starts_without_a_worktree() {
+    let rig = rig();
+    let spawned = tool(&rig);
+    let mut args = arguments("fiber:fake/m");
+    args.insert("isolation".into(), serde_json::json!("none"));
+    let output = spawned.run(&args, &fakes::CancelToken::new(), &Recorder::default());
+    // Guard first: the child is already running, so arm its watchdog
+    // before any assertion that could fail and strand it.
+    let _watchdog = child_group(&rig);
+    assert!(output.error.is_none());
+    let [_, JobRecord::DelegateStarted(delegate)] = &output.jobs[..] else {
+        panic!("a good call records its start: {:?}", output.jobs);
+    };
+    assert!(delegate.worktree.is_none());
+    let launched = Deadline::after(DEADLINE)
+        .recv(&rig.launched)
+        .expect("the launcher ran");
+    assert!(launched.worktree.is_none());
+    assert_eq!(
+        rig.launch_count.load(Ordering::SeqCst),
+        1,
+        "the non-isolated path launches without creating"
+    );
+    assert_eq!(rig.registry.stop_delegates(), 1);
+    assert_cancelled_notice(&rig);
+}
+
+#[test]
 fn extension_isolation_and_workspace_use_the_shared_creation_path() {
     let rig = rig();
     let mut spawned = tool(&rig);

@@ -736,14 +736,7 @@ pub(crate) mod test_rig {
                     )]
                     |_, _| panic!("unexpected worktree creation"),
                 ),
-                finish: Arc::new(|end| contract::events::FinishedWorktree {
-                    worktree: contract::shapes::Worktree {
-                        path: end.path.to_string_lossy().into_owned(),
-                        branch: end.branch,
-                        repository: None,
-                    },
-                    dirty: false,
-                }),
+                finish: crate::support::clean_finish(),
             }
         }
     }

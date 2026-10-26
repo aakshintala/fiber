@@ -252,6 +252,49 @@ fn delegate_end_removes_only_clean_unadvanced_unshared_worktrees() {
 }
 
 #[test]
+fn delegate_end_reports_a_missing_worktree_clean_and_keeps_a_non_worktree() {
+    fakes::within("delegate end absent", Deadline::after(BUDGET), || {
+        let home = fakes::TempDir::new("delegate-end-absent-home");
+        let repo = repo("delegate-end-absent-repo");
+        let id = SessionId("s_0123456789abcdef".into());
+        let branch = format!("fiber/{}", id.0);
+        // A recorded path that was never created: the inspection finds
+        // no worktree and the path is absent, so the end reports clean
+        // with nothing to remove.
+        let missing = worktree_path(home.path(), &key_of(repo.path()), &id.0);
+        let finished = super::end_delegate_worktree(
+            home.path(),
+            &id,
+            fakes::clock::FakeClock::new(),
+            &missing,
+            &branch,
+            Some("base"),
+            true,
+        );
+        assert_eq!(finished.worktree.path, missing.to_string_lossy());
+        assert_eq!(finished.worktree.branch, branch);
+        assert!(!finished.dirty);
+        assert!(!missing.exists(), "no removal to attempt");
+        // A present path that is no worktree stays conservative: the end
+        // reports dirty yet still removes nothing.
+        let plain = home.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        let finished = super::end_delegate_worktree(
+            home.path(),
+            &id,
+            fakes::clock::FakeClock::new(),
+            &plain,
+            &branch,
+            Some("base"),
+            true,
+        );
+        assert_eq!(finished.worktree.path, plain.to_string_lossy());
+        assert!(finished.dirty);
+        assert!(plain.exists(), "a non-worktree is never removed");
+    });
+}
+
+#[test]
 fn delegate_creation_preserves_repository_and_git_failure_kinds() {
     fakes::within("delegate creation errors", Deadline::after(BUDGET), || {
         let home = fakes::TempDir::new("delegate-create-home");

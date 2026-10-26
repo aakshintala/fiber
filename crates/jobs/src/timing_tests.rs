@@ -224,14 +224,7 @@ impl Fixture {
                     )]
                     |_, _| panic!("unexpected worktree creation"),
                 ),
-                finish: Arc::new(|end| contract::events::FinishedWorktree {
-                    worktree: contract::shapes::Worktree {
-                        path: end.path.to_string_lossy().into_owned(),
-                        branch: end.branch,
-                        repository: None,
-                    },
-                    dirty: false,
-                }),
+                finish: crate::support::clean_finish(),
                 depth: 0,
                 registry: Arc::clone(&self.registry),
                 parent: SessionId("s_parent".into()),
@@ -251,14 +244,7 @@ impl Fixture {
 
     fn messenger(&self, launch: Launch, watch: Watch, last_seq: LastSeq) -> DelegateMessage {
         DelegateMessage {
-            finish: Arc::new(|end| contract::events::FinishedWorktree {
-                worktree: contract::shapes::Worktree {
-                    path: end.path.to_string_lossy().into_owned(),
-                    branch: end.branch,
-                    repository: None,
-                },
-                dirty: false,
-            }),
+            finish: crate::support::clean_finish(),
             depth: 0,
             registry: Arc::clone(&self.registry),
             parent: SessionId("s_parent".into()),
