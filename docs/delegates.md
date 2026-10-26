@@ -246,7 +246,12 @@ final message, any questions, usage totals and worktree state. Their keys are
 
 ## Worktrees
 
-- `isolation: worktree` makes a new branch from the parent workspace's HEAD, in
+A malformed `isolation` or `workspace` fails with `invalid_arguments` before
+model or credential lookup. With well-formed arguments and no worktree, the
+child launch reports its own failure. With worktree isolation, a non-git
+path is `invalid_arguments` and a git failure is `io_failed`.
+
+- `isolation: worktree` makes a new branch from the HEAD of the delegate's `workspace`, in
   a worktree under `~/.fiber/projects/<key>/worktrees/<id>`. Fiber runs the
   `git` program; no git library is linked in.
 - At the end of a run, a worktree with nothing uncommitted and no commits beyond

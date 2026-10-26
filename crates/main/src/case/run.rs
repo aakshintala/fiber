@@ -540,6 +540,7 @@ pub(crate) fn extension_case(
         prompt,
         false,
         false,
+        None,
         case_run.session_clock(),
         &signals,
         fiber,

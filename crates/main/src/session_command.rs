@@ -219,12 +219,27 @@ pub(crate) fn run(
     if parent.is_some() {
         signals.lifeline(Box::new(std::io::stdin()));
     }
+    // Only a fresh delegate can adopt the worktree its parent made. The
+    // share stays live across run_new, including Log::create and the
+    // session_started event that acknowledges the handoff to the parent.
+    let adopted = if parent.is_some() && args.worktree {
+        match doors::adopt_delegate_worktree(&args.workspace, &SessionId(args.id.clone())) {
+            Ok(adopted) => adopted,
+            Err(failure) => return report(&signals, failure),
+        }
+    } else {
+        None
+    };
+    let (adopted, _shared) = adopted
+        .map(|(worktree, shared)| (Some(worktree), Some(shared)))
+        .unwrap_or((None, None));
     new_session(
         SessionId(args.id),
         crate::per_run(args.model, args.overrides),
         args.prompt,
         parent.is_some(),
         args.worktree,
+        adopted,
         clock,
         &signals,
         fiber,
@@ -252,6 +267,7 @@ pub(crate) fn new_session(
     prompt: Option<String>,
     one_turn: bool,
     worktree: bool,
+    adopted: Option<Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
@@ -267,10 +283,10 @@ pub(crate) fn new_session(
     let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
     let clock = case_run.as_ref().map_or(clock, |case| case.session_clock());
     let host = case_run.as_ref().map(|case| case.host_script());
-    if !worktree {
+    if !worktree || adopted.is_some() {
         return match run_new(
-            id, overrides, prompt, one_turn, None, clock, signals, fiber, host, case_run, parent,
-            None, reads, supervised,
+            id, overrides, prompt, one_turn, adopted, clock, signals, fiber, host, case_run,
+            parent, None, reads, supervised,
         ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),
@@ -739,6 +755,7 @@ pub(crate) fn run_new(
                             permissions,
                         },
                         parent,
+                        worktree,
                     ),
                     (None, None) if supervised => Loop::supervised(
                         r#loop::Session {
