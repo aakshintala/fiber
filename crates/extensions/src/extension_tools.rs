@@ -72,18 +72,6 @@ impl LuaTool {
     pub fn extension(&self) -> &str {
         self.extension.name()
     }
-
-    /// Why a call failed, worded for the model and the log.
-    fn failed(&self, why: &str) -> Failure {
-        failure(
-            ErrorCode::ToolError,
-            format!(
-                "the tool `{}` of `{}` returned {why}",
-                self.declared.name,
-                self.extension()
-            ),
-        )
-    }
 }
 
 impl Tool for LuaTool {
@@ -271,15 +259,8 @@ impl ProcessTool {
             }
             Err(e) => return failed_output(failure(ErrorCode::ToolError, e.to_string())),
         };
-        output_from(value).unwrap_or_else(|why| {
-            failed_output(failure(
-                ErrorCode::ToolError,
-                format!(
-                    "the tool `{}` of `{}` returned {why}",
-                    self.declared.name, self.owner
-                ),
-            ))
-        })
+        output_from(value)
+            .unwrap_or_else(|why| failed_output_for(&self.owner, &self.declared.name, &why))
     }
 }
 
@@ -296,8 +277,18 @@ impl LuaTool {
             }
             Err(e) => return failed_output(failure(ErrorCode::ToolError, e.to_string())),
         };
-        output_from(value).unwrap_or_else(|why| failed_output(self.failed(&why)))
+        output_from(value)
+            .unwrap_or_else(|why| failed_output_for(self.extension(), &self.declared.name, &why))
     }
+}
+
+/// Why a tool call failed, worded for the model and the log: the shared
+/// tail of both backends' `output`.
+fn failed_output_for(owner: &str, name: &str, why: &str) -> Output {
+    failed_output(failure(
+        ErrorCode::ToolError,
+        format!("the tool `{name}` of `{owner}` returned {why}"),
+    ))
 }
 
 fn failure(code: ErrorCode, message: String) -> Failure {

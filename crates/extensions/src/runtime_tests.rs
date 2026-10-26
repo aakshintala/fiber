@@ -1,6 +1,6 @@
 //! The backend-neutral callback owner (`super::runtime`): generation-keyed
-//! function references, the pending-callback table, and dispatch to Lua or
-//! process functions without the caller naming a backend.
+//! function references and dispatch to Lua or process functions without
+//! the caller naming a backend.
 
 #![allow(
     clippy::unwrap_used,
@@ -45,7 +45,7 @@ fn failing(message: &str) -> ProcessInvoke {
 /// Registers `fiber.test/proc` as a process owner with one `run` function
 /// answering `value`, and returns its reference.
 fn process_run(runtime: &Runtime, value: Value) -> FunctionRef {
-    runtime.register_process("fiber.test/proc");
+    runtime.register_owner("fiber.test/proc", None);
     runtime.install_process_handler("fiber.test/proc", command("c1"), "run", handler(value))
 }
 
@@ -55,14 +55,20 @@ fn process_run(runtime: &Runtime, value: Value) -> FunctionRef {
 #[test]
 fn generations_start_at_one_and_bump_per_registration() {
     let runtime = runtime();
-    assert_eq!(runtime.register_process("fiber.test/proc"), 1);
-    assert_eq!(runtime.register_process("fiber.test/proc"), 2);
+    assert_eq!(runtime.register_owner("fiber.test/proc", None), 1);
+    assert_eq!(runtime.register_owner("fiber.test/proc", None), 2);
     let home = Home::new();
     home.install("lua", "fiber.hook(\"turn_end\", { phase = \"transform\", on_failure = \"non-blocking\", timeout = 5000, run = function(input) return {} end })");
     let session = home.load(&[]);
     let extension = session.lua_extension("fiber.test/lua").unwrap();
-    assert_eq!(runtime.register_lua("fiber.test/lua", &extension), 1);
-    assert_eq!(runtime.register_lua("fiber.test/lua", &extension), 2);
+    assert_eq!(
+        runtime.register_owner("fiber.test/lua", Some(&extension)),
+        1
+    );
+    assert_eq!(
+        runtime.register_owner("fiber.test/lua", Some(&extension)),
+        2
+    );
 }
 
 /// A process function resolves within the generation that registered it.
@@ -78,6 +84,20 @@ fn process_function_resolves_within_its_generation() {
     assert!(matches!(resolved.target, FunctionTarget::Process(_)));
 }
 
+/// The debug rendering names only the owner and the backend for
+/// developers, never the function itself: an empty rendering would hide
+/// both, and naming the function would leak it.
+#[test]
+fn resolved_function_debug_names_owner_and_backend() {
+    let runtime = runtime();
+    let made = process_run(&runtime, json!({"ok": true}));
+    let resolved = runtime.resolve(&made).unwrap();
+    assert_eq!(
+        format!("{resolved:?}"),
+        "ResolvedFunction { owner: \"fiber.test/proc\", backend: \"process\" }"
+    );
+}
+
 /// A replacement bumps the generation: the old reference no longer
 /// resolves, and a reference minted at the new generation does. Resolving
 /// by command id and key alone would answer with the replacement's
@@ -86,7 +106,7 @@ fn process_function_resolves_within_its_generation() {
 fn replacement_generation_rejects_old_reference() {
     let runtime = runtime();
     let old = process_run(&runtime, json!({"generation": 1}));
-    runtime.register_process("fiber.test/proc");
+    runtime.register_owner("fiber.test/proc", None);
     let old_error = runtime.resolve(&old).unwrap_err().to_string();
     assert!(
         old_error.contains("generation 1"),
@@ -113,7 +133,7 @@ fn replacement_generation_rejects_old_reference() {
 #[test]
 fn unknown_function_never_resolves() {
     let runtime = runtime();
-    runtime.register_process("fiber.test/proc");
+    runtime.register_owner("fiber.test/proc", None);
     let missing = FunctionRef {
         command: command("nope"),
         key: "run".to_owned(),
@@ -149,22 +169,6 @@ fn registering_a_function_for_an_unknown_owner_never_resolves() {
     );
     assert!(runtime.resolve(&made).is_err());
     assert_eq!(runtime.owner_name(&made), None);
-}
-
-/// The pending table keeps the reference until it is taken: a take removes
-/// it, and a second take finds nothing. Keeping the entry after a take
-/// would answer one request twice.
-#[test]
-fn pending_callbacks_round_trip() {
-    let runtime = runtime();
-    let made = process_run(&runtime, json!(null));
-    let id = RequestId("r1".to_owned());
-    assert_eq!(runtime.pending_get(&id), None);
-    runtime.pending_insert(id.clone(), made.clone());
-    assert_eq!(runtime.pending_get(&id), Some(made.clone()));
-    assert_eq!(runtime.pending_take(&id), Some(made));
-    assert_eq!(runtime.pending_take(&id), None);
-    assert_eq!(runtime.pending_get(&id), None);
 }
 
 /// The owner name answers for a known reference and stays silent for an
@@ -259,7 +263,7 @@ fn process_tool_run_asking_runs_without_runner() {
 #[test]
 fn process_computed_callbacks_resolve_by_key() {
     let runtime = runtime();
-    runtime.register_process("fiber.test/proc");
+    runtime.register_owner("fiber.test/proc", None);
     let cancel = support::cancel::Token::new();
     let effects = runtime.install_process_handler(
         "fiber.test/proc",
@@ -305,23 +309,6 @@ fn process_computed_callbacks_resolve_by_key() {
     );
 }
 
-/// A process command run returns the handler's text, and a non-string
-/// answer reads as empty, as `LuaExtension::command` does. Returning the
-/// raw value would change the command contract.
-#[test]
-fn process_command_run_returns_text() {
-    let runtime = runtime();
-    let made = process_run(&runtime, json!("done"));
-    assert_eq!(runtime.command_run(&made, "go").unwrap(), "done");
-    let wrong = runtime.register_function(
-        "fiber.test/proc",
-        command("c2"),
-        "run".to_owned(),
-        FunctionTarget::Process(handler(json!(42))),
-    );
-    assert_eq!(runtime.command_run(&wrong, "go").unwrap(), "");
-}
-
 /// A stale reference fails every dispatch, and never selects the
 /// replacement's function. Letting it through would run the wrong
 /// generation's code.
@@ -329,7 +316,7 @@ fn process_command_run_returns_text() {
 fn stale_reference_fails_every_dispatch() {
     let runtime = runtime();
     let old = process_run(&runtime, json!({"generation": 1}));
-    runtime.register_process("fiber.test/proc");
+    runtime.register_owner("fiber.test/proc", None);
     let cancel = support::cancel::Token::new();
     assert!(runtime.resolve(&old).is_err());
     assert!(
@@ -340,7 +327,6 @@ fn stale_reference_fails_every_dispatch() {
     assert!(runtime.tool_run(&old, json!({}), &cancel).is_err());
     assert!(runtime.tool_effects(&old, json!({})).is_err());
     assert!(runtime.search_run(&old, json!({}), &cancel).is_err());
-    assert!(runtime.command_run(&old, "go").is_err());
     assert!(runtime.provider_call(&old, json!({})).is_err());
     assert!(runtime.harness_call(&old, json!({})).is_err());
     assert!(runtime.drain_watcher(&old, json!({})).is_err());
@@ -361,7 +347,7 @@ fn lua_hook_dispatch_matches_direct_call() {
     let session = home.load(&[]);
     let extension = session.lua_extension("fiber.test/hook").unwrap();
     let runtime = runtime();
-    runtime.register_lua("fiber.test/hook", &extension);
+    runtime.register_owner("fiber.test/hook", Some(&extension));
     let made = runtime.register_function(
         "fiber.test/hook",
         command("lua-hook"),
@@ -381,7 +367,7 @@ fn lua_hook_dispatch_matches_direct_call() {
         .hook_with(&made, json!({}), |value| Ok((value, false)))
         .unwrap();
     assert_eq!(routed.0, direct.0);
-    assert_eq!(routed.1.len(), direct.1.len());
+    assert_eq!(routed.1, direct.1);
     assert_eq!(routed.2, direct.2);
 }
 
@@ -397,7 +383,7 @@ fn lua_tool_dispatch_matches_direct_call() {
     let session = home.load(&[]);
     let extension = session.lua_extension("fiber.test/tool").unwrap();
     let runtime = runtime();
-    runtime.register_lua("fiber.test/tool", &extension);
+    runtime.register_owner("fiber.test/tool", Some(&extension));
     let made = runtime.register_function(
         "fiber.test/tool",
         command("lua-tool"),
@@ -420,17 +406,19 @@ fn lua_tool_dispatch_matches_direct_call() {
 }
 
 /// A process watcher queues through its handler: a queued offer advances
-/// the fan-out cursor, and the drain runs the same handler again.
+/// the fan-out cursor, and the drain runs the same handler again. Each
+/// phase asserts its own run, with no pinned total: the count of offers
+/// the session fans out is the session's, not the runtime's, to promise.
 #[test]
 fn process_watcher_push_and_drain() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
     let runtime = runtime();
-    runtime.register_process("fiber.test/proc");
-    let calls = Arc::new(AtomicUsize::new(0));
+    runtime.register_owner("fiber.test/proc", None);
+    let ran = Arc::new(AtomicBool::new(false));
     let counting: ProcessInvoke = {
-        let calls = Arc::clone(&calls);
+        let ran = Arc::clone(&ran);
         Arc::new(move |_args: Value, _cancel: &dyn Cancel| {
-            calls.fetch_add(1, Ordering::SeqCst);
+            ran.store(true, Ordering::SeqCst);
             Ok(Some(json!({})))
         })
     };
@@ -442,8 +430,13 @@ fn process_watcher_push_and_drain() {
     );
     assert!(!runtime.is_watcher_busy(&watcher));
     assert!(runtime.push_watcher(&watcher, json!({})).is_some());
+    assert!(
+        ran.load(Ordering::SeqCst),
+        "the queued offer runs the watcher"
+    );
+    ran.store(false, Ordering::SeqCst);
     assert!(runtime.drain_watcher(&watcher, json!({})).is_ok());
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(ran.load(Ordering::SeqCst), "the drain runs the watcher");
 }
 
 /// A queued process command runs on release and the waiter sees its answer:
@@ -475,6 +468,24 @@ fn process_command_queue_runs_on_release() {
     assert!(queued.wait().is_err());
 }
 
+/// A process command that returns nothing still completes: the driver's
+/// return value is ignored (`docs/extensions.md`, "Commands and screens"),
+/// so there is no failure to notice. An error still fails the wait.
+#[test]
+fn process_command_none_answer_completes() {
+    let runtime = runtime();
+    runtime.register_owner("fiber.test/proc", None);
+    let none = runtime.install_process_handler(
+        "fiber.test/proc",
+        command("c1"),
+        "run",
+        Arc::new(|_args: Value, _cancel: &dyn Cancel| Ok(None)),
+    );
+    let queued = runtime.queue_command(&none, command("q"), "go").unwrap();
+    queued.release();
+    assert_eq!(queued.wait().unwrap(), Value::Null);
+}
+
 /// Only its own command's hooks refuse the chain: outside any command both
 /// backends pass, and a process owner never owns a command call.
 #[test]
@@ -487,7 +498,7 @@ fn own_command_check_passes_outside_commands() {
     let session = home.load(&[]);
     let extension = session.lua_extension("fiber.test/hook").unwrap();
     let runtime = runtime();
-    runtime.register_lua("fiber.test/hook", &extension);
+    runtime.register_owner("fiber.test/hook", Some(&extension));
     let lua_made = runtime.register_function(
         "fiber.test/hook",
         command("lua-hook"),
@@ -547,7 +558,17 @@ fn emit_forwards_to_installed_sink() {
         message: "boom".to_owned(),
         extension: Some("fiber.test/proc".to_owned()),
     }));
-    assert_eq!(sink.events.lock().unwrap().len(), 1);
+    // The sink receives the emitted notice: the count of deliveries is the
+    // emitter's, not the runtime's, to promise, so the test pins the
+    // content, not the total.
+    let events = sink.events.lock().unwrap();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            contract::events::Event::Notice(notice) if notice.message == "boom"
+        )),
+        "the sink receives the emitted notice: {events:?}"
+    );
 }
 
 /// A dispatch on a dropped VM fails instead of running it: the runtime
@@ -565,7 +586,7 @@ fn dispatch_on_a_dropped_vm_fails() {
         );
         let session = home.load(&[]);
         let extension = session.lua_extension("fiber.test/hook").unwrap();
-        runtime.register_lua("fiber.test/hook", &extension);
+        runtime.register_owner("fiber.test/hook", Some(&extension));
         let made = runtime.register_function(
             "fiber.test/hook",
             command("lua-hook"),
@@ -600,7 +621,7 @@ fn dispatch_on_a_dropped_vm_fails() {
 #[test]
 fn process_provider_credential_answers() {
     let runtime = runtime();
-    runtime.register_process("fiber.test/proc");
+    runtime.register_owner("fiber.test/proc", None);
     let credential = runtime.install_process_handler(
         "fiber.test/proc",
         command("c1"),
@@ -615,6 +636,6 @@ fn process_provider_credential_answers() {
         runtime.provider_credential(&credential, &pair).unwrap(),
         json!({"token": "t", "expires_at": 4102444800.0})
     );
-    runtime.register_process("fiber.test/proc");
+    runtime.register_owner("fiber.test/proc", None);
     assert!(runtime.provider_credential(&credential, &pair).is_err());
 }

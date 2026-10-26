@@ -1,6 +1,8 @@
 //! Native process registrations (`docs/extensions.md`, "Process extensions"
-//! and "Registering"): validating the wire's JSON registration calls with
-//! the Lua registry's exact wording, without running Lua.
+//! and "Registering"): the validated registry behind the wire's JSON
+//! registration calls. The checks live in `validate`, with the Lua
+//! registry's exact wording, without running Lua; this owns the state,
+//! mints the references, and inserts.
 //!
 //! Each `fiber.*` call validates exactly as its Lua twin does: a refusal
 //! carries the problem's sentence back in `command_rejected` and records it
@@ -11,21 +13,19 @@
 //! [`FunctionRef`][crate::runtime::FunctionRef]: the registering command's
 //! id, the function's key and the owner's generation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use contract::CommandId;
 use contract::ErrorCode;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::Error;
-use crate::lua::{
-    DeclaredHook, DeclaredHooks, DeclaredTool, DeclaredWatcher, DeclaredWatchers, HookPhase,
-    StaticEffects, effects_from, is_known_kind,
-};
+use crate::lua::{DeclaredHooks, DeclaredTool, DeclaredWatchers};
 use crate::runtime::{FunctionRef, FunctionTarget, ProcessInvoke, Runtime};
-use contract::tool::Bound;
+
+mod validate;
 
 /// What one registration call answers on the wire: accepted with its
 /// result, rejected with the refusal's sentence, or failing the package.
@@ -35,11 +35,10 @@ use contract::tool::Bound;
 )]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum RegisterOutcome {
-    /// The registration stands; the `call` answer carries `value`.
-    Accepted {
-        /// The accepted registration's result: empty, as for Lua.
-        value: Value,
-    },
+    /// The registration stands; the `call` answers `command_accepted`
+    /// with no `value`, as a Lua registration returns nothing
+    /// (`docs/extensions.md`, "Process extensions").
+    Accepted,
     /// The registration does not stand; the `call` answer carries the
     /// refusal's code and sentence, and the sentence is recorded for the
     /// notice.
@@ -169,7 +168,7 @@ impl Registry {
     /// owner registers at once, so every minted reference carries
     /// generation one until a replacement re-registers.
     pub(crate) fn new(owner: String, runtime: Runtime, manifest: &config::Manifest) -> Self {
-        runtime.register_process(&owner);
+        runtime.register_owner(&owner, None);
         Self {
             owner,
             runtime,
@@ -351,61 +350,6 @@ fn in_callback_message(call: &str) -> String {
     .to_owned()
 }
 
-/// The `args` value at `index`, when the call passed one.
-fn arg(args: &[Value], index: usize) -> Option<&Value> {
-    args.get(index)
-}
-
-/// How Lua shows a registration name that is not a string: the value, or
-/// `nil` for nothing and `table` for what has no short rendering. JSON
-/// `null` reads as Lua's `nil`, which is what the wire decodes it to.
-fn shown(value: Option<&Value>) -> String {
-    match value {
-        None | Some(Value::Null) => "nil".to_owned(),
-        Some(Value::String(name)) => name.clone(),
-        Some(Value::Bool(held)) => held.to_string(),
-        Some(Value::Number(number)) => number.to_string(),
-        Some(_) => "table".to_owned(),
-    }
-}
-
-/// A whole number of milliseconds above 0, as every callback declares.
-fn millis(value: Option<&Value>) -> Option<u64> {
-    value?.as_u64().filter(|millis| *millis > 0)
-}
-
-/// Whether `name` is 1 to 128 of `A-Z`, `a-z`, `0-9`, `_` and `-`: what a
-/// tool may be called.
-fn is_tool_name(name: &str) -> bool {
-    (1..=128).contains(&name.len())
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-}
-
-/// Whether `name` is plain: non-empty with no whitespace, `/` or `:`.
-fn is_plain(name: &str) -> bool {
-    !name.is_empty()
-        && !name.chars().any(char::is_whitespace)
-        && !name.contains('/')
-        && !name.contains(':')
-}
-
-/// Whether `point` is a hook point.
-fn is_hook_point(point: &str) -> bool {
-    matches!(
-        point,
-        "session_start"
-            | "before_message"
-            | "turn_start"
-            | "before_tool"
-            | "before_model_call"
-            | "after_tool"
-            | "turn_end"
-            | "before_handoff"
-    )
-}
-
 /// Records `message` for the notice and rejects the call with it.
 fn refuse(problems: &mut Vec<String>, message: String) -> RegisterOutcome {
     problems.push(message.clone());
@@ -415,103 +359,21 @@ fn refuse(problems: &mut Vec<String>, message: String) -> RegisterOutcome {
     }
 }
 
-/// A `fiber.tool` registration: exactly the checks `fiber.tool` runs, in
-/// its order, over JSON.
+/// A `fiber.tool` registration: the validated declaration, inserted with
+/// its references. The checks live in `validate`, in `fiber.tool`'s order;
+/// this refuses a duplicate name and mints.
 impl Registry {
     /// Registers `fiber.tool` from `command` with `args`.
     fn register_tool(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
         if let Some(fatal) = self.reject_lazy("fiber.tool") {
             return fatal;
         }
-        let name = arg(args, 0);
-        let spec = arg(args, 1);
-        let fail = |problems: &mut Vec<String>, why: &str| {
-            refuse(
-                problems,
-                format!("`{}` tool not registered: {why}", shown(name)),
-            )
+        let valid = match validate::check_tool(args) {
+            Ok(valid) => valid,
+            Err(why) => return refuse(&mut self.problems, why),
         };
-        let Some(Value::String(name)) = name else {
-            return fail(&mut self.problems, "the name must be a string");
-        };
-        if !is_tool_name(name) {
-            return fail(
-                &mut self.problems,
-                "a name is 1 to 128 of `A-Z`, `a-z`, `0-9`, `_` and `-`",
-            );
-        }
-        let Some(Value::Object(spec)) = spec else {
-            return fail(
-                &mut self.problems,
-                "it takes a table of `description`, `input_schema`, `effects`, `timeout`, `run` and optionally `keep`",
-            );
-        };
-        let description = match spec.get("description") {
-            Some(Value::String(description)) if !description.is_empty() => description.clone(),
-            _ => {
-                return fail(
-                    &mut self.problems,
-                    "`description` must be a non-empty string",
-                );
-            }
-        };
-        let input_schema = match spec.get("input_schema") {
-            Some(Value::Object(schema))
-                if schema.get("type") == Some(&Value::String("object".to_owned())) =>
-            {
-                Value::Object(schema.clone())
-            }
-            _ => {
-                return fail(
-                    &mut self.problems,
-                    "`input_schema` must be a JSON object whose `type` is `object`",
-                );
-            }
-        };
-        let (effects, effects_fn) = match spec.get("effects") {
-            None | Some(Value::Null) => return fail(&mut self.problems, "missing `effects`"),
-            Some(Value::Bool(true)) => (None, true),
-            Some(Value::Object(effects)) => match effects_from(&Value::Object(effects.clone())) {
-                Ok((declared, hosts)) => (Some(StaticEffects { declared, hosts }), false),
-                Err(why) => return fail(&mut self.problems, &format!("`effects`: {why}")),
-            },
-            _ => {
-                return fail(
-                    &mut self.problems,
-                    "`effects` must be a table or a function",
-                );
-            }
-        };
-        let timeout = match spec.get("timeout") {
-            None | Some(Value::Null) => return fail(&mut self.problems, "missing `timeout`"),
-            Some(value) => match millis(Some(value)) {
-                Some(millis) => Duration::from_millis(millis),
-                None => {
-                    return fail(
-                        &mut self.problems,
-                        "`timeout` must be a whole number of milliseconds above 0",
-                    );
-                }
-            },
-        };
-        if spec.get("run") != Some(&Value::Bool(true)) {
-            return fail(&mut self.problems, "`run` must be a function");
-        }
-        let keep = match spec.get("keep") {
-            None | Some(Value::Null) => Bound::DEFAULT,
-            Some(Value::Object(keep)) => match keep_of(keep) {
-                Ok(keep) => keep,
-                Err(why) => return fail(&mut self.problems, &why),
-            },
-            _ => {
-                return fail(
-                    &mut self.problems,
-                    "`keep` must be a table of `head` and `tail`",
-                );
-            }
-        };
-        if self.tools.contains_key(name) {
-            let message = format!("`{name}` tool is already registered");
+        if self.tools.contains_key(&valid.tool.name) {
+            let message = format!("`{}` tool is already registered", valid.tool.name);
             self.problems.push(message.clone());
             return RegisterOutcome::Rejected {
                 code: ErrorCode::ExtensionFailed,
@@ -519,25 +381,16 @@ impl Registry {
             };
         }
         let run = self.mint(command.clone(), "run");
-        let effects_reference = effects_fn.then(|| self.mint(command, "effects"));
+        let effects_reference = valid.effects_fn.then(|| self.mint(command, "effects"));
         self.tools.insert(
-            name.clone(),
+            valid.tool.name.clone(),
             ToolEntry {
-                declared: DeclaredTool {
-                    name: name.clone(),
-                    description,
-                    input_schema,
-                    effects,
-                    timeout,
-                    keep,
-                },
+                declared: valid.tool,
                 run,
                 effects: effects_reference,
             },
         );
-        RegisterOutcome::Accepted {
-            value: Value::Object(Map::new()),
-        }
+        RegisterOutcome::Accepted
     }
 
     /// Mints the reference for (`command`, `key`): a process function that
@@ -557,164 +410,39 @@ impl Registry {
     }
 }
 
-/// A tool's `keep`: the byte counts of the start and of the end of a long
-/// result, exactly as `fiber.tool` reads them.
-fn keep_of(keep: &Map<String, Value>) -> Result<Bound, String> {
-    for key in keep.keys() {
-        if key != "head" && key != "tail" {
-            return Err(format!("`keep`: `{key}` is not `head` or `tail`"));
-        }
-    }
-    let pair = |key: &str| -> Result<usize, String> {
-        match keep.get(key) {
-            None | Some(Value::Null) => Ok(0),
-            Some(Value::Number(number)) => number
-                .as_u64()
-                .and_then(|n| usize::try_from(n).ok())
-                .ok_or_else(|| format!("`keep`: `{key}` must be a whole number of bytes")),
-            _ => Err(format!("`keep`: `{key}` must be a whole number of bytes")),
-        }
-    };
-    let head = pair("head")?;
-    let tail = pair("tail")?;
-    if head == 0 && tail == 0 {
-        return Err("`keep`: `head` and `tail` cannot both be 0".to_owned());
-    }
-    head.checked_add(tail)
-        .map(|_| Bound {
-            start: head,
-            end: tail,
-        })
-        .ok_or_else(|| "`keep`: `head` plus `tail` is too large".to_owned())
-}
-
-/// A `fiber.hook` registration: exactly the checks `fiber.hook` runs, in
-/// its order, over JSON.
+/// A `fiber.hook` registration: the validated point and declaration,
+/// numbered among its point's hooks and inserted with its reference. The
+/// checks live in `validate`, in `fiber.hook`'s order.
 impl Registry {
     /// Registers `fiber.hook` from `command` with `args`.
     fn register_hook(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
         if let Some(fatal) = self.reject_lazy("fiber.hook") {
             return fatal;
         }
-        let point = arg(args, 0);
-        let spec = arg(args, 1);
-        let entry = match spec {
-            Some(Value::Object(spec)) => match spec.get("entry") {
-                Some(Value::String(entry)) => Some(entry.clone()),
-                _ => None,
-            },
-            _ => None,
+        let valid = match validate::check_hook(args) {
+            Ok(valid) => valid,
+            Err(why) => return refuse(&mut self.problems, why),
         };
-        let fail = |problems: &mut Vec<String>, shown: &str, why: &str| {
-            refuse(
-                problems,
-                match &entry {
-                    Some(entry) => {
-                        format!("`{shown}` hook not registered for entry `{entry}`: {why}")
-                    }
-                    None => format!("`{shown}` hook not registered: {why}"),
-                },
-            )
-        };
-        let point_text = shown(point);
-        let Some(Value::String(point)) = point else {
-            return fail(
-                &mut self.problems,
-                &point_text,
-                &format!("`{point_text}` is not a hook point"),
-            );
-        };
-        if !is_hook_point(point) {
-            return fail(
-                &mut self.problems,
-                point,
-                &format!("`{point}` is not a hook point"),
-            );
-        }
-        let Some(Value::Object(spec)) = spec else {
-            return fail(
-                &mut self.problems,
-                point,
-                "it takes a table of `timeout`, `on_failure` and `run`",
-            );
-        };
-        let timeout = match spec.get("timeout") {
-            None | Some(Value::Null) => {
-                return fail(&mut self.problems, point, "missing `timeout`");
-            }
-            Some(value) => match millis(Some(value)) {
-                Some(millis) => Duration::from_millis(millis),
-                None => {
-                    return fail(
-                        &mut self.problems,
-                        point,
-                        "`timeout` must be a whole number of milliseconds above 0",
-                    );
-                }
-            },
-        };
-        let blocking = match spec.get("on_failure") {
-            None | Some(Value::Null) => {
-                return fail(&mut self.problems, point, "missing `on_failure`");
-            }
-            Some(Value::String(failure)) if failure == "blocking" => true,
-            Some(Value::String(failure)) if failure == "non-blocking" => false,
-            _ => {
-                return fail(
-                    &mut self.problems,
-                    point,
-                    "`on_failure` must be `blocking` or `non-blocking`",
-                );
-            }
-        };
-        let phase = match spec.get("phase") {
-            None | Some(Value::Null) => HookPhase::Transform,
-            Some(Value::String(phase)) if phase == "sanitize" => HookPhase::Sanitize,
-            Some(Value::String(phase)) if phase == "transform" => HookPhase::Transform,
-            Some(Value::String(phase)) if phase == "check" => HookPhase::Check,
-            _ => {
-                return fail(
-                    &mut self.problems,
-                    point,
-                    "`phase` must be `sanitize`, `transform` or `check`",
-                );
-            }
-        };
-        if phase == HookPhase::Check
-            && !matches!(
-                point.as_str(),
-                "before_message" | "before_tool" | "before_model_call"
-            )
-        {
-            return fail(
-                &mut self.problems,
-                point,
-                "a `check` hook exists only at `before_message`, `before_tool` and `before_model_call`",
-            );
-        }
-        if spec.get("run") != Some(&Value::Bool(true)) {
-            return fail(&mut self.problems, point, "`run` must be a function");
-        }
-        let index = self.hooks.by_point.get(point).map(Vec::len).unwrap_or(0);
+        let index = self
+            .hooks
+            .by_point
+            .get(&valid.point)
+            .map(Vec::len)
+            .unwrap_or(0);
         let run = self.mint(command, "run");
-        self.hook_runs.insert((point.clone(), index), run);
+        self.hook_runs.insert((valid.point.clone(), index), run);
         self.hooks
             .by_point
-            .entry(point.clone())
+            .entry(valid.point)
             .or_default()
-            .push(DeclaredHook {
-                phase,
-                timeout,
-                blocking,
-            });
-        RegisterOutcome::Accepted {
-            value: Value::Object(Map::new()),
-        }
+            .push(valid.hook);
+        RegisterOutcome::Accepted
     }
 
-    /// Registers `fiber.watch` from `command` with `args`: exactly the
-    /// checks `fiber.watch` runs, with kinds checked against the event
-    /// kinds, as `DeclaredWatchers` does.
+    /// Registers `fiber.watch` from `command` with `args`: the validated
+    /// watcher, numbered and inserted with its reference. The checks live
+    /// in `validate`; unknown kinds keep their notices and register
+    /// nothing, as in Lua.
     fn register_watch(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
         if let Some(fatal) = self.reject_lazy("fiber.watch") {
             return fatal;
@@ -722,151 +450,35 @@ impl Registry {
         // The index counts registered watchers, as Lua's `#watchers` does:
         // a refused call registers nothing and takes no number.
         let index = self.watchers.watchers.len();
-        let fail = |problems: &mut Vec<String>, why: &str| {
-            refuse(
-                problems,
-                format!("`watcher:{index}` watcher not registered: {why}"),
-            )
-        };
-        let kinds = match arg(args, 0) {
-            Some(Value::Array(kinds))
-                if !kinds.is_empty()
-                    && kinds
-                        .iter()
-                        .all(|kind| matches!(kind, Value::String(kind) if !kind.is_empty())) =>
-            {
-                kinds
-                    .iter()
-                    .filter_map(|kind| kind.as_str())
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
+        let checked = validate::check_watch(args, index);
+        self.watch_problems.extend(checked.notices);
+        match checked.result {
+            Err(why) => refuse(&mut self.watch_problems, why),
+            Ok(None) => RegisterOutcome::Accepted,
+            Ok(Some(valid)) => {
+                let run = self.mint(command, "run");
+                self.watcher_runs.insert(index, run);
+                self.watchers.watchers.push(valid.watcher);
+                RegisterOutcome::Accepted
             }
-            _ => {
-                return fail(
-                    &mut self.watch_problems,
-                    "`kinds` must be a list of event kinds",
-                );
-            }
-        };
-        let spec = match arg(args, 1) {
-            Some(Value::Object(spec)) => spec,
-            _ => {
-                return fail(
-                    &mut self.watch_problems,
-                    "it takes a table of `timeout` and `run`",
-                );
-            }
-        };
-        let timeout = match spec.get("timeout") {
-            None | Some(Value::Null) => {
-                return fail(&mut self.watch_problems, "missing `timeout`");
-            }
-            Some(value) => match millis(Some(value)) {
-                Some(millis) => Duration::from_millis(millis),
-                None => {
-                    return fail(
-                        &mut self.watch_problems,
-                        "`timeout` must be a whole number of milliseconds above 0",
-                    );
-                }
-            },
-        };
-        if spec.get("run") != Some(&Value::Bool(true)) {
-            return fail(&mut self.watch_problems, "`run` must be a function");
-        }
-        let mut wanted = Vec::new();
-        for kind in &kinds {
-            if is_known_kind(kind) {
-                wanted.push(kind.clone());
-            } else {
-                self.watch_problems.push(format!(
-                    "`watcher:{index}` watcher not registered: `{kind}` is not an event kind"
-                ));
-            }
-        }
-        if wanted.is_empty() {
-            let message = format!(
-                "`watcher:{index}` watcher not registered: `{}` is not an event kind",
-                kinds.first().cloned().unwrap_or_default()
-            );
-            return RegisterOutcome::Rejected {
-                code: ErrorCode::ExtensionFailed,
-                message,
-            };
-        }
-        let run = self.mint(command, "run");
-        self.watcher_runs.insert(index, run);
-        self.watchers.watchers.push(DeclaredWatcher {
-            kinds: wanted,
-            timeout,
-        });
-        RegisterOutcome::Accepted {
-            value: Value::Object(Map::new()),
         }
     }
 
-    /// Registers `fiber.command` from `command` with `args`: exactly the
-    /// checks `fiber.command` runs, in its order, over JSON. A later call
-    /// for the same name replaces the first, as in Lua.
+    /// Registers `fiber.command` from `command` with `args`: the validated
+    /// entry, inserted with its reference. The checks live in `validate`,
+    /// in `fiber.command`'s order; the manifest check follows them, and a
+    /// later call for the same name replaces the first, as in Lua.
     fn register_command(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
-        let name = arg(args, 0);
-        let spec = arg(args, 1);
-        let fail = |problems: &mut Vec<String>, why: &str| {
-            refuse(
-                problems,
-                format!("`{}` command not registered: {why}", shown(name)),
-            )
-        };
-        let Some(Value::String(name)) = name else {
-            return fail(&mut self.problems, "the name must be a string");
-        };
-        if name.is_empty()
-            || name.chars().any(char::is_whitespace)
-            || name.contains('/')
-            || name.contains(':')
-        {
-            return fail(
-                &mut self.problems,
-                &format!("names are plain: `{name}` is empty or holds whitespace, `/` or `:`"),
-            );
-        }
-        let Some(Value::Object(spec)) = spec else {
-            return fail(
-                &mut self.problems,
-                "it takes a table of `timeout`, `run` and `description`",
-            );
-        };
-        let timeout = match spec.get("timeout") {
-            None | Some(Value::Null) => return fail(&mut self.problems, "missing `timeout`"),
-            Some(value) => match millis(Some(value)) {
-                Some(millis) => Duration::from_millis(millis),
-                None => {
-                    return fail(
-                        &mut self.problems,
-                        "`timeout` must be a whole number of milliseconds above 0",
-                    );
-                }
-            },
-        };
-        if spec.get("run") != Some(&Value::Bool(true)) {
-            return fail(&mut self.problems, "`run` must be a function");
-        }
-        let description = match spec.get("description") {
-            None | Some(Value::Null) => String::new(),
-            Some(Value::String(description)) if !description.contains('\n') => description.clone(),
-            _ => {
-                return fail(
-                    &mut self.problems,
-                    "`description` must be a single-line string",
-                );
-            }
+        let valid = match validate::check_command(args) {
+            Ok(valid) => valid,
+            Err(why) => return refuse(&mut self.problems, why),
         };
         if let Some(declared) = &self.manifest_commands
-            && !declared.contains_key(name)
+            && !declared.contains_key(&valid.name)
         {
             let message = format!(
-                "Command `{name}` is not declared under `commands`; `{}` registers only the commands its manifest declares",
-                self.owner
+                "Command `{}` is not declared under `commands`; `{}` registers only the commands its manifest declares",
+                valid.name, self.owner
             );
             self.problems.push(message.clone());
             return RegisterOutcome::FailedPackage {
@@ -876,223 +488,83 @@ impl Registry {
         }
         let run = self.mint(command, "run");
         self.commands.insert(
-            name.clone(),
+            valid.name.clone(),
             CommandEntry {
-                description,
-                timeout,
+                description: valid.description,
+                timeout: valid.timeout,
                 run,
             },
         );
-        RegisterOutcome::Accepted {
-            value: Value::Object(Map::new()),
-        }
+        RegisterOutcome::Accepted
     }
 
-    /// Registers `fiber.search_backend` from `command` with `args`: exactly
-    /// the checks `fiber.search_backend` runs, in its order, over JSON.
-    /// Unlike commands, a backend name need not be plain.
+    /// Registers `fiber.search_backend` from `command` with `args`: the
+    /// validated backend, inserted with its reference. The checks live in
+    /// `validate`, in `fiber.search_backend`'s order. Unlike commands, a
+    /// backend name need not be plain.
     fn register_search(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
-        let name = arg(args, 0);
-        let spec = arg(args, 1);
-        let fail = |problems: &mut Vec<String>, why: &str| {
-            refuse(
-                problems,
-                format!("`{}` search backend not registered: {why}", shown(name)),
-            )
-        };
         if let Some(fatal) = self.reject_lazy("fiber.search_backend") {
             return fatal;
         }
-        let Some(Value::String(name)) = name else {
-            return fail(&mut self.problems, "the name must be a string");
-        };
-        if self.search.contains_key(name) {
-            let message = format!("`{name}` search backend is already registered");
-            self.problems.push(message.clone());
-            return RegisterOutcome::Rejected {
-                code: ErrorCode::ExtensionFailed,
-                message,
-            };
-        }
-        let Some(Value::Object(spec)) = spec else {
-            return fail(
-                &mut self.problems,
-                "it takes a table of `timeout` and `run`",
-            );
-        };
-        if spec.get("run") != Some(&Value::Bool(true)) {
-            return fail(&mut self.problems, "`run` must be a function");
-        }
-        let timeout = match spec.get("timeout") {
-            None | Some(Value::Null) => return fail(&mut self.problems, "missing `timeout`"),
-            Some(value) => match millis(Some(value)) {
-                Some(millis) => Duration::from_millis(millis),
-                None => {
-                    return fail(
-                        &mut self.problems,
-                        "`timeout` must be a whole number of milliseconds above 0",
-                    );
-                }
-            },
+        let registered: BTreeSet<String> = self.search.keys().cloned().collect();
+        let valid = match validate::check_search(args, &registered) {
+            Ok(valid) => valid,
+            Err(why) => return refuse(&mut self.problems, why),
         };
         let run = self.mint(command, "run");
-        self.search.insert(name.clone(), (timeout, run));
-        RegisterOutcome::Accepted {
-            value: Value::Object(Map::new()),
-        }
+        self.search.insert(valid.name.clone(), (valid.timeout, run));
+        RegisterOutcome::Accepted
     }
 
-    /// Registers `fiber.provider` from `command` with `args`: exactly the
-    /// checks `fiber.provider` runs, in its order, over JSON. The provider
+    /// Registers `fiber.provider` from `command` with `args`: the validated
+    /// provider, inserted with one reference per function. The checks live
+    /// in `validate`, in `fiber.provider`'s order, reading the manifest
+    /// and the standing providers as the registry holds them. The provider
     /// name stands where Lua names the provider file, which a process has
     /// none of.
     fn register_provider(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
         if let Some(fatal) = self.reject_lazy("fiber.provider") {
             return fatal;
         }
-        let name = arg(args, 0);
-        let spec = arg(args, 1);
-        let violate = |problems: &mut Vec<String>, message: String| refuse(problems, message);
-        let (Some(Value::String(name)), Some(Value::Object(spec))) = (name, spec) else {
-            return violate(
-                &mut self.problems,
-                "fiber.provider: takes a name and a table of functions".to_owned(),
-            );
-        };
-        for key in spec.keys() {
-            if !matches!(
-                key.as_str(),
-                "models" | "quota" | "credential" | "sign" | "cost"
-            ) {
-                return violate(
-                    &mut self.problems,
-                    format!(
-                        "fiber.provider: `{key}` is not models, quota, credential, sign or cost"
-                    ),
-                );
-            }
-        }
-        if !self
-            .manifest_providers
-            .iter()
-            .any(|declared| declared == name)
-        {
-            let error = Error::UndeclaredProvider {
-                extension: self.owner.clone(),
-                provider: name.clone(),
-            };
-            let message = error.to_string();
-            let code = error.code();
-            self.problems.push(message.clone());
-            return RegisterOutcome::FailedPackage { code, message };
-        }
-        if self.providers.contains_key(name) {
-            return violate(
-                &mut self.problems,
-                format!("fiber.provider: `{name}` registers its provider exactly once"),
-            );
-        }
-        let mut timeouts = BTreeMap::new();
-        let mut runs = BTreeMap::new();
-        for (key, func) in spec {
-            let what = format!("fiber.provider: `{key}`");
-            let Some(Value::Object(func)) = Some(func) else {
-                return violate(
-                    &mut self.problems,
-                    format!("{what}: `timeout` must be a whole number of milliseconds above 0"),
-                );
-            };
-            let timeout = match func.get("timeout") {
-                Some(value) => match millis(Some(value)) {
-                    Some(millis) => Duration::from_millis(millis),
-                    None => {
-                        return violate(
-                            &mut self.problems,
-                            format!(
-                                "{what}: `timeout` must be a whole number of milliseconds above 0"
-                            ),
-                        );
-                    }
-                },
-                None => {
-                    return violate(
-                        &mut self.problems,
-                        format!("{what}: `timeout` must be a whole number of milliseconds above 0"),
-                    );
+        let registered: BTreeSet<String> = self.providers.keys().cloned().collect();
+        match validate::check_provider(args, &self.owner, &self.manifest_providers, &registered) {
+            validate::Checked::Accept(valid) => {
+                let mut runs = BTreeMap::new();
+                for key in &valid.funcs {
+                    runs.insert(key.clone(), self.mint(command.clone(), key));
                 }
-            };
-            if func.get("run") != Some(&Value::Bool(true)) {
-                return violate(
-                    &mut self.problems,
-                    format!("{what}: `run` must be a function"),
+                self.providers.insert(
+                    valid.name.clone(),
+                    ProviderEntry {
+                        timeouts: valid.timeouts,
+                        runs,
+                    },
                 );
+                RegisterOutcome::Accepted
             }
-            timeouts.insert(key.clone(), timeout);
-            runs.insert(key.clone(), self.mint(command.clone(), key));
-        }
-        self.providers
-            .insert(name.clone(), ProviderEntry { timeouts, runs });
-        RegisterOutcome::Accepted {
-            value: Value::Object(Map::new()),
+            validate::Checked::Refuse(message) => refuse(&mut self.problems, message),
+            validate::Checked::Fail(code, message) => {
+                self.problems.push(message.clone());
+                RegisterOutcome::FailedPackage { code, message }
+            }
         }
     }
 
-    /// Registers `fiber.harness` from `command` with `args`: the documented
-    /// registration (`docs/extensions.md`, "Registering"), with the Lua
-    /// call's naming and timeout rules, since no Lua registry exists to
-    /// mirror. Data keys ride along for the delegate runner; only the
-    /// functions run.
+    /// Registers `fiber.harness` from `command` with `args`: the validated
+    /// harness, inserted with its references. The checks live in
+    /// `validate`, with the Lua call's naming and timeout rules, since no
+    /// Lua registry exists to mirror. Data keys ride along for the
+    /// delegate runner; only the functions run.
     fn register_harness(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
         if let Some(fatal) = self.reject_lazy("fiber.harness") {
             return fatal;
         }
-        let name = arg(args, 0);
-        let spec = arg(args, 1);
-        let fail = |problems: &mut Vec<String>, why: &str| {
-            refuse(
-                problems,
-                format!("`{}` harness not registered: {why}", shown(name)),
-            )
+        let valid = match validate::check_harness(args) {
+            Ok(valid) => valid,
+            Err(why) => return refuse(&mut self.problems, why),
         };
-        let Some(Value::String(name)) = name else {
-            return fail(&mut self.problems, "the name must be a string");
-        };
-        if !is_plain(name) {
-            return fail(
-                &mut self.problems,
-                &format!("names are plain: `{name}` is empty or holds whitespace, `/` or `:`"),
-            );
-        }
-        let Some(Value::Object(spec)) = spec else {
-            return fail(
-                &mut self.problems,
-                "it takes a table of `timeout`, `command`, `line`, `models` and optionally `quota`",
-            );
-        };
-        let timeout = match spec.get("timeout") {
-            None | Some(Value::Null) => return fail(&mut self.problems, "missing `timeout`"),
-            Some(value) => match millis(Some(value)) {
-                Some(millis) => Duration::from_millis(millis),
-                None => {
-                    return fail(
-                        &mut self.problems,
-                        "`timeout` must be a whole number of milliseconds above 0",
-                    );
-                }
-            },
-        };
-        for key in ["command", "line", "models"] {
-            if spec.get(key) != Some(&Value::Bool(true)) {
-                return fail(&mut self.problems, &format!("`{key}` must be a function"));
-            }
-        }
-        let quota = match spec.get("quota") {
-            None | Some(Value::Null) => None,
-            Some(Value::Bool(true)) => Some(self.mint(command.clone(), "quota")),
-            _ => return fail(&mut self.problems, "`quota` must be a function"),
-        };
-        if self.harness.contains_key(name) {
-            let message = format!("`{name}` harness is already registered");
+        if self.harness.contains_key(&valid.name) {
+            let message = format!("`{}` harness is already registered", valid.name);
             self.problems.push(message.clone());
             return RegisterOutcome::Rejected {
                 code: ErrorCode::ExtensionFailed,
@@ -1100,31 +572,17 @@ impl Registry {
             };
         }
         let mut runs = BTreeMap::new();
-        for key in ["command", "line", "models"] {
-            runs.insert(key.to_owned(), self.mint(command.clone(), key));
-        }
-        if let Some(quota) = quota {
-            runs.insert("quota".to_owned(), quota);
-        }
-        let mut data = BTreeMap::new();
-        for (key, value) in spec {
-            if !matches!(
-                key.as_str(),
-                "timeout" | "command" | "line" | "models" | "quota"
-            ) {
-                data.insert(key.clone(), value.clone());
-            }
+        for key in &valid.funcs {
+            runs.insert(key.clone(), self.mint(command.clone(), key));
         }
         self.harness.insert(
-            name.clone(),
+            valid.name.clone(),
             HarnessEntry {
-                timeout,
-                data,
+                timeout: valid.timeout,
+                data: valid.data,
                 runs,
             },
         );
-        RegisterOutcome::Accepted {
-            value: Value::Object(Map::new()),
-        }
+        RegisterOutcome::Accepted
     }
 }

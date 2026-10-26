@@ -19,182 +19,31 @@
 //! test installs it, so the seam is exercised without a child process.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
 use support::lock;
 
+use contract::CommandId;
 use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::Event;
 use contract::hook::{HookFailure, StateLine};
 use contract::tool::{Cancel, InnerCalls};
-use contract::{CommandId, RequestId};
 use serde_json::{Map, Value};
 
 use crate::lua_provider::{CredentialPair, LoginMethod};
 use crate::oauth::LoginSlot;
 use crate::{Error, LuaExtension};
 
-/// A registered callback: the `call` command that registered it, the
-/// function's key within that call, and the owner's generation that
-/// registered it (`docs/extensions.md`, "Process extensions"). Only the
-/// originating generation resolves it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct FunctionRef {
-    /// The `call` command that registered the function.
-    pub(crate) command: CommandId,
-    /// The function's key: `run`, `effects`, a provider or harness
-    /// function name, or a positional `"1"`.
-    pub(crate) key: String,
-    /// The owner's generation that registered it.
-    pub(crate) generation: u64,
-}
+mod queued;
+mod refs;
 
-/// What invokes one process function: the test or transport stand-in for
-/// the child's answer. Arguments arrive as the Lua function would receive
-/// them, as a JSON array for callbacks taking arguments and as the decoded
-/// value elsewhere; a `None` answer means the function returned nothing.
-pub(crate) type ProcessInvoke =
-    Arc<dyn Fn(Value, &dyn Cancel) -> Result<Option<Value>, Error> + Send + Sync>;
-
-/// One registered function's target: a Lua function in its extension's VM,
-/// or a process function behind its installed invoker.
-#[derive(Clone)]
-pub(crate) enum FunctionTarget {
-    /// A Lua function, dispatched through its extension.
-    Lua(LuaBinding),
-    /// A process function, dispatched through its invoker.
-    Process(ProcessInvoke),
-}
-
-/// A Lua function behind a reference: its extension and which of its
-/// functions to run. The handle is weak: the session's strong handles
-/// decide the VM's life, and a dispatch on a dropped VM fails instead of
-/// resurrecting it.
-#[derive(Clone)]
-pub(crate) struct LuaBinding {
-    /// The extension whose VM runs the function.
-    pub(crate) extension: Weak<LuaExtension>,
-    /// Which of the extension's functions to run.
-    pub(crate) kind: LuaKind,
-}
-
-/// Which Lua function a reference names.
-#[allow(
-    dead_code,
-    reason = "constructed as each family wires its dispatch through references; asserted by tests"
-)]
-#[derive(Clone, Debug)]
-pub(crate) enum LuaKind {
-    /// One hook at `point`, by its place among the extension's hooks there.
-    Hook {
-        /// The hook point, such as `turn_end`.
-        point: String,
-        /// Its place among the extension's hooks at the point.
-        index: usize,
-    },
-    /// One watcher, by its place among the extension's watchers.
-    Watcher {
-        /// Its place among the extension's watchers.
-        index: usize,
-    },
-    /// One tool's `run`.
-    Tool {
-        /// The tool's name.
-        name: String,
-    },
-    /// One tool's computed `effects`.
-    Effects {
-        /// The tool's name.
-        name: String,
-    },
-    /// One search backend's `run`.
-    Search {
-        /// The backend's name.
-        name: String,
-    },
-    /// One command's `run`.
-    Command {
-        /// The registered command name.
-        name: String,
-    },
-    /// One provider function.
-    Provider {
-        /// The provider's name.
-        provider: String,
-        /// Which of its functions to run.
-        function: ProviderFunction,
-    },
-    /// One harness function.
-    Harness {
-        /// The harness's name.
-        harness: String,
-        /// Which of its functions to run.
-        function: String,
-    },
-}
-
-/// A provider function a reference can name: the five `fiber.provider`
-/// functions (`docs/extensions.md`, "Registering").
-#[allow(
-    dead_code,
-    reason = "constructed as provider dispatch wires through references in a later part; asserted by tests"
-)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ProviderFunction {
-    /// The provider's `models`.
-    Models,
-    /// The provider's `quota`.
-    Quota,
-    /// The provider's `credential`.
-    Credential,
-    /// The provider's `sign`.
-    Sign,
-    /// The provider's `cost`.
-    Cost,
-}
-
-#[allow(
-    dead_code,
-    reason = "read once provider dispatch resolves references in a later part; asserted by tests"
-)]
-impl ProviderFunction {
-    /// The function's name, as `fiber.provider` registers it.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::Models => "models",
-            Self::Quota => "quota",
-            Self::Credential => "credential",
-            Self::Sign => "sign",
-            Self::Cost => "cost",
-        }
-    }
-}
-
-/// A resolved reference: the owner it named and the current target.
-#[derive(Clone)]
-pub(crate) struct ResolvedFunction {
-    /// The owner that registered the function.
-    pub(crate) owner: String,
-    /// The function to run.
-    pub(crate) target: FunctionTarget,
-}
-
-impl std::fmt::Debug for ResolvedFunction {
-    /// Names the owner and the backend, never the function itself: an
-    /// `Arc` behind the target has no `Debug`.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let backend = match self.target {
-            FunctionTarget::Lua(_) => "lua",
-            FunctionTarget::Process(_) => "process",
-        };
-        f.debug_struct("ResolvedFunction")
-            .field("owner", &self.owner)
-            .field("backend", &backend)
-            .finish()
-    }
-}
+pub(crate) use queued::{CommandWait, ProcessQueued};
+pub(crate) use refs::{
+    FunctionRef, FunctionTarget, LuaBinding, LuaKind, ProcessInvoke, ResolvedFunction,
+};
+use refs::{gone, no_answer, unknown};
 
 /// One callback owner: its current generation and, for Lua, its VM.
 struct Owner {
@@ -214,18 +63,12 @@ struct Inner {
     owners: BTreeMap<String, Owner>,
     /// Each registered function by its full reference, beside its owner.
     functions: BTreeMap<(CommandId, String, u64), (String, FunctionTarget)>,
-    /// Each pending callback request by its id.
-    #[allow(
-        dead_code,
-        reason = "request correlation retires through here once the transport holds calls in a later part"
-    )]
-    pending: BTreeMap<RequestId, FunctionRef>,
     /// The session's emitter, for process failures with no VM to emit them.
     emit: Option<Arc<dyn Emit>>,
 }
 
 /// The session's backend-neutral callback owner: generations, function
-/// references, pending requests and dispatch, shared by every adapter.
+/// references and dispatch, shared by every adapter.
 #[derive(Clone)]
 pub(crate) struct Runtime {
     /// The registry. The lock is a leaf: no callback runs under it.
@@ -242,7 +85,6 @@ impl Default for Runtime {
                 order: Vec::new(),
                 owners: BTreeMap::new(),
                 functions: BTreeMap::new(),
-                pending: BTreeMap::new(),
                 emit: None,
             })),
         }
@@ -258,17 +100,18 @@ impl Runtime {
                 order: Vec::new(),
                 owners: BTreeMap::new(),
                 functions: BTreeMap::new(),
-                pending: BTreeMap::new(),
                 emit: None,
             })),
         }
     }
 
-    /// Registers the Lua owner `name`, bumping its generation, and returns
+    /// Registers the owner `name`, bumping its generation, and returns
     /// the new generation. A replacement or restart re-registers, so older
-    /// references stop resolving. The registry keeps only a weak handle:
-    /// strong handles elsewhere decide the VM's life.
-    pub(crate) fn register_lua(&self, name: &str, extension: &Arc<LuaExtension>) -> u64 {
+    /// references stop resolving. A Lua owner passes its extension: the
+    /// registry keeps only a weak handle, so strong handles elsewhere
+    /// decide the VM's life, and a `None` handle leaves a stored VM in
+    /// place, so re-registering a process owner never drops one.
+    pub(crate) fn register_owner(&self, name: &str, lua: Option<&Arc<LuaExtension>>) -> u64 {
         let mut inner = lock(&self.inner);
         let generation = {
             let owner = inner.owners.entry(name.to_owned()).or_insert(Owner {
@@ -276,25 +119,9 @@ impl Runtime {
                 lua: None,
             });
             owner.generation += 1;
-            owner.lua = Some(Arc::downgrade(extension));
-            owner.generation
-        };
-        if !inner.order.iter().any(|ordered| ordered == name) {
-            inner.order.push(name.to_owned());
-        }
-        generation
-    }
-
-    /// Registers the process owner `name`, bumping its generation, and
-    /// returns the new generation.
-    pub(crate) fn register_process(&self, name: &str) -> u64 {
-        let mut inner = lock(&self.inner);
-        let generation = {
-            let owner = inner.owners.entry(name.to_owned()).or_insert(Owner {
-                generation: 0,
-                lua: None,
-            });
-            owner.generation += 1;
+            if let Some(extension) = lua {
+                owner.lua = Some(Arc::downgrade(extension));
+            }
             owner.generation
         };
         if !inner.order.iter().any(|ordered| ordered == name) {
@@ -393,33 +220,6 @@ impl Runtime {
                 .functions
                 .get(&(func.command.clone(), func.key.clone(), func.generation))?;
         inner.owners.contains_key(owner).then(|| owner.clone())
-    }
-
-    /// Remembers that `id` waits on `func`. Answered, timed out and
-    /// cancelled requests leave through [`Runtime::pending_take`], so one
-    /// request answers once.
-    #[allow(
-        dead_code,
-        reason = "request correlation holds here once the transport queues calls in a later part; asserted by tests"
-    )]
-    pub(crate) fn pending_insert(&self, id: RequestId, func: FunctionRef) {
-        lock(&self.inner).pending.insert(id, func);
-    }
-
-    /// Takes the reference `id` waits on, if any. Taking removes it, so a
-    /// late reply finds nothing and fails stale.
-    #[allow(
-        dead_code,
-        reason = "request correlation retires through here once the transport queues calls in a later part; asserted by tests"
-    )]
-    pub(crate) fn pending_take(&self, id: &RequestId) -> Option<FunctionRef> {
-        lock(&self.inner).pending.remove(id)
-    }
-
-    /// The reference `id` waits on, if any, left in place.
-    #[allow(dead_code, reason = "observed by tests pinning request correlation")]
-    pub(crate) fn pending_get(&self, id: &RequestId) -> Option<FunctionRef> {
-        lock(&self.inner).pending.get(id).cloned()
     }
 
     /// Installs the session's emitter, for process failures with no VM.
@@ -562,37 +362,6 @@ impl Runtime {
                 }
             }
             FunctionTarget::Process(invoke) => invoke(args, cancel),
-        }
-    }
-
-    /// Runs the command behind `func` with `text`, as
-    /// [`LuaExtension::command`] does: its returned text, or empty when it
-    /// answered nothing.
-    #[allow(
-        dead_code,
-        reason = "the synchronous command dispatch beside the queued one; exercised by tests"
-    )]
-    pub(crate) fn command_run(&self, func: &FunctionRef, text: &str) -> Result<String, Error> {
-        let resolved = self.resolve(func)?;
-        match resolved.target {
-            FunctionTarget::Lua(binding) => {
-                if let LuaKind::Command { name } = &binding.kind {
-                    let extension = binding
-                        .extension
-                        .upgrade()
-                        .ok_or_else(|| gone(func, &resolved.owner))?;
-                    extension.command(name, text)
-                } else {
-                    Err(unknown(func, Some(resolved.owner.as_str())))
-                }
-            }
-            FunctionTarget::Process(invoke) => {
-                let cancel = support::cancel::Token::new();
-                let returned = invoke(Value::String(text.to_owned()), &cancel)?;
-                Ok(returned
-                    .and_then(|value| value.as_str().map(str::to_owned))
-                    .unwrap_or_default())
-            }
         }
     }
 
@@ -890,152 +659,5 @@ impl Runtime {
             }
         }
         Some((reply, ack))
-    }
-}
-
-/// A reference that names no current function: what every stale or unknown
-/// dispatch fails with. The owner names the extension when the reference
-/// named a known one, else the command that registered it.
-fn unknown(func: &FunctionRef, owner: Option<&str>) -> Error {
-    match owner {
-        None => Error::UnknownCallback {
-            extension: format!("command `{}`", func.command.0),
-            callback: format!("`{}` (generation {})", func.key, func.generation),
-        },
-        Some(owner) => Error::UnknownCallback {
-            extension: owner.to_owned(),
-            callback: format!(
-                "`{}` (generation {}): it has since re-registered",
-                func.key, func.generation
-            ),
-        },
-    }
-}
-
-/// One queued command both backends admit: it never starts until its
-/// release, and the wait sees the run's answer.
-#[derive(Clone)]
-pub(crate) enum CommandWait {
-    /// A Lua command held in its VM's queue.
-    Lua(Arc<crate::lua::Queued>),
-    /// A process command held for its release.
-    Process(Arc<ProcessQueued>),
-}
-
-impl CommandWait {
-    /// Releases the call, so the run may start.
-    pub(crate) fn release(&self) {
-        match self {
-            Self::Lua(queued) => queued.release(),
-            Self::Process(queued) => queued.release(),
-        }
-    }
-
-    /// Waits until the run ends, and returns its answer.
-    pub(crate) fn wait(&self) -> Result<Value, Error> {
-        match self {
-            Self::Lua(queued) => queued.wait(),
-            Self::Process(queued) => queued.wait(),
-        }
-    }
-}
-
-/// A held queued process command: the handler runs on release, and the
-/// wait sees its answer. Release runs the handler on the releasing thread,
-/// so the door protocol holds: admit, wait on one thread, release on the
-/// other.
-pub(crate) struct ProcessQueued {
-    /// The run, guarded: release runs it once, and the wait sees the one
-    /// answer.
-    state: Mutex<ProcessQueuedState>,
-    /// Wakes the wait when release answers.
-    done: Condvar,
-}
-
-struct ProcessQueuedState {
-    /// The owner that registered the command, for the failure message.
-    owner: String,
-    /// The command's handler, taken by the release that runs it.
-    invoke: Option<ProcessInvoke>,
-    /// The command's text, as its handler receives it.
-    arg: Value,
-    /// The run's answer, once release ran it.
-    answer: Option<Result<Value, Error>>,
-}
-
-impl ProcessQueued {
-    /// A held call of `owner` running `invoke` on `arg` at release.
-    pub(crate) fn new(owner: String, invoke: ProcessInvoke, arg: Value) -> Self {
-        Self {
-            state: Mutex::new(ProcessQueuedState {
-                owner,
-                invoke: Some(invoke),
-                arg,
-                answer: None,
-            }),
-            done: Condvar::new(),
-        }
-    }
-
-    /// Runs the handler, so the wait sees its answer. A second release
-    /// changes nothing: the first answer stands.
-    pub(crate) fn release(&self) {
-        let mut state = lock(&self.state);
-        if state.answer.is_some() {
-            return;
-        }
-        let invoke = state.invoke.take();
-        let arg = state.arg.clone();
-        let owner = state.owner.clone();
-        if let Some(invoke) = invoke {
-            let cancel = support::cancel::Token::new();
-            state.answer = Some(invoke(arg, &cancel).and_then(|returned| {
-                returned.ok_or_else(|| Error::BadReturn {
-                    extension: owner,
-                    callback: "command".to_owned(),
-                    why: "returned nothing".to_owned(),
-                })
-            }));
-        }
-        self.done.notify_all();
-    }
-
-    /// Waits until a release answers the run, and takes the one answer: a
-    /// second wait finds no answer and fails stopped instead of hanging.
-    pub(crate) fn wait(&self) -> Result<Value, Error> {
-        let mut state = lock(&self.state);
-        while state.answer.is_none() && state.invoke.is_some() {
-            state = self
-                .done
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-        state.answer.take().unwrap_or_else(|| {
-            Err(Error::Stopped {
-                extension: state.owner.clone(),
-            })
-        })
-    }
-}
-
-/// A function whose extension is gone: the session dropped its VM, so no
-/// call runs. A dropped provider-only VM reads this way, and a later
-/// `start_provider` starts fresh.
-fn gone(func: &FunctionRef, owner: &str) -> Error {
-    Error::UnknownCallback {
-        extension: owner.to_owned(),
-        callback: format!(
-            "`{}` (generation {}): its extension is no longer running",
-            func.key, func.generation
-        ),
-    }
-}
-
-/// A function that answered nothing where an answer was owed.
-fn no_answer(func: &FunctionRef, owner: &str) -> Error {
-    Error::BadReturn {
-        extension: owner.to_owned(),
-        callback: format!("`{}` (generation {})", func.key, func.generation),
-        why: "returned nothing".to_owned(),
     }
 }

@@ -1130,11 +1130,14 @@ fn an_extension_for_another_api_starts_no_vm_while_a_process_extension_loads_wit
     });
     let session = home.load(&[]);
     // The wrong-API extension stays out; the process extension loads
-    // without a VM, admitting the package with no registrations yet.
-    let loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
+    // without a VM, admitting the package with no registrations yet. No
+    // doc promises the load order, so the test pins membership, not order.
+    let mut loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
+    loaded.sort();
     assert_eq!(loaded, names(&["lua", "proc"]));
     assert_eq!(session.lua.len(), 1);
-    let dirs: Vec<String> = session.dirs().into_iter().map(|(name, _)| name).collect();
+    let mut dirs: Vec<String> = session.dirs().into_iter().map(|(name, _)| name).collect();
+    dirs.sort();
     assert_eq!(dirs, names(&["lua", "proc"]));
     assert!(session.commands().is_empty());
     assert_eq!(changed_content(&after_tool(&session, "x")), Some("x|lua"));
@@ -3879,7 +3882,7 @@ fn register_every_family(package: &ProcessPackage) {
     ] {
         let outcome = process_register(package, id, call, args);
         assert!(
-            matches!(outcome, ProcessOutcome::Accepted { .. }),
+            matches!(outcome, ProcessOutcome::Accepted),
             "{call}: {outcome:?}"
         );
     }
@@ -3900,12 +3903,16 @@ fn process_registrations_fold_into_the_session() {
     );
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     let tools = session.tools();
+    // One `fiber.tool` call registers one tool (`docs/extensions.md`,
+    // "Registering").
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].0, "fiber.test/proc");
     assert_eq!(tools[0].1.definition().name, "t");
     assert!(session.has_hooks());
     let home = Home::new();
     chain.fill(&home.config(&[]), &mut session);
+    // One `fiber.hook` call registers one hook (`docs/extensions.md`,
+    // "Registering"): one per point here.
     assert_eq!(session.lifecycle.turn_start.len(), 1);
     assert_eq!(session.after_tool.len(), 1);
     assert_eq!(
@@ -3916,6 +3923,8 @@ fn process_registrations_fold_into_the_session() {
     assert!(hook.blocking);
     assert_eq!(hook.hook.command, ProcessCommandId("c2".to_owned()));
     assert_eq!(hook.hook.key, "run");
+    // One `fiber.watch` call registers one watcher (`docs/extensions.md`,
+    // "Registering").
     assert_eq!(session.watchers.len(), 1);
     assert_eq!(session.watchers[0].name, "fiber.test/proc");
     assert_eq!(session.watchers[0].kinds, vec!["notice".to_owned()]);
@@ -3945,7 +3954,7 @@ fn process_package_problems_become_session_notices() {
         "fiber.hook",
         json!(["turn_end", process_hook_spec()]),
     );
-    assert!(matches!(kept, ProcessOutcome::Accepted { .. }), "{kept:?}");
+    assert!(matches!(kept, ProcessOutcome::Accepted), "{kept:?}");
     // An accepted tool the settle dropped stays out of the session.
     let dropped = process_register(
         &package,
@@ -3953,10 +3962,7 @@ fn process_package_problems_become_session_notices() {
         "fiber.tool",
         json!(["u", process_tool_spec()]),
     );
-    assert!(
-        matches!(dropped, ProcessOutcome::Accepted { .. }),
-        "{dropped:?}"
-    );
+    assert!(matches!(dropped, ProcessOutcome::Accepted), "{dropped:?}");
     let mut session = SessionExtensions::default();
     let mut chain = super::chain::Builder::default();
     assert!(
@@ -4110,7 +4116,7 @@ fn process_commands_and_search_join_session_sources() {
     ] {
         let outcome = process_register(&package, id, call, args);
         assert!(
-            matches!(outcome, ProcessOutcome::Accepted { .. }),
+            matches!(outcome, ProcessOutcome::Accepted),
             "{call}: {outcome:?}"
         );
     }
@@ -4157,6 +4163,8 @@ fn process_commands_and_search_join_session_sources() {
         .collect();
     assert_eq!(listed, vec!["cmd".to_owned()]);
     let backends = started.process_search_sources(&runtime);
+    // One `fiber.search_backend` call registers one backend
+    // (`docs/extensions.md`, "Registering").
     assert_eq!(backends.len(), 1);
     assert_eq!(backends[0].name, "web");
 }

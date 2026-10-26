@@ -850,7 +850,7 @@ impl SessionExtensions {
             // hooks and watchers mint their references under one
             // generation: a second registration would stale the first.
             if let Some(lua) = &s.extension {
-                session.runtime.register_lua(&s.name, lua);
+                session.runtime.register_owner(&s.name, Some(lua));
             }
             // A lazy extension's VM stays unstarted but joins the session's
             // walks, which only set what `host.drive`, `host.model` and

@@ -127,10 +127,7 @@ fn package_undeclared_provider_files_fail() {
 fn package_registers_a_tool() {
     let (_dir, package) = load(json!({}));
     let outcome = register(&package, "c1", "fiber.tool", json!(["t", tool_spec()]));
-    assert!(
-        matches!(outcome, RegisterOutcome::Accepted { .. }),
-        "{outcome:?}"
-    );
+    assert!(matches!(outcome, RegisterOutcome::Accepted), "{outcome:?}");
     let registry = package.registry().unwrap();
     let entry = registry.tools().get("t").unwrap();
     assert_eq!(entry.run.command, CommandId("c1".to_owned()));
@@ -193,10 +190,7 @@ fn package_lazy_commands_restrict_registrations() {
         "fiber.command",
         json!(["cmd", {"timeout": 5000, "run": true, "description": "Runs it."}]),
     );
-    assert!(
-        matches!(outcome, RegisterOutcome::Accepted { .. }),
-        "{outcome:?}"
-    );
+    assert!(matches!(outcome, RegisterOutcome::Accepted), "{outcome:?}");
     let other = register(
         &package,
         "c2",

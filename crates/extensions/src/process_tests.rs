@@ -403,8 +403,11 @@ fn provider_registers_once() {
         "fiber.provider",
         json!(["p", provider_spec()]),
     );
-    assert!(matches!(outcome, RegisterOutcome::Accepted { .. }));
+    assert!(matches!(outcome, RegisterOutcome::Accepted));
     let entry = registry.providers().get("p").unwrap();
+    // All five `fiber.provider` functions take a timeout
+    // (`docs/extensions.md`, "Registering"), so one fully declared
+    // provider holds five.
     assert_eq!(entry.timeouts.len(), 5);
     for key in ["models", "quota", "credential", "sign", "cost"] {
         let reference = entry.runs.get(key).unwrap();
@@ -488,7 +491,7 @@ fn search_backend_registers_under_its_wire_command() {
         "fiber.search_backend",
         json!(["b", search_spec()]),
     );
-    assert!(matches!(outcome, RegisterOutcome::Accepted { .. }));
+    assert!(matches!(outcome, RegisterOutcome::Accepted));
     let (timeout, run) = registry.search().get("b").unwrap();
     assert_eq!(*timeout, Duration::from_millis(5000));
     assert_eq!(run.command, CommandId("c3".to_owned()));
@@ -543,10 +546,7 @@ fn harness_registers_functions_and_data() {
         "fiber.harness",
         json!(["h", harness_spec()]),
     );
-    assert!(
-        matches!(outcome, RegisterOutcome::Accepted { .. }),
-        "{outcome:?}"
-    );
+    assert!(matches!(outcome, RegisterOutcome::Accepted), "{outcome:?}");
     let entry = registry.harness().get("h").unwrap();
     assert_eq!(entry.timeout, Duration::from_millis(5000));
     assert_eq!(entry.data.get("takes_messages"), Some(&Value::Bool(true)));
@@ -563,7 +563,7 @@ fn harness_registers_functions_and_data() {
         "fiber.harness",
         json!(["q", {"timeout": 5000, "command": true, "line": true, "models": true, "quota": true}]),
     );
-    assert!(matches!(without_quota, RegisterOutcome::Accepted { .. }));
+    assert!(matches!(without_quota, RegisterOutcome::Accepted));
     assert!(
         registry
             .harness()
@@ -702,10 +702,7 @@ fn lazy_packages_register_only_declared_commands() {
         "fiber.command",
         json!(["go", command_spec()]),
     );
-    assert!(
-        matches!(allowed, RegisterOutcome::Accepted { .. }),
-        "{allowed:?}"
-    );
+    assert!(matches!(allowed, RegisterOutcome::Accepted), "{allowed:?}");
 }
 
 /// A provider or replacement the manifest does not declare fails the
@@ -746,7 +743,7 @@ fn retry_after_a_refusal_registers() {
         "fiber.provider",
         json!(["p", provider_spec()]),
     );
-    assert!(matches!(good, RegisterOutcome::Accepted { .. }), "{good:?}");
+    assert!(matches!(good, RegisterOutcome::Accepted), "{good:?}");
 }
 
 /// An empty object reads as an empty object, not as Lua's empty table
@@ -850,7 +847,7 @@ fn tool_keep_must_be_a_table_of_head_and_tail() {
 fn tool_registers_under_its_wire_command() {
     let (_dir, mut registry) = test_registry(json!({}));
     let outcome = register(&mut registry, "c7", "fiber.tool", json!(["t", tool_spec()]));
-    let RegisterOutcome::Accepted { .. } = outcome else {
+    let RegisterOutcome::Accepted = outcome else {
         panic!("a valid tool registers, not {outcome:?}");
     };
     let entry = registry.tools().get("t").unwrap();
@@ -996,12 +993,11 @@ fn hook_registers_each_point_in_order() {
             "fiber.hook",
             json!([point, hook_spec()]),
         );
-        assert!(
-            matches!(outcome, RegisterOutcome::Accepted { .. }),
-            "{point}"
-        );
+        assert!(matches!(outcome, RegisterOutcome::Accepted), "{point}");
     }
     let runs = registry.hook_runs();
+    // One `fiber.hook` call registers one hook (`docs/extensions.md`,
+    // "Registering"), so one call per point holds one run per point.
     assert_eq!(runs.len(), points.len());
     for (index, point) in points.iter().enumerate() {
         let reference = runs.get(&(point.to_string(), 0)).unwrap();
@@ -1027,15 +1023,39 @@ fn watcher_kinds_must_be_a_non_empty_list() {
     );
 }
 
+/// An unknown-only watcher registers nothing but still accepts: Lua keeps
+/// the problems and skips the entry (`DeclaredWatchers::read`), so the
+/// call stands and the notices ride with it. Rejecting here would answer
+/// what Lua accepts.
 #[test]
-fn watcher_unknown_kinds_do_not_register() {
-    check_parity(
+fn watcher_unknown_kinds_register_nothing_but_accept() {
+    let expected = lua_problems(
         "fiber.watch({ \"dawn\", \"nap\" }, { timeout = 5, run = function() end })",
         json!({}),
         &[],
+    );
+    assert_eq!(
+        expected,
+        [
+            "`watcher:0` watcher not registered: `dawn` is not an event kind",
+            "`watcher:0` watcher not registered: `nap` is not an event kind",
+        ],
+        "Lua keeps the problems and registers nothing: {expected:?}"
+    );
+    let (_dir, mut registry) = test_registry(json!({}));
+    let (problems, outcome) = process_problems(
+        &mut registry,
+        "c1",
         "fiber.watch",
         json!([["dawn", "nap"], watcher_spec()]),
     );
+    assert!(
+        matches!(outcome, RegisterOutcome::Accepted),
+        "an unknown-only watcher still accepts, as in Lua, not {outcome:?}"
+    );
+    assert_eq!(problems, expected);
+    assert!(registry.watchers().watchers.is_empty());
+    assert!(registry.watcher_runs().is_empty());
 }
 
 /// A refused watcher consumes no index: Lua numbers each attempt by the
@@ -1054,15 +1074,15 @@ fn watcher_index_counts_only_registered_watchers() {
         "Lua numbers the refused watcher 0: {expected:?}"
     );
     let (_dir, mut registry) = test_registry(json!({}));
-    let (_, refused) = process_problems(
+    let (_, accepted) = process_problems(
         &mut registry,
         "c1",
         "fiber.watch",
         json!([["dawn"], watcher_spec()]),
     );
     assert!(
-        matches!(refused, RegisterOutcome::Rejected { .. }),
-        "{refused:?}"
+        matches!(accepted, RegisterOutcome::Accepted),
+        "an unknown-only watcher accepts and consumes no index: {accepted:?}"
     );
     let (problems, accepted) = process_problems(
         &mut registry,
@@ -1071,10 +1091,13 @@ fn watcher_index_counts_only_registered_watchers() {
         json!([["notice"], watcher_spec()]),
     );
     assert!(
-        matches!(accepted, RegisterOutcome::Accepted { .. }),
+        matches!(accepted, RegisterOutcome::Accepted),
         "{accepted:?}"
     );
     assert_eq!(problems, expected);
+    // One `fiber.watch` call registers one watcher (`docs/extensions.md`,
+    // "Registering"): the accepted call holds one run, and the
+    // accepted-but-empty call holds none.
     assert_eq!(registry.watcher_runs().len(), 1);
     let run = registry.watcher_runs().get(&0).unwrap();
     assert_eq!(run.command, CommandId("c2".to_owned()));
@@ -1100,11 +1123,13 @@ fn watcher_registers_surviving_kinds() {
         "fiber.watch",
         json!([["notice", "dawn"], watcher_spec()]),
     );
-    let RegisterOutcome::Accepted { .. } = outcome else {
+    let RegisterOutcome::Accepted = outcome else {
         panic!("a partially unknown watcher still registers, not {outcome:?}");
     };
     assert_eq!(problems, expected);
     let watchers = registry.watchers();
+    // One `fiber.watch` call registers one watcher (`docs/extensions.md`,
+    // "Registering"), with only the surviving kinds kept.
     assert_eq!(watchers.watchers.len(), 1);
     assert_eq!(watchers.watchers[0].kinds, vec!["notice".to_owned()]);
     assert_eq!(registry.watcher_runs().len(), 1);
@@ -1185,14 +1210,14 @@ fn command_registers_and_re_registers() {
         "fiber.command",
         json!(["cmd", command_spec()]),
     );
-    assert!(matches!(outcome, RegisterOutcome::Accepted { .. }));
+    assert!(matches!(outcome, RegisterOutcome::Accepted));
     let second = register(
         &mut registry,
         "c2",
         "fiber.command",
         json!(["cmd", command_spec()]),
     );
-    assert!(matches!(second, RegisterOutcome::Accepted { .. }));
+    assert!(matches!(second, RegisterOutcome::Accepted));
     let entry = registry.commands().get("cmd").unwrap();
     assert_eq!(entry.run.command, CommandId("c2".to_owned()));
     assert!(registry.problems().is_empty());
@@ -1222,10 +1247,7 @@ fn provider_references_resolve_only_within_their_generation() {
         "fiber.provider",
         json!(["p", provider_spec()]),
     );
-    assert!(
-        matches!(outcome, RegisterOutcome::Accepted { .. }),
-        "{outcome:?}"
-    );
+    assert!(matches!(outcome, RegisterOutcome::Accepted), "{outcome:?}");
     let old = first
         .providers()
         .get("p")
@@ -1247,10 +1269,7 @@ fn provider_references_resolve_only_within_their_generation() {
         "fiber.provider",
         json!(["p", provider_spec()]),
     );
-    assert!(
-        matches!(outcome, RegisterOutcome::Accepted { .. }),
-        "{outcome:?}"
-    );
+    assert!(matches!(outcome, RegisterOutcome::Accepted), "{outcome:?}");
     let new = second
         .providers()
         .get("p")
@@ -1284,10 +1303,7 @@ fn positional_references_share_the_generation_triple() {
     let runtime = Runtime::new(fakes::clock::FakeClock::new());
     let (_dir, mut registry) = shared_registry(&runtime, json!({}));
     let outcome = register(&mut registry, "c1", "fiber.tool", json!(["t", tool_spec()]));
-    assert!(
-        matches!(outcome, RegisterOutcome::Accepted { .. }),
-        "{outcome:?}"
-    );
+    assert!(matches!(outcome, RegisterOutcome::Accepted), "{outcome:?}");
     let positional = registry.set_handler(
         &CommandId("c1".to_owned()),
         "1",
@@ -1297,6 +1313,6 @@ fn positional_references_share_the_generation_triple() {
     assert_eq!(positional.key, "1");
     assert_eq!(positional.generation, 1);
     assert!(runtime.resolve(&positional).is_ok());
-    runtime.register_process("fiber.test/proc");
+    runtime.register_owner("fiber.test/proc", None);
     assert!(runtime.resolve(&positional).is_err());
 }
