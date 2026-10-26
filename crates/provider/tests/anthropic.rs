@@ -2986,3 +2986,106 @@ fn a_required_nullable_property_uses_strict_mode() {
         .unwrap();
     assert_eq!(sent_body(&server, 0)["tools"][0]["strict"], true);
 }
+
+/// The malformed text #3017 replays safely: it parses as neither an object
+/// nor an array, so the decoder keeps the raw text for the loop to quote.
+const MALFORMED_ARGUMENTS: &str = "{\"command\":\"ls\"]}";
+
+/// The replayed `tool_use` block and its paired `tool_result` for one call
+/// with `arguments` beside a completed result.
+fn replayed_blocks(arguments: Value, provider_id: Option<ProviderCallId>) -> (Value, Value) {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let ep = endpoint(&server);
+    let model = ep.reference();
+    let action = ActionId("a_1".into());
+    let request = ModelRequest {
+        conversation: vec![
+            Input::ToolCall {
+                action_id: action.clone(),
+                model: model.clone(),
+                call: ToolCallRequested {
+                    name: "get_weather".into(),
+                    arguments,
+                    provider_id,
+                    repair: None,
+                    ran_by: None,
+                    provider_item: None,
+                },
+            },
+            Input::ToolResult {
+                pdfs: Vec::new(),
+                action_id: action,
+                text: "18 C, clear".into(),
+                is_error: false,
+                images: Vec::new(),
+            },
+        ]
+        .into(),
+        ..request()
+    };
+    run(Box::new(Messages::new(ep).request(&request)))
+        .0
+        .unwrap();
+    let body = sent_body(&server, 0);
+    let mut blocks = Vec::new();
+    for message in body["messages"].as_array().unwrap() {
+        match &message["content"] {
+            Value::Array(content) => blocks.extend(content.clone()),
+            Value::Null
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::String(_)
+            | Value::Object(_) => panic!("no block array in {body}"),
+        }
+    }
+    let tool_use = blocks
+        .iter()
+        .find(|block| block["type"] == "tool_use")
+        .unwrap_or_else(|| panic!("no tool_use in {body}"))
+        .clone();
+    let tool_result = blocks
+        .iter()
+        .find(|block| block["type"] == "tool_result")
+        .unwrap_or_else(|| panic!("no tool_result in {body}"))
+        .clone();
+    (tool_use, tool_result)
+}
+
+#[test]
+fn non_object_tool_arguments_replay_as_an_empty_object() {
+    // Every non-object class replays as exactly the empty object, while
+    // objects keep their members.
+    for (label, arguments) in [
+        (
+            "malformed string",
+            Value::String(MALFORMED_ARGUMENTS.into()),
+        ),
+        ("empty array", json!([])),
+        ("nonempty array", json!([1, 2])),
+        ("null", Value::Null),
+        ("boolean", json!(true)),
+        ("number", json!(3)),
+    ] {
+        let (tool_use, tool_result) = replayed_blocks(arguments, None);
+        assert_eq!(tool_use["input"], json!({}), "{label}");
+        assert_eq!(tool_result["tool_use_id"], tool_use["id"], "{label}");
+    }
+    for (label, arguments) in [
+        ("empty object", json!({})),
+        ("nonempty object", json!({"city": "Paris"})),
+    ] {
+        let (tool_use, _) = replayed_blocks(arguments.clone(), None);
+        assert_eq!(tool_use["input"], arguments, "{label}");
+    }
+}
+
+#[test]
+fn a_non_object_call_replays_under_its_provider_id_with_its_paired_result() {
+    let (tool_use, tool_result) = replayed_blocks(
+        Value::String(MALFORMED_ARGUMENTS.into()),
+        Some(ProviderCallId("toolu_1".into())),
+    );
+    assert_eq!(tool_use["id"], "toolu_1");
+    assert_eq!(tool_use["input"], json!({}));
+    assert_eq!(tool_result["tool_use_id"], "toolu_1");
+}

@@ -22,7 +22,6 @@ mod clear;
 mod completions;
 mod drag;
 mod history;
-#[path = "home_view.rs"]
 mod home;
 mod hooks_offer;
 mod input_box;
