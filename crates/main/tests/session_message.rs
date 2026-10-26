@@ -661,6 +661,24 @@ fn a_target_hook_refuses_sibling_senders_and_rewrites_its_children() {
     // reaches the target's stdout; wait for that line before reading.
     target.wait_for("turn_completed");
     let t_log = read_log(&setup, &t_id);
+    // The complete ordered kinds, so a duplicated, missing or reordered
+    // event fails (`docs/testing.md`, "Event streams"). Positions follow
+    // `docs/events.md`, "Process boundary" (`session_started` is the
+    // log's first line, `fiber_started` follows it), "Extensions"
+    // (`extensions_loaded` before the first model request), "Preamble"
+    // (`preamble_built` follows `fiber_started` before the next model
+    // request), "Opening message" (written at session start), "Session
+    // and turn" (`step_started` opens the step before anything else in
+    // it; `turn_completed` means settled), "Actions" (a text reply's
+    // `text_completed` follows its `assistant_message_started` in the
+    // model's order, `assistant_message_completed` closes it), "Usage
+    // and notices" (one `usage_recorded` per model call, so one per
+    // quiet turn here), and `docs/loop.md`, "Starting a turn", "One
+    // step" and "Ending a turn" (one step per turn: the model replies
+    // with no tool call; the refused sibling's message is neither
+    // logged nor sent per `docs/extensions.md`, "The hook points", so
+    // no turn takes it, while the child's message starts the second
+    // turn, giving exactly two turns).
     assert_eq!(
         ordered_kinds(&t_log),
         [
