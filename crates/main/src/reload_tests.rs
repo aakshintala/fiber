@@ -293,13 +293,17 @@ impl Fixture {
         fixture
     }
 
-    /// Runs the reload preparation, dumping every fake MCP server's
-    /// `stderr.log` and `requests.log` into the failure when the wait
-    /// expires or the preparation panics: the failure then shows whether
-    /// the prepare blocked on a server start or past it.
+    /// Runs the reload preparation, dumping the prepare stall line and
+    /// every fake MCP server's `stderr.log` and `requests.log` into the
+    /// failure when the wait expires or the preparation panics: the
+    /// stall line names how far this prepare's own server traffic got,
+    /// so the failure shows whether the prepare stopped before its
+    /// server traffic or at or past it.
     #[track_caller]
     fn prepare(&self) -> r#loop::ReloadPrepared {
         let state = self.state.clone();
+        let root = self.rig.root.path().to_path_buf();
+        let before = snapshot_request_lengths(&root);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             fakes::within(
                 "reload prepared",
@@ -320,8 +324,9 @@ impl Fixture {
         match outcome {
             Ok(prepared) => prepared,
             Err(payload) => panic!(
-                "{message}\n{dump}",
+                "{message}\n{stall}\n{dump}",
                 message = panic_text(&payload),
+                stall = describe_prepare_stall(&prepare_traffic(&root, &before)),
                 dump = dump_fake_servers(self.rig.root.path()),
             ),
         }
@@ -346,30 +351,171 @@ fn panic_text(payload: &Box<dyn std::any::Any + Send>) -> String {
 
 /// Every fake server directory under the rig's root, sorted by name: a
 /// directory holding `tools.json` is one `FakeServer` made, whether the
-/// fixture tracks it or a test holds it aside. Each entry shows the
-/// server's stderr and every line it received.
-fn dump_fake_servers(root: &std::path::Path) -> String {
-    let mut names: Vec<String> = Vec::new();
+/// fixture tracks it or a test holds it aside.
+fn fake_server_dirs(root: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+    let mut servers = Vec::new();
     if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
             let dir = entry.path();
-            if dir.join("tools.json").is_file() {
-                names.extend(
-                    dir.file_name()
-                        .map(|name| name.to_string_lossy().into_owned()),
-                );
+            if dir.join("tools.json").is_file()
+                && let Some(name) = dir.file_name()
+            {
+                servers.push((name.to_string_lossy().into_owned(), dir));
             }
         }
     }
-    names.sort();
-    if names.is_empty() {
+    servers.sort();
+    servers
+}
+
+/// Every fake server directory under the rig's root, sorted by name.
+/// Each entry shows the server's stderr and every line it received.
+fn dump_fake_servers(root: &std::path::Path) -> String {
+    let servers = fake_server_dirs(root);
+    if servers.is_empty() {
         return format!("fake MCP servers: none under {}", root.display());
     }
     let mut dump = String::from("fake MCP servers at the prepare timeout:");
-    for name in &names {
-        dump.push_str(&dump_fake_server(&root.join(name), name));
+    for (name, dir) in &servers {
+        dump.push_str(&dump_fake_server(dir, name));
     }
     dump
+}
+
+/// The `requests.log` lengths before the prepare runs, by server name:
+/// the timeout dump reports only the requests that arrived during the
+/// failed prepare, so earlier phases' handshakes cannot pass as this
+/// prepare's progress.
+fn snapshot_request_lengths(root: &std::path::Path) -> Vec<(String, usize)> {
+    fake_server_dirs(root)
+        .iter()
+        .map(|(name, dir)| {
+            let len = std::fs::read_to_string(dir.join("requests.log"))
+                .map(|text| text.len())
+                .unwrap_or(0);
+            (name.clone(), len)
+        })
+        .collect()
+}
+
+/// The handshake order a shadow start or a relist drives through a fake
+/// server: `initialize`, then the initialized notification, then the
+/// capability-gated lists. A later method means the exchange got
+/// further; any other method names no handshake step.
+fn handshake_step(method: &str) -> Option<u8> {
+    match method {
+        "initialize" => Some(0),
+        "notifications/initialized" => Some(1),
+        "tools/list" => Some(2),
+        "prompts/list" => Some(3),
+        _ => None,
+    }
+}
+
+/// The `method` of one `requests.log` line, when the line parses as a
+/// request or notification: the log holds every received line, so a
+/// non-JSON line names none.
+fn request_method(line: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()?
+        .get("method")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// What one fake server received during the failed prepare: the count
+/// of new `requests.log` lines and the furthest handshake method among
+/// them, which bounds how far the sync's server exchange got.
+#[derive(Debug)]
+struct ServerTraffic {
+    name: String,
+    new_requests: usize,
+    furthest: Option<String>,
+}
+
+/// Cuts each fake server's `requests.log` at its snapshot length: only
+/// the requests that arrived during the failed prepare count, and the
+/// furthest handshake method among them bounds the exchange.
+fn prepare_traffic(root: &std::path::Path, before: &[(String, usize)]) -> Vec<ServerTraffic> {
+    fake_server_dirs(root)
+        .iter()
+        .map(|(name, dir)| {
+            let before_len = before
+                .iter()
+                .find(|(seen, _)| seen == name)
+                .map(|(_, len)| *len)
+                .unwrap_or(0);
+            let current = std::fs::read_to_string(dir.join("requests.log")).unwrap_or_default();
+            let tail = current.get(before_len..).unwrap_or("");
+            let mut new_requests = 0;
+            let mut best: Option<(u8, String)> = None;
+            for line in tail.lines() {
+                new_requests += 1;
+                if let Some(method) = request_method(line)
+                    && let Some(step) = handshake_step(&method)
+                    && best.as_ref().is_none_or(|(held, _)| step > *held)
+                {
+                    best = Some((step, method));
+                }
+            }
+            ServerTraffic {
+                name: name.clone(),
+                new_requests,
+                furthest: best.map(|(_, method)| method),
+            }
+        })
+        .collect()
+}
+
+/// Names the unfinished prepare step from the traffic that arrived
+/// during the failed prepare: no new request means the prepare stopped
+/// before the MCP sync's server traffic, otherwise the furthest method
+/// reached bounds how far past its start the prepare got. Both lines
+/// only restate what the fake servers saw, never why it stopped.
+fn describe_prepare_stall(traffic: &[ServerTraffic]) -> String {
+    let mut stall = if traffic.iter().all(|server| server.new_requests == 0) {
+        String::from(
+            "prepare stall: no fake server received a request during this prepare; \
+             the prepare stopped before the MCP sync's server traffic",
+        )
+    } else {
+        let furthest = traffic
+            .iter()
+            .filter_map(|server| server.furthest.as_deref())
+            .max_by_key(|method| handshake_step(method));
+        match furthest {
+            Some(method) => format!(
+                "prepare stall: server traffic during this prepare reached {method}; \
+                 the prepare stopped at or past the MCP sync's server traffic"
+            ),
+            None => String::from(
+                "prepare stall: server traffic during this prepare named no handshake method; \
+                 the prepare stopped inside the MCP sync's server traffic",
+            ),
+        }
+    };
+    for server in traffic {
+        let requests = if server.new_requests == 1 {
+            String::from("1 new request")
+        } else {
+            format!("{} new requests", server.new_requests)
+        };
+        match &server.furthest {
+            Some(method) => stall.push_str(&format!(
+                "\nprepare traffic {}: {requests}, furthest: {method}",
+                server.name
+            )),
+            None if server.new_requests > 0 => stall.push_str(&format!(
+                "\nprepare traffic {}: {requests}, no handshake method",
+                server.name
+            )),
+            None => stall.push_str(&format!(
+                "\nprepare traffic {}: no new request during this prepare",
+                server.name
+            )),
+        }
+    }
+    stall
 }
 
 /// One fake server's logs: its stderr, then every request line it read.
@@ -2619,6 +2765,175 @@ fn a_prepare_timeout_dump_shows_each_fake_servers_stderr_and_requests_log() {
     assert!(!dump.contains("stray"), "skips a file: {dump}");
 }
 
+#[test]
+fn handshake_steps_order_the_server_exchange() {
+    // Each pair flips the verdict when reversed: the order is what the
+    // furthest-method bound rests on.
+    assert!(handshake_step("initialize") < handshake_step("notifications/initialized"));
+    assert!(handshake_step("notifications/initialized") < handshake_step("tools/list"));
+    assert!(handshake_step("tools/list") < handshake_step("prompts/list"));
+    assert_eq!(handshake_step("tools/call"), None);
+    assert_eq!(handshake_step(""), None);
+}
+
+#[test]
+fn request_method_names_only_parsed_methods() {
+    assert_eq!(
+        request_method(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#).as_deref(),
+        Some("initialize")
+    );
+    assert_eq!(
+        request_method(r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#)
+            .as_deref(),
+        Some("notifications/initialized")
+    );
+    assert_eq!(
+        request_method(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
+        None,
+        "a result names no method"
+    );
+    assert_eq!(request_method("not json"), None, "garbage names no method");
+    assert_eq!(
+        request_method(r#"{"method":42}"#),
+        None,
+        "a non-string method names none"
+    );
+}
+
+#[test]
+fn prepare_traffic_counts_only_requests_after_the_snapshot() {
+    let rig = Rig::new("fiber-reload-traffic");
+    let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+    let listed = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
+    let prompts = r#"{"jsonrpc":"2.0","id":3,"method":"prompts/list","params":{}}"#;
+    // fx completed a full handshake in an earlier phase; gx and hx
+    // heard nothing yet, and hx still has no log file.
+    let fx = rig.root.path().join("fx");
+    std::fs::create_dir_all(&fx).unwrap();
+    std::fs::write(fx.join("tools.json"), "[]").unwrap();
+    std::fs::write(
+        fx.join("requests.log"),
+        format!("{initialize}\n{listed}\n{prompts}\n"),
+    )
+    .unwrap();
+    let gx = rig.root.path().join("gx");
+    std::fs::create_dir_all(&gx).unwrap();
+    std::fs::write(gx.join("tools.json"), "[]").unwrap();
+    let hx = rig.root.path().join("hx");
+    std::fs::create_dir_all(&hx).unwrap();
+    std::fs::write(hx.join("tools.json"), "[]").unwrap();
+    let before = snapshot_request_lengths(rig.root.path());
+    // During this prepare fx lists again, gx handshakes with a garbage
+    // line mixed in, and hx stays silent.
+    std::fs::write(
+        fx.join("requests.log"),
+        format!("{initialize}\n{listed}\n{prompts}\n{listed}\n"),
+    )
+    .unwrap();
+    std::fs::write(gx.join("requests.log"), format!("{initialize}\ngarbage\n")).unwrap();
+    let traffic = prepare_traffic(rig.root.path(), &before);
+    assert_eq!(traffic.len(), 3, "one entry per server: {traffic:?}");
+    assert_eq!(traffic[0].name, "fx");
+    assert_eq!(traffic[0].new_requests, 1, "earlier lines do not count");
+    assert_eq!(
+        traffic[0].furthest.as_deref(),
+        Some("tools/list"),
+        "the earlier prompts/list must not leak past the cut"
+    );
+    assert_eq!(traffic[1].name, "gx");
+    assert_eq!(traffic[1].new_requests, 2, "garbage counts as traffic");
+    assert_eq!(
+        traffic[1].furthest.as_deref(),
+        Some("initialize"),
+        "garbage names no step"
+    );
+    assert_eq!(traffic[2].name, "hx");
+    assert_eq!(traffic[2].new_requests, 0);
+    assert_eq!(traffic[2].furthest, None);
+}
+
+#[test]
+fn prepare_traffic_keeps_the_furthest_method_whichever_arrives_last() {
+    let rig = Rig::new("fiber-reload-traffic-order");
+    let dir = rig.root.path().join("fx");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("tools.json"), "[]").unwrap();
+    let before = snapshot_request_lengths(rig.root.path());
+    // A later smaller step must not move the bound backwards.
+    std::fs::write(
+        dir.join("requests.log"),
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"prompts/list\",\"params\":{}}\n\
+         {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"initialize\",\"params\":{}}\n",
+    )
+    .unwrap();
+    let traffic = prepare_traffic(rig.root.path(), &before);
+    assert_eq!(traffic.len(), 1);
+    assert_eq!(traffic[0].new_requests, 2);
+    assert_eq!(traffic[0].furthest.as_deref(), Some("prompts/list"));
+}
+
+#[test]
+fn describe_prepare_stall_names_the_unfinished_step() {
+    let quiet = [ServerTraffic {
+        name: "fx".to_owned(),
+        new_requests: 0,
+        furthest: None,
+    }];
+    let stall = describe_prepare_stall(&quiet);
+    assert!(
+        stall.contains("stopped before the MCP sync's server traffic"),
+        "silence means the exchange never started: {stall}"
+    );
+    assert!(
+        stall.contains("prepare traffic fx: no new request during this prepare"),
+        "names the quiet server: {stall}"
+    );
+    let traffic = [
+        ServerTraffic {
+            name: "fx".to_owned(),
+            new_requests: 1,
+            furthest: Some("tools/list".to_owned()),
+        },
+        ServerTraffic {
+            name: "gx".to_owned(),
+            new_requests: 2,
+            furthest: Some("initialize".to_owned()),
+        },
+    ];
+    let stall = describe_prepare_stall(&traffic);
+    assert!(
+        stall.contains("reached tools/list"),
+        "names the furthest step: {stall}"
+    );
+    assert!(
+        stall.contains("prepare traffic fx: 1 new request, furthest: tools/list"),
+        "counts the singular: {stall}"
+    );
+    assert!(
+        stall.contains("prepare traffic gx: 2 new requests, furthest: initialize"),
+        "keeps the earlier server: {stall}"
+    );
+    let odd = [ServerTraffic {
+        name: "fx".to_owned(),
+        new_requests: 2,
+        furthest: None,
+    }];
+    let stall = describe_prepare_stall(&odd);
+    assert!(
+        stall.contains("named no handshake method"),
+        "traffic without a handshake step says so: {stall}"
+    );
+    assert!(
+        stall.contains("prepare traffic fx: 2 new requests, no handshake method"),
+        "counts the plural: {stall}"
+    );
+    let stall = describe_prepare_stall(&[]);
+    assert!(
+        stall.contains("stopped before the MCP sync's server traffic"),
+        "no servers means no exchange: {stall}"
+    );
+}
+
 // debt: one small helper test for the three panic payload forms; upgrade
 // trigger: remove the helper or cover these forms through another focused
 // test.
@@ -2656,6 +2971,10 @@ fn a_failed_prepare_reports_the_fake_servers_logs() {
     assert!(
         text.contains("requests.log:"),
         "carries the requests log: {text}"
+    );
+    assert!(
+        text.contains("stopped before the MCP sync's server traffic"),
+        "an invalid config fails before any server traffic: {text}"
     );
 }
 
