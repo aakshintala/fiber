@@ -160,11 +160,11 @@ fn alias_spans(alias: Option<&str>, query: &str) -> Vec<Span<'static>> {
     ]
 }
 
-/// One `/` row: the gutter, the name in its column, the alias dim
-/// after it (` /exit` on the quit row, with the query's match bold),
-/// the description dim and cut so the hint and the tag always fit, the
-/// hint in `attention`, and the tag dim at the right end. The focused
-/// row sits on the bar.
+/// One `/` row: the gutter, the name in its column, each alias dim
+/// after it in order (` /exit` on the quit row, with the query's match
+/// bold), the description dim and cut so the hint and the tag always
+/// fit, the hint in `attention`, and the tag dim at the right end. The
+/// focused row sits on the bar.
 fn slash_row(row: &slash::Row, query: &str, name_w: usize, room: usize, focused: bool) -> Row {
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let dim = Style::new().add_modifier(Modifier::DIM);
@@ -173,14 +173,16 @@ fn slash_row(row: &slash::Row, query: &str, name_w: usize, room: usize, focused:
         if focused { bold } else { dim },
     )];
     spans.extend(name_spans(&row.name, query, name_w));
-    spans.extend(alias_spans(row.alias.as_deref(), query));
+    for alias in &row.aliases {
+        spans.extend(alias_spans(Some(alias), query));
+    }
     spans.push(Span::raw(" ".to_owned()));
     let hint = row
         .hint
         .as_deref()
         .map_or_else(String::new, |hint| format!(" {hint}"));
-    let alias = row.alias.as_deref().map_or(0, |alias| cells(alias) + 2);
-    let fixed = 2 + name_w + alias + 1 + cells(&hint) + 1 + cells(&row.tag);
+    let aliases: usize = row.aliases.iter().map(|alias| cells(alias) + 2).sum();
+    let fixed = 2 + name_w + aliases + 1 + cells(&hint) + 1 + cells(&row.tag);
     spans.push(Span::styled(
         crate::text::cut(&row.description, room.saturating_sub(fixed), "…"),
         dim,

@@ -519,6 +519,90 @@ fn replacing_a_builtin_without_replaces_unloads_with_extension_failed() {
     assert!(status.success(), "stderr: {stderr}");
 }
 
+/// Each slash alias is a built-in command: an extension registering one
+/// without declaring it in `replaces` unloads with `extension_failed`,
+/// as any other built-in collision.
+#[test]
+fn registering_a_slash_alias_without_replaces_unloads_with_extension_failed() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    // One extension per alias, so every alias gets its own collision
+    // notice naming it.
+    for (extension, alias) in [
+        ("w-compact", "compact"),
+        ("w-keymap", "keymap"),
+        ("w-permissions", "permissions"),
+        ("w-stop", "stop"),
+    ] {
+        setup.lua_with(
+            extension,
+            &format!("fiber.command(\"{alias}\", {{ timeout = 8000, run = function() end }})\n"),
+            json!({}),
+        );
+    }
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    // The load notices name the commands; they are written at start, so
+    // read stdout until `extensions_loaded` and every alias is named by
+    // an `extension_failed` notice. The load notices are written after
+    // `extensions_loaded`; wait for both.
+    let mut started = Vec::new();
+    loop {
+        let line = match setup.deadline.recv(&running.lines) {
+            Ok(line) => line,
+            Err(_) => panic!("waited for extensions_loaded and the alias notices on stdout"),
+        };
+        let value: Value = serde_json::from_str(&line).unwrap();
+        started.push(value);
+        let loaded = started
+            .iter()
+            .any(|v: &Value| v["kind"] == "extensions_loaded");
+        let noticed = ["compact", "keymap", "permissions", "stop"]
+            .iter()
+            .all(|alias| {
+                started.iter().any(|line| {
+                    line["kind"] == "notice"
+                        && line["payload"]["code"] == "extension_failed"
+                        && line["payload"]["message"]
+                            .as_str()
+                            .unwrap()
+                            .contains(&format!("`{alias}`"))
+                })
+            });
+        if loaded && noticed {
+            break;
+        }
+    }
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
+    let lines = until_session(&client, "the commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
+    });
+    let result = lines.last().unwrap()["payload"]["result"].clone();
+    // None of the aliases loads: no command by that name arrives from
+    // any of the four extensions.
+    for alias in ["compact", "keymap", "permissions", "stop"] {
+        assert!(
+            !result["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["name"] == alias && c["extension"] == true),
+            "{alias} in {result}"
+        );
+    }
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
 #[test]
 fn extensions_loaded_in_the_log_carries_each_replaces() {
     let setup = Setup::new_with_fm_root();

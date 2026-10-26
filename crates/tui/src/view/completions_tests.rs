@@ -144,6 +144,62 @@ fn slash_exit_alias() {
 }
 
 #[test]
+fn slash_keys_aliases_render_and_filter_independently() {
+    // Each alias, whole or in part, finds exactly the keys row, which
+    // carries both aliases on it, with no range line.
+    for query in ["keymap", "keybindings", "keyma", "keybind"] {
+        let mut app = attached(160, 48);
+        type_text(&mut app, &format!("/{query}"));
+        let shown = screen(&app, 160, 48);
+        let keys = shown
+            .lines()
+            .find(|line| line.contains("Opens the rebinding screen."))
+            .expect("the keys row");
+        assert!(keys.contains("keys /keybindings /keymap"), "{shown}");
+        assert!(!shown.contains(" of "), "{shown}");
+    }
+}
+
+#[test]
+fn slash_keys_alias_spans_match_only_the_queried_alias() {
+    use super::slash_row;
+    // An unfocused row: the focused bar reads bold throughout, so the
+    // query's match shows here, where only its own spans are bold.
+    let row = crate::slash::Row {
+        name: "keys".to_owned(),
+        aliases: vec!["keybindings".to_owned(), "keymap".to_owned()],
+        description: "Opens the rebinding screen.".to_owned(),
+        hint: None,
+        tag: "command".to_owned(),
+    };
+    for (query, matched, unmatched) in [
+        ("keymap", "keymap", "keybindings"),
+        ("keybindings", "keybindings", "keymap"),
+    ] {
+        let drawn = slash_row(&row, query, 4, 150, false);
+        let cells: Vec<(char, bool)> = drawn
+            .spans
+            .iter()
+            .flat_map(|span| {
+                let bold = span.style.add_modifier.contains(Modifier::BOLD);
+                span.content.chars().map(move |ch| (ch, bold))
+            })
+            .collect();
+        let text: String = cells.iter().map(|(ch, _)| ch).collect();
+        // Char columns, not byte indices: the gutter holds `›`.
+        let cell_at = |byte: usize| text[..byte].chars().count();
+        let at = cell_at(text.find(matched).expect("the matched alias"));
+        for (n, _) in matched.chars().enumerate() {
+            assert!(cells[at + n].1, "the matched alias for {query}");
+        }
+        let at = cell_at(text.find(unmatched).expect("the quiet alias"));
+        for (n, _) in unmatched.chars().enumerate() {
+            assert!(!cells[at + n].1, "the quiet alias for {query}");
+        }
+    }
+}
+
+#[test]
 fn a_scrolled_slash_list_counts_both_directions() {
     let mut app = forty();
     type_text(&mut app, "/");
@@ -561,7 +617,7 @@ fn windowed() -> Vec<crate::slash::Row> {
     (0..8)
         .map(|n| crate::slash::Row {
             name: format!("n{n}"),
-            alias: None,
+            aliases: Vec::new(),
             description: format!("Does n{n}."),
             hint: None,
             tag: "skill".to_owned(),

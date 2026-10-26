@@ -116,7 +116,7 @@ fn the_list_carries_one_quit_row_with_the_alias() {
     let all = slash::rows(&[]);
     let quits: Vec<&slash::Row> = all.iter().filter(|row| row.name == "quit").collect();
     assert_eq!(quits.len(), 1);
-    assert_eq!(quits[0].alias.as_deref(), Some("exit"));
+    assert_eq!(quits[0].aliases, ["exit"]);
     assert_eq!(quits[0].line(), "/quit /exit  Quits.  command".to_owned());
     // No second row for the alias: `/exit` rides on the quit row.
     assert!(all.iter().all(|row| row.name != "exit"));
@@ -159,15 +159,15 @@ fn extension_info(name: &str) -> contract::events::CommandInfo {
 fn an_extension_exit_sheds_the_quit_alias_and_keeps_one_exit_row() {
     let plain = slash::rows(&[]);
     let quit = plain.iter().find(|row| row.name == "quit").unwrap();
-    assert_eq!(quit.alias.as_deref(), Some("exit"));
+    assert_eq!(quit.aliases, ["exit"]);
     let with = slash::rows(&[extension_info("exit")]);
     assert_eq!(with.len(), plain.len() + 1);
     let quit = with.iter().find(|row| row.name == "quit").unwrap();
-    assert_eq!(quit.alias, None);
+    assert!(quit.aliases.is_empty());
     assert_eq!(quit.line(), "/quit  Quits.  command".to_owned());
     let exits: Vec<&slash::Row> = with
         .iter()
-        .filter(|row| row.name == "exit" || row.alias.as_deref() == Some("exit"))
+        .filter(|row| row.name == "exit" || row.aliases.iter().any(|alias| alias == "exit"))
         .collect();
     assert_eq!(exits.len(), 1);
     assert_eq!(
@@ -182,11 +182,11 @@ fn an_unrelated_extension_keeps_the_quit_alias() {
     // row leaves `/exit` on the quit row.
     let with = slash::rows(&[extension_info("model")]);
     let quit = with.iter().find(|row| row.name == "quit").unwrap();
-    assert_eq!(quit.alias.as_deref(), Some("exit"));
+    assert_eq!(quit.aliases, ["exit"]);
     assert_eq!(quit.line(), "/quit /exit  Quits.  command".to_owned());
     let exits: Vec<&slash::Row> = with
         .iter()
-        .filter(|row| row.name == "exit" || row.alias.as_deref() == Some("exit"))
+        .filter(|row| row.name == "exit" || row.aliases.iter().any(|alias| alias == "exit"))
         .collect();
     assert_eq!(exits.len(), 1);
     assert_eq!(exits[0].name, "quit");

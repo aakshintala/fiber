@@ -148,17 +148,24 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         [
             &"effort",
             &"cost",
+            &"permissions",
             &"config",
             &"keybindings",
+            &"keymap",
             &"rewind",
+            &"compact",
             &"rename",
+            &"stop",
             &"exit",
             &"bug"
         ]
     );
     // Every alias is a contract name, so an extension or a skill cannot
     // take it unannounced.
-    for alias in TABLE.iter().filter_map(|entry| alias_of(entry.name)) {
+    for alias in TABLE
+        .iter()
+        .flat_map(|entry| alias_of(entry.name).iter().copied())
+    {
         assert!(is_built_in(alias), "{alias}");
     }
     let rows = rows(&[]);
@@ -312,7 +319,7 @@ fn a_row_draws_name_hint_description_and_tag() {
     let handoff = all.iter().find(|row| row.name == "handoff");
     assert_eq!(
         handoff.map(Row::line),
-        Some("/handoff [instructions]  Starts a handoff.  command".to_owned())
+        Some("/handoff /compact [instructions]  Starts a handoff.  command".to_owned())
     );
     let home = all.iter().find(|row| row.name == "home");
     assert_eq!(

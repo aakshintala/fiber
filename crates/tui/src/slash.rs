@@ -15,10 +15,11 @@ pub(crate) const COMMAND: &str = "command";
 pub(crate) struct Row {
     /// The name typed after `/`.
     pub(crate) name: String,
-    /// A second name for the row, drawn after the name: `/exit` on the
-    /// quit row. `None` when an extension row takes that name, so only
-    /// one entry of that name shows.
-    pub(crate) alias: Option<String>,
+    /// Other names for the row, drawn after the name in order: `/exit`
+    /// on the quit row, `/keybindings` and `/keymap` on the keys row.
+    /// Empty when an extension row takes every name, so only one entry
+    /// of a name shows.
+    pub(crate) aliases: Vec<String>,
     /// A one-line description.
     pub(crate) description: String,
     /// An argument hint, such as `[instructions]`.
@@ -29,18 +30,20 @@ pub(crate) struct Row {
 }
 
 impl Row {
-    /// The row as drawn: `/name hint  description  tag`.
+    /// The row as drawn: `/name hint  description  tag`, each alias
+    /// after the name in order.
     pub(crate) fn line(&self) -> String {
         let hint = self
             .hint
             .as_ref()
             .map_or_else(String::new, |hint| format!(" {hint}"));
-        let alias = self
-            .alias
-            .as_ref()
-            .map_or_else(String::new, |alias| format!(" /{alias}"));
+        let aliases: String = self
+            .aliases
+            .iter()
+            .map(|alias| format!(" /{alias}"))
+            .collect();
         format!(
-            "/{}{alias}{hint}  {}  {}",
+            "/{}{aliases}{hint}  {}  {}",
             self.name, self.description, self.tag
         )
     }
@@ -57,8 +60,8 @@ pub(crate) fn is_built_in(name: &str) -> bool {
 /// hint and tag it gives. An
 /// extension row (`extension` set) named like a drawn built-in takes that
 /// row's slot, with its own description, hint and tag; one named like an
-/// alias takes the alias off its row; any other row named like a
-/// built-in is left out.
+/// alias takes only that alias off its row, leaving the row's other
+/// aliases; any other row named like a built-in is left out.
 pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
     let replacement = |name: &str| {
         commands
@@ -69,7 +72,7 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
         if let Some(command) = replacement(entry.name) {
             Row {
                 name: command.name.clone(),
-                alias: None,
+                aliases: Vec::new(),
                 description: command.description.clone(),
                 hint: command.argument_hint.clone(),
                 tag: command.tag.clone(),
@@ -77,11 +80,14 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
         } else {
             Row {
                 name: entry.name.to_owned(),
-                // An extension row named like the alias takes that
-                // name, so only one entry of it shows.
-                alias: alias_of(entry.name)
+                // An extension row named like an alias takes that
+                // alias only, so only one entry of it shows; the row
+                // keeps its other aliases.
+                aliases: alias_of(entry.name)
+                    .iter()
                     .filter(|alias| replacement(alias).is_none())
-                    .map(str::to_owned),
+                    .map(|alias| (*alias).to_owned())
+                    .collect(),
                 description: entry.description.to_owned(),
                 hint: entry.hint.map(str::to_owned),
                 tag: COMMAND.to_owned(),
@@ -100,7 +106,7 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
         })
         .map(|command| Row {
             name: command.name.clone(),
-            alias: None,
+            aliases: Vec::new(),
             description: command.description.clone(),
             hint: command.argument_hint.clone(),
             tag: command.tag.clone(),
@@ -127,13 +133,14 @@ pub(crate) fn filter<'a>(rows: &'a [Row], query: &str) -> Vec<&'a Row> {
     // each row, then the stable sort keeps list order in each group.
     let rank = |row: &Row| {
         let name = row.name.to_lowercase();
-        let alias = row.alias.as_deref().map(str::to_lowercase);
-        let starts = name.starts_with(&query)
-            || alias
-                .as_deref()
-                .is_some_and(|alias| alias.starts_with(&query));
-        let hits =
-            name.contains(&query) || alias.as_deref().is_some_and(|alias| alias.contains(&query));
+        let aliases: Vec<String> = row
+            .aliases
+            .iter()
+            .map(|alias| alias.to_lowercase())
+            .collect();
+        let starts =
+            name.starts_with(&query) || aliases.iter().any(|alias| alias.starts_with(&query));
+        let hits = name.contains(&query) || aliases.iter().any(|alias| alias.contains(&query));
         if starts {
             0
         } else if hits {
