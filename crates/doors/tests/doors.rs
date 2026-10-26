@@ -17,7 +17,8 @@ use contract::inbox::Delivery;
 use contract::shapes::{ContentPart, Failure, Origin};
 use contract::{ErrorCode, SessionId, TurnId};
 use doors::{
-    Session, SessionError, exit_before_session, failure, mint, project, prompt, resolve_project,
+    SOCKET_PATH_MAX, Session, SessionError, exit_before_session, failure, mint, project, prompt,
+    resolve_project,
 };
 use fakes::Deadline;
 use log::Log;
@@ -389,7 +390,11 @@ fn a_project_reports_whether_git_found_a_repository() {
 }
 
 /// A session's log and the door side opened on it, in `home` under `temp`.
-fn open(temp: &Temp, home: &str, out: &Shared) -> (Arc<Log>, PathBuf, Result<Session, Failure>) {
+fn open(
+    temp: &Temp,
+    home: &str,
+    out: &Shared,
+) -> (Arc<Log>, PathBuf, Result<Session, SessionError>) {
     let home = temp.0.join(home);
     let sessions = home.join("projects/p/sessions");
     let id = SessionId(mint("s_"));
@@ -514,8 +519,16 @@ fn a_fiber_home_too_long_for_a_socket_is_a_usage_error_and_leaves_no_session() {
 
     let error = session.err().unwrap();
 
-    assert_eq!(error.code, ErrorCode::Usage);
-    assert!(error.message.contains("FIBER_HOME"));
+    assert!(
+        matches!(
+            &error,
+            SessionError::SocketPathTooLong { max }
+            if *max == SOCKET_PATH_MAX
+        ),
+        "a path past the limit is too long: {error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::Usage);
+    assert!(error.to_string().contains("FIBER_HOME"));
     assert!(!dir.exists());
 }
 

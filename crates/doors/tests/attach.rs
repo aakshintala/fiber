@@ -31,7 +31,7 @@ use contract::events::{
 use contract::inbox::{Ack, Delivery, Rejection};
 use contract::shapes::{ContentPart, Failure, Origin, Sender, Tokens, Usage};
 use contract::{CommandId, ErrorCode, SCHEMA_VERSION, SessionId, TurnId};
-use doors::{Session, attach, failure, mint};
+use doors::{Session, SessionError, attach, failure, mint};
 use fakes::Deadline;
 use log::Log;
 use serde_json::Value;
@@ -84,7 +84,7 @@ fn attach_on_thread<W: Write + Send + 'static>(
     prompt: String,
     out: W,
     refused: Failure,
-) -> Receiver<(Result<i32, Failure>, W)> {
+) -> Receiver<(Result<i32, SessionError>, W)> {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut out = out;
@@ -99,9 +99,9 @@ fn attach_on_thread<W: Write + Send + 'static>(
 /// The helper thread's result, waited for within [`DEADLINE`].
 #[track_caller]
 fn attached<T>(
-    finished: Receiver<(Result<i32, Failure>, T)>,
+    finished: Receiver<(Result<i32, SessionError>, T)>,
     operation: &str,
-) -> (Result<i32, Failure>, T) {
+) -> (Result<i32, SessionError>, T) {
     match Deadline::after(DEADLINE).recv(&finished) {
         Ok(value) => value,
         Err(_) => panic!("waited {DEADLINE:?} for {operation}"),
@@ -421,11 +421,16 @@ fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
     let (failed, out) = attached(finished, "attach to return");
     let failed = failed.unwrap_err();
 
-    assert_eq!(failed.code, ErrorCode::Busy);
-    assert_eq!(
-        failed.message,
-        "A turn is running; send `steer` to add to it."
+    assert!(
+        matches!(
+            &failed,
+            SessionError::Rejected { code, message }
+            if *code == ErrorCode::Busy
+                && message == "A turn is running; send `steer` to add to it."
+        ),
+        "a busy turn is a rejection: {failed:?}"
     );
+    assert_eq!(failed.code(), ErrorCode::Busy);
     assert!(out.is_empty(), "a rejection prints nothing");
     assert_eq!(close(opened.log, inbox), Ok(()));
 }
@@ -471,7 +476,11 @@ fn the_session_ending_before_the_turn_completes_is_a_failure_not_a_hang() {
     let (failed, out) = attached(finished, "attach to return");
     let failed = failed.unwrap_err();
 
-    assert_eq!(failed.code, ErrorCode::Closing);
+    assert!(
+        matches!(&failed, SessionError::SessionEnded { id } if *id == opened.id),
+        "the ended session is named: {failed:?}"
+    );
+    assert_eq!(failed.code(), ErrorCode::Closing);
     let text = String::from_utf8(out).unwrap();
     assert!(text.is_empty() || kinds_of_text(&text) == ["turn_started"].map(String::from));
     assert_eq!(close(opened.log, inbox), Ok(()));
@@ -600,21 +609,19 @@ fn a_different_schema_version_is_session_held_naming_both_versions() {
     let (failed, out) = attached(finished, "attach to return");
     let failed = failed.unwrap_err();
 
-    assert_eq!(failed.code, ErrorCode::SessionHeld);
     assert!(
-        failed.message.contains(&id.0),
-        "the message names the session: {}",
-        failed.message
+        matches!(
+            &failed,
+            SessionError::VersionMismatch { id: seen, version }
+            if seen == &id && *version == u64::from(SCHEMA_VERSION) + 1
+        ),
+        "the mismatch names the session and its version: {failed:?}"
     );
+    assert_eq!(failed.code(), ErrorCode::SessionHeld);
     assert!(
-        failed.message.contains(&(SCHEMA_VERSION + 1).to_string()),
-        "the message names the session's version: {}",
-        failed.message
-    );
-    assert!(
-        failed.message.contains(&SCHEMA_VERSION.to_string()),
+        failed.to_string().contains(&SCHEMA_VERSION.to_string()),
         "the message names this build's version: {}",
-        failed.message
+        failed.to_string()
     );
     assert!(out.is_empty());
     // Attach sent no prompt after the version check: the stand-in saw the
@@ -647,7 +654,11 @@ fn a_connection_closed_before_the_turn_completes_is_a_failure() {
     let (failed, out) = attached(finished, "attach to return");
     let failed = failed.unwrap_err();
 
-    assert_eq!(failed.code, ErrorCode::Closing);
+    assert!(
+        matches!(&failed, SessionError::SessionEnded { id: seen } if seen == &id),
+        "a closed connection ends the session: {failed:?}"
+    );
+    assert_eq!(failed.code(), ErrorCode::Closing);
     assert!(out.is_empty());
     stood_in(server, "the stand-in to see the connection end");
 }
@@ -674,7 +685,11 @@ fn a_socket_that_refuses_returns_the_refusal() {
     let (failed, out) = attached(finished, "attach to return");
     let failed = failed.unwrap_err();
 
-    assert_eq!(failed, expected);
+    assert!(
+        matches!(&failed, SessionError::Forwarded(failure) if failure == &expected),
+        "nothing accepting returns the refusal: {failed:?}"
+    );
+    assert_eq!(failed.code(), expected.code);
     assert!(out.is_empty());
 }
 
@@ -720,7 +735,11 @@ fn an_unwritable_stdout_is_an_io_failure() {
     let (failed, _) = attached(finished, "attach to return");
     let failed = failed.unwrap_err();
 
-    assert_eq!(failed.code, ErrorCode::IoFailed);
+    assert!(
+        matches!(&failed, SessionError::StdoutFailed { .. }),
+        "a broken stdout is a write failure: {failed:?}"
+    );
+    assert_eq!(failed.code(), ErrorCode::IoFailed);
     assert_eq!(close(opened.log, inbox), Ok(()));
 }
 
@@ -849,8 +868,15 @@ fn attach_with_a_rejected_label_fails_printing_nothing() {
     );
     let (failed, out) = attached(finished, "attach to return");
     let failed = failed.unwrap_err();
-    assert_eq!(failed.code, ErrorCode::CredentialMissing);
-    assert_eq!(failed.message, "no such label");
+    assert!(
+        matches!(
+            &failed,
+            SessionError::Rejected { code, message }
+            if *code == ErrorCode::CredentialMissing && message == "no such label"
+        ),
+        "a rejected label is a rejection: {failed:?}"
+    );
+    assert_eq!(failed.code(), ErrorCode::CredentialMissing);
     assert!(out.is_empty(), "a rejection prints nothing");
     stood_in(server, "the stand-in to see the connection end");
 }
@@ -901,16 +927,19 @@ fn a_different_schema_version_that_is_not_an_envelope_is_still_session_held() {
     let (failed, out) = attached(finished, "attach to return");
     let failed = failed.unwrap_err();
 
-    assert_eq!(failed.code, ErrorCode::SessionHeld);
     assert!(
-        failed.message.contains(&(SCHEMA_VERSION + 1).to_string()),
-        "the message names the session's version: {}",
-        failed.message
+        matches!(
+            &failed,
+            SessionError::VersionMismatch { id: seen, version }
+            if seen == &id && *version == u64::from(SCHEMA_VERSION) + 1
+        ),
+        "the mismatch names the session and its version: {failed:?}"
     );
+    assert_eq!(failed.code(), ErrorCode::SessionHeld);
     assert!(
-        failed.message.contains(&SCHEMA_VERSION.to_string()),
+        failed.to_string().contains(&SCHEMA_VERSION.to_string()),
         "the message names this build's version: {}",
-        failed.message
+        failed.to_string()
     );
     assert!(out.is_empty());
     server.join().expect("the listener answered the subscribe");

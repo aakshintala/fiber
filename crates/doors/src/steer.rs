@@ -129,8 +129,8 @@ pub fn steer(
     pause_at_ack_wait();
     let (mut reader, mut writer) = match subscribed(opened, id) {
         Ok(pair) => pair,
-        Err(Unsubscribed::Rejected(failure) | Unsubscribed::Version(failure)) => {
-            return Steered::Rejected(failure);
+        Err(Unsubscribed::Rejected(error) | Unsubscribed::Version(error)) => {
+            return Steered::Rejected(Failure::from(error));
         }
         Err(_) => return Steered::Gone,
     };
@@ -176,7 +176,7 @@ pub fn steer(
             return Steered::Gone;
         };
         if is_answer(&line, "command_rejected", command) {
-            return Steered::Rejected(rejected(&line));
+            return Steered::Rejected(Failure::from(rejected(&line)));
         }
         if is_answer(&line, "command_accepted", command) {
             // The at-once answer is itself the queue proof: the reader

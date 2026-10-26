@@ -8,6 +8,7 @@ use std::path::Path;
 
 use contract::{Envelope, SessionId};
 
+use crate::SessionError;
 use crate::attach::{Unsubscribed, next_envelope, subscribe_full};
 
 /// What a watch ended on.
@@ -83,9 +84,10 @@ pub fn watch_after(
     }
 }
 
-/// A Fiber failure as an I/O error: the watcher's only error type.
-fn failed(failure: contract::shapes::Failure) -> std::io::Error {
-    std::io::Error::other(failure.message)
+/// A session failure as an I/O error: the watcher's only error type. The
+/// sentence is the failure's own, so it reads as it did before.
+fn failed(error: SessionError) -> std::io::Error {
+    std::io::Error::other(error.to_string())
 }
 
 /// The session ended before answering: its connection closed before the

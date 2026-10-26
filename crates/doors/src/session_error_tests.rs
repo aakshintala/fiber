@@ -283,13 +283,27 @@ fn worktree_failed_reads_its_source_code() {
 fn malformed_wire_rejections_stay_unknown_and_empty() {
     let empty = serde_json::Map::new();
     let rejection = crate::attach::rejection(&empty);
-    assert_eq!(rejection.code, ErrorCode::Other("unknown".to_owned()));
-    assert_eq!(rejection.message, "");
+    assert!(
+        matches!(
+            &rejection,
+            SessionError::Rejected { code, message }
+            if *code == ErrorCode::Other("unknown".to_owned()) && message.is_empty()
+        ),
+        "a missing code and message stay unknown and empty: {rejection:?}"
+    );
+    assert_eq!(rejection.code(), ErrorCode::Other("unknown".to_owned()));
     let payload: serde_json::Map<String, serde_json::Value> =
         serde_json::from_value(serde_json::json!({"code": 42, "message": 7})).unwrap();
     let rejection = crate::attach::rejection(&payload);
-    assert_eq!(rejection.code, ErrorCode::Other("unknown".to_owned()));
-    assert_eq!(rejection.message, "");
+    assert!(
+        matches!(
+            &rejection,
+            SessionError::Rejected { code, message }
+            if *code == ErrorCode::Other("unknown".to_owned()) && message.is_empty()
+        ),
+        "a non-string code and message stay unknown and empty: {rejection:?}"
+    );
+    assert_eq!(rejection.code(), ErrorCode::Other("unknown".to_owned()));
 }
 
 #[test]
