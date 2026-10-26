@@ -104,6 +104,11 @@ pub(crate) fn run_with(
     ) -> std::io::Result<std::thread::JoinHandle<()>>,
     diag: Arc<log::diag::Diag>,
 ) -> Result<i32, Error> {
+    // The first render's span opens at entry: at `info` this is one level
+    // check with no clock read. Every pre-draw return below discards it,
+    // so a line there never times setup work as a frame that never drew.
+    let timing = crate::timing::Timing::new(diag);
+    let first_render = timing.first_render();
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
@@ -113,6 +118,7 @@ pub(crate) fn run_with(
     // kill the process without restoring, so a refused one fails before
     // any frame.
     let Ok(term_signals) = Signals::new([SIGTERM, SIGHUP]) else {
+        crate::timing::discard(first_render);
         return Ok(1);
     };
     catch_interrupts();
@@ -121,12 +127,15 @@ pub(crate) fn run_with(
     // never a child process or a tty/hub read.
     let hover = launch.hover;
     let Ok((width, height)) = term::setup(&tty, hover) else {
+        crate::timing::discard(first_render);
         return Ok(1);
     };
     let Ok(out) = tty.try_clone() else {
+        crate::timing::discard(first_render);
         return Ok(1);
     };
     let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
+        crate::timing::discard(first_render);
         return Ok(1);
     };
     // `App::new` maps an empty launch directory to no workspace, so a
@@ -228,8 +237,11 @@ pub(crate) fn run_with(
         }
     }
     if screen.draw(&mut app, None).is_err() {
+        crate::timing::discard(first_render);
         return Ok(1);
     }
+    // The frame drew: its line stands, whatever the loop meets after.
+    drop(first_render);
     // Startup pushes (config reads, session restores) gain births and
     // wakes before the first arm, so they fade like every other event.
     app.sweep_notices(clock.now());
@@ -259,7 +271,7 @@ pub(crate) fn run_with(
         tty,
         on_attach,
         clock,
-        timing: crate::timing::Timing::new(diag),
+        timing,
         files_out: tx.clone(),
         search: None,
         reader,
@@ -372,10 +384,6 @@ struct Loop<B: Backend> {
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
     /// The diagnostic writer the timed scopes share.
-    #[allow(
-        dead_code,
-        reason = "stored for the timing scopes, which do not read it yet"
-    )]
     timing: crate::timing::Timing,
     /// Where workers post their results.
     files_out: Sender<Input>,
@@ -775,6 +783,9 @@ impl<B: Backend> Loop<B> {
     /// batch, after every input in it is handled. Returns the exit code
     /// when the terminal cannot be drawn.
     fn frame(&mut self, rx: &Receiver<Input>) -> Option<i32> {
+        // A frame past its 16 ms budget writes `tui.frame`; one within
+        // budget writes no line, so scrolling leaves the log small.
+        let _frame = self.timing.frame();
         // The reconciler's subscribes go out before the frame pages: an
         // acknowledgement arriving late is reconciled on the step that
         // brings it.
@@ -1034,6 +1045,9 @@ impl<B: Backend> Loop<B> {
             // Each range loads under its own segment's session: ancestor
             // and descendant logs both start at `Seq(0)`, so a bare range
             // names no page on its own.
+            // The first attach's log read is timed once per process, to
+            // completion whatever its outcome: an attempted read is work.
+            let log_read = self.timing.log_read();
             match self.hub.fetch(
                 rx,
                 &session,
@@ -1044,7 +1058,12 @@ impl<B: Backend> Loop<B> {
                 self.tick.armed(),
             ) {
                 Ok(lines) => {
+                    // The first successful attach load's transcript build
+                    // is timed once per process; a failed first fetch
+                    // leaves its latch for the next successful load.
+                    let transcript = self.timing.transcript();
                     self.app.load(&session, lines);
+                    drop(transcript);
                     // An answer that folded nothing into the page would
                     // leave it needed, and the frame asking forever.
                     if self.app.needs().first() == Some(&(session.clone(), range.clone())) {
@@ -1054,6 +1073,7 @@ impl<B: Backend> Loop<B> {
                 }
                 Err(message) => self.app.load_failed(&session, &range, &message),
             }
+            drop(log_read);
         }
     }
 
