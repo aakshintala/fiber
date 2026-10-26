@@ -5666,3 +5666,43 @@ fn advance_when_parked_in_past_what_the_clock_can_represent_errors_before_waitin
     );
     assert_eq!(clock.now(), now, "a rejected wait moves no time");
 }
+
+#[test]
+fn advance_when_parked_in_past_what_the_wall_can_represent_errors_before_waiting() {
+    let clock = FakeClock::with_sleep(Sleep::Waits);
+    let now = clock.now();
+    // The wall base (UNIX_EPOCH plus the fixed epoch) dwarfs any monotonic
+    // uptime, so the wall time overflows first: this advance still fits the
+    // monotonic instant but not the wall time. Under the `||`-to-`&&` mutant
+    // the guard passes and the wait ends in the no-park error, which never
+    // names the overflow. A zero bound proves the guard wins before waiting.
+    let past_the_wall = Duration::from_secs(9_223_372_035_854_775_807);
+    let result = clock.advance_when_parked_in(past_the_wall, Duration::ZERO);
+    let message = result.expect_err("a wall-unrepresentable advance is rejected");
+    assert!(
+        message.contains("overflow"),
+        "the failure names the overflow: {message}"
+    );
+    assert_eq!(clock.now(), now, "a rejected wait moves no time");
+}
+
+#[test]
+fn parked_offsets_reports_the_offset_and_the_remaining_deadline() {
+    let clock = FakeClock::with_sleep(Sleep::Waits);
+    clock.advance(Duration::from_secs(5));
+    let until = clock.now() + Duration::from_secs(10);
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    // An exact match: the default-body mutants `(0, [])`, `(0, [Some(0)])`
+    // and `(0, [None])` each differ in the offset, the count or the entry.
+    assert_eq!(
+        clock.parked_offsets(),
+        (Duration::from_secs(5), vec![Some(Duration::from_secs(10))])
+    );
+    release.send(()).unwrap();
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
