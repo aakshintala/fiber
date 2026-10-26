@@ -13,9 +13,9 @@ use crate::app::App;
 use crate::app::panel::{Branch, Spot};
 use crate::changed_files_view;
 use crate::format;
-use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
 use crate::surface;
+use crate::theme::{Role, style};
 
 pub(crate) mod delegates;
 pub(crate) mod quota;

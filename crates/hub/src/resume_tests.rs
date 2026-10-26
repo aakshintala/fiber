@@ -1229,6 +1229,7 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
             &relays,
             None,
             false,
+            None,
         );
     }
     Deadline::after(DEADLINE).recv_or_fail(&played, "the scripted replay");
@@ -1415,6 +1416,7 @@ fn a_first_exit_re_routes_and_the_resumed_session_answers() {
         &relays,
         None,
         false,
+        None,
     );
     Deadline::after(DEADLINE).recv_or_fail(&played, "the scripted replay");
     let mut reader = BufReader::new(client_read);
@@ -3253,6 +3255,7 @@ fn a_rerouted_full_subscribe_to_an_exited_delegate_replays_and_releases_the_queu
         &relays,
         Some(epoch),
         true,
+        None,
     );
     peer.set_read_timeout(Some(DEADLINE)).unwrap();
     let mut read = BufReader::new(peer);

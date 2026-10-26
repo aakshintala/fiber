@@ -17,7 +17,7 @@ use contract::shapes::Failure;
 use contract::{CommandId, Envelope, ErrorCode, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value};
 
-use crate::{failure, mint};
+use crate::{SessionError, mint};
 
 /// Sends `prompt` to the session `id` running under `home`, prints the
 /// lines from the `turn_started` carrying this prompt's command id through
@@ -41,7 +41,7 @@ pub fn attach(
     prompt: String,
     out: &mut dyn Write,
     refused: Failure,
-) -> Result<i32, Failure> {
+) -> Result<i32, SessionError> {
     // One handshake for every client: connect, mint, write the subscribe,
     // then read until its answer and check the version, all on the raw
     // line. A session on another schema version may answer outside this
@@ -52,12 +52,12 @@ pub fn attach(
     let socket = home.join("run").join(&id.0);
     let (mut reader, mut writer) = match subscribe_full(&socket, id) {
         Ok(pair) => pair,
-        Err(Unsubscribed::Connect(_)) => return Err(refused),
+        Err(Unsubscribed::Connect(_)) => return Err(SessionError::Forwarded(refused)),
         Err(Unsubscribed::Clone(e)) => {
-            return Err(failure(
-                ErrorCode::IoFailed,
-                format!("{}: {e}", socket.display()),
-            ));
+            return Err(SessionError::SubscribeClone {
+                socket: socket.clone(),
+                source: e,
+            });
         }
         Err(Unsubscribed::Write(f) | Unsubscribed::Rejected(f) | Unsubscribed::Version(f)) => {
             return Err(f);
@@ -136,13 +136,9 @@ pub(crate) fn send(
     writer: &mut UnixStream,
     id: &SessionId,
     line: &CommandLine,
-) -> Result<(), Failure> {
-    let bytes = serde_json::to_vec(line).map_err(|e| {
-        failure(
-            ErrorCode::IoFailed,
-            format!("a command could not be written as JSON: {e}"),
-        )
-    })?;
+) -> Result<(), SessionError> {
+    let bytes =
+        serde_json::to_vec(line).map_err(|source| SessionError::CommandEncode { source })?;
     support::framing::write_line(writer, &bytes).map_err(|_| ended(id))
 }
 
@@ -192,13 +188,13 @@ pub(crate) enum Unsubscribed {
     /// The reader side did not clone.
     Clone(io::Error),
     /// The subscribe write failed.
-    Write(Failure),
+    Write(SessionError),
     /// The connection closed before the answer.
     Closed,
     /// The subscribe was rejected, with its code and message.
-    Rejected(Failure),
+    Rejected(SessionError),
     /// The session runs another schema version.
-    Version(Failure),
+    Version(SessionError),
 }
 
 /// Connects to the session socket, mints the subscribe id and writes the
@@ -320,19 +316,14 @@ fn exit_code(envelope: &Envelope) -> i32 {
 }
 
 /// Prints one line of the turn.
-fn emit(out: &mut dyn Write, raw: &[u8]) -> Result<(), Failure> {
-    support::framing::write_line(out, raw).map_err(|e| {
-        failure(
-            ErrorCode::IoFailed,
-            format!("stdout could not be written: {e}"),
-        )
-    })
+fn emit(out: &mut dyn Write, raw: &[u8]) -> Result<(), SessionError> {
+    support::framing::write_line(out, raw).map_err(|source| SessionError::StdoutFailed { source })
 }
 
 /// Any command's rejection code and message, read from the answer line's
 /// payload map. Envelope readers pass `envelope.payload` to [`rejection`]
 /// directly; raw-line readers pass the whole line here.
-pub(crate) fn rejected(line: &Value) -> Failure {
+pub(crate) fn rejected(line: &Value) -> SessionError {
     let empty = Map::new();
     let payload = line
         .get("payload")
@@ -344,7 +335,7 @@ pub(crate) fn rejected(line: &Value) -> Failure {
 /// Any command's rejection code and message, read from the answer's payload
 /// map. Envelope readers pass `envelope.payload` directly; raw-line readers
 /// use [`rejected`] on the whole line.
-pub(crate) fn rejection(payload: &Map<String, Value>) -> Failure {
+pub(crate) fn rejection(payload: &Map<String, Value>) -> SessionError {
     let code = payload
         .get("code")
         .cloned()
@@ -355,7 +346,7 @@ pub(crate) fn rejection(payload: &Map<String, Value>) -> Failure {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_owned();
-    failure(code, message)
+    SessionError::Rejected { code, message }
 }
 
 /// Declines on a `schema_version` different from this build's
@@ -363,29 +354,22 @@ pub(crate) fn rejection(payload: &Map<String, Value>) -> Failure {
 /// the version (`docs/events.md`, "Versioning"), so any other one cannot be
 /// read. Another process does hold the session, so the code stays
 /// `session_held`, and the message names the session's version and this one.
-pub(crate) fn check_version(id: &SessionId, line: &Value) -> Result<(), Failure> {
+pub(crate) fn check_version(id: &SessionId, line: &Value) -> Result<(), SessionError> {
     let version = line
         .get("schema_version")
         .and_then(Value::as_u64)
         .unwrap_or(0);
     if u64::from(SCHEMA_VERSION) != version {
-        return Err(failure(
-            ErrorCode::SessionHeld,
-            format!(
-                "session {} runs schema version {version}, this Fiber runs schema version {}; \
-                 close the session or let it exit, then resume",
-                id.0, SCHEMA_VERSION,
-            ),
-        ));
+        return Err(SessionError::VersionMismatch {
+            id: id.clone(),
+            version,
+        });
     }
     Ok(())
 }
 
 /// The session ended before answering: its connection closed, or its
 /// `fiber_exited` arrived before this turn completed.
-fn ended(id: &SessionId) -> Failure {
-    failure(
-        ErrorCode::Closing,
-        format!("session {} ended before its turn completed", id.0),
-    )
+fn ended(id: &SessionId) -> SessionError {
+    SessionError::SessionEnded { id: id.clone() }
 }

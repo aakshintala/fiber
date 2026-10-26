@@ -283,7 +283,7 @@ fn flat_drops_every_style_and_keeps_text_and_links() {
 
 #[test]
 fn from_ratatui_names_roles_and_flags() {
-    use crate::markdown::style;
+    use crate::theme::style;
     let role = from_ratatui(&[Span::styled("x", style(Role::Success))]);
     assert_eq!(
         role.first().expect("one span").fg,
@@ -317,7 +317,7 @@ fn from_ratatui_names_roles_and_flags() {
 
 #[test]
 fn from_ratatui_then_fit_reproduces_the_ledger_styles() {
-    use crate::markdown::style;
+    use crate::theme::style;
     let built_in = vec![
         Span::styled("info ", style(Role::Info)),
         Span::styled("ok ", style(Role::Success)),

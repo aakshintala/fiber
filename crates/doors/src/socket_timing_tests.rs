@@ -157,7 +157,7 @@ fn open_within(
     log: Arc<Log>,
     clock: Arc<dyn Clock>,
     tools: Vec<ToolInfo>,
-) -> Result<Session, contract::shapes::Failure> {
+) -> Result<Session, crate::SessionError> {
     let (tx, rx) = mpsc::channel();
     let (home, dir) = (temp.home.clone(), temp.dir.clone());
     thread::spawn(move || {
@@ -263,7 +263,15 @@ fn open_measures_a_bind_failure_and_deletes_the_directory() {
         Ok(_) => panic!("a socket path past the limit binds"),
         Err(error) => error,
     };
-    assert_eq!(error.code, ErrorCode::Usage);
+    assert!(
+        matches!(
+            &error,
+            crate::SessionError::SocketPathTooLong { max }
+            if *max == crate::socket::SOCKET_PATH_MAX
+        ),
+        "a path past the limit is too long: {error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::Usage);
     assert!(!dir.exists(), "a new session's directory is deleted");
     let lines: Vec<Value> =
         fs::read_to_string(home.join("logs").join(format!("session-{}.log", temp.id.0)))
@@ -304,7 +312,15 @@ fn resume_measures_a_bind_failure_and_keeps_the_directory() {
         Ok(_) => panic!("a socket path past the limit binds"),
         Err(error) => error,
     };
-    assert_eq!(error.code, ErrorCode::Usage);
+    assert!(
+        matches!(
+            &error,
+            crate::SessionError::SocketPathTooLong { max }
+            if *max == crate::socket::SOCKET_PATH_MAX
+        ),
+        "a path past the limit is too long: {error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::Usage);
     assert!(
         dir.join("events.jsonl").is_file(),
         "a resumed session is kept"
@@ -333,7 +349,15 @@ fn open_measures_a_live_socket_and_leaves_it_alone() {
         Ok(_) => panic!("a socket a live session holds binds"),
         Err(error) => error,
     };
-    assert_eq!(error.code, ErrorCode::SessionHeld);
+    assert!(
+        matches!(
+            &error,
+            crate::SessionError::SocketHeld { socket }
+            if socket == &temp.socket()
+        ),
+        "a held socket is held: {error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::SessionHeld);
     UnixStream::connect(temp.socket()).expect("the live socket still answers");
     assert!(!temp.dir.exists(), "a refused open cleans up");
     assert_socket_line(&session_lines(&temp), 0);
@@ -485,7 +509,7 @@ fn legacy_constructors_are_quiet() {
 /// Opens a new session through the legacy constructor on a bounded
 /// thread, like [`open_within`] but without a timing slot.
 #[track_caller]
-fn open_within_legacy_open(temp: &Temp) -> Result<Session, contract::shapes::Failure> {
+fn open_within_legacy_open(temp: &Temp) -> Result<Session, crate::SessionError> {
     let (tx, rx) = mpsc::channel();
     let (home, dir, log) = (temp.home.clone(), temp.dir.clone(), Arc::clone(&temp.log));
     let clock: Arc<dyn Clock> = Arc::clone(&temp.clock) as Arc<dyn Clock>;

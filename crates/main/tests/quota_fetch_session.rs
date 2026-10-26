@@ -343,9 +343,9 @@ fn a_hot_window_notices_rearms_and_notices_again_across_resumes() {
     hub.lock().unwrap().take().unwrap().kill_and_wait();
 }
 
-/// The `/lua-quota` gate: armed after the turn answers, holding the
-/// view's later fetch until the test's release, counting the fetches
-/// held in between.
+/// The `/lua-quota` gate: armed once the drawn value below proves no
+/// fetch is in flight, holding the view's later fetch until the test's
+/// release, counting the fetches held in between.
 struct QuotaGate {
     armed: bool,
     gated: usize,
@@ -430,18 +430,41 @@ fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
     // session start's fetch takes longer and stays in flight.
     run.write(b"hi\r");
     run.wait_screen("the answered turn", |grid| grid.contents.contains("Hello."));
-    // The session start's fetch can still be in flight here: the view's
-    // read would share that flight (`docs/invocation.md`, `quota`) and
-    // never reach the gate, so the hold below would time out. Focus in
-    // (the terminal asks for cached quota on focus-in, answered from the
-    // caches without starting a fetch) and wait for the fetched value
-    // before arming: a drawn value means `finish_quota` stored it and
-    // cleared the flight under one lock, and the fresh cache starts no
-    // new flight on its own, so only the view's fetch can arrive now.
-    run.write(b"\x1b[I");
+    // The fetch-less quota snapshot is a one-shot read of the caches
+    // (`docs/invocation.md`, `quota`): nothing re-asks when a flight
+    // lands after it, so one focus-in can miss a session-start fetch
+    // still in flight. Re-ask on every pass until the drawn value proves
+    // `finish_quota` stored it: the store clears the flight under the
+    // same lock (`crates/extensions/src/lua_provider/quota.rs`,
+    // `finish_quota`), so a drawn value means no flight is in flight.
+    // Each focus-in sends a fetch-less query (`docs/tui.md`, "The
+    // panel"; `docs/tools.md`, "Fetching") without starting a fetch on
+    // a fresh cache, so re-asking starts no new `/lua-quota` request
+    // and only the view's fetch can reach the gate below. The wait is
+    // the drawn value itself (`docs/testing.md`, "Waits and timeouts"),
+    // not the session-log `provider_request` record, which the fetch
+    // thread writes when the body ends
+    // (`crates/extensions/src/host.rs`, `execute`), synchronously
+    // before quota parsing and the store.
+    loop {
+        run.write(b"\x1b[I");
+        if run.screen().contents.contains("58%") {
+            break;
+        }
+        assert!(
+            !setup.deadline.left().is_zero(),
+            "waited until the deadline for the fetched quota value to draw after focus-in",
+        );
+        std::thread::yield_now();
+    }
     run.wait_screen("the fetched quota value", |grid| {
         grid.contents.contains("58%")
     });
+    // The drawn value means this session's loader checked every provider
+    // as well (`docs/tools.md`, "Fetching": without `fetch` the command
+    // answers empty until loading lists labels), and the fresh cache
+    // starts no new flight on its own with no turn running, so arming
+    // finds no flight in flight: only the view's fetch can arrive now.
     quota_gate.lock().unwrap().armed = true;
     run.write(b"/quota\r");
     run.wait_screen("the view's fetching mark", |grid| {

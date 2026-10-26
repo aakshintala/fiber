@@ -25,7 +25,7 @@ use super::*;
 use crate::Starter as _;
 use crate::connection::{Hub, lock};
 use crate::fake::{FakeSession, FakeStarter};
-use crate::relay::{Kept, Relay, Replayed};
+use crate::relay::{Kept, Relay, RelayTarget, Replayed};
 use crate::testkit::write_log;
 use fakes::Deadline;
 
@@ -147,6 +147,7 @@ fn rig(
         replayed: Replayed::default(),
         thread,
         retiring: None,
+        target: RelayTarget::LiveUnreadable,
     });
     let rig = Rig {
         hub,
@@ -358,6 +359,7 @@ fn route_on_thread(rig: &Rig, id: &str, stripped: Map<String, Value>) {
             &relays,
             None,
             false,
+            None,
         );
         done_tx.send(()).unwrap_or(());
     });

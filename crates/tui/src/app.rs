@@ -86,6 +86,8 @@ mod screen;
 mod select;
 mod session_views;
 mod status_rows;
+#[cfg(test)]
+pub(crate) mod testkit;
 mod top;
 
 use screen::Screen;

@@ -109,9 +109,20 @@ impl Loop {
             None => call.arguments.clone(),
         };
         let Value::Object(arguments) = arguments else {
+            // The failure quotes what the model sent, so the model still
+            // sees what it wrote: a raw string as sent, any other value in
+            // its JSON form.
+            let seen = match &call.arguments {
+                Value::String(raw) => raw.clone(),
+                Value::Null
+                | Value::Bool(_)
+                | Value::Number(_)
+                | Value::Array(_)
+                | Value::Object(_) => call.arguments.to_string(),
+            };
             return Err(Box::new(crate::completion::failed(
                 ErrorCode::InvalidArguments,
-                "The arguments are not a JSON object. Send them as one.".to_owned(),
+                format!("The arguments are not a JSON object. Send them as one.\n{seen}"),
             )));
         };
         match classify(&tool, &arguments) {

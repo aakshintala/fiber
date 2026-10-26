@@ -656,7 +656,7 @@ fn ask(
     let terminal = stdin.is_terminal();
     let prompt = match doors::prompt(arg, dash, &mut stdin.lock(), terminal) {
         Ok(prompt) => prompt,
-        Err(e) => return ask_failed(e),
+        Err(e) => return ask_failed(Failure::from(e)),
     };
     match resume {
         Some(resuming) => resume::ask_resume(resuming, overrides, prompt, clock, &signals, fiber),
@@ -692,10 +692,10 @@ fn feedback(
         // Stdin shapes that yield no description carry `ask`'s no-prompt
         // sentence; the report writer's empty-description sentence names
         // the command the person ran.
-        Err(error) if error.code == ErrorCode::Usage => {
+        Err(error) if error.code() == ErrorCode::Usage => {
             return fail(::cli::FeedbackError::EmptyDescription.into());
         }
-        Err(error) => return fail(error),
+        Err(error) => return fail(Failure::from(error)),
     };
     let home = match config::fiber_home_path_from_env() {
         Ok(home) => home,
@@ -1095,6 +1095,19 @@ fn terminal(
     // connect closure moves it, as is the diagnostic writer's.
     let launch_home = home.clone();
     let diag_home = home.clone();
+    // The terminal's diagnostic writer: one process, one file. Built once
+    // here and shared with the terminal, so the error path below writes to
+    // the same file a run would have (`docs/state.md`, "Diagnostic logs").
+    let diag = Arc::new(log::diag::Diag::new(
+        &diag_home,
+        log::diag::Process::Tui,
+        if config::diagnostics_debug(&config) {
+            log::diag::Level::Debug
+        } else {
+            log::diag::Level::Info
+        },
+        Arc::clone(&clock),
+    ));
     // The interactive door's report writer reads the same launch
     // directory the terminal opens in: cloned before `launch` takes it.
     let feedback_home = home.clone();
@@ -1153,6 +1166,7 @@ fn terminal(
         connect,
         Box::new(log::crash::attach),
         Arc::clone(&clock),
+        Arc::clone(&diag),
     ) {
         Ok(code) => code,
         Err(error) => {
@@ -1164,18 +1178,7 @@ fn terminal(
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_owned))
                 .unwrap_or_else(|| "other".to_owned());
-            let level = if config::diagnostics_debug(&config) {
-                log::diag::Level::Debug
-            } else {
-                log::diag::Level::Info
-            };
-            log::diag::Diag::new(
-                &diag_home,
-                log::diag::Process::Tui,
-                level,
-                Arc::clone(&clock),
-            )
-            .line(log::diag::Severity::Error, None, &code, &failure.message);
+            diag.line(log::diag::Severity::Error, None, &code, &failure.message);
             fail(failure)
         }
     }

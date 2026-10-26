@@ -539,13 +539,14 @@ impl Pages {
         // only their counts: a late line with equal rows still moves the
         // search revision when its text changed.
         let before = summary.closing();
-        summary.spend.record(&line);
+        let generation = line.generation_id.clone();
+        summary.spend.record(None, line);
         let after = summary.closing();
         let rows = |line: Option<&Line<'static>>| {
             line.map(|line| crate::rows::fitted(line, crate::surface::inset(width)))
         };
         let page = summary.closed_on;
-        self.generations.insert(line.generation_id, at);
+        self.generations.insert(generation, at);
         if before != after {
             self.index.invalidate(page);
         }

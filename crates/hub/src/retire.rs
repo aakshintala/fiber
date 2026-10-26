@@ -499,6 +499,7 @@ fn reroute_once(
                 relays,
                 Some(epoch),
                 false,
+                None,
             );
         }
         return;
@@ -524,6 +525,7 @@ fn reroute_once(
                 relays,
                 Some(epoch),
                 true,
+                None,
             );
         } else {
             order.forget_handed(&id);
@@ -602,6 +604,7 @@ pub(crate) fn recover(
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
     from: Option<u64>,
+    admit: Option<&crate::connection::Attribution>,
 ) {
     let queued: Vec<(String, Map<String, Value>)> = lock(&entry.kept)
         .iter()
@@ -619,9 +622,12 @@ pub(crate) fn recover(
             relays,
             from,
             false,
+            admit,
         );
     }
-    crate::relay::route(id, session, stripped, hub, writer, relays, from, exited);
+    crate::relay::route(
+        id, session, stripped, hub, writer, relays, from, exited, admit,
+    );
 }
 
 fn pump(
@@ -673,6 +679,7 @@ fn pump(
             relays,
             Some(epoch),
             false,
+            None,
         );
     }
 }

@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use contract::events::{Event, SessionStarted, Variables, VariablesSource};
-use contract::shapes::{Failure, Worktree};
+use contract::shapes::Worktree;
 use contract::{ErrorCode, SessionId};
 use log::Log;
 
@@ -110,9 +110,7 @@ fn exists(path: &Path) -> bool {
 }
 
 /// The failure an `isolate` that was expected to fail returned.
-fn expect_failed(
-    result: Result<super::Isolation, contract::shapes::Failure>,
-) -> contract::shapes::Failure {
+fn expect_failed(result: Result<super::Isolation, super::SessionError>) -> super::SessionError {
     match result {
         Err(failure) => failure,
         Ok(_) => panic!("expected isolation to fail"),
@@ -397,9 +395,13 @@ fn isolate_outside_a_repository_is_usage_and_creates_nothing() {
                 clock,
                 &direct,
             ));
-            assert_eq!(failure.code, ErrorCode::Usage);
+            assert!(
+                matches!(&failure, super::SessionError::WorktreeFailed { .. }),
+                "outside a repository fails the worktree: {failure:?}"
+            );
+            assert_eq!(failure.code(), ErrorCode::Usage);
             assert_eq!(
-                failure.message,
+                failure.to_string(),
                 format!(
                     "{} is not in a git repository, so it cannot have a worktree.",
                     launch.display()
@@ -429,9 +431,13 @@ fn isolate_onto_an_existing_path_is_io_failed_and_leaves_it() {
                 clock,
                 &direct,
             ));
-            assert_eq!(failure.code, ErrorCode::IoFailed);
+            assert!(
+                matches!(&failure, super::SessionError::WorktreeFailed { .. }),
+                "an existing path fails the worktree: {failure:?}"
+            );
+            assert_eq!(failure.code(), ErrorCode::IoFailed);
             assert_eq!(
-                failure.message,
+                failure.to_string(),
                 format!(
                     "{} already exists, so Fiber did not make a worktree there.",
                     path.display()
@@ -462,9 +468,13 @@ fn isolate_with_an_interrupted_add_is_io_failed_and_creates_nothing() {
                 clock,
                 &runner,
             ));
-            assert_eq!(failure.code, ErrorCode::IoFailed);
+            assert!(
+                matches!(&failure, super::SessionError::WorktreeFailed { .. }),
+                "an interrupted add fails the worktree: {failure:?}"
+            );
+            assert_eq!(failure.code(), ErrorCode::IoFailed);
             assert_eq!(
-                failure.message,
+                failure.to_string(),
                 format!(
                     "{}: {}.",
                     worktree_path(home.path(), &key_of(repo.path()), id).display(),
@@ -496,8 +506,12 @@ fn isolate_without_git_on_path_is_usage() {
                 ));
                 // `project` falls back to the launch path with no git, so the
                 // failure comes from `create`'s missing git.
-                assert_eq!(failure.code, ErrorCode::Usage);
-                assert_eq!(failure.message, "git is not installed.");
+                assert!(
+                    matches!(&failure, super::SessionError::WorktreeFailed { .. }),
+                    "a missing git fails the worktree: {failure:?}"
+                );
+                assert_eq!(failure.code(), ErrorCode::Usage);
+                assert_eq!(failure.to_string(), "git is not installed.");
                 assert!(!home.join("projects").exists());
             },
         );
@@ -1057,9 +1071,13 @@ fn no_message_or_log_line_carries_git_stderr() {
                 "git worktree add failed for the worktree {}.",
                 worktree_path(home.path(), &key_of(failing.path()), id).display()
             );
-            assert_eq!(failure.message, expected);
+            assert!(
+                matches!(&failure, super::SessionError::WorktreeFailed { .. }),
+                "a failing hook fails the worktree: {failure:?}"
+            );
+            assert_eq!(failure.to_string(), expected);
             for marker in ["fatal:", "hook-marker-out", "hook-marker-err"] {
-                assert!(!failure.message.contains(marker), "{marker} leaked");
+                assert!(!failure.to_string().contains(marker), "{marker} leaked");
             }
             let repo = repo("doors-stderr-locked");
             let isolation = isolate_now(repo.path(), home.path(), id);
@@ -1455,15 +1473,15 @@ fn recreate_with_a_missing_repository_makes_nothing() {
                 Err(error) => error,
                 Ok(_) => panic!("a missing repository recreates nothing"),
             };
-            assert_eq!(error.failure.code, ErrorCode::IoFailed);
-            assert_eq!(
-                error.failure.message,
-                format!(
-                    "The repository {} is gone, so the worktree {} cannot be made again.",
-                    repository.display(),
-                    path.display()
-                )
+            assert!(
+                matches!(
+                    &error.failure,
+                    super::SessionError::RepositoryGone { repository: gone, path: missing }
+                    if gone == &repository && missing == &path
+                ),
+                "a missing repository is gone: {error:?}"
             );
+            assert_eq!(error.failure.code(), ErrorCode::IoFailed);
             assert!(error.isolation.is_none());
             assert!(!exists(&path), "nothing was made");
             // The claim's hold was released: a share takes hold.
@@ -1498,9 +1516,13 @@ fn recreate_with_an_existing_branch_keeps_it_where_it_was() {
                 Err(error) => error,
                 Ok(_) => panic!("an existing branch recreates nothing"),
             };
-            assert_eq!(error.failure.code, ErrorCode::IoFailed);
+            assert!(
+                matches!(&error.failure, super::SessionError::WorktreeFailed { .. }),
+                "an existing branch fails the worktree: {error:?}"
+            );
+            assert_eq!(error.failure.code(), ErrorCode::IoFailed);
             assert_eq!(
-                error.failure.message,
+                error.failure.to_string(),
                 format!(
                     "refs/heads/{branch} already exists, so Fiber did not make a worktree there."
                 )
@@ -1728,10 +1750,12 @@ fn a_downgrade_failure_after_a_successful_add_keeps_nothing() {
             // The downgrade fails after `worktree::recreate` succeeded:
             // the worktree stands, held by the returned isolation.
             let fail = |_creating: super::shared::Creating| {
-                Err::<super::shared::Shared, contract::shapes::Failure>(crate::failure(
-                    ErrorCode::IoFailed,
-                    format!("{}: {}.", lock.display(), io::ErrorKind::PermissionDenied),
-                ))
+                Err::<super::shared::Shared, super::SessionError>(
+                    super::SessionError::ShareFailed {
+                        path: lock.clone(),
+                        kind: io::ErrorKind::PermissionDenied,
+                    },
+                )
             };
             let error = match super::recreate_with(
                 &common,
@@ -1747,11 +1771,15 @@ fn a_downgrade_failure_after_a_successful_add_keeps_nothing() {
                 Err(error) => error,
                 Ok(_) => panic!("the downgrade fails"),
             };
-            assert_eq!(error.failure.code, ErrorCode::IoFailed);
-            assert_eq!(
-                error.failure.message,
-                format!("{}: {}.", lock.display(), io::ErrorKind::PermissionDenied)
+            assert!(
+                matches!(
+                    &error.failure,
+                    super::SessionError::ShareFailed { path: denied, kind }
+                    if denied == &lock && *kind == io::ErrorKind::PermissionDenied
+                ),
+                "the failed downgrade names the lock: {error:?}"
             );
+            assert_eq!(error.failure.code(), ErrorCode::IoFailed);
             let isolation = error.isolation.expect("the made worktree is kept");
             assert!(exists(&path), "the worktree stands");
             isolation.end();
@@ -1788,11 +1816,9 @@ fn a_downgrade_failure_after_a_successful_add_keeps_nothing() {
 
 #[test]
 fn recreate_error_debug_names_the_isolation_state() {
-    let failure = || Failure {
-        code: ErrorCode::IoFailed,
-        message: "the worktree could not be made".to_owned(),
-        retry_after_ms: None,
-        provider: None,
+    let failure = || super::SessionError::ShareFailed {
+        path: PathBuf::from("/x/w"),
+        kind: io::ErrorKind::NotFound,
     };
     let without = RecreateError {
         failure: failure(),

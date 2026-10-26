@@ -621,6 +621,71 @@ the reviewer exists to check. Its say already reaches the reviewer through its
 prompts and steers, and it runs outside Fiber, where no Fiber reviewer would
 judge an answer it gave.
 
+## Sessions on the sockets
+
+When a process connects to the hub's local socket or a session's socket, the
+operating system says which process it is (`LOCAL_PEERPID` on macOS,
+`SO_PEERCRED` on Linux). The hub, or the session, walks that process's
+parents. When the walk passes a session process, the connection is treated
+as coming from inside a session. A session process is a `fiber` process
+running a command that hosts a session in that process: the internal session
+command, `fiber ask`, or the case runner's child. Which session it is, Fiber
+reads from the process tree, never from the arguments. Every session process
+on the walk counts, including a Fiber delegate's. The kernel's process tree
+is the record; no marker file, environment variable or pid table is kept.
+
+A connection that comes from inside a session is refused `from_session`
+when it:
+
+1. answers an approval with `reply`, on any live session socket. The
+   rejection names `reply` and its target session, not the source session;
+2. sends `prompt`, `steer` or `reply` to its own session — the session whose
+   process is on the connection's ancestor walk — or to a session whose
+   parent walk shares one of those processes;
+3. asks for `pairing_code`.
+
+A target with no live process keeps the existing not-found or replay
+behavior; it is not refused just because the caller is session-owned.
+
+A `message` is a session message, logged with its sender, not a person's words, so none of these refusals covers it.
+
+The second refusal exempts the delegate's own client. It does not apply
+when the connecting process is the target session's parent process, as the
+kernel reports it. That is exactly a session process's own messages to the
+delegate it started, the path `delegate_message` uses. A shell the session
+started is never the delegate's parent, so its steering stays refused.
+
+Sessions started through the hub's `start`, including those the delegate CLI
+starts, stay allowed when they are unrelated to the caller's process tree.
+A session started below the session's own tree — `fiber ask` from its shell,
+or a delegate it spawned — shares a session process with the connection's
+walk, so steering it stays refused. A complete-walk rejection names the
+command and, when it targets a session, that session; it never names a
+source session id.
+
+A process owned by another account is never a session process, and its
+arguments are never read; the walk continues through it to PID 1. If the
+kernel will not report PID 1's effective uid, Fiber treats it as root and
+continues the walk. An unreadable effective uid for any other process
+makes the walk incomplete. When the walk is incomplete — a parent pid cannot
+be read, an effective uid other than PID 1's cannot be read, or this
+account's process's arguments cannot be read — the refusals above still apply, and the rejection message names the
+unreadable pid. The second refusal still admits
+its parent-process exemption on an incomplete caller walk, when the peer pid
+was read and the target session's own parent walk reads fully. A live target
+whose process, parent, or parent walk cannot be read fails the second
+refusal closed: the command is refused naming the target session. A
+synthetic replay of an exited delegate has no target process, so no refusal
+applies to it.
+
+A process that a model detaches from its session on purpose is reparented
+outside the session's tree, so the walk no longer sees it. Attaching a
+debugger to the session process where the system allows it (inside the Linux
+Yama `ptrace_scope`, or with the macOS debugger entitlement) reaches the
+session the same way. Both are deliberate escapes, and the known limit of
+this check. When Fiber cannot read a process it needs for this check, it
+refuses these commands rather than allowing them.
+
 ## Not settled here
 
 - Which tools exist is indexed in

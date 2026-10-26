@@ -214,6 +214,7 @@ fn the_start_pick_lists_the_hubs_models() {
                 once(terminal, hello()),
                 Box::new(|_| {}),
                 clock,
+                crate::timing::info_diag(),
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());

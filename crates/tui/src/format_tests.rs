@@ -413,8 +413,8 @@ fn summary_counts_keep_their_added_and_removed_styles() {
     for span in [&plus, &minus] {
         assert!(span.style.add_modifier.contains(Modifier::DIM));
     }
-    assert_eq!(plus.style.fg, crate::markdown::style(Role::Added).fg);
-    assert_eq!(minus.style.fg, crate::markdown::style(Role::Removed).fg);
+    assert_eq!(plus.style.fg, crate::theme::style(Role::Added).fg);
+    assert_eq!(minus.style.fg, crate::theme::style(Role::Removed).fg);
     // Every other span is dim.
     for span in &spans {
         if span.content == "+2" || span.content == "−1" {

@@ -160,6 +160,11 @@ pub(crate) struct Hub {
     /// port's spawn-failure paths run without an outside seam.
     #[cfg(test)]
     pub(crate) fail_spawn: Mutex<Option<&'static str>>,
+    /// Tests only: scripted process reads for the session-socket refusal
+    /// paths; production always reads the kernel.
+    #[cfg(test)]
+    pub(crate) test_read:
+        Mutex<Option<std::sync::Arc<dyn support::peer::ProcessRead + Send + Sync>>>,
     /// The longest client line the read loop takes, in bytes
     /// before its line feed: tests lower it so the cap is reachable
     /// without a 64 MiB line, production takes `MAX_LINE`. One field
@@ -266,6 +271,8 @@ impl Hub {
             on_fanout_wait: Mutex::new(None),
             #[cfg(test)]
             on_scan_listed: Mutex::new(None),
+            #[cfg(test)]
+            test_read: Mutex::new(None),
             #[cfg(test)]
             on_abort_flush: Mutex::new(None),
             #[cfg(test)]
@@ -649,6 +656,15 @@ fn serve_from(
         return;
     };
     hub.pairing.attach(&who, &writer);
+    // Caller attribution before `hub_hello`: every command on this
+    // connection is judged by the same session-process pids. A websocket
+    // or port connection stays remote.
+    let attribution = match &who {
+        crate::pairing::Who::Local => {
+            attribute_peer(support::peer::peer_pid(&stream), read_for(&hub).as_ref())
+        }
+        crate::pairing::Who::Device(_) => Attribution::Remote,
+    };
     if hello {
         #[cfg(test)]
         if let Some(pause) = lock(&hub.before_hello).take() {
@@ -656,7 +672,10 @@ fn serve_from(
         }
         send(&writer, &hub, "hub_hello", hello_payload(&hub));
     }
-    let mut fresh = Relays::default();
+    let mut fresh = Relays {
+        attribution: Some(attribution.clone()),
+        ..Relays::default()
+    };
     // Replay timing rides this connection's hub: at debug the transfer
     // path stamps failures on its writer, at info nothing is kept.
     if hub.diag.debugging() {
@@ -691,6 +710,7 @@ fn serve_from(
                     &who,
                     &mut remote,
                     web.as_ref(),
+                    &attribution,
                 );
             }
         }
@@ -730,6 +750,110 @@ fn serve_from(
     disconnect(&hub, n);
 }
 
+/// What a connection is, for the session-socket refusals
+/// (`docs/permissions.md`, "Sessions on the sockets"): a local connection
+/// carries the kernel peer pid and every session-process pid on its walk,
+/// a remote websocket or port connection carries nothing, and a local
+/// connection whose peer credential or walk could not be read carries what
+/// is known. An incomplete walk keeps a known peer pid so the direct-parent
+/// exception can still be checked; `None` never stands for a remote
+/// connection.
+#[derive(Clone)]
+pub(crate) enum Attribution {
+    /// A local connection with its kernel peer pid and matching
+    /// session-process pids.
+    Local {
+        /// The kernel-reported peer pid.
+        peer_pid: support::peer::Pid,
+        /// Every session-process pid on the peer's strict-ancestor walk,
+        /// nearest first.
+        session_process_pids: Vec<support::peer::Pid>,
+    },
+    /// A local connection whose peer credential or walk could not be
+    /// read, failing closed.
+    Incomplete {
+        /// The kernel-reported peer pid, when the credential read held.
+        peer_pid: Option<support::peer::Pid>,
+        /// The unreadable pid, when the walk failed; `None` when the peer
+        /// credential itself could not be read.
+        pid: Option<support::peer::Pid>,
+        /// The peer-credential read's error text, when the credential
+        /// itself could not be read; the refusal names it.
+        peer_error: Option<String>,
+    },
+    /// A websocket or port connection: unchanged behavior.
+    Remote,
+}
+
+impl Attribution {
+    /// Whether the connection may belong to a session: an owned local
+    /// connection, or an incomplete local one, failing closed.
+    fn session_owned(&self) -> bool {
+        match self {
+            Attribution::Local {
+                session_process_pids,
+                ..
+            } => !session_process_pids.is_empty(),
+            Attribution::Incomplete { .. } => true,
+            Attribution::Remote => false,
+        }
+    }
+
+    /// The kernel peer pid, when the credential read held.
+    pub(crate) fn peer_pid(&self) -> Option<support::peer::Pid> {
+        match self {
+            Attribution::Local { peer_pid, .. } => Some(*peer_pid),
+            Attribution::Incomplete { peer_pid, .. } => *peer_pid,
+            Attribution::Remote => None,
+        }
+    }
+}
+
+/// The attribution of one accepted local connection: the kernel peer pid
+/// first, then every session-process pid on its walk. A failed peer
+/// credential or walk reads as [`Attribution::Incomplete`], never as
+/// remote. The accepted socket peer's own arguments are never read: only
+/// strict ancestors are walked.
+pub(crate) fn attribute_peer(
+    peer: Result<support::peer::Pid, support::peer::PeerCredentialError>,
+    read: &dyn support::peer::ProcessRead,
+) -> Attribution {
+    match peer {
+        Err(error) => Attribution::Incomplete {
+            peer_pid: None,
+            pid: None,
+            peer_error: Some(error.to_string()),
+        },
+        Ok(peer_pid) => {
+            match support::peer::walk_ancestors(
+                peer_pid,
+                read,
+                contract::session_process::is_session_process,
+            ) {
+                Ok(walk) => Attribution::Local {
+                    peer_pid,
+                    session_process_pids: walk.matched_pids,
+                },
+                Err(incomplete) => Attribution::Incomplete {
+                    peer_pid: Some(peer_pid),
+                    pid: Some(incomplete.pid),
+                    peer_error: None,
+                },
+            }
+        }
+    }
+}
+
+/// The process reads the refusal paths use: the test seam when set,
+/// otherwise the kernel.
+pub(crate) fn read_for(_hub: &Hub) -> std::sync::Arc<dyn support::peer::ProcessRead + Send + Sync> {
+    #[cfg(test)]
+    if let Some(read) = lock(&_hub.test_read).clone() {
+        return read;
+    }
+    std::sync::Arc::new(support::peer::KernelProcessRead)
+}
+
 /// Logs the departure, then releases the count: once the count shows it
 /// gone, the line is written, and the idle exit's `hub_stopped` follows it.
 fn disconnect(hub: &Hub, n: u64) {
@@ -762,6 +886,7 @@ fn on_command(
     who: &crate::pairing::Who,
     remote: &mut Remote,
     web: Option<&Arc<crate::port::Web>>,
+    attribution: &Attribution,
 ) {
     if who.revoked() {
         return;
@@ -780,7 +905,15 @@ fn on_command(
         }
     };
     if let Some(session) = line.session_id {
-        crate::relay::relay_command(&line.id, &session, &line.value, hub, writer, relays);
+        crate::relay::relay_command(
+            &line.id,
+            &session,
+            &line.value,
+            hub,
+            writer,
+            relays,
+            attribution,
+        );
         return;
     }
     match line.command.as_str() {
@@ -814,13 +947,30 @@ fn on_command(
             &line.id,
             crate::machine::on_write_config(hub, &line.args),
         ),
-        "pairing_code" => match hub.pairing.mint(hub, who, &line.args) {
-            Ok(crate::pairing::Outcome::Done(result)) => {
-                accept_result(writer, hub, &line.id, result)
+        "pairing_code" => {
+            if attribution.session_owned() {
+                reject(
+                    writer,
+                    hub,
+                    Some(&line.id),
+                    &ErrorCode::FromSession,
+                    &crate::relay::from_session_message(
+                        attribution,
+                        crate::relay::FromSessionRefusal::PairingCode,
+                    ),
+                );
+            } else {
+                match hub.pairing.mint(hub, who, &line.args) {
+                    Ok(crate::pairing::Outcome::Done(result)) => {
+                        accept_result(writer, hub, &line.id, result)
+                    }
+                    Ok(crate::pairing::Outcome::Dropped) => {}
+                    Err(refused) => {
+                        reject(writer, hub, Some(&line.id), &refused.code, &refused.message)
+                    }
+                }
             }
-            Ok(crate::pairing::Outcome::Dropped) => {}
-            Err(refused) => reject(writer, hub, Some(&line.id), &refused.code, &refused.message),
-        },
+        }
         "devices" => answer(writer, hub, &line.id, hub.pairing.devices(hub, &line.args)),
         "revoke" => match hub.pairing.revoke(hub, who, &line.args) {
             Ok(crate::pairing::Outcome::Done(revoked)) => {

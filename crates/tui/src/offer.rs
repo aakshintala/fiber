@@ -17,9 +17,9 @@ use ratatui::text::{Line, Span};
 use crate::app::{read, session_command};
 use crate::diff::{diff_lines, gutter_prefix, gutter_width, styled_spans};
 use crate::keys::{Edit, Key};
-use crate::markdown::{Role, style};
 use crate::swapped::Ink;
 use crate::text::to_u16;
+use crate::theme::{Role, style};
 
 /// The line every offer shows.
 pub(crate) const TUI_FILES: &str = "A package's TUI files are never installed from a repository.";

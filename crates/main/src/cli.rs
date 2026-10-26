@@ -330,6 +330,17 @@ pub(crate) enum Commands {
     Hub(HubCommands),
 }
 
+/// The subcommands that host a session in their process, by CLI name: the
+/// internal session command, `fiber ask`, and the case runner's child
+/// (`docs/permissions.md`, "Sessions on the sockets"). The list lives
+/// beside the enum so a new in-process host is added in the same place.
+#[cfg(test)]
+impl Commands {
+    pub(crate) fn session_host_commands() -> &'static [&'static str] {
+        &["session", "ask", "extension-case"]
+    }
+}
+
 #[derive(Debug, Subcommand)]
 #[command(disable_help_subcommand = true)]
 pub(crate) enum HubCommands {

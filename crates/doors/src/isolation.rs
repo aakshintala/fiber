@@ -12,10 +12,9 @@ use contract::SessionId;
 use contract::clock::Clock;
 use contract::diag::{Op, Timing};
 use contract::shapes::Worktree;
-use contract::{ErrorCode, shapes::Failure};
 use log::diag::{Diag, Level, Process, Severity};
 
-use crate::{failure, project};
+use crate::{SessionError, project};
 
 mod shared;
 
@@ -58,7 +57,7 @@ pub fn isolate(
     session: &SessionId,
     clock: Arc<dyn Clock>,
     add: &dyn Fn(&mut Command) -> io::Result<Output>,
-) -> Result<Isolation, contract::shapes::Failure> {
+) -> Result<Isolation, SessionError> {
     let repository = project(launch);
     let key = log::project_key(&repository);
     let path = home
@@ -78,7 +77,10 @@ pub fn isolate(
                 created, session, home, clock, repository, None, made_in,
             ))
         }
-        Err(error) => Err(failure(error.code(), sentence(&error, &path))),
+        Err(error) => Err(SessionError::WorktreeFailed {
+            message: sentence(&error, &path),
+            source: error,
+        }),
     }
 }
 
@@ -107,19 +109,20 @@ pub fn create_delegate_worktree(
     session: &SessionId,
     add: &dyn Fn(&mut Command) -> io::Result<Output>,
 ) -> Result<(worktree::Created, Shared), DelegateCreateError> {
-    let path = home
-        .join("projects")
-        .join(log::project_key(&project(workspace)))
-        .join("worktrees")
-        .join(&session.0);
+    let project = config::ProjectKey::new(log::project_key(&project(workspace))).map_err(|_| {
+        DelegateCreateError::Failed {
+            message: "the repository project key is not valid for Fiber home".to_owned(),
+        }
+    })?;
+    let path = config::project_worktrees_dir(home, &project).join(&session.0);
     let branch = format!("fiber/{}", session.0);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|source| DelegateCreateError::Failed {
             message: format!("{}: {}.", parent.display(), source.kind()),
         })?;
     }
-    let hold = share(&path).map_err(|failure| DelegateCreateError::Failed {
-        message: failure.message,
+    let hold = share(&path).map_err(|error| DelegateCreateError::Failed {
+        message: error.to_string(),
     })?;
     let created =
         worktree::create(workspace, &path, &branch, add).map_err(|error| match error {
@@ -140,7 +143,7 @@ pub fn create_delegate_worktree(
 pub fn adopt_delegate_worktree(
     path: &Path,
     session: &SessionId,
-) -> Result<Option<(Worktree, Shared)>, Failure> {
+) -> Result<Option<(Worktree, Shared)>, SessionError> {
     let hold = share(path)?;
     match worktree::inspect(path) {
         Ok(worktree::Inspection::Worktree(found))
@@ -160,7 +163,10 @@ pub fn adopt_delegate_worktree(
             | worktree::Inspection::NotAWorktree
             | worktree::Inspection::Detached,
         ) => Ok(None),
-        Err(error) => Err(failure(ErrorCode::IoFailed, sentence(&error, path))),
+        Err(error) => Err(SessionError::WorktreeAccess {
+            message: sentence(&error, path),
+            source: error,
+        }),
     }
 }
 
@@ -170,11 +176,14 @@ pub struct RemovalHold {
 }
 
 /// Tries to hold a worktree exclusively without waiting. `None` means in use.
-pub fn try_hold_removal(path: &Path) -> Result<Option<RemovalHold>, Failure> {
+pub fn try_hold_removal(path: &Path) -> Result<Option<RemovalHold>, SessionError> {
     match shared::exclusive(path) {
         Ok(shared::Removal::Exclusive(file)) => Ok(Some(RemovalHold { _file: file })),
         Ok(shared::Removal::InUse) => Ok(None),
-        Err(error) => Err(failure(ErrorCode::IoFailed, sentence(&error, path))),
+        Err(error) => Err(SessionError::WorktreeAccess {
+            message: sentence(&error, path),
+            source: error,
+        }),
     }
 }
 
@@ -246,7 +255,7 @@ pub enum Recreated {
 /// What a failed recreation leaves behind.
 pub struct RecreateError {
     /// The failure to report.
-    pub failure: Failure,
+    pub failure: SessionError,
     /// The made worktree, when it was made and only its share failed:
     /// the caller ends it after releasing whatever would keep it.
     pub isolation: Option<Isolation>,
@@ -320,7 +329,7 @@ fn recreate_with(
     clock: Arc<dyn Clock>,
     add: &dyn Fn(&mut Command) -> io::Result<Output>,
     before_wait: &dyn Fn(),
-    downgrade: &dyn Fn(shared::Creating) -> Result<Shared, Failure>,
+    downgrade: &dyn Fn(shared::Creating) -> Result<Shared, SessionError>,
 ) -> Result<Recreated, RecreateError> {
     match shared::claim(path, before_wait) {
         Ok(shared::Claim::Present(shared)) => Ok(Recreated::Present(shared)),
@@ -332,7 +341,7 @@ fn recreate_with(
                 Ok(created) => created,
                 Err(error) => {
                     return Err(RecreateError {
-                        failure: recreate_failure(&error, repository, path),
+                        failure: recreate_failure(error, repository, path),
                         isolation: None,
                     });
                 }
@@ -372,20 +381,19 @@ fn recreate_with(
 /// One fixed sentence for a recreation's `worktree::Error`: a missing
 /// repository names both directories, and every other error reads as the
 /// matching creation failure does, never with git's output.
-fn recreate_failure(error: &worktree::Error, repository: &Path, path: &Path) -> Failure {
+fn recreate_failure(error: worktree::Error, repository: &Path, path: &Path) -> SessionError {
     match error {
-        worktree::Error::NotARepository { .. } => failure(
-            ErrorCode::IoFailed,
-            format!(
-                "The repository {} is gone, so the worktree {} cannot be made again.",
-                repository.display(),
-                path.display()
-            ),
-        ),
+        worktree::Error::NotARepository { .. } => SessionError::RepositoryGone {
+            repository: repository.to_owned(),
+            path: path.to_owned(),
+        },
         worktree::Error::Exists { .. }
         | worktree::Error::GitMissing
         | worktree::Error::Git { .. }
-        | worktree::Error::Io { .. } => failure(error.code(), sentence(error, path)),
+        | worktree::Error::Io { .. } => SessionError::WorktreeFailed {
+            message: sentence(&error, path),
+            source: error,
+        },
     }
 }
 

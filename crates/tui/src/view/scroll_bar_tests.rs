@@ -4,7 +4,7 @@
 use super::{THUMB, split, text_width, thumb};
 use crate::app::App;
 use crate::link::Line;
-use crate::markdown::Role;
+use crate::theme::Role;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
