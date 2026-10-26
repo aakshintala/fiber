@@ -1,19 +1,19 @@
 //! The `/usage` view: model-call totals grouped by turn, model and delegate
 //! (`docs/tui.md`, "Swapped views").
 
-use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
+use std::collections::{BTreeMap, BTreeSet};
 
 use contract::events::{DelegateStarted, UsageRecorded};
 use contract::shapes::Usage;
-use contract::{GenerationId, JobId, SessionId, TurnId};
+use contract::{JobId, SessionId, TurnId};
 
-use crate::format::money;
+use crate::format::{Spend, money};
 use crate::swapped::{Frame, Ink, List, Spot, compact};
 
 /// The latest call line per generation, and its first turn.
 #[derive(Debug, Default)]
 pub(crate) struct UsageFold {
-    calls: BTreeMap<GenerationId, (Option<TurnId>, UsageRecorded)>,
+    spend: Spend,
     turns: Vec<TurnId>,
     delegates: Vec<(SessionId, String)>,
     jobs: BTreeMap<JobId, String>,
@@ -54,12 +54,7 @@ impl UsageFold {
 
     /// Keeps the first turn for a generation and its latest usage line.
     pub(crate) fn recorded(&mut self, turn: Option<TurnId>, line: UsageRecorded) {
-        match self.calls.entry(line.generation_id.clone()) {
-            Entry::Vacant(entry) => {
-                entry.insert((turn, line));
-            }
-            Entry::Occupied(mut entry) => entry.get_mut().1 = line,
-        }
+        self.spend.record(turn, line);
     }
 }
 
@@ -68,7 +63,7 @@ impl UsageFold {
 /// (`docs/tui.md`, "Swapped views").
 pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame {
     let mut rows = Vec::new();
-    let calls: Vec<&UsageRecorded> = fold.calls.values().map(|(_, line)| line).collect();
+    let calls: Vec<&UsageRecorded> = fold.spend.iter().map(|(_, _, line)| line).collect();
     if calls.is_empty() {
         rows.push(row("No model calls yet.", Ink::Muted));
         budget_row(&mut rows, budget, 0.0);
@@ -78,7 +73,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
         let known_turns: BTreeSet<TurnId> = fold.turns.iter().cloned().collect();
         let mut turns: BTreeMap<TurnId, Vec<&UsageRecorded>> = BTreeMap::new();
         let mut outside = Vec::new();
-        for (turn, line) in fold.calls.values() {
+        for (_, turn, line) in fold.spend.iter() {
             match turn.as_ref().filter(|turn| known_turns.contains(*turn)) {
                 Some(turn) => turns.entry(turn.clone()).or_default().push(line),
                 None => outside.push(line),

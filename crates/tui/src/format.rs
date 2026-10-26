@@ -4,12 +4,12 @@
 //! "Turns", "Tool groups and the ledger", "Thinking"). A tool
 //! group's summary line and ledger are drawn in `crate::turn::group`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
 
 use contract::ErrorCode;
-use contract::GenerationId;
 use contract::events::{CallStatus, RetryScheduled, ToolCallCompleted, UsageRecorded};
 use contract::shapes::{ContentPart, Failure, Usage};
+use contract::{GenerationId, TurnId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
@@ -505,13 +505,19 @@ pub(crate) fn dim(text: String) -> Line<'static> {
 /// a correction, is still one call (`docs/events.md`, `usage_recorded`).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Spend {
-    calls: BTreeMap<GenerationId, UsageRecorded>,
+    calls: BTreeMap<GenerationId, (Option<TurnId>, UsageRecorded)>,
 }
 
 impl Spend {
-    /// Keeps `line`, replacing any earlier line with its `generation_id`.
-    pub(crate) fn record(&mut self, line: &UsageRecorded) {
-        self.calls.insert(line.generation_id.clone(), line.clone());
+    /// Keeps `line`, replacing any earlier line with its `generation_id`
+    /// while keeping the first turn that recorded it.
+    pub(crate) fn record(&mut self, turn: Option<TurnId>, line: UsageRecorded) {
+        match self.calls.entry(line.generation_id.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert((turn, line));
+            }
+            Entry::Occupied(mut entry) => entry.get_mut().1 = line,
+        }
     }
 
     /// Whether a line with `id` is kept here.
@@ -521,7 +527,15 @@ impl Spend {
 
     /// The docs' `usage` shape over the lines kept.
     pub(crate) fn usage(&self) -> Usage {
-        log::usage(self.calls.values())
+        log::usage(self.calls.values().map(|(_, line)| line))
+    }
+
+    /// The kept generation, its first turn, and its latest line, in
+    /// generation order.
+    pub(crate) fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&GenerationId, &Option<TurnId>, &UsageRecorded)> + '_ {
+        self.calls.iter().map(|(id, (turn, line))| (id, turn, line))
     }
 }
 
