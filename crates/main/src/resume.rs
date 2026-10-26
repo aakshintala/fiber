@@ -21,24 +21,81 @@ use r#loop::Loop;
 use crate::session_command::close;
 use crate::{ask_failed, failed, run_turn};
 
-pub(crate) fn chain_seed(segments: &[log::Segment]) -> Result<extensions::StateSeed, log::Error> {
-    let mut carry = log::Ruled::new();
-    for segment in segments {
-        let lines = segment.lines(0)?;
-        carry = match segment.to {
-            Some(point) => {
+/// Whether the session in `dir` continues its chain as a delegate's fork:
+/// its first line carries `parent` (`docs/delegates.md`, "Forks"). A
+/// missing or still-empty log reads as missing, exactly as a history walk
+/// treats it; any other unreadable first line reads as corrupt, failing
+/// the seed closed instead of silently folding a fork's full log.
+fn is_fork_child(dir: &Path) -> Result<bool, log::Error> {
+    match log::started_first(dir) {
+        Ok(started) => Ok(started.delegate),
+        Err(log::FirstLineError::Incomplete) => Err(log::Error::NotFound(dir.to_path_buf())),
+        Err(log::FirstLineError::Corrupt) => Err(log::Error::Pointer {
+            path: dir.join("events.jsonl"),
+            reason: "the child's first line is not a session_started with a workspace".to_owned(),
+        }),
+    }
+}
+
+/// Folds one chain segment over `carry`: a fork boundary reads `Latest` as
+/// of the point, any other boundary reads it at the parent's end. A fork
+/// passes its bounded lines as both the point and the full log, so later
+/// writes are excluded; a rewind passes the full log, as before.
+fn fold_segment(
+    carry: log::Ruled,
+    segment: &log::Segment,
+    fork: bool,
+) -> Result<log::Ruled, log::Error> {
+    let lines = segment.lines(0)?;
+    match segment.to {
+        Some(point) => {
+            if fork {
+                Ok(log::fold_boundary(carry, &lines, &lines, point.0))
+            } else {
                 let full = log::Segment {
                     session_id: segment.session_id.clone(),
                     dir: segment.dir.clone(),
                     to: None,
                 }
                 .lines(0)?;
-                log::fold_boundary(carry, &lines, &full, point.0)
+                Ok(log::fold_boundary(carry, &lines, &full, point.0))
             }
-            None => log::fold_from(carry, &lines, log::Fold::Resume),
+        }
+        None => Ok(log::fold_from(carry, &lines, log::Fold::Resume)),
+    }
+}
+
+/// Folds the chain for a fresh terminal of the named kind: interior and
+/// resume-path boundaries classify by the following child's header, while
+/// a bounded terminal with no follower on disk folds as the caller names.
+fn seed_from(
+    segments: &[log::Segment],
+    terminal_fork: bool,
+) -> Result<extensions::StateSeed, log::Error> {
+    let mut carry = log::Ruled::new();
+    for (index, segment) in segments.iter().enumerate() {
+        let fork = match segments.get(index + 1) {
+            Some(next) => is_fork_child(&next.dir)?,
+            None => terminal_fork,
         };
+        carry = fold_segment(carry, segment, fork)?;
     }
     Ok(log::seed(carry))
+}
+
+/// The extension seed for a resumed session: each `to: Some` boundary folds
+/// through the point the following child continues from, `Latest` as of the
+/// point when that child carries `parent` (a fork) and at the parent's end
+/// otherwise (a rewind, and any bounded segment with no follower).
+pub(crate) fn chain_seed(segments: &[log::Segment]) -> Result<extensions::StateSeed, log::Error> {
+    seed_from(segments, false)
+}
+
+/// The extension seed for a fresh fork's first run over `history_to`: the
+/// terminal is bounded by the fork's point with no child on disk yet, so it
+/// folds as a fork; interior boundaries classify as [`chain_seed`] does.
+pub(crate) fn fork_seed(segments: &[log::Segment]) -> Result<extensions::StateSeed, log::Error> {
+    seed_from(segments, true)
 }
 
 /// `fiber ask --resume <selector>`: resolves the selector, opens the

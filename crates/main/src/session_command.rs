@@ -385,10 +385,16 @@ pub(crate) fn run_new(
                 .thinking
                 .as_deref()
                 .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
-            let seed = crate::resume::chain_seed(
-                &log::history_to(&sessions.join(&start.from.session_id.0), start.from.seq)
-                    .map_err(|error| failed(error.code(), error))?,
-            )
+            let segments =
+                log::history_to(&sessions.join(&start.from.session_id.0), start.from.seq)
+                    .map_err(|error| failed(error.code(), error))?;
+            // The fresh terminal has no child on disk yet, so its kind
+            // comes from the continuation: a fork folds `Latest` as of the
+            // point, a rewind at the parent's end.
+            let seed = match &start.how {
+                r#loop::Continuation::Fork { .. } => crate::resume::fork_seed(&segments),
+                r#loop::Continuation::Rewind { .. } => crate::resume::chain_seed(&segments),
+            }
             .map_err(|error| failed(error.code(), error))?;
             parts_with(
                 Vec::new(),
