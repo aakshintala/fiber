@@ -186,10 +186,14 @@ fn delete_on_a_hub_removes_only_hub_side_state() {
         format!("{}\n{}\n", recent_row(ROOT), recent_row(FORK)),
     )
     .unwrap();
-    // No `--hub`: `hub.default=box` selects the listed hub.
+    // No `--hub`: `hub.default=box` selects the listed hub
+    // (docs/invocation.md:1268-1270: `hub.default` names the one used
+    // without `--hub`).
     let deleted = client(&world, &["sessions", "delete", ROOT, "--cascade", "--yes"]);
     succeeds(&deleted);
-    // `--yes` sends one `delete`: the printed id is the one it sent.
+    // `--yes` sends one `delete` with no `expect`: the printed id is the one
+    // it sent (docs/invocation.md:1421-1426: with `--yes` it sends one
+    // `delete` with no `expect`).
     assert_eq!(
         String::from_utf8_lossy(&deleted.stdout).into_owned(),
         format!("{ROOT}\n")
@@ -211,7 +215,10 @@ fn delete_on_a_hub_removes_only_hub_side_state() {
 fn prune_dry_run_prints_the_hub_list_and_frees_nothing() {
     let world = world(true);
     let root = hub_session(&world.a.home(), "p", ROOT, None);
-    // No `--hub`: `hub.default=box` selects the listed hub.
+    // No `--hub`: `hub.default=box` selects the listed hub
+    // (docs/invocation.md:1268-1270: `hub.default` names the one used
+    // without `--hub`). A dry run prints what prune would delete and frees
+    // nothing (docs/invocation.md:1474-1476).
     let dry = client(
         &world,
         &["sessions", "prune", "--older-than", "30d", "--dry-run"],
@@ -226,6 +233,9 @@ fn prune_dry_run_prints_the_hub_list_and_frees_nothing() {
 
 #[test]
 fn prune_confirms_the_exact_returned_items() {
+    // Without `--yes` the command first asks for the dry run, prints it and
+    // asks, then sends those items back as `expect`
+    // (docs/invocation.md:1479-1483).
     let world = world(true);
     let root = hub_session(&world.a.home(), "p", ROOT, None);
     let fork = hub_session(&world.a.home(), "p", FORK, Some(ROOT));
@@ -276,7 +286,9 @@ fn prune_mutation_during_prompt_is_stale_and_removes_nothing() {
         grid.contents.contains("prune? [y/N]")
     });
     // The prompt stays open: a session added now changes the selection
-    // the confirm preflights.
+    // the confirm preflights, and the hub rejects the prune `stale_request`
+    // when what it would remove differs, deleting nothing
+    // (docs/invocation.md:1483-1484).
     hub_session(&world.a.home(), "p", NEW, None);
     run.write(b"y\r");
     let stale = run.wait();
@@ -298,6 +310,8 @@ fn prune_mutation_during_prompt_is_stale_and_removes_nothing() {
 
 #[test]
 fn prune_partial_failure_reports_freed_and_failures() {
+    // It prints the space freed and each failure as a local prune does
+    // (docs/invocation.md:1484-1485).
     let world = world(true);
     let root = hub_session(&world.a.home(), "p", ROOT, None);
     let fork = hub_session(&world.a.home(), "p", FORK, Some(ROOT));
@@ -354,8 +368,10 @@ fn prune_partial_failure_reports_freed_and_failures() {
 
 #[test]
 fn unknown_hub_fails_before_connecting() {
-    // `hub.default=box` is configured, but the explicit `--hub` wins:
-    // the unknown hub fails before anything connects.
+    // `hub.default=box` is configured, but the explicit `--hub` wins
+    // (docs/invocation.md:1268-1270: `hub.default` names the one used
+    // without `--hub`): an unknown `--hub` name is a usage error
+    // (docs/errors.md:95), so nothing connects.
     let world = world(true);
     let root = hub_session(&world.a.home(), "p", ROOT, None);
     let deleted = client(
@@ -401,6 +417,10 @@ fn unknown_hub_fails_before_connecting() {
 
 #[test]
 fn no_tty_without_yes_is_usage_and_removes_nothing() {
+    // Without `--yes` the command lists what it would delete and asks, and
+    // with no terminal to ask on it is a usage error
+    // (docs/invocation.md:1418-1420; docs/invocation.md:1475-1476: prune asks
+    // as delete does).
     let world = world(true);
     let root = hub_session(&world.a.home(), "p", ROOT, None);
     fs::write(

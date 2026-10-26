@@ -869,6 +869,9 @@ fn continue_hub_opens_the_latest_session_across_projects() {
     let mut run = terminal(&b, 120, 32, &["continue", "--hub", "box"], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
+    // The second seed is the latest across projects
+    // (docs/invocation.md:115: `continue --hub` opens the entry with the
+    // greatest (`active`, `id`) across every project).
     run.wait_screen("the latest reply", |grid| grid.contents.contains("Second."));
     run.write(b"\x03\x03\r");
     run.wait_screen("the restored primary screen", |grid| {
@@ -881,7 +884,9 @@ fn continue_hub_opens_the_latest_session_across_projects() {
 
 #[test]
 fn continue_hub_without_a_session_is_a_usage_error() {
-    // The same owned hub fixture, with no sessions seeded on it.
+    // The same owned hub fixture, with no sessions seeded on it: no
+    // eligible entry is the empty-hub usage error (docs/invocation.md:115:
+    // with no eligible entry it is the same usage error as an empty hub).
     let a = support::Setup::new();
     let served = installed_hub(&a);
     let b = paired_client(&a, &served, false);
@@ -898,12 +903,18 @@ fn continue_hub_without_a_session_is_a_usage_error() {
 fn continue_without_a_flag_uses_the_configured_hub() {
     let (a, served) = seeded_hub();
     let b = paired_client(&a, &served, true);
-    // No `--hub`: `hub.default=box` selects the listed hub; the resumed
-    // session lives in `other`, so guard it like the explicit-flag test.
+    // No `--hub`: `hub.default=box` selects the listed hub
+    // (docs/invocation.md:1268-1270: `hub.default` names the one used
+    // without `--hub`; docs/invocation.md:291: `--default` makes it the hub
+    // this client uses without `--hub`); the resumed session lives in
+    // `other`, so guard it like the explicit-flag test.
     let _resumed = guard_other(&a);
     let mut run = terminal(&b, 120, 32, &["continue"], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
+    // The second seed is the latest across projects
+    // (docs/invocation.md:115: `continue --hub` opens the entry with the
+    // greatest (`active`, `id`) across every project).
     run.wait_screen("the latest reply", |grid| grid.contents.contains("Second."));
     run.write(b"\x03\x03\r");
     run.wait_screen("the restored primary screen", |grid| {
@@ -918,8 +929,10 @@ fn continue_without_a_flag_uses_the_configured_hub() {
 fn continue_explicit_hub_overrides_the_configured_default() {
     let (a, served) = seeded_hub();
     let b = paired_client(&a, &served, true);
-    // `hub.default=box` is configured, but the explicit flag wins: the
-    // unknown hub fails instead of opening the default hub's session.
+    // `hub.default=box` is configured, but the explicit flag wins
+    // (docs/invocation.md:1268-1270: `hub.default` names the one used
+    // without `--hub`): the unknown hub fails instead of opening the
+    // default hub's session.
     let mut run = terminal(&b, 120, 32, &["continue", "--hub", "nope"], &[]);
     run.wait_screen("the usage error", |grid| {
         grid.contents.contains("No hub named `nope`")
