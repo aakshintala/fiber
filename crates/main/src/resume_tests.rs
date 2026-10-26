@@ -268,7 +268,11 @@ fn enter_worktree_reports_a_lock_it_cannot_open() {
         false,
     ) {
         Err(error) => {
-            assert_eq!(error.failure.code, ErrorCode::IoFailed);
+            assert!(
+                matches!(&error.failure, doors::SessionError::SharedIo { .. }),
+                "a lock that cannot open fails: {error:?}"
+            );
+            assert_eq!(error.failure.code(), ErrorCode::IoFailed);
             assert!(error.isolation.is_none(), "nothing was made");
         }
         Ok(_) => panic!("a lock that cannot open fails"),
@@ -316,15 +320,18 @@ fn a_hub_present_recreation_whose_path_vanished_fails_io_failed() {
     std::fs::remove_dir_all(&worktree).unwrap();
     match enter(&worktree, shared, true) {
         Err(error) => {
-            assert_eq!(error.failure.code, ErrorCode::IoFailed);
             assert!(
-                error
-                    .failure
-                    .message
-                    .contains(worktree.to_string_lossy().as_ref()),
-                "{}",
-                error.failure.message
+                matches!(
+                    &error.failure,
+                    doors::SessionError::Forwarded(failure)
+                    if failure.code == ErrorCode::IoFailed
+                        && failure
+                            .message
+                            .contains(worktree.to_string_lossy().as_ref())
+                ),
+                "a vanished path fails entering: {error:?}"
             );
+            assert_eq!(error.failure.code(), ErrorCode::IoFailed);
             assert!(error.isolation.is_none(), "nothing was made");
         }
         Ok(_) => panic!("a vanished path fails"),

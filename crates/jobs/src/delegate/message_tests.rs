@@ -515,6 +515,7 @@ fn a_refused_message_with_a_driver_code_fails_tool_error_naming_it() {
     for (code, name) in [
         (ErrorCode::SessionHeld, "session_held"),
         (ErrorCode::NotSubscribed, "not_subscribed"),
+        (ErrorCode::FromSession, "from_session"),
         (ErrorCode::Other("x".into()), "x"),
     ] {
         let rig = rig(vec![SteerReply::rejected(code, "busy")]);

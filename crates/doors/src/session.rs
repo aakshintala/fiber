@@ -14,7 +14,7 @@ use std::thread::{self, JoinHandle};
 
 use crate::client;
 use crate::socket::{bind, remove_socket};
-use crate::{failure, mint};
+use crate::{SessionError, mint};
 
 use contract::clock::{Clock, Wake};
 use contract::diag::Timing;
@@ -27,7 +27,7 @@ use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
 use contract::steering::Queue;
 use contract::tool::Tool;
-use contract::{CommandId, ErrorCode, SessionId};
+use contract::{CommandId, SessionId};
 use log::diag::{Diag, Level, Process, Severity};
 use log::{Injector, Log, Watcher};
 use support::lock;
@@ -188,6 +188,11 @@ pub(crate) struct Gate {
     /// What a test observes, or holds, at a [`tests::Probe`] point.
     #[cfg(test)]
     pub(crate) probe: Mutex<Option<tests::Prober>>,
+    /// Tests only: scripted process reads for the session-socket refusal
+    /// paths; production always reads the kernel.
+    #[cfg(test)]
+    pub(crate) test_read:
+        Mutex<Option<std::sync::Arc<dyn support::peer::ProcessRead + Send + Sync>>>,
     clients: ClientCounts,
     one_turn: AtomicBool,
     /// The live connections, their writers, and whether the session stopped.
@@ -210,7 +215,7 @@ impl Session {
         clock: Arc<dyn Clock>,
         tools: Vec<ToolInfo>,
         out: Box<dyn Write + Send>,
-    ) -> Result<Self, Failure> {
+    ) -> Result<Self, SessionError> {
         Self::open_with_timing(home, dir, log, clock, tools, out, None)
     }
 
@@ -227,7 +232,7 @@ impl Session {
         tools: Vec<ToolInfo>,
         out: Box<dyn Write + Send>,
         timing: Option<Timing>,
-    ) -> Result<Self, Failure> {
+    ) -> Result<Self, SessionError> {
         let opened = open_in(home, dir, log, clock, tools, out, timing);
         if opened.is_err() {
             fs::remove_dir_all(dir).unwrap_or(());
@@ -246,7 +251,7 @@ impl Session {
         clock: Arc<dyn Clock>,
         tools: Vec<ToolInfo>,
         out: Box<dyn Write + Send>,
-    ) -> Result<Self, Failure> {
+    ) -> Result<Self, SessionError> {
         open_in(home, dir, log, clock, tools, out, None)
     }
 
@@ -263,7 +268,7 @@ impl Session {
         tools: Vec<ToolInfo>,
         out: Box<dyn Write + Send>,
         timing: Option<Timing>,
-    ) -> Result<Self, Failure> {
+    ) -> Result<Self, SessionError> {
         open_in(home, dir, log, clock, tools, out, timing)
     }
 
@@ -305,7 +310,7 @@ impl Session {
         *lock(&self.gate.inbox) = Some(inbox);
         let stored = self.gate.cancel.set(cancel);
         debug_assert!(stored.is_ok(), "cancel is wired once");
-        self.start_accept()?;
+        self.start_accept().map_err(Failure::from)?;
         run(waiting)
     }
 
@@ -793,7 +798,7 @@ impl Session {
         );
     }
 
-    fn start_accept(&self) -> Result<(), Failure> {
+    fn start_accept(&self) -> Result<(), SessionError> {
         let Some(listener) = lock(&self.listener).take() else {
             return Ok(());
         };
@@ -801,7 +806,7 @@ impl Session {
         let accept = thread::Builder::new()
             .name("accept".to_owned())
             .spawn(move || accept_loop(listener, gate))
-            .map_err(|e| failure(ErrorCode::IoFailed, format!("cannot start a thread: {e}")))?;
+            .map_err(|source| SessionError::ThreadSpawn { source })?;
         *lock(&self.accept) = Some(accept);
         Ok(())
     }
@@ -994,7 +999,7 @@ fn open_in(
     tools: Vec<ToolInfo>,
     out: Box<dyn Write + Send>,
     timing: Option<Timing>,
-) -> Result<Session, Failure> {
+) -> Result<Session, SessionError> {
     // The stamp comes from the session clock before binding, so the
     // helper takes no start read of its own; without a callable the
     // bind costs no clock read. The guard drops at binding readiness,
@@ -1054,6 +1059,8 @@ fn open_in(
         answered: AtomicBool::new(false),
         #[cfg(test)]
         probe: Mutex::new(None),
+        #[cfg(test)]
+        test_read: Mutex::new(None),
         clients: ClientCounts::new(),
         one_turn: AtomicBool::new(false),
         conns: Conns::new(),
@@ -1082,14 +1089,14 @@ fn open_in(
     })
 }
 
-fn spawn<F>(name: &str, body: F) -> Result<JoinHandle<()>, Failure>
+fn spawn<F>(name: &str, body: F) -> Result<JoinHandle<()>, SessionError>
 where
     F: FnOnce() + Send + 'static,
 {
     thread::Builder::new()
         .name(name.to_owned())
         .spawn(body)
-        .map_err(|e| failure(ErrorCode::IoFailed, format!("cannot start a thread: {e}")))
+        .map_err(|source| SessionError::ThreadSpawn { source })
 }
 
 fn join(handle: JoinHandle<()>) {

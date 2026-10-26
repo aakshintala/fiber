@@ -15,11 +15,10 @@ use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-pub(crate) use crate::theme::Role;
-
 use crate::highlight;
 use crate::rows::{Join, RowText};
 use crate::surface::{self, edge_row};
+use crate::theme::{Role, style};
 use wrap::{Cell, link_cols, spans_of, wrap, wrap_joined_indices};
 
 /// A reply rendered at one width.
@@ -55,11 +54,6 @@ impl Rendered {
 const COPY: &str = "click to copy";
 /// Cells per tab stop in code.
 const TAB: usize = 4;
-
-/// The foreground of `role`.
-pub(crate) fn style(role: Role) -> Style {
-    Style::new().fg(role.color())
-}
 
 /// The foreground of `role` on the code tint.
 fn tinted(role: Role) -> Style {

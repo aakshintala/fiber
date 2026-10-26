@@ -8,7 +8,7 @@ use ratatui::style::Style;
 use super::chrome;
 use crate::app::App;
 use crate::layout::{Edge, edge_rect};
-use crate::markdown::{Role, style};
+use crate::theme::{Role, style};
 
 /// An active edge's tint: the `rule` background only, so the grip's `⋮`
 /// stays.

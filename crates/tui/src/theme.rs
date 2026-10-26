@@ -7,7 +7,7 @@
 //! to the theme's colours on the copy of each frame it writes
 //! (`crate::look::Look::paint`).
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
 use serde_json::Value;
 
 /// How many roles a theme gives a colour.
@@ -315,6 +315,11 @@ impl Role {
     pub(crate) fn from_lifted(index: u8) -> Option<Role> {
         index.checked_sub(LIFTED_BASE).and_then(Self::from_index)
     }
+}
+
+/// The foreground of `role`.
+pub(crate) fn style(role: Role) -> Style {
+    Style::new().fg(role.color())
 }
 
 /// A colour in 24 bits.

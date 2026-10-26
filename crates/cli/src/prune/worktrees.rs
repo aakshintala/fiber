@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use contract::ErrorCode;
+use contract::shapes::Failure;
 
 use super::ignored;
 
@@ -177,7 +178,7 @@ pub(crate) fn select_scoped(
             let name = entry.file_name().to_string_lossy().into_owned();
             // Probe without waiting and drop before the confirmation prompt.
             // Removal retakes the same hold after that prompt.
-            let _hold = match doors::try_hold_removal(&dir) {
+            let _hold = match doors::try_hold_removal(&dir).map_err(Failure::from) {
                 Ok(Some(hold)) => hold,
                 Ok(None) => {
                     listed.push(Listed {
@@ -317,7 +318,7 @@ pub(crate) fn remove_planned(
         before_remove(&removal.dir);
         // A delegate can acquire its share after selection. Keep this
         // exclusive hold through revalidation and git removal, even forced.
-        let _hold = match doors::try_hold_removal(&removal.dir) {
+        let _hold = match doors::try_hold_removal(&removal.dir).map_err(Failure::from) {
             Ok(Some(hold)) => hold,
             Ok(None) => {
                 failures.push((

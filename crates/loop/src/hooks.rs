@@ -110,7 +110,7 @@ impl Loop {
         // "Shutdown"). A spilled file is removed, so no raw output stays.
         if self.shutting_down() {
             if let Some(spilled) = ran.spilled {
-                remove_spilled(&spilled)?;
+                remove_spilled(&self.log, &spilled)?;
             }
             return Ok(Shaped {
                 state: Vec::new(),
@@ -485,7 +485,7 @@ impl Loop {
         left: Option<std::path::PathBuf>,
     ) -> Result<Shaped, Error> {
         if let Some(left) = left {
-            std::fs::remove_file(&left).map_err(|source| log::Error::Io { path: left, source })?;
+            remove_spilled_at(&self.log, &left)?;
         }
         let notice = cut_notice(removed, Err(&message));
         let shown = lined(&cut_joined(&head, &notice, &tail));
@@ -635,29 +635,20 @@ fn spill_artifact(log: &Log, path: &std::path::Path) -> String {
     }
 }
 
-/// Replaces the spilled file at `path` with `bytes`: through
-/// `Log::write_artifact` when the file sits in the session's `artifacts/`,
-/// else written to its own path. A failure fails the turn, as a log write
-/// does.
-// Both arms write the same bytes to the same file, since a spill in
-// `artifacts/` is named by its own file name: a mutant of the artifacts
-// arm changes nothing a consumer sees.
-#[cfg_attr(false, mutants::skip)]
+/// Replaces the spilled file at `path` with `bytes`: through `log`
+/// when the file sits inside the session directory, else written to its
+/// own path. A path inside the session directory but outside `artifacts/`
+/// is refused by `log`, never written by the fallback, so no hook text
+/// lands in `events.jsonl` or another session file. A failure fails the
+/// turn, as a log write does.
 fn replace_spilled(log: &Log, path: &std::path::Path, bytes: &[u8]) -> Result<(), Error> {
-    let in_artifacts = path
-        .strip_prefix(log.dir())
-        .is_ok_and(|relative| relative.starts_with("artifacts"));
-    match (
-        in_artifacts,
-        path.file_name().and_then(|name| name.to_str()),
-    ) {
-        (true, Some(name)) => {
-            log.write_artifact(name, bytes).map(|_| ())?;
-        }
-        _ => std::fs::write(path, bytes).map_err(|source| log::Error::Io {
+    if path.strip_prefix(log.dir()).is_ok() {
+        log.replace_artifact_at(path, bytes)?;
+    } else {
+        std::fs::write(path, bytes).map_err(|source| log::Error::Io {
             path: path.to_path_buf(),
             source,
-        })?,
+        })?;
     }
     Ok(())
 }
@@ -703,20 +694,30 @@ fn kept_ranges(head: u64, tail: u64, len: u64) -> Vec<[u64; 2]> {
 
 /// Removes a spilled file the loop must not keep: the kept file, or a
 /// partial file the tool could not remove. A failed removal fails the turn.
-fn remove_spilled(spilled: &Spilled) -> Result<(), Error> {
+fn remove_spilled(log: &Log, spilled: &Spilled) -> Result<(), Error> {
     match &spilled.file {
-        Ok(file) => std::fs::remove_file(&file.path).map_err(|source| log::Error::Io {
-            path: file.path.clone(),
-            source,
-        })?,
+        Ok(file) => remove_spilled_at(log, &file.path)?,
         Err(failed) => {
             if let Some(left) = &failed.left {
-                std::fs::remove_file(left).map_err(|source| log::Error::Io {
-                    path: left.clone(),
-                    source,
-                })?;
+                remove_spilled_at(log, left)?;
             }
         }
+    }
+    Ok(())
+}
+
+/// Removes the spilled file at `path`: through `log` when it sits inside
+/// the session directory, by the fallback otherwise. A path inside the
+/// session directory but outside `artifacts/` is refused by `log`, never
+/// removed by the fallback.
+fn remove_spilled_at(log: &Log, path: &std::path::Path) -> Result<(), Error> {
+    if path.strip_prefix(log.dir()).is_ok() {
+        log.remove_artifact_at(path)?;
+    } else {
+        std::fs::remove_file(path).map_err(|source| log::Error::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
     }
     Ok(())
 }

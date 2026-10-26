@@ -22,9 +22,16 @@ pub mod cancel;
 /// (`docs/testing.md`, "Values that change every run").
 pub mod clock;
 
+/// One deadline for a test's waits (`docs/testing.md`, "Waits and timeouts").
+pub mod deadline;
+
 /// The process-group guard, the process-wide list and the signals
 /// (`docs/testing.md`, "Running tests").
 pub mod group;
+
+/// Kernel process identity for socket attribution: the peer process id
+/// and the ancestor walk (`docs/permissions.md`, "Sessions on the sockets").
+pub mod peer;
 
 /// A `git` command with the scrubbed environment: `core.fsmonitor` off,
 /// the lock and terminal-prompt guards pinned, the redirecting variables

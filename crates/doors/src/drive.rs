@@ -209,7 +209,9 @@ pub(crate) fn parse(
 }
 
 impl client::Conn {
-    /// A connection for the in-process driver: already subscribed, with no stream.
+    /// A connection for the in-process driver: already subscribed, with no
+    /// stream and no socket peer attribution, so the session-socket
+    /// refusals never apply to it.
     pub(crate) fn driven(gate: Arc<Gate>, answer: Ack, extension: &str) -> Self {
         Self {
             id: 0,
@@ -222,6 +224,7 @@ impl client::Conn {
             },
             full: true,
             gone: false,
+            attribution: None,
         }
     }
 }
