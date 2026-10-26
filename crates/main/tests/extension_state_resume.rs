@@ -310,9 +310,9 @@ fn live_rewind_and_its_resume_use_the_same_parent_point_seed() {
     assert_eq!(seen(&setup, &child), "at point");
 }
 
-/// Starts a fresh fork child on the `delegates.rs::start_fork_child` argv
+/// Starts a fresh delegate fork on the `delegates.rs::start_fork_child` argv
 /// pattern, holding piped stdin open as the delegate's lifeline, and waits
-/// for its one turn to exit. A fork child runs one turn and exits on its
+/// for its one turn to exit. A delegate fork runs one turn and exits on its
 /// own, so the wait ends at its exit, not at a close.
 fn fork_first_run(setup: &Setup, new: &str, from: &str, seq: u64, parent: &str, job: &str) {
     let (mut running, lifeline) = setup.start_session_stdin(
@@ -340,7 +340,7 @@ fn fork_first_run(setup: &Setup, new: &str, from: &str, seq: u64, parent: &str, 
     assert_eq!(status.code(), Some(0), "{stderr}");
     assert!(
         lines.iter().any(|line| line["kind"] == "turn_completed"),
-        "the fork child ran its prompt as one turn: {lines:?}"
+        "the delegate fork ran its prompt as one turn: {lines:?}"
     );
 }
 
@@ -375,7 +375,7 @@ fn fork_latest_reads_the_parent_value_at_its_point() {
     // So does its resume: the first run and every resume agree.
     ask(&setup, &child);
     assert_eq!(seen(&setup, &child), json!("at point"));
-    // As does a fork child continued inline: the resume path classifies
+    // As does a delegate fork continued inline: the resume path classifies
     // the boundary by the following child's header either way.
     let inline = doors::mint("s_");
     drop(initial(

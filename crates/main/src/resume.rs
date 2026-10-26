@@ -26,13 +26,14 @@ use crate::{ask_failed, failed, run_turn};
 /// missing or still-empty log reads as missing, exactly as a history walk
 /// treats it; any other unreadable first line reads as corrupt, failing
 /// the seed closed instead of silently folding a fork's full log.
-fn is_fork_child(dir: &Path) -> Result<bool, log::Error> {
+fn is_delegate_fork(dir: &Path) -> Result<bool, log::Error> {
     match log::started_first(dir) {
         Ok(started) => Ok(started.delegate),
         Err(log::FirstLineError::Incomplete) => Err(log::Error::NotFound(dir.to_path_buf())),
         Err(log::FirstLineError::Corrupt) => Err(log::Error::Pointer {
             path: dir.join("events.jsonl"),
-            reason: "the child's first line is not a session_started with a workspace".to_owned(),
+            reason: "the delegate's first line is not a session_started with a workspace"
+                .to_owned(),
         }),
     }
 }
@@ -75,7 +76,7 @@ fn seed_from(
     let mut carry = log::Ruled::new();
     for (index, segment) in segments.iter().enumerate() {
         let fork = match segments.get(index + 1) {
-            Some(next) => is_fork_child(&next.dir)?,
+            Some(next) => is_delegate_fork(&next.dir)?,
             None => terminal_fork,
         };
         carry = fold_segment(carry, segment, fork)?;
