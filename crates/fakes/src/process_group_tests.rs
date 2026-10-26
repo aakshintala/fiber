@@ -185,6 +185,35 @@ fn group_alive_is_false_once_the_group_is_empty() {
 }
 
 #[test]
+fn group_alive_sees_a_killed_child_until_it_is_reaped() {
+    let child = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let guard = KillOnDrop(group);
+    assert!(group_alive(group), "a live group must read as alive");
+    assert!(
+        kill_group(group, "KILL").unwrap(),
+        "the kill must reach the group"
+    );
+    // No reap yet: the killed child is a zombie, and the instantaneous
+    // probe still reports a zombie's group as alive. Holding the reap is
+    // the pause point that forces the interleaving the flaky assertion saw.
+    assert!(
+        group_alive(group),
+        "an unreaped zombie's group must read as alive"
+    );
+    drop(guard);
+    reaped(child, "the killed child");
+    assert!(
+        group_empties(group, Deadline::after(MUST_SUCCEED_WITHIN)),
+        "waited {MUST_SUCCEED_WITHIN:?} for the reaped group to empty"
+    );
+}
+
+#[test]
 fn pid_alive_is_false_once_the_process_is_reaped() {
     let mut child = Command::new("true").spawn().unwrap();
     let pid = child.id();
