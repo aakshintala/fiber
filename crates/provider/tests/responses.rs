@@ -2721,3 +2721,55 @@ fn an_opencode_go_muse_request_sends_store_false() {
         .unwrap();
     assert_eq!(sent_body(&server, 0)["store"], false);
 }
+
+/// The malformed text #3017 leaves alone on string-carrying protocols: the
+/// wire keeps the raw text byte for byte, never an empty object.
+const MALFORMED_ARGUMENTS: &str = "{\"command\":\"ls\"]}";
+
+/// The `arguments` field the request sends for one call with `arguments`.
+fn sent_arguments(arguments: Value) -> Value {
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let ep = endpoint(&server);
+    let model = ep.reference();
+    let request = ModelRequest {
+        conversation: vec![
+            call_input("a_1", &model, "get_weather", arguments),
+            answer("a_1", "18 C, clear", false),
+        ]
+        .into(),
+        ..request()
+    };
+    run(Box::new(Responses::new(ep).request(&request)))
+        .0
+        .unwrap();
+    sent_body(&server, 0)["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "function_call" && item["call_id"] == "a_1")
+        .unwrap_or_else(|| panic!("no function_call in {:?}", sent_body(&server, 0)))
+        .get("arguments")
+        .cloned()
+        .unwrap()
+}
+
+#[test]
+fn non_object_arguments_are_sent_as_the_model_sent_them() {
+    // A raw malformed string stays byte-for-byte equal, and an array stays
+    // its serialized array text: neither becomes an empty object.
+    assert_eq!(
+        sent_arguments(Value::String(MALFORMED_ARGUMENTS.into())),
+        json!(MALFORMED_ARGUMENTS)
+    );
+    assert_eq!(sent_arguments(json!([1, 2])), json!("[1,2]"));
+    assert_eq!(sent_arguments(json!([])), json!("[]"));
+    // Objects keep their members, serialized the same way.
+    assert_eq!(
+        sent_arguments(json!({"city": "Paris"})),
+        json!("{\"city\":\"Paris\"}")
+    );
+}

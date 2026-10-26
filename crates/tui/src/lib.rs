@@ -88,6 +88,7 @@ mod term;
 mod text;
 mod theme;
 mod tick;
+mod timing;
 mod tools_view;
 mod tty_screen;
 mod turn;

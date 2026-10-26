@@ -336,7 +336,10 @@ fn blocks_of(
         } => vec![json!({"toolUse": {
             "toolUseId": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
             "name": call.name,
-            "input": call.arguments,
+            // A tool call's `input` is an object: one whose arguments are
+            // not an object replays as an empty object, so the provider
+            // accepts the request and the model corrects itself.
+            "input": crate::wire::object(call.arguments.clone()),
         }})],
         Input::ToolSearchResult { action_id, loaded } => result_blocks(
             call_ids
