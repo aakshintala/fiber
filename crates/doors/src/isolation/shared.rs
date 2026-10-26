@@ -17,10 +17,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use contract::ErrorCode;
-use contract::shapes::Failure;
-
-use crate::failure;
+use crate::SessionError;
 
 /// How many times `claim` tries for the worktree before it reports the
 /// worktree in use: a path that stays absent while a process holds the
@@ -55,10 +52,10 @@ pub(crate) struct Creating {
 impl Creating {
     /// Shares the held file: the conversion from the exclusive hold, with
     /// no unlock in between.
-    pub(crate) fn downgrade(self) -> Result<Shared, Failure> {
+    pub(crate) fn downgrade(self) -> Result<Shared, SessionError> {
         self.file
             .lock_shared()
-            .map_err(|source| io_failed(&self.lock, &source))?;
+            .map_err(|source| io_failed(&self.lock, source))?;
         Ok(Shared { _file: self.file })
     }
 }
@@ -76,33 +73,31 @@ pub(crate) enum Removal {
 /// Shares the worktree's lock file for the process's life, creating the
 /// file. Blocks only while another process recreates or removes the
 /// worktree, both bounded by one git command.
-pub fn share(worktree: &Path) -> Result<Shared, Failure> {
+pub fn share(worktree: &Path) -> Result<Shared, SessionError> {
     share_with(worktree, &|| {})
 }
 
 /// [`share`] with a hook the test parks on: it runs before every blocking
 /// wait. Production passes a no-op. The hook exists because no outside
 /// seam can observe that a process is blocked in `flock`.
-pub(crate) fn share_with(worktree: &Path, before_wait: &dyn Fn()) -> Result<Shared, Failure> {
-    let lock = lock_path(worktree).ok_or_else(|| {
-        failure(
-            ErrorCode::IoFailed,
-            format!("{}: {}.", worktree.display(), io::ErrorKind::InvalidInput),
-        )
+pub(crate) fn share_with(worktree: &Path, before_wait: &dyn Fn()) -> Result<Shared, SessionError> {
+    let lock = lock_path(worktree).ok_or_else(|| SessionError::ShareFailed {
+        path: worktree.to_owned(),
+        kind: io::ErrorKind::InvalidInput,
     })?;
     for _ in 0..ATTEMPTS {
-        let file = open(&lock, false).map_err(|source| io_failed(&lock, &source))?;
+        let file = open(&lock, false).map_err(|source| io_failed(&lock, source))?;
         before_wait();
         file.lock_shared()
-            .map_err(|source| io_failed(&lock, &source))?;
+            .map_err(|source| io_failed(&lock, source))?;
         if same_file(&file, &lock) {
             return Ok(Shared { _file: file });
         }
     }
-    Err(failure(
-        ErrorCode::IoFailed,
-        format!("{}: {}.", lock.display(), io::ErrorKind::TimedOut),
-    ))
+    Err(SessionError::ShareFailed {
+        path: lock,
+        kind: io::ErrorKind::TimedOut,
+    })
 }
 
 /// Claims the worktree: `Create` when its path is absent, `Present` when
@@ -118,21 +113,19 @@ pub(crate) fn share_with(worktree: &Path, before_wait: &dyn Fn()) -> Result<Shar
 // shares its parent, so opening the lock fails first; no OS fault the
 // tests can inject reaches it.
 #[cfg_attr(false, mutants::skip)]
-pub(crate) fn claim(worktree: &Path, before_wait: &dyn Fn()) -> Result<Claim, Failure> {
-    let lock = lock_path(worktree).ok_or_else(|| {
-        failure(
-            ErrorCode::IoFailed,
-            format!("{}: {}.", worktree.display(), io::ErrorKind::InvalidInput),
-        )
+pub(crate) fn claim(worktree: &Path, before_wait: &dyn Fn()) -> Result<Claim, SessionError> {
+    let lock = lock_path(worktree).ok_or_else(|| SessionError::ShareFailed {
+        path: worktree.to_owned(),
+        kind: io::ErrorKind::InvalidInput,
     })?;
     for _ in 0..ATTEMPTS {
-        let file = open(&lock, true).map_err(|source| io_failed(&lock, &source))?;
+        let file = open(&lock, true).map_err(|source| io_failed(&lock, source))?;
         let held = match file.try_lock() {
             Ok(()) => file,
             Err(TryLockError::WouldBlock) => {
                 before_wait();
                 file.lock_shared()
-                    .map_err(|source| io_failed(&lock, &source))?;
+                    .map_err(|source| io_failed(&lock, source))?;
                 if !same_file(&file, &lock) {
                     continue;
                 }
@@ -140,14 +133,14 @@ pub(crate) fn claim(worktree: &Path, before_wait: &dyn Fn()) -> Result<Claim, Fa
                     Ok(_) => return Ok(Claim::Present(Shared { _file: file })),
                     Err(source) if source.kind() == io::ErrorKind::NotFound => continue,
                     Err(source) => {
-                        return Err(failure(
-                            ErrorCode::IoFailed,
-                            format!("{}: {}.", worktree.display(), source.kind()),
-                        ));
+                        return Err(SessionError::ShareFailed {
+                            path: worktree.to_owned(),
+                            kind: source.kind(),
+                        });
                     }
                 }
             }
-            Err(TryLockError::Error(source)) => return Err(io_failed(&lock, &source)),
+            Err(TryLockError::Error(source)) => return Err(io_failed(&lock, source)),
         };
         if !same_file(&held, &lock) {
             continue;
@@ -157,10 +150,10 @@ pub(crate) fn claim(worktree: &Path, before_wait: &dyn Fn()) -> Result<Claim, Fa
                 return Ok(Claim::Create(Creating { file: held, lock }));
             }
             Err(source) => {
-                return Err(failure(
-                    ErrorCode::IoFailed,
-                    format!("{}: {}.", worktree.display(), source.kind()),
-                ));
+                return Err(SessionError::ShareFailed {
+                    path: worktree.to_owned(),
+                    kind: source.kind(),
+                });
             }
             Ok(_) => {
                 return match (Creating { file: held, lock }).downgrade() {
@@ -170,13 +163,9 @@ pub(crate) fn claim(worktree: &Path, before_wait: &dyn Fn()) -> Result<Claim, Fa
             }
         }
     }
-    Err(failure(
-        ErrorCode::IoFailed,
-        format!(
-            "The worktree {} is in use by another process, so Fiber did not make it again.",
-            worktree.display()
-        ),
-    ))
+    Err(SessionError::WorktreeInUse {
+        path: worktree.to_owned(),
+    })
 }
 
 /// Takes the worktree's lock file exclusively without waiting: `Exclusive`
@@ -253,13 +242,13 @@ fn open(lock: &Path, create_parent: bool) -> Result<File, io::Error> {
         .open(lock)
 }
 
-/// An I/O failure's sentence: the lock file and the kind only, never the
-/// operating system's message.
-fn io_failed(lock: &Path, source: &io::Error) -> Failure {
-    failure(
-        ErrorCode::IoFailed,
-        format!("{}: {}.", lock.display(), source.kind()),
-    )
+/// A lock-file I/O failure: the lock file and the error, rendered as the
+/// lock file and the kind only, never the operating system's message.
+fn io_failed(lock: &Path, source: io::Error) -> SessionError {
+    SessionError::SharedIo {
+        path: lock.to_owned(),
+        source,
+    }
 }
 
 /// Whether the locked descriptor is still the file at the lock path: a
