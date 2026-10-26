@@ -1210,20 +1210,29 @@ fn run_directory_edits_change_nothing() {
 /// refused `from_session`. Nobody can be asked inside an ask session — the
 /// ask answers its own approvals — so the probe replies to a fabricated
 /// request: the hub refuses before the session ever validates it. The ask
-/// stays alive on a sleeping shell call the test closes at the end.
+/// stays alive on a held shell call the test releases at the end.
 #[test]
 fn ask_descendant_reply_to_approval_is_refused_from_session() {
     let setup = Setup::new();
     fs::write(
         setup.home().join("rules"),
-        json!({"decision": "allow", "tool": "shell", "prefix": "sleep"}).to_string(),
+        json!({"decision": "allow", "tool": "shell", "prefix": "python3"}).to_string(),
     )
     .unwrap();
+    // The ask's shell holds on a fifo the test releases after the probe:
+    // the single command signals start itself by writing the marker, so
+    // the probe never runs before the hold exists.
+    let hold = setup.workspace().join("ask-reply.hold.fifo");
+    fakes::fifo(&hold);
+    let marker = setup.workspace().join("ask-reply.started.fifo");
+    fakes::fifo(&marker);
+    let hold_arg = hold.to_string_lossy().into_owned();
+    let marker_arg = marker.to_string_lossy().into_owned();
     let server = fakes::ProviderServer::start([
         stream(&[function_call(
-            "call_sleep",
+            "call_hold",
             "shell",
-            &json!({"command": "sleep 20"}),
+            &json!({"command": format!("python3 -c \"open('{marker_arg}','w').write('started'); open('{hold_arg}').read()\"")}),
         )]),
         hello(),
         hello(),
@@ -1243,13 +1252,17 @@ fn ask_descendant_reply_to_approval_is_refused_from_session() {
         server.await_requests(1, setup.deadline),
         "the ask reaches its provider"
     );
-    // The provider request only proves the model was hit: the sleeping
-    // shell call announces itself, and the probe runs once it has started.
-    let _started = until(&client, "the ask starts its sleeping shell call", |line| {
-        line["kind"] == "tool_call_requested"
-            && line["session_id"] == session
-            && line["payload"]["name"] == "shell"
+    // The provider request only proves the model was hit: the held shell
+    // signals start itself by writing the marker, and the probe runs only
+    // after that signal.
+    let marker_start = marker.clone();
+    let started = support::bounded(setup.deadline, "the ask shell to hold", move || {
+        fs::read_to_string(&marker_start).unwrap_or_default()
     });
+    assert!(
+        started.contains("started"),
+        "the ask shell holds before the probe runs"
+    );
 
     let answer = probe_answer_to(
         &client,
@@ -1267,6 +1280,11 @@ fn ask_descendant_reply_to_approval_is_refused_from_session() {
     assert_eq!(answer["kind"], "command_rejected", "{answer}");
     assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
 
+    // The test releases the hold after the probe: the open turn continues.
+    let hold_release = hold.clone();
+    support::bounded(setup.deadline, "the ask shell to release", move || {
+        fs::write(&hold_release, "go\n").unwrap();
+    });
     client.send(
         &json!({"id": "c_close_ask", "session_id": session, "command": "close", "args": {"now": true}})
             .to_string(),
@@ -1281,8 +1299,8 @@ fn ask_descendant_reply_to_approval_is_refused_from_session() {
 
 /// A shell under `fiber ask` prompts the ask session's own socket: the
 /// target is on the connection's ancestor walk, so the prompt is refused
-/// `from_session`. The ask stays alive on a sleeping shell call the test
-/// closes at the end.
+/// `from_session`. The ask stays alive on a held shell call the test
+/// releases at the end.
 #[test]
 fn ask_descendant_prompt_to_own_ask_socket_is_refused_from_session() {
     let setup = Setup::new();
@@ -1290,16 +1308,25 @@ fn ask_descendant_prompt_to_own_ask_socket_is_refused_from_session() {
         setup.home().join("rules"),
         format!(
             "{}\n{}",
-            json!({"decision": "allow", "tool": "shell", "prefix": "sleep"}),
+            json!({"decision": "allow", "tool": "shell", "prefix": "python3"}),
             json!({"decision": "ask", "tool": "shell", "prefix": "echo"}),
         ),
     )
     .unwrap();
+    // The ask's shell holds on a fifo the test releases after the probe:
+    // the single command signals start itself by writing the marker, so
+    // the probe never runs before the hold exists.
+    let hold = setup.workspace().join("ask-prompt.hold.fifo");
+    fakes::fifo(&hold);
+    let marker = setup.workspace().join("ask-prompt.started.fifo");
+    fakes::fifo(&marker);
+    let hold_arg = hold.to_string_lossy().into_owned();
+    let marker_arg = marker.to_string_lossy().into_owned();
     let server = fakes::ProviderServer::start([
         stream(&[function_call(
-            "call_sleep",
+            "call_hold",
             "shell",
-            &json!({"command": "sleep 20"}),
+            &json!({"command": format!("python3 -c \"open('{marker_arg}','w').write('started'); open('{hold_arg}').read()\"")}),
         )]),
         hello(),
         hello(),
@@ -1319,13 +1346,17 @@ fn ask_descendant_prompt_to_own_ask_socket_is_refused_from_session() {
         server.await_requests(1, setup.deadline),
         "the ask reaches its provider"
     );
-    // The provider request only proves the model was hit: the sleeping
-    // shell call announces itself, and the probe runs once it has started.
-    let _started = until(&client, "the ask starts its sleeping shell call", |line| {
-        line["kind"] == "tool_call_requested"
-            && line["session_id"] == session
-            && line["payload"]["name"] == "shell"
+    // The provider request only proves the model was hit: the held shell
+    // signals start itself by writing the marker, and the probe runs only
+    // after that signal.
+    let marker_start = marker.clone();
+    let started = support::bounded(setup.deadline, "the ask shell to hold", move || {
+        fs::read_to_string(&marker_start).unwrap_or_default()
     });
+    assert!(
+        started.contains("started"),
+        "the ask shell holds before the probe runs"
+    );
 
     let answer = probe_answer_to(
         &client,
@@ -1343,6 +1374,11 @@ fn ask_descendant_prompt_to_own_ask_socket_is_refused_from_session() {
     assert_eq!(answer["kind"], "command_rejected", "{answer}");
     assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
 
+    // The test releases the hold after the probe: the open turn continues.
+    let hold_release = hold.clone();
+    support::bounded(setup.deadline, "the ask shell to release", move || {
+        fs::write(&hold_release, "go\n").unwrap();
+    });
     client.send(
         &json!({"id": "c_close_ask", "session_id": session, "command": "close", "args": {"now": true}})
             .to_string(),
@@ -1363,16 +1399,28 @@ fn ask_descendant_steering_an_unrelated_hub_started_session_is_allowed() {
     let setup = Setup::new();
     fs::write(
         setup.home().join("rules"),
-        json!({"decision": "allow", "tool": "shell", "prefix": "sleep"}).to_string(),
+        json!({"decision": "allow", "tool": "shell", "prefix": "python3"}).to_string(),
     )
     .unwrap();
-    let server = fakes::ProviderServer::start_responding(|request: &fakes::Request| {
+    // The ask's shell holds on a fifo the test releases after the probe:
+    // the single command signals start itself by writing the marker, so
+    // the probe never runs before the hold exists.
+    let hold = setup.workspace().join("ask-allowed.hold.fifo");
+    fakes::fifo(&hold);
+    let marker = setup.workspace().join("ask-allowed.started.fifo");
+    fakes::fifo(&marker);
+    let hold_arg = hold.to_string_lossy().into_owned();
+    let marker_arg = marker.to_string_lossy().into_owned();
+    let hold_command = format!(
+        "python3 -c \"open('{marker_arg}','w').write('started'); open('{hold_arg}').read()\""
+    );
+    let server = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
         let text = String::from_utf8_lossy(&request.body);
         if text.contains("sleeper") {
             return stream(&[function_call(
-                "call_sleep",
+                "call_hold",
                 "shell",
-                &json!({"command": "sleep 20"}),
+                &json!({"command": hold_command}),
             )]);
         }
         hello()
@@ -1390,6 +1438,20 @@ fn ask_descendant_steering_an_unrelated_hub_started_session_is_allowed() {
     let ask = spawn_ask(&setup, &["ask", &format!("sleeper run it in {workspace}")]);
     let session = ask_session_id(&ask, setup.deadline);
     subscribe(&client, &session);
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the ask reaches its provider"
+    );
+    // The held shell signals start itself by writing the marker, and the
+    // probe runs only after that signal.
+    let marker_start = marker.clone();
+    let started = support::bounded(setup.deadline, "the ask shell to hold", move || {
+        fs::read_to_string(&marker_start).unwrap_or_default()
+    });
+    assert!(
+        started.contains("started"),
+        "the ask shell holds before the probe runs"
+    );
 
     let answer = probe_answer_to(
         &client,
@@ -1406,6 +1468,11 @@ fn ask_descendant_steering_an_unrelated_hub_started_session_is_allowed() {
     );
     assert_eq!(answer["kind"], "command_accepted", "{answer}");
 
+    // The test releases the hold after the probe: the open turn continues.
+    let hold_release = hold.clone();
+    support::bounded(setup.deadline, "the ask shell to release", move || {
+        fs::write(&hold_release, "go\n").unwrap();
+    });
     client.send(
         &json!({"id": "c_close_ask", "session_id": session, "command": "close", "args": {"now": true}})
             .to_string(),

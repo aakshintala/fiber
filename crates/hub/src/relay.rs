@@ -102,7 +102,7 @@ pub(crate) struct Relay {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelayTarget {
     /// A live session server process.
-    Live { pid: u32 },
+    Live { pid: support::peer::Pid },
     /// A live target the check could not read: refusals fail closed.
     LiveUnreadable,
     /// A synthetic replay of an exited delegate: no target process, so no
@@ -223,7 +223,7 @@ pub(crate) fn session_command_refusal(
     read: &dyn support::peer::ProcessRead,
 ) -> Option<crate::connection::Refused> {
     use crate::connection::{Attribution, Refused};
-    let caller_matches: &[u32] = match attribution {
+    let caller_matches: &[support::peer::Pid] = match attribution {
         Attribution::Local {
             session_process_pids,
             ..

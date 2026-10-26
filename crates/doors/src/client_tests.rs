@@ -794,12 +794,26 @@ mod attribution_tests {
     /// session id: the shared predicate recognizes the session host.
     fn host_walk(argv: Vec<Vec<u8>>) -> PeerScript {
         PeerScript {
-            current: 1000,
-            parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
-            euids: [(20, 1000), (1, 1000)].into_iter().collect(),
-            argvs: [(20, argv), (1, vec![b"/sbin/init".to_vec()])]
-                .into_iter()
-                .collect(),
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (support::peer::Pid(10), support::peer::Pid(20)),
+                (support::peer::Pid(20), support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (support::peer::Pid(20), support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (support::peer::Pid(20), argv),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
             unreadable_euid: vec![],
             unreadable_argv: vec![],
             argv_read: std::cell::Cell::new(0),
@@ -808,7 +822,7 @@ mod attribution_tests {
 
     #[test]
     fn ask_argv_on_the_caller_walk_marks_the_session_process_pid() {
-        let attribution = attribute_peer(Ok(10), &host_walk(ask_argv()));
+        let attribution = attribute_peer(Ok(support::peer::Pid(10)), &host_walk(ask_argv()));
         let Attribution::Local {
             session_process_pids,
             ..
@@ -816,12 +830,15 @@ mod attribution_tests {
         else {
             panic!("an ask descendant is a local session-caller peer");
         };
-        assert_eq!(session_process_pids, [20]);
+        assert_eq!(session_process_pids, [support::peer::Pid(20)]);
     }
 
     #[test]
     fn extension_case_argv_on_the_caller_walk_marks_the_session_process_pid() {
-        let attribution = attribute_peer(Ok(10), &host_walk(extension_case_argv()));
+        let attribution = attribute_peer(
+            Ok(support::peer::Pid(10)),
+            &host_walk(extension_case_argv()),
+        );
         let Attribution::Local {
             session_process_pids,
             ..
@@ -829,25 +846,28 @@ mod attribution_tests {
         else {
             panic!("an extension-case descendant is a local session-caller peer");
         };
-        assert_eq!(session_process_pids, [20]);
+        assert_eq!(session_process_pids, [support::peer::Pid(20)]);
     }
 
     struct PeerScript {
-        current: u32,
-        parents: HashMap<u32, u32>,
-        euids: HashMap<u32, u32>,
-        argvs: HashMap<u32, Vec<Vec<u8>>>,
-        unreadable_euid: Vec<u32>,
-        unreadable_argv: Vec<u32>,
+        current: support::peer::EffectiveUid,
+        parents: HashMap<support::peer::Pid, support::peer::Pid>,
+        euids: HashMap<support::peer::Pid, support::peer::EffectiveUid>,
+        argvs: HashMap<support::peer::Pid, Vec<Vec<u8>>>,
+        unreadable_euid: Vec<support::peer::Pid>,
+        unreadable_argv: Vec<support::peer::Pid>,
         argv_read: std::cell::Cell<usize>,
     }
 
     impl support::peer::ProcessRead for PeerScript {
-        fn current_euid(&self) -> Result<u32, support::peer::ReadError> {
+        fn current_euid(&self) -> Result<support::peer::EffectiveUid, support::peer::ReadError> {
             Ok(self.current)
         }
 
-        fn euid(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+        fn euid(
+            &self,
+            pid: support::peer::Pid,
+        ) -> Result<support::peer::EffectiveUid, support::peer::ReadError> {
             if self.unreadable_euid.contains(&pid) {
                 return Err(support::peer::ReadError::Unreadable { pid, what: "euid" });
             }
@@ -857,7 +877,10 @@ mod attribution_tests {
                 .ok_or(support::peer::ReadError::Unreadable { pid, what: "euid" })
         }
 
-        fn parent(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+        fn parent(
+            &self,
+            pid: support::peer::Pid,
+        ) -> Result<support::peer::Pid, support::peer::ReadError> {
             self.parents
                 .get(&pid)
                 .copied()
@@ -867,7 +890,7 @@ mod attribution_tests {
                 })
         }
 
-        fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
+        fn argv(&self, pid: support::peer::Pid) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
             self.argv_read.set(self.argv_read.get() + 1);
             if self.unreadable_argv.contains(&pid) {
                 return Err(support::peer::ReadError::Unreadable { pid, what: "argv" });
@@ -895,12 +918,28 @@ mod attribution_tests {
     fn the_walk_collects_session_hosts_nearest_first() {
         let id = "s_0123456789abcdef";
         let read = PeerScript {
-            current: 1000,
-            parents: [(10, 20), (20, 30), (30, 1), (1, 0)].into_iter().collect(),
-            euids: [(20, 1000), (30, 2000), (1, 1000)].into_iter().collect(),
-            argvs: [(20, session_argv(id)), (1, session_argv(id))]
-                .into_iter()
-                .collect(),
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (support::peer::Pid(10), support::peer::Pid(20)),
+                (support::peer::Pid(20), support::peer::Pid(30)),
+                (support::peer::Pid(30), support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (support::peer::Pid(20), support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(30), support::peer::EffectiveUid(2000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (support::peer::Pid(20), session_argv(id)),
+                (support::peer::Pid(1), session_argv(id)),
+            ]
+            .into_iter()
+            .collect(),
             unreadable_euid: vec![],
             unreadable_argv: vec![],
             argv_read: std::cell::Cell::new(0),
@@ -908,13 +947,16 @@ mod attribution_tests {
         let Attribution::Local {
             session_process_pids,
             ..
-        } = attribute_peer(Ok(10), &read)
+        } = attribute_peer(Ok(support::peer::Pid(10)), &read)
         else {
             panic!("a session descendant is a local session-caller peer");
         };
         // Pid 30 shares no owner with the caller, so its arguments are
         // never read even though they name a session.
-        assert_eq!(session_process_pids, [20, 1]);
+        assert_eq!(
+            session_process_pids,
+            [support::peer::Pid(20), support::peer::Pid(1)]
+        );
         assert_eq!(read.argv_read.get(), 2);
     }
 
@@ -922,36 +964,62 @@ mod attribution_tests {
     fn an_unreadable_caller_walk_keeps_the_unreadable_pid() {
         let id = "s_0123456789abcdef";
         let unreadable = PeerScript {
-            current: 1000,
-            parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
-            euids: [(20, 1000), (1, 1000)].into_iter().collect(),
-            argvs: [(1, session_argv(id))].into_iter().collect(),
-            unreadable_euid: vec![20],
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (support::peer::Pid(10), support::peer::Pid(20)),
+                (support::peer::Pid(20), support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (support::peer::Pid(20), support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [(support::peer::Pid(1), session_argv(id))]
+                .into_iter()
+                .collect(),
+            unreadable_euid: vec![support::peer::Pid(20)],
             unreadable_argv: vec![],
             argv_read: std::cell::Cell::new(0),
         };
         assert_eq!(
-            attribute_peer(Ok(10), &unreadable),
+            attribute_peer(Ok(support::peer::Pid(10)), &unreadable),
             Attribution::Incomplete {
-                peer_pid: Some(10),
-                pid: Some(20),
+                peer_pid: Some(support::peer::Pid(10)),
+                pid: Some(support::peer::Pid(20)),
                 peer_error: None,
             }
         );
         let unreadable = PeerScript {
-            current: 1000,
-            parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
-            euids: [(20, 1000), (1, 1000)].into_iter().collect(),
-            argvs: [(1, session_argv(id))].into_iter().collect(),
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (support::peer::Pid(10), support::peer::Pid(20)),
+                (support::peer::Pid(20), support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (support::peer::Pid(20), support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [(support::peer::Pid(1), session_argv(id))]
+                .into_iter()
+                .collect(),
             unreadable_euid: vec![],
-            unreadable_argv: vec![20],
+            unreadable_argv: vec![support::peer::Pid(20)],
             argv_read: std::cell::Cell::new(0),
         };
         assert_eq!(
-            attribute_peer(Ok(10), &unreadable),
+            attribute_peer(Ok(support::peer::Pid(10)), &unreadable),
             Attribution::Incomplete {
-                peer_pid: Some(10),
-                pid: Some(20),
+                peer_pid: Some(support::peer::Pid(10)),
+                pid: Some(support::peer::Pid(20)),
                 peer_error: None,
             }
         );
@@ -961,8 +1029,8 @@ mod attribution_tests {
     fn refusal_messages_name_the_target_pid_and_peer_error() {
         let target = contract::SessionId("s_fedcba9876543210".to_owned());
         let local = Attribution::Local {
-            peer_pid: 555,
-            session_process_pids: vec![20],
+            peer_pid: support::peer::Pid(555),
+            session_process_pids: vec![support::peer::Pid(20)],
         };
         let approval =
             from_session_message(&local, FromSessionRefusal::Approval { target: &target });
@@ -986,8 +1054,8 @@ mod attribution_tests {
             "no caller session is named: {command}"
         );
         let incomplete = Attribution::Incomplete {
-            peer_pid: Some(555),
-            pid: Some(999),
+            peer_pid: Some(support::peer::Pid(555)),
+            pid: Some(support::peer::Pid(999)),
             peer_error: None,
         };
         let incomplete = from_session_message(
@@ -1033,10 +1101,10 @@ mod refusal_tests {
     use contract::commands::{Command, ContentArgs, Reply, ReplyAnswer, SentPart};
     use contract::events::Decision;
 
-    const PEER: u32 = 555;
-    const TARGET_PID: u32 = 777;
-    const HOST: u32 = 440;
-    const UNREADABLE: u32 = 999;
+    const PEER: support::peer::Pid = support::peer::Pid(555);
+    const TARGET_PID: support::peer::Pid = support::peer::Pid(777);
+    const HOST: support::peer::Pid = support::peer::Pid(440);
+    const UNREADABLE: support::peer::Pid = support::peer::Pid(999);
     const OWNED: &str = "s_0123456789abcdef";
     const OTHER: &str = "s_fedcba9876543210";
 
@@ -1052,25 +1120,31 @@ mod refusal_tests {
     /// and a missing entry reads as unreadable.
     #[derive(Default)]
     struct Script {
-        current: u32,
-        parents: HashMap<u32, u32>,
-        euids: HashMap<u32, u32>,
-        argvs: HashMap<u32, Vec<Vec<u8>>>,
+        current: support::peer::EffectiveUid,
+        parents: HashMap<support::peer::Pid, support::peer::Pid>,
+        euids: HashMap<support::peer::Pid, support::peer::EffectiveUid>,
+        argvs: HashMap<support::peer::Pid, Vec<Vec<u8>>>,
     }
 
     impl support::peer::ProcessRead for Script {
-        fn current_euid(&self) -> Result<u32, support::peer::ReadError> {
+        fn current_euid(&self) -> Result<support::peer::EffectiveUid, support::peer::ReadError> {
             Ok(self.current)
         }
 
-        fn euid(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+        fn euid(
+            &self,
+            pid: support::peer::Pid,
+        ) -> Result<support::peer::EffectiveUid, support::peer::ReadError> {
             self.euids
                 .get(&pid)
                 .copied()
                 .ok_or(support::peer::ReadError::Unreadable { pid, what: "euid" })
         }
 
-        fn parent(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+        fn parent(
+            &self,
+            pid: support::peer::Pid,
+        ) -> Result<support::peer::Pid, support::peer::ReadError> {
             self.parents
                 .get(&pid)
                 .copied()
@@ -1080,7 +1154,7 @@ mod refusal_tests {
                 })
         }
 
-        fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
+        fn argv(&self, pid: support::peer::Pid) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
             self.argvs
                 .get(&pid)
                 .cloned()
@@ -1118,10 +1192,22 @@ mod refusal_tests {
     /// itself decides.
     fn plain_target() -> Script {
         Script {
-            current: 1000,
-            parents: [(TARGET_PID, 1), (1, 0)].into_iter().collect(),
-            euids: [(TARGET_PID, 1000), (1, 1000)].into_iter().collect(),
-            argvs: [(1, vec![b"/sbin/init".to_vec()])].into_iter().collect(),
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET_PID, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (TARGET_PID, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [(support::peer::Pid(1), vec![b"/sbin/init".to_vec()])]
+                .into_iter()
+                .collect(),
         }
     }
 
@@ -1129,14 +1215,26 @@ mod refusal_tests {
     /// session process with a caller below that host.
     fn host_target(argv: Vec<Vec<u8>>) -> Script {
         Script {
-            current: 1000,
-            parents: [(TARGET_PID, HOST), (HOST, 1), (1, 0)]
-                .into_iter()
-                .collect(),
-            euids: [(HOST, 1000), (1, 1000)].into_iter().collect(),
-            argvs: [(HOST, argv), (1, vec![b"/sbin/init".to_vec()])]
-                .into_iter()
-                .collect(),
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET_PID, HOST),
+                (HOST, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (HOST, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (HOST, argv),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
         }
     }
 
@@ -1144,28 +1242,40 @@ mod refusal_tests {
     /// direct-parent exception admits every command but an approval answer.
     fn parent_target() -> Script {
         Script {
-            current: 1000,
-            parents: [(TARGET_PID, PEER), (PEER, 1), (1, 0)]
-                .into_iter()
-                .collect(),
-            euids: [(PEER, 1000), (1, 1000)].into_iter().collect(),
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET_PID, PEER),
+                (PEER, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (PEER, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
             argvs: [
                 (PEER, vec![b"/bin/sh".to_vec()]),
-                (1, vec![b"/sbin/init".to_vec()]),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
             ]
             .into_iter()
             .collect(),
         }
     }
 
-    fn local(peer: u32, matches: &[u32]) -> Attribution {
+    fn local(peer: support::peer::Pid, matches: &[support::peer::Pid]) -> Attribution {
         Attribution::Local {
             peer_pid: peer,
             session_process_pids: matches.to_vec(),
         }
     }
 
-    fn incomplete(peer: Option<u32>, pid: Option<u32>) -> Attribution {
+    fn incomplete(
+        peer: Option<support::peer::Pid>,
+        pid: Option<support::peer::Pid>,
+    ) -> Attribution {
         Attribution::Incomplete {
             peer_pid: peer,
             pid,
@@ -1447,7 +1557,7 @@ mod refusal_tests {
     #[test]
     fn attribute_peer_names_the_unreadable_owner_and_keeps_the_error() {
         let read = Script {
-            current: 1000,
+            current: support::peer::EffectiveUid(1000),
             parents: [(PEER, UNREADABLE)].into_iter().collect(),
             ..Default::default()
         };
@@ -1477,9 +1587,13 @@ mod refusal_tests {
     #[test]
     fn an_unreadable_owner_walk_fails_closed_with_its_pid() {
         let read = Script {
-            current: 1000,
-            parents: [(1, 0)].into_iter().collect(),
-            euids: [(1, 1000)].into_iter().collect(),
+            current: support::peer::EffectiveUid(1000),
+            parents: [(support::peer::Pid(1), support::peer::Pid(0))]
+                .into_iter()
+                .collect(),
+            euids: [(support::peer::Pid(1), support::peer::EffectiveUid(1000))]
+                .into_iter()
+                .collect(),
             ..Default::default()
         };
         let attribution = attribute_peer(Ok(PEER), &read);

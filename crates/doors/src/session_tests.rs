@@ -218,33 +218,41 @@ mod refusal_tests {
     use contract::{CommandId, ErrorCode, RequestId, SessionId};
     use fakes::Deadline;
 
-    const PEER: u32 = 555;
-    const HOST: u32 = 440;
-    const UNREADABLE: u32 = 999;
+    const PEER: support::peer::Pid = support::peer::Pid(555);
+    const HOST: support::peer::Pid = support::peer::Pid(440);
+    const UNREADABLE: support::peer::Pid = support::peer::Pid(999);
 
     /// Scripted kernel reads: the refusal paths answer from these tables,
     /// and a missing entry reads as unreadable.
     #[derive(Default)]
     struct Script {
-        current: u32,
-        parents: HashMap<u32, u32>,
-        euids: HashMap<u32, u32>,
-        argvs: HashMap<u32, Vec<Vec<u8>>>,
+        current: support::peer::EffectiveUid,
+        parents: HashMap<support::peer::Pid, support::peer::Pid>,
+        euids: HashMap<support::peer::Pid, support::peer::EffectiveUid>,
+        argvs: HashMap<support::peer::Pid, Vec<Vec<u8>>>,
     }
 
     impl ::support::peer::ProcessRead for Script {
-        fn current_euid(&self) -> Result<u32, ::support::peer::ReadError> {
+        fn current_euid(
+            &self,
+        ) -> Result<::support::peer::EffectiveUid, ::support::peer::ReadError> {
             Ok(self.current)
         }
 
-        fn euid(&self, pid: u32) -> Result<u32, ::support::peer::ReadError> {
+        fn euid(
+            &self,
+            pid: ::support::peer::Pid,
+        ) -> Result<::support::peer::EffectiveUid, ::support::peer::ReadError> {
             self.euids
                 .get(&pid)
                 .copied()
                 .ok_or(::support::peer::ReadError::Unreadable { pid, what: "euid" })
         }
 
-        fn parent(&self, pid: u32) -> Result<u32, ::support::peer::ReadError> {
+        fn parent(
+            &self,
+            pid: ::support::peer::Pid,
+        ) -> Result<::support::peer::Pid, ::support::peer::ReadError> {
             self.parents
                 .get(&pid)
                 .copied()
@@ -254,7 +262,10 @@ mod refusal_tests {
                 })
         }
 
-        fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, ::support::peer::ReadError> {
+        fn argv(
+            &self,
+            pid: ::support::peer::Pid,
+        ) -> Result<Vec<Vec<u8>>, ::support::peer::ReadError> {
             self.argvs
                 .get(&pid)
                 .cloned()
@@ -265,23 +276,46 @@ mod refusal_tests {
     /// The target's walk with no session above it: the target session
     /// itself decides. The target is always this test process.
     fn plain_target() -> Script {
-        let own = std::process::id();
+        let own = ::support::peer::Pid(std::process::id());
         Script {
-            current: 1000,
-            parents: [(own, 1), (1, 0)].into_iter().collect(),
-            euids: [(own, 1000), (1, 1000)].into_iter().collect(),
-            argvs: [(1, vec![b"/sbin/init".to_vec()])].into_iter().collect(),
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (own, ::support::peer::Pid(1)),
+                (::support::peer::Pid(1), ::support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (own, ::support::peer::EffectiveUid(1000)),
+                (::support::peer::Pid(1), ::support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [(::support::peer::Pid(1), vec![b"/sbin/init".to_vec()])]
+                .into_iter()
+                .collect(),
         }
     }
 
     /// The target's walk with a session host above this test process: the
     /// target shares that session process with a caller below it.
     fn shared_target() -> Script {
-        let own = std::process::id();
+        let own = ::support::peer::Pid(std::process::id());
         Script {
-            current: 1000,
-            parents: [(own, HOST), (HOST, 1), (1, 0)].into_iter().collect(),
-            euids: [(HOST, 1000), (1, 1000)].into_iter().collect(),
+            current: ::support::peer::EffectiveUid(1000),
+            parents: [
+                (own, HOST),
+                (HOST, ::support::peer::Pid(1)),
+                (::support::peer::Pid(1), ::support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (HOST, ::support::peer::EffectiveUid(1000)),
+                (::support::peer::Pid(1), ::support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
             argvs: [
                 (
                     HOST,
@@ -295,7 +329,7 @@ mod refusal_tests {
                     .map(|word| word.as_bytes().to_vec())
                     .collect(),
                 ),
-                (1, vec![b"/sbin/init".to_vec()]),
+                (::support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
             ]
             .into_iter()
             .collect(),
@@ -305,21 +339,35 @@ mod refusal_tests {
     /// The target's readable walk with the peer as its kernel parent: the
     /// direct-parent exception admits every command but an approval answer.
     fn parent_target() -> Script {
-        let own = std::process::id();
+        let own = ::support::peer::Pid(std::process::id());
         Script {
-            current: 1000,
-            parents: [(own, PEER), (PEER, 1), (1, 0)].into_iter().collect(),
-            euids: [(PEER, 1000), (1, 1000)].into_iter().collect(),
+            current: ::support::peer::EffectiveUid(1000),
+            parents: [
+                (own, PEER),
+                (PEER, ::support::peer::Pid(1)),
+                (::support::peer::Pid(1), ::support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (PEER, ::support::peer::EffectiveUid(1000)),
+                (::support::peer::Pid(1), ::support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
             argvs: [
                 (PEER, vec![b"/bin/sh".to_vec()]),
-                (1, vec![b"/sbin/init".to_vec()]),
+                (::support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
             ]
             .into_iter()
             .collect(),
         }
     }
 
-    fn local(peer: u32, matches: &[u32]) -> crate::client::Attribution {
+    fn local(
+        peer: support::peer::Pid,
+        matches: &[support::peer::Pid],
+    ) -> crate::client::Attribution {
         crate::client::Attribution::Local {
             peer_pid: peer,
             session_process_pids: matches.to_vec(),

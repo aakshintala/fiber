@@ -764,19 +764,19 @@ pub(crate) enum Attribution {
     /// session-process pids.
     Local {
         /// The kernel-reported peer pid.
-        peer_pid: u32,
+        peer_pid: support::peer::Pid,
         /// Every session-process pid on the peer's strict-ancestor walk,
         /// nearest first.
-        session_process_pids: Vec<u32>,
+        session_process_pids: Vec<support::peer::Pid>,
     },
     /// A local connection whose peer credential or walk could not be
     /// read, failing closed.
     Incomplete {
         /// The kernel-reported peer pid, when the credential read held.
-        peer_pid: Option<u32>,
+        peer_pid: Option<support::peer::Pid>,
         /// The unreadable pid, when the walk failed; `None` when the peer
         /// credential itself could not be read.
-        pid: Option<u32>,
+        pid: Option<support::peer::Pid>,
         /// The peer-credential read's error text, when the credential
         /// itself could not be read; the refusal names it.
         peer_error: Option<String>,
@@ -800,7 +800,7 @@ impl Attribution {
     }
 
     /// The kernel peer pid, when the credential read held.
-    pub(crate) fn peer_pid(&self) -> Option<u32> {
+    pub(crate) fn peer_pid(&self) -> Option<support::peer::Pid> {
         match self {
             Attribution::Local { peer_pid, .. } => Some(*peer_pid),
             Attribution::Incomplete { peer_pid, .. } => *peer_pid,
@@ -815,7 +815,7 @@ impl Attribution {
 /// remote. The accepted socket peer's own arguments are never read: only
 /// strict ancestors are walked.
 pub(crate) fn attribute_peer(
-    peer: Result<u32, support::peer::PeerCredentialError>,
+    peer: Result<support::peer::Pid, support::peer::PeerCredentialError>,
     read: &dyn support::peer::ProcessRead,
 ) -> Attribution {
     match peer {

@@ -22,23 +22,29 @@ use fakes::Deadline;
 struct TargetRead;
 
 impl support::peer::ProcessRead for TargetRead {
-    fn current_euid(&self) -> Result<u32, support::peer::ReadError> {
-        Ok(1000)
+    fn current_euid(&self) -> Result<support::peer::EffectiveUid, support::peer::ReadError> {
+        Ok(support::peer::EffectiveUid(1000))
     }
 
-    fn euid(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+    fn euid(
+        &self,
+        pid: support::peer::Pid,
+    ) -> Result<support::peer::EffectiveUid, support::peer::ReadError> {
         match pid {
-            30 => Ok(1000),
-            1 => Ok(0),
+            support::peer::Pid(30) => Ok(support::peer::EffectiveUid(1000)),
+            support::peer::Pid(1) => Ok(support::peer::EffectiveUid(0)),
             _ => Err(support::peer::ReadError::Unreadable { pid, what: "euid" }),
         }
     }
 
-    fn parent(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+    fn parent(
+        &self,
+        pid: support::peer::Pid,
+    ) -> Result<support::peer::Pid, support::peer::ReadError> {
         match pid {
-            41 | 42 => Ok(30),
-            30 => Ok(1),
-            1 => Ok(0),
+            support::peer::Pid(41) | support::peer::Pid(42) => Ok(support::peer::Pid(30)),
+            support::peer::Pid(30) => Ok(support::peer::Pid(1)),
+            support::peer::Pid(1) => Ok(support::peer::Pid(0)),
             _ => Err(support::peer::ReadError::Unreadable {
                 pid,
                 what: "parent",
@@ -46,8 +52,8 @@ impl support::peer::ProcessRead for TargetRead {
         }
     }
 
-    fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
-        (pid == 30)
+    fn argv(&self, pid: support::peer::Pid) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
+        (pid == support::peer::Pid(30))
             .then(|| vec![b"sh".to_vec()])
             .ok_or(support::peer::ReadError::Unreadable { pid, what: "argv" })
     }
@@ -62,8 +68,8 @@ fn a_reroute_uses_a_live_relay_with_a_strictly_newer_epoch() {
     let hub = Arc::new(hub(&held));
     *crate::connection::lock(&hub.test_read) = Some(Arc::new(TargetRead));
     let attribution = crate::connection::Attribution::Local {
-        peer_pid: 10,
-        session_process_pids: vec![41],
+        peer_pid: support::peer::Pid(10),
+        session_process_pids: vec![support::peer::Pid(41)],
     };
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     let (old_epoch, new_epoch) = {
@@ -85,7 +91,9 @@ fn a_reroute_uses_a_live_relay_with_a_strictly_newer_epoch() {
             replayed: Replayed::default(),
             thread: None,
             retiring: None,
-            target: RelayTarget::Live { pid: 41 },
+            target: RelayTarget::Live {
+                pid: support::peer::Pid(41),
+            },
         },
         Relay {
             session: SID.to_owned(),
@@ -95,7 +103,9 @@ fn a_reroute_uses_a_live_relay_with_a_strictly_newer_epoch() {
             replayed: Replayed::default(),
             thread: Some(live_thread),
             retiring: None,
-            target: RelayTarget::Live { pid: 42 },
+            target: RelayTarget::Live {
+                pid: support::peer::Pid(42),
+            },
         },
     ]);
     let (client_writer, _client_reader) = UnixStream::pair().unwrap();
@@ -145,8 +155,8 @@ fn authorization_uses_the_target_session_relay_not_another_session() {
     let hub = Arc::new(hub(&held));
     *crate::connection::lock(&hub.test_read) = Some(Arc::new(TargetRead));
     let attribution = crate::connection::Attribution::Local {
-        peer_pid: 10,
-        session_process_pids: vec![41],
+        peer_pid: support::peer::Pid(10),
+        session_process_pids: vec![support::peer::Pid(41)],
     };
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     let (blocked_writer, _blocked_peer) = UnixStream::pair().unwrap();
@@ -173,7 +183,9 @@ fn authorization_uses_the_target_session_relay_not_another_session() {
                 replayed: Replayed::default(),
                 thread: None,
                 retiring: None,
-                target: RelayTarget::Live { pid: 41 },
+                target: RelayTarget::Live {
+                    pid: support::peer::Pid(41),
+                },
             },
             Relay {
                 session: B.to_owned(),
@@ -183,7 +195,9 @@ fn authorization_uses_the_target_session_relay_not_another_session() {
                 replayed: Replayed::default(),
                 thread: Some(live_thread),
                 retiring: None,
-                target: RelayTarget::Live { pid: 42 },
+                target: RelayTarget::Live {
+                    pid: support::peer::Pid(42),
+                },
             },
         ]);
     }
@@ -2753,8 +2767,8 @@ impl Ended {
     fn mark_session_owned_caller(&self) {
         crate::connection::lock(&self.relays).attribution =
             Some(crate::connection::Attribution::Local {
-                peer_pid: u32::MAX,
-                session_process_pids: vec![std::process::id()],
+                peer_pid: support::peer::Pid(u32::MAX),
+                session_process_pids: vec![support::peer::Pid(std::process::id())],
             });
     }
 

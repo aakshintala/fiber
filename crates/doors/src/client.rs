@@ -137,7 +137,7 @@ pub(crate) fn serve(
     stream: support::stoppable::Reader,
     gate: Arc<Gate>,
     id: u64,
-    peer: Result<u32, support::peer::PeerCredentialError>,
+    peer: Result<support::peer::Pid, support::peer::PeerCredentialError>,
 ) {
     let Some(writer) = stream.get_ref().try_clone().ok() else {
         return;
@@ -155,7 +155,7 @@ pub(crate) fn serve_connection(
     writer: Box<dyn Write + Send>,
     gate: Arc<Gate>,
     id: u64,
-    peer: Result<u32, support::peer::PeerCredentialError>,
+    peer: Result<support::peer::Pid, support::peer::PeerCredentialError>,
 ) {
     let _finish = Finish {
         gate: Arc::clone(&gate),
@@ -269,7 +269,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             attribution,
             &line.command,
             &conn.gate.session_id,
-            std::process::id(),
+            support::peer::Pid(std::process::id()),
             read.as_ref(),
         ) {
             reject(conn, Some(id), refused.code, &refused.message);
@@ -963,19 +963,19 @@ pub(crate) enum Attribution {
     /// session-process pids.
     Local {
         /// The kernel-reported peer pid.
-        peer_pid: u32,
+        peer_pid: support::peer::Pid,
         /// Every session-process pid on the peer's strict-ancestor walk,
         /// nearest first.
-        session_process_pids: Vec<u32>,
+        session_process_pids: Vec<support::peer::Pid>,
     },
     /// A local connection whose peer credential or walk could not be
     /// read, failing closed.
     Incomplete {
         /// The kernel-reported peer pid, when the credential read held.
-        peer_pid: Option<u32>,
+        peer_pid: Option<support::peer::Pid>,
         /// The unreadable pid, when the walk failed; `None` when the peer
         /// credential itself could not be read.
-        pid: Option<u32>,
+        pid: Option<support::peer::Pid>,
         /// The peer-credential read's error text, when the credential
         /// itself could not be read; the refusal names it.
         peer_error: Option<String>,
@@ -984,7 +984,7 @@ pub(crate) enum Attribution {
 
 impl Attribution {
     /// The kernel peer pid, when the credential read held.
-    pub(crate) fn peer_pid(&self) -> Option<u32> {
+    pub(crate) fn peer_pid(&self) -> Option<support::peer::Pid> {
         match self {
             Attribution::Local { peer_pid, .. } => Some(*peer_pid),
             Attribution::Incomplete { peer_pid, .. } => *peer_pid,
@@ -1088,7 +1088,7 @@ pub(crate) fn read_for(_gate: &Gate) -> Arc<dyn support::peer::ProcessRead + Sen
 /// remote. The accepted socket peer's own arguments are never read: only
 /// strict ancestors are walked.
 pub(crate) fn attribute_peer(
-    peer: Result<u32, support::peer::PeerCredentialError>,
+    peer: Result<support::peer::Pid, support::peer::PeerCredentialError>,
     read: &dyn support::peer::ProcessRead,
 ) -> Attribution {
     match peer {
@@ -1142,10 +1142,10 @@ pub(crate) fn session_command_refusal(
     attribution: &Attribution,
     command: &Command,
     target: &contract::SessionId,
-    target_pid: u32,
+    target_pid: support::peer::Pid,
     read: &dyn support::peer::ProcessRead,
 ) -> Option<Refused> {
-    let caller_matches: &[u32] = match attribution {
+    let caller_matches: &[support::peer::Pid] = match attribution {
         Attribution::Local {
             session_process_pids,
             ..

@@ -18,10 +18,32 @@ pub enum PeerCredentialError {
     Unavailable(#[from] std::io::Error),
 }
 
+/// A kernel process id. Distinct from an effective uid so one never passes
+/// where the other belongs (`docs/code-quality.md`, "Types").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Pid(pub u32);
+
+/// A kernel-reported effective uid. Distinct from a process id so one never
+/// passes where the other belongs (`docs/code-quality.md`, "Types").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EffectiveUid(pub u32);
+
+impl std::fmt::Display for Pid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::fmt::Display for EffectiveUid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// The peer process id the kernel reports for an accepted local socket:
 /// `SO_PEERCRED` on Linux, `LOCAL_PEERPID` on macOS. A failure is an
 /// error, never silence: the caller fails closed on it.
-pub fn peer_pid(stream: &UnixStream) -> Result<u32, PeerCredentialError> {
+pub fn peer_pid(stream: &UnixStream) -> Result<Pid, PeerCredentialError> {
     peer_pid_inner(stream)
 }
 
@@ -31,9 +53,9 @@ pub fn peer_pid(stream: &UnixStream) -> Result<u32, PeerCredentialError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessInfo {
     /// The ancestor's pid.
-    pub pid: u32,
+    pub pid: Pid,
     /// The ancestor's kernel-reported effective uid.
-    pub euid: u32,
+    pub euid: EffectiveUid,
 }
 
 /// A walk that could not be completed: an effective uid or a parent pid
@@ -42,7 +64,7 @@ pub struct ProcessInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncompleteWalk {
     /// The pid whose effective uid or parent pid could not be read.
-    pub pid: u32,
+    pub pid: Pid,
 }
 
 /// What a process-data read can refuse with. Every variant names the pid,
@@ -53,7 +75,7 @@ pub enum ReadError {
     #[error("process {pid}: {what}")]
     Unreadable {
         /// The process whose data could not be read.
-        pid: u32,
+        pid: Pid,
         /// Which read failed, such as `status`, `stat` or `cmdline`.
         what: &'static str,
     },
@@ -65,13 +87,13 @@ pub enum ReadError {
 /// unreadable one fails without touching the others.
 pub trait ProcessRead {
     /// The calling process's kernel-reported effective uid.
-    fn current_euid(&self) -> Result<u32, ReadError>;
+    fn current_euid(&self) -> Result<EffectiveUid, ReadError>;
     /// The process's kernel-reported effective uid.
-    fn euid(&self, pid: u32) -> Result<u32, ReadError>;
-    /// The process's kernel-reported parent pid, `0` for PID 1.
-    fn parent(&self, pid: u32) -> Result<u32, ReadError>;
+    fn euid(&self, pid: Pid) -> Result<EffectiveUid, ReadError>;
+    /// The process's kernel-reported parent pid, `Pid(0)` for PID 1.
+    fn parent(&self, pid: Pid) -> Result<Pid, ReadError>;
     /// The process's full kernel argument vector, including `argv[0]`.
-    fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, ReadError>;
+    fn argv(&self, pid: Pid) -> Result<Vec<Vec<u8>>, ReadError>;
 }
 
 /// The kernel's own process data: `/proc` on Linux, `sysctl` on macOS.
@@ -79,19 +101,19 @@ pub trait ProcessRead {
 pub struct KernelProcessRead;
 
 impl ProcessRead for KernelProcessRead {
-    fn current_euid(&self) -> Result<u32, ReadError> {
-        Ok(rustix::process::geteuid().as_raw())
+    fn current_euid(&self) -> Result<EffectiveUid, ReadError> {
+        Ok(EffectiveUid(rustix::process::geteuid().as_raw()))
     }
 
-    fn euid(&self, pid: u32) -> Result<u32, ReadError> {
+    fn euid(&self, pid: Pid) -> Result<EffectiveUid, ReadError> {
         euid_of(pid)
     }
 
-    fn parent(&self, pid: u32) -> Result<u32, ReadError> {
+    fn parent(&self, pid: Pid) -> Result<Pid, ReadError> {
         parent_of(pid)
     }
 
-    fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
+    fn argv(&self, pid: Pid) -> Result<Vec<Vec<u8>>, ReadError> {
         argv_of(pid)
     }
 }
@@ -101,9 +123,9 @@ impl ProcessRead for KernelProcessRead {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessWalk {
     /// The first strict ancestor, or `None` when the target has no parent.
-    pub parent_pid: Option<u32>,
+    pub parent_pid: Option<Pid>,
     /// Matching strict ancestors, nearest first.
-    pub matched_pids: Vec<u32>,
+    pub matched_pids: Vec<Pid>,
 }
 
 /// Every strict ancestor of `pid` through PID 1, nearest first. Reads each
@@ -112,7 +134,7 @@ pub struct ProcessWalk {
 /// as does a repeated pid (a kernel-data cycle) or a 4097th ancestor
 /// before PID 1 (an unbounded walk): both fail closed naming the repeated
 /// or excess pid. PID 1 itself always terminates the walk.
-pub fn ancestors(pid: u32, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, IncompleteWalk> {
+pub fn ancestors(pid: Pid, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, IncompleteWalk> {
     let mut ancestors = Vec::new();
     let mut seen = HashSet::new();
     seen.insert(pid);
@@ -121,7 +143,7 @@ pub fn ancestors(pid: u32, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, I
         let parent = read
             .parent(child)
             .map_err(|_| IncompleteWalk { pid: child })?;
-        if parent == 0 {
+        if parent == Pid(0) {
             return Ok(ancestors);
         }
         if !seen.insert(parent) {
@@ -130,7 +152,7 @@ pub fn ancestors(pid: u32, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, I
         let euid = read
             .euid(parent)
             .map_err(|_| IncompleteWalk { pid: parent })?;
-        if parent == 1 {
+        if parent == Pid(1) {
             ancestors.push(ProcessInfo { pid: parent, euid });
             return Ok(ancestors);
         }
@@ -150,7 +172,7 @@ pub fn ancestors(pid: u32, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, I
 /// names its pid. The accepted socket peer's own arguments are never read:
 /// only strict ancestors are walked.
 pub fn walk_ancestors<F>(
-    peer_pid: u32,
+    peer_pid: Pid,
     read: &dyn ProcessRead,
     mut predicate: F,
 ) -> Result<ProcessWalk, IncompleteWalk>
@@ -181,13 +203,13 @@ where
 }
 
 #[cfg(target_os = "linux")]
-fn peer_pid_inner(stream: &UnixStream) -> Result<u32, PeerCredentialError> {
+fn peer_pid_inner(stream: &UnixStream) -> Result<Pid, PeerCredentialError> {
     use std::os::unix::io::AsFd as _;
     let credential =
         rustix::net::sockopt::socket_peercred(stream.as_fd()).map_err(std::io::Error::from)?;
     let pid = u32::try_from(credential.pid.as_raw_pid())
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "a negative peer pid"))?;
-    Ok(pid)
+    Ok(Pid(pid))
 }
 
 #[cfg(target_os = "macos")]
@@ -197,7 +219,7 @@ fn peer_pid_inner(stream: &UnixStream) -> Result<u32, PeerCredentialError> {
     unsafe_code,
     reason = "getsockopt LOCAL_PEERPID on a borrowed Unix socket: the fd is open, the option level and name are fixed, and the out buffer is a sized int"
 )]
-fn peer_pid_inner(stream: &UnixStream) -> Result<u32, PeerCredentialError> {
+fn peer_pid_inner(stream: &UnixStream) -> Result<Pid, PeerCredentialError> {
     use std::os::unix::io::AsRawFd as _;
     let mut peer: libc::c_int = 0;
     let mut length = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
@@ -217,24 +239,25 @@ fn peer_pid_inner(stream: &UnixStream) -> Result<u32, PeerCredentialError> {
         return Err(std::io::Error::last_os_error().into());
     }
     u32::try_from(peer)
+        .map(Pid)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "a negative peer pid"))
         .map_err(PeerCredentialError::Unavailable)
 }
 
 #[cfg(target_os = "linux")]
-fn proc_path(pid: u32, file: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from(format!("/proc/{pid}/{file}"))
+fn proc_path(pid: Pid, file: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("/proc/{}/{file}", pid.0))
 }
 
 #[cfg(target_os = "linux")]
-fn read_proc(pid: u32, file: &'static str) -> Result<Vec<u8>, ReadError> {
+fn read_proc(pid: Pid, file: &'static str) -> Result<Vec<u8>, ReadError> {
     std::fs::read(proc_path(pid, file)).map_err(|_| ReadError::Unreadable { pid, what: file })
 }
 
 /// The second value of the `Uid:` line of `/proc/<pid>/status`: the
 /// effective uid, after the real uid.
 #[cfg(target_os = "linux")]
-fn parse_status_euid(bytes: &[u8], pid: u32) -> Result<u32, ReadError> {
+fn parse_status_euid(bytes: &[u8], pid: Pid) -> Result<EffectiveUid, ReadError> {
     let text = std::str::from_utf8(bytes).map_err(|_| ReadError::Unreadable {
         pid,
         what: "status",
@@ -245,6 +268,7 @@ fn parse_status_euid(bytes: &[u8], pid: u32) -> Result<u32, ReadError> {
             let euid = fields
                 .nth(1)
                 .and_then(|field| field.parse::<u32>().ok())
+                .map(EffectiveUid)
                 .ok_or(ReadError::Unreadable {
                     pid,
                     what: "status",
@@ -261,7 +285,7 @@ fn parse_status_euid(bytes: &[u8], pid: u32) -> Result<u32, ReadError> {
 /// The parent pid after the last `)` of `/proc/<pid>/stat`: the command
 /// name itself may hold spaces and parentheses.
 #[cfg(target_os = "linux")]
-fn parse_stat_parent(bytes: &[u8], pid: u32) -> Result<u32, ReadError> {
+fn parse_stat_parent(bytes: &[u8], pid: Pid) -> Result<Pid, ReadError> {
     let text =
         std::str::from_utf8(bytes).map_err(|_| ReadError::Unreadable { pid, what: "stat" })?;
     let after = text
@@ -272,13 +296,14 @@ fn parse_stat_parent(bytes: &[u8], pid: u32) -> Result<u32, ReadError> {
         .split_whitespace()
         .nth(1)
         .and_then(|field| field.parse::<u32>().ok())
+        .map(Pid)
         .ok_or(ReadError::Unreadable { pid, what: "stat" })
 }
 
 /// The NUL-separated words of `/proc/<pid>/cmdline`: one trailing NUL ends
 /// the last word rather than starting an empty one.
 #[cfg(target_os = "linux")]
-fn parse_cmdline_argv(bytes: &[u8], pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
+fn parse_cmdline_argv(bytes: &[u8], pid: Pid) -> Result<Vec<Vec<u8>>, ReadError> {
     let mut words: Vec<Vec<u8>> = bytes
         .split(|byte| *byte == 0)
         .map(|word| word.to_vec())
@@ -296,17 +321,17 @@ fn parse_cmdline_argv(bytes: &[u8], pid: u32) -> Result<Vec<Vec<u8>>, ReadError>
 }
 
 #[cfg(target_os = "linux")]
-fn euid_of(pid: u32) -> Result<u32, ReadError> {
+fn euid_of(pid: Pid) -> Result<EffectiveUid, ReadError> {
     parse_status_euid(&read_proc(pid, "status")?, pid)
 }
 
 #[cfg(target_os = "linux")]
-fn parent_of(pid: u32) -> Result<u32, ReadError> {
+fn parent_of(pid: Pid) -> Result<Pid, ReadError> {
     parse_stat_parent(&read_proc(pid, "stat")?, pid)
 }
 
 #[cfg(target_os = "linux")]
-fn argv_of(pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
+fn argv_of(pid: Pid) -> Result<Vec<Vec<u8>>, ReadError> {
     parse_cmdline_argv(&read_proc(pid, "cmdline")?, pid)
 }
 
@@ -320,9 +345,9 @@ fn argv_of(pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
     unsafe_code,
     reason = "proc_pidinfo PROC_PIDTBSDINFO into a caller-sized proc_bsdinfo: the pid converts losslessly, the flavor and zero arg are fixed, and the buffer is exactly one structure the kernel fills or fails"
 )]
-fn bsdinfo_of(pid: u32) -> Result<libc::proc_bsdinfo, ReadError> {
+fn bsdinfo_of(pid: Pid) -> Result<libc::proc_bsdinfo, ReadError> {
     let pid_arg =
-        libc::c_int::try_from(pid).map_err(|_| ReadError::Unreadable { pid, what: "pid" })?;
+        libc::c_int::try_from(pid.0).map_err(|_| ReadError::Unreadable { pid, what: "pid" })?;
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
     // SAFETY: `pid_arg` is the wanted pid, the flavor and zero arg select
@@ -363,7 +388,7 @@ fn take_word(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
 /// padding zeros are skipped only before the first word, so a corrupt
 /// buffer fails instead of shifting words.
 #[cfg(any(target_os = "macos", test))]
-fn parse_procargs2(bytes: &[u8], pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
+fn parse_procargs2(bytes: &[u8], pid: Pid) -> Result<Vec<Vec<u8>>, ReadError> {
     let missing = || ReadError::Unreadable { pid, what: "argv" };
     let argc_at: [u8; 4] = bytes
         .get(..4)
@@ -401,14 +426,14 @@ fn parse_procargs2(bytes: &[u8], pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn sysctl_mib(pid: u32, ctl_kern: i32, query: i32) -> Result<[i32; 3], ReadError> {
-    let pid = i32::try_from(pid).map_err(|_| ReadError::Unreadable { pid, what: "pid" })?;
+fn sysctl_mib(pid: Pid, ctl_kern: i32, query: i32) -> Result<[i32; 3], ReadError> {
+    let pid = i32::try_from(pid.0).map_err(|_| ReadError::Unreadable { pid, what: "pid" })?;
     Ok([ctl_kern, query, pid])
 }
 
 #[cfg(any(target_os = "macos", test))]
 fn argv_from_sysctl(
-    pid: u32,
+    pid: Pid,
     mut mib: [i32; 3],
     mut query: impl FnMut(&mut [i32; 3], Option<&mut [u8]>, &mut usize) -> i32,
 ) -> Result<Vec<Vec<u8>>, ReadError> {
@@ -430,15 +455,21 @@ fn argv_from_sysctl(
 #[cfg(target_os = "macos")]
 // Mutants run on Linux, where this is not compiled; the macOS test job runs it.
 #[cfg_attr(false, mutants::skip)]
-fn euid_of(pid: u32) -> Result<u32, ReadError> {
-    Ok(bsdinfo_of(pid)?.pbi_uid)
+fn euid_of(pid: Pid) -> Result<EffectiveUid, ReadError> {
+    Ok(EffectiveUid(bsdinfo_of(pid)?.pbi_uid))
 }
 
 #[cfg(target_os = "macos")]
 // Mutants run on Linux, where this is not compiled; the macOS test job runs it.
 #[cfg_attr(false, mutants::skip)]
-fn parent_of(pid: u32) -> Result<u32, ReadError> {
-    Ok(bsdinfo_of(pid)?.pbi_ppid)
+fn parent_of(pid: Pid) -> Result<Pid, ReadError> {
+    let raw = bsdinfo_of(pid)?.pbi_ppid;
+    u32::try_from(raw)
+        .map(Pid)
+        .map_err(|_| ReadError::Unreadable {
+            pid,
+            what: "proc_bsdinfo",
+        })
 }
 
 #[cfg(target_os = "macos")]
@@ -448,7 +479,7 @@ fn parent_of(pid: u32) -> Result<u32, ReadError> {
     unsafe_code,
     reason = "sysctl KERN_PROCARGS2 with a fixed mib: the name pointer and count are fixed, the size probe passes no buffers, and the fill passes a buffer the first call sized"
 )]
-fn argv_of(pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
+fn argv_of(pid: Pid) -> Result<Vec<Vec<u8>>, ReadError> {
     let mib = sysctl_mib(pid, libc::CTL_KERN, libc::KERN_PROCARGS2)?;
     argv_from_sysctl(pid, mib, |mib, buffer, length| {
         let old = buffer.map_or(std::ptr::null_mut(), |bytes| {
