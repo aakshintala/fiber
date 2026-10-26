@@ -4,6 +4,9 @@
 //! itself, the next request replays the call with `input: {}` on the
 //! object-input protocols, and its failed result quotes the raw text, so
 //! the turn completes and a resumed session replays the same bytes.
+//!
+//! Complete ordered kinds and request counts below cite the doc that
+//! promises each order and count (`docs/testing.md`, "Event streams").
 
 #![allow(
     clippy::unwrap_used,
@@ -165,8 +168,10 @@ fn anthropic_hello() -> Response {
 }
 
 /// The event kinds of a turn whose tool call streams malformed input and
-/// fails before it starts: the argument delta arrives, but no
-/// `tool_call_started` ever does.
+/// fails before it starts (`docs/loop.md`, "One step" and "Tool calls that
+/// do not run"): the argument delta arrives before the request
+/// (`docs/events.md`, "`tool_call_arguments_delta`"), but no
+/// `tool_call_started` ever does (`docs/tools.md`, "Before a call runs").
 fn malformed_kinds() -> Vec<&'static str> {
     let mut kinds = support::read_kinds();
     kinds.retain(|kind| *kind != "assistant_message_delta");
@@ -186,8 +191,9 @@ fn malformed_kinds() -> Vec<&'static str> {
     kinds
 }
 
-/// The event kinds of a resumed turn answering in text: the reply streams
-/// `Hello.` as one delta.
+/// The event kinds of a resumed turn answering in text (`docs/events.md`,
+/// "Process boundary": no `session_started`, starting at `fiber_started`;
+/// `docs/loop.md`, "One step"): the reply streams `Hello.` as one delta.
 const RESUME_HELLO_KINDS: [&str; 12] = [
     "fiber_started",
     "extensions_loaded",
@@ -274,6 +280,10 @@ fn malformed_tool_arguments_replay_as_an_empty_object_with_the_raw_text_quoted()
     let run = setup.run(&["ask", "call it"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // Complete ordered kinds: the failed call's step precedes the text step
+    // (`docs/loop.md`, "One step" and "Ending a turn"), the delta precedes
+    // the request (`docs/events.md`, "`tool_call_arguments_delta`"), and no
+    // `tool_call_started` is written (`docs/tools.md`, "Before a call runs").
     assert_eq!(run.kinds(), malformed_kinds());
     // The log records the arguments as the model sent them.
     let requested = run.first("tool_call_requested");
@@ -299,8 +309,12 @@ fn malformed_tool_arguments_replay_as_an_empty_object_with_the_raw_text_quoted()
     assert!(!run.stdout.contains("tool_call_started"));
 
     // The second request replays the call with an empty object, paired
-    // with its failed result quoting the raw text.
+    // with its failed result quoting the raw text (`docs/model-routing.md`,
+    // "Anthropic messages wire facts"; `docs/tools.md`, "Before a call runs").
     let requests = server.requests();
+    // Two requests: one round-trip per step (`docs/loop.md`, "One step");
+    // the failed call continues the turn ("Tool calls that do not run"), so
+    // the text step sends the second request ("Ending a turn").
     assert_eq!(requests.len(), 2);
     let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
     assert_eq!(messages_tool_use(&body)["input"], json!({}));
@@ -313,8 +327,14 @@ fn malformed_tool_arguments_replay_as_an_empty_object_with_the_raw_text_quoted()
     let id = run.session_id().to_owned();
     let resumed = setup.run(&["ask", "--resume", &id, "again"]);
     assert_eq!(resumed.code, Some(0), "stderr: {}", resumed.stderr);
+    // Complete ordered kinds: a resumed process writes no `session_started`,
+    // starting at `fiber_started` (`docs/events.md`, "Process boundary"),
+    // and the resumed turn answers in one text step (`docs/loop.md`,
+    // "One step" and "Ending a turn").
     assert_eq!(resumed.kinds(), RESUME_HELLO_KINDS);
     let requests = server.requests();
+    // Three requests: the resume's one step sends one more (`docs/loop.md`,
+    // "One step"), replaying the same bytes ("What the model is sent").
     assert_eq!(requests.len(), 3);
     let body: Value = serde_json::from_slice(&requests[2].body).unwrap();
     assert_eq!(messages_tool_use(&body)["input"], json!({}));
@@ -473,7 +493,11 @@ fn converse_tool_result(body: &Value) -> Value {
 }
 
 /// The event kinds of a Converse turn whose tool call streams malformed
-/// input and fails before it starts.
+/// input and fails before it starts (`docs/loop.md`, "One step" and "Tool
+/// calls that do not run"; `docs/tools.md`, "Before a call runs"). The one
+/// `extension_exec` is the bedrock package reading the credential at startup
+/// (`docs/events.md`, "`extension_exec`"; `docs/model-routing.md`, "When a
+/// credential is missing or fails"), before any step.
 const CONVERSE_MALFORMED_KINDS: [&str; 22] = [
     "session_started",
     "fiber_started",
@@ -499,7 +523,9 @@ const CONVERSE_MALFORMED_KINDS: [&str; 22] = [
     "fiber_exited",
 ];
 
-/// The event kinds of a resumed Converse turn answering in text.
+/// The event kinds of a resumed Converse turn answering in text
+/// (`docs/events.md`, "Process boundary": no `session_started`, starting at
+/// `fiber_started`; `docs/loop.md`, "One step" and "Ending a turn").
 const CONVERSE_RESUME_KINDS: [&str; 13] = [
     "fiber_started",
     "extensions_loaded",
@@ -543,6 +569,10 @@ fn malformed_converse_tool_input_replays_as_an_empty_object_with_the_raw_text_qu
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // Complete ordered kinds: the failed call's step precedes the text step
+    // (`docs/loop.md`, "One step" and "Ending a turn"), the delta precedes
+    // the request (`docs/events.md`, "`tool_call_arguments_delta`"), and no
+    // `tool_call_started` is written (`docs/tools.md`, "Before a call runs").
     assert_eq!(run.kinds(), CONVERSE_MALFORMED_KINDS);
     // The log records the arguments as the model sent them.
     let requested = run.first("tool_call_requested");
@@ -565,8 +595,12 @@ fn malformed_converse_tool_input_replays_as_an_empty_object_with_the_raw_text_qu
     );
 
     // The second request replays the call with an empty object, paired
-    // with its failed result quoting the raw text.
+    // with its failed result quoting the raw text (`docs/model-routing.md`,
+    // "Bedrock Converse wire facts"; `docs/tools.md`, "Before a call runs").
     let requests = server.requests();
+    // Two requests: one round-trip per step (`docs/loop.md`, "One step");
+    // the failed call continues the turn ("Tool calls that do not run"), so
+    // the text step sends the second request ("Ending a turn").
     assert_eq!(requests.len(), 2);
     let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
     assert_eq!(converse_tool_use(&body)["toolUse"]["input"], json!({}));
@@ -584,8 +618,14 @@ fn malformed_converse_tool_input_replays_as_an_empty_object_with_the_raw_text_qu
     let id = run.session_id().to_owned();
     let resumed = setup.run_with_env(&["ask", "--resume", &id, "again"], &env);
     assert_eq!(resumed.code, Some(0), "stderr: {}", resumed.stderr);
+    // Complete ordered kinds: a resumed process writes no `session_started`,
+    // starting at `fiber_started` (`docs/events.md`, "Process boundary"),
+    // and the resumed turn answers in one text step (`docs/loop.md`,
+    // "One step" and "Ending a turn").
     assert_eq!(resumed.kinds(), CONVERSE_RESUME_KINDS);
     let requests = server.requests();
+    // Three requests: the resume's one step sends one more (`docs/loop.md`,
+    // "One step"), replaying the same bytes ("What the model is sent").
     assert_eq!(requests.len(), 3);
     let body: Value = serde_json::from_slice(&requests[2].body).unwrap();
     assert_eq!(converse_tool_use(&body)["toolUse"]["input"], json!({}));
