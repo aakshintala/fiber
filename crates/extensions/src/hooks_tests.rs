@@ -24,7 +24,7 @@ use contract::hook::{
     JobDelivery,
 };
 use contract::shapes::{DeclaredEffects, Process};
-use contract::tool::SpillFile;
+use contract::tool::{Bound, SpillFile};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Map, json};
@@ -3973,6 +3973,38 @@ fn process_transform_hook_rewrites_before_tool_arguments() {
     };
     assert_eq!(rewritten.get("path"), Some(&json!("rewritten")));
     assert_eq!(changed_by, vec!["fiber.test/proc"]);
+}
+
+#[test]
+fn process_tool_keep_uses_zero_for_an_omitted_or_null_side() {
+    let cases = [
+        (json!({"head": 7}), Bound { start: 7, end: 0 }),
+        (json!({"head": 7, "tail": null}), Bound { start: 7, end: 0 }),
+        (json!({"tail": 9}), Bound { start: 0, end: 9 }),
+        (json!({"head": null, "tail": 9}), Bound { start: 0, end: 9 }),
+    ];
+    for (keep, expected) in cases {
+        let dir = process_dir(json!({}));
+        let mut session = SessionExtensions::default();
+        let package = ProcessPackage::load_with_runtime(
+            ProcessPackageOptions {
+                dir: dir.path().to_path_buf(),
+                clock: FakeClock::new(),
+            },
+            session.runtime.clone(),
+        )
+        .unwrap();
+        let mut spec = process_tool_spec();
+        spec["keep"] = keep;
+        let outcome = process_register(&package, "c1", "fiber.tool", json!(["lookup", spec]));
+        assert!(matches!(outcome, ProcessOutcome::Accepted), "{outcome:?}");
+        let settled = ProcessFoldSet::from([("fiber.test/proc".to_owned(), "lookup".to_owned())]);
+        let mut chain = super::chain::Builder::default();
+        assert!(session.admit_process("fiber.test/proc", &package, &mut chain, &settled,));
+        let tools = session.tools();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1.bound(), expected);
+    }
 }
 
 #[test]

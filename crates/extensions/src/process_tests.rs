@@ -558,9 +558,27 @@ fn harness_registers_functions_and_data() {
         assert_eq!(reference.generation, 1);
     }
     assert!(!entry.runs.contains_key("quota"));
-    let without_quota = register(
+    let null_quota = register(
         &mut registry,
         "c10",
+        "fiber.harness",
+        json!(["n", {"timeout": 5000, "command": true, "line": true, "models": true, "quota": null}]),
+    );
+    assert!(
+        matches!(null_quota, RegisterOutcome::Accepted),
+        "{null_quota:?}"
+    );
+    assert!(
+        !registry
+            .harness()
+            .get("n")
+            .unwrap()
+            .runs
+            .contains_key("quota")
+    );
+    let without_quota = register(
+        &mut registry,
+        "c11",
         "fiber.harness",
         json!(["q", {"timeout": 5000, "command": true, "line": true, "models": true, "quota": true}]),
     );
@@ -973,6 +991,19 @@ fn hook_phase_must_suit_its_point() {
         &[],
         "fiber.hook",
         json!(["turn_end", spec]),
+    );
+}
+
+#[test]
+fn hook_rejects_a_phase_outside_the_documented_set() {
+    let mut spec = hook_spec();
+    spec["phase"] = json!("validate");
+    check_parity(
+        "fiber.hook(\"before_tool\", { phase = \"validate\", timeout = 5, on_failure = \"blocking\", run = function() end })",
+        json!({}),
+        &[],
+        "fiber.hook",
+        json!(["before_tool", spec]),
     );
 }
 
