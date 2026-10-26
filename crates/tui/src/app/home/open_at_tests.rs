@@ -4,6 +4,7 @@
 
 use super::super::{App, Effect};
 use crate::OpenAt;
+use crate::app::testkit::hello;
 use crate::home::{Level, Spot};
 use crate::link::Line;
 use contract::SessionId;
@@ -44,16 +45,6 @@ fn spent(app: &App) -> bool {
     app.home
         .as_ref()
         .is_some_and(|home| home.launch.open_at == OpenAt::Home)
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
 }
 
 /// A hub `command_accepted` for `id` with `result`.
