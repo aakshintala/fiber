@@ -167,7 +167,7 @@ pub(crate) fn ask_resume(
     // untouched, no lock is taken and nothing attaches.
     let dir = log::SessionDir::new(&sessions, &id);
     let recorded = recorded_worktree(dir.path());
-    if !recreatable(recorded.as_ref()) && !in_launch_project(dir.path(), &in_project) {
+    if resume_refused(recorded.as_ref(), dir.path(), &in_project) {
         let e = log::Error::NotFound(sessions.clone());
         return ask_failed(failed(e.code(), e));
     }
@@ -229,6 +229,19 @@ fn in_launch_project(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> bool {
         return false;
     };
     in_project(&started.workspace)
+}
+
+/// Whether `ask --resume` refuses the session as unknown: a missing worktree
+/// with a recorded repository is recreated first, so it resumes even outside
+/// the launch project; anything else must pass the launch-project predicate.
+/// The recreatable check runs first, so `in_project` is not called for a
+/// recreatable worktree.
+fn resume_refused(
+    recorded: Option<&Worktree>,
+    dir: &Path,
+    in_project: &dyn Fn(&str) -> bool,
+) -> bool {
+    !recreatable(recorded) && !in_launch_project(dir, in_project)
 }
 
 /// The internal session command with `--resume`: resumes the session `id`

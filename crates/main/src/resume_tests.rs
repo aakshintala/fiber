@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 
 use super::{
     chain_seed, enter, enter_worktree, finish, fork_seed, in_launch_project, recorded_worktree,
-    recreatable,
+    recreatable, resume_refused,
 };
 use crate::failed;
 
@@ -147,6 +147,63 @@ fn recreatable_needs_a_repository_and_a_missing_path() {
         "no recorded repository recreates nothing"
     );
     assert!(!recreatable(None), "no recorded worktree recreates nothing");
+}
+
+#[test]
+fn a_recreatable_worktree_is_allowed_outside_the_launch_project() {
+    let home = fakes::TempDir::new("main-resume-recreatable-outside");
+    // A missing path with a recorded repository recreates, so the launch
+    // predicate is never consulted even though it would refuse.
+    let recorded = Worktree {
+        path: home.path().join("wt").to_string_lossy().into_owned(),
+        branch: "fiber/x".to_owned(),
+        repository: Some("/repo/.git".to_owned()),
+    };
+    let seen = RefCell::new(Vec::new());
+    assert!(
+        !resume_refused(
+            Some(&recorded),
+            &home.path().join("sessions").join("s_0123456789abcdef"),
+            &|started: &str| {
+                seen.borrow_mut().push(started.to_owned());
+                false
+            }
+        ),
+        "a missing but recreatable worktree is allowed outside the launch project"
+    );
+    assert!(
+        seen.borrow().is_empty(),
+        "the launch predicate is not called for a recreatable worktree"
+    );
+    // The same outside predicate refuses a session with no recorded
+    // worktree, so the two cases stay distinguished.
+    let dir = home.path().join("sessions").join("s_0123456789abcde0");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("events.jsonl"),
+        json!({
+            "kind": "session_started",
+            "session_id": "s_0123456789abcde0",
+            "ts": 1,
+            "schema_version": 1,
+            "payload": {
+                "workspace": "/nowhere",
+                "variables": {"path": "/usr/bin:/bin", "names": [], "source": "inherited"},
+            },
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let seen = RefCell::new(Vec::new());
+    assert!(
+        resume_refused(None, &dir, &|started: &str| {
+            seen.borrow_mut().push(started.to_owned());
+            false
+        }),
+        "a non-recreatable session outside the launch project is refused"
+    );
+    assert_eq!(*seen.borrow(), vec!["/nowhere".to_owned()]);
 }
 
 #[test]

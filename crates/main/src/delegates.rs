@@ -663,6 +663,14 @@ fn steerer(home: &Path) -> jobs::Steer {
     )
 }
 
+/// The child's `events.jsonl` resolver over `sessions`: a plain join per
+/// id through [`log::SessionDir`], so `jobs` never joins a session path
+/// itself.
+fn events_for(sessions: &Path) -> jobs::EventsFor {
+    let sessions = sessions.to_path_buf();
+    Arc::new(move |id: &SessionId| log::SessionDir::new(&sessions, id).events())
+}
+
 /// Reads the point a fork continues from: the parent's own log holds the
 /// calling message, the call and the chain they ran inside
 /// (`docs/delegates.md`, "Forks"). `S` is the latest
@@ -674,14 +682,6 @@ fn steerer(home: &Path) -> jobs::Steer {
 /// with `invalid_arguments`, while a link the log does not hold keeps the
 /// point and the message's model instead of failing the parent. A failure
 /// that reads only the parent's own log is a `tool_error`.
-/// The child's `events.jsonl` resolver over `sessions`: a plain join per
-/// id through [`log::SessionDir`], so `jobs` never joins a session path
-/// itself.
-fn events_for(sessions: &Path) -> jobs::EventsFor {
-    let sessions = sessions.to_path_buf();
-    Arc::new(move |id: &SessionId| log::SessionDir::new(&sessions, id).events())
-}
-
 pub(crate) fn fork_point_reader(sessions: &Path, parent: &SessionId) -> jobs::ForkPoint {
     let dir = log::SessionDir::new(sessions, parent);
     let parent = parent.clone();
