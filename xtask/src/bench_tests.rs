@@ -4991,6 +4991,10 @@ fn remeasure_maps_timing_ids_to_their_rows() {
     // The attach row already takes 5 samples and nests samples by fixture,
     // and `session_list` has no row the selector skips: neither remeasures.
     assert_eq!(super::judge::remeasured_row("terminal_attach_ms"), None);
+    assert_eq!(
+        super::judge::remeasured_row("terminal_attach_pass_ms"),
+        None
+    );
     assert_eq!(super::judge::remeasured_row("session_list_ms"), None);
     assert_eq!(super::judge::remeasured_row("no_such_metric"), None);
 }
@@ -5129,6 +5133,21 @@ fn attach_and_session_list_breaches_name_no_remeasure_skip() {
     // its ceiling and base tolerance and nothing else breaches
     // (`docs/performance.md`, "When a budget is exceeded").
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert_eq!(out.remeasure_skip, None);
+    // A slow pass end stays advisory with no remeasure skip: the row
+    // never breaches, however slow the opening pass runs.
+    let (h, b) = attach_pair(&[31.0; 5], &[31.0; 5], &[30.5; 5], &[30.5; 5], SLOW_MODEL);
+    let h = with_metric(
+        h,
+        "terminal_attach_pass_ms",
+        Value::Array({
+            let mut entries = attach_entries("1 MiB", 1_050_231, &[5000.0; 5]);
+            entries.extend(attach_entries("10 MiB", 10_492_016, &[9000.0; 5]));
+            entries
+        }),
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     assert_eq!(out.remeasure_skip, None);
     // `session_list` has no row the selector skips: its breach fails with no skip.
     let mut h = with_counts(neutral_scalars("session_list_ms", head()), 5, 3);
