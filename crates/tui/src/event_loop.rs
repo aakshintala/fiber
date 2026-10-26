@@ -61,13 +61,15 @@ impl Error {
 /// workspace. `hover` is `launch.hover`: with it off, mouse mode 1003 is
 /// never sent and nothing is tinted under the pointer. `Ok(0)` on quit
 /// and `Ok(1)` when the terminal cannot be set up or drawn. The terminal
-/// is restored on every return.
+/// is restored on every return. Timed scopes write through `diag`, the
+/// process's diagnostic writer.
 pub fn run(
     tty: File,
     launch: Launch,
     connect: Connect,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
+    diag: Arc<log::diag::Diag>,
 ) -> Result<i32, Error> {
     run_with(
         tty,
@@ -77,6 +79,7 @@ pub fn run(
         clock,
         Reader::spawn,
         |builder, body| builder.spawn(body),
+        diag,
     )
 }
 
@@ -84,6 +87,10 @@ pub fn run(
 /// line's timer spawn as functions so tests fail them. A failed spawn
 /// returns the failure without entering the loop: the terminal is
 /// restored by the [`term::Guard`] drop on that return.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each seam fails on its own in tests"
+)]
 pub(crate) fn run_with(
     tty: File,
     launch: Launch,
@@ -95,6 +102,7 @@ pub(crate) fn run_with(
         std::thread::Builder,
         Box<dyn FnOnce() + Send + 'static>,
     ) -> std::io::Result<std::thread::JoinHandle<()>>,
+    diag: Arc<log::diag::Diag>,
 ) -> Result<i32, Error> {
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
@@ -251,6 +259,7 @@ pub(crate) fn run_with(
         tty,
         on_attach,
         clock,
+        timing: crate::timing::Timing::new(diag),
         files_out: tx.clone(),
         search: None,
         reader,
@@ -362,6 +371,12 @@ struct Loop<B: Backend> {
     tty: File,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
+    /// The diagnostic writer the timed scopes share.
+    #[allow(
+        dead_code,
+        reason = "stored for the timing scopes, which do not read it yet"
+    )]
+    timing: crate::timing::Timing,
     /// Where workers post their results.
     files_out: Sender<Input>,
     /// The `@` panel's search worker, while the panel is open.
@@ -1196,6 +1211,10 @@ mod focus_tests;
 #[cfg(test)]
 #[path = "loop_tests.rs"]
 mod loop_tests;
+
+#[cfg(test)]
+#[path = "timing_tests.rs"]
+mod timing_tests;
 
 #[cfg(test)]
 #[path = "lib_mouse_tests.rs"]

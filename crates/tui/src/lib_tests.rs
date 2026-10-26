@@ -178,6 +178,7 @@ impl<B: Backend> Loop<B> {
             tty,
             on_attach: Box::new(|_| {}),
             clock,
+            timing: crate::timing::Timing::info(),
             files_out,
             search: None,
             reader,
@@ -568,8 +569,15 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
-            let code = super::run(slave, launch(), once(hub, hello), Box::new(|_| {}), clock)
-                .unwrap_or_else(|error| panic!("run: {error}"));
+            let code = super::run(
+                slave,
+                launch(),
+                once(hub, hello),
+                Box::new(|_| {}),
+                clock,
+                crate::timing::info_diag(),
+            )
+            .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
@@ -645,6 +653,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
+                crate::timing::info_diag(),
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
@@ -709,6 +718,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
                 Box::new(|| Err(io::Error::other("refused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
+                crate::timing::info_diag(),
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
@@ -769,6 +779,7 @@ fn run_returns_one_when_the_tty_cannot_be_set_up() {
                 Box::new(|| Err(io::Error::other("unused"))),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
+                crate::timing::info_diag(),
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
@@ -809,6 +820,7 @@ fn failed_reader_start_returns_io_failed() {
                     )
                 },
                 |builder, body| builder.spawn(body),
+                crate::timing::info_diag(),
             );
             done.send(result).unwrap_or(());
         })
@@ -854,6 +866,7 @@ fn failed_tick_start_returns_io_failed() {
                 fakes::clock::FakeClock::new(),
                 super::Reader::spawn,
                 |_, _| Err(io::Error::other("no thread")),
+                crate::timing::info_diag(),
             );
             done.send(result).unwrap_or(());
         })
@@ -2019,6 +2032,7 @@ fn spawn_run_with_launch_at_height(
                 once(hub, hello),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
+                crate::timing::info_diag(),
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
@@ -2754,6 +2768,7 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
                 }),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
+                crate::timing::info_diag(),
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
@@ -2910,8 +2925,15 @@ fn with_no_model_the_picker_opens_at_start() {
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
-            let code = super::run(slave, launch, once(hub, hello()), Box::new(|_| {}), clock)
-                .unwrap_or_else(|error| panic!("run: {error}"));
+            let code = super::run(
+                slave,
+                launch,
+                once(hub, hello()),
+                Box::new(|_| {}),
+                clock,
+                crate::timing::info_diag(),
+            )
+            .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
@@ -2968,8 +2990,15 @@ fn with_a_model_home_opens_as_before() {
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
-            let code = super::run(slave, launch(), once(hub, hello()), Box::new(|_| {}), clock)
-                .unwrap_or_else(|error| panic!("run: {error}"));
+            let code = super::run(
+                slave,
+                launch(),
+                once(hub, hello()),
+                Box::new(|_| {}),
+                clock,
+                crate::timing::info_diag(),
+            )
+            .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
