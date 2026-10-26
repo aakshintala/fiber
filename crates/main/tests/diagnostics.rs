@@ -8,6 +8,7 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
+    clippy::indexing_slicing,
     reason = "test helpers; a failure is the test's"
 )]
 
