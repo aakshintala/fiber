@@ -26,6 +26,11 @@ pub(crate) struct Page {
     /// bytes that are not valid UTF-8 become U+FFFD while `next` and
     /// `size` stay byte counts.
     pub(crate) text: String,
+    /// The byte offset in the file where each line of `text` starts:
+    /// computed from the page's raw bytes before the lossy decode, plus
+    /// the request offset, so every entry is an absolute file offset and
+    /// invalid bytes cannot shift the mapping. At most 64 entries.
+    pub(crate) lines: Vec<u64>,
     /// The byte offset after the page, absent at the end of the file. It
     /// is never an offset the next call rejects.
     pub(crate) next: Option<u64>,
@@ -135,13 +140,30 @@ fn page_at(
     let Some(bytes) = region.get(..end_usize) else {
         return Err(too_big());
     };
+    let mut lines = Vec::new();
+    let mut start = offset;
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        lines.push(start);
+        let Some(len) = u64::try_from(line.len()).ok() else {
+            return Err(too_big());
+        };
+        let Some(at) = start.checked_add(len) else {
+            return Err(too_big());
+        };
+        start = at;
+    }
     let text = String::from_utf8_lossy(bytes).into_owned();
     let Some(edge) = offset.checked_add(end) else {
         return Err(too_big());
     };
     // `next` is absent exactly at the end of the file.
     let next = if edge == size { None } else { Some(edge) };
-    Ok(Page { text, next, size })
+    Ok(Page {
+        text,
+        lines,
+        next,
+        size,
+    })
 }
 
 /// The page's end when its first line runs past the byte cap: the cap
@@ -268,6 +290,7 @@ pub(crate) fn run(conn: &mut Conn, id: CommandId, args: ArtifactPageArgs) {
             id,
             Some(CommandResult::ArtifactPage {
                 text: found.text,
+                lines: found.lines,
                 next: found.next,
                 size: found.size,
             }),

@@ -786,7 +786,7 @@ impl App {
             Open::Logout(_) => return None,
             Open::Unavailable(title, command) => Frame {
                 title: (*title).to_owned(),
-                command,
+                command: (*command).to_owned(),
                 rows: Vec::new(),
                 list: List::default(),
                 below: vec![UNAVAILABLE.to_owned()],
