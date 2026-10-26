@@ -819,6 +819,127 @@ fn install_failure_replaces_the_offer_and_blocks_retry() {
     assert_eq!(notices(&app).len(), 1);
 }
 
+/// A worker connection loss that folds before the disconnect: the
+/// install's own failure replaces the offer, and the reconnect clears
+/// the link's condition while the failure stands, with no retry.
+#[test]
+fn install_connection_failure_survives_a_reconnect_without_retry() {
+    let mut app = home(Some(fake()));
+    app.on_line(hello());
+    let old = refuse_start(&mut app, "hi");
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(matches!(
+        app.take_hooks_job(),
+        Some(crate::install_worker::HooksJob::Install(_))
+    ));
+    // The worker's connection loss folds first: the install's own
+    // failure keeps the connection detail and names the install
+    // command, sending no start.
+    let lines = app.on_hooks_installed(
+        ticket,
+        Err(ConfigureError {
+            code: ErrorCode::ConnectionFailed,
+            message: "Connection lost while installing hooks.".to_owned(),
+        }),
+    );
+    assert!(lines.is_empty(), "a failure sends no start");
+    assert!(!app.hooks_offer_open());
+    // The dropped connection lands next, then the hub returns: the
+    // reconnect clears the link's condition, but the completed
+    // install failure stands, and no start goes out again.
+    app.disconnected();
+    app.on_line(hello());
+    assert_eq!(
+        notices(&app),
+        [(
+            "extension_failed".to_owned(),
+            "Connection lost while installing hooks. Run `fiber extension install hooks`."
+                .to_owned()
+        )]
+    );
+    assert!(
+        app.outbox
+            .pending
+            .values()
+            .all(|(kind, _)| *kind != Kind::Start),
+        "a reconnect replays no start"
+    );
+    assert!(!app.outbox.pending.contains_key(&old));
+    assert!(app.session().is_none());
+    // A late result for the settled ticket still changes nothing.
+    assert!(app.on_hooks_installed(ticket, Ok(())).is_empty());
+    assert!(app.session().is_none());
+}
+
+/// A worker clone failure that folds while the loop still reads the
+/// link up, then the dropped connection: the disconnect upgrades the
+/// completed install failure to the connection-loss text both orders
+/// share, so the failure names the install command with the
+/// connection lost and no start goes out again.
+#[test]
+fn disconnect_upgrades_a_worker_first_clone_failure() {
+    let mut app = home(Some(fake()));
+    app.on_line(hello());
+    let old = refuse_start(&mut app, "hi");
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(matches!(
+        app.take_hooks_job(),
+        Some(crate::install_worker::HooksJob::Install(_))
+    ));
+    // The worker's clone failure folds first, before the loop notices
+    // the dead link: the install's own failure replaces the offer,
+    // sending no start.
+    let lines = app.on_hooks_installed(
+        ticket,
+        Err(ConfigureError {
+            code: ErrorCode::FetchFailed,
+            message: "`git clone --quiet --depth 1 --branch v0.1.0 https://github.com/aakshintala/fiber /tmp/fiber-fetch-0/hooks` failed: ".to_owned(),
+        }),
+    );
+    assert!(lines.is_empty(), "a failure sends no start");
+    assert!(!app.hooks_offer_open());
+    // The dropped connection lands next: it upgrades the completed
+    // failure to the connection-loss text, dropping the clone's raw
+    // command line, and replays no start.
+    app.disconnected();
+    assert_eq!(
+        notices(&app),
+        [
+            (
+                "connection_failed".to_owned(),
+                "Connection lost.".to_owned()
+            ),
+            (
+                "extension_failed".to_owned(),
+                "Connection lost while installing hooks. Run `fiber extension install hooks`."
+                    .to_owned()
+            )
+        ]
+    );
+    assert!(
+        app.outbox
+            .pending
+            .values()
+            .all(|(kind, _)| *kind != Kind::Start),
+        "a disconnect replays no start"
+    );
+    assert!(!app.outbox.pending.contains_key(&old));
+    assert!(app.session().is_none());
+    // A late result for the settled ticket still changes nothing.
+    assert!(app.on_hooks_installed(ticket, Ok(())).is_empty());
+    assert!(app.session().is_none());
+}
+
 #[test]
 fn disconnect_while_installing_fails_without_retry() {
     let mut app = home(Some(fake()));
@@ -848,7 +969,7 @@ fn disconnect_while_installing_fails_without_retry() {
                 "Connection lost.".to_owned()
             ),
             (
-                "connection_failed".to_owned(),
+                "extension_failed".to_owned(),
                 "Connection lost while installing hooks. Run `fiber extension install hooks`."
                     .to_owned()
             )

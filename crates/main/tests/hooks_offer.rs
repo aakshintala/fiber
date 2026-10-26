@@ -308,9 +308,12 @@ fn removed_hooks_with_a_blocking_entry_offers_then_installs_and_starts() {
     run.wait_screen("the session reply", |grid| grid.contents.contains("done"));
     assert_installed(&setup);
     let started = started_payload(&setup, &id);
+    // The hub stores the canonical workspace: on macOS that resolves
+    // the fixture's `/var/...` temporary path to `/private/var/...`,
+    // so both sides canonicalize before the identity comparison.
     assert_eq!(
-        started["workspace"].as_str().unwrap(),
-        setup.workspace().to_str().unwrap()
+        fs::canonicalize(started["workspace"].as_str().unwrap()).unwrap(),
+        fs::canonicalize(setup.workspace()).unwrap()
     );
     assert!(fs::read_to_string(&marker).unwrap().contains("marked"));
     drop(server);
@@ -382,9 +385,12 @@ fn a_blocking_entry_from_overrides_only_offers_and_starts() {
     run.wait_screen("the session reply", |grid| grid.contents.contains("done"));
     assert_installed(&setup);
     let started = started_payload(&setup, &id);
+    // The hub stores the canonical workspace: on macOS that resolves
+    // the fixture's `/var/...` temporary path to `/private/var/...`,
+    // so both sides canonicalize before the identity comparison.
     assert_eq!(
-        started["workspace"].as_str().unwrap(),
-        setup.workspace().to_str().unwrap()
+        fs::canonicalize(started["workspace"].as_str().unwrap()).unwrap(),
+        fs::canonicalize(setup.workspace()).unwrap()
     );
     drop(server);
     finish(hub, guard, run);

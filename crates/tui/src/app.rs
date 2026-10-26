@@ -336,6 +336,11 @@ pub(crate) struct App {
     /// The offer's worker job the loop has not started yet, once: the
     /// names query the refusal queued, or the install Enter committed.
     hooks_job: Option<HooksJob>,
+    /// The completed hooks install failure's notice, while it stands:
+    /// its code and identity, so a dropped connection upgrades it to
+    /// the connection-loss text instead of leaving the worker's raw
+    /// error beside the link's own notice.
+    hooks_failed: Option<(String, String)>,
     /// The `/clear` `close` waiting for its answer: its id, so a lost
     /// link names it.
     clear_close: Option<String>,
@@ -409,6 +414,7 @@ impl App {
             clear_pending: None,
             hooks_ticket: 0,
             hooks_job: None,
+            hooks_failed: None,
             clear_close: None,
             motion: crate::motion::Motion::default(),
             frames: top::Frames::default(),

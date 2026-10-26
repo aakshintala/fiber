@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use super::super::super::{App, Effect, Kind, Phase, mint};
+use super::super::super::{App, Effect, Kind, NoticeLine, Phase, mint};
 use super::Prompt;
 use crate::configure::ConfigureError;
 use crate::home::HooksChoice;
@@ -29,6 +29,11 @@ use contract::ErrorCode;
 /// missing-extension error settles as today, with no offer.
 const MISSING_HOOKS: &str =
     "The `hooks` extension is not installed. Run `fiber extension install hooks`.";
+
+/// The install failure when the link drops mid-install: the connection
+/// detail, with the install-command guidance appended by
+/// `install_failure_text`.
+const INSTALL_CONNECTION_LOST: &str = "Connection lost while installing hooks.";
 
 /// The offer's stage: waiting on the names query, showing the names,
 /// or committed to the install. The install commits only from the
@@ -368,16 +373,30 @@ impl App {
     /// Closes the offer on an install that never runs — no seam, or no
     /// hub link for a remote — settling the refused start silently and
     /// presenting the failure naming the install command instead.
+    /// A connection loss the worker reports is the install's own
+    /// failure, not the link's condition: it folds as the
+    /// `extension_failed` event, so the reconnect's clearing of
+    /// `connection_failed` notices never erases it, while its text
+    /// keeps the connection detail and the install-command guidance.
+    /// Either way no start is retried. The pushed notice is stashed
+    /// while it stands, so a dropped connection can upgrade a raw
+    /// worker error to the connection-loss text.
     fn fail_hooks_install(&mut self, error: ConfigureError) {
         if let Some(state) = self.take_hooks_offer() {
-            let code = crate::format::code(&error.code);
-            let code = if code.is_empty() {
-                "io_failed".to_owned()
+            let code = if matches!(error.code, ErrorCode::ConnectionFailed) {
+                "extension_failed".to_owned()
             } else {
-                code
+                let code = crate::format::code(&error.code);
+                if code.is_empty() {
+                    "io_failed".to_owned()
+                } else {
+                    code
+                }
             };
             self.settle_hooks_start(&state);
-            self.push_notice(&code, install_failure_text(&error));
+            let text = install_failure_text(&error);
+            self.hooks_failed = Some((code.clone(), text.clone()));
+            self.push_notice(&code, text);
         }
     }
 
@@ -489,29 +508,57 @@ impl App {
     /// with the connection lost; a refused start still waiting settles
     /// silently when Attached, and through the existing unanswered
     /// settle on reconnect when Starting. A reconnect never replays
-    /// the start.
+    /// the start. When the worker already folded its failure, the
+    /// disconnect upgrades that notice to the same connection-loss
+    /// text instead of leaving the worker's raw error beside the
+    /// link's own notice.
     pub(crate) fn hooks_disconnected(&mut self) {
-        let Some(state) = self.take_hooks_offer() else {
-            return;
-        };
-        self.hooks_job = None;
-        if state.installing() {
+        if self.hooks_offer_installing() {
+            self.hooks_job = None;
             let error = ConfigureError {
                 code: ErrorCode::ConnectionFailed,
-                message: "Connection lost while installing hooks.".to_owned(),
+                message: INSTALL_CONNECTION_LOST.to_owned(),
             };
-            self.settle_hooks_start(&state);
-            self.push_notice(
-                &crate::format::code(&error.code),
-                install_failure_text(&error),
-            );
-        } else if self
-            .clear_pending
-            .as_ref()
-            .is_some_and(|pending| pending.command_id == state.refused_id)
-        {
-            self.settle_hooks_start(&state);
+            self.fail_hooks_install(error);
+        } else if let Some(state) = self.take_hooks_offer() {
+            self.hooks_job = None;
+            if self
+                .clear_pending
+                .as_ref()
+                .is_some_and(|pending| pending.command_id == state.refused_id)
+            {
+                self.settle_hooks_start(&state);
+            }
         }
+        self.upgrade_hooks_failure();
+    }
+
+    /// Upgrades the stashed install failure to the connection-loss text
+    /// while it still stands: a worker result that folded before the
+    /// loop noticed the dead link names the worker's raw error, while
+    /// the disconnect both orders share names the install command with
+    /// the connection lost. A faded or dismissed failure stays gone;
+    /// either way the stash clears, so one failure upgrades at most
+    /// once and no start is retried.
+    fn upgrade_hooks_failure(&mut self) {
+        let Some((code, identity)) = self.hooks_failed.take() else {
+            return;
+        };
+        let standing = self.notices().into_iter().any(|line| {
+            matches!(
+                line,
+                NoticeLine::Notice { code: c, text: t, .. } if c == code && t == identity
+            )
+        });
+        if !standing {
+            return;
+        }
+        self.notices.clear_code(&code, &identity);
+        let error = ConfigureError {
+            code: ErrorCode::ConnectionFailed,
+            message: INSTALL_CONNECTION_LOST.to_owned(),
+        };
+        self.push_notice("extension_failed", install_failure_text(&error));
     }
 }
 
