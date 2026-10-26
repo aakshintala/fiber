@@ -1178,45 +1178,45 @@ impl<B: Backend> Loop<B> {
 mod tests;
 
 #[cfg(test)]
-#[path = "lib_login_tests.rs"]
+#[path = "event_loop_login_tests.rs"]
 mod login_tests;
 
 #[cfg(test)]
-#[path = "lib_install_tests.rs"]
+#[path = "event_loop_install_tests.rs"]
 mod install_tests;
 
 #[cfg(test)]
-#[path = "lib_image_tests.rs"]
+#[path = "event_loop_image_tests.rs"]
 mod image_tests;
 
 #[cfg(test)]
-#[path = "lib_focus_tests.rs"]
+#[path = "event_loop_focus_tests.rs"]
 mod focus_tests;
 
 #[cfg(test)]
-#[path = "loop_tests.rs"]
+#[path = "event_loop_loop_tests.rs"]
 mod loop_tests;
 
 #[cfg(test)]
-#[path = "lib_mouse_tests.rs"]
+#[path = "event_loop_mouse_tests.rs"]
 mod mouse_tests;
 
 #[cfg(test)]
-#[path = "lib_delegates_tests.rs"]
+#[path = "event_loop_delegates_tests.rs"]
 mod delegates_tests;
 #[cfg(test)]
-#[path = "lib_panel_tests.rs"]
+#[path = "event_loop_panel_tests.rs"]
 mod panel_tests;
 #[cfg(test)]
-#[path = "lib_rail_tests.rs"]
+#[path = "event_loop_rail_tests.rs"]
 mod rail_tests;
 
 #[cfg(test)]
-#[path = "lib_drag_tests.rs"]
+#[path = "event_loop_drag_tests.rs"]
 mod drag_tests;
 
 #[cfg(test)]
-#[path = "lib_attention_tests.rs"]
+#[path = "event_loop_attention_tests.rs"]
 mod attention_tests;
 
 #[cfg(test)]
@@ -1224,11 +1224,11 @@ mod attention_tests;
 mod look_tests;
 
 #[cfg(test)]
-#[path = "lib_settings_tests.rs"]
+#[path = "event_loop_settings_tests.rs"]
 mod settings_tests;
 
 #[cfg(test)]
-#[path = "lib_paste_tests.rs"]
+#[path = "event_loop_paste_tests.rs"]
 mod paste_tests;
 
 #[cfg(test)]
