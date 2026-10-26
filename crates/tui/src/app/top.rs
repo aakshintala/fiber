@@ -17,6 +17,10 @@ use std::cell::RefCell;
 pub(crate) enum Surface {
     /// The clear question, over every other surface.
     Clear,
+    /// The hooks install offer, over the questions behind it: it takes
+    /// every key while open, ahead of the delete question and the input
+    /// box.
+    HooksOffer,
     /// The quit question, over every other surface.
     Quit,
     /// The accepted-import report.
@@ -75,6 +79,7 @@ impl Surface {
         matches!(
             self,
             Surface::Clear
+                | Surface::HooksOffer
                 | Surface::Quit
                 | Surface::Report
                 | Surface::Keymap
@@ -161,6 +166,7 @@ impl App {
     pub(crate) fn top_surfaces(&self) -> Vec<Surface> {
         let open = [
             (Surface::Clear, self.clear_open()),
+            (Surface::HooksOffer, self.hooks_offer_open()),
             (Surface::Quit, self.quit_open()),
             (Surface::Report, self.import_report_open()),
             (Surface::KeysScreen, self.keys_screen_open()),
@@ -197,10 +203,12 @@ impl App {
     /// the order they draw: [`Self::top_surfaces`] from the bottom up, so
     /// the one on top draws last, as far as they are open.
     pub(crate) fn framed_surfaces(&self) -> impl Iterator<Item = Surface> {
-        self.top_surfaces()
-            .into_iter()
-            .rev()
-            .filter(|surface| matches!(surface, Surface::Report | Surface::Quit | Surface::Clear))
+        self.top_surfaces().into_iter().rev().filter(|surface| {
+            matches!(
+                surface,
+                Surface::Report | Surface::Quit | Surface::Clear | Surface::HooksOffer
+            )
+        })
     }
 
     /// The surface on top: the head of [`Self::top_surfaces`].
@@ -225,6 +233,7 @@ impl App {
     fn context_of(&self, surface: Surface) -> Context {
         match surface {
             Surface::Clear
+            | Surface::HooksOffer
             | Surface::Quit
             | Surface::Report
             | Surface::Keymap
@@ -270,6 +279,7 @@ impl App {
         }
         match surface {
             Surface::Clear => self.clear_key(key),
+            Surface::HooksOffer => self.hooks_offer_key(key),
             Surface::Quit => self.quit_key(key),
             Surface::Report => self.report_key(key),
             // The screen takes its strokes in `on_press`, and the

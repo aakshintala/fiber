@@ -93,7 +93,15 @@ impl App {
         if !top.closes_on_outside_click() {
             return None;
         }
-        let slab = self.frames().slab_of(top)?;
+        let slab = match self.frames().slab_of(top) {
+            Some(slab) => slab,
+            // The offer's names query draws no frame: while it runs the
+            // press lands nowhere rather than reaching the rows beneath.
+            None if top == Surface::HooksOffer && self.hooks_offer_names().is_none() => {
+                return Some(Effect::None);
+            }
+            None => return None,
+        };
         if slab.contains(Position::new(mouse.col, mouse.row)) {
             return None;
         }
@@ -244,12 +252,25 @@ impl App {
         if order.contains(&Surface::ReviewerSetup) {
             return;
         }
-        // The quit and clear questions and the notice overlay have
-        // nothing to scroll, and their frames cover the rows beneath:
-        // the wheel over a frame is theirs and moves nothing.
-        if [Surface::Quit, Surface::Clear, Surface::Notice]
-            .into_iter()
-            .any(|frame| order.contains(&frame) && crate::view::frame_of(self, frame).contains(at))
+        // The hooks offer consumes the wheel while it is on top: its
+        // names query draws no frame, so the frame-only guard below
+        // would let the wheel reach the home list, the panel or the
+        // rail.
+        if self.top_surface() == Surface::HooksOffer {
+            return;
+        }
+        // The quit, hooks offer and clear questions and the notice
+        // overlay have nothing to scroll, and their frames cover the
+        // rows beneath: the wheel over a frame is theirs and moves
+        // nothing.
+        if [
+            Surface::Quit,
+            Surface::HooksOffer,
+            Surface::Clear,
+            Surface::Notice,
+        ]
+        .into_iter()
+        .any(|frame| order.contains(&frame) && crate::view::frame_of(self, frame).contains(at))
         {
             return;
         }

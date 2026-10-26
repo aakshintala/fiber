@@ -11,11 +11,11 @@ mod support;
 mod timing_tests;
 mod tool;
 
+pub use delegate::EventsFor;
 pub use delegate::{
-    CreateWorktree, CreatedWorktree, DelegateFork, DelegateMessage, DelegateModels,
-    DelegateSessions, DelegateSpawn, DelegateWiring, EndWorktree, FinishWorktree, ForkPoint,
-    Forking, Fresh, LastSeq, Launch, Launched, Resolve, Start, Steer, Steered, Watch, Watched,
-    WorktreeGuard,
+    CreateWorktree, CreatedWorktree, DelegateFork, DelegateMessage, DelegateModels, DelegateSpawn,
+    DelegateWiring, EndWorktree, FinishWorktree, ForkPoint, Forking, Fresh, LastSeq, Launch,
+    Launched, Resolve, Start, Steer, Steered, Watch, Watched, WorktreeGuard,
 };
 pub use error::JobsError;
 pub use registry::Registry;

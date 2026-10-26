@@ -215,6 +215,24 @@ pub(crate) enum Input {
         /// What the install put in place, or why it failed.
         result: Result<ProviderInstall, ConfigureError>,
     },
+    /// A hooks names query for the install offer answered for `ticket`:
+    /// the sorted blocking names, or why they could not be read. A
+    /// result for a ticket no longer waiting changes nothing.
+    HooksOfferNames {
+        /// The offer waiting on the names.
+        ticket: u64,
+        /// The blocking hook names, or the query's error.
+        result: Result<Vec<String>, ConfigureError>,
+    },
+    /// A hooks install for the install offer finished for `ticket`:
+    /// nothing, or why it failed. A result for a ticket no longer
+    /// waiting changes nothing.
+    HooksInstalled {
+        /// The offer waiting on the install.
+        ticket: u64,
+        /// Nothing, or the install's error.
+        result: Result<(), ConfigureError>,
+    },
     /// The working line's timer passed: the frame the tick armed drew,
     /// and the next moving frame arms it again (`docs/tui.md`, "The
     /// working line").

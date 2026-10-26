@@ -153,8 +153,9 @@ impl Delegates {
             registry: Arc::clone(&self.jobs),
             parent: self.parent.clone(),
             workspace: self.workspace.clone(),
-            sessions: Arc::new(move |workspace| {
-                log::sessions_dir(&home, &doors::project(workspace))
+            events_for: Arc::new(move |workspace, id| {
+                let sessions = log::sessions_dir(&home, &doors::project(workspace));
+                log::SessionDir::new(&sessions, id).events()
             }),
             clock: Arc::clone(&self.clock),
             // A stop waits for the delegate's own shutdown before SIGKILL,
@@ -740,14 +741,14 @@ fn steerer(home: &Path) -> jobs::Steer {
 /// point and the message's model instead of failing the parent. A failure
 /// that reads only the parent's own log is a `tool_error`.
 pub(crate) fn fork_point_reader(sessions: &Path, parent: &SessionId) -> jobs::ForkPoint {
-    let dir = sessions.join(&parent.0);
+    let dir = log::SessionDir::new(sessions, parent);
     let parent = parent.clone();
     Arc::new(move |action: Option<&ActionId>| read_fork_point(&dir, &parent, action))
 }
 
 /// The reader's read: the parent's own log to the point and model above.
 fn read_fork_point(
-    dir: &Path,
+    dir: &log::SessionDir,
     parent: &SessionId,
     action: Option<&ActionId>,
 ) -> Result<jobs::Forking, Failure> {
@@ -758,11 +759,11 @@ fn read_fork_point(
             ErrorCode::ToolError,
             format!(
                 "Cannot fork from the session log `{}`: {detail}",
-                dir.display()
+                dir.path().display()
             ),
         )
     };
-    let lines = log::read(dir).map_err(|error| unreadable(error.to_string()))?;
+    let lines = log::read(dir.path()).map_err(|error| unreadable(error.to_string()))?;
     // The calling message and its `seq`, from the call's own
     // `tool_call_requested` or from the log's latest message.
     let calling = match action {
@@ -855,7 +856,7 @@ fn read_fork_point(
 fn last_seq_reader(sessions: &Path) -> jobs::LastSeq {
     let sessions = sessions.to_path_buf();
     Arc::new(move |id| {
-        log::last_seq(&sessions.join(&id.0))
+        log::last_seq(log::SessionDir::new(&sessions, id).path())
             .map(|seq| seq.map(|seq| seq.0))
             .map_err(|error| error.to_string())
     })

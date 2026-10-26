@@ -463,10 +463,6 @@ const SESSION_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/hub/src/feed.rs", "fn how_left", "join:events.jsonl", "#1725"),
     source_allowance!("crates/hub/src/resume.rs", "fn find_log", "join:sessions", "#1725"),
     source_allowance!("crates/hub/src/resume.rs", "fn find_log", "join:events.jsonl", "#1725"),
-    source_allowance!("crates/jobs/src/delegate.rs", "fn start", "join:events.jsonl", "#1725"),
-    source_allowance!("crates/main/src/resume.rs", "fn resumed_session", "join:events.jsonl", "#1725"),
-    source_allowance!("crates/main/src/resume.rs", "fn is_delegate_fork", "join:events.jsonl", "#2507"),
-    source_allowance!("crates/main/src/session_command.rs", "fn run_new", "join:events.jsonl", "#1725"),
 ];
 #[rustfmt::skip]
 const HOME_ALLOWANCES: &[SourceAllowance] = &[

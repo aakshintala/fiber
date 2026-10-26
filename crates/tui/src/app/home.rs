@@ -363,6 +363,7 @@ impl App {
             | Some(Prompt::CloseAll { .. })
             | Some(Prompt::Stop { .. })
             | Some(Prompt::Clear { .. })
+            | Some(Prompt::HooksOffer(_))
             | None => (None, 0),
         };
         // The foot names each action by its first bound key, leaving
@@ -965,6 +966,7 @@ impl App {
                             | Prompt::CloseAll { .. }
                             | Prompt::Stop { .. }
                             | Prompt::Clear { .. }
+                            | Prompt::HooksOffer(_)
                     )
                 })
             })
@@ -1078,6 +1080,14 @@ impl App {
         if let Spot::Clear(choice) = spot {
             return self.clear_click(choice);
         }
+        if let Spot::HooksOffer(choice) = spot {
+            return self.hooks_offer_click(choice);
+        }
+        // The offer owns the foot while open: no row, chip, picker or
+        // delete click reaches past it, in either phase.
+        if self.hooks_offer_open() {
+            return Effect::None;
+        }
         match spot {
             Spot::Entry(key) => self.open_row(key),
             Spot::Stop(key) => self.stop_or_ask(key),
@@ -1125,6 +1135,7 @@ impl App {
                 self.close_import_prompt();
                 Effect::None
             }
+            Spot::HooksOffer(_) => Effect::None,
             Spot::Question => Effect::None,
             Spot::Start(key) => {
                 let workspace = self
@@ -1152,6 +1163,12 @@ impl App {
     /// between chips, every other edit returns to the entry bar. With
     /// the box focused the draft keeps the key.
     pub(super) fn home_edit(&mut self, edit: &Edit) -> Option<Effect> {
+        // The hooks install offer consumes every edit while open, on
+        // home or over the attached old session: a paste over a
+        // clear-staged offer must not reach the draft behind it.
+        if self.hooks_offer_open() {
+            return Some(Effect::None);
+        }
         if !self.on_home() {
             return None;
         }
@@ -1427,7 +1444,8 @@ impl App {
             | Spot::Keep
             | Spot::Question
             | Spot::Quit(_)
-            | Spot::Clear(_) => None,
+            | Spot::Clear(_)
+            | Spot::HooksOffer(_) => None,
         }
     }
 

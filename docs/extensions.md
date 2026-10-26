@@ -1314,6 +1314,8 @@ extension. An entry that is not an object fails the session with
 several entries are malformed, the error names the first in sorted key
 order.
 
+The terminal asks in an overlay (docs/tui.md, "Look", "Overlays"): the title "Install hooks?", then "Configuration declares blocking hooks: <names>." dim, the names sorted and comma-separated, then two choices, "Enter" to install and start and "Esc" to cancel, with Enter's focused. The footer reads "click a choice". Enter runs the install `fiber extension install hooks`, then starts the session. When the install fails, no session starts and the overlay is replaced by the failure, naming `fiber extension install hooks`. When the terminal cannot read the declarations, it shows the refusal without the offer, and no session starts. Esc, the ✕ and a click outside start no session, run no hook point, and show the message the terminal shows without the offer.
+
 The declarations are the extension's settings (`docs/configuration.md`,
 "Extension settings"), under `hooks`, one entry per name, so each layer adds
 entries instead of replacing the list:

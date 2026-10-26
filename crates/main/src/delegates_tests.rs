@@ -964,14 +964,15 @@ fn the_steer_seam_maps_a_refused_commit_to_withheld() {
 /// Writes `lines` as the log `<sessions>/<sid>/events.jsonl`, each with a
 /// trailing newline.
 fn write_log(sessions: &std::path::Path, sid: &str, lines: &[serde_json::Value]) {
-    let dir = sessions.join(sid);
-    std::fs::create_dir_all(&dir).unwrap();
+    let id = SessionId(sid.to_owned());
+    let dir = log::SessionDir::new(sessions, &id);
+    std::fs::create_dir_all(dir.path()).unwrap();
     let mut text = String::new();
     for line in lines {
         text.push_str(&line.to_string());
         text.push('\n');
     }
-    std::fs::write(dir.join("events.jsonl"), text).unwrap();
+    std::fs::write(dir.events(), text).unwrap();
 }
 
 /// One envelope line carrying `seq`, in the served shape.
@@ -2022,7 +2023,7 @@ fn no_calling_action_reads_the_latest_message_in_the_log() {
 }
 
 /// The fork tool shares the spawn tool's wiring: depth, registry,
-/// parent, workspace, sessions, clock, bound, cap, launch and watch.
+/// parent, workspace, log resolver, clock, bound, cap, launch and watch.
 /// It carries a point reader, not a model resolver.
 #[test]
 fn the_fork_tool_shares_the_spawn_tools_wiring() {
@@ -2038,9 +2039,10 @@ fn the_fork_tool_shares_the_spawn_tools_wiring() {
     ));
     assert_eq!(forked.wiring.parent, spawned.wiring.parent);
     assert_eq!(forked.wiring.workspace, spawned.wiring.workspace);
+    let child = SessionId("s_child".into());
     assert_eq!(
-        (forked.wiring.sessions)(&forked.wiring.workspace),
-        (spawned.wiring.sessions)(&spawned.wiring.workspace)
+        (forked.wiring.events_for)(&forked.wiring.workspace, &child),
+        (spawned.wiring.events_for)(&spawned.wiring.workspace, &child)
     );
     assert!(Arc::ptr_eq(&forked.wiring.clock, &spawned.wiring.clock));
     assert_eq!(forked.wiring.bound, spawned.wiring.bound);

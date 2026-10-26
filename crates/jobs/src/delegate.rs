@@ -40,8 +40,8 @@ use crate::registry::{Registry, mint_job_id};
 /// is recorded; the runner thread owns everything after that.
 ///
 /// The fields are wired by `main`: delegates of `parent` share `workspace`
-/// and log under `sessions`; `bound` is the stop bound and `cap` the
-/// output cap.
+/// and each child's log resolves through `events_for`; `bound` is the stop
+/// bound and `cap` the output cap.
 pub struct DelegateSpawn {
     /// The shared launch and lifecycle wiring.
     pub wiring: DelegateWiring,
@@ -60,8 +60,8 @@ pub struct DelegateWiring {
     pub parent: SessionId,
     /// The parent's workspace, which the delegate shares.
     pub workspace: PathBuf,
-    /// Resolves the child's sessions directory from its selected workspace.
-    pub sessions: DelegateSessions,
+    /// Resolves the child's `events.jsonl` from its selected workspace and id.
+    pub events_for: EventsFor,
     /// The session clock.
     pub clock: Arc<dyn contract::clock::Clock>,
     /// How long a stop waits before SIGKILL.
@@ -87,8 +87,8 @@ pub struct DelegateWiring {
 /// admission; the caller wires the reader.
 ///
 /// The fields are wired by `main`: like a spawn's, delegates of `parent`
-/// share `workspace` and log under `sessions`; `bound` is the stop bound
-/// and `cap` the output cap.
+/// share `workspace`, and each child's log resolves through `events_for`;
+/// `bound` is the stop bound and `cap` the output cap.
 pub struct DelegateFork {
     /// The shared launch and lifecycle wiring.
     pub wiring: DelegateWiring,
@@ -98,8 +98,9 @@ pub struct DelegateFork {
     pub point: ForkPoint,
 }
 
-/// Locates child logs using the selected workspace's project identity.
-pub type DelegateSessions = Arc<dyn Fn(&Path) -> PathBuf + Send + Sync>;
+/// Resolves a child's `events.jsonl` using the selected workspace's project
+/// identity, without making `jobs` depend on the session directory layout.
+pub type EventsFor = Arc<dyn Fn(&Path, &SessionId) -> PathBuf + Send + Sync>;
 
 /// Reads the point a fork continues from: the caller wires the reader,
 /// and the fork only calls it. The
@@ -504,9 +505,7 @@ impl DelegateWiring {
                     bind(&job_id);
                 }
                 let session_id = run::mint_session_id();
-                let output_path = (self.sessions)(&workspace)
-                    .join(&session_id.0)
-                    .join("events.jsonl")
+                let output_path = (self.events_for)(&workspace, &session_id)
                     .to_string_lossy()
                     .into_owned();
                 let created = if isolated {
@@ -723,7 +722,7 @@ pub(crate) mod test_rig {
                 registry: Arc::clone(&self.registry),
                 parent: contract::SessionId("s_parent".into()),
                 workspace: self.sessions.parent().unwrap().to_path_buf(),
-                sessions: Arc::new(move |_| sessions.clone()),
+                events_for: Arc::new(move |_, id| sessions.join(&id.0).join("events.jsonl")),
                 clock: Arc::clone(&self.clock) as Arc<dyn contract::clock::Clock>,
                 bound: Duration::from_secs(5),
                 cap: 1024,

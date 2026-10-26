@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 
 use super::{
     chain_seed, enter, enter_worktree, finish, fork_seed, in_launch_project, recorded_worktree,
-    recreatable,
+    recreatable, resume_refused,
 };
 use crate::failed;
 
@@ -147,6 +147,63 @@ fn recreatable_needs_a_repository_and_a_missing_path() {
         "no recorded repository recreates nothing"
     );
     assert!(!recreatable(None), "no recorded worktree recreates nothing");
+}
+
+#[test]
+fn a_recreatable_worktree_is_allowed_outside_the_launch_project() {
+    let home = fakes::TempDir::new("main-resume-recreatable-outside");
+    // A missing path with a recorded repository recreates, so the launch
+    // predicate is never consulted even though it would refuse. The session
+    // log is valid, so `in_launch_project` would reach the predicate if the
+    // recreatable check did not short-circuit first.
+    let recorded = Worktree {
+        path: home.path().join("wt").to_string_lossy().into_owned(),
+        branch: "fiber/x".to_owned(),
+        repository: Some("/repo/.git".to_owned()),
+    };
+    let dir = home.path().join("sessions").join("s_0123456789abcdef");
+    let _log = session_with(&dir, Some(recorded.clone()));
+    let seen = RefCell::new(Vec::new());
+    assert!(
+        !resume_refused(Some(&recorded), &dir, &|started: &str| {
+            seen.borrow_mut().push(started.to_owned());
+            false
+        }),
+        "a missing but recreatable worktree is allowed outside the launch project"
+    );
+    assert!(
+        seen.borrow().is_empty(),
+        "the launch predicate is not called for a recreatable worktree"
+    );
+    // The same outside predicate refuses a session with no recorded
+    // worktree, so the two cases stay distinguished.
+    let dir = home.path().join("sessions").join("s_0123456789abcde0");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("events.jsonl"),
+        json!({
+            "kind": "session_started",
+            "session_id": "s_0123456789abcde0",
+            "ts": 1,
+            "schema_version": 1,
+            "payload": {
+                "workspace": "/nowhere",
+                "variables": {"path": "/usr/bin:/bin", "names": [], "source": "inherited"},
+            },
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let seen = RefCell::new(Vec::new());
+    assert!(
+        resume_refused(None, &dir, &|started: &str| {
+            seen.borrow_mut().push(started.to_owned());
+            false
+        }),
+        "a non-recreatable session outside the launch project is refused"
+    );
+    assert_eq!(*seen.borrow(), vec!["/nowhere".to_owned()]);
 }
 
 #[test]
@@ -449,10 +506,14 @@ fn fork_boundaries_fold_latest_at_the_point() {
     // The resume path classifies the boundary by the following child: a
     // child carrying `parent` folds `Latest` as of the point, excluding
     // the write after it.
-    let seed = chain_seed(&log::history(&sessions.join(&child.0)).unwrap()).unwrap();
+    let seed = chain_seed(&sessions, &log::history(&sessions.join(&child.0)).unwrap()).unwrap();
     assert_eq!(seed_goal(&seed), json!("at point"));
     // The fresh-fork path folds the bounded terminal as a fork too.
-    let seed = fork_seed(&log::history_to(&sessions.join(&parent.0), point).unwrap()).unwrap();
+    let seed = fork_seed(
+        &sessions,
+        &log::history_to(&sessions.join(&parent.0), point).unwrap(),
+    )
+    .unwrap();
     assert_eq!(seed_goal(&seed), json!("at point"));
 }
 
@@ -463,11 +524,15 @@ fn rewind_boundaries_fold_latest_at_the_end() {
     let child = continuing_child(&sessions, "s_1111111111111111", &parent, point, false);
     // A child without `parent` is a rewind: it keeps today's full-log
     // fold, reading `Latest` at the end.
-    let seed = chain_seed(&log::history(&sessions.join(&child.0)).unwrap()).unwrap();
+    let seed = chain_seed(&sessions, &log::history(&sessions.join(&child.0)).unwrap()).unwrap();
     assert_eq!(seed_goal(&seed), json!("later"));
     // The fresh-rewind terminal, a bounded segment with no follower,
     // folds as a rewind too.
-    let seed = chain_seed(&log::history_to(&sessions.join(&parent.0), point).unwrap()).unwrap();
+    let seed = chain_seed(
+        &sessions,
+        &log::history_to(&sessions.join(&parent.0), point).unwrap(),
+    )
+    .unwrap();
     assert_eq!(seed_goal(&seed), json!("later"));
 }
 
@@ -498,7 +563,7 @@ fn a_following_child_without_a_workspace_fails_the_seed_as_corrupt() {
     }
     std::fs::write(&path, rewritten).unwrap();
     let segments = log::history(&sessions.join(&child.0)).unwrap();
-    let error = chain_seed(&segments).unwrap_err();
+    let error = chain_seed(&sessions, &segments).unwrap_err();
     assert!(
         matches!(error, log::Error::Pointer { .. }),
         "a corrupt following-child header fails closed, not as a full-log fold: {error:?}"
@@ -513,7 +578,7 @@ fn a_vanished_following_child_fails_the_seed_as_missing() {
     let child_dir = sessions.join(&child.0);
     let segments = log::history(&child_dir).unwrap();
     std::fs::remove_dir_all(&child_dir).unwrap();
-    let error = chain_seed(&segments).unwrap_err();
+    let error = chain_seed(&sessions, &segments).unwrap_err();
     assert!(
         matches!(error, log::Error::NotFound(_)),
         "a missing following-child header fails as missing: {error:?}"

@@ -96,9 +96,9 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
             registry: Arc::clone(&registry),
             parent: SessionId("s_parent".into()),
             workspace: dir.path().to_path_buf(),
-            sessions: {
+            events_for: {
                 let sessions = sessions.clone();
-                Arc::new(move |_| sessions.clone())
+                Arc::new(move |_, id| sessions.join(&id.0).join("events.jsonl"))
             },
             clock: Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
             bound: Duration::from_secs(5),
