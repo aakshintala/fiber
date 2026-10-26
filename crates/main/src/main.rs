@@ -1114,6 +1114,13 @@ fn terminal(
     let feedback_workspace = workspace.clone();
     let feedback_version = cli::bare_version();
     let feedback_clock = Arc::clone(&clock);
+    // The `/doctor` view's report reader captures the same launch
+    // directory, home, version and clock the feedback writer does, so
+    // the view shows the report the headless door would print.
+    let doctor_home = home.clone();
+    let doctor_workspace = workspace.clone();
+    let doctor_version = cli::bare_version();
+    let doctor_clock = Arc::clone(&clock);
     let identity = doors::project(&workspace);
     let mut launch = launch::launch(
         workspace,
@@ -1159,6 +1166,20 @@ fn terminal(
             ::cli::write(description, session, &context).map_err(|error| error.to_string())
         });
     launch.feedback = Some(feedback);
+    // The `/doctor` view's report reader: `cli::doctor`'s capture
+    // behind the contract seam, beside the report writer. It reads the
+    // same launch directory, so the view shows the same `doctor` output
+    // the headless door prints.
+    let doctor: contract::feedback::ReadDoctor = std::sync::Arc::new(move || {
+        doctor_report(
+            &doctor_home,
+            &doctor_workspace,
+            &doctor_version,
+            doctor_clock.as_ref(),
+        )
+        .map_err(|error| error.to_string())
+    });
+    launch.doctor = Some(doctor);
     launch.open_at = open_at;
     match tui::run(
         tty,
