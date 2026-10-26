@@ -46,6 +46,7 @@ use std::path::{Path, PathBuf};
 
 pub use blocking::BlockingProvider;
 pub use client::Client;
+pub use clock::FakeClock;
 pub use connect_proxy::ConnectProxy;
 pub use deadline::Deadline;
 pub use emit::{EventLog, Recorder};
