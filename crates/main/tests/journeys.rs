@@ -890,7 +890,49 @@ fn journey_drag_notice_copies_its_text() {
     let notice = run.wait_screen("the cache-rebuild notice after the switch", |screen| {
         shows(screen, "cache_rebuild") && shows(screen, "✕") && shows(screen, "Beta here.")
     });
-    let (x, y) = find_cell(&notice, "cache_rebuild");
+    let (stale_x, stale_y) = find_cell(&notice, "cache_rebuild");
+    let stale_row = usize::from(stale_y);
+    // A taller terminal moves the bottom-anchored notice to a new row,
+    // so the snapshot's cell points at blank conversation cells. The
+    // offset is taken before the resize, so the frame-end wait catches
+    // the redraw the resize causes.
+    let resized_from = run.output().len();
+    run.resize(120, 38);
+    // The redrawn frame's end on the raw output proves a whole frame
+    // drew after the resize went out, before the pointer goes out
+    // (`docs/testing/screens.md`, "Screens"): a grid match alone never
+    // proves the layout settled.
+    run.wait_bytes(resized_from, b"\x1b[?2026l", "the resized frame");
+    let resized = run.wait_screen("the cache-rebuild notice after resize", |screen| {
+        shows(screen, "cache_rebuild")
+            && shows(screen, "✕")
+            && shows(screen, "Beta here.")
+            && screen.size() == (120, 38)
+            && screen
+                .rows
+                .iter()
+                .position(|row| row.contains("cache_rebuild"))
+                .is_some_and(|row| row != stale_row)
+    });
+    // The press, drag and release all use the post-resize grid's cell:
+    // the snapshot's cell points at the wrong row after the move.
+    let (x, y) = find_cell(&resized, "cache_rebuild");
+    assert_ne!(
+        (x, y),
+        (stale_x, stale_y),
+        "the resize moved the notice cell"
+    );
+    // The forced stale interleaving: the snapshot's cell now sits on
+    // blank conversation cells, so its release routes through
+    // copy_selection to an empty OSC 52 payload — the flake's exact
+    // signature.
+    let stale_from = run.output().len();
+    drag(&mut run, (stale_x, stale_y), (stale_x + 13, stale_y));
+    assert_eq!(
+        osc52_copy(&mut run, stale_from),
+        "",
+        "the stale cell copies nothing"
+    );
     let from = run.output().len();
     drag(&mut run, (x, y), (x + 13, y));
     assert_eq!(osc52_copy(&mut run, from), "cache_rebuild");
