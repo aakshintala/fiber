@@ -437,6 +437,15 @@ fn process_command_queue_runs_on_release() {
         .recv(&done_rx)
         .expect("the queued command answers");
     assert_eq!(answer.unwrap(), json!("done"));
+    let waiting = Arc::clone(&queued);
+    let (second_tx, second_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = second_tx.send(waiting.wait());
+    });
+    let second = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&second_rx)
+        .expect("a consumed command wait answers instead of hanging");
+    assert!(matches!(second, Err(Error::Stopped { .. })), "{second:?}");
     let failed = runtime.register_function(
         "fiber.test/proc",
         command("c2"),

@@ -15,11 +15,15 @@ use std::thread;
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
+use contract::CommandId;
 use contract::ErrorCode;
 use contract::clock::Clock as _;
 use contract::events::{CallStatus, Notice};
-use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks, JobDelivery};
-use contract::shapes::Process;
+use contract::hook::{
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeToolCall, BeforeToolOutcome, Hooks,
+    JobDelivery,
+};
+use contract::shapes::{DeclaredEffects, Process};
 use contract::tool::SpillFile;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -3885,6 +3889,90 @@ fn register_every_family(package: &ProcessPackage) {
             "{call}: {outcome:?}"
         );
     }
+}
+
+#[test]
+fn process_watcher_uses_the_session_clock() {
+    let home = Home::new();
+    let clock = Arc::new(FakeClock::new());
+    clock.advance(Duration::from_secs(7));
+    let expected = clock.now();
+    let session = home.load_with_clock(&[], Arc::clone(&clock));
+    let runtime = &session.runtime;
+    runtime.register_owner("fiber.test/proc", None);
+    let watcher = runtime.install_process_handler(
+        "fiber.test/proc",
+        CommandId("register-watch".to_owned()),
+        "run",
+        Arc::new(|_args, _cancel| Ok(Some(json!(null)))),
+    );
+    let offered = runtime
+        .push_watcher(&watcher, json!({"kind": "notice"}))
+        .expect("the registered process watcher answers");
+    assert_eq!(offered.1, expected);
+}
+
+#[test]
+fn process_transform_hook_rewrites_before_tool_arguments() {
+    let home = Home::new();
+    let dir = process_dir(json!({}));
+    let mut session = SessionExtensions::default();
+    let package = ProcessPackage::load_with_runtime(
+        ProcessPackageOptions {
+            dir: dir.path().to_path_buf(),
+            clock: FakeClock::new(),
+        },
+        session.runtime.clone(),
+    )
+    .unwrap();
+    let outcome = process_register(
+        &package,
+        "c1",
+        "fiber.hook",
+        json!(["before_tool", {
+            "phase": "transform",
+            "timeout": 5000,
+            "on_failure": "blocking",
+            "run": true,
+        }]),
+    );
+    assert!(matches!(outcome, ProcessOutcome::Accepted), "{outcome:?}");
+    package.registry().unwrap().set_handler(
+        &ProcessCommandId("c1".to_owned()),
+        "run",
+        Arc::new(|_args, _cancel| Ok(Some(json!({"arguments": {"path": "rewritten"}})))),
+    );
+    let mut chain = super::chain::Builder::default();
+    assert!(session.admit_process(
+        "fiber.test/proc",
+        &package,
+        &mut chain,
+        &ProcessFoldSet::new()
+    ));
+    chain.fill(&home.config(&[]), &mut session);
+    let arguments = Map::from_iter([("path".to_owned(), json!("original"))]);
+    let declared = DeclaredEffects {
+        effects: Vec::new(),
+        reversible: true,
+        paths: None,
+    };
+    let answer = session.before_tool(&BeforeToolCall {
+        tool: "write",
+        arguments: &arguments,
+        declared: &declared,
+    });
+    let BeforeToolOutcome::Rewritten {
+        arguments: rewritten,
+        changed_by,
+    } = answer.outcome
+    else {
+        panic!(
+            "a process transform rewrites the call, not {:?}",
+            answer.outcome
+        );
+    };
+    assert_eq!(rewritten.get("path"), Some(&json!("rewritten")));
+    assert_eq!(changed_by, vec!["fiber.test/proc"]);
 }
 
 #[test]

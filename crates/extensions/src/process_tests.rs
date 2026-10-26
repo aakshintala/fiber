@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use super::process::{RegisterOutcome, Registry};
 use super::runtime::Runtime;
 use super::test_support::Home;
+use crate::lua::HookPhase;
 
 /// A process package directory holding `manifest_extra`, read back as the
 /// registry's manifest.
@@ -844,6 +845,42 @@ fn tool_keep_must_be_a_table_of_head_and_tail() {
 }
 
 #[test]
+fn a_valid_tool_keeps_its_function_effects_and_one_sided_bound() {
+    let (_dir, mut registry) = test_registry(json!({}));
+    let mut spec = tool_spec();
+    spec["effects"] = json!(true);
+    spec["keep"] = json!({"head": 7, "tail": 0});
+    let outcome = register(
+        &mut registry,
+        "c1",
+        "fiber.tool",
+        json!(["read_file-2", spec]),
+    );
+    assert!(matches!(outcome, RegisterOutcome::Accepted), "{outcome:?}");
+    let entry = registry.tools().get("read_file-2").unwrap();
+    assert_eq!(entry.declared.keep.start, 7);
+    assert_eq!(entry.declared.keep.end, 0);
+    assert_eq!(entry.effects.as_ref().unwrap().key, "effects");
+}
+
+#[test]
+fn an_omitted_or_null_keep_uses_the_default_bound() {
+    for keep in [None, Some(Value::Null)] {
+        let (_dir, mut registry) = test_registry(json!({}));
+        let mut spec = tool_spec();
+        if let Some(keep) = keep {
+            spec["keep"] = keep;
+        }
+        let outcome = register(&mut registry, "c1", "fiber.tool", json!(["lookup", spec]));
+        assert!(matches!(outcome, RegisterOutcome::Accepted), "{outcome:?}");
+        assert_eq!(
+            registry.tools().get("lookup").unwrap().declared.keep,
+            contract::tool::Bound::DEFAULT
+        );
+    }
+}
+
+#[test]
 fn tool_registers_under_its_wire_command() {
     let (_dir, mut registry) = test_registry(json!({}));
     let outcome = register(&mut registry, "c7", "fiber.tool", json!(["t", tool_spec()]));
@@ -937,6 +974,90 @@ fn hook_phase_must_suit_its_point() {
         "fiber.hook",
         json!(["turn_end", spec]),
     );
+}
+
+#[test]
+fn hook_accepts_non_blocking_and_sanitize_on_turn_end() {
+    let (_dir, mut registry) = test_registry(json!({}));
+    let outcome = register(
+        &mut registry,
+        "c1",
+        "fiber.hook",
+        json!(["turn_end", {
+            "phase": "sanitize",
+            "timeout": 5000,
+            "on_failure": "non-blocking",
+            "run": true,
+        }]),
+    );
+    assert!(matches!(outcome, RegisterOutcome::Accepted), "{outcome:?}");
+    let hook = &registry.hooks().by_point["turn_end"][0];
+    assert_eq!(hook.phase, HookPhase::Sanitize);
+    assert!(!hook.blocking);
+}
+
+#[test]
+fn a_missing_or_null_hook_phase_defaults_to_transform() {
+    for phase in [None, Some(Value::Null)] {
+        let (_dir, mut registry) = test_registry(json!({}));
+        let mut spec = hook_spec();
+        if let Some(phase) = phase {
+            spec["phase"] = phase;
+        } else {
+            spec.as_object_mut().unwrap().remove("phase");
+        }
+        let outcome = register(&mut registry, "c1", "fiber.hook", json!(["turn_end", spec]));
+        assert!(matches!(outcome, RegisterOutcome::Accepted), "{outcome:?}");
+        assert_eq!(
+            registry.hooks().by_point["turn_end"][0].phase,
+            HookPhase::Transform
+        );
+    }
+}
+
+#[test]
+fn hook_rejection_names_its_entry() {
+    let (_dir, mut registry) = test_registry(json!({}));
+    let outcome = register(
+        &mut registry,
+        "c1",
+        "fiber.hook",
+        json!(["dawn", {
+            "entry": "init.lua:17",
+            "phase": "transform",
+            "timeout": 5000,
+            "on_failure": "blocking",
+            "run": true,
+        }]),
+    );
+    let RegisterOutcome::Rejected { message, .. } = outcome else {
+        panic!("an unknown hook point refuses, not {outcome:?}");
+    };
+    assert_eq!(
+        message,
+        "`dawn` hook not registered for entry `init.lua:17`: `dawn` is not a hook point"
+    );
+}
+
+#[test]
+fn missing_hook_failure_names_the_missing_field() {
+    for failure in [None, Some(Value::Null)] {
+        let (_dir, mut registry) = test_registry(json!({}));
+        let mut spec = hook_spec();
+        if let Some(failure) = failure {
+            spec["on_failure"] = failure;
+        } else {
+            spec.as_object_mut().unwrap().remove("on_failure");
+        }
+        let outcome = register(&mut registry, "c1", "fiber.hook", json!(["turn_end", spec]));
+        let RegisterOutcome::Rejected { message, .. } = outcome else {
+            panic!("a hook without on_failure refuses, not {outcome:?}");
+        };
+        assert_eq!(
+            message,
+            "`turn_end` hook not registered: missing `on_failure`"
+        );
+    }
 }
 
 #[test]
@@ -1152,6 +1273,17 @@ fn command_name_must_be_plain() {
 }
 
 #[test]
+fn command_name_with_a_slash_is_rejected() {
+    check_parity(
+        "fiber.command(\"group/run\", { timeout = 5, run = function() end, description = \"Runs it.\" })",
+        json!({}),
+        &[],
+        "fiber.command",
+        json!(["group/run", command_spec()]),
+    );
+}
+
+#[test]
 fn command_spec_must_be_a_table() {
     check_parity(
         "fiber.command(\"cmd\", 42)",
@@ -1199,6 +1331,22 @@ fn command_description_must_be_single_line() {
         "fiber.command",
         json!(["cmd", spec]),
     );
+}
+
+#[test]
+fn command_description_may_be_omitted_or_null() {
+    for description in [None, Some(Value::Null)] {
+        let (_dir, mut registry) = test_registry(json!({}));
+        let mut spec = command_spec();
+        if let Some(description) = description {
+            spec["description"] = description;
+        } else {
+            spec.as_object_mut().unwrap().remove("description");
+        }
+        let outcome = register(&mut registry, "c1", "fiber.command", json!(["cmd", spec]));
+        assert!(matches!(outcome, RegisterOutcome::Accepted), "{outcome:?}");
+        assert_eq!(registry.commands().get("cmd").unwrap().description, "");
+    }
 }
 
 #[test]
@@ -1257,6 +1405,7 @@ fn provider_references_resolve_only_within_their_generation() {
         .unwrap()
         .clone();
     assert_eq!(old.generation, 1);
+    assert_eq!(runtime.generation("fiber.test/proc"), Some(1));
     let (_dir2, mut second) = shared_registry(&runtime, json!({"providers": {"p": []}}));
     let outcome = register(
         &mut second,
@@ -1274,6 +1423,7 @@ fn provider_references_resolve_only_within_their_generation() {
         .unwrap()
         .clone();
     assert_eq!(new.generation, 2);
+    assert_eq!(runtime.generation("fiber.test/proc"), Some(2));
     let stale = runtime.resolve(&old).unwrap_err().to_string();
     assert!(stale.contains("generation 1"), "{stale}");
     assert!(runtime.resolve(&new).is_ok());
