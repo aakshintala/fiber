@@ -1023,7 +1023,7 @@ fn resume_readers_use_the_child_project_even_after_its_worktree_was_removed() {
         root.path().join("other/worktrees/s_child"),
     ] {
         assert_eq!(
-            super::delegate_sessions(&home, &other).unwrap(),
+            super::delegate_sessions(&home, &other, &SessionId("s_unknown".into())).unwrap(),
             log::sessions_dir(&home, &doors::project(&other))
         );
     }
@@ -1053,6 +1053,54 @@ fn resume_readers_use_the_child_project_even_after_its_worktree_was_removed() {
         super::worktree_record_reader(&home)(&workspace, &id)
             .unwrap_err()
             .contains("worktree")
+    );
+}
+
+#[test]
+fn missing_git_subworkspace_readers_find_the_logged_project_and_fail_closed() {
+    let root = fakes::TempDir::new("dm-removed-repository");
+    let home = root.path().join("home");
+    let repository = root.path().join("repository");
+    let workspace = repository.join("subworkspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    fakes::git::git(&repository, &["init", "--quiet"]);
+    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    let id = SessionId("s_removed_repository".into());
+    write_log(
+        &sessions,
+        &id.0,
+        &[
+            json!({"kind":"session_started", "payload":{"workspace":workspace}, "seq":1}),
+            envelope(7),
+        ],
+    );
+    std::fs::rename(&repository, repository.with_extension("moved")).unwrap();
+    assert_eq!(super::last_seq_reader(&home)(&workspace, &id), Ok(Some(7)));
+    assert_eq!(
+        super::worktree_record_reader(&home)(&workspace, &id),
+        Ok(None)
+    );
+    write_log(
+        &sessions,
+        &id.0,
+        &[
+            json!({"kind":"session_started", "payload":{"workspace":workspace, "worktree":null}, "seq":1}),
+        ],
+    );
+    assert!(
+        super::worktree_record_reader(&home)(&workspace, &id)
+            .unwrap_err()
+            .contains("malformed worktree record")
+    );
+    // An existing workspace resolves its own project, not a different logged project.
+    std::fs::create_dir_all(&workspace).unwrap();
+    assert_eq!(
+        super::delegate_sessions(&home, &workspace, &id).unwrap(),
+        log::sessions_dir(&home, &doors::project(&workspace))
+    );
+    assert_ne!(
+        super::delegate_sessions(&home, &workspace, &id).unwrap(),
+        sessions
     );
 }
 

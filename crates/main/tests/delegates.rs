@@ -4791,6 +4791,8 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
             .iter()
             .map(|request| String::from_utf8_lossy(&request.body).into_owned())
             .collect();
+        // docs/delegates.md, "Talking to a delegate": steering joins the next step;
+        // docs/loop.md, "One step": each fixture tool reply takes one further request.
         assert_eq!(bodies.len(), 2, "{bodies:?}");
         assert!(
             !bodies[0].contains(MARK),
@@ -4810,7 +4812,16 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
             ask_sessions(&setup)
         };
         let child_lines = read_lines(&sessions.join(&delegate_id).join("events.jsonl"));
-        assert_eq!(durable_kinds(&child_lines), DELEGATE_DURABLE);
+        // docs/events.md, "Kinds", defines these lines; cross-trigger order is open.
+        assert_eq!(
+            durable_kinds(&child_lines)
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            DELEGATE_DURABLE
+                .iter()
+                .map(|kind| (*kind).to_owned())
+                .collect::<std::collections::BTreeSet<_>>()
+        );
         let applied = one(&child_lines, "steering_applied");
         assert_eq!(applied["source"], "driver");
         assert!(
@@ -4847,12 +4858,22 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
         assert_eq!(resolved["payload"]["decided_by"], "reviewer");
         for kind in ["job_started", "job_completed"] {
             let found: Vec<&Value> = lines.iter().filter(|line| line["kind"] == kind).collect();
+            // docs/delegates.md, "Identity and resume": one start/completion per run.
             assert_eq!(found.len(), 1, "{kind} wrote {:?}", owned_kinds(&lines));
             assert_eq!(found[0]["payload"]["job_id"], job.as_str());
         }
         let finished = one(&lines, "delegate_finished");
         assert_eq!(finished["text"], "after-steer");
-        assert_eq!(durable_kinds(&without_copies(&lines)), STEER_PARENT_DURABLE);
+        // docs/events.md, "Kinds", defines these lines; cross-trigger order is open.
+        assert_eq!(
+            durable_kinds(&without_copies(&lines))
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            STEER_PARENT_DURABLE
+                .iter()
+                .map(|kind| (*kind).to_owned())
+                .collect::<std::collections::BTreeSet<_>>()
+        );
     }
 }
 
@@ -4964,6 +4985,7 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
         "removed-dirty",
         "missing-repository",
         "no-record-missing",
+        "no-record-missing-git-subworkspace",
     ] {
         let setup = support::Setup::new();
         let _guard = arm(&setup);
@@ -4976,8 +4998,8 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
         let selected_root = fakes::TempDir::new("selected-project");
         let repository = selected_root.path().join("repository");
         fs::create_dir(&repository).unwrap();
-        let isolated = mode != "no-record-missing";
-        if isolated {
+        let isolated = !mode.starts_with("no-record-missing");
+        if isolated || mode == "no-record-missing-git-subworkspace" {
             support::git(setup.deadline, &repository, &["init"]);
             support::git(
                 setup.deadline,
@@ -4985,9 +5007,17 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
                 &["commit", "--allow-empty", "-m", "child"],
             );
         }
-        let sessions = log::sessions_dir(&setup.home(), &doors::project(&repository));
+        let workspace = if mode == "no-record-missing-git-subworkspace" {
+            let path = repository.join("subworkspace");
+            fs::create_dir(&path).unwrap();
+            path
+        } else {
+            repository.clone()
+        };
+        let sessions = log::sessions_dir(&setup.home(), &doors::project(&workspace));
         let worktrees = sessions.parent().unwrap().join("worktrees");
-        let selected = repository.clone();
+        let selected = workspace.clone();
+        let selected_repository = repository.clone();
         let selected_worktrees = worktrees.clone();
         let deadline = setup.deadline;
         let parent = ProviderServer::start_responding(move |request: &Request| {
@@ -4999,8 +5029,8 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
                     assert!(!fs::read_dir(&selected_worktrees).unwrap().any(|entry| entry.unwrap().path().is_dir()), "the first clean run removed its worktree");
                     support::git(deadline, &selected, &["commit", "--allow-empty", "-m", "new HEAD"]);
                 }
-                if mode == "missing-repository" || mode == "no-record-missing" {
-                    fs::rename(&selected, selected.with_extension("moved")).unwrap();
+                if mode == "missing-repository" || mode.starts_with("no-record-missing") {
+                    fs::rename(&selected_repository, selected_repository.with_extension("moved")).unwrap();
                 }
                 return support::stream(&[function_call("call_resume", "delegate_message", &json!({"id":job_id(&text), "message":RESUME_MARK}))]);
             }
@@ -5008,7 +5038,7 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
             support::stream(&[function_call("call_spawn", "delegate_spawn", &json!({"description":"scan", "prompt":"scan child", "model":"fiber:pb/m", "workspace":selected, "isolation":if isolated {"worktree"} else {"none"}}))])
         }).unwrap();
         let child_worktrees = worktrees.clone();
-        let child_repository = repository.clone();
+        let child_repository = workspace;
         let child = ProviderServer::start_responding(move |request: &Request| {
             let resumed = String::from_utf8_lossy(&request.body).contains(RESUME_MARK);
             let path = if isolated {
@@ -5020,7 +5050,9 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
             } else {
                 child_repository.clone()
             };
-            if mode == "kept" || mode == "no-record-missing" || (resumed && mode == "removed-dirty")
+            if mode == "kept"
+                || mode.starts_with("no-record-missing")
+                || (resumed && mode == "removed-dirty")
             {
                 fs::write(path.join("kept.txt"), "dirty fixture").unwrap();
             }
@@ -5048,7 +5080,7 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
             ended == 2
         });
         child.release_one();
-        let fails = mode == "missing-repository" || mode == "no-record-missing";
+        let fails = mode == "missing-repository" || mode.starts_with("no-record-missing");
         let requested = fails || child.await_requests(2, setup.deadline);
         child.release();
         assert!(requested, "{mode}: the resumed child's request");
@@ -5081,6 +5113,8 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
                         .contains(repository.join(".git").to_str().unwrap())
                 );
             }
+            // docs/delegates.md, "Worktrees": missing workspace fails before launch;
+            // docs/events.md, "fiber_started": one line per process, not per message.
             assert_eq!(child.requests().len(), 1);
             assert_eq!(
                 child_lines
@@ -5094,11 +5128,15 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
                 completed["payload"]["status"], "completed",
                 "{mode}: {completed}"
             );
+            // docs/delegates.md, "Identity and resume": resume continues the session;
+            // docs/loop.md, "One step": each text-only fixture reply ends its run.
             assert_eq!(child.requests().len(), 2);
             let process_starts: Vec<_> = child_lines
                 .iter()
                 .filter(|line| line["kind"] == "fiber_started")
                 .collect();
+            // docs/events.md, "fiber_started": one per process; resume starts a new run
+            // (docs/delegates.md, "Identity and resume" and "Lifetime").
             assert_eq!(process_starts.len(), 2, "{mode}");
             assert_eq!(
                 one(&child_lines, "session_started")["workspace"],
@@ -5108,6 +5146,7 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
                 .iter()
                 .map(|line| line["seq"].as_u64().unwrap())
                 .collect();
+            // docs/events.md, "The envelope": seq is contiguous, never reset or reused.
             assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]), "{seqs:?}");
             for kind in [
                 "job_started",
@@ -5116,6 +5155,8 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
                 "delegate_finished",
             ] {
                 let records: Vec<_> = lines.iter().filter(|line| line["kind"] == kind).collect();
+                // docs/delegates.md, "Identity and resume" and "Events": one pair
+                // of job/delegate start and finish lines per run.
                 assert_eq!(records.len(), 2, "{mode}: {kind}");
                 assert!(
                     records
@@ -6690,7 +6731,16 @@ fn an_isolated_fork_records_and_holds_its_own_worktree_and_explains_its_workspac
     assert_eq!(status.code(), Some(0), "{stderr}");
     let parent_id = lines[0]["session_id"].as_str().unwrap();
     let fork_lines = read_lines(&fork_log);
-    assert_eq!(durable_kinds(&fork_lines), FORK_DURABLE);
+    // docs/events.md, "Kinds", defines these lines; cross-trigger order is open.
+    assert_eq!(
+        durable_kinds(&fork_lines)
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        FORK_DURABLE
+            .iter()
+            .map(|kind| (*kind).to_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+    );
     let parent_body = fork_call_request(&server, "scan the tree");
     let fork_body = fork_first(&server);
     let (parent_input, fork_input) = assert_continues(&parent_body, &fork_body, parent_id);

@@ -18,6 +18,18 @@ fn sessions_in(home: &std::path::Path) -> std::path::PathBuf {
 }
 
 #[test]
+fn first_line_errors_display_a_readable_reason() {
+    assert_eq!(
+        FirstLineError::Incomplete.to_string(),
+        "the session's first line is missing or incomplete"
+    );
+    assert_eq!(
+        FirstLineError::Corrupt.to_string(),
+        "the session's first line is corrupt"
+    );
+}
+
+#[test]
 fn sessions_dir_for_key_resolves_a_plain_key_under_projects() {
     let home = fakes::TempDir::new("log-sessions-dir-key");
     assert_eq!(

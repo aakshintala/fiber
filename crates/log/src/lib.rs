@@ -68,6 +68,15 @@ pub use usage::usage;
 pub use weak_emit::WeakEmit;
 pub use write::{Log, Subscription, cut_joined, cut_notice};
 
+impl std::fmt::Display for FirstLineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Incomplete => "the session's first line is missing or incomplete",
+            Self::Corrupt => "the session's first line is corrupt",
+        })
+    }
+}
+
 /// The log's name in a session directory.
 const EVENTS: &str = "events.jsonl";
 /// The lock file's name in a session directory.
