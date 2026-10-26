@@ -317,13 +317,31 @@ fn worktree_failures_hide_git_stderr_from_debug() {
         message: "git rev-parse failed for the worktree /x/w.".to_owned(),
         source: git_failed(SECRET),
     };
+    let failed_debug = format!("{:?}", failed);
     assert!(
-        !format!("{:?}", failed).contains(SECRET),
+        !failed_debug.contains(SECRET),
         "WorktreeFailed debug: {failed:?}"
     );
     assert!(
-        !format!("{:?}", access).contains(SECRET),
+        failed_debug.contains("WorktreeFailed"),
+        "WorktreeFailed debug names its variant: {failed:?}"
+    );
+    assert!(
+        failed_debug.contains("git worktree add failed for the worktree /x/w."),
+        "WorktreeFailed debug keeps its safe message: {failed:?}"
+    );
+    let access_debug = format!("{:?}", access);
+    assert!(
+        !access_debug.contains(SECRET),
         "WorktreeAccess debug: {access:?}"
+    );
+    assert!(
+        access_debug.contains("WorktreeAccess"),
+        "WorktreeAccess debug names its variant: {access:?}"
+    );
+    assert!(
+        access_debug.contains("git rev-parse failed for the worktree /x/w."),
+        "WorktreeAccess debug keeps its safe message: {access:?}"
     );
     assert_eq!(
         failed.to_string(),
