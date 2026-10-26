@@ -139,27 +139,30 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
             "{name} drawn but not in the contract list"
         );
     }
-    let extra: Vec<&&str> = BUILT_IN_COMMANDS
+    let mut extra: Vec<&&str> = BUILT_IN_COMMANDS
         .iter()
         .filter(|name| !table_names().contains(name))
         .collect();
-    assert_eq!(
-        extra,
-        [
-            &"effort",
-            &"cost",
-            &"permissions",
-            &"config",
-            &"keybindings",
-            &"keymap",
-            &"rewind",
-            &"compact",
-            &"rename",
-            &"stop",
-            &"exit",
-            &"bug"
-        ]
-    );
+    // Membership only: no doc promises this registry order
+    // (`docs/tui.md:1951` promises the `/` list's display order), so
+    // both sides sort before the comparison.
+    extra.sort();
+    let mut wanted = [
+        &"effort",
+        &"cost",
+        &"permissions",
+        &"config",
+        &"keybindings",
+        &"keymap",
+        &"rewind",
+        &"compact",
+        &"rename",
+        &"stop",
+        &"exit",
+        &"bug",
+    ];
+    wanted.sort();
+    assert_eq!(extra, wanted);
     // Every alias is a contract name, so an extension or a skill cannot
     // take it unannounced.
     for alias in TABLE

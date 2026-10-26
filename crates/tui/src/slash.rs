@@ -133,14 +133,16 @@ pub(crate) fn filter<'a>(rows: &'a [Row], query: &str) -> Vec<&'a Row> {
     // each row, then the stable sort keeps list order in each group.
     let rank = |row: &Row| {
         let name = row.name.to_lowercase();
-        let aliases: Vec<String> = row
-            .aliases
-            .iter()
-            .map(|alias| alias.to_lowercase())
-            .collect();
-        let starts =
-            name.starts_with(&query) || aliases.iter().any(|alias| alias.starts_with(&query));
-        let hits = name.contains(&query) || aliases.iter().any(|alias| alias.contains(&query));
+        let starts = name.starts_with(&query)
+            || row
+                .aliases
+                .iter()
+                .any(|alias| alias.to_lowercase().starts_with(&query));
+        let hits = name.contains(&query)
+            || row
+                .aliases
+                .iter()
+                .any(|alias| alias.to_lowercase().contains(&query));
         if starts {
             0
         } else if hits {
