@@ -107,11 +107,12 @@ pub fn create_delegate_worktree(
     session: &SessionId,
     add: &dyn Fn(&mut Command) -> io::Result<Output>,
 ) -> Result<(worktree::Created, Shared), DelegateCreateError> {
-    let path = home
-        .join("projects")
-        .join(log::project_key(&project(workspace)))
-        .join("worktrees")
-        .join(&session.0);
+    let project = config::ProjectKey::new(log::project_key(&project(workspace))).map_err(|_| {
+        DelegateCreateError::Failed {
+            message: "the repository project key is not valid for Fiber home".to_owned(),
+        }
+    })?;
+    let path = config::project_worktrees_dir(home, &project).join(&session.0);
     let branch = format!("fiber/{}", session.0);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|source| DelegateCreateError::Failed {
