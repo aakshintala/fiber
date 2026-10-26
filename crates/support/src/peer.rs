@@ -226,7 +226,13 @@ fn peer_pid_inner(stream: &UnixStream) -> Result<Pid, PeerCredentialError> {
 fn peer_pid_inner(stream: &UnixStream) -> Result<Pid, PeerCredentialError> {
     use std::os::unix::io::AsRawFd as _;
     let mut peer: libc::c_int = 0;
-    let mut length = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    let mut length =
+        libc::socklen_t::try_from(std::mem::size_of::<libc::c_int>()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "peer pid size exceeds socklen_t",
+            )
+        })?;
     // SAFETY: the socket fd is open for the call, the level and option
     // name are the fixed LOCAL_PEERPID pair, and `peer` with `length`
     // is a sized int the kernel fills or fails.
@@ -353,7 +359,12 @@ fn bsdinfo_of(pid: Pid) -> Result<libc::proc_bsdinfo, ReadError> {
     let pid_arg =
         libc::c_int::try_from(pid.0).map_err(|_| ReadError::Unreadable { pid, what: "pid" })?;
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).map_err(|_| {
+        ReadError::Unreadable {
+            pid,
+            what: "proc_bsdinfo",
+        }
+    })?;
     // SAFETY: `pid_arg` is the wanted pid, the flavor and zero arg select
     // the bsd info of that pid, and `info` with `size` is one whole
     // `proc_bsdinfo` of plain integers the kernel fills or fails.
@@ -467,13 +478,7 @@ fn euid_of(pid: Pid) -> Result<EffectiveUid, ReadError> {
 // Mutants run on Linux, where this is not compiled; the macOS test job runs it.
 #[cfg_attr(false, mutants::skip)]
 fn parent_of(pid: Pid) -> Result<Pid, ReadError> {
-    let raw = bsdinfo_of(pid)?.pbi_ppid;
-    u32::try_from(raw)
-        .map(Pid)
-        .map_err(|_| ReadError::Unreadable {
-            pid,
-            what: "proc_bsdinfo",
-        })
+    Ok(Pid(bsdinfo_of(pid)?.pbi_ppid))
 }
 
 #[cfg(target_os = "macos")]
