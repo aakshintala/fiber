@@ -156,7 +156,9 @@ fn authorization_uses_the_target_session_relay_not_another_session() {
         .unwrap();
     let (stop_tx, stop_rx) = std::sync::mpsc::channel();
     let live_thread = std::thread::spawn(move || {
-        stop_rx.recv_timeout(MUST_SUCCEED_WITHIN).unwrap_or(());
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&stop_rx)
+            .unwrap_or(());
     });
     {
         let mut held = crate::connection::lock(&relays);
