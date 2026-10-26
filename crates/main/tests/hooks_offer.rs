@@ -719,10 +719,26 @@ fn losing_the_hub_mid_install_fails_without_retry_or_session() {
         "the gate held the install's clone"
     );
     // Drop the hub with the install gated: the failure must name the
-    // install command with the connection lost.
+    // install command with the connection lost. The kill takes the
+    // whole group, but the gated clone stays blocked on the fifo until
+    // the release below, so the group cannot be empty yet: wait for
+    // the hub leader's exit first, assert while the gate is held, then
+    // release and drain the group under the deadline.
     let process = cleanup.process.take().expect("the hub serves");
     process.kill("TERM");
-    assert_eq!(process.wait().code(), Some(143));
+    let HubProc {
+        mut child,
+        watchdog,
+        group,
+        deadline,
+    } = process;
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(child.wait().expect("the hub leader reaped"))
+            .unwrap();
+    });
+    let status = deadline.recv_or_fail(&finished, "the hub leader to exit");
+    assert_eq!(status.code(), Some(143));
     run.wait_screen("the install failure", |grid| {
         grid.contents.contains("installing hooks")
             && grid.contents.contains("fiber extension install hooks")
@@ -735,6 +751,17 @@ fn losing_the_hub_mid_install_fails_without_retry_or_session() {
     drop(release);
     holder.join().expect("the gate holder joins");
     fs::remove_file(&fifo).unwrap_or(());
+    // The release lets the gated clone exit: the group must drain under
+    // the deadline before the watchdog stands down, so the reaping
+    // assertion still holds and no process group escapes.
+    fakes::wait_until("the hub group to drain", a.deadline, move || {
+        !fakes::group_alive(group)
+    });
+    assert!(
+        !fakes::group_alive(group),
+        "the hub left a process in its group behind"
+    );
+    watchdog.stand_down(deadline.cleanup_phase());
     quit_idle(run);
     hub_guard.wait_gone();
     client_guard.wait_gone();
