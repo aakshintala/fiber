@@ -1170,3 +1170,27 @@ fn no_item_view_draws_no_item_hint() {
         "no job hint outside an item view"
     );
 }
+
+#[test]
+fn steering_selected_hides_the_item_hint_itself() {
+    let mut app = item_home();
+    item_opened(&mut app);
+    fold_delegate(&mut app);
+    open_delegate(&mut app);
+    app.on_line(session_line(
+        ITEM_SESSION,
+        "steering_queue",
+        serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+        ]}),
+    ));
+    app.select_steering(0);
+    assert!(app.steering_selected().is_some());
+    assert!(app.item_open());
+    assert!(app.item_view().is_some());
+    // The first `||` matters alone here: not-open is false, the draft
+    // is empty and the item view exists, so only steering hides the
+    // hint. The draw keeps the editing hint, but the guard itself must
+    // already be `None`.
+    assert_eq!(super::item_hint(&app), None);
+}

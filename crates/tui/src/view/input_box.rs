@@ -111,7 +111,7 @@ pub(super) fn draw(
     if app.steering_selected().is_some() {
         draw_editing_hint(area, below, &rows, (cursor_row, cursor_col), buf);
     } else if let Some(hint) = item_hint(app) {
-        draw_item_hint(area, below, &rows, (cursor_row, cursor_col), &hint, buf);
+        draw_hint(area, below, &rows, (cursor_row, cursor_col), &hint, buf);
     }
     if cursor_shown(app) {
         let (x, y) = caret_cell(area, below, &rows, cursor_row, cursor_col);
@@ -256,21 +256,6 @@ fn draw_editing_hint(
         EDITING_HINT,
         buf,
     );
-}
-
-/// Draws the item view's hint at the box's right end on its last text
-/// row, with the editing hint's placement: right-aligned and dim, only
-/// over cells past the draft's text and never over the caret
-/// (`docs/tui.md`, "Swapped views").
-fn draw_item_hint(
-    area: Rect,
-    below: u16,
-    rows: &[String],
-    (cursor_row, cursor_col): (usize, u16),
-    hint: &str,
-    buf: &mut Buffer,
-) {
-    draw_hint(area, below, rows, (cursor_row, cursor_col), hint, buf);
 }
 
 /// Draws `hint` at the box's right end on its last text row,

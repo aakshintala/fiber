@@ -159,24 +159,21 @@ fn row_with(grid: &Grid, needle: &str) -> u16 {
 }
 
 /// The column where `needle` starts on `y`, matching the cells one by
-/// one, so a wide cell before it changes nothing.
-fn col_at_or(grid: &Grid, y: u16, needle: &str) -> Option<u16> {
+/// one, so a wide cell before it changes nothing, or a panic naming it.
+fn col_at(grid: &Grid, y: u16, needle: &str) -> u16 {
     let want: Vec<char> = needle.chars().collect();
     if want.is_empty() {
-        return None;
+        panic!("{needle:?} on row {y}");
     }
     let (width, _) = grid.size();
-    (0..width).find(|x| {
-        want.iter().enumerate().all(|(dx, ch)| {
-            let xi = x + dx as u16;
-            xi < width && grid.cell(xi, y).symbol == ch.to_string()
+    (0..width)
+        .find(|x| {
+            want.iter().enumerate().all(|(dx, ch)| {
+                let xi = x + dx as u16;
+                xi < width && grid.cell(xi, y).symbol == ch.to_string()
+            })
         })
-    })
-}
-
-/// The column where `needle` starts on `y`, or a panic.
-fn col_at(grid: &Grid, y: u16, needle: &str) -> u16 {
-    col_at_or(grid, y, needle).unwrap_or_else(|| panic!("{needle:?} on row {y}"))
+        .unwrap_or_else(|| panic!("{needle:?} on row {y}"))
 }
 
 /// Every cell of `needle` on `y` is bold, or a panic naming it.
@@ -208,9 +205,10 @@ fn click(run: &mut Run, x: u16, y: u16) {
 }
 
 /// Opens the panel row holding `needle`: clicks its text, then waits
-/// for the item view's top row. The row's position is final: the
-/// parent's turn is done and the one held item parks, so later folds
-/// only tick in place.
+/// for the item view's top row. The caller waits for the turn's
+/// completion first, so the row's position is final: the parent's turn
+/// is done and the one held item parks on the test-held FIFO, so later
+/// folds only tick in place.
 fn open_row(run: &mut Run, needle: &str, top: &str) -> Grid {
     let grid = run.wait_screen("the panel lists the row", |grid| {
         grid.contents.contains(needle)
@@ -236,8 +234,16 @@ fn assert_span_tint(grid: &Grid, y: u16, needle: &str, tint: Colour) {
 fn the_delegate_view_matches_the_doc() {
     let (setup, release, _guard) = delegate_setup();
     let mut run = start_run(&setup);
+    // The parent's turn completes before the click, so the panel row's
+    // position is final: the completed footer proves the turn is done,
+    // and the delegate parks on the test-held FIFO, so no further
+    // session event can move rows before the click. The finished title
+    // never emits while an item is held, so the turn's completion —
+    // not `turn_finished` — is the readiness signal here.
     run.wait_screen("the delegate parks", |grid| {
-        grid.contents.contains("● review the parser") && grid.contents.contains("Done.")
+        grid.contents.contains("● review the parser")
+            && grid.contents.contains("Done.")
+            && grid.contents.contains("completed")
     });
     let top = "Delegate  ◆ review the parser";
     let grid = open_row(&mut run, "● review the parser", top);
@@ -249,13 +255,54 @@ fn the_delegate_view_matches_the_doc() {
     assert_bold(&grid, crumb, "› ◆ review the parser");
     // The status card sits on the `surface` tint: the harness, the
     // model, the calls with the elapsed time and the session, then the
-    // stop target with that same session.
-    let card = row_with(&grid, "harness fiber");
-    assert_dim(&grid, card, " · model ");
+    // stop target with that same session. The card rows sit below the
+    // header's own top row, so they anchor to it: the panel's session
+    // list names the same harness and model on its own rows.
+    let card = y_top + 2;
+    let card_row = &grid.rows[card as usize];
+    assert!(
+        card_row.contains("harness fiber"),
+        "the card's first row:\n{card_row}"
+    );
+    let model = card_row
+        .split(" · model ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .filter(|model| !model.is_empty())
+        .unwrap_or_else(|| panic!("the model in\n{}", grid.contents))
+        .to_owned();
+    let model_segment = format!(" · model {model}");
+    assert_dim(&grid, card, &model_segment);
     assert_span_tint(&grid, card, "harness fiber", SURFACE);
-    assert_span_tint(&grid, card, " · model ", SURFACE);
-    let calls = row_with(&grid, "calls · elapsed");
-    let session = grid.rows[calls as usize]
+    assert_span_tint(&grid, card, &model_segment, SURFACE);
+    // No held status names no level: past the model, the `surface` slab
+    // is blank until the panel's own ground.
+    let seg_at = col_at(&grid, card, &model_segment);
+    let seg_end = seg_at + model_segment.chars().count() as u16;
+    let (width, _) = grid.size();
+    let mut x = seg_end;
+    while x < width && grid.cell(x, card).bg == SURFACE {
+        assert_eq!(grid.cell(x, card).symbol, " ", "blank past the model {x}");
+        x += 1;
+    }
+    let calls = y_top + 3;
+    let calls_row = &grid.rows[calls as usize];
+    assert!(
+        calls_row.contains("calls · elapsed"),
+        "the card's second row:\n{calls_row}"
+    );
+    let elapsed = calls_row
+        .split("elapsed ")
+        .nth(1)
+        .and_then(|rest| rest.split(" · session ").next())
+        .filter(|elapsed| elapsed.contains('s'))
+        .unwrap_or_else(|| panic!("the elapsed value in\n{}", grid.contents))
+        .to_owned();
+    assert!(
+        calls_row.contains(&format!("elapsed {elapsed} · session ")),
+        "the elapsed value draws:\n{calls_row}"
+    );
+    let session = calls_row
         .split("session ")
         .nth(1)
         .and_then(|rest| rest.split_whitespace().next())
@@ -263,10 +310,16 @@ fn the_delegate_view_matches_the_doc() {
         .unwrap_or_else(|| panic!("the session id in\n{}", grid.contents))
         .to_owned();
     assert_dim(&grid, calls, "calls · elapsed");
+    assert_dim(&grid, calls, &session);
     assert_span_tint(&grid, calls, "calls · elapsed", SURFACE);
     assert_span_tint(&grid, calls, &session, SURFACE);
     let stop = format!("■ stop {session}");
-    let y_stop = row_with(&grid, &stop);
+    let y_stop = y_top + 4;
+    assert!(
+        grid.rows[y_stop as usize].contains(&stop),
+        "the stop row:\n{}",
+        grid.rows[y_stop as usize]
+    );
     assert_span_tint(&grid, y_stop, &stop, SURFACE);
     let stop_at = col_at(&grid, y_stop, &stop);
     for (dx, ch) in stop.chars().enumerate() {
@@ -310,9 +363,19 @@ fn the_job_pty_view_matches_the_doc() {
     let (setup, release, _guard) = job_setup();
     let mut run = start_run(&setup);
     // The Jobs card starts closed: its title toggles the list, whose
-    // one row is the held job directly below it.
+    // one row is the held job directly below it. The parent's turn
+    // completes before either click, so both rows' positions are final:
+    // the completed footer proves the turn is done, and the job parks
+    // on the test-held FIFO, so no further session event can move rows
+    // before either click. The finished title never emits while an
+    // item is held, so the turn's completion — not `turn_finished` —
+    // is the readiness signal here. No session event lands between the
+    // two clicks, only the first click's own expansion, so the second
+    // click rides the same signal.
     let grid = run.wait_screen("the tty job starts", |grid| {
-        grid.contents.contains("Jobs") && grid.contents.contains("Done.")
+        grid.contents.contains("Jobs")
+            && grid.contents.contains("Done.")
+            && grid.contents.contains("completed")
     });
     let title = row_with(&grid, "Jobs");
     click(&mut run, col_at(&grid, title, "Jobs"), title);
@@ -351,8 +414,22 @@ fn the_job_pty_view_matches_the_doc() {
         row.contains(&format!("job {id} · head -n 1 ")),
         "the job row names the job and command:\n{row}"
     );
+    let running = row
+        .split("running ")
+        .nth(1)
+        .and_then(|rest| rest.split(" · ").next())
+        .filter(|elapsed| elapsed.contains('s'))
+        .unwrap_or_else(|| panic!("the running time in\n{row}"))
+        .to_owned();
+    assert!(
+        row.contains(&format!("running {running}")),
+        "the running time draws:\n{row}"
+    );
+    assert_span_tint(&grid, status, &format!("job {id}"), SURFACE);
+    assert_span_tint(&grid, status, &format!("running {running}"), SURFACE);
     let stop = format!("■ stop {id}");
     let y_stop = row_with(&grid, &stop);
+    assert_span_tint(&grid, y_stop, &stop, SURFACE);
     let stop_at = col_at(&grid, y_stop, &stop);
     for (dx, ch) in stop.chars().enumerate() {
         let cell = grid.cell(stop_at + dx as u16, y_stop);

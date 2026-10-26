@@ -1023,6 +1023,43 @@ fn stop_target_covers_the_cut_stop_at_a_narrow_width() {
 }
 
 #[test]
+fn a_refusal_message_cut_leaves_six_cells_for_the_stop() {
+    let mut app = home(40, 24);
+    opened(&mut app);
+    start_delegate(&mut app, 0);
+    refused_open(&mut app);
+    // At 40 columns the 28-cell refusal keeps 12 cells: the cut is the
+    // row minus the 25-cell stop and its 3-cell separator. Six cells of
+    // slack would keep 18 cells and push the stop off the row, so the
+    // full stop below pins the cut width.
+    let area = Rect::new(0, 0, 40, 5);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_header(&app, area, &mut buf, &mut targets);
+    let text = crate::view::text(&buf);
+    let stop_row = text.lines().nth(4).unwrap_or_default();
+    assert!(
+        stop_row.contains("Could not op · ■ stop s_dddddddddddddddd"),
+        "the 12-cell cut:\n{stop_row}"
+    );
+    assert!(
+        !stop_row.contains("Could not open: al"),
+        "no 18-cell cut:\n{stop_row}"
+    );
+    let stop = targets
+        .iter()
+        .find(|target| target.id == TargetId::Item(Spot::Stop))
+        .unwrap_or_else(|| panic!("stop target"));
+    assert_eq!(stop.rect.x, 15);
+    assert_eq!(stop.rect.width, 25);
+    assert_eq!(
+        buf.cell((stop.rect.x, stop.rect.y))
+            .map(|cell| cell.symbol()),
+        Some("■")
+    );
+}
+
+#[test]
 fn body_guard_rejects_a_zero_height_area() {
     let mut app = home(80, 24);
     opened(&mut app);
@@ -1213,6 +1250,137 @@ fn plain_job_header_has_no_live_screen_line() {
     assert!(
         !rows.iter().any(|row| row.contains("live screen")),
         "no live-screen line for a plain job"
+    );
+}
+
+#[test]
+fn a_job_status_cut_leaves_six_cells_for_the_stop() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home(40, 24);
+    opened(&mut app);
+    app.set_now(clock.now(), wall_ms(&clock));
+    mark_tty(&mut app);
+    app.on_line(session_line(
+        "job_started",
+        wall_ms(&clock).saturating_sub(11_000),
+        json!({"job_id": "j_2", "description": "build the workspace",
+            "output_path": "/tmp/out"}),
+    ));
+    open_job(&mut app, "j_2");
+    // At 40 columns the 43-cell status keeps 27 cells: the cut is the
+    // row minus the 10-cell stop and its 3-cell separator. Six cells of
+    // slack would keep 33 cells and push the stop off the row, so the
+    // full stop below pins the cut width.
+    let area = Rect::new(0, 0, 40, 5);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_header(&app, area, &mut buf, &mut targets);
+    let text = crate::view::text(&buf);
+    let status_row = text.lines().nth(2).unwrap_or_default();
+    assert!(
+        status_row.contains("job j_2 · build the workspa · ■ stop j_2"),
+        "the 27-cell cut:\n{status_row}"
+    );
+    assert!(
+        !status_row.contains("workspace · r"),
+        "no 33-cell cut:\n{status_row}"
+    );
+    let stop = targets
+        .iter()
+        .find(|target| target.id == TargetId::Item(Spot::Stop))
+        .unwrap_or_else(|| panic!("stop target"));
+    assert_eq!(stop.rect.x, 30);
+    assert_eq!(stop.rect.width, 10);
+    assert_eq!(
+        buf.cell((stop.rect.x, stop.rect.y))
+            .map(|cell| cell.symbol()),
+        Some("■")
+    );
+}
+
+#[test]
+fn a_job_stop_target_starts_on_the_drawn_stop_label() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home(80, 24);
+    opened(&mut app);
+    app.set_now(clock.now(), wall_ms(&clock));
+    mark_tty(&mut app);
+    app.on_line(session_line(
+        "job_started",
+        wall_ms(&clock).saturating_sub(11_000),
+        json!({"job_id": "j_2", "description": "build the workspace",
+            "output_path": "/tmp/out"}),
+    ));
+    open_job(&mut app, "j_2");
+    // The 43-cell status draws whole at 80 columns, so the stop starts
+    // after it and its separator: three cells of slack would start it
+    // early, and a scaled start would leave the row.
+    let area = Rect::new(0, 0, 80, 5);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_header(&app, area, &mut buf, &mut targets);
+    let stop = targets
+        .iter()
+        .find(|target| target.id == TargetId::Item(Spot::Stop))
+        .unwrap_or_else(|| panic!("stop target"));
+    assert_eq!(stop.rect.x, 46);
+    assert_eq!(stop.rect.width, 10);
+    assert_eq!(stop.rect.y, 2);
+    assert_eq!(
+        buf.cell((stop.rect.x, stop.rect.y))
+            .map(|cell| cell.symbol()),
+        Some("■")
+    );
+    assert_eq!(
+        buf.cell((
+            stop.rect
+                .x
+                .saturating_add(stop.rect.width)
+                .saturating_sub(1),
+            stop.rect.y
+        ))
+        .map(|cell| cell.symbol()),
+        Some("2")
+    );
+}
+
+#[test]
+fn a_tty_job_draws_its_live_screen_line_only_from_four_rows() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home(80, 24);
+    opened(&mut app);
+    app.set_now(clock.now(), wall_ms(&clock));
+    mark_tty(&mut app);
+    app.on_line(session_line(
+        "job_started",
+        wall_ms(&clock).saturating_sub(11_000),
+        json!({"job_id": "j_2", "description": "build the workspace",
+            "output_path": "/tmp/out"}),
+    ));
+    open_job(&mut app, "j_2");
+    // Four rows fit the top, the breadcrumb, the status and the live
+    // line; three rows stop after the status. Either boundary flip
+    // would move that edge.
+    let area = Rect::new(0, 0, 80, 4);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_header(&app, area, &mut buf, &mut targets);
+    let four = crate::view::text(&buf);
+    assert!(
+        four.lines()
+            .nth(3)
+            .unwrap_or_default()
+            .contains("live screen · 80 columns × 24 rows from attach"),
+        "the live line draws at four rows:\n{four}"
+    );
+    let area = Rect::new(0, 0, 80, 3);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_header(&app, area, &mut buf, &mut targets);
+    let three = crate::view::text(&buf);
+    assert!(
+        !three.lines().any(|row| row.contains("live screen")),
+        "no live line at three rows:\n{three}"
     );
 }
 
