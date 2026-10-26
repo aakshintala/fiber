@@ -61,13 +61,15 @@ impl Error {
 /// workspace. `hover` is `launch.hover`: with it off, mouse mode 1003 is
 /// never sent and nothing is tinted under the pointer. `Ok(0)` on quit
 /// and `Ok(1)` when the terminal cannot be set up or drawn. The terminal
-/// is restored on every return.
+/// is restored on every return. Timed scopes write through `diag`, the
+/// process's diagnostic writer.
 pub fn run(
     tty: File,
     launch: Launch,
     connect: Connect,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
+    diag: Arc<log::diag::Diag>,
 ) -> Result<i32, Error> {
     run_with(
         tty,
@@ -77,6 +79,7 @@ pub fn run(
         clock,
         Reader::spawn,
         |builder, body| builder.spawn(body),
+        diag,
     )
 }
 
@@ -84,6 +87,10 @@ pub fn run(
 /// line's timer spawn as functions so tests fail them. A failed spawn
 /// returns the failure without entering the loop: the terminal is
 /// restored by the [`term::Guard`] drop on that return.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each seam fails on its own in tests"
+)]
 pub(crate) fn run_with(
     tty: File,
     launch: Launch,
@@ -95,7 +102,13 @@ pub(crate) fn run_with(
         std::thread::Builder,
         Box<dyn FnOnce() + Send + 'static>,
     ) -> std::io::Result<std::thread::JoinHandle<()>>,
+    diag: Arc<log::diag::Diag>,
 ) -> Result<i32, Error> {
+    // The first render's span opens at entry: at `info` this is one level
+    // check with no clock read. Every pre-draw return below discards it,
+    // so a line there never times setup work as a frame that never drew.
+    let timing = crate::timing::Timing::new(diag);
+    let first_render = timing.first_render();
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
@@ -105,6 +118,7 @@ pub(crate) fn run_with(
     // kill the process without restoring, so a refused one fails before
     // any frame.
     let Ok(term_signals) = Signals::new([SIGTERM, SIGHUP]) else {
+        crate::timing::discard(first_render);
         return Ok(1);
     };
     catch_interrupts();
@@ -113,12 +127,15 @@ pub(crate) fn run_with(
     // never a child process or a tty/hub read.
     let hover = launch.hover;
     let Ok((width, height)) = term::setup(&tty, hover) else {
+        crate::timing::discard(first_render);
         return Ok(1);
     };
     let Ok(out) = tty.try_clone() else {
+        crate::timing::discard(first_render);
         return Ok(1);
     };
     let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
+        crate::timing::discard(first_render);
         return Ok(1);
     };
     // `App::new` maps an empty launch directory to no workspace, so a
@@ -220,8 +237,11 @@ pub(crate) fn run_with(
         }
     }
     if screen.draw(&mut app, None).is_err() {
+        crate::timing::discard(first_render);
         return Ok(1);
     }
+    // The frame drew: its line stands, whatever the loop meets after.
+    drop(first_render);
     // Startup pushes (config reads, session restores) gain births and
     // wakes before the first arm, so they fade like every other event.
     app.sweep_notices(clock.now());
@@ -251,6 +271,7 @@ pub(crate) fn run_with(
         tty,
         on_attach,
         clock,
+        timing,
         files_out: tx.clone(),
         search: None,
         reader,
@@ -362,6 +383,8 @@ struct Loop<B: Backend> {
     tty: File,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
+    /// The diagnostic writer the timed scopes share.
+    timing: crate::timing::Timing,
     /// Where workers post their results.
     files_out: Sender<Input>,
     /// The `@` panel's search worker, while the panel is open.
@@ -760,6 +783,9 @@ impl<B: Backend> Loop<B> {
     /// batch, after every input in it is handled. Returns the exit code
     /// when the terminal cannot be drawn.
     fn frame(&mut self, rx: &Receiver<Input>) -> Option<i32> {
+        // A frame past its 16 ms budget writes `tui.frame`; one within
+        // budget writes no line, so scrolling leaves the log small.
+        let _frame = self.timing.frame();
         // The reconciler's subscribes go out before the frame pages: an
         // acknowledgement arriving late is reconciled on the step that
         // brings it.
@@ -981,14 +1007,18 @@ impl<B: Backend> Loop<B> {
     /// Reads the open's tail when one is due: the history windows fill
     /// it, then the preview installs. No stream means the tail ended
     /// with nothing read; a lost read ends everything through
-    /// `disconnected`, with no install.
+    /// `disconnected`, with no install. The tail read stays untimed:
+    /// the attach timers cover the first fetched page below.
     fn open_tail(&mut self, rx: &Receiver<Input>) {
         let Some(session) = self.app.tail_due() else {
             return;
         };
         if !self.hub.has_stream() {
             self.app.tail_ended(None);
-        } else if self
+            self.app.install_tail();
+            return;
+        }
+        if self
             .hub
             .fetch_tail(
                 rx,
@@ -1002,6 +1032,11 @@ impl<B: Backend> Loop<B> {
         {
             return;
         }
+        // The completed read's install always runs: the open still holds
+        // its tail read here (only a lost connection drops it, and that
+        // returns above). No page count is compared: a rebuild can
+        // hold the same count, and an empty tail still installs its
+        // empty preview.
         self.app.install_tail();
     }
 
@@ -1016,10 +1051,15 @@ impl<B: Backend> Loop<B> {
             if !self.hub.has_stream() {
                 return;
             }
+            // The first attach's first fetched page is timed once per
+            // process, to completion whatever its outcome: an attempted
+            // read is work. The guards above return before any attempt,
+            // so they consume no latch.
+            let log_read = self.timing.log_read();
             // Each range loads under its own segment's session: ancestor
             // and descendant logs both start at `Seq(0)`, so a bare range
             // names no page on its own.
-            match self.hub.fetch(
+            let fetched = self.hub.fetch(
                 rx,
                 &session,
                 &range,
@@ -1027,9 +1067,16 @@ impl<B: Backend> Loop<B> {
                 &self.tick,
                 self.clock.as_ref(),
                 self.tick.armed(),
-            ) {
+            );
+            drop(log_read);
+            match fetched {
                 Ok(lines) => {
+                    // The first successful load folds the page into the
+                    // transcript, once per process. A failed fetch never
+                    // takes the latch, so it stays for the next load.
+                    let transcript = self.timing.transcript();
                     self.app.load(&session, lines);
+                    drop(transcript);
                     // An answer that folded nothing into the page would
                     // leave it needed, and the frame asking forever.
                     if self.app.needs().first() == Some(&(session.clone(), range.clone())) {
@@ -1174,65 +1221,69 @@ impl<B: Backend> Loop<B> {
 }
 
 #[cfg(test)]
-#[path = "lib_tests.rs"]
+#[path = "event_loop_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "lib_login_tests.rs"]
+#[path = "event_loop_login_tests.rs"]
 mod login_tests;
 
 #[cfg(test)]
-#[path = "lib_install_tests.rs"]
+#[path = "event_loop_install_tests.rs"]
 mod install_tests;
 
 #[cfg(test)]
-#[path = "lib_image_tests.rs"]
+#[path = "event_loop_image_tests.rs"]
 mod image_tests;
 
 #[cfg(test)]
-#[path = "lib_focus_tests.rs"]
+#[path = "event_loop_focus_tests.rs"]
 mod focus_tests;
 
 #[cfg(test)]
-#[path = "loop_tests.rs"]
+#[path = "event_loop_loop_tests.rs"]
 mod loop_tests;
 
 #[cfg(test)]
-#[path = "lib_mouse_tests.rs"]
+#[path = "timing_tests.rs"]
+mod timing_tests;
+
+#[cfg(test)]
+#[path = "event_loop_mouse_tests.rs"]
 mod mouse_tests;
 
 #[cfg(test)]
-#[path = "lib_delegates_tests.rs"]
+#[path = "event_loop_delegates_tests.rs"]
 mod delegates_tests;
 #[cfg(test)]
-#[path = "lib_panel_tests.rs"]
+#[path = "event_loop_panel_tests.rs"]
 mod panel_tests;
 #[cfg(test)]
-#[path = "lib_rail_tests.rs"]
+#[path = "event_loop_rail_tests.rs"]
 mod rail_tests;
 
 #[cfg(test)]
-#[path = "lib_drag_tests.rs"]
+#[path = "event_loop_drag_tests.rs"]
 mod drag_tests;
 
 #[cfg(test)]
-#[path = "lib_attention_tests.rs"]
+#[path = "event_loop_attention_tests.rs"]
 mod attention_tests;
 
 #[cfg(test)]
-#[path = "lib_look_tests.rs"]
+#[path = "event_loop_look_tests.rs"]
 mod look_tests;
 
 #[cfg(test)]
-#[path = "lib_settings_tests.rs"]
+#[path = "event_loop_settings_tests.rs"]
 mod settings_tests;
 
 #[cfg(test)]
-#[path = "lib_paste_tests.rs"]
+#[path = "event_loop_paste_tests.rs"]
 mod paste_tests;
 
 #[cfg(test)]
-#[path = "lib_reconnect_tests.rs"]
+#[path = "event_loop_reconnect_tests.rs"]
 mod reconnect_tests;
 
 #[cfg(test)]
