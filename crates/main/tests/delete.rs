@@ -22,7 +22,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
-use serde_json::json;
+use serde_json::{Value, json};
+use support::pty::Run;
 use support::*;
 
 const FORK: &str = "s_00000000000000d2";
@@ -267,4 +268,169 @@ fn without_yes_and_without_a_terminal_it_is_usage_and_removes_nothing() {
         !setup.home().join("logs").join("hub.log").exists(),
         "no hub was started"
     );
+}
+
+// `/delete` in the terminal (`docs/tui.md`, "Slash commands"): the
+// sections below drive the built terminal in a pty, type the command,
+// and assert on the screen. Every run and every wait carries a
+// deadline.
+
+/// The pty size the journeys draw on.
+const COLS: u16 = 160;
+const ROWS: u16 = 48;
+
+/// A config naming the workspace script, with the hub exiting once no
+/// client stays connected.
+fn scripted(setup: &Setup, steps: Value) {
+    write_json(&setup.workspace().join("s.json"), &json!({"steps": steps}));
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}}),
+    );
+}
+
+/// The stored session ids, or `None` while the first session directory is
+/// still being created.
+fn stored_at(dir: &Path) -> Option<Vec<String>> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => panic!("read session directory {}: {error}", dir.display()),
+    };
+    let mut ids: Vec<String> = entries
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    ids.sort();
+    Some(ids)
+}
+
+/// The ids of the sessions stored under the workspace, sorted.
+fn stored(setup: &Setup) -> Vec<String> {
+    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    stored_at(&dir).unwrap_or_else(|| panic!("session directory {} does not exist", dir.display()))
+}
+
+/// Waits for exactly `count` sessions to be stored before reading their ids.
+fn wait_stored(setup: &Setup, count: usize) -> Vec<String> {
+    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    fakes::wait_until("the stored session rows", setup.deadline, move || {
+        stored_at(&dir).is_some_and(|ids| ids.len() == count)
+    });
+    stored(setup)
+}
+
+/// Quits the terminal from the home screen with `/quit` and reaps what
+/// remains: home prints no resume line, so the run exits cleanly.
+fn quit_home(run: Run, guard: SessionGuard) {
+    let mut run = run;
+    run.write(b"/quit\r");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    guard.wait_gone();
+}
+
+/// `/delete` opens the session list's delete question for the session on
+/// screen, naming it, and Enter confirms through the hub: the terminal
+/// stays home with the session removed.
+#[test]
+fn delete_command_confirms_through_the_hub_and_removes_the_session() {
+    let setup = Setup::new();
+    scripted(&setup, json!([{"text": ["done."]}]));
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let mut run = Run::spawn(&setup, COLS, ROWS, &[], &[]);
+    run.ready();
+    run.write(b"run it\r");
+    run.wait_screen("the session reply", |grid| grid.contents.contains("done."));
+    let a = wait_stored(&setup, 1).into_iter().next().unwrap();
+    // The session dies while the terminal stays attached, so the delete
+    // question opens for it. Killing the process releases its lock at
+    // once, with no exiting window for the delete to race.
+    assert!(
+        !fakes::matching(&a)
+            .expect("pgrep lists the session")
+            .is_empty(),
+        "the session runs before the kill"
+    );
+    support::kill_matching(setup.deadline, &a).expect("the kill lands");
+    fakes::try_matching_exits(&a, setup.deadline).expect("the session process exits");
+    run.write(b"/delete\r");
+    run.wait_screen("the delete question", |grid| {
+        grid.contents.contains(a.as_str()) && grid.contents.contains("It cannot be undone")
+    });
+    run.write(b"\r");
+    // The hub answers Enter with the row gone or a refusal notice.
+    let grid = run.wait_screen("the delete answer", |grid| {
+        !grid.contents.contains(a.as_str()) || grid.contents.contains("Session `")
+    });
+    if let Some(note) = grid
+        .contents
+        .lines()
+        .find(|line| line.contains("Session `"))
+    {
+        panic!("the hub refused the delete: {note}");
+    }
+    let gone = session_dir(&setup, &a);
+    fakes::wait_until("the session directory to go", setup.deadline, move || {
+        !gone.exists()
+    });
+    run.wait_screen("home without the session", |grid| {
+        !grid.contents.contains(a.as_str())
+    });
+    quit_home(run, guard);
+}
+
+/// Esc in `/delete`'s question keeps the session: the row and its
+/// directory stay.
+#[test]
+fn delete_esc_keeps_the_session() {
+    let setup = Setup::new();
+    scripted(&setup, json!([{"text": ["done."]}]));
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let mut run = Run::spawn(&setup, COLS, ROWS, &[], &[]);
+    run.ready();
+    run.write(b"run it\r");
+    run.wait_screen("the session reply", |grid| grid.contents.contains("done."));
+    let a = wait_stored(&setup, 1).into_iter().next().unwrap();
+    // The session dies while the terminal stays attached, so the delete
+    // question opens for it.
+    assert!(
+        !fakes::matching(&a)
+            .expect("pgrep lists the session")
+            .is_empty(),
+        "the session runs before the kill"
+    );
+    support::kill_matching(setup.deadline, &a).expect("the kill lands");
+    fakes::try_matching_exits(&a, setup.deadline).expect("the session process exits");
+    run.write(b"/delete\r");
+    run.wait_screen("the delete question", |grid| {
+        grid.contents.contains(a.as_str()) && grid.contents.contains("It cannot be undone")
+    });
+    run.write(b"\x1b[27u");
+    run.wait_screen("the question closed", |grid| {
+        !grid.contents.contains("It cannot be undone")
+    });
+    assert!(
+        session_dir(&setup, &a).join("events.jsonl").is_file(),
+        "Esc deletes nothing"
+    );
+    assert_eq!(wait_stored(&setup, 1).len(), 1, "Esc starts nothing");
+    quit_home(run, guard);
+}
+
+/// `/delete` on home with no session on screen shows the notice.
+#[test]
+fn delete_on_home_with_no_session_says_so() {
+    let setup = Setup::new();
+    scripted(&setup, json!([{"text": ["done."]}]));
+    let mut run = Run::spawn(&setup, COLS, ROWS, &[], &[]);
+    run.ready();
+    run.write(b"/delete\r");
+    run.wait_screen("the no-session notice", |grid| {
+        grid.contents.contains("No session on screen.")
+    });
+    run.write(b"/quit\r");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
 }
