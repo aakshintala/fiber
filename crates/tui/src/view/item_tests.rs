@@ -285,6 +285,26 @@ fn rendered(app: &App, width: u16, height: u16) -> (Vec<String>, Vec<Target>) {
     (rows, targets)
 }
 
+/// Renders `app` at `width` by `height`: the buffer, for style asserts.
+fn rendered_buf(app: &App, width: u16, height: u16) -> Buffer {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let _ = crate::view::render(app, area, &mut buf, None);
+    buf
+}
+
+/// The buffer's row holding `needle`, for style asserts.
+fn row_with(buf: &Buffer, needle: &str) -> u16 {
+    crate::view::text(buf)
+        .lines()
+        .enumerate()
+        .find_map(|(y, row)| {
+            row.contains(needle)
+                .then(|| u16::try_from(y).unwrap_or(u16::MAX))
+        })
+        .unwrap_or_else(|| panic!("a row with {needle}"))
+}
+
 /// Renders `app` and takes the frame's targets, so focus steps through
 /// what is drawn.
 fn frame(app: &mut App, width: u16, height: u16) -> Vec<Target> {
@@ -300,18 +320,94 @@ fn wall_ms(clock: &std::sync::Arc<fakes::clock::FakeClock>) -> u64 {
 
 #[test]
 fn running_delegate_header_with_held_status() {
+    use ratatui::style::Modifier;
+
+    use crate::theme::Role;
+
     let clock = fakes::clock::FakeClock::new();
     let mut app = home(80, 24);
     opened(&mut app);
     app.set_now(clock.now(), wall_ms(&clock));
-    // Sixty seconds in: the status row reads whole minutes.
+    // Sixty seconds in: the elapsed row reads whole minutes.
     start_delegate(&mut app, wall_ms(&clock).saturating_sub(61_000));
-    // The delegate's own summary is held: the glyph and word name it.
-    app.on_line(delegate_status(
-        json!({"state": "streaming", "started": wall_ms(&clock)}),
-    ));
+    // The delegate's own summary is held with its thinking level.
+    app.on_line(delegate_status(json!({
+        "state": "streaming", "started": wall_ms(&clock), "thinking": "high",
+    })));
     open_item(&mut app);
-    let (rows, _) = rendered(&app, 80, 24);
+    let (rows, targets) = rendered(&app, 80, 24);
+    assert!(rows[0].contains("Delegate  ◆ review the parser"));
+    assert!(rows[0].contains("Esc returns"));
+    assert!(!rows[0].contains('✕'));
+    assert!(rows[1].contains("fix the parser › ◆ review the parser"));
+    assert!(rows[2].contains("harness fiber"));
+    assert!(rows[2].contains(" · model test/model · high"));
+    assert!(rows[3].contains("0 calls ·"));
+    assert!(rows[3].contains("1m 01s"));
+    assert!(rows[3].contains("session s_dddddddddddddddd"));
+    assert!(rows[4].contains("■ stop s_dddddddddddddddd"));
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::Item(Spot::Stop))
+    );
+    let buf = rendered_buf(&app, 80, 24);
+    // The breadcrumb is bold.
+    let crumb = row_with(&buf, "› ◆ review the parser");
+    for x in 0..80 {
+        let cell = &buf[(x, crumb)];
+        if cell.symbol() != " " {
+            assert!(cell.modifier.contains(Modifier::BOLD), "bold crumb {x}");
+        }
+    }
+    // Every card row's cells sit on the `surface` tint.
+    for needle in ["harness fiber", "0 calls ·", "■ stop s_dddddddddddddddd"] {
+        let y = row_with(&buf, needle);
+        let first = (0..80)
+            .find(|x| buf[(*x, y)].symbol() != " ")
+            .unwrap_or_else(|| panic!("card text {needle}"));
+        let last = (0..80)
+            .rev()
+            .find(|x| buf[(*x, y)].symbol() != " ")
+            .unwrap_or_else(|| panic!("card text {needle}"));
+        for x in first..=last {
+            assert_eq!(buf[(x, y)].bg, Role::Surface.color(), "card tint {x},{y}");
+        }
+    }
+    // The harness draws plain, the model segment dim.
+    let card = row_with(&buf, "harness fiber");
+    let line: String = crate::view::text(&buf)
+        .lines()
+        .nth(usize::from(card))
+        .unwrap_or_default()
+        .to_owned();
+    let harness_at = line
+        .find("harness fiber")
+        .unwrap_or_else(|| panic!("the harness part"));
+    let model_at = line
+        .find(" · model test/model · high")
+        .unwrap_or_else(|| panic!("the model part"));
+    for (index, ch) in line.chars().enumerate() {
+        if ch == ' ' {
+            continue;
+        }
+        let x = u16::try_from(index).unwrap_or(u16::MAX);
+        let fg = buf[(x, card)].fg;
+        if index >= model_at {
+            assert_eq!(fg, Role::Muted.color(), "dim model {x}");
+        } else if index >= harness_at {
+            assert_eq!(fg, Role::Text.color(), "plain harness {x}");
+        }
+    }
+    // The stop target draws in `error`.
+    let stop = row_with(&buf, "■ stop");
+    for x in 0..80 {
+        let cell = &buf[(x, stop)];
+        if cell.symbol() != " " {
+            assert_eq!(cell.fg, Role::Error.color(), "error stop {x}");
+            assert_eq!(cell.bg, Role::Surface.color(), "stop tint {x}");
+        }
+    }
     insta::assert_snapshot!("running_delegate_header_with_held_status", rows.join("\n"));
 }
 
@@ -324,6 +420,14 @@ fn running_delegate_header_unheld() {
     start_delegate(&mut app, wall_ms(&clock).saturating_sub(11_000));
     open_item(&mut app);
     let (rows, _) = rendered(&app, 80, 24);
+    assert!(rows[0].contains("Delegate  ◆ review the parser"));
+    assert!(rows[1].contains("fix the parser › ◆ review the parser"));
+    // No held status names no level: the model segment ends the card's
+    // first row with no trailing separator.
+    assert!(rows[2].contains("harness fiber"));
+    assert!(rows[2].trim_end().ends_with("model test/model"));
+    assert!(!rows[2].contains("high"));
+    assert!(rows[4].contains("■ stop s_dddddddddddddddd"));
     insta::assert_snapshot!("running_delegate_header_unheld", rows.join("\n"));
 }
 
@@ -363,6 +467,9 @@ fn completed_delegate_header_freezes_the_elapsed_and_drops_the_stop() {
     let (rows, targets) = rendered(&app, 80, 24);
     assert!(rows.iter().any(|row| row.contains("failed")));
     assert!(rows.iter().any(|row| row.contains("2m 00s")));
+    // The outcome sits where the stop target would be.
+    assert!(rows[4].contains("failed"));
+    assert!(!rows[4].contains("■ stop"));
     assert!(
         targets
             .iter()
@@ -411,7 +518,7 @@ fn a_click_anywhere_on_the_top_row_closes_the_view() {
     opened(&mut app);
     start_delegate(&mut app, 0);
     open_item(&mut app);
-    let area = Rect::new(3, 2, 80, 2);
+    let area = Rect::new(3, 2, 80, 5);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
     super::draw_header(&app, area, &mut buf, &mut targets);
@@ -603,9 +710,10 @@ fn the_wheel_over_the_transcript_scrolls_it() {
     }
     let height = app.conversation_height();
     assert!(height > 0);
-    // Below the header's two rows, on the transcript's last row: past
+    // Below the header's five rows, on the transcript's last row: past
     // the grip, which takes column 0.
-    let row = 2u16.saturating_add(u16::try_from(height).unwrap_or(u16::MAX).saturating_sub(1));
+    let header = u16::try_from(crate::view::item::ITEM_HEADER_ROWS).unwrap_or(u16::MAX);
+    let row = header.saturating_add(u16::try_from(height).unwrap_or(u16::MAX).saturating_sub(1));
     app.on_wheel(&Mouse {
         kind: MouseKind::WheelUp,
         col: 2,
@@ -648,7 +756,8 @@ fn a_drag_selection_starts_at_the_transcript_first_row() {
         .layout()
         .map(|layout| layout.column.y)
         .unwrap_or(0);
-    assert_eq!(app.conversation_area().y, body_y.saturating_add(2));
+    let header = u16::try_from(crate::view::item::ITEM_HEADER_ROWS).unwrap_or(u16::MAX);
+    assert_eq!(app.conversation_area().y, body_y.saturating_add(header));
     assert!(!app.conversation_covered());
     // The view bottom-aligns a short transcript: the press goes on its
     // last drawn row, the drag to the area's top clamps to its first.
@@ -746,12 +855,12 @@ fn elapsed_counts_whole_seconds_at_each_side_of_the_minute() {
         start_delegate(&mut app, wall_ms(&clock).saturating_sub(ago));
         open_item(&mut app);
         let (rows, _) = rendered(&app, 80, 24);
-        let status = rows
+        let elapsed = rows
             .iter()
-            .find(|row| row.contains("harness"))
+            .find(|row| row.contains("elapsed"))
             .cloned()
             .unwrap_or_default();
-        assert!(status.contains(text), "{text} in {status}");
+        assert!(elapsed.contains(text), "{text} in {elapsed}");
     }
 }
 
@@ -771,21 +880,46 @@ fn header_guard_rejects_either_zero_dimension() {
 }
 
 #[test]
-fn header_draws_the_status_at_two_rows_and_only_the_breadcrumb_at_one() {
+fn header_draws_each_row_only_with_room_for_it() {
     let mut app = home(80, 24);
     opened(&mut app);
     start_delegate(&mut app, 0);
     open_item(&mut app);
-    for (height, has_stop) in [(1, false), (2, true), (3, true)] {
+    // The delegate's card fills the five header rows: the stop target
+    // draws only with room for the card's last row.
+    for (height, rows) in [
+        (1, ["Delegate", "", "", "", ""]),
+        (2, ["Delegate", "◆ review", "", "", ""]),
+        (3, ["Delegate", "◆ review", "harness", "", ""]),
+        (4, ["Delegate", "◆ review", "harness", "calls", ""]),
+        (5, ["Delegate", "◆ review", "harness", "calls", "■ stop"]),
+    ] {
         let area = Rect::new(0, 0, 80, height);
-        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 5));
         let mut targets = Vec::new();
         super::draw_header(&app, area, &mut buf, &mut targets);
+        let text = crate::view::text(&buf);
+        for (index, needle) in rows.iter().enumerate() {
+            let line = text.lines().nth(index).unwrap_or_default();
+            if needle.is_empty() {
+                assert!(line.trim().is_empty(), "height {height} row {index}");
+            } else {
+                assert!(line.contains(needle), "height {height} row {index}");
+            }
+        }
         assert_eq!(
             targets
                 .iter()
                 .any(|target| target.id == TargetId::Item(Spot::Stop)),
-            has_stop,
+            height == 5,
+            "height {height}"
+        );
+        assert_eq!(
+            targets
+                .iter()
+                .filter(|target| target.id == TargetId::Item(Spot::Close))
+                .count(),
+            1,
             "height {height}"
         );
     }
@@ -797,7 +931,7 @@ fn stop_target_starts_on_the_drawn_stop_label() {
     opened(&mut app);
     start_delegate(&mut app, 0);
     open_item(&mut app);
-    let area = Rect::new(0, 0, 80, 2);
+    let area = Rect::new(0, 0, 80, 5);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
     super::draw_header(&app, area, &mut buf, &mut targets);
@@ -813,19 +947,27 @@ fn stop_target_starts_on_the_drawn_stop_label() {
 }
 
 #[test]
-fn stop_target_is_omitted_when_the_label_starts_at_the_right_edge() {
+fn stop_target_covers_the_cut_stop_at_a_narrow_width() {
     let mut app = home(80, 24);
     opened(&mut app);
     start_delegate(&mut app, 0);
     open_item(&mut app);
-    let area = Rect::new(0, 0, 3, 2);
+    // The message is cut to fit the stop, so the stop always starts
+    // inside the row: its target covers the drawn cells.
+    let area = Rect::new(0, 0, 10, 5);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
     super::draw_header(&app, area, &mut buf, &mut targets);
-    assert!(
-        targets
-            .iter()
-            .all(|target| target.id != TargetId::Item(Spot::Stop))
+    let stop = targets
+        .iter()
+        .find(|target| target.id == TargetId::Item(Spot::Stop))
+        .unwrap_or_else(|| panic!("stop target"));
+    assert_eq!(stop.rect.x, 0);
+    assert_eq!(stop.rect.width, 10);
+    assert_eq!(
+        buf.cell((stop.rect.x, stop.rect.y))
+            .map(|cell| cell.symbol()),
+        Some("■")
     );
 }
 
@@ -864,7 +1006,7 @@ fn elapsed_asks_for_the_next_whole_second_using_milliseconds() {
     start_delegate(&mut app, 1_500);
     open_item(&mut app);
     app.motion().clear_wake();
-    let area = Rect::new(0, 0, 80, 2);
+    let area = Rect::new(0, 0, 80, 5);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
     super::draw_header(&app, area, &mut buf, &mut targets);
@@ -953,11 +1095,9 @@ fn no_selection_starts_in_a_view_without_a_transcript() {
     );
 }
 
-#[test]
-fn a_refusal_message_draws_on_the_status_row() {
-    let mut app = home(160, 40);
-    opened(&mut app);
-    start_delegate(&mut app, 0);
+/// Refuses the open delegate's subscribe, so its view shows the refusal
+/// message "Could not open: already full" on the stop row.
+fn refused_open(app: &mut App) {
     let serial = app
         .serial_of_job(&contract::JobId("j_1".to_owned()))
         .unwrap_or_else(|| panic!("a serial"));
@@ -1007,10 +1147,44 @@ fn a_refusal_message_draws_on_the_status_row() {
         seq: None,
         payload,
     }));
+}
+
+#[test]
+fn a_refusal_message_draws_on_the_stop_row() {
+    let mut app = home(160, 40);
+    opened(&mut app);
+    start_delegate(&mut app, 0);
+    refused_open(&mut app);
     let (rows, _) = rendered(&app, 160, 40);
-    // The row is cut at the column's edge, so only the message's head
-    // shows beside the stop target.
-    assert!(rows.iter().any(|row| row.contains("· Co ·")));
+    // The message draws on the stop row, cut to fit the stop target.
+    let stop = rows
+        .iter()
+        .find(|row| row.contains("■ stop s_dddddddddddddddd"))
+        .unwrap_or_else(|| panic!("the stop row"));
+    assert!(stop.contains("Could not open: already full"));
+}
+
+#[test]
+fn a_refusal_message_cut_to_empty_leaves_no_separator() {
+    let mut app = home(80, 24);
+    opened(&mut app);
+    start_delegate(&mut app, 0);
+    refused_open(&mut app);
+    // Too narrow for any message text: the stop still starts the row
+    // with its target, and no dangling separator precedes it.
+    let area = Rect::new(0, 0, 10, 5);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_header(&app, area, &mut buf, &mut targets);
+    let text = crate::view::text(&buf);
+    let stop = text.lines().nth(4).unwrap_or_default();
+    assert!(!stop.contains("·"), "{stop}");
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::Item(Spot::Stop)),
+        "the cut stop keeps its target"
+    );
 }
 
 #[test]
@@ -1090,6 +1264,7 @@ fn an_item_views_transcript_draws_no_pin() {
     assert!(app.pinned_row().is_none(), "no pin in an item view");
     let (shown, targets) = rendered(&app, 80, 24);
     // The transcript's first drawn row is the covered row itself.
+    // The item's five header rows draw above the conversation area.
     let _ = crate::view::item::ITEM_HEADER_ROWS;
     let top = app.top().expect("a scrolled transcript");
     let (page, _) = app.pages().page_text(0).expect("the resident page");
@@ -1103,7 +1278,7 @@ fn an_item_views_transcript_draws_no_pin() {
         row += height;
     }
     let covered = covered.expect("the covered row");
-    // The item's two header rows draw above the conversation area, so
+    // The item's five header rows draw above the conversation area, so
     // the transcript's first row is the area's own first row.
     let body_y = app.conversation_area().y;
     assert_eq!(shown[usize::from(body_y)].trim(), covered.trim());

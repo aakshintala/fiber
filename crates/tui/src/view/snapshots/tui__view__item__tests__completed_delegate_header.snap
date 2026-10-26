@@ -2,11 +2,11 @@
 source: crates/tui/src/view/item_tests.rs
 expression: "rows.join(\"\\n\")"
 ---
+  Delegate  ◆ review the parser                                      Esc returns
  fix the parser › ◆ review the parser
- ✗ failed · harness fiber · model test/model · 0 calls · 2m 00s · session s_dddd
-
-
-
+ harness fiber · model test/model
+ 0 calls · elapsed 2m 00s · session s_dddddddddddddddd
+ ✗ failed
 
 
 
