@@ -293,13 +293,19 @@ impl App {
                 code: ErrorCode::IoFailed,
                 message: "Installing is not available in this terminal.".to_owned(),
             };
-            if let Some(state) = self.take_hooks_offer() {
-                let code = crate::format::code(&error.code);
-                self.settle_hooks_start(&state);
-                self.push_notice(&code, install_failure_text(&error));
-            }
+            self.fail_hooks_install(error);
             return Effect::None;
         };
+        // A remote without a hub link fails at once, with no job: the
+        // worker would only repeat the hub's own refusal to route.
+        if self.remote().is_some() && !self.outbox.is_up() {
+            let error = crate::configure::ConfigureError {
+                code: ErrorCode::IoFailed,
+                message: "The hub is not connected.".to_owned(),
+            };
+            self.fail_hooks_install(error);
+            return Effect::None;
+        }
         if let Some(home) = self.home.as_mut()
             && let Some(Prompt::HooksOffer(state)) = home.questions.prompt.as_mut()
             && state.ticket == ticket
@@ -322,6 +328,22 @@ impl App {
         self.hooks_job = None;
         if !self.clear_rejected(&state.refused_id, &state.code, &state.message) {
             self.rejected(&state.refused_id, &state.code, state.message.clone());
+        }
+    }
+
+    /// Closes the offer on an install that never runs — no seam, or no
+    /// hub link for a remote — settling the refused start silently and
+    /// presenting the failure naming the install command instead.
+    fn fail_hooks_install(&mut self, error: ConfigureError) {
+        if let Some(state) = self.take_hooks_offer() {
+            let code = crate::format::code(&error.code);
+            let code = if code.is_empty() {
+                "io_failed".to_owned()
+            } else {
+                code
+            };
+            self.settle_hooks_start(&state);
+            self.push_notice(&code, install_failure_text(&error));
         }
     }
 
@@ -391,11 +413,11 @@ impl App {
         if !self.hooks_ticket_live(ticket, true) {
             return Vec::new();
         }
-        let Some(state) = self.take_hooks_offer() else {
-            return Vec::new();
-        };
         match result {
             Ok(()) => {
+                let Some(state) = self.take_hooks_offer() else {
+                    return Vec::new();
+                };
                 let id = mint();
                 let line = json!({"id": id, "command": "start", "args": state.args}).to_string();
                 let draft = self
@@ -420,14 +442,9 @@ impl App {
                 }
             }
             Err(error) => {
-                let code = crate::format::code(&error.code);
-                let code = if code.is_empty() {
-                    "io_failed".to_owned()
-                } else {
-                    code
-                };
-                self.settle_hooks_start(&state);
-                self.push_notice(&code, install_failure_text(&error));
+                // The install's own failure replaces the offer: no
+                // session starts, and no second result can retry.
+                self.fail_hooks_install(error);
                 Vec::new()
             }
         }

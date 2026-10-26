@@ -613,6 +613,413 @@ fn presses_hold_while_the_names_query_runs_over_an_attached_session() {
 }
 
 #[test]
+fn accepting_resends_the_retained_start_unchanged() {
+    let mut app = home(Some(fake()));
+    app.launch_overrides = vec!["z=1".to_owned(), "a=2".to_owned(), "z=1".to_owned()];
+    app.on_line(hello());
+    let old = refuse_start(&mut app, "hi");
+    // The query repeats the start's workspace with its exact ordered
+    // overrides, repeated keys kept.
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => {
+            assert_eq!(query.workspace, PathBuf::from("/w"));
+            assert_eq!(
+                query.overrides,
+                vec!["z=1".to_owned(), "a=2".to_owned(), "z=1".to_owned()]
+            );
+            query.ticket
+        }
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    let first = app.outbox.start_line(&old).expect("the start is retained");
+    let first: Value = serde_json::from_str(&first).expect("the retained start");
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    // An install answer for another ticket while the query's offer
+    // waits does nothing: without the ticket check it would send a
+    // spare start for an install nobody committed.
+    assert!(
+        app.on_hooks_installed(ticket.wrapping_add(1), Ok(()))
+            .is_empty()
+    );
+    assert!(app.hooks_offer_open());
+    // Enter commits the install: the job waits, and nothing goes out yet.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(matches!(
+        app.take_hooks_job(),
+        Some(crate::install_worker::HooksJob::Install(_))
+    ));
+    assert!(app.hooks_offer_open(), "the offer waits on the install");
+    // Success resends the retained args unchanged under a fresh id, and
+    // the hub reruns its gate: the args match the first send exactly.
+    let lines = app.on_hooks_installed(ticket, Ok(()));
+    assert_eq!(lines.len(), 1);
+    let retry: Value = serde_json::from_str(&lines[0]).expect("the retry");
+    assert_eq!(retry["command"], "start");
+    assert_eq!(retry["args"], first["args"]);
+    assert_ne!(retry["id"], first["id"]);
+    let new = retry["id"]
+        .as_str()
+        .expect("the retry has an id")
+        .to_owned();
+    assert!(app.outbox.pending.contains_key(&new));
+    assert!(!app.outbox.pending.contains_key(&old));
+    assert!(
+        app.outbox.start_line(&new).is_some(),
+        "the retry is retained"
+    );
+    assert!(app.outbox.start_line(&old).is_none());
+    assert!(matches!(app.phase, Phase::Pending { .. }));
+    // The new start's answer opens the session, as any start's does:
+    // attach, commands, then the pending draft as its first prompt.
+    let out = app.on_line(accepted(&new, "s_aaaaaaaaaaaaaaaa"));
+    assert_eq!(out.len(), 3);
+    assert!(out[2].contains("hi"), "the draft prompts first");
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    // No second result for the ticket can retry: the late success and a
+    // stale ticket change nothing.
+    assert!(app.on_hooks_installed(ticket, Ok(())).is_empty());
+    assert!(
+        app.on_hooks_installed(ticket.wrapping_add(1), Ok(()))
+            .is_empty()
+    );
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+}
+
+#[test]
+fn clear_staged_accept_closes_the_old_session_with_its_credential() {
+    let old_session = "s_aaaaaaaaaaaaaaaa";
+    let mut app = home(Some(fake()));
+    app.launch_overrides = vec!["providers.\"test\".credential=work".to_owned()];
+    app.on_line(hello());
+    // The first start carries the credential, so the panel records it.
+    let first = send_start(&mut app, "hi");
+    app.on_line(accepted(&first, old_session));
+    app.on_line(status(old_session));
+    app.clear();
+    let staged = app
+        .clear_pending
+        .as_ref()
+        .expect("the clear staged a start")
+        .command_id
+        .clone();
+    let staged_line = app
+        .outbox
+        .start_line(&staged)
+        .expect("the stage is retained");
+    let staged_args: Value = serde_json::from_str(&staged_line).expect("the stage");
+    assert!(
+        staged_args["args"]["overrides"]
+            .as_array()
+            .is_some_and(|overrides| overrides
+                .iter()
+                .any(|override_| override_ == "providers.\"test\".credential=work")),
+        "the clear carries the credential"
+    );
+    app.on_line(refused(&staged, "extension_missing", MISSING));
+    assert!(app.hooks_offer_open());
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(matches!(
+        app.take_hooks_job(),
+        Some(crate::install_worker::HooksJob::Install(_))
+    ));
+    // The retry resends the staged args unchanged, then the accepted
+    // retry closes the old session: no extra close went out before.
+    let lines = app.on_hooks_installed(ticket, Ok(()));
+    assert_eq!(lines.len(), 1);
+    let retry: Value = serde_json::from_str(&lines[0]).expect("the retry");
+    assert_eq!(retry["args"], staged_args["args"]);
+    let new = retry["id"]
+        .as_str()
+        .expect("the retry has an id")
+        .to_owned();
+    assert_eq!(
+        app.clear_pending
+            .as_ref()
+            .map(|pending| pending.command_id.as_str()),
+        Some(new.as_str()),
+        "the clear follows the retry"
+    );
+    let out = app.on_line(accepted(&new, "s_bbbbbbbbbbbbbbbb"));
+    assert_eq!(out.len(), 3);
+    let close: Value = serde_json::from_str(&out[2]).expect("the close");
+    assert_eq!(close["command"], "close");
+    assert_eq!(close["session_id"], old_session);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_bbbbbbbbbbbbbbbb")
+    );
+}
+
+#[test]
+fn install_failure_replaces_the_offer_and_blocks_retry() {
+    let mut app = home(Some(fake()));
+    app.on_line(hello());
+    let old = refuse_start(&mut app, "hi");
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(matches!(
+        app.take_hooks_job(),
+        Some(crate::install_worker::HooksJob::Install(_))
+    ));
+    // The install's own failure replaces the offer: the error keeps its
+    // text, naming the install command it lacked.
+    let lines = app.on_hooks_installed(
+        ticket,
+        Err(ConfigureError {
+            code: ErrorCode::ExtensionFailed,
+            message: "no network".to_owned(),
+        }),
+    );
+    assert!(lines.is_empty(), "a failure sends no start");
+    assert!(!app.hooks_offer_open());
+    assert_eq!(
+        notices(&app),
+        [(
+            "extension_failed".to_owned(),
+            "no network. Run `fiber extension install hooks`.".to_owned()
+        )]
+    );
+    // An ordinary start restores its draft and phase, with no session.
+    assert_eq!(app.draft(), "hi");
+    assert!(matches!(app.phase, Phase::Starting));
+    assert!(app.session().is_none());
+    assert!(!app.outbox.pending.contains_key(&old));
+    // No second result for the ticket can retry, late success included.
+    assert!(app.on_hooks_installed(ticket, Ok(())).is_empty());
+    assert!(
+        app.on_hooks_installed(ticket.wrapping_add(1), Ok(()))
+            .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert_eq!(notices(&app).len(), 1);
+}
+
+#[test]
+fn disconnect_while_installing_fails_without_retry() {
+    let mut app = home(Some(fake()));
+    app.on_line(hello());
+    let old = refuse_start(&mut app, "hi");
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(matches!(
+        app.take_hooks_job(),
+        Some(crate::install_worker::HooksJob::Install(_))
+    ));
+    // The dropped connection ends the wait: the existing lost-link
+    // notice stays, then the failure names the install command with
+    // the connection lost, and no retry follows.
+    app.disconnected();
+    assert!(!app.hooks_offer_open());
+    assert!(app.take_hooks_job().is_none(), "the queued job never runs");
+    assert_eq!(
+        notices(&app),
+        [
+            (
+                "connection_failed".to_owned(),
+                "Connection lost.".to_owned()
+            ),
+            (
+                "connection_failed".to_owned(),
+                "Connection lost while installing hooks. Run `fiber extension install hooks`."
+                    .to_owned()
+            )
+        ]
+    );
+    assert!(!app.outbox.pending.contains_key(&old));
+    // A late success after the disconnect changes nothing: no start
+    // goes out, no session opens, and the failure stands unchanged.
+    assert!(app.on_hooks_installed(ticket, Ok(())).is_empty());
+    assert!(app.session().is_none());
+    assert_eq!(notices(&app).len(), 2);
+}
+
+#[test]
+fn disconnect_during_the_names_query_follows_lost_link_handling() {
+    let mut app = home(Some(fake()));
+    app.on_line(hello());
+    let old = refuse_start(&mut app, "hi");
+    assert!(app.take_hooks_job().is_some(), "the query runs");
+    app.disconnected();
+    assert!(!app.hooks_offer_open(), "the offer closes");
+    assert!(app.take_hooks_job().is_none(), "the queued job never runs");
+    // The dropped link notices through the existing path.
+    assert_eq!(
+        notices(&app),
+        [(
+            "connection_failed".to_owned(),
+            "Connection lost.".to_owned()
+        )]
+    );
+    // The later answer is stale: no offer, no failure, no session.
+    app.on_hooks_offer_names(1, Ok(vec!["fmt".to_owned()]));
+    assert!(!app.hooks_offer_open());
+    assert_eq!(notices(&app).len(), 1);
+    // The refused start still waits: the reconnect settles it through
+    // the existing unanswered path.
+    assert!(app.outbox.pending.contains_key(&old));
+    app.on_line(hello());
+    // The reconnect clears the dropped-link notice, then settles the
+    // still-waiting start through the existing unanswered path.
+    assert_eq!(
+        notices(&app),
+        [(
+            "connection_failed".to_owned(),
+            "No answer before the connection was lost.".to_owned()
+        )]
+    );
+    assert!(matches!(app.phase, Phase::Starting));
+}
+
+#[test]
+fn commits_without_a_seam_or_link_fail_at_once_with_no_job() {
+    // No seam: the install cannot run, so the offer closes on the
+    // failure naming the command instead.
+    let mut app = home(Some(fake()));
+    app.on_line(hello());
+    refuse_start(&mut app, "hi");
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    app.set_configure(None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.take_hooks_job().is_none(), "no job runs without a seam");
+    assert!(!app.hooks_offer_open());
+    assert_eq!(
+        notices(&app),
+        [(
+            "io_failed".to_owned(),
+            "Installing is not available in this terminal. Run `fiber extension install hooks`."
+                .to_owned()
+        )]
+    );
+
+    // A remote whose hub link drops fails the same way, with no job.
+    let mut app = home(Some(fake()));
+    let router = crate::remote::Router::new();
+    let remote = Arc::new(crate::remote::Remote::new(
+        Arc::new(Fake::new(Vec::new())),
+        "/client".into(),
+        router,
+    ));
+    app.set_remote(Arc::clone(&remote));
+    app.on_line(hello());
+    let before = notices(&app).len();
+    let old = refuse_start(&mut app, "hi");
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    app.outbox.link = crate::app::Link::Down;
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(
+        app.take_hooks_job().is_none(),
+        "no job runs without the link"
+    );
+    assert!(!app.hooks_offer_open());
+    // Whatever hello through the detached remote already noticed, the
+    // commit adds exactly the link failure naming the command.
+    assert_eq!(
+        notices(&app)[before..],
+        [(
+            "io_failed".to_owned(),
+            "The hub is not connected. Run `fiber extension install hooks`.".to_owned()
+        )]
+    );
+    assert!(!app.outbox.pending.contains_key(&old));
+}
+
+#[test]
+fn spawn_failures_fold_as_their_own_side() {
+    // A query that never starts settles the original refusal: the
+    // spawn failure never becomes an install failure.
+    let seam = fake();
+    let mut app = home(Some(Arc::clone(&seam)));
+    app.on_line(hello());
+    refuse_start(&mut app, "hi");
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(
+        ticket,
+        Err(ConfigureError {
+            code: ErrorCode::IoFailed,
+            message: "terminal: could not start the names query: none left".to_owned(),
+        }),
+    );
+    assert!(!app.hooks_offer_open());
+    assert_eq!(
+        notices(&app),
+        [("extension_missing".to_owned(), MISSING.to_owned())]
+    );
+
+    // An install that never starts replaces the offer with the failure
+    // naming the command: no seam install runs, no start goes out.
+    let seam = fake();
+    let mut app = home(Some(Arc::clone(&seam)));
+    app.on_line(hello());
+    refuse_start(&mut app, "hi");
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(matches!(
+        app.take_hooks_job(),
+        Some(crate::install_worker::HooksJob::Install(_))
+    ));
+    assert!(
+        app.on_hooks_installed(
+            ticket,
+            Err(ConfigureError {
+                code: ErrorCode::IoFailed,
+                message: "terminal: could not start the install: none left".to_owned(),
+            })
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        notices(&app),
+        [(
+            "io_failed".to_owned(),
+            "terminal: could not start the install: none left. Run `fiber extension install hooks`.".to_owned()
+        )]
+    );
+    assert_eq!(
+        seam.hooks_installs
+            .lock()
+            .map(|runs| *runs)
+            .unwrap_or_default(),
+        0,
+        "the spawn failure ran no install"
+    );
+    assert!(app.outbox.pending.is_empty(), "no retry went out");
+}
+
+#[test]
 fn row_clicks_cannot_clobber_the_offer() {
     let mut app = home(Some(fake()));
     let lines = app.on_line(hello());

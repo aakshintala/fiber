@@ -10,7 +10,7 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use fakes::Deadline;
 
-use super::{start, start_with};
+use super::{HooksInstall, HooksJob, HooksQuery, start, start_hooks, start_hooks_with, start_with};
 use crate::Input;
 use crate::configure::{Configure, ConfigureError, ProviderInstall};
 use crate::configure_fake::Fake;
@@ -97,6 +97,197 @@ fn a_gated_install_posts_nothing_until_released() {
     assert!(rx.try_recv().is_err());
     gate.send(Ok(answered("released"))).unwrap();
     assert_eq!(next(&rx), ("openai".to_owned(), Ok(answered("released"))));
+}
+
+/// The hooks offer's names query through `fake`: exact workspace and
+/// ordered overrides, repeated keys kept.
+fn query(fake: &Arc<Fake>, ticket: u64) -> HooksJob {
+    HooksJob::Query(HooksQuery {
+        ticket,
+        workspace: "/w".into(),
+        overrides: vec!["z=1".to_owned(), "a=2".to_owned(), "z=1".to_owned()],
+        seam: Arc::clone(fake) as Arc<dyn Configure>,
+    })
+}
+
+/// The hooks offer's global install through `fake`.
+fn hooks_install(fake: &Arc<Fake>, ticket: u64) -> HooksJob {
+    HooksJob::Install(HooksInstall {
+        ticket,
+        seam: Arc::clone(fake) as Arc<dyn Configure>,
+    })
+}
+
+/// The next hooks answer the worker posted, within the deadline.
+#[track_caller]
+fn next_hooks(rx: &Receiver<Input>) -> Input {
+    match Deadline::after(WAIT).recv(rx) {
+        Ok(input @ (Input::HooksOfferNames { .. } | Input::HooksInstalled { .. })) => input,
+        Ok(_) => panic!("the hooks worker posted something else"),
+        Err(err) => panic!("waited {WAIT:?} for the hooks worker: {err}"),
+    }
+}
+
+#[test]
+fn the_names_query_runs_once_off_this_thread_and_posts_its_answer() {
+    let fake = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut answer) = fake.blocking_hooks_answer.lock() {
+        *answer = Ok(vec!["b".to_owned(), "a".to_owned()]);
+    }
+    let (tx, rx) = mpsc::channel();
+    start_hooks(query(&fake, 7), clock(), tx);
+    assert!(matches!(
+        next_hooks(&rx),
+        Input::HooksOfferNames {
+            ticket: 7,
+            result: Ok(_),
+        }
+    ));
+    // The worker posts the names raw; the offer sorts them for display.
+    // The query repeats the refused start's ordered overrides exactly.
+    let queries = fake
+        .blocking_hooks_queries
+        .lock()
+        .map(|queries| queries.clone())
+        .unwrap_or_default();
+    assert_eq!(
+        queries,
+        [(
+            std::path::PathBuf::from("/w"),
+            vec!["z=1".to_owned(), "a=2".to_owned(), "z=1".to_owned()]
+        )]
+    );
+    let threads = fake.hooks_threads();
+    assert_eq!(threads.len(), 1);
+    assert_ne!(threads.first(), Some(&std::thread::current().id()));
+    // Exactly one answer: the sender hangs up with the thread.
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn a_failed_names_query_posts_its_error() {
+    let fake = Arc::new(Fake::new(Vec::new()));
+    let error = ConfigureError {
+        code: ErrorCode::IoFailed,
+        message: "no hooks file".to_owned(),
+    };
+    if let Ok(mut answer) = fake.blocking_hooks_answer.lock() {
+        *answer = Err(error.clone());
+    }
+    let (tx, rx) = mpsc::channel();
+    start_hooks(query(&fake, 7), clock(), tx);
+    assert!(matches!(
+        next_hooks(&rx),
+        Input::HooksOfferNames {
+            ticket: 7,
+            result: Err(_),
+        }
+    ));
+}
+
+#[test]
+fn the_hooks_install_runs_once_off_this_thread_and_posts_its_answer() {
+    let fake = Arc::new(Fake::new(Vec::new()));
+    let (tx, rx) = mpsc::channel();
+    start_hooks(hooks_install(&fake, 9), clock(), tx);
+    assert!(matches!(
+        next_hooks(&rx),
+        Input::HooksInstalled {
+            ticket: 9,
+            result: Ok(()),
+        }
+    ));
+    assert_eq!(
+        fake.hooks_installs
+            .lock()
+            .map(|runs| *runs)
+            .unwrap_or_default(),
+        1
+    );
+    let threads = fake.hooks_threads();
+    assert_eq!(threads.len(), 1);
+    assert_ne!(threads.first(), Some(&std::thread::current().id()));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn a_failed_hooks_install_posts_its_error() {
+    let fake = Arc::new(Fake::new(Vec::new()));
+    let error = ConfigureError {
+        code: ErrorCode::ExtensionFailed,
+        message: "no network".to_owned(),
+    };
+    if let Ok(mut answer) = fake.hooks_install_answer.lock() {
+        *answer = Err(error.clone());
+    }
+    let (tx, rx) = mpsc::channel();
+    start_hooks(hooks_install(&fake, 9), clock(), tx);
+    assert!(matches!(
+        next_hooks(&rx),
+        Input::HooksInstalled {
+            ticket: 9,
+            result: Err(_),
+        }
+    ));
+}
+
+#[test]
+fn a_hooks_thread_that_cannot_start_posts_the_failure_as_the_result() {
+    let query_fake = Arc::new(Fake::new(Vec::new()));
+    let install_fake = Arc::new(Fake::new(Vec::new()));
+    for (job, ticket, message) in [
+        (
+            query(&query_fake, 7),
+            7,
+            "terminal: could not start the names query: no threads left",
+        ),
+        (
+            hooks_install(&install_fake, 9),
+            9,
+            "terminal: could not start the install: no threads left",
+        ),
+    ] {
+        let (tx, rx) = mpsc::channel();
+        start_hooks_with(job, clock(), tx, |_, _| {
+            Err(io::Error::other("no threads left"))
+        });
+        let error = match next_hooks(&rx) {
+            Input::HooksOfferNames {
+                ticket: got,
+                result,
+            } => {
+                assert_eq!(got, ticket);
+                result.unwrap_err()
+            }
+            Input::HooksInstalled {
+                ticket: got,
+                result,
+            } => {
+                assert_eq!(got, ticket);
+                result.unwrap_err()
+            }
+            _ => unreachable!("the worker posts a hooks answer"),
+        };
+        assert_eq!(error.code, ErrorCode::IoFailed);
+        assert_eq!(error.message, message);
+        assert!(rx.try_recv().is_err());
+    }
+    // Neither spawn failure ran its seam operation.
+    assert!(
+        query_fake
+            .blocking_hooks_queries
+            .lock()
+            .map(|queries| queries.is_empty())
+            .unwrap_or_default()
+    );
+    assert_eq!(
+        install_fake
+            .hooks_installs
+            .lock()
+            .map(|runs| *runs)
+            .unwrap_or_default(),
+        0
+    );
 }
 
 #[test]

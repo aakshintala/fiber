@@ -2738,6 +2738,65 @@ fn an_empty_batch_with_no_senders_ends_the_loop() {
     assert!(conn.take_batch(&rx).is_none());
 }
 
+#[test]
+fn hooks_results_waiting_on_history_are_stashed_then_folded_stale() {
+    let (mut lp, theirs, tx, rx) = opened();
+    let mut serve_all = answers_all();
+    let mut first = true;
+    let script: Script = Box::new(move |command| {
+        let mut inputs = Vec::new();
+        if first {
+            first = false;
+            // A names answer and an install answer for offers this
+            // terminal never opened: no live ticket folds them.
+            inputs.push(Input::HooksOfferNames {
+                ticket: 7,
+                result: Ok(vec!["fmt".to_owned()]),
+            });
+            inputs.push(Input::HooksInstalled {
+                ticket: 9,
+                result: Ok(()),
+            });
+        }
+        inputs.extend(serve_all(command));
+        inputs
+    });
+    let _seen = serve(theirs, tx, script);
+    lp.app.jump(0);
+    // One frame, on a thread: it blocks on its fetches.
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("loop-step".to_owned())
+        .spawn(move || {
+            let code = lp.step(Input::Bytes(Vec::new()), &rx);
+            done.send((code, lp, rx)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (code, mut lp, rx) = match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(ended) => ended,
+        Err(err) => panic!("waited {DEADLINE:?} for the frame: {err}"),
+    };
+    assert_eq!(code, None);
+    // Held in arrival order, not yet handled.
+    let held: Vec<String> = lp
+        .hub
+        .stashed()
+        .iter()
+        .map(|input| match input {
+            Input::HooksOfferNames { .. } => "names".to_owned(),
+            Input::HooksInstalled { .. } => "installed".to_owned(),
+            _ => "other".to_owned(),
+        })
+        .collect();
+    assert_eq!(held, ["names", "installed"]);
+    while let Some(input) = lp.hub.pop_stashed() {
+        assert_eq!(lp.step(input, &rx), None);
+    }
+    // Stale tickets fold to nothing: no draft, no notice, no session.
+    assert_eq!(lp.app.draft(), "");
+    assert_eq!(lp.app.notice(), None);
+}
+
 #[path = "event_loop/attach_tests.rs"]
 mod attach_tests;
 
