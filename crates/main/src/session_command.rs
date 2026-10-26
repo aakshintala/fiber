@@ -174,6 +174,19 @@ pub(crate) fn run(
             args.supervised,
         );
     }
+    // Every delegate adopts its own worktree before writing session_started.
+    // The share stays alive through both fork and fresh-session teardown.
+    let adopted = if args.parent.is_some() && args.worktree {
+        match doors::adopt_delegate_worktree(&args.workspace, &SessionId(args.id.clone())) {
+            Ok(adopted) => adopted,
+            Err(failure) => return report(&signals, Failure::from(failure)),
+        }
+    } else {
+        None
+    };
+    let (adopted, _shared) = adopted
+        .map(|(worktree, shared)| (Some(worktree), Some(shared)))
+        .unwrap_or((None, None));
     // A fork names its point outright: no last line is checked. The
     // parent, the delegate job and the prompt ride with the flags.
     if args.forked_from.is_some() {
@@ -202,6 +215,7 @@ pub(crate) fn run(
             parent,
             args.depth.unwrap_or(0),
             prompt,
+            adopted,
             clock,
             &signals,
             fiber,
@@ -219,20 +233,6 @@ pub(crate) fn run(
     if parent.is_some() {
         signals.lifeline(Box::new(std::io::stdin()));
     }
-    // Only a fresh delegate can adopt the worktree its parent made. The
-    // share stays live across run_new, including Log::create and the
-    // session_started event that acknowledges the handoff to the parent.
-    let adopted = if parent.is_some() && args.worktree {
-        match doors::adopt_delegate_worktree(&args.workspace, &SessionId(args.id.clone())) {
-            Ok(adopted) => adopted,
-            Err(failure) => return report(&signals, Failure::from(failure)),
-        }
-    } else {
-        None
-    };
-    let (adopted, _shared) = adopted
-        .map(|(worktree, shared)| (Some(worktree), Some(shared)))
-        .unwrap_or((None, None));
     new_session(
         SessionId(args.id),
         crate::per_run(args.model, args.overrides),

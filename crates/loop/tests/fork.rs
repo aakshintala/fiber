@@ -47,7 +47,7 @@ const FORK_TURN: &[&str] = &[
 ];
 
 fn task() -> String {
-    fork_task(&SessionId("s_test".into()), 1, "check it")
+    fork_task(&SessionId("s_test".into()), 1, "check it", "")
 }
 
 fn tool(name: &'static str) -> Arc<dyn Tool> {
@@ -402,6 +402,46 @@ fn a_session_start_context_sits_between_the_prefix_and_fork_task() {
     assert_eq!(lines[1].payload["hook"], "session_start");
     assert_eq!(lines[1].payload["text"], "hook says hi");
     assert_eq!(lines[2].payload["input"][0]["content"][0]["text"], task());
+}
+
+#[test]
+fn an_isolated_forks_workspace_notice_follows_start_context_without_changing_the_prefix() {
+    let session = parent();
+    let hooks = StartHooks::new();
+    hooks.answer(start_added("fiber.test/start", "hook says hi"));
+    let (b, tx, provider, dir) = fork(
+        &session,
+        point(&session.dir, 2),
+        Vec::new(),
+        vec![Scripted::text("fork-done")],
+    );
+    let notice = r#loop::fork_workspace("/fork", "/parent");
+    let task = fork_task(&SessionId("s_test".into()), 1, "check it", &notice);
+    let _b = turn(b.hooks(hooks), &tx, &task);
+    let parent = &session.provider.requests()[2];
+    let first = &provider.requests()[0];
+    let k = parent.conversation.len();
+    // First-turn context stays between the inherited prefix and task.
+    assert_eq!(first.conversation[..k], parent.conversation[..]);
+    assert_eq!(first.conversation.len(), k + 2);
+    assert_eq!(user(&first.conversation[k]), "hook says hi");
+    assert_eq!(user(&first.conversation[k + 1]), task);
+    let lines = log::read(&dir).unwrap();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "context_added",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed"
+        ]
+    );
+    assert_eq!(lines[2].payload["input"][0]["content"][0]["text"], task);
 }
 
 struct MessageHooks(Mutex<Option<BeforeMessageAnswer>>);

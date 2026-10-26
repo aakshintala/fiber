@@ -170,16 +170,38 @@ impl Loop {
 }
 
 /// The first turn's task for a fork, with its parent's identity and depth.
-/// Workspace isolation is supplied separately; the inherited workspace adds no text.
-pub fn fork_task(parent: &contract::SessionId, depth: u32, prompt: &str) -> String {
+/// The pre-rendered workspace notice is empty in the parent's workspace.
+pub fn fork_task(
+    parent: &contract::SessionId,
+    depth: u32,
+    prompt: &str,
+    fork_workspace: &str,
+) -> String {
+    let notice = if fork_workspace.is_empty() {
+        String::new()
+    } else {
+        format!("{fork_workspace}\n\n")
+    };
     fill(
         message("fork-task"),
         &[
             ("parent_session_id", &parent.0),
             ("depth", &depth.to_string()),
             ("workspace", ""),
+            ("fork_workspace", &notice),
             ("unattended", message("unattended")),
             ("prompt", prompt),
+        ],
+    )
+}
+
+/// The fork's workspace notice, rendered once so path braces remain literal.
+pub fn fork_workspace(workspace: &str, parent_workspace: &str) -> String {
+    fill(
+        message("fork-workspace"),
+        &[
+            ("workspace", workspace),
+            ("parent_workspace", parent_workspace),
         ],
     )
 }

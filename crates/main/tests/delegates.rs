@@ -6369,6 +6369,118 @@ fn a_delegate_fork_starts_a_fork_of_the_calling_turn() {
     }
 }
 
+#[test]
+fn an_isolated_fork_records_and_holds_its_own_worktree_and_explains_its_workspace() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    support::git(setup.deadline, setup.root.path(), &["init"]);
+    support::git(
+        setup.deadline,
+        setup.root.path(),
+        &["commit", "--allow-empty", "-m", "fixture"],
+    );
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    let reply = tree_answering(
+        support::stream(&[function_call(
+            "call_fork",
+            "delegate_fork",
+            &json!({
+                "description": "scan", "prompt": "say hello", "isolation": "worktree"
+            }),
+        )]),
+        text_reply("allow"),
+        support::hello(),
+        support::hello(),
+        support::hello(),
+    );
+    let server = ProviderServer::start_responding(move |request| {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        if body.to_string().contains("you are a fork of session") {
+            entered_tx.send(()).unwrap();
+            let _released =
+                Deadline::after(Duration::from_secs(20)).recv(&release_rx.lock().unwrap());
+        }
+        reply(request)
+    })
+    .unwrap();
+    // Drop the release before the server on failure, so its held request can exit.
+    let release_tx = release_tx;
+    fork_providers(&setup, &server);
+    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let starts = running.wait_line("the parent records the isolated fork", |line| {
+        line["kind"] == "delegate_started"
+    });
+    let started = one(&starts, "delegate_started");
+    let fork_id = started["delegate_session_id"].as_str().unwrap();
+    let worktree = &started["worktree"];
+    let path = PathBuf::from(worktree["path"].as_str().unwrap());
+    let fork_log = log::session_dir(
+        &setup.home(),
+        &log::project_key(&doors::project(setup.root.path())),
+        &contract::SessionId(fork_id.into()),
+    )
+    .join("events.jsonl");
+    if Deadline::after(Duration::from_secs(20))
+        .recv(&entered_rx)
+        .is_err()
+    {
+        drop(release_tx);
+        let (status, lines, stderr) = running.wait();
+        panic!(
+            "the fork never requested: {status:?}; {stderr}; finish {:?}; child {:?}",
+            one(&lines, "delegate_finished"),
+            read_lines(&fork_log)
+        );
+    }
+    let fork_started = one(&read_lines(&fork_log), "session_started");
+    assert_eq!(fork_started["worktree"]["path"], worktree["path"]);
+    assert_eq!(fork_started["worktree"]["branch"], worktree["branch"]);
+    assert_eq!(fork_started["workspace"], worktree["path"]);
+    assert_ne!(path, setup.root.path());
+    assert_eq!(
+        support::git(setup.deadline, &path, &["branch", "--show-current"]),
+        worktree["branch"].as_str().unwrap()
+    );
+    let probe = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path.with_extension("lock"))
+        .unwrap();
+    assert!(
+        matches!(probe.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        "the fork owns a share after session_started"
+    );
+    drop(probe);
+    release_tx.send(()).unwrap();
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    let parent_id = lines[0]["session_id"].as_str().unwrap();
+    let fork_lines = read_lines(&fork_log);
+    assert_eq!(durable_kinds(&fork_lines), FORK_DURABLE);
+    let parent_body = fork_call_request(&server, "scan the tree");
+    let fork_body = fork_first(&server);
+    let (parent_input, fork_input) = assert_continues(&parent_body, &fork_body, parent_id);
+    let task = fork_input[parent_input.len()..].last().unwrap()["content"]
+        .as_str()
+        .unwrap();
+    let parent_workspace = fs::canonicalize(setup.root.path()).unwrap();
+    let notice = format!(
+        "Your workspace is {}, a worktree of {}. Paths above under {} are at the same place under yours; work only in yours.",
+        path.display(),
+        parent_workspace.display(),
+        parent_workspace.display()
+    );
+    assert!(
+        task.contains(&format!("{notice}\n\nNobody is present")),
+        "{task}"
+    );
+    let finished = one(&lines, "delegate_finished");
+    assert_eq!(finished["worktree"]["path"], worktree["path"]);
+    assert!(!path.exists(), "the clean fork worktree is removed");
+}
+
 /// A depth-1 delegate's `delegate_fork` call starts a depth-2 fork whose
 /// first request matches the delegate's last request up to the new
 /// content, keyed on the delegate session. The depth-2 fork's own
