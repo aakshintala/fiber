@@ -144,13 +144,10 @@ impl Rewind {
                 self.cursor.toggle_expanded(key);
                 EnterAction::Reseat
             }
-            Vis::Bound(ti, bound) => {
+            Vis::Bound(..) => {
                 // Enter on a boundary row sends from that point at
                 // once: reaching the Rewind row crosses content rows,
                 // which would move the point.
-                if let Some(point) = self.fold.bound_point(ti, bound).map(|(_, point)| point) {
-                    self.cursor.set_point(point);
-                }
                 EnterAction::Send
             }
             Vis::Check => {

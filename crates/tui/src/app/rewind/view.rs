@@ -129,11 +129,6 @@ impl Cursor {
         self.selected = selected;
     }
 
-    /// Sets the point without moving the cursor.
-    pub(super) fn set_point(&mut self, point: (SessionId, u64)) {
-        self.point = Some(point);
-    }
-
     /// Toggles the turn open into its step boundaries.
     pub(super) fn toggle_expanded(&mut self, key: Option<(SessionId, u64)>) {
         if self.expanded == key {

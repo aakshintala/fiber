@@ -80,6 +80,32 @@ fn resumed(app: &mut App, resumed: bool, ts: u64) {
     );
 }
 
+/// A durable `job_started` line for `id` with `description` at `ts`.
+fn started_job(app: &mut App, id: &str, description: &str, ts: u64) {
+    feed_durable(
+        app,
+        "job_started",
+        ts,
+        json!({"job_id": id, "description": description, "output_path": "/tmp/out"}),
+    );
+}
+
+/// A durable `job_completed` line for `id` ending `status`, with `code`
+/// naming its error when given, at `ts`.
+fn completed_job(app: &mut App, id: &str, status: &str, code: Option<&str>, ts: u64) {
+    let mut payload = json!({"job_id": id, "status": status});
+    if let Some(code) = code {
+        payload
+            .as_object_mut()
+            .expect("a job completion is an object")
+            .insert(
+                "error".to_owned(),
+                json!({"code": code, "message": format!("{id} {code}.")}),
+            );
+    }
+    feed_durable(app, "job_completed", ts, payload);
+}
+
 /// A `rewound` line at `ts`, naming the continuing session.
 fn rewound(app: &mut App, ts: u64) {
     feed_durable(
@@ -259,6 +285,76 @@ fn a_rewound_session_lists_the_jobs_that_stopped() {
     assert!(
         lines.iter().any(|line| line.trim_start()
             == "⟲ s_ccc · nothing restored · jobs stopped: first task, second task"),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn the_rewound_line_lists_only_cancelled_and_indeterminate_stops() {
+    let mut app = app();
+    // Five jobs still running when the session is rewound: a cancelled
+    // one and one failed with `indeterminate` stop with it; a failure
+    // with another code, a completed one and an orphaned one do not
+    // (`docs/events.md`, "Rewind").
+    started_job(&mut app, "j_a", "alpha task", 10_000);
+    started_job(&mut app, "j_b", "beta task", 11_000);
+    started_job(&mut app, "j_g", "gamma task", 12_000);
+    started_job(&mut app, "j_e", "epsilon task", 13_000);
+    started_job(&mut app, "j_d", "delta task", 14_000);
+    completed_job(&mut app, "j_a", "cancelled", None, 15_000);
+    completed_job(&mut app, "j_b", "failed", Some("indeterminate"), 16_000);
+    completed_job(&mut app, "j_g", "failed", Some("nonzero_exit"), 17_000);
+    completed_job(&mut app, "j_e", "completed", None, 18_000);
+    completed_job(&mut app, "j_d", "failed", Some("orphaned"), 19_000);
+    rewound(&mut app, 60_000);
+    let lines = texts(&app);
+    // Sorted by description, so the line is stable no matter which
+    // `job_started` arrived first (`docs/tui.md`, "Rewind").
+    assert!(
+        lines.iter().any(|line| line.trim_start()
+            == "⟲ s_ccc · nothing restored · jobs stopped: alpha task, beta task"),
+        "{lines:?}"
+    );
+    // The orphaned job keeps its own line, out of the stopped list.
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start() == "Orphaned jobs: delta task"),
+        "{lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("gamma task") || line.contains("epsilon task")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_durable_line_between_the_stop_and_rewound_drops_the_stop() {
+    let mut app = app();
+    started_job(&mut app, "j_1", "second task", 10_000);
+    completed_job(&mut app, "j_1", "cancelled", None, 11_000);
+    // A durable non-job line separates the stop from `rewound`: the
+    // stop run is over, so the rewind line reports no stopped jobs. An
+    // ephemeral notice between the same lines changes nothing (see
+    // `a_rewound_session_lists_the_jobs_that_stopped`).
+    feed_durable(
+        &mut app,
+        "notice",
+        12_000,
+        json!({"code": "hook_failed", "message": "end hook failed"}),
+    );
+    rewound(&mut app, 60_000);
+    let lines = texts(&app);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start() == "⟲ s_ccc · nothing restored · jobs stopped: none"),
+        "{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("second task")),
         "{lines:?}"
     );
 }

@@ -29,8 +29,8 @@ pub(crate) struct Crash {
     jobs: HashMap<String, String>,
     /// Descriptions of jobs started on earlier pages and still open.
     earlier: HashMap<String, String>,
-    /// Descriptions this page took from `earlier` for jobs that ended
-    /// orphaned or stopped on it: all its seed keeps of job text.
+    /// Descriptions of jobs that ended stopped or orphaned on this
+    /// page: all its seed keeps of job text.
     carried: HashMap<String, String>,
     /// Jobs completed by the contiguous stop run immediately before a
     /// `rewound` line.
@@ -42,28 +42,25 @@ pub(crate) struct Crash {
 impl Fold {
     /// The continuation state a page seed keeps. Rendered asides stay in
     /// resident pages and are folded again from that page's lines on reload.
-    pub(crate) fn seed_continuation(
-        &self,
-    ) -> (usize, bool, Option<u64>, bool, HashMap<String, String>) {
+    pub(crate) fn seed_continuation(&self) -> (usize, bool, Option<u64>, bool) {
         (
             self.next,
             self.ledgers,
             self.trigger_at,
             self.crash.suspended,
-            self.crash.rewind_stopped.clone(),
         )
     }
 
     /// A page's starting fold from its seed's continuation state, with no
     /// rendered text: the reload folds the page's own lines into it.
-    /// `carried` names earlier pages' jobs that end on this page.
+    /// `carried` names the page's stopped or orphaned completions, so
+    /// its reload keeps their descriptions.
     pub(crate) fn seeded(
         next: usize,
         ledgers: bool,
         trigger_at: Option<u64>,
         suspended: bool,
         carried: HashMap<String, String>,
-        rewind_stopped: HashMap<String, String>,
     ) -> Self {
         Self {
             next,
@@ -72,7 +69,6 @@ impl Fold {
             crash: Crash {
                 suspended,
                 earlier: carried,
-                rewind_stopped,
                 ..Crash::default()
             },
             ..Self::default()
@@ -88,9 +84,6 @@ impl Fold {
         self.crash
             .earlier
             .extend(std::mem::take(&mut old.crash.earlier));
-        self.crash
-            .rewind_stopped
-            .extend(std::mem::take(&mut old.crash.rewind_stopped));
     }
 
     /// Copies `open`'s open jobs as this candidate page's earlier ones,
@@ -103,16 +96,10 @@ impl Fold {
                 .chain(&open.crash.earlier)
                 .map(|(id, name)| (id.clone(), name.clone())),
         );
-        self.crash.rewind_stopped.extend(
-            open.crash
-                .rewind_stopped
-                .iter()
-                .map(|(id, name)| (id.clone(), name.clone())),
-        );
     }
 
-    /// Takes the descriptions this page took from earlier pages for jobs
-    /// that ended on it.
+    /// Takes the descriptions of jobs that ended stopped or orphaned on
+    /// this page.
     pub(crate) fn take_carried(&mut self) -> HashMap<String, String> {
         std::mem::take(&mut self.crash.carried)
     }
@@ -322,7 +309,6 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             let id = done.job_id.0;
             let here = fold.crash.jobs.remove(&id);
             let earlier = fold.crash.earlier.remove(&id);
-            let carried = here.is_none() && earlier.is_some();
             let name = here
                 .or_else(|| earlier.clone())
                 .unwrap_or_else(|| id.clone());
@@ -339,7 +325,11 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
                 .error
                 .as_ref()
                 .is_some_and(|error| error.code == ErrorCode::Orphaned);
-            if carried && (stopped || orphaned) {
+            // Every stopped or orphaned completion forwards its
+            // description: the reload refolds this page's own lines,
+            // whose completion consumes the entry again, so no other
+            // page reads it.
+            if stopped || orphaned {
                 fold.crash.carried.insert(id, name.clone());
             }
             let Some(error) = done.error.filter(|error| error.code == ErrorCode::Orphaned) else {

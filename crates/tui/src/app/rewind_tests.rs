@@ -1238,6 +1238,48 @@ fn clicks_select_toggle_and_close() {
 }
 
 #[test]
+fn clicking_a_boundary_then_sending_from_the_action_row_sends_the_clicked_point() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    let next = accept(&mut app, &lines[0]["id"], segment_a());
+    let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
+    accept(&mut app, &asked["id"], segment_b());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+    assert_eq!(
+        rows(&app),
+        [
+            "before: older",
+            "before: first",
+            "before: second",
+            CHECK,
+            ACTION
+        ]
+    );
+    // Open the ancestor turn and click its second boundary: the point
+    // becomes the ancestor's session at that boundary's seq.
+    goto(&mut app, &clock, 0);
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    let bounds = app.rewind.turn_bounds(0);
+    let wanted = bounds.get(1).cloned().expect("a second boundary");
+    app.session_view_click(crate::swapped::Spot::Row(2));
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.list.selected(), 2);
+    // The Rewind row's cell sends from the clicked point, not the
+    // default: the list never crosses a content row on the way there.
+    let action = rows(&app).len() - 1;
+    let out = sent(app.session_view_click(crate::swapped::Spot::Cell(action, 0)));
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["command"], "rewind");
+    assert_eq!(out[0]["session_id"], SESSION);
+    assert_eq!(
+        out[0]["args"],
+        json!({"from_session_id": wanted.0, "seq": wanted.1, "summarise": false})
+    );
+}
+
+#[test]
 fn the_opened_view_snapshot() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();

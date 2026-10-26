@@ -53,11 +53,9 @@ pub(crate) struct Seed {
     trigger_at: Option<u64>,
     /// The last `fiber_exited` carried `suspended_on`.
     suspended: bool,
-    /// Descriptions of jobs that end on this page but started on an
-    /// earlier one, set once the page closes.
+    /// Descriptions of jobs that ended stopped or orphaned on this
+    /// page, set once the page closes.
     carried: HashMap<String, String>,
-    /// Jobs completed in the stop run that ends with `rewound`.
-    rewind_stopped: HashMap<String, String>,
     /// The live durations of the page's groups, in order: a reload folds
     /// the page's durable lines only, without the ephemeral lines that
     /// timed them.
@@ -68,7 +66,7 @@ impl Seed {
     /// The seed a page opening on `open`'s cards starts from: its turn and
     /// step, and the fold's continuation state.
     fn live(first: usize, step: Option<u64>, open: &Part) -> Self {
-        let (next, ledgers, trigger_at, suspended, rewind_stopped) = open.fold.seed_continuation();
+        let (next, ledgers, trigger_at, suspended) = open.fold.seed_continuation();
         Self {
             first,
             step,
@@ -80,7 +78,6 @@ impl Seed {
             trigger_at,
             suspended,
             carried: HashMap::new(),
-            rewind_stopped,
             spans: Vec::new(),
         }
     }
@@ -113,7 +110,6 @@ impl Part {
                 seed.trigger_at,
                 seed.suspended,
                 seed.carried,
-                seed.rewind_stopped,
             ),
             aside_start: 0,
             joins_next: false,
