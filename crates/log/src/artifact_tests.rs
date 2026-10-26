@@ -475,6 +475,10 @@ fn replace_output_on_an_unwritable_directory_is_io_leaving_the_file() {
     fs::write(log.dir().join(relative), b"old\n").unwrap();
     let dir = log.dir().join("artifacts");
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if fs::File::create(dir.join("permission-probe")).is_ok() {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        panic!("running as root: root bypasses file modes, so the mode row cannot fail here");
+    }
     let error = log.replace_output(relative, b"new\n").unwrap_err();
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(

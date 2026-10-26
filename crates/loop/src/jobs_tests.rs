@@ -5905,12 +5905,15 @@ fn an_absolute_output_path_outside_the_session_keeps_the_fallback() {
     write_started_at(&mut world, JOB, Some("shell"), &path.display().to_string());
     world.send(held(JOB));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    // Outside the session directory the pass still reads and replaces at
-    // the recorded path itself.
-    let calls = hooks.calls();
-    assert_eq!(calls.len(), 2);
-    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
-    assert_eq!(calls[0].content, "token TOKEN-1234\n");
+    // A job's output file passes through `after_tool` when it ends
+    // (`docs/tools.md`, "Background jobs"). The external path still reads
+    // and replaces at the recorded path itself.
+    let output = hooks
+        .calls()
+        .into_iter()
+        .find(|call| call.delivery == Some(JobDelivery::OutputFile))
+        .expect("the output file reaches after_tool");
+    assert_eq!(output.content, "token TOKEN-1234\n");
     assert_eq!(std::fs::read(&path).unwrap(), b"token [redacted]\n");
 }
 
