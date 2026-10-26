@@ -3,9 +3,7 @@
 //! `(session, path)` draws under one id (`docs/tui.md`, "Images"). A
 //! child of `window`, so it reads the pages' fields.
 
-use contract::events::{SteeringApplied, ToolCallCompleted, TurnStarted};
-use contract::{Envelope, events::InputItem};
-use serde_json::Value;
+use contract::{Envelope, events::Event, events::InputItem};
 
 use super::Pages;
 use crate::image;
@@ -21,30 +19,29 @@ impl Pages {
     /// pair already seen keeps its id, so a page dropped and folded
     /// again draws the same id.
     pub(super) fn note_images(&mut self, envelope: &Envelope) {
-        let payload = Value::Object(envelope.payload.clone());
-        let parts: Vec<image::Part> = match envelope.kind.as_str() {
-            "turn_started" => serde_json::from_value::<TurnStarted>(payload)
-                .map(|started| {
-                    started
-                        .input
-                        .iter()
-                        .filter_map(|input| {
-                            if let InputItem::Message { content, .. } = input {
-                                Some(image::parts(&envelope.session_id, content))
-                            } else {
-                                None
-                            }
-                        })
-                        .flatten()
-                        .collect()
+        match envelope.kind.as_str() {
+            "turn_started" | "tool_call_completed" | "steering_applied" => {}
+            _ => return,
+        }
+        let parts: Vec<image::Part> = match Event::from_envelope(envelope) {
+            Ok(Some(Event::TurnStarted(started))) => started
+                .input
+                .iter()
+                .filter_map(|input| {
+                    if let InputItem::Message { content, .. } = input {
+                        Some(image::parts(&envelope.session_id, content))
+                    } else {
+                        None
+                    }
                 })
-                .unwrap_or_default(),
-            "tool_call_completed" => serde_json::from_value::<ToolCallCompleted>(payload)
-                .map(|done| image::parts(&envelope.session_id, &done.content))
-                .unwrap_or_default(),
-            "steering_applied" => serde_json::from_value::<SteeringApplied>(payload)
-                .map(|applied| image::parts(&envelope.session_id, &applied.content))
-                .unwrap_or_default(),
+                .flatten()
+                .collect(),
+            Ok(Some(Event::ToolCallCompleted(done))) => {
+                image::parts(&envelope.session_id, &done.content)
+            }
+            Ok(Some(Event::SteeringApplied(applied))) => {
+                image::parts(&envelope.session_id, &applied.content)
+            }
             _ => Vec::new(),
         };
         for part in &parts {

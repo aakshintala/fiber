@@ -6,6 +6,9 @@ use serde_json::json;
 
 use super::Pages;
 
+#[global_allocator]
+static ALLOC: fakes::alloc::Counting = fakes::alloc::Counting;
+
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
 fn envelope(kind: &str, payload: serde_json::Value) -> Envelope {
@@ -336,4 +339,92 @@ fn a_failed_image_recounts_to_its_one_line() {
     // Clearing the session drops the failure with the layout.
     pages.clear();
     assert!(!pages.image_failed(&SessionId(SESSION.to_owned()), "artifacts/a.png"));
+}
+
+/// An unrelated large line never reaches the image decoder: folding it
+/// adds no image and holds no payload-sized allocation. The fixture is
+/// built before measurement, so only the fold itself is counted.
+#[test]
+fn an_unrelated_large_line_adds_no_image_and_holds_no_payload_sized_allocation() {
+    use std::hint::black_box;
+    // The counting allocator is installed: one large block counts one,
+    // so a low count below cannot pass vacuously without it.
+    let ((), probe) = fakes::alloc::bytes_during(|| {
+        drop(black_box(Vec::<u8>::with_capacity(fakes::alloc::LARGE)));
+    });
+    assert!(
+        probe.peak() >= fakes::alloc::LARGE,
+        "the probe peaks at its block: {}",
+        probe.peak()
+    );
+    let mut pages = pages();
+    pages.note_images(&started(&["artifacts/a.png"]));
+    let seeded = pages
+        .images
+        .id(&SessionId(SESSION.to_owned()), "artifacts/a.png")
+        .expect("the seeded image draws");
+    let ids = pages.images.parts.len();
+    let big = "x".repeat(fakes::alloc::LARGE + 1);
+    let unrelated = envelope("text_completed", json!({"text": big}));
+    drop(big);
+    let ((), bytes) = fakes::alloc::bytes_during(|| pages.note_images(black_box(&unrelated)));
+    assert!(
+        bytes.peak() < fakes::alloc::LARGE,
+        "the unrelated fold peaks below one payload: {}",
+        bytes.peak()
+    );
+    assert_eq!(
+        pages
+            .images
+            .id(&SessionId(SESSION.to_owned()), "artifacts/a.png"),
+        Some(seeded),
+        "the seeded image keeps its id"
+    );
+    assert_eq!(pages.images.parts.len(), ids, "no image is added");
+}
+
+/// An unknown kind adds no image: the fold returns before decoding.
+#[test]
+fn an_unknown_kind_adds_no_image() {
+    let mut pages = pages();
+    pages.note_images(&started(&["artifacts/a.png"]));
+    let seeded = pages
+        .images
+        .id(&SessionId(SESSION.to_owned()), "artifacts/a.png")
+        .expect("the seeded image draws");
+    let ids = pages.images.parts.len();
+    pages.note_images(&envelope("some_future_kind", json!({"text": "hi"})));
+    assert_eq!(
+        pages
+            .images
+            .id(&SessionId(SESSION.to_owned()), "artifacts/a.png"),
+        Some(seeded),
+        "the seeded image keeps its id"
+    );
+    assert_eq!(pages.images.parts.len(), ids, "no image is added");
+}
+
+/// A malformed image-bearing line adds no image: a payload that fails
+/// to decode notes nothing.
+#[test]
+fn a_malformed_image_line_adds_no_image() {
+    let mut pages = pages();
+    pages.note_images(&started(&["artifacts/a.png"]));
+    let seeded = pages
+        .images
+        .id(&SessionId(SESSION.to_owned()), "artifacts/a.png")
+        .expect("the seeded image draws");
+    let ids = pages.images.parts.len();
+    pages.note_images(&envelope(
+        "tool_call_completed",
+        json!({"status": "completed", "content": "not-an-array"}),
+    ));
+    assert_eq!(
+        pages
+            .images
+            .id(&SessionId(SESSION.to_owned()), "artifacts/a.png"),
+        Some(seeded),
+        "the seeded image keeps its id"
+    );
+    assert_eq!(pages.images.parts.len(), ids, "no image is added");
 }
