@@ -1259,7 +1259,7 @@ last write up to the point decides what the new session gets:
 | `on_fork` | The new session gets |
 |---|---|
 | `at_point` | the value as of the point |
-| `latest` | the value at the end of the parent's log when the new session starts |
+| `latest` | the value at the end of the parent's log when the new session starts. For a delegate's fork, the end of the parent's log is the fork's point, `forked_from.seq`, so the first run and every resume get the same values. |
 | `fresh` | nothing |
 
 ### Jobs
