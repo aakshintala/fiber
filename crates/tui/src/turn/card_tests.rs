@@ -340,6 +340,58 @@ fn the_summary_names_the_closing_line_when_it_differs_from_the_card() {
 }
 
 #[test]
+fn an_ended_summary_leaves_the_open_cards_group_collapsed() {
+    use contract::events::{TurnCompleted, TurnOutcome};
+
+    use crate::turn::DrawSummary;
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    step(&mut cards);
+    requested(&mut cards, "a_1", "read", json!({"path": "a.rs"}));
+    // The card is still open, but the summary closes the turn: the
+    // group draws collapsed, without its in-flight call
+    // (`docs/tui.md`, "Tool groups and the ledger").
+    let turn = &cards.turns[0];
+    let ended = (
+        TurnCompleted {
+            outcome: TurnOutcome::Completed,
+            error: None,
+            questions: None,
+        },
+        5_000u64,
+    );
+    let summary = DrawSummary {
+        started: turn.started,
+        calls: turn.calls,
+        spend: &turn.spend,
+        ended: Some(&ended),
+    };
+    let mut out = Rows::default();
+    turn.rows_with_summary(
+        WIDTH,
+        &TimeZone::UTC,
+        Edges::BOTH,
+        &crate::image::Layout::default(),
+        Some(summary),
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    let shown = shown_rows(&rows);
+    assert!(
+        shown.iter().any(|row| row.contains("▣ completed")),
+        "the summary closes the card: {shown:?}"
+    );
+    assert!(
+        shown.iter().any(|row| row.contains("Read 1 file")),
+        "the group still draws its summary row: {shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|row| row.contains("read a.rs")),
+        "the in-flight call stays off the collapsed row: {shown:?}"
+    );
+}
+
+#[test]
 fn a_handoff_breaks_the_card_into_two_surfaces() {
     // An edge closes the piece before the band, and one opens the piece
     // after it; the band's line keeps the surface tint
