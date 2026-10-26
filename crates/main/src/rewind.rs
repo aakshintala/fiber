@@ -91,22 +91,24 @@ pub(crate) fn session_forked(
         Err(code) => return code,
     };
     let sessions = context.sessions;
-    let from_dir = sessions.join(&from.session_id.0);
+    let from_dir = log::SessionDir::new(&sessions, &from.session_id);
     // A missing session is `session_not_found`; any other failure to
     // read its directory (permissions, a broken link) is `io_failed`
-    // and names the path (`docs/errors.md`). `is_dir` folds both into
-    // `false`, so the metadata error is matched instead.
-    let missing = match std::fs::metadata(&from_dir) {
-        Ok(meta) => !meta.is_dir(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
-        Err(e) => {
+    // and names the path (`docs/errors.md`).
+    let missing = match from_dir.require_dir() {
+        Ok(()) => false,
+        Err(log::Error::NotFound(_)) => true,
+        Err(log::Error::Io { path, source }) => {
             return ask_failed(failed(
                 ErrorCode::IoFailed,
                 format!(
-                    "Cannot read session directory `{}`: {e}",
-                    from_dir.display()
+                    "Cannot read session directory `{}`: {source}",
+                    path.display()
                 ),
             ));
+        }
+        Err(error) => {
+            return ask_failed(failed(error.code(), error));
         }
     };
     if missing {
@@ -117,7 +119,7 @@ pub(crate) fn session_forked(
     }
     // The fold reads the point's history: a corrupt log fails with its
     // code, before any session line is written.
-    let folded = match r#loop::forked(&from_dir, from.seq) {
+    let folded = match r#loop::forked(from_dir.path(), from.seq) {
         Ok(folded) => folded,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
@@ -191,23 +193,23 @@ pub(crate) fn session_rewound(
         Err(code) => return code,
     };
     let sessions = context.sessions;
-    let old_dir = sessions.join(&old.0);
-    if !old_dir.is_dir() {
+    let old_dir = log::SessionDir::new(&sessions, &old);
+    if !log::dir_exists(old_dir.path()) {
         return ask_failed(failed(
             ErrorCode::SessionNotFound,
             format!("No session `{}`.", old.0),
         ));
     }
-    let (point, summary) = match r#loop::rewound_from(log::last_line(&old_dir), &new, &old) {
+    let (point, summary) = match r#loop::rewound_from(log::last_line(old_dir.path()), &new, &old) {
         Ok(point) => point,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
-    let dir = sessions.join(&point.session_id.0);
-    let forked = match r#loop::forked(&dir, point.seq) {
+    let dir = log::SessionDir::new(&sessions, &point.session_id);
+    let forked = match r#loop::forked(dir.path(), point.seq) {
         Ok(forked) => forked,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
-    let note = match r#loop::rewind_note_with_jobs(&old_dir, &dir, point.seq) {
+    let note = match r#loop::rewind_note_with_jobs(old_dir.path(), dir.path(), point.seq) {
         Ok(note) => note,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
@@ -223,7 +225,7 @@ pub(crate) fn session_rewound(
         None => None,
     };
     // The name is the rewound session's, not the point's session's.
-    let name = r#loop::latest_name(&old_dir);
+    let name = r#loop::latest_name(old_dir.path());
     match super::session_command::run_new(
         new,
         Vec::new(),

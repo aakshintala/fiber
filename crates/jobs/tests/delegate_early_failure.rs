@@ -82,12 +82,14 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
     });
     // Refused, as for a child that never bound its socket.
     let watch: jobs::Watch = Arc::new(|_, _, _| Err(std::io::Error::other("refused")));
+    let events_for: jobs::EventsFor =
+        Arc::new(move |id: &SessionId| sessions.join(&id.0).join("events.jsonl"));
     let spawn = DelegateSpawn {
         depth: 0,
         registry: Arc::clone(&registry),
         parent: SessionId("s_parent".into()),
         workspace: dir.path().to_path_buf(),
-        sessions: sessions.clone(),
+        events_for,
         clock: Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
         bound: Duration::from_secs(5),
         cap: 1024,
