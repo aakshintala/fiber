@@ -338,7 +338,8 @@ fn first_page_fetch_times_log_read_and_successful_load_times_transcript() {
     lp.hub.store(ours);
     let (tx, rx) = mpsc::channel();
     let worker_log = Arc::clone(&log);
-    let worker = std::thread::Builder::new()
+    let (seen_tx, seen) = mpsc::channel();
+    std::thread::Builder::new()
         .name("timing-page-in".to_owned())
         .spawn(move || {
             let mut reader = BufReader::new(theirs);
@@ -380,14 +381,32 @@ fn first_page_fetch_times_log_read_and_successful_load_times_transcript() {
                     .send(crate::Input::Hub(crate::link::Line::Session(envelope)))
                     .is_err()
                 {
-                    return;
+                    break;
                 }
             }
+            seen_tx.send(()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    lp.page_in(&rx);
+    // `page_in` blocks in `recv`: it runs on a thread of its own and its
+    // result arrives through one deadline, so a wait that never ends
+    // fails here instead of hanging the suite (`docs/testing.md`,
+    // "Waits and timeouts").
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("timing-page-in-fetch".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            lp.page_in(&rx);
+            done.send(lp).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let lp = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the fetch: {err}"));
     drop(lp);
-    worker.join().unwrap_or_else(|_| panic!("the hub thread"));
+    Deadline::after(DEADLINE)
+        .recv(&seen)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the hub to see the hang-up: {err}"));
     let lines = op_lines(home.path());
     let log_read: Vec<Value> = lines
         .iter()
@@ -404,9 +423,11 @@ fn first_page_fetch_times_log_read_and_successful_load_times_transcript() {
 }
 
 /// A failed first fetch still times `tui.log_read`, but leaves the
-/// `tui.transcript` latch unset for the next successful load: flipping the
+/// `tui.transcript` latch unset for the next successful load: the test
+/// asserts no transcript line after the failure, then a later successful
+/// `app.load` of the failed page writes exactly one. Flipping the
 /// success-only guard to take the latch on failure writes a transcript
-/// line here and fails (`docs/state.md`, "Diagnostic logs").
+/// line before that load and fails (`docs/state.md`, "Diagnostic logs").
 #[test]
 fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
     let home = fakes::TempDir::new("tui-timing-page-in-failed");
@@ -437,9 +458,16 @@ fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
         "a page is missing before the first fetch"
     );
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let failed_need = lp
+        .app
+        .needs()
+        .into_iter()
+        .next()
+        .expect("a page is missing before the first fetch");
     lp.hub.store(ours);
     let (tx, rx) = mpsc::channel();
-    let worker = std::thread::Builder::new()
+    let (seen_tx, seen) = mpsc::channel();
+    std::thread::Builder::new()
         .name("timing-page-in-rejected".to_owned())
         .spawn(move || {
             let mut reader = BufReader::new(theirs);
@@ -466,18 +494,74 @@ fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
                     .send(crate::Input::Hub(crate::link::Line::Session(envelope)))
                     .is_err()
                 {
-                    return;
+                    break;
                 }
             }
+            seen_tx.send(()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    lp.page_in(&rx);
-    // The failed fetch consumed no transcript latch: a later successful
-    // load still writes. Dropping the guard here proves the latch stayed
-    // unset; had `page_in` taken it on failure, this would write nothing.
-    drop(lp.timing.transcript());
+    // `page_in` blocks in `recv`: it runs on a thread of its own and its
+    // result arrives through one deadline, so a wait that never ends
+    // fails here instead of hanging the suite (`docs/testing.md`,
+    // "Waits and timeouts").
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("timing-page-in-rejected-fetch".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            lp.page_in(&rx);
+            done.send(lp).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let mut lp = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the fetch: {err}"));
+    // The failed fetch wrote its `tui.log_read` line to completion but
+    // left `tui.transcript` unset.
+    let lines = op_lines(home.path());
+    let log_read: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["data"]["op"] == "tui.log_read")
+        .cloned()
+        .collect();
+    assert_terminal_wire(&log_read, "tui.log_read");
+    let transcript: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["data"]["op"] == "tui.transcript")
+        .cloned()
+        .collect();
+    assert!(
+        transcript.is_empty(),
+        "a failed fetch leaves tui.transcript unset: {transcript:?}"
+    );
+    // A later successful load of the failed page takes the waiting latch
+    // exactly as `page_in`'s success branch does, and writes one line.
+    let (failed_session, failed_range) = failed_need;
+    let folded: Vec<contract::Envelope> =
+        window(&failed_log, failed_range.start().0, failed_range.end().0)
+            .into_iter()
+            .map(|value| contract::Envelope {
+                kind: value["kind"].as_str().unwrap_or("").to_owned(),
+                session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: None,
+                seq: value["seq"].as_u64().map(contract::Seq),
+                payload: value["payload"].as_object().cloned().unwrap_or_default(),
+            })
+            .collect();
+    assert!(
+        !folded.is_empty(),
+        "the failed page holds lines for the later load"
+    );
+    let transcript_guard = lp.timing.transcript();
+    lp.app.load(&failed_session, folded);
+    drop(transcript_guard);
     drop(lp);
-    worker.join().unwrap_or_else(|_| panic!("the hub thread"));
+    Deadline::after(DEADLINE)
+        .recv(&seen)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the hub to see the hang-up: {err}"));
     let lines = op_lines(home.path());
     let log_read: Vec<Value> = lines
         .iter()
