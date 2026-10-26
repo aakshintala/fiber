@@ -4,7 +4,7 @@
 //! outside the window keeps only its seq range and its counts. Each turn's
 //! totals, which its ▣ line draws, are kept for the whole session.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
@@ -24,12 +24,13 @@ use crate::turn::{Entry, Fold, Row, Turn, target_id};
 mod images;
 mod live;
 mod pins;
+mod residency;
 
 /// Where folding a page begins: its turn and step, the live fold's scalar
 /// continuation state, and descriptions only of earlier pages' jobs that
 /// complete orphaned on it. Rendered asides stay in resident pages.
 #[derive(Debug, Clone, Default)]
-struct Seed {
+pub(crate) struct Seed {
     /// The summary of the page's first card.
     first: usize,
     /// The step its turn had reached, when the page begins inside a running
@@ -261,15 +262,8 @@ pub(crate) struct Pages {
     index: Index,
     /// One per page.
     seeds: Vec<Seed>,
-    /// Each closed page's cards, `None` while dropped.
-    closed: Vec<Option<Part>>,
-    /// The closed pages holding cards: `trim` drops from this set
-    /// instead of scanning every page, so settling costs residents,
-    /// not the session. The set over-approximates: a test may drop a
-    /// page directly, and dropping an already dropped page changes
-    /// nothing, while every site that keeps cards inserts, so no kept
-    /// page is ever missing.
-    resident_set: BTreeSet<usize>,
+    /// The closed pages' cards and what the dropped ones wait on.
+    residency: residency::Residency,
     /// The open page's cards, always held.
     open: Part,
     pending: Option<Pending>,
@@ -308,12 +302,6 @@ pub(crate) struct Pages {
     anchor: Option<(SessionId, Seq, usize)>,
     /// What the person opened or closed since, by target.
     overrides: BTreeMap<Target, bool>,
-    /// Dropped pages whose row counts wait for a reload.
-    stale: BTreeSet<usize>,
-    /// Pages whose load failed since the width last changed.
-    failed: BTreeSet<usize>,
-    /// Dropped pages a pending copy asked for, kept until it runs.
-    pins: pins::Pins,
     /// The session's images, one id per path (`docs/tui.md`, "Images").
     images: crate::image::Layout,
     width: u16,
@@ -335,6 +323,7 @@ pub(crate) struct Pages {
     /// The renderer seam's shared state: the installed renderer, the
     /// pages' caches, and whether the screen reader drops every style.
     pub(crate) ext: crate::ext::Ext,
+    halves: BTreeMap<SessionId, BTreeMap<String, String>>,
 }
 
 impl Pages {
@@ -344,8 +333,7 @@ impl Pages {
         Self {
             index: Index::default(),
             seeds: vec![seed.clone()],
-            closed: Vec::new(),
-            resident_set: BTreeSet::new(),
+            residency: residency::Residency::default(),
             open: Part::seeded(seed),
             pending: None,
             summaries: Vec::new(),
@@ -358,9 +346,6 @@ impl Pages {
             row_seqs: Vec::new(),
             anchor: None,
             overrides: BTreeMap::new(),
-            stale: BTreeSet::new(),
-            failed: BTreeSet::new(),
-            pins: pins::Pins::default(),
             images: crate::image::Layout::default(),
             width,
             zone: TimeZone::UTC,
@@ -370,6 +355,7 @@ impl Pages {
             #[cfg(test)]
             recounts: 0,
             ext: crate::ext::Ext::default(),
+            halves: BTreeMap::new(),
         }
     }
 
@@ -446,7 +432,7 @@ impl Pages {
         // new open page. Counting may wait for the batch's end, but the
         // revision moves now, so a search never trusts a stale scan.
         if changed && kind != "usage_recorded" {
-            self.index.invalidate(self.closed.len());
+            self.index.invalidate(self.residency.len());
         }
         // A usage line counts the page holding its turn's ▣ line itself.
         if (changed && kind != "usage_recorded") || cut != Cut::None {
@@ -455,7 +441,7 @@ impl Pages {
                 // marked, and the batch's end counts it once.
                 self.dirty = true;
             } else {
-                self.count(self.closed.len());
+                self.count(self.residency.len());
             }
         }
         self.rejoin();
@@ -475,7 +461,7 @@ impl Pages {
         self.held = false;
         if self.dirty {
             self.dirty = false;
-            self.count(self.closed.len());
+            self.count(self.residency.len());
         }
     }
 
@@ -496,7 +482,7 @@ impl Pages {
 
     /// Keeps a live line's totals.
     fn summarise(&mut self, folded: Folded, ts: u64) {
-        let at = self.closed.len();
+        let at = self.residency.len();
         let running = self.running().and_then(|at| self.summaries.get_mut(at));
         match (folded, running) {
             (Folded::Started, _) => self.summaries.push(Summary {
@@ -566,7 +552,7 @@ impl Pages {
         if let (Some(before), Some(after)) = (before, after) {
             let before_rows = rows(Some(&before));
             let after_rows = rows(Some(&after));
-            let open = page == self.closed.len();
+            let open = page == self.residency.len();
             if open && self.held {
                 self.dirty = true;
             } else if (open || before_rows != after_rows) && self.part(page).is_some() {
@@ -585,7 +571,7 @@ impl Pages {
     fn close(&mut self) {
         let seed = Seed::live(self.summaries.len(), None, &self.open);
         self.pending = None;
-        let at = self.closed.len();
+        let at = self.residency.len();
         let mut part = std::mem::replace(&mut self.open, Part::seeded(seed.clone()));
         self.open.fold.carry_from(&mut part.fold);
         let spans = group_spans(&part);
@@ -593,8 +579,7 @@ impl Pages {
             closing.spans = spans;
             closing.carried = part.fold.take_carried();
         }
-        self.closed.push(Some(part));
-        self.resident_set.insert(at);
+        self.residency.push(part);
         self.seeds.push(seed);
         self.focus.push(Vec::new());
         self.table.push(None);
@@ -637,7 +622,7 @@ impl Pages {
         if let Some(card) = before.turns.last_mut() {
             card.end_group();
         }
-        let at = self.closed.len();
+        let at = self.residency.len();
         let spans = group_spans(&before);
         // Whether the cut card's pieces drew, from the rows the pieces
         // draw, never from entries: an entry can draw nothing
@@ -679,8 +664,7 @@ impl Pages {
         // The next page took its copy of the open jobs at the candidate:
         // the closed page keeps none of their descriptions.
         Fold::default().carry_from(&mut before.fold);
-        self.closed.push(Some(before));
-        self.resident_set.insert(at);
+        self.residency.push(before);
         self.seeds.push(seed);
         self.focus.push(Vec::new());
         self.table.push(None);
@@ -700,7 +684,7 @@ impl Pages {
     /// and paging"). A piece never goes from rows back to none, so the
     /// flag only ever turns true once.
     fn rejoin(&mut self) {
-        let open = self.closed.len();
+        let open = self.residency.len();
         if !self.open.joins_previous {
             return;
         }
@@ -727,7 +711,7 @@ impl Pages {
         if let Some(seed) = self.seeds.get_mut(before) {
             seed.joins_next = true;
         }
-        if let Some(Some(part)) = self.closed.get_mut(before) {
+        if let Some(part) = self.residency.slot_mut(before) {
             part.joins_next = true;
             self.count(before);
         } else if let Some(rows) = self.index.pages().get(before).map(|page| page.rows) {
@@ -742,72 +726,36 @@ impl Pages {
     /// never folded again: it holds the live fold. Session state is the
     /// app's, so nothing here touches it.
     pub(crate) fn load(&mut self, session: &SessionId, lines: &[Envelope]) {
-        let mut folding: Option<(usize, Part)> = None;
+        let mut folding: Option<(usize, Vec<&Envelope>)> = None;
         for line in lines {
             self.note_images(line);
             let Some(at) = line.seq.and_then(|seq| self.index.page_of(session, seq)) else {
                 continue;
             };
-            if at >= self.closed.len() {
+            if at >= self.residency.len() {
                 continue;
             }
             if folding.as_ref().is_none_or(|(page, _)| *page != at) {
-                if let Some((page, part)) = folding.take() {
-                    self.keep(page, part);
+                if let Some((page, group)) = folding.take()
+                    && self
+                        .residency
+                        .load(page, &group, &self.seeds, &self.overrides)
+                {
+                    self.count(page);
                 }
-                folding = self.begin(at).map(|part| (at, part));
+                folding = Some((at, Vec::new()));
             }
-            if let Some((_, part)) = &mut folding {
-                fold(part, line);
+            if let Some((_, group)) = &mut folding {
+                group.push(line);
             }
         }
-        if let Some((page, part)) = folding {
-            self.keep(page, part);
-        }
-    }
-
-    /// The cards page `at` starts folding from: its seed's, or `None` for
-    /// the open page, which holds the live fold, and for an unknown one.
-    fn begin(&self, at: usize) -> Option<Part> {
-        if at >= self.closed.len() {
-            return None;
-        }
-        self.seeds.get(at).cloned().map(Part::seeded)
-    }
-
-    /// Finishes page `at`'s folded cards without keeping them: closes the
-    /// group the next page ends, applies what the person opened, and
-    /// restores the live durations, as [`Pages::keep`] does before it
-    /// counts. The search folds a dropped page through it and draws the
-    /// result without keeping it.
-    fn finish(&self, at: usize, part: &mut Part) {
-        if self.seeds.get(at).is_some_and(|seed| seed.cut)
-            && let Some(card) = part.turns.last_mut()
+        if let Some((page, group)) = folding.take()
+            && self
+                .residency
+                .load(page, &group, &self.seeds, &self.overrides)
         {
-            card.end_group();
+            self.count(page);
         }
-        if let Some(seed) = self.seeds.get(at) {
-            part.joins_next = seed.joins_next;
-        }
-        for (target, open) in &self.overrides {
-            set(part, target, *open);
-        }
-        if let Some(seed) = self.seeds.get(at) {
-            restore_spans(part, &seed.spans);
-        }
-    }
-
-    /// Keeps page `at`'s folded cards, closes the group the next page ends,
-    /// applies what the person opened, and counts its rows.
-    fn keep(&mut self, at: usize, mut part: Part) {
-        self.finish(at, &mut part);
-        if let Some(slot) = self.closed.get_mut(at) {
-            *slot = Some(part);
-            self.resident_set.insert(at);
-        }
-        self.stale.remove(&at);
-        self.failed.remove(&at);
-        self.count(at);
     }
 
     /// Closed page `at` folded from its seed and drawn with every section
@@ -831,11 +779,9 @@ impl Pages {
         at: usize,
         lines: &[Envelope],
     ) -> Option<(Vec<Row>, Vec<RowText>, TurnRanges, CallPaths)> {
-        let mut part = self.begin(at)?;
-        for line in lines {
-            fold(&mut part, line);
-        }
-        self.finish(at, &mut part);
+        let part = self
+            .residency
+            .refold(at, lines, &self.seeds, &self.overrides)?;
         let (rows, texts, _, turns) = self.draw_data(at, &part, Draw::AllOpen);
         Some((rows, texts, turns, call_paths(&part)))
     }
@@ -843,9 +789,7 @@ impl Pages {
     /// The page holding segment `session`'s `seq` could not be loaded:
     /// it is not asked for again until the width changes.
     pub(crate) fn fail(&mut self, session: &SessionId, seq: Seq) {
-        if let Some(at) = self.index.page_of(session, seq) {
-            self.failed.insert(at);
-        }
+        self.residency.fail(session, seq, &self.index);
     }
 
     /// The seq ranges to load, in order, each with its segment's session:
@@ -853,35 +797,17 @@ impl Pages {
     /// are stale, then the pages a pending copy asked for. A page may be
     /// listed twice; once loaded, it is no longer needed.
     pub(crate) fn needs(&self, top: usize, height: usize) -> Vec<(SessionId, RangeInclusive<Seq>)> {
-        let wanted = |at: &usize| {
-            !self.failed.contains(at) && self.closed.get(*at).is_some_and(Option::is_none)
-        };
-        let mut pages: Vec<usize> = self.index.window(top, height).filter(wanted).collect();
-        pages.extend(self.stale.iter().copied().filter(wanted));
-        pages.extend(self.pins.pages().filter(wanted));
-        pages
-            .into_iter()
-            .filter_map(|at| self.index.pages().get(at))
-            .map(|page| (page.session.clone(), page.first_seq..=page.last_seq))
-            .collect()
+        self.residency.needs(top, height, &self.index)
     }
 
     /// Drops the cards of every closed page outside the window, keeping
     /// the pages a pending copy asked for until it runs.
     pub(crate) fn trim(&mut self, top: usize, height: usize) {
-        let window = self.index.window(top, height);
-        // Only pages holding cards can drop: the set holds every kept
-        // page, so the scan costs residents, never the session.
-        for at in self.resident_set.clone() {
-            if !window.contains(&at) && !self.pins.contains(at) {
-                if let Some(slot) = self.closed.get_mut(at) {
-                    *slot = None;
-                }
-                // A dropped page's entries go with it: a reload calls
-                // its renderer again.
-                self.ext.cache.drop_page(at);
-                self.resident_set.remove(&at);
-            }
+        let evicted = self.residency.trim(top, height, &self.index);
+        for (at, session) in evicted {
+            self.ext
+                .cache
+                .drop_page(crate::ext::cache::PageKey { session, index: at });
         }
     }
 
@@ -902,20 +828,20 @@ impl Pages {
 
     /// Keeps page `at` resident for one more pending copy.
     pub(crate) fn want(&mut self, at: usize) {
-        self.pins.pin(at);
+        self.residency.want(at);
     }
 
     /// One pending copy lets page `at` go; it drops with the window once
     /// no copy keeps it.
     pub(crate) fn unwant(&mut self, at: usize) {
-        self.pins.unpin(at);
+        self.residency.unwant(at);
     }
 
     /// How many pins pending copies hold (tests only: what an abandoned
     /// copy must return to).
     #[cfg(test)]
     pub(crate) fn pinned(&self) -> usize {
-        self.pins.total()
+        self.residency.pinned()
     }
 
     /// The width rows wrap at.
@@ -924,8 +850,13 @@ impl Pages {
     }
 
     /// Whether page `at`'s load failed since the width last changed.
+    /// Only a closed page can fail: the open page holds the live fold
+    /// and never loads, and an unknown page holds nothing.
     pub(crate) fn page_failed(&self, at: usize) -> bool {
-        self.failed.contains(&at)
+        if at >= self.residency.len() {
+            return false;
+        }
+        self.residency.page_failed(at)
     }
 
     /// A resident page's rows and their texts as drawn now; `None` while
@@ -968,8 +899,8 @@ impl Pages {
         self.ext.cache.drop_entries();
         self.width = width;
         self.wrapped.clear();
-        self.failed.clear();
-        for at in 0..=self.closed.len() {
+        self.residency.on_width_change();
+        for at in 0..=self.residency.len() {
             if self.table.get(at).copied().flatten().unwrap_or(true) {
                 self.index.invalidate(at);
             }
@@ -978,21 +909,54 @@ impl Pages {
     }
 
     /// Counts every resident page again, and marks every dropped one stale.
-    fn recount(&mut self) {
-        for at in 0..=self.closed.len() {
+    pub(crate) fn recount(&mut self) {
+        for at in 0..=self.residency.len() {
             if self.part(at).is_some() {
                 self.count(at);
             } else {
-                self.stale.insert(at);
+                self.residency.mark_stale(at);
             }
         }
     }
 
-    /// A new renderer was installed: the old lines are gone, so every
-    /// resident page counts again under the new one.
-    pub(crate) fn renderers_changed(&mut self) {
-        self.ext.cache.clear();
-        self.recount();
+    /// Retains the latest complete half map and updates only its session's pages.
+    pub(crate) fn record_halves(&mut self, session: &SessionId, halves: BTreeMap<String, String>) {
+        self.halves.insert(session.clone(), halves);
+        let matching: Vec<_> = self
+            .index
+            .pages()
+            .iter()
+            .enumerate()
+            .filter_map(|(at, page)| (&page.session == session).then_some(at))
+            .collect();
+        for at in matching {
+            if self.part(at).is_some() {
+                self.count(at);
+            } else {
+                self.residency.mark_stale(at);
+            }
+        }
+    }
+
+    /// Records the event without interpreting eligibility in the terminal.
+    pub(crate) fn record_extensions(&mut self, envelope: &Envelope) {
+        if envelope.kind == "extensions_loaded"
+            && let Some(loaded) = envelope
+                .payload
+                .get("extensions")
+                .and_then(serde_json::Value::as_array)
+        {
+            let halves = loaded
+                .iter()
+                .filter_map(|half| {
+                    Some((
+                        half.get("name")?.as_str()?.to_owned(),
+                        half.get("version")?.as_str()?.to_owned(),
+                    ))
+                })
+                .collect();
+            self.record_halves(&envelope.session_id, halves);
+        }
     }
 
     /// Whether the screen reader drops every style from the returned
@@ -1009,12 +973,10 @@ impl Pages {
     /// Opens or closes what `target` names on a resident page; false when
     /// none holds it. It stays so when its page is dropped and loaded.
     pub(crate) fn open(&mut self, target: &Target) -> bool {
-        let at = self.closed.len();
+        let at = self.residency.len();
         let resident = self
-            .closed
-            .iter_mut()
-            .enumerate()
-            .filter_map(|(at, part)| part.as_mut().map(|part| (at, part)))
+            .residency
+            .resident_mut()
             .chain(std::iter::once((at, &mut self.open)));
         let mut found = None;
         for (at, part) in resident {
@@ -1047,15 +1009,15 @@ impl Pages {
     /// override is recorded so a dropped page loads it open, and whether
     /// anything changed.
     pub(crate) fn force_open(&mut self, target: &Target) -> bool {
-        let last = self.closed.len();
+        let last = self.residency.len();
         let mut changed = false;
         for at in 0..=last {
             let found = if at == last {
                 set(&mut self.open, target, true)
             } else {
-                self.closed
-                    .get_mut(at)
-                    .is_some_and(|part| part.as_mut().is_some_and(|part| set(part, target, true)))
+                self.residency
+                    .slot_mut(at)
+                    .is_some_and(|part| set(part, target, true))
             };
             if found {
                 self.record(target, true, at);
@@ -1099,6 +1061,8 @@ impl Pages {
         // and the same flag.
         fresh.ext.handle = self.ext.handle;
         fresh.ext.flat = self.ext.flat;
+        fresh.ext.cache = Arc::new(self.ext.cache.scratch_sharing_pending());
+        fresh.halves = self.halves.clone();
         fresh
     }
 
@@ -1159,7 +1123,7 @@ impl Pages {
             .index
             .pages()
             .iter()
-            .take(self.closed.len())
+            .take(self.residency.len())
             .take_while(|page| page.session != attached)
             .count();
         if len == 0 {
@@ -1173,24 +1137,23 @@ impl Pages {
             if let Some(seed) = self.seeds.get(at) {
                 summaries = summaries.max(seed.first.saturating_add(1));
             }
-            if let Some(part) = self.closed.get(at).and_then(Option::as_ref) {
+            if let Some(part) = self.residency.part(at) {
                 summaries = summaries.max(part.first.saturating_add(part.turns.len().max(1)));
             }
         }
         let summaries = summaries.min(self.summaries.len());
         fold.index.prepend_from(&self.index, len);
         fold.seeds.splice(..0, self.seeds.iter().take(len).cloned());
-        fold.closed
-            .splice(..0, self.closed.iter().take(len).cloned());
+        for (_, part) in fold.residency.resident_mut() {
+            part.first = part.first.saturating_add(summaries);
+        }
+        self.residency.carry_prefix_into(&mut fold.residency, len);
         fold.table.splice(..0, self.table.iter().take(len).cloned());
         fold.focus.splice(..0, self.focus.iter().take(len).cloned());
         fold.row_seqs
             .splice(..0, self.row_seqs.iter().take(len).cloned());
         for seed in fold.seeds.iter_mut().skip(len) {
             seed.first = seed.first.saturating_add(summaries);
-        }
-        for part in fold.closed.iter_mut().skip(len).flatten() {
-            part.first = part.first.saturating_add(summaries);
         }
         fold.open.first = fold.open.first.saturating_add(summaries);
         if let Some(pending) = fold.pending.as_mut() {
@@ -1245,46 +1208,6 @@ impl Pages {
                 *turn = turn.saturating_add(summaries);
             }
         }
-        let stale: Vec<usize> = fold.stale.iter().copied().collect();
-        fold.stale.clear();
-        for at in stale {
-            fold.stale.insert(at.saturating_add(len));
-        }
-        for at in &self.stale {
-            if *at < len {
-                fold.stale.insert(*at);
-            }
-        }
-        let failed: Vec<usize> = fold.failed.iter().copied().collect();
-        fold.failed.clear();
-        for at in failed {
-            fold.failed.insert(at.saturating_add(len));
-        }
-        for at in &self.failed {
-            if *at < len {
-                fold.failed.insert(*at);
-            }
-        }
-        let resident: Vec<usize> = fold.resident_set.iter().copied().collect();
-        fold.resident_set.clear();
-        for at in resident {
-            fold.resident_set.insert(at.saturating_add(len));
-        }
-        for at in &self.resident_set {
-            if *at < len && self.closed.get(*at).is_some_and(Option::is_some) {
-                fold.resident_set.insert(*at);
-            }
-        }
-        let pins: Vec<usize> = fold.pins.pages().collect();
-        for at in &pins {
-            fold.pins.unpin(*at);
-        }
-        for at in self.pins.pages().filter(|at| *at < len).collect::<Vec<_>>() {
-            fold.pins.pin(at);
-        }
-        for at in pins {
-            fold.pins.pin(at.saturating_add(len));
-        }
         // The chain keeps one id per `(session, path)`: each carried
         // part re-notes under its own segment, so the same path in two
         // segments keeps two ids.
@@ -1319,9 +1242,9 @@ impl Pages {
             .pending
             .iter_mut()
             .flat_map(|pending| [&mut pending.before, &mut pending.next]);
-        self.closed
-            .iter_mut()
-            .flatten()
+        self.residency
+            .resident_mut()
+            .map(|(_, part)| part)
             .chain(std::iter::once(&mut self.open))
             .chain(pending)
     }
@@ -1430,9 +1353,9 @@ impl Pages {
             .as_ref()
             .into_iter()
             .flat_map(|pending| [&pending.before, &pending.next]);
-        self.closed
-            .iter()
-            .flatten()
+        self.residency
+            .resident()
+            .map(|(_, part)| part)
             .chain(std::iter::once(&self.open))
             .chain(pending)
             .flat_map(|part| part.turns.iter())
@@ -1444,9 +1367,9 @@ impl Pages {
     pub(crate) fn toggle_ledgers(&mut self) {
         let open = {
             let mut ledgers = self
-                .closed
-                .iter()
-                .flatten()
+                .residency
+                .resident()
+                .map(|(_, part)| part)
                 .chain(std::iter::once(&self.open))
                 .flat_map(|part| part.turns.iter())
                 .flat_map(Turn::groups)
@@ -1480,9 +1403,9 @@ impl Pages {
             .iter_mut()
             .flat_map(|pending| [&mut pending.before, &mut pending.next]);
         for part in self
-            .closed
-            .iter_mut()
-            .flatten()
+            .residency
+            .resident_mut()
+            .map(|(_, part)| part)
             .chain(std::iter::once(&mut self.open))
             .chain(pending)
         {
@@ -1640,11 +1563,9 @@ impl Pages {
     pub(crate) fn turn_text(&self, turn: usize) -> Option<String> {
         let mut text = Vec::new();
         for (at, part) in self
-            .closed
-            .iter()
-            .enumerate()
-            .filter_map(|(at, part)| part.as_ref().map(|part| (at, part)))
-            .chain(std::iter::once((self.closed.len(), &self.open)))
+            .residency
+            .resident()
+            .chain(std::iter::once((self.residency.len(), &self.open)))
         {
             let (rows, texts, _, turns) = self.draw_data(at, part, Draw::Shown);
             for (_, range) in turns.into_iter().filter(|(id, _)| *id == turn) {
@@ -1677,11 +1598,9 @@ impl Pages {
     pub(crate) fn rows(&self) -> Vec<Row> {
         let mut out = Rows::default();
         for (at, part) in self
-            .closed
-            .iter()
-            .enumerate()
-            .filter_map(|(at, part)| part.as_ref().map(|part| (at, part)))
-            .chain(std::iter::once((self.closed.len(), &self.open)))
+            .residency
+            .resident()
+            .chain(std::iter::once((self.residency.len(), &self.open)))
         {
             self.draw(at, part, &mut out);
         }
@@ -1752,7 +1671,7 @@ impl Pages {
     /// Whether a dropped page still waits to be counted at the width:
     /// the pass stays live while one is owed.
     pub(crate) fn stale_owed(&self) -> bool {
-        self.stale.iter().any(|at| !self.failed.contains(at))
+        self.residency.stale_owed()
     }
 
     /// The held anchor's row as the pages count now, as
@@ -1761,7 +1680,7 @@ impl Pages {
     /// counted again or failed, since then its row no longer moves.
     pub(crate) fn anchored_row(&mut self) -> Option<usize> {
         let (session, seq, offset) = self.anchor.clone()?;
-        if self.stale.iter().all(|at| self.failed.contains(at)) {
+        if !self.stale_owed() {
             self.anchor = None;
         }
         self.seq_row(&session, seq, offset)
@@ -1775,9 +1694,9 @@ impl Pages {
     /// The code block target in a resident page, when it is still held:
     /// the block rendered at the width the pages wrap at.
     pub(crate) fn copy_target(&self, target: Target) -> Option<crate::markdown::CopyTarget> {
-        self.closed
-            .iter()
-            .flatten()
+        self.residency
+            .resident()
+            .map(|(_, part)| part)
             .chain(std::iter::once(&self.open))
             .find_map(|part| crate::app::copy::copy_target(&part.turns, target, self.wrap_width()))
     }
@@ -1787,7 +1706,7 @@ impl Pages {
         let Some(item) = item else {
             return false;
         };
-        let page = self.closed.len();
+        let page = self.residency.len();
         let after = self.summaries.len();
         self.shell_index
             .entry((page, after))
@@ -1804,24 +1723,23 @@ impl Pages {
     /// the closed ones; `None` for a page the window dropped.
     pub(crate) fn newest_first(&self) -> impl Iterator<Item = Option<&[Turn]>> {
         std::iter::once(Some(self.open.turns.as_slice())).chain(
-            self.closed
-                .iter()
+            (0..self.residency.len())
                 .rev()
-                .map(|part| part.as_ref().map(|part| part.turns.as_slice())),
+                .map(|at| self.residency.part(at).map(|part| part.turns.as_slice())),
         )
     }
 
     /// How many pages hold cards, the open one included.
     pub(crate) fn resident(&self) -> usize {
-        self.closed.iter().flatten().count().saturating_add(1)
+        self.residency.resident().count().saturating_add(1)
     }
 
     /// Page `at`'s cards, while it holds them.
     pub(crate) fn part(&self, at: usize) -> Option<&Part> {
-        if at == self.closed.len() {
+        if at == self.residency.len() {
             return Some(&self.open);
         }
-        self.closed.get(at).and_then(Option::as_ref)
+        self.residency.part(at)
     }
 
     /// Whether page `at`'s replies hold a Markdown table: unknown
@@ -1851,15 +1769,29 @@ impl Pages {
         // that page's index: the window only drops resident pages, so
         // those entries would leak. It binds a throwaway cache instead,
         // which serves repeats inside the draw and is dropped with it.
+        let session = self
+            .index
+            .pages()
+            .get(page)
+            .map(|page| page.session.clone())
+            .unwrap_or_else(|| SessionId(String::new()));
+        let ctx = crate::ext::SessionCtx {
+            session_id: session.clone(),
+            halves: self.halves.get(&session).cloned(),
+        };
+        let key = crate::ext::cache::PageKey {
+            session,
+            index: page,
+        };
         let seam = if self.part(page).is_none() {
             crate::ext::Ext {
                 handle: self.ext.handle,
-                cache: Arc::new(crate::ext::cache::Cache::default()),
+                cache: Arc::new(self.ext.cache.scratch_sharing_pending()),
                 flat: self.ext.flat,
             }
-            .bind(page)
+            .bind(key, ctx)
         } else {
-            self.ext.bind(page)
+            self.ext.bind(key, ctx)
         };
         let mut out = match mode {
             Draw::Shown => Rows::default(),
@@ -1966,7 +1898,7 @@ impl Pages {
         crate::work::add(|work| work.search_order_pages += sources);
         let ((lines, _, focus, _), sources) = self.draw_sourced(at, part, Draw::Shown);
         let width = self.width;
-        let open = at == self.closed.len();
+        let open = at == self.residency.len();
         let mut wrapped = HashMap::new();
         let mut rows = 0usize;
         let mut runs: Vec<(usize, Seq)> = Vec::new();

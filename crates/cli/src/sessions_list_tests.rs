@@ -20,7 +20,7 @@ use contract::shapes::Failure;
 use contract::{ErrorCode, HubLine};
 use serde_json::{Map, Value, json};
 
-use super::{list, resolve_listed, run};
+use super::{latest_listed, list, resolve_listed, run};
 use crate::CliError;
 use fakes::Deadline;
 
@@ -693,6 +693,133 @@ fn a_wrong_shaped_result_is_a_sessions_answer_error() {
 
     let (resolved, _) = resolving("s_1", json!(7));
     let failure = resolved.unwrap_err();
+    assert!(
+        matches!(&failure, CliError::SessionsAnswer(_)),
+        "{failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::IoFailed);
+}
+
+/// A live row with `active`: the row's `status` plus its activity.
+fn live_active(id: &str, name: &str, active: Value) -> Value {
+    let mut row = live(id, idle(name));
+    row["active"] = active;
+    row
+}
+
+/// An exited row with `active`: the row's fields plus its activity.
+fn exited_active(id: &str, active: Value) -> Value {
+    let mut row = exited(id, "n", "exited", None);
+    row["active"] = active;
+    row
+}
+
+/// Runs `latest_listed` against `result` answered to one `sessions`
+/// command: the outcome and the command the hub read, the outcome
+/// received under the hub deadline.
+#[track_caller]
+fn latest(result: Value) -> (Result<Option<contract::SessionId>, CliError>, Value) {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut hub = FakeHub::new(&[accepted(result)]);
+        let picked = latest_listed(&mut || hub.connect());
+        let sent = hub.sent();
+        tx.send((picked, sent)).unwrap_or(());
+    });
+    Deadline::after(HUB_DEADLINE).recv(&rx).unwrap()
+}
+
+/// The picked id, if any.
+fn picked(result: Value) -> Option<String> {
+    latest(result).0.unwrap().map(|id| id.0)
+}
+
+#[test]
+fn latest_requests_activity_without_a_project() {
+    let (_, sent) = latest(empty());
+    // Hub-bound continue asks for activity (docs/invocation.md:115: with
+    // `--hub`, it asks for `active: true`).
+    assert_eq!(
+        sent,
+        json!({"id": "c_sessions", "command": "sessions", "args": {"active": true}})
+    );
+}
+
+#[test]
+fn latest_prefers_the_greatest_activity_live_or_exited() {
+    // The exited row wrote last, so it wins over the live one: the pick
+    // follows the last line, never the row's `ts` or `since`
+    // (docs/invocation.md:115: `continue --hub` opens the entry with the
+    // greatest (`active`, `id`)).
+    let result = json!({
+        "live": [live_active("s_live", "a", json!(100))],
+        "exited": [exited_active("s_exited", json!(300))],
+    });
+    assert_eq!(picked(result), Some("s_exited".to_owned()));
+    let result = json!({
+        "live": [live_active("s_live", "a", json!(300))],
+        "exited": [exited_active("s_exited", json!(100))],
+    });
+    assert_eq!(picked(result), Some("s_live".to_owned()));
+}
+
+#[test]
+fn latest_breaks_activity_ties_by_greater_id() {
+    // Just above wins, just below loses, and an exact tie falls back to
+    // the greater id (docs/invocation.md:115: `continue --hub` opens the
+    // entry with the greatest (`active`, `id`)).
+    let tied = |first: &str, second: &str| {
+        json!({
+            "live": [live_active(first, "a", json!(100)), live_active(second, "b", json!(100))],
+            "exited": [],
+        })
+    };
+    assert_eq!(picked(tied("s_a", "s_b")), Some("s_b".to_owned()));
+    assert_eq!(picked(tied("s_b", "s_a")), Some("s_b".to_owned()));
+    let above = json!({
+        "live": [live_active("s_a", "a", json!(101))],
+        "exited": [exited_active("s_b", json!(100))],
+    });
+    assert_eq!(picked(above), Some("s_a".to_owned()));
+    let below = json!({
+        "live": [live_active("s_a", "a", json!(99))],
+        "exited": [exited_active("s_b", json!(100))],
+    });
+    assert_eq!(picked(below), Some("s_b".to_owned()));
+}
+
+#[test]
+fn latest_without_an_eligible_entry_is_none() {
+    // No entry, or no entry with non-null activity, is none
+    // (docs/invocation.md:115: among entries whose `active` is not `null`;
+    // with no eligible entry it is the same usage error as an empty hub).
+    assert_eq!(picked(empty()), None);
+    let result = json!({
+        "live": [live_active("s_live", "a", Value::Null)],
+        "exited": [exited_active("s_exited", Value::Null)],
+    });
+    assert_eq!(picked(result), None);
+}
+
+#[test]
+fn latest_skips_null_activity() {
+    // Null activity is skipped (docs/invocation.md:115: among entries whose
+    // `active` is not `null`).
+    let result = json!({
+        "live": [live_active("s_live", "a", Value::Null)],
+        "exited": [exited_active("s_exited", json!(7))],
+    });
+    assert_eq!(picked(result), Some("s_exited".to_owned()));
+}
+
+#[test]
+fn latest_with_malformed_activity_is_a_sessions_answer_error() {
+    let result = json!({
+        "live": [live_active("s_live", "a", json!("soon"))],
+        "exited": [],
+    });
+    let (got, _) = latest(result);
+    let failure = got.unwrap_err();
     assert!(
         matches!(&failure, CliError::SessionsAnswer(_)),
         "{failure:?}"

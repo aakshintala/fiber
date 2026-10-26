@@ -3,7 +3,8 @@
 
 use super::commands_testkit::{
     SESSION, answer_commands, answer_rows, attached, connected, enter, hub_line, image_part, now,
-    paste_image, sent, session_line, shown, start_accepted, turn_starts, type_text,
+    paste_image, sent, session_line, shown, start_accepted, turn_starts, turn_starts_with,
+    type_text,
 };
 use crate::app::{App, Effect};
 use crate::keys::Key;
@@ -78,6 +79,37 @@ fn the_slash_list_shows_the_name_row() {
     assert_eq!(
         shown(&app),
         ["/name /rename <text>  Names the session.  command"]
+    );
+}
+
+#[test]
+fn reload_rebuilds_renderer_and_installs_an_empty_replacement() {
+    use std::sync::atomic::Ordering;
+    let mut app = attached();
+    let loader = crate::ext::tests::TestLoad::new("replacement");
+    app.set_home(crate::home::Launch {
+        extensions: Some(loader.clone()),
+        ..Default::default()
+    });
+    enter(&mut app, "/reload");
+    assert_eq!(loader.calls.load(Ordering::SeqCst), 1); // One rebuild per /reload.
+    assert!(matches!(
+        app.handle.get().unwrap().fills_for(
+            &crate::ext::SessionCtx {
+                session_id: contract::SessionId(SESSION.into()),
+                halves: None
+            },
+            "ledger_row"
+        ),
+        crate::ext::SlotSelection::Draw { .. }
+    ));
+    assert!(app.notices().iter().any(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="extension_failed" && text.contains("load fixture notice"))));
+    loader.enabled.store(false, Ordering::SeqCst);
+    enter(&mut app, "/reload");
+    assert_eq!(loader.calls.load(Ordering::SeqCst), 2);
+    assert!(
+        !app.handle.get().unwrap().fills("ledger_row"),
+        "empty result replaces the old renderer"
     );
 }
 
@@ -585,7 +617,18 @@ fn report_keys_keep_the_held_conversation_position() {
         .cloned()
         .unwrap_or_default(),
     });
-    assert!(app.on_line(held).is_empty());
+    // The replayed start asks `commands` again; answering with no rows
+    // leaves the held row to the anchor below.
+    let asked = app.on_line(held);
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    assert_eq!(asked.len(), 1);
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    assert_eq!(asked["command"], "commands");
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": asked["id"], "result": {"commands": []}}),
+    );
+    assert!(app.on_line(answer).is_empty());
     app.screen.pages_mut().hold_anchor(
         &contract::SessionId(SESSION.to_owned()),
         contract::Seq(0),
@@ -1014,11 +1057,11 @@ fn an_extension_command_sends_command_with_text() {
 #[test]
 fn an_extension_command_sends_command_during_a_turn() {
     let mut app = attached();
-    answer_rows(
-        &mut app,
-        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]),
-    );
-    turn_starts(&mut app);
+    let rows =
+        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]);
+    answer_rows(&mut app, rows.clone());
+    // The turn's answer keeps the rows: `/deploy` still dispatches.
+    turn_starts_with(&mut app, rows);
     let lines = sent(enter(&mut app, "/deploy now"));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "command");
@@ -1536,7 +1579,20 @@ fn credential_overlays_and_rebound_session_only_route_to_the_picker() {
         },
         ..Default::default()
     });
-    app.on_line(session_line("session_status", json!({"name":"working","workspace":"/w","project":"-w","state":"streaming","since":0,"started":0,"calls":0,"delegates":0,"jobs":0,"clients":1,"model":"fake/m","spend":{"tokens":{"input":0,"output":0,"cache_read":0,"cache_write":{}},"cost":0.0,"subscription_cost":0.0}})));
+    // The introducing status queues its project's scoped ask, drained
+    // on the same outgoing pass as the fresh feed and recent.
+    let queued: Vec<Value> = app
+        .on_line(session_line("session_status", json!({"name":"working","workspace":"/w","project":"-w","state":"streaming","since":0,"started":0,"calls":0,"delegates":0,"jobs":0,"clients":1,"model":"fake/m","spend":{"tokens":{"input":0,"output":0,"cache_read":0,"cache_write":{}},"cost":0.0,"subscription_cost":0.0}})))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    // The introducing status queues its project's scoped ask (`docs/tui.md:268`):
+    // assert only its presence, not the outgoing order or count.
+    assert!(
+        queued
+            .iter()
+            .any(|line| line["command"] == "recent" && line["args"]["project"] == "-w")
+    );
     app.quit();
     assert!(app.quit_open());
     assert_eq!(app.key_context(), crate::keyset::Context::Overlay);
@@ -2004,7 +2060,20 @@ fn clear_twice_before_any_prompt_keeps_the_start_credential() {
 #[test]
 fn clear_start_refused_keeps_the_old_session_with_one_notice() {
     let mut app = homed();
-    app.on_line(clear_status(SESSION, "/w", "fake/m", Some("high")));
+    // The introducing status queues its project's scoped ask, drained
+    // on the same outgoing pass as the fresh feed and recent.
+    let queued: Vec<Value> = app
+        .on_line(clear_status(SESSION, "/w", "fake/m", Some("high")))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    // The introducing status queues its project's scoped ask (`docs/tui.md:268`):
+    // assert only its presence, not the outgoing order or count.
+    assert!(
+        queued
+            .iter()
+            .any(|line| line["command"] == "recent" && line["args"]["project"] == "-w")
+    );
     let lines = sent(enter(&mut app, "/clear"));
     let id = lines[0]["id"].clone();
     // Typing after the dispatch stays: the refusal takes nothing.
@@ -2193,7 +2262,20 @@ fn clear_overlay_esc_stays() {
 #[test]
 fn clear_overlay_refused_start_closes_with_one_notice() {
     let mut app = homed();
-    app.on_line(waiting_status(SESSION, "approval"));
+    // The introducing status queues its project's scoped ask, drained
+    // on the same outgoing pass as the fresh feed and recent.
+    let queued: Vec<Value> = app
+        .on_line(waiting_status(SESSION, "approval"))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    // The introducing status queues its project's scoped ask (`docs/tui.md:268`):
+    // assert only its presence, not the outgoing order or count.
+    assert!(
+        queued
+            .iter()
+            .any(|line| line["command"] == "recent" && line["args"]["project"] == "-w")
+    );
     assert_eq!(enter(&mut app, "/clear"), Effect::None);
     let lines = sent(app.on_key(Key::Enter, now()));
     assert_eq!(lines.len(), 1);

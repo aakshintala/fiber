@@ -256,7 +256,6 @@ list is one row tall, it shows the focused row's first line.
   right the id, turns, spend and age ("3h ago"). When there are more, a last
   row reads "… N more", and Enter or a click on it lists the rest of the
   project's exited sessions in place.
-
 The focused row is drawn on the selection bar. With no session, the list's
 rows hold two dim lines, centred: "No sessions yet." and "Type below and
 press Enter to start one."
@@ -265,6 +264,8 @@ Live sessions come from the hub's feed, across every project, grouped by the
 `project` on each `session_status`. Exited sessions come from `recent.jsonl`,
 then from the hub's paged query for older ones, grouped by the `project` on
 each row.
+
+Each project's "exited · N", "… N more" and the rail's "N ✓" count from the `total` of a `recent` scoped to that project. The terminal asks for one when the project first appears, after a reconnect, and when one of the project's sessions leaves or is deleted, with one ask in flight per project; it never adjusts a count itself. Until the first answer arrives, N counts the rows loaded. "… N more" counts the rows the hub holds past those shown, and opening it pages the project's `recent`.
 
 Clicking a row, or Enter on it, opens the session: an exited one is resumed by
 the hub. A resume the hub refuses because the workspace is gone shows
@@ -1494,11 +1495,28 @@ The other interactions, `confirm`, `select`, `multi_select` and `text_input`, ra
 
 ### Selection and copy
 
-Dragging selects conversation text, unwrapped and excluding the panel, and
-copies on release. "Copied" shows in `info` in the conversation's top-right
-corner, below the search box when it is open. The selection is on the
-`selection` tint. The terminal owns Cmd+C (Ghostty binds
+Dragging selects text on any surface that shows it, and copies on release,
+as the conversation does today. That covers the input box, notices, panel
+cards, overlays (pickers, the login overlay, `/settings`), the approval
+panel, question forms and swapped views. The press claims the surface it
+starts on: a drag selects within that surface and does not spill into a
+neighbour, even when the pointer leaves the window. "Copied" shows in
+`info` in the conversation's top-right corner, below the search box when
+it is open. The selection is on the `selection` tint, painted over every
+surface's own rects. The terminal owns Cmd+C (Ghostty binds
 `super+c=copy_to_clipboard`), which is why release copies.
+
+A surface's renderer already draws its text as spans, the same spans that
+make selection, copy and search work in the conversation. Every surface
+uses that span shape. A span is either text or decoration. What a
+selection copies is the text spans that fall inside it. Decoration never
+goes into the copy: stripes, half-block edges, chips' brackets, key
+hints, the focus gutter and mark, borders, the scroll bar, and the "…"
+a cut adds. A selected paste token or image copies its visible label,
+never its hidden payload or bytes. A row that wraps onto the next is
+joined with no newline; a line break in the text is a newline. Trailing
+spaces on each row are dropped. A cut element copies what is drawn,
+without the "…". Its whole text is one click away, in the overlay.
 
 The copy goes through OSC 52 and, on a local session, the system clipboard
 command as well. tmux's default `set-clipboard external` drops OSC 52
@@ -1521,6 +1539,24 @@ reply to copy in this view."
 
 Shift-drag stays the terminal's native selection. A selection's highlight
 counts as open, so Esc clears it before it can interrupt the turn.
+
+The input box keeps the selection as the editor's selection too. Typing
+or a paste replaces it, and Backspace or Delete removes it. An unshifted
+cursor key clears it: ← and Home leave the cursor at the selection's
+start, and → and End at its end; ↑ and ↓ clear it and then move as usual.
+A click in the box clears the selection and places the cursor. Shift with
+the arrow keys stays out of this rule. Release still copies.
+
+A press-and-release with no movement is still a click, so mouse targets
+keep working. A drag that starts on a target selects instead of clicking:
+once the pointer leaves the press's cell the click is disarmed and the
+release clicks nothing. Rail and panel edge drags keep resizing and never
+start a text selection.
+
+A notice that would fade, or an overlay that would close by itself, waits
+while a drag is in progress. On release the copy happens first, then the
+waiting fade or close. A close the person asks for, such as Esc or a
+click, is never part of a drag, so this rule does not touch it.
 
 ### Search
 
@@ -1921,9 +1957,9 @@ never as a row of its own.
 The rest of the list is the session's answer to the `commands` driver command
 (`docs/invocation.md`, "What each command does"): its skills, prompt templates
 and extension commands, each with the tag the answer gives. The terminal sends
-`commands` when it attaches to a session and again after each `reloaded` and
+`commands` when it attaches to a session and again after each `reloaded`,
 each `extensions_loaded`, which an offer's approval writes with no `reloaded`
-(`docs/events.md`, "`extensions_loaded`"), and
+(`docs/events.md`, "`extensions_loaded`"), and each `turn_started`, and
 fills the list from the answer to the latest one it sent; until that answer
 arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's command named like an alias takes that name the same way: its own row shows, and the built-in row drops the alias. An extension's commands run
 with the `command` driver command (`docs/extensions.md`, "Commands and
@@ -2364,6 +2400,10 @@ image, in the prompt bubble.
 - The terminal holds the image and moves it with the text, through kitty's
   Unicode placeholders. Fiber keeps no decoded image and sends nothing again
   on a scroll.
+- When the session changes, Fiber deletes the previous session's inline
+  image placements before drawing the next session and does not write those
+  placements again; images the next session presents are written for the new
+  session.
 - An image part in the log carries its width and height, so paging counts its
   rows without decoding it.
 
@@ -2625,8 +2665,7 @@ built-in rather than drawing the row again.
   instruction hook enforces it.
 - **Loading comes before the first frame.** A replaced layout or input box
   changes the first frame, so the terminal loads its TUI extensions before
-  drawing it ("Performance"). An extension that passes its loading timeout is
-  switched off, and the frame goes ahead without it.
+  drawing it ("Performance"). Reading, compiling and running the entry script share the loading timeout, as on the session side. An extension that passes it is switched off, and the frame goes ahead without it.
 - **The renderer is a trait the terminal defines.** `tui` defines a
   `Renderer` trait, and `main` adapts the `extensions` Lua VM to it, so `tui`
   depends on no crate that holds the VM (`docs/architecture.md`, "The call
@@ -2637,6 +2676,16 @@ built-in rather than drawing the row again.
   width changes, so an unchanged frame
   calls no Lua and scrolling or searching costs what it costs for built-in
   rows. The cache lives with the paging window and is dropped with its pages.
+  The key also includes the page's session and index, the selected extension,
+  and its session-half version when it has one. A change to any of these
+  reruns the renderer; an unrelated session-half change does not. Failures
+  use the same key without width.
+- A range-bound client half stays inert without notice until the session's
+  first `extensions_loaded`. An omitted or out-of-range half stays inert
+  with one `extension_incompatible` notice per TUI extension and session-half
+  version until `/reload`; omission counts as `not loaded`. The notice names
+  the TUI version and the session-half version, or `not loaded`.
+  A client half with no session half, such as a layout or a ledger row for a built-in tool, draws for every session.
 
 Measured in the prototype on macOS arm64, on a session of 1,047 tool calls
 ([research/tui-prototype/SEAMS.md](../research/tui-prototype/SEAMS.md)): a
@@ -2712,6 +2761,7 @@ one tool, the input box, the layout, or one key.
   wins (`docs/configuration.md`). Two extensions binding the same key follow
   the same rule, as `tui.slots."key:<key>"`. This is the rule for commands
   (`docs/extensions.md`, "Commands and screens").
+  The notice comes once for each slot and set of contenders until `/reload`. A `tui.slots."<slot>"` that names none of them picks no winner, and the notice names the setting.
 - **A key the person bound in `keys`** is the person's. An extension that
   binds the same key does not get it, and a notice names the extension.
 - **A per-tool ledger row beats the catch-all** `ledger_row`, with no notice.

@@ -6,11 +6,11 @@
 
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::events::Decision;
 use crate::shapes::True;
-use crate::{CommandId, JobId, RequestId, Seq, SessionId};
+use crate::{CommandId, ErrorCode, JobId, RequestId, Seq, SessionId};
 
 pub mod hub;
 
@@ -29,8 +29,8 @@ impl<'de> Deserialize<'de> for CommandLine {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = Value::deserialize(deserializer)?;
         if let Some(args) = value.get("args")
-            && args.is_object()
-            && contains_null(args)
+            && let Some(map) = args.as_object()
+            && args_refuse_null(value.get("command").and_then(Value::as_str), map)
         {
             return Err(D::Error::custom("an optional key is absent, never null"));
         }
@@ -81,6 +81,21 @@ fn contains_null(value: &Value) -> bool {
         Value::Object(map) => map.values().any(contains_null),
         Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
     }
+}
+
+/// Whether a command line's `args` object breaks the null rule: a null
+/// anywhere but the arbitrary-JSON positions the process wire carries — a
+/// `call`'s argument array and a `reply`'s `result`. A null in a control
+/// key, in any other position, or on any other command is still refused: an
+/// optional key is absent, never `null`.
+fn args_refuse_null(command: Option<&str>, args: &Map<String, Value>) -> bool {
+    args.iter().any(|(key, item)| {
+        let wired = matches!(
+            (command, key.as_str()),
+            (Some("call"), "args") | (Some("reply"), "result")
+        );
+        !wired && contains_null(item)
+    })
 }
 
 /// A driver command, keyed by `command`, with its keys under `args`.
@@ -152,11 +167,34 @@ pub enum Command {
     Close(CloseArgs),
     /// Reads one file listed by a pending repository offer.
     OfferedFile(OfferedFile),
+    /// Sends one process-extension call: a registration, a `host` call or
+    /// a `state` call, answered with the call's return. Process extensions
+    /// only, on their own pipe (`docs/extensions.md`, "Process extensions").
+    Call(CallArgs),
+    /// Ends a process extension's registrations. Process extensions only,
+    /// on their own pipe.
+    Ready,
     /// A command this Fiber does not build: never sent by a client type,
     /// answered `unknown_command` with the line's own command name.
     #[serde(other)]
     #[serde(skip_serializing)]
     Unknown,
+}
+
+/// The `args` of `call`: one process-extension call, with the Lua call's
+/// arguments as a JSON array. A function the Lua call passes as a value is
+/// sent as `true`, and Fiber calls it with an `extension_request`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallArgs {
+    /// The call's name as Lua writes it, such as `fiber.tool`.
+    pub call: String,
+    /// The Lua call's arguments, as a JSON array; any JSON value allowed.
+    pub args: Vec<Value>,
+    /// The request answered, naming the call as made inside that request's
+    /// callback; absent before `ready` and on timer calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<RequestId>,
 }
 
 /// One file listed by a pending repository offer.
@@ -278,6 +316,28 @@ pub enum ReplyAnswer {
         /// `approve`, `skip` or `never` for each item.
         decisions: Vec<crate::events::OfferDecision>,
     },
+    /// Answers a process extension's callback request with a value: what
+    /// the Lua function returns; any JSON value, null included.
+    Value {
+        /// The return.
+        result: Value,
+    },
+    /// Fails a process extension's callback request, as a Lua error does.
+    Failure {
+        /// The failure, `{ code, message }`.
+        error: ProcessError,
+    },
+}
+
+/// A process extension's callback failure, which fails the call as a Lua
+/// error does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessError {
+    /// The failure's code.
+    pub code: ErrorCode,
+    /// Fiber's own sentence.
+    pub message: String,
 }
 
 /// One field's answer in a form reply. Unlike the logged

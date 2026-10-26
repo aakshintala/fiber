@@ -16,6 +16,7 @@ use contract::events::{
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
+use ratatui::layout::Rect;
 use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, Queue};
@@ -23,6 +24,7 @@ use crate::ext::{Handle, Renderer};
 use crate::home::Level;
 use crate::import_report::ImportReport;
 use crate::input::Draft;
+use crate::keys::Edit;
 use crate::keys::Key;
 use crate::link::Line;
 use crate::shell;
@@ -89,6 +91,8 @@ use screen::Screen;
 pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
 pub(crate) use outbox::{Kind, Link, Phase, history_args, mint, session_command};
+pub(crate) use select::SurfaceId;
+pub(crate) use select::{NotedSurface, SpanRow};
 pub(crate) use session_views::SessionView;
 pub(crate) use top::Surface;
 
@@ -245,6 +249,14 @@ pub(crate) struct App {
     armed_at: Option<Instant>,
     /// Whether detection saw kitty's keyboard flags.
     kitty: bool,
+    /// Whether detection saw kitty's graphics protocol: the probe's
+    /// answer, which never delays the first frame (`docs/tui.md`,
+    /// "Images").
+    graphics: bool,
+    /// One cell's size in pixels, for the placeholder grid: the tty's
+    /// pixel size over its cell counts, the fallback while unknown
+    /// (`docs/tui.md`, "Images").
+    cell: (u16, u16),
     /// Approval requests from every session.
     queue: Queue,
     /// The attached session's offer of its repository's code.
@@ -358,6 +370,8 @@ impl App {
             renderer_reported: BTreeSet::new(),
             armed_at: None,
             kitty: false,
+            graphics: false,
+            cell: crate::term::FALLBACK_CELL,
             queue: Queue::default(),
             offer: crate::offer::Offer::default(),
             steering: Steering::default(),
@@ -395,6 +409,9 @@ impl App {
         };
         // One install reaches every page the screen draws.
         app.screen.pages_mut().ext.handle = app.handle;
+        app.screen
+            .pages_mut()
+            .set_image_ids(app.images.id_allocator.clone());
         app
     }
 
@@ -562,6 +579,23 @@ impl App {
                 self.toggle_ledgers();
                 Effect::None
             }
+            // End moves to the line's end in the input editor, where
+            // typing would reach it, then jumps to the conversation's
+            // end as before (`docs/tui.md`, "Selection and copy"). The
+            // guard keeps every other context on the arm below: End
+            // outside the input editor only jumps to the end.
+            Key::End
+                if matches!(
+                    self.key_context(),
+                    crate::keyset::Context::Input
+                        | crate::keyset::Context::Steering
+                        | crate::keyset::Context::Conversation
+                ) =>
+            {
+                crate::input::route(Edit::LineEnd, &mut self.draft, &mut self.queue);
+                self.screen.follow();
+                Effect::None
+            }
             Key::End | Key::CtrlC => {
                 self.screen.follow();
                 Effect::None
@@ -690,6 +724,7 @@ impl App {
             return;
         };
         let mut preview = self.attached_screen().pages().fresh();
+        preview.set_image_ids(self.images.id_allocator.clone());
         let mut busy = None;
         if let Some(lines) = tail.turn_lines() {
             for line in lines {
@@ -739,6 +774,7 @@ impl App {
     /// A fresh second `Pages` for the pass, held while a batch is open.
     fn fresh_fold(&self) -> Box<Pages> {
         let mut fold = self.attached_screen().pages().fresh();
+        fold.set_image_ids(self.images.id_allocator.clone());
         if self.screen.pages().holding() {
             fold.hold();
         }
@@ -830,6 +866,7 @@ impl App {
     /// it loads, so the pages hold the anchor and each load finds the
     /// top again.
     fn land(&mut self, mut fold: Pages, held: bool) {
+        fold.ext.cache.promote();
         // The preview's closed ancestor runs land in the fold front
         // beside the carried opens, under their own sessions, before the
         // swap; the fold still replays the own log only.
@@ -1217,9 +1254,84 @@ impl App {
         self.kitty
     }
 
+    /// Records the graphics probe's answer: the terminal speaks kitty's
+    /// graphics protocol (`docs/tui.md`, "Images").
+    pub(crate) fn set_graphics(&mut self) {
+        self.graphics = true;
+        self.refresh_image_sizing();
+    }
+
+    /// Sets one cell's size in pixels, for the placeholder grid, and
+    /// resizes the inline images to it.
+    pub(crate) fn set_cell(&mut self, cell: (u16, u16)) {
+        self.cell = cell;
+        self.refresh_image_sizing();
+    }
+
+    /// Whether images draw inline on the attached screen: the flag is
+    /// on, graphics were detected, and the window is not flat
+    /// (`docs/tui.md`, "Images", "Screen readers").
+    fn inline_images(&self) -> bool {
+        self.home
+            .as_ref()
+            .is_some_and(|home| home.launch.inline_images)
+            && self.graphics
+    }
+
+    /// Resizes the attached and shown screens' images between the
+    /// one-line form and the inline grid, recounting where the sizing
+    /// changed. The attached screen is the stashed one while a
+    /// transcript is swapped in; the shown one sizes too, for the
+    /// settle back.
+    fn refresh_image_sizing(&mut self) {
+        let inline = self.inline_images();
+        let cell = self.cell;
+        let sizing_of = |flat: bool| {
+            if inline && !flat {
+                crate::image::Sizing::Inline { cell }
+            } else {
+                crate::image::Sizing::Text
+            }
+        };
+        let attached_flat = self.attached_screen().pages().ext.flat;
+        let attached = sizing_of(attached_flat);
+        self.attached_screen_mut()
+            .pages_mut()
+            .set_image_sizing(attached);
+        if self
+            .items
+            .open
+            .as_ref()
+            .is_some_and(|open| open.stashed.is_some())
+        {
+            let shown_flat = self.screen.pages().ext.flat;
+            let shown = sizing_of(shown_flat);
+            self.screen.pages_mut().set_image_sizing(shown);
+        }
+    }
+
     /// The draft in the input box.
     pub(crate) fn input(&self) -> &Draft {
         &self.draft
+    }
+
+    /// Notes the input box's shown text slab and its first draft row,
+    /// from the frame that drew it: the press and drag map their cells
+    /// through it.
+    pub(crate) fn note_input_area(&self, area: Rect, top: usize) {
+        self.select.note_input(area, top);
+    }
+
+    /// Drops the input box's note, before the next frame notes its own.
+    pub(crate) fn clear_input_note(&self) {
+        self.select.clear_input_note();
+        self.select.clear_notes();
+    }
+
+    /// Notes `surface`'s drawn text rows for the press, drag and copy
+    /// mapping, from the frame that drew them.
+    pub(crate) fn note_surface(&self, noted: NotedSurface) {
+        self.select.note_surface(noted);
     }
 
     /// The session's name, if it has one.
@@ -1442,20 +1554,59 @@ impl App {
     fn set_renderer(&mut self, renderer: Rc<dyn Renderer>) {
         if self.handle.get().is_none() {
             self.handle = Handle::create();
-            self.attached_screen_mut().pages_mut().ext.handle = self.handle;
+            self.screen.pages_mut().ext.handle = self.handle;
+            if let Some(stashed) = self
+                .items
+                .open
+                .as_mut()
+                .and_then(|open| open.stashed.as_mut())
+            {
+                stashed.pages_mut().ext.handle = self.handle;
+            }
         }
         self.handle.set(renderer);
     }
 
-    /// Installs the ledger renderer: every page counts again under it.
-    /// No production caller yet: Part 3 adapts the extensions VM to it.
-    #[allow(
-        dead_code,
-        reason = "no production caller until Part 3 adapts the extensions VM"
-    )]
+    /// Installs once, then invalidates every live displayed or folding cache.
     pub(crate) fn use_renderer(&mut self, renderer: Rc<dyn Renderer>) {
         self.set_renderer(renderer);
-        self.attached_screen_mut().pages_mut().renderers_changed();
+        let pages = [
+            Some(self.screen.pages_mut()),
+            self.items
+                .open
+                .as_mut()
+                .and_then(|open| open.stashed.as_mut())
+                .map(|stashed| stashed.pages_mut()),
+            if let Overlay::Folding { fold, .. } = &mut self.overlay {
+                Some(fold.as_mut())
+            } else {
+                None
+            },
+        ];
+        // Owners can share pending/failure state. Clear every cache before
+        // any recount can enqueue notices or memoize failures for this install.
+        for pages in pages.iter().flatten() {
+            pages.ext.cache.clear();
+        }
+        for pages in pages.into_iter().flatten() {
+            pages.recount();
+        }
+    }
+
+    /// Every live fold retains the event so a later swap cannot lose it.
+    fn record_extensions(&mut self, envelope: &Envelope) {
+        self.screen.pages_mut().record_extensions(envelope);
+        if let Some(stashed) = self
+            .items
+            .open
+            .as_mut()
+            .and_then(|open| open.stashed.as_mut())
+        {
+            stashed.pages_mut().record_extensions(envelope);
+        }
+        if let Overlay::Folding { fold, .. } = &mut self.overlay {
+            fold.record_extensions(envelope);
+        }
     }
 
     /// `toggle_ledgers`: closes every ledger when all are open, else opens
@@ -1921,8 +2072,11 @@ impl App {
             }
             // An offer's approval loads extensions with no `reloaded`,
             // so `extensions_loaded` asks too: their commands join the
-            // list (`docs/events.md`, "`extensions_loaded`").
-            "reloaded" | "extensions_loaded" => {
+            // list (`docs/events.md`, "`extensions_loaded`"). A turn
+            // start may change the runnable set, so `turn_started` asks
+            // too (`docs/invocation.md`, "What each command does").
+            "reloaded" | "extensions_loaded" | "turn_started" => {
+                self.record_extensions(envelope);
                 if self.outbox.is_up() {
                     send.push(self.ask_commands(&envelope.session_id));
                 }

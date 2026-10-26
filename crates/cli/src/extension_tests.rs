@@ -1149,7 +1149,7 @@ fn install_from_a_path_without_a_terminal_installs_and_names_it() {
 fn install_in_a_terminal_shows_the_summary_and_installs_on_yes() {
     let setup = Setup::new();
     let mut manifest = manifest(NAME_A);
-    manifest["process"] = serde_json::json!({"program": "prog-acme", "args": ["--serve", "8080"]});
+    manifest["process"] = serde_json::json!({"program": "prog-acme", "args": ["--serve", "8080"], "exit_timeout_ms": 0});
     let source = setup.source(
         "aaa",
         &manifest,

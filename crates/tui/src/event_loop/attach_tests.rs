@@ -2769,12 +2769,18 @@ fn the_raise_is_written_after_the_frame_draws() {
 
 /// What the scripted hub answers to the `full` raise.
 enum Full {
-    /// Accepts with the log's last seq, streams the log, then hangs up.
+    /// Accepts with the log's last seq, streams the log, serves the
+    /// replay's `commands` requests, then hangs up.
     Replay,
     /// Accepts with no result: no pass opens.
     Accepted,
     /// Reads the raise and hangs up without answering.
     Hung,
+    /// Accepts with no result, then serves a replay the test feeds
+    /// itself: every post-raise `commands` is read but not answered, so
+    /// the pass the test choreographs gains no input, and the hub hangs
+    /// up when the loop does.
+    ManualReplay,
 }
 
 /// What the scripted hub answers to a `history` read.
@@ -2804,6 +2810,7 @@ struct TailOpen {
     seen: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
     tx: mpsc::Sender<Input>,
     rx: mpsc::Receiver<Input>,
+    hub_done: mpsc::Receiver<()>,
 }
 
 /// The doors' history window over `log`: the last 256 lines at or below
@@ -2832,6 +2839,16 @@ fn tail_open(
     history: History,
     extra: Vec<serde_json::Value>,
 ) -> TailOpen {
+    tail_open_prepared(log, full, history, extra, |_| {})
+}
+
+fn tail_open_prepared(
+    log: Vec<contract::Envelope>,
+    full: Full,
+    history: History,
+    extra: Vec<serde_json::Value>,
+    prepare: impl FnOnce(&mut crate::app::App),
+) -> TailOpen {
     use std::sync::Mutex;
     let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
     app.set_home(crate::home::Launch {
@@ -2853,6 +2870,7 @@ fn tail_open(
         ..Default::default()
     });
     app.set_size(60, 12);
+    prepare(&mut app);
     let (events_tx, events) = mpsc::channel();
     let backend = RecordBackend {
         inner: ratatui::backend::TestBackend::new(60, 12),
@@ -2880,11 +2898,21 @@ fn tail_open(
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&seen);
-    let want_full = matches!(full, Full::Replay | Full::Accepted | Full::Hung);
+    let want_full = matches!(
+        full,
+        Full::Replay | Full::Accepted | Full::Hung | Full::ManualReplay
+    );
     let want_drop = matches!(history, History::Drop);
     let (hub_done_tx, hub_done) = mpsc::channel();
     let (full_tx, full_seen) = mpsc::channel();
     let replay = matches!(full, Full::Replay);
+    let manual = matches!(full, Full::ManualReplay);
+    // Every replayed turn start sends `commands` again: the streamed
+    // replay's turn starts, which the hub serves before hanging up.
+    let replay_turns = log
+        .iter()
+        .filter(|envelope| envelope.kind == "turn_started")
+        .count();
     std::thread::Builder::new()
         .name("tail-hub".to_owned())
         .spawn(move || {
@@ -2920,6 +2948,8 @@ fn tail_open(
                 value
             };
             let mut reads = 0usize;
+            let mut replaying = false;
+            let mut replay_commands = 0usize;
             while std::io::BufRead::read_line(&mut reader, &mut text).is_ok_and(|read| read > 0) {
                 let command: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
                 text.clear();
@@ -2930,7 +2960,21 @@ fn tail_open(
                 match command["command"].as_str() {
                     Some("feed") => write(hub_ack(&id, json!({}))),
                     Some("recent") => write(hub_ack(&id, json!({"sessions": []}))),
-                    Some("commands") => write(session_ack(&id, json!({"commands": []}))),
+                    Some("commands") => {
+                        if replaying && manual {
+                            // The test feeds the replay itself: the request
+                            // is recorded above, and no answer goes out, so
+                            // the choreographed pass gains no input.
+                        } else {
+                            write(session_ack(&id, json!({"commands": []})));
+                            if replaying {
+                                replay_commands += 1;
+                                if replay_commands >= replay_turns {
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     Some("subscribe") if command["args"]["level"] == "full" => {
                         full_tx.send(()).unwrap_or(());
                         match full {
@@ -2944,18 +2988,38 @@ fn tail_open(
                                 for envelope in &log {
                                     write(serde_json::to_value(envelope).unwrap_or_default());
                                 }
+                                // The streamed replay's turn starts send
+                                // `commands` again: serve those, then hang
+                                // up, so no send lands on a dead hub.
+                                replaying = true;
                             }
                             Full::Accepted => {
                                 write(session_ack(&id, json!({})));
                             }
                             Full::Hung => {}
+                            Full::ManualReplay => {
+                                write(session_ack(&id, json!({})));
+                                // The test feeds the replay itself: read
+                                // its `commands`, answer none, and hang up
+                                // when the loop does.
+                                replaying = true;
+                            }
                         }
-                        break;
+                        if !replaying {
+                            break;
+                        }
                     }
                     Some("subscribe") => write(session_ack(&id, json!({}))),
                     Some("history") => {
                         for line in &extra {
                             write(line.clone());
+                        }
+                        if replaying && manual {
+                            // The test feeds the replay itself: an empty
+                            // window keeps the choreographed pass
+                            // single-sourced.
+                            write(session_ack(&id, json!({"lines": []})));
+                            continue;
                         }
                         reads += 1;
                         match &history {
@@ -3016,7 +3080,7 @@ fn tail_open(
     if want_drop {
         wait.recv_or_fail(&hub_done, "the hub to drop the stream");
         wait.recv_or_fail(&reader_done, "the reader to reach EOF");
-    } else if !replay {
+    } else if !replay && !manual {
         wait.recv_or_fail(&hub_done, "the hub to hang up");
         wait.recv_or_fail(&reader_done, "the reader to reach EOF");
     }
@@ -3026,6 +3090,7 @@ fn tail_open(
         seen,
         tx,
         rx,
+        hub_done,
     }
 }
 
@@ -3063,6 +3128,204 @@ fn frames(open: &TailOpen) -> Vec<String> {
 /// The first frame draws the last page of the tail before the `full`
 /// raise: the preview's last reply shows, and the raise goes out after
 /// the frame's history read.
+#[test]
+fn startup_loader_completes_before_the_first_draw_observes_its_result() {
+    struct TracedLoad(mpsc::Sender<&'static str>);
+    impl crate::ext::Load for TracedLoad {
+        fn load(&self) -> (std::rc::Rc<dyn crate::ext::Renderer>, Vec<(String, String)>) {
+            let loaded: (std::rc::Rc<dyn crate::ext::Renderer>, Vec<(String, String)>) = (
+                std::rc::Rc::new(crate::ext::tests::SessionRenderer::new("first-renderer")),
+                vec![("extension_failed".into(), "FIRST-LOAD-RESULT".into())],
+            );
+            self.0.send("load completed").unwrap();
+            loaded
+        }
+    }
+    let pair = crate::event_loop::tests::open();
+    let watched = crate::pty_watch::watch(&pair.main, vec![b"\x1b]2;fiber\x07"]);
+    let (trace_tx, trace) = mpsc::channel();
+    let observer = trace_tx.clone();
+    let (done, finished) = mpsc::channel();
+    let mut launch = crate::event_loop::tests::launch();
+    launch.extensions = Some(Arc::new(TracedLoad(trace_tx)));
+    std::thread::spawn(move || {
+        let result = crate::event_loop::run_with(
+            pair.slave,
+            launch,
+            Box::new(|| Err(std::io::Error::other("unused"))),
+            Box::new(|_| {}),
+            fakes::clock::FakeClock::new(),
+            |tty, tx| {
+                crate::event_loop::Reader::spawn_with(
+                    tty,
+                    tx,
+                    |_| Err(std::io::Error::other("stop after first frame")),
+                    std::io::pipe,
+                    |builder, body| builder.spawn(body),
+                )
+            },
+            |builder, body| builder.spawn(body),
+        );
+        done.send(result).unwrap();
+    });
+    let wait = Deadline::after(DEADLINE);
+    let bytes = wait.recv_or_fail(&watched, "the first frame title");
+    assert!(
+        String::from_utf8_lossy(&bytes).contains("FIRST-LOAD-RESULT"),
+        "first draw must observe the loader result"
+    );
+    observer.send("first draw").unwrap();
+    // docs/tui.md:2659: the first frame waits for the loader, so load
+    // completion precedes the first draw observation in this trace.
+    assert_eq!(
+        wait.recv_or_fail(&trace, "load completion"),
+        "load completed"
+    );
+    assert_eq!(
+        wait.recv_or_fail(&trace, "first draw observation"),
+        "first draw"
+    );
+    assert!(wait.recv_or_fail(&finished, "terminal cleanup").is_err());
+}
+
+#[test]
+fn tail_speculation_failure_survives_replay_and_reaches_actual_app_drain_once() {
+    let mut log = super::handoff_log(3, "tail reply");
+    let at = log
+        .iter()
+        .position(|line| line.kind == "assistant_message_completed")
+        .unwrap();
+    let mut tool = log[at].clone();
+    tool.kind = "tool_call_requested".into();
+    tool.action_id = Some(contract::ActionId("a_tail_tool".into()));
+    tool.payload = json!({"name":"shell","arguments":{"command":"echo tail"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    log.insert(at, tool);
+    for (at, line) in log.iter_mut().enumerate() {
+        line.seq = Some(contract::Seq(at as u64));
+    }
+    let mut fake = crate::ext::tests::SessionRenderer::new("tail-failure");
+    fake.failure = Some(crate::ext::FailureKind::HookFailed);
+    let fake = std::rc::Rc::new(fake);
+    let renderer = fake.clone();
+    let mut open = tail_open_prepared(
+        log,
+        Full::Replay,
+        History::Windows,
+        Vec::new(),
+        move |app| {
+            app.install_renderer(renderer);
+            app.on_key(
+                crate::keys::Key::CtrlO,
+                contract::clock::Clock::now(&*fakes::clock::FakeClock::new()),
+            );
+        },
+    );
+    assert!(
+        !fake.calls.borrow().is_empty(),
+        "tail counted a rendered tool row"
+    );
+    open.lp.app.drawn(&[]);
+    let notices = open.lp.app.notices();
+    // docs/tui.md:2734: the failure keeps one hook_failed per extension and slot.
+    assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="hook_failed"&&text.contains("session-test"))).count(),1);
+    assert!(!open.lp.app.drawn(&[]), "a replay cannot report it twice");
+}
+
+#[test]
+fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
+    // Two contenders claim every ledger row: selection stays inert and
+    // queues one conflict notice through the shared sink, without halves.
+    #[derive(Debug)]
+    struct ConflictPair {
+        pending: std::cell::RefCell<Vec<(String, String)>>,
+        reported: std::cell::Cell<bool>,
+    }
+    impl crate::ext::Renderer for ConflictPair {
+        fn name(&self) -> &str {
+            "tail-a"
+        }
+        fn fills(&self, slot: &str) -> bool {
+            slot.starts_with("ledger_row")
+        }
+        fn fills_for(
+            &self,
+            _ctx: &crate::ext::SessionCtx,
+            slot: &str,
+        ) -> crate::ext::SlotSelection {
+            if !self.fills(slot) {
+                return crate::ext::SlotSelection::Absent;
+            }
+            if !self.reported.replace(true) {
+                self.pending.borrow_mut().push((
+                    "command_conflict".into(),
+                    format!("extensions tail-a, tail-b replace {slot}; the built-in stays"),
+                ));
+            }
+            crate::ext::SlotSelection::Suppressed
+        }
+        fn take_pending(&self) -> Vec<(String, String)> {
+            std::mem::take(&mut *self.pending.borrow_mut())
+        }
+        fn render(
+            &self,
+            _ctx: &crate::ext::SessionCtx,
+            _slot: &str,
+            _input: &crate::ext::Input<'_>,
+            _width: u16,
+            _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+        ) -> crate::ext::Decision {
+            crate::ext::Decision::Draw {
+                extension: "tail-a".into(),
+                lines: Vec::new(),
+            }
+        }
+    }
+    let mut log = super::handoff_log(3, "tail reply");
+    let at = log
+        .iter()
+        .position(|line| line.kind == "assistant_message_completed")
+        .unwrap();
+    let mut tool = log[at].clone();
+    tool.kind = "tool_call_requested".into();
+    tool.action_id = Some(contract::ActionId("a_tail_tool".into()));
+    tool.payload = json!({"name":"shell","arguments":{"command":"echo tail"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    log.insert(at, tool);
+    for (at, line) in log.iter_mut().enumerate() {
+        line.seq = Some(contract::Seq(at as u64));
+    }
+    let renderer = std::rc::Rc::new(ConflictPair {
+        pending: std::cell::RefCell::new(Vec::new()),
+        reported: std::cell::Cell::new(false),
+    });
+    let mut open = tail_open_prepared(
+        log,
+        Full::Replay,
+        History::Windows,
+        Vec::new(),
+        move |app| {
+            app.install_renderer(renderer);
+            app.on_key(
+                crate::keys::Key::CtrlO,
+                contract::clock::Clock::now(&*fakes::clock::FakeClock::new()),
+            );
+        },
+    );
+    open.lp.app.drawn(&[]);
+    let notices = open.lp.app.notices();
+    // docs/tui.md:2757: one command_conflict per slot and set of contenders.
+    assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="command_conflict"&&text.contains("tail-a, tail-b"))).count(),1);
+    assert!(
+        !open.lp.app.drawn(&[]),
+        "a replay cannot report the notice twice"
+    );
+}
+
 #[test]
 fn the_first_frame_draws_the_last_page_before_the_full_subscribe() {
     let log = super::handoff_log(3, "the last reply holds quokkas");
@@ -3266,7 +3529,15 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
             json!({"outcome": "completed"}),
         ),
     ];
-    let open = tail_open(log.clone(), Full::Accepted, History::Windows, Vec::new());
+    // The hub serves the replay the test feeds below: it reads every
+    // `commands` a replayed turn start sends but answers none, so the
+    // choreographed batches gain no input.
+    let open = tail_open(
+        log.clone(),
+        Full::ManualReplay,
+        History::Windows,
+        Vec::new(),
+    );
     let first = frames(&open)
         .pop()
         .unwrap_or_else(|| panic!("a preview frame"));
@@ -3289,9 +3560,10 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     let TailOpen {
         mut lp,
         events,
-        seen: _,
+        seen,
         tx,
         rx,
+        hub_done,
     } = open;
     let send = |input: Input| tx.send(input).unwrap_or_else(|error| panic!("{error}"));
     let send_lines = |lines: &[contract::Envelope]| {
@@ -3388,6 +3660,27 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         whole.apply(envelope);
     }
     assert_eq!(lp.app.pages().index().total(), whole.index().total());
+    // Every replayed turn start sends `commands` again: one per log
+    // turn plus the live one, each read and none answered.
+    drop(lp);
+    Deadline::after(DEADLINE).recv_or_fail(&hub_done, "the hub to hang up");
+    let replay_turns = log
+        .iter()
+        .filter(|envelope| envelope.kind == "turn_started")
+        .count()
+        + 1;
+    let seen_commands: Vec<serde_json::Value> =
+        seen.lock().map(|held| held.clone()).unwrap_or_default();
+    let full_at = seen_commands
+        .iter()
+        .position(|command| command["command"] == "subscribe" && command["args"]["level"] == "full")
+        .expect("the full subscribe");
+    let replayed: Vec<&serde_json::Value> = seen_commands[full_at + 1..]
+        .iter()
+        .filter(|command| command["command"] == "commands")
+        .collect();
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
 }
 
 #[test]
@@ -3407,6 +3700,31 @@ fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
     assert_eq!(open.lp.app.pages().index().total(), whole.index().total());
     assert!(!open.lp.app.pass_open());
     assert_eq!(open.lp.app.take_raise(), None);
+    // Every replayed turn start sends `commands` again: the requests
+    // after the `full` subscribe match the log's turn starts one for one.
+    Deadline::after(DEADLINE).recv_or_fail(&open.hub_done, "the hub to hang up");
+    let replay_turns = log
+        .iter()
+        .filter(|envelope| envelope.kind == "turn_started")
+        .count();
+    let seen_commands: Vec<serde_json::Value> = open
+        .seen
+        .lock()
+        .map(|held| held.clone())
+        .unwrap_or_default();
+    let full_at = seen_commands
+        .iter()
+        .position(|command| command["command"] == "subscribe" && command["args"]["level"] == "full")
+        .expect("the full subscribe");
+    let replayed = &seen_commands[full_at + 1..];
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
+    assert!(
+        replayed
+            .iter()
+            .all(|command| command["command"] == "commands"),
+        "{replayed:?}"
+    );
 }
 
 /// A log whose last 256 lines hold the second turn's start with about

@@ -72,6 +72,27 @@ pub struct Manifest {
     /// package holds").
     #[serde(default, deserialize_with = "present")]
     pub commands: Option<BTreeMap<String, ManifestCommand>>,
+    /// The terminal half's session compatibility.
+    #[serde(default, deserialize_with = "present")]
+    pub tui: Option<TuiManifest>,
+}
+
+/// The terminal half's manifest settings.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TuiManifest {
+    /// Supported session-half versions; absent for a client-only half.
+    #[serde(default, deserialize_with = "present")]
+    pub session_versions: Option<SessionVersions>,
+}
+
+/// Inclusive minimum and optional exclusive upper session-half version.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SessionVersions {
+    /// The inclusive minimum version tag.
+    pub min: String,
+    /// The exclusive upper version tag.
+    #[serde(default, deserialize_with = "present")]
+    pub before: Option<String>,
 }
 
 /// One command a manifest declares.
@@ -132,6 +153,13 @@ pub struct Process {
     /// Its arguments.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Whether the extension is required: one marked `required` that fails
+    /// to start makes that fatal, as a required MCP server does.
+    #[serde(default)]
+    pub required: bool,
+    /// How long the program may take to finish when the session ends, in
+    /// milliseconds; no default. Zero allows no finish time.
+    pub exit_timeout_ms: u64,
 }
 
 /// One per-account host placeholder a provider's models name
@@ -502,7 +530,29 @@ pub fn has_manifest(dir: &Path) -> bool {
 /// Reads `extension.json` at the top of an extension's directory.
 pub fn read_manifest(dir: &Path) -> Result<Manifest, ConfigError> {
     let file = dir.join("extension.json");
-    let manifest: Manifest = read_typed(&file, "an extension's manifest")?;
+    let manifest: Manifest = read_typed(&file, "an extension's manifest").map_err(|error| {
+        // Preserve ordinary manifest errors, but identify the compatibility key
+        // when its structural shape prevents typed deserialization.
+        if matches!(error, ConfigError::Shape { .. })
+            && let Ok(value) = read_typed::<Value>(&file, "an extension's manifest")
+            && let Some(tui) = value.get("tui")
+            && serde_json::from_value::<TuiManifest>(tui.clone()).is_err()
+        {
+            return ConfigError::WrongType {
+                source_name: format!(
+                    "{} ({})",
+                    file.display(),
+                    value
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unnamed extension")
+                ),
+                key: "tui.session_versions".into(),
+                expected: "an object with a string min and an optional string before".into(),
+            };
+        }
+        error
+    })?;
     if let Some(n) = manifest.memory_mib
         && (n == 0
             || n.checked_mul(MIB)

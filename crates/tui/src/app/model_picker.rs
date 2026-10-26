@@ -11,9 +11,7 @@ use crate::model_picker::{
     Choice, InstallStart, Landed, Mode, Progress, command_args, saves, scoped_save,
 };
 use crate::swapped::{Spot, about};
-
-/// The thinking levels `/thinking` takes, in order.
-const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+use contract::ThinkingLevel;
 
 impl App {
     /// Folds a model-list read's answer: each catalogue notice shows once,
@@ -574,7 +572,7 @@ impl App {
         let Some(level) = words.next() else {
             return self.open_thinking();
         };
-        if !LEVELS.contains(&level) {
+        if level.parse::<ThinkingLevel>().is_err() {
             return self.refuse_level(level);
         }
         if let Some(extra) = words.next() {
@@ -747,7 +745,7 @@ impl App {
             "invalid_arguments",
             format!(
                 "Unknown thinking level \"{word}\"; the levels are {}.",
-                LEVELS.join(", ")
+                ThinkingLevel::ALL.map(ThinkingLevel::as_str).join(", ")
             ),
         );
         super::Effect::None

@@ -34,6 +34,7 @@ fn session_start() -> Event {
         forked_from: None,
         rewind: None,
         worktree: None,
+        supervised: false,
     })
 }
 

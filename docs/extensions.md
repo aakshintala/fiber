@@ -185,6 +185,31 @@ envelope and `schema_version` (`docs/events.md`), and three kinds of traffic:
 - **from the extension:** its registrations, and host calls as requests Fiber
   answers
 
+> **The extension's calls are driver commands.** A registration, a `host` call or a `state` call is the command `call`, with `args` `{ "call": "<name>", "args": [ ... ] }`: the name as Lua writes it, such as `fiber.tool`, `host.http` or `state.set`, and the Lua call's arguments as a JSON array. A key whose Lua value is a function, such as `run`, a computed `effects`, or a provider's `sign` or `cost`, is sent as `true`, and Fiber calls it with a request. A call is answered by `command_accepted`, whose `result` is `{ "value": <what the Lua call returns> }`, with `value` absent when it returns nothing, or by `command_rejected` with the `code` and `message` a Lua call raises. A registration that would fail in Lua is rejected with the message its notice carries. `host.after`, `host.every` and `host.drive` are not calls: the program keeps its own timers and sends driver commands directly. The extension ends its registrations with the command `ready`, which takes no `args`. The startup deadline is met when `ready` arrives. A call made while answering a request names it with `request_id` in its `args`. Fiber treats it as made inside that request's callback, with every rule a Lua call in that callback follows: which calls it may make, what `ran_by` names, the timeout it counts against, whether a state write goes with a hook's change, and what is cancelled when the callback ends. A call with no `request_id` before `ready` is treated as made while the entry script runs. One after `ready` is treated as made from a timer with no timeout of its own. A call naming a request that is no longer pending, because it was answered, timed out or was cancelled, is rejected `stale_request` and runs nothing. When a request ends, each call still running under it is stopped as the Lua callback's would be, and answered `stale_request`.
+>
+> **Bytes are base64.** JSON strings are text, so every position below that holds bytes in Lua carries them as a string of standard base64, both ways. Every other string is text, as JSON carries it.
+>
+> | Call | Bytes positions |
+> |---|---|
+> | `host.http` | `opts.body`; the result's `body` |
+> | `host.exec` | `opts.input`; the result's `stdout` and `stderr` |
+> | `host.fs.read` | its result |
+> | `host.fs.write` | the contents argument |
+> | `host.sha256` | its argument (the result is hex text) |
+> | `host.hmac_sha256` | both arguments and the result, so one result passes unchanged as the next call's key |
+>
+> A bytes position that is not valid base64 is rejected `invalid_arguments`, naming the call and the argument.
+>
+> **Functions are requests.** A function passed as a value, whether a key such as `run`, `sign`, `cost` or a computed `effects`, or a positional argument such as `host.oauth.refresh`'s, is sent as `true`. Fiber calls it with an `extension_request`. Its `key` is the key's name or, for a positional argument, its 1-based position as a string, such as `"1"`. `host.after`, `host.every`, `host.drive` and `json` are not calls (above).
+>
+> **JSON is exact.** Lua cannot tell an empty object from an empty list (an empty table), and the rule that settles it in Lua ("`json.encode({})` is `{}`") does not apply on the wire. What the extension sends is read as sent, and what Fiber sends is the value as recorded, so `{}` and `[]` stay distinct. A whole number Lua requires, such as a `timeout`, must be a JSON integer, and a fraction there is rejected as it is in Lua.
+>
+> **Size.** Each line is bounded by the framing cap (64 MiB), counted after base64, which adds a third. A line the extension sends over the cap closes the pipe, as it closes a client's connection, and the extension counts as dead ("One that dies is restarted once"). A result Fiber cannot fit under the cap is answered `command_rejected` `too_large` in place of the result. The call's own limits still apply first, such as `state_too_large`.
+>
+> **Fiber's requests are lines the extension answers with `reply`.** Each is an ephemeral line of kind `extension_request`, whose payload holds `request_id`, `registration` (the `id` of the `call` command that registered it), `key` (the function's key, such as `run`) and `args` (the arguments the Lua function receives, as a JSON array). The extension answers with `reply`: `request_id` and `result` (what the Lua function returns), or `request_id` and `error`, `{ code, message }`, which fails the call as a Lua error does. Stream items, meaning hooks, watcher deliveries and commands, are sent one at a time, each after the reply to the last one. Tool calls are sent as they arrive, so several can be outstanding. A reply to a request that is no longer pending, such as one past its timeout, is rejected `stale_request` and changes nothing. That is how a late reply is dropped.
+>
+> **`extension_hello`** is the first line Fiber sends, ephemeral, with payload keys `session_id`, `reason` (`new`, `resume`, `fork`, `rewind` or `handoff`), `workspace` (the workspace root), `data_dirs` (`{ machine, project }`, the paths `host.data_dir` returns) and `state` (the extension's folded state, as `state.get` reads it). After a restart it is sent again, with the state as it stands in the session.
+
 Every session starts its own process extensions, a delegate included, as it
 starts its own MCP servers. Nothing is shared between sessions
 ([ADR 0009](adr/0009-each-session-is-one-process.md)). They start at session
@@ -600,7 +625,7 @@ including a `nil` value, raise `invalid_arguments`; use `state.unset` to remove 
 - **The fork rule rides on each write.** A fork, a rewind or a delegate's fork
   folds its parent's log. For each key, the `on_fork` of its last write
   decides what the new session gets: `at_point`, its value as of the point;
-  `latest`, its value at the end of the parent's log; `fresh`, nothing. A
+  `latest`, its value at the end of the parent's log; `fresh`, nothing. For a delegate's fork, the end of the parent's log is the fork's point, `forked_from.seq`, so the first run and every resume get the same values. A
   test budget is `at_point`. A list of files the person already approved is
   `latest`. A delegate that is not a fork starts with no extension state.
 - **A hook's writes go with its change.** A write made inside a hook is
@@ -1284,7 +1309,10 @@ not silently dropped. When any entry is `blocking`, a headless run fails with
 `extension_missing`, and the terminal offers to install `hooks` before the
 session starts, so a guard never fails open. When every entry is
 `non-blocking`, the session starts and a `notice` names the missing
-extension.
+extension. An entry that is not an object fails the session with
+`config_invalid`, naming it, whether or not `hooks` is installed. When
+several entries are malformed, the error names the first in sorted key
+order.
 
 The declarations are the extension's settings (`docs/configuration.md`,
 "Extension settings"), under `hooks`, one entry per name, so each layer adds
@@ -1328,7 +1356,8 @@ entries instead of replacing the list:
   false, read only from the repository's file, as
   `mcp.servers."<name>".required` is for a server. A required entry nobody
   approved fails a run that has nobody to ask, with `hook_unapproved` ("Code a
-  repository ships").
+  repository ships"). An approved entry runs from its pinned copy. When that copy cannot be made, a `required` entry stops the session starting, and Fiber exits with error `hook_failed` naming it; any other entry is skipped, with a `notice` with code `hook_failed` naming it.
+- **A repository entry with the name of one of the person's.** An unapproved repository entry is withheld before the layers merge, so the person's entry of that name runs unchanged. Once approved, it merges key by key like any other layer.
 
 The command runs as `host.exec` runs a program ("Host calls"): in the
 session's workspace, in its own process group, with the session's
@@ -1363,8 +1392,23 @@ extension among the others.
 A repository may declare hooks in its layer of these settings. Each one runs
 only after a person approves it, pinned to its exact content ("Code a
 repository ships"); one nobody has approved is withheld from what the
-extension reads. A repository cannot set `hooks.order` or a hook timeout
-override, so the order within a phase and every timeout stay the person's.
+extension reads, so the person's entry of that name runs unchanged. An
+approved entry merges key by key in normal layer order: the person's
+project and run layers still beat it. A repository cannot set `hooks.order`
+or a hook timeout override, so the order within a phase and every timeout
+stay the person's; an entry-local `timeout` is the hook's own.
+A hook's `command` and `args` strings that name repository files run from
+the pinned copy in Fiber home, never the repository: Inside paths map to
+their pinned files, Outside strings (including absolute symlink spellings)
+and unmapped names, flags and missing paths stay exactly as written, and
+gathered Inside symlink resolutions stay frozen. Only approved entries are
+installed, each through a blocking copy that rebuilds a pruned copy; a copy
+that cannot be made fails only that hook, classified by the repository's
+`required`. A skipped, unapproved or failed replacement never removes a
+running snapshot: only an approved and materialized replacement swaps it,
+and the old copy stays held until then. Watchers use the same authorized
+mapping and holds. A pinned script runs in the workspace, reads live
+workspace files outside its copy, and sees none of its unpinned siblings.
 
 ## Watchers
 

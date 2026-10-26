@@ -7,7 +7,7 @@ use ratatui::text::Line;
 
 use super::{
     Kind, Kinds, content_text, count, cut, duration, heading, headline, kind, money, seconds,
-    summary, tokens, wrap, wrap_joined,
+    spend_against_budget, summary, tokens, wrap, wrap_joined,
 };
 
 fn text(kinds: &Kinds) -> String {
@@ -198,6 +198,27 @@ fn money_has_two_decimals_and_a_floor_for_tiny_amounts() {
     assert_eq!(money(0.005), "$0.01");
     assert_eq!(money(0.0), "$0.00");
     assert_eq!(money(12.345_67), "$12.35");
+}
+
+#[test]
+fn spend_against_a_budget_reads_billed_cost_and_unknown() {
+    // A set budget draws billed spend against it, `$0.00` included; a
+    // still-null cost reads "unknown" (`docs/loop.md`, "Spending
+    // budget"). With no budget there is no comparison to draw.
+    assert_eq!(
+        spend_against_budget(Some(1.25), Some(5.0)),
+        Some("$1.25 of $5.00".to_owned())
+    );
+    assert_eq!(
+        spend_against_budget(Some(0.0), Some(5.0)),
+        Some("$0.00 of $5.00".to_owned())
+    );
+    assert_eq!(
+        spend_against_budget(None, Some(5.0)),
+        Some("unknown of $5.00".to_owned())
+    );
+    assert_eq!(spend_against_budget(Some(1.25), None), None);
+    assert_eq!(spend_against_budget(None, None), None);
 }
 
 #[test]

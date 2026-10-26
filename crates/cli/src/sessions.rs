@@ -12,9 +12,11 @@ use contract::shapes::Failure;
 use contract::{CommandId, ErrorCode, HubLine, SessionId};
 use serde_json::Value;
 
+use serde::Deserialize;
+
 use crate::CliError;
 use crate::approve::{confirmed, say};
-use crate::{project_of, with_dirs, write_line};
+use crate::{project_of, resolve_listed, with_dirs, write_line};
 
 /// What the delete prompt asks.
 const DELETE_PROMPT: &str = "delete? [y/N]";
@@ -59,13 +61,15 @@ fn run(
     Ok(target)
 }
 
-/// `fiber sessions delete [--cascade] [--yes] <id>` in the current
-/// directory: resolves the session, asks unless `yes`, and sends one
+/// `fiber sessions delete [--hub <name>] [--cascade] [--yes] <id>`: with
+/// a hub the id resolves on that hub and deletes through it; without one
+/// it resolves in the current directory. Asks unless `yes`, and sends the
 /// `delete` to the hub `connect` reaches, starting one when none runs.
 pub fn delete(
     selector: &str,
     cascade: bool,
     yes: bool,
+    hub: Option<&str>,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> i32 {
     let stdin = io::stdin();
@@ -77,15 +81,18 @@ pub fn delete(
             input: &mut stdin.lock(),
             err: &mut io::stderr(),
         };
-        delete_run(
-            home,
-            workspace,
-            selector,
-            cascade,
-            ask,
-            &mut io::stdout(),
-            connect,
-        )
+        match hub {
+            Some(name) => delete_listed(name, selector, cascade, ask, &mut io::stdout(), connect),
+            None => delete_run(
+                home,
+                workspace,
+                selector,
+                cascade,
+                ask,
+                &mut io::stdout(),
+                connect,
+            ),
+        }
     })
 }
 
@@ -142,6 +149,96 @@ fn delete_run(
     print_ids(out, &listed)
 }
 
+/// Deletes `selector` on hub `name`: resolves it against that hub's
+/// `sessions` answer across every project, as `resume --hub` does, never
+/// reading this machine's directory or logs. Without `yes` sends a dry
+/// run, prints the answered set and asks, then sends `delete` with that
+/// exact set as `expect`. With `yes` sends one `delete` with no `expect`.
+/// Nobody to ask fails before connecting; hub refusals keep their codes.
+fn delete_listed(
+    hub: &str,
+    selector: &str,
+    cascade: bool,
+    ask: Ask<'_>,
+    out: &mut dyn Write,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
+) -> Result<(), CliError> {
+    if !ask.yes && !ask.terminal {
+        return Err(CliError::DeleteNobody);
+    }
+    let id = resolve_listed(selector, hub, connect)?;
+    let (stream, _) = connect().map_err(CliError::Hub)?;
+    let mut read = BufReader::new(stream);
+    if ask.yes {
+        confirm(&mut read, &id, cascade, None)?;
+        return print_ids(out, &[id]);
+    }
+    let set = dry_run(&mut read, &id, cascade)?;
+    print_ids(out, &set)?;
+    if !confirmed(
+        DELETE_PROMPT,
+        DELETE_NOBODY,
+        ask.terminal,
+        ask.input,
+        ask.err,
+    )? {
+        say(ask.err, "nothing deleted\n");
+        return Ok(());
+    }
+    confirm(&mut read, &id, cascade, Some(set.clone()))?;
+    print_ids(out, &set)
+}
+
+/// The hub's dry-run answer: the sessions the delete would remove.
+#[derive(Deserialize)]
+struct DryRun {
+    sessions: Vec<SessionId>,
+}
+
+/// Sends `delete` with `dry_run` and reads the answered `sessions`: the
+/// set the delete would remove, the session first.
+fn dry_run(
+    read: &mut BufReader<UnixStream>,
+    id: &SessionId,
+    cascade: bool,
+) -> Result<Vec<SessionId>, CliError> {
+    let result = request_value(
+        read,
+        DELETE_ID,
+        HubCommand::Delete(Delete {
+            session: id.clone(),
+            cascade: cascade.then_some(true),
+            expect: None,
+            dry_run: Some(true),
+        }),
+    )?;
+    serde_json::from_value::<DryRun>(result)
+        .map(|dry| dry.sessions)
+        .map_err(CliError::SessionsAnswer)
+}
+
+/// Sends the confirmed `delete`: `expect` carries the dry run's exact
+/// set, or nothing with `--yes`, which sends one `delete` with no
+/// `expect`, as local `--yes` deletes without confirming a set.
+fn confirm(
+    read: &mut BufReader<UnixStream>,
+    id: &SessionId,
+    cascade: bool,
+    expect: Option<Vec<SessionId>>,
+) -> Result<(), CliError> {
+    request_value(
+        read,
+        DELETE_ID,
+        HubCommand::Delete(Delete {
+            session: id.clone(),
+            cascade: cascade.then_some(true),
+            expect,
+            dry_run: None,
+        }),
+    )
+    .map(drop)
+}
+
 /// Sends `delete` for `id` and reads until its answer, skipping every
 /// other line. An end before the answer is `io_failed`; a rejection is a
 /// failure with its code and message.
@@ -170,6 +267,7 @@ fn delete_value(
             session: id.clone(),
             cascade: cascade.then_some(true),
             expect: None,
+            dry_run: None,
         }),
     )
     .map(drop)

@@ -38,6 +38,7 @@ mod machine;
 mod pairing;
 mod port;
 mod prompt_history;
+mod prune;
 mod read_file;
 mod recent;
 mod rejoin;
@@ -73,7 +74,7 @@ use crate::listen::Held;
 
 pub use crate::environment::{Environment, Environments};
 pub use crate::error::StartError;
-pub use crate::machine::{DeviceLogin, FileSearch, Machine, ShowCode};
+pub use crate::machine::{DeviceLogin, FileSearch, Machine, PruneFailure, PruneOutcome, ShowCode};
 pub use crate::recent::{Left, RecentError, RecentRow, append, append_exited};
 pub use crate::spawn::{HUB_SESSION_MARKER, SpawnStarter};
 
@@ -125,7 +126,13 @@ pub trait Starter: Send + Sync {
     /// "Isolation"); the session command creates the worktree itself.
     /// With `continues` naming a session, the session runs in that
     /// session's worktree instead, which `start` checked is the
-    /// workspace (`docs/invocation.md`, "Isolation").
+    /// workspace (`docs/invocation.md`, "Isolation"). With `supervised`
+    /// true, the session is driven by a program (`docs/permissions.md`,
+    /// "Supervised sessions").
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the start call takes each launch option once"
+    )]
     fn start(
         &self,
         id: &SessionId,
@@ -134,6 +141,7 @@ pub trait Starter: Send + Sync {
         overrides: &[&str],
         worktree: bool,
         continues: Option<&SessionId>,
+        supervised: bool,
     ) -> io::Result<Box<dyn Started>>;
 
     /// Starts the session command resuming `id` in `workspace`, the launch

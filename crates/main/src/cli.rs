@@ -18,12 +18,12 @@ Sessions:
   fiber [--model <model>] [-c <key>=<value>]...                                                                   Open the terminal
   ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
   resume [<id>] [--credential <label>]                                                                            Open a session in the terminal, or home at the session list
-  continue                                                                                                        Open the most recent session in this project
+  continue [--hub <name>]                                                                                           Open the most recent session in this project
   sessions [--all] [--json]                                                                                       List sessions: id, state, name, what it waits on, spend
   sessions search [--all] [--json] <text>                                                                         Search the logs of past and running sessions for the text
-  sessions delete [--cascade] [--yes] <id>                                                                        Delete a session, and with --cascade the sessions that continue it
+  sessions delete [--hub <name>] [--cascade] [--yes] <id>                                                         Delete a session, and with --cascade the sessions that continue it
   sessions export <id> [<path>]                                                                                   Write the session's log and its artifacts to <path>
-  sessions prune [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]                              Delete old sessions, worktrees and diagnostic logs
+  sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]               Delete old sessions, worktrees and diagnostic logs
   models [<search>] [--json]                                                                                      List the models the installed providers serve
 
 Fiber itself:
@@ -207,7 +207,11 @@ pub(crate) enum Commands {
         hub: Option<String>,
     },
     /// Open the most recent session in this project
-    Continue,
+    Continue {
+        /// Use a hub from this client's list.
+        #[arg(long, value_name = "name")]
+        hub: Option<String>,
+    },
     /// List sessions, or delete, export or prune them
     Sessions(SessionsArgs),
     /// List the models the installed providers serve
@@ -437,6 +441,9 @@ pub(crate) struct SessionsArgs {
 pub(crate) enum SessionsCommands {
     /// Delete a session, and with --cascade the sessions that continue it
     Delete {
+        /// Use a hub from this client's list.
+        #[arg(long, value_name = "name")]
+        hub: Option<String>,
         /// Also delete every session that continues it: its forks and
         /// rewinds, and theirs.
         #[arg(long)]
@@ -460,6 +467,9 @@ pub(crate) enum SessionsCommands {
     },
     /// Delete old sessions, worktrees and diagnostic logs
     Prune {
+        /// Use a hub from this client's list.
+        #[arg(long, value_name = "name")]
+        hub: Option<String>,
         /// Delete every exited session whose last line is older than
         /// this, such as `30d`: a whole number and `s`, `m`, `h` or `d`.
         /// Without it no session is deleted.
@@ -883,6 +893,18 @@ pub(crate) struct SessionArgs {
     /// environment").
     #[arg(long = "login-shell", hide = true)]
     pub(crate) login_shell: bool,
+
+    /// The session is driven by a program, never by a person: its
+    /// escalations stay blocks (`docs/permissions.md`, "Supervised
+    /// sessions"). Hidden and free to change, passed by the hub that
+    /// starts a supervised session; fixed at `start`, so never with a
+    /// resume or a delegate's parent.
+    #[arg(
+        long,
+        hide = true,
+        conflicts_with_all = ["resume", "rewound_from", "parent", "forked_from", "forked_seq"]
+    )]
+    pub(crate) supervised: bool,
 }
 
 impl From<&SessionArgs> for contract::session_argv::SessionArgv {
@@ -904,6 +926,7 @@ impl From<&SessionArgs> for contract::session_argv::SessionArgv {
             delegate_id: args.delegate_id.clone().map(contract::JobId),
             depth: args.depth,
             login_shell: args.login_shell,
+            supervised: args.supervised,
         }
     }
 }

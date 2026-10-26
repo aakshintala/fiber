@@ -38,5 +38,8 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
         &choices,
         "click a choice",
     );
-    overlay::draw(buf, area, &question, Place::Centre, targets)
+    let slab = overlay::draw(buf, area, &question, Place::Centre, targets);
+    let joins = vec![crate::rows::Join::Break; question.body.len()];
+    overlay::note_overlay(app, buf, slab, &question, area, Place::Centre, &joins);
+    slab
 }

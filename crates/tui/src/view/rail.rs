@@ -16,6 +16,7 @@ use crate::format;
 use crate::home::{Left, Row, Section, State, title};
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
+use crate::text::to_u16;
 
 /// The rail's width from which a card draws its context bar.
 const BAR_FROM: u16 = 30;
@@ -81,13 +82,14 @@ pub(crate) fn groups<'a>(
                 .filter(|card| card.left.is_none())
                 .fold(0.0, |sum, card| sum + card.spend);
             // A crashed card is not exited either: the count and the
-            // first-exited key come from the exited rows alone.
+            // first-exited key come from the exited rows alone, with the
+            // count drawn from the hub's total when one is held.
             let (exited, first_exited) = sections
                 .iter()
                 .find(|section| section.project == project)
                 .map(|section| {
                     (
-                        section.exited.len(),
+                        section.total.unwrap_or(section.exited.len()),
                         section.exited.first().map(|row| row.key),
                     )
                 })
@@ -164,6 +166,9 @@ pub(crate) struct RailRow {
     pub(crate) spots: Vec<(u16, u16, u16, Spot)>,
     /// The key of the card this row starts: the wheel's stops.
     pub(crate) start: Option<u64>,
+    /// Whether the row is a card edge: stripes, half-block edges and
+    /// borders never copy (`docs/tui.md`, "Selection and copy").
+    pub(crate) edge: bool,
 }
 
 /// Every group's rows, top to bottom; `width` is the rail rect's.
@@ -229,6 +234,7 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<RailRow> {
             tint: None,
             spots,
             start: None,
+            edge: false,
         });
         for row in &group.cards {
             card(app, row, width, &mut out);
@@ -272,6 +278,7 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
         tint: None,
         spots: Vec::new(),
         start: Some(row.key),
+        edge: true,
     });
     let mut spots = Vec::new();
     // The ✕ target follows the card's, so a click on it dismisses. It
@@ -307,6 +314,7 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
             tint: Some(tint),
             spots: std::mem::take(&mut spots),
             start: None,
+            edge: false,
         });
     }
     out.push(RailRow {
@@ -314,6 +322,7 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
         tint: None,
         spots: Vec::new(),
         start: None,
+        edge: true,
     });
 }
 
@@ -571,6 +580,58 @@ pub(crate) fn draw(
             });
         }
     }
+    // The selection reads the drawn rows: edge rows never note, body
+    // rows without their stripe or box side and its gap column, headers
+    // as drawn (`docs/tui.md`, "Selection and copy"). Spots stay
+    // clickable: a drag from one still selects.
+    let boxed = crate::surface::box_fit(area.width);
+    let mut noted = Vec::new();
+    for ((_, row), y) in rows
+        .iter()
+        .enumerate()
+        .skip(skip)
+        .zip(area.y..area.bottom())
+    {
+        if row.edge {
+            continue;
+        }
+        let mut spans = row.line.spans.as_slice();
+        let mut x = area.x;
+        if row.tint.is_some() {
+            // The stripe's column, or the box's left side, with the gap
+            // column after it.
+            for _ in 0..2 {
+                let Some(first) = spans.first() else {
+                    break;
+                };
+                x = x.saturating_add(to_u16(crate::format::width(&first.content)));
+                let Some(rest) = spans.get(1..) else {
+                    break;
+                };
+                spans = rest;
+            }
+        }
+        let mut text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+        if boxed && text.ends_with('│') {
+            text.pop();
+        }
+        let cut = crate::format::cut(
+            &text,
+            usize::from(card_w).saturating_sub(usize::from(x.saturating_sub(area.x))),
+        );
+        noted.push(crate::app::SpanRow {
+            y,
+            x,
+            end: area.x.saturating_add(card_w),
+            text: cut,
+            join: crate::rows::Join::Break,
+        });
+    }
+    app.note_surface(crate::app::NotedSurface {
+        surface: crate::app::SurfaceId::Rail,
+        rows: noted,
+    });
+    super::marks::paint_selection(app, buf, crate::app::SurfaceId::Rail, area);
     // The focused stop reads lifted (`docs/tui.md`, "The rail"): a
     // focused card reads as one lifted card, with colour its text rows
     // taking the hover tint, leaving its blank edges untinted; without

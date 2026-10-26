@@ -46,6 +46,29 @@ const CURRENT_NO_COLOR: Style = Style::new()
     .add_modifier(Modifier::REVERSED)
     .add_modifier(Modifier::BOLD);
 
+/// The selection's highlight style, shared by every surface that paints
+/// one (`docs/tui.md`, "Selection and copy").
+pub(crate) fn selection_style() -> Style {
+    if crate::surface::boxed() {
+        SELECTION_NO_COLOR
+    } else {
+        SELECTION
+    }
+}
+
+/// Paints `surface`'s selection over `area`: each cell with the
+/// selection tint (`docs/tui.md`, "Selection and copy").
+pub(crate) fn paint_selection(
+    app: &App,
+    buf: &mut Buffer,
+    surface: crate::app::SurfaceId,
+    area: Rect,
+) {
+    for rect in app.selection_cells(surface, area) {
+        buf.set_style(rect.intersection(area), selection_style());
+    }
+}
+
 /// The matched and current styles shared by conversation and results.
 pub(super) fn hit_styles() -> (Style, Style) {
     if crate::surface::boxed() {
@@ -103,19 +126,12 @@ pub(super) fn draw(
     // With no colour the marks keep their modifiers and the paint
     // pass strips the tints; in colour the tints carry the marks with
     // no modifier (`docs/tui.md`, "Look", "Search").
-    let selection = if crate::surface::boxed() {
-        SELECTION_NO_COLOR
-    } else {
-        SELECTION
-    };
     let (matched, current_mark) = hit_styles();
     for (rect, current) in app.find_marks(area) {
         let style = if current { current_mark } else { matched };
         buf.set_style(rect.intersection(area), style);
     }
-    for rect in app.selection_cells(area) {
-        buf.set_style(rect.intersection(area), selection);
-    }
+    paint_selection(app, buf, crate::app::SurfaceId::Conversation, area);
     let focused = app.focused();
     let links = if gap.is_some() {
         app.visible_links(area)

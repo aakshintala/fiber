@@ -710,3 +710,35 @@ fn an_empty_match_anchors_the_window_at_its_bytes() {
     assert_eq!(row.text, "5678");
     assert_eq!(row.marked, "");
 }
+
+/// A drag over a result entry copies its text: the path row and the
+/// match row read in order (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_over_a_result_entry_copies_its_match() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    let mut app = attached(80, 24);
+    reply(&mut app, "a1", "needle one");
+    searched(&mut app, "needle");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let screen = crate::view::text(&buf);
+    let (y, line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("needle one"))
+        .map(|(y, line)| (u16::try_from(y).unwrap_or(u16::MAX), line.to_owned()))
+        .expect("the match row draws");
+    let x = u16::try_from(line.find("needle").unwrap_or_default()).unwrap_or(u16::MAX);
+    let mut report = |kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        app.on_select(&Mouse { kind, col, row }, &targets)
+    };
+    let _ = report(MouseKind::Press(Button::Left), x, y);
+    let _ = report(MouseKind::Drag(Button::Left), x + 5, y);
+    assert_eq!(
+        report(MouseKind::Release, x + 5, y),
+        Effect::Copy("needle".to_owned())
+    );
+}

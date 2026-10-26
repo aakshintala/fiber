@@ -45,6 +45,8 @@ pub enum HubCommand {
     Start(Start),
     /// Deletes an exited session.
     Delete(Delete),
+    /// Prunes the hub's machine.
+    Prune(Prune),
     /// Answers with a page of the project's prompt history.
     PromptHistory(PromptHistory),
     /// Answers with one file from the session's `artifacts/`.
@@ -142,6 +144,10 @@ pub struct SessionsArgs {
     /// Keeps only that project's sessions; absent means every project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// With true, each entry carries `active`; absent or false lists
+    /// without opening any session log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
 }
 
 /// The `args` of `start`.
@@ -162,6 +168,10 @@ pub struct Start {
     /// The session whose worktree this session continues: its id. Set from `--continues`, beside `--rewound-from`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continues: Option<SessionId>,
+    /// With true, a program drives the session (`docs/permissions.md`,
+    /// "Supervised sessions").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervised: Option<bool>,
     /// The session's first prompt, sent after the answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<Vec<SentPart>>,
@@ -179,6 +189,60 @@ pub struct Delete {
     /// The sessions the person confirmed; sent only with `cascade`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect: Option<Vec<SessionId>>,
+    /// With true, answers the sessions it would remove and deletes nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dry_run: Option<bool>,
+}
+
+/// The `args` of `prune`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Prune {
+    /// Deletes exited sessions older than the duration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older_than: Option<String>,
+    /// With true, dependents of a removed session go too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cascade: Option<bool>,
+    /// With true, removes without asking about anything kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub force: Option<bool>,
+    /// With true, answers the preview and deletes nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dry_run: Option<bool>,
+    /// The previewed items to remove; absent reads as empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<PruneExpect>,
+}
+
+/// The `expect` of `prune`: the dry run's items, each named as the dry
+/// run names it. Each list reads absent as empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PruneExpect {
+    /// The previewed sessions, each with its confirmed set.
+    #[serde(default)]
+    pub sessions: Vec<PruneSession>,
+    /// The previewed worktree directory paths.
+    #[serde(default)]
+    pub worktrees: Vec<String>,
+    /// The previewed pinned-copy hashes.
+    #[serde(default)]
+    pub pinned: Vec<String>,
+    /// The previewed diagnostic paths.
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
+}
+
+/// One previewed session: its id with the full confirmed set the delete
+/// removes, matching `delete`'s `expect` semantics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PruneSession {
+    /// The session to delete.
+    pub id: SessionId,
+    /// The full set the delete removes.
+    pub cascade: Vec<SessionId>,
 }
 
 /// The `args` of `prompt_history`.

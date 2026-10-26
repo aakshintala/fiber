@@ -109,7 +109,9 @@ pub struct LoadedExtension {
 pub enum OnFork {
     /// The value as of the point.
     AtPoint,
-    /// The value at the end of the parent's log.
+    /// The value at the end of the parent's log. For a delegate's fork,
+    /// the end of the parent's log is the fork's point, `forked_from.seq`,
+    /// so the first run and every resume get the same values.
     Latest,
     /// Nothing.
     Fresh,
@@ -477,6 +479,32 @@ pub enum CommandResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<Box<crate::shapes::Failure>>,
     },
+    /// For `call`: what the Lua call returned.
+    Call(CallResult),
+}
+
+/// The `call` command's answer: the return wrapped as `value`, absent when
+/// the call returns nothing and distinct from a present JSON null.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallResult {
+    /// The return; any JSON value. Absent when the call returns nothing.
+    #[serde(
+        default,
+        deserialize_with = "present_value",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub value: Option<Value>,
+}
+
+/// Reads a present JSON value as `Some`, keeping an explicit `null` apart
+/// from an absent key: `{"value": null}` is a null return, while `{}` is no
+/// return. A plain `Option` reads both as `None`.
+fn present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
 }
 
 /// The labels of the provider a credential command would switch now.

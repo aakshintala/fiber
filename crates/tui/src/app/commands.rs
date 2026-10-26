@@ -333,6 +333,17 @@ fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
 pub(super) fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
     // A reloaded extension draws again: its next failure reports anew.
     app.renderer_reported.clear();
+    if let Some(loader) = app
+        .home
+        .as_ref()
+        .and_then(|home| home.launch.extensions.clone())
+    {
+        let (renderer, notices) = loader.load();
+        app.use_renderer(renderer);
+        for (code, text) in notices {
+            app.push_notice(&code, text);
+        }
+    }
     Some(app.send_command("reload", None).0)
 }
 
@@ -879,7 +890,8 @@ impl App {
     }
 
     /// A `commands` line for `session`, sent on attach and after each
-    /// `reloaded`; its answer, and no older one, fills the `/` list.
+    /// `reloaded`, `extensions_loaded`, and `turn_started`; its answer,
+    /// and no older one, fills the `/` list.
     /// Until it answers, the list holds the built-ins only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
         self.completion.ask_commands(session)

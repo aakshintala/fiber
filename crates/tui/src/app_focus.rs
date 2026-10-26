@@ -24,6 +24,10 @@ impl App {
     /// focus and is drawn again. A chip stays focused behind the model
     /// picker, whose swapped view carries no home targets.
     pub(crate) fn drawn(&mut self, targets: &[Target]) -> bool {
+        // The inline images the frame drew queue their display fetches,
+        // once each however often the frame redraws (`docs/tui.md`,
+        // "Images").
+        self.images_drawn(targets);
         // A renderer's failure falls back to the built-in row and names
         // itself once per extension and slot, so the frame with a new
         // notice draws again with it.
@@ -55,19 +59,33 @@ impl App {
     /// finds its pair in the set and adds nothing.
     fn drain_renderer_failures(&mut self) -> bool {
         let mut pushed = false;
-        for (slot, failure) in self
-            .attached_screen_mut()
-            .pages_mut()
-            .ext
-            .cache
-            .take_failures()
+        let cache = &self.screen.pages().ext.cache;
+        let mut failures = cache.take_failures();
+        let mut notices = cache.take_notices();
+        if let Some(stashed) = self
+            .items
+            .open
+            .as_ref()
+            .and_then(|open| open.stashed.as_ref())
         {
+            failures.extend(stashed.pages().ext.cache.take_failures());
+            notices.extend(stashed.pages().ext.cache.take_notices());
+        }
+        for (code, text) in notices {
+            self.notices.push(&code, text);
+            pushed = true;
+        }
+        for (slot, failure) in failures {
+            let (code, identity) = match failure.kind {
+                crate::ext::FailureKind::HookFailed => ("hook_failed", slot.clone()),
+                crate::ext::FailureKind::ExtensionFailed => ("extension_failed", String::new()),
+            };
             if self
                 .renderer_reported
-                .insert((failure.extension.clone(), slot.clone()))
+                .insert((failure.extension.clone(), identity))
             {
                 self.notices.push(
-                    "hook_failed",
+                    code,
                     format!(
                         "extension {} could not draw {slot}: {}; the built-in row is drawn",
                         failure.extension, failure.message

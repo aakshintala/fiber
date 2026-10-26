@@ -491,7 +491,7 @@ fn a_schema_mismatch_says_so_and_hangs_up() {
 #[test]
 fn restore_puts_back_what_setup_changed() {
     let pair = open();
-    let start = "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+    let start = "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
     let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
     let frames = watch(&pair.main, vec![start.as_bytes(), end.as_bytes()]);
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
@@ -1151,7 +1151,7 @@ fn command_after_decline(
     payload: serde_json::Value,
     keys: &[u8],
 ) -> serde_json::Value {
-    let (mut lp, reader) = connected_loop();
+    let (mut lp, mut reader) = connected_loop();
     if running {
         feed(
             &mut lp,
@@ -1166,6 +1166,28 @@ fn command_after_decline(
                 payload: serde_json::json!({"input": [{"type": "message",
                     "source": "driver",
                     "content": [{"type": "text", "text": "go"}]}]})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            }))],
+        );
+        // The turn asks `commands` again: answer with no rows so the
+        // decline's reply stays next on the socket.
+        let (next, asked) = command(reader, "the turn's commands");
+        reader = next;
+        assert_eq!(asked["command"], "commands");
+        feed(
+            &mut lp,
+            vec![Input::Hub(Line::Session(contract::Envelope {
+                kind: "command_accepted".to_owned(),
+                session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: None,
+                seq: None,
+                payload: serde_json::json!({"command_id": asked["id"],
+                    "result": {"commands": []}})
                 .as_object()
                 .cloned()
                 .unwrap_or_default(),
@@ -1748,9 +1770,29 @@ fn opening_a_row_by_key_calls_on_attach() {
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let reader = BufReader::new(theirs);
     feed(&mut lp, vec![Input::Connected(ours, hello())]);
-    let (reader, feed_cmd) = command(reader, "the feed command");
-    assert_eq!(feed_cmd["command"], "feed");
-    let (reader, _) = command(reader, "the recent command");
+    // The hello fans out feed and an unscoped recent; no doc promises
+    // their order or count, so collect until both kinds appear.
+    let mut reader = reader;
+    let mut hello_lines: Vec<serde_json::Value> = Vec::new();
+    while !(hello_lines.iter().any(|line| line["command"] == "feed")
+        && hello_lines
+            .iter()
+            .any(|line| line["command"] == "recent" && line.get("args").is_none()))
+    {
+        let (next, line) = command(reader, "a hello command");
+        reader = next;
+        hello_lines.push(line);
+    }
+    assert!(
+        hello_lines.iter().any(|line| line["command"] == "feed"),
+        "a feed went out: {hello_lines:?}"
+    );
+    assert!(
+        hello_lines
+            .iter()
+            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+        "an unscoped recent went out: {hello_lines:?}"
+    );
     let status = contract::Envelope {
         kind: "session_status".to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
@@ -1775,6 +1817,19 @@ fn opening_a_row_by_key_calls_on_attach() {
         .unwrap_or_default(),
     };
     feed(&mut lp, vec![Input::Hub(Line::Session(status))]);
+    // The introducing status queues its project's scoped ask; no doc
+    // promises its position, so collect until that kind appears.
+    let scoped = loop {
+        let (next, line) = command(reader, "the scoped command");
+        reader = next;
+        if line["command"] == "recent" && line["args"]["project"] == "-w" {
+            break line;
+        }
+    };
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
+    assert_eq!(scoped["command"], "recent");
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
+    assert_eq!(scoped["args"]["project"], "-w");
     // The first session row follows the project heading on row 7: a
     // press then a release on it opens the session.
     feed(
@@ -1841,10 +1896,42 @@ fn an_exit_sends_its_lines_then_quits() {
     // Ctrl+C twice asks while the session works, and `c` closes all.
     assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
     assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
-    let (reader, feed) = command(reader, "the feed");
-    assert_eq!(feed["command"], "feed");
-    let (reader, recent) = command(reader, "the recent");
-    assert_eq!(recent["command"], "recent");
+    // The hello fanned out feed and an unscoped recent; no doc promises
+    // their order or count, so collect until both kinds appear.
+    let mut reader = reader;
+    let mut hello_lines: Vec<serde_json::Value> = Vec::new();
+    while !(hello_lines.iter().any(|line| line["command"] == "feed")
+        && hello_lines
+            .iter()
+            .any(|line| line["command"] == "recent" && line.get("args").is_none()))
+    {
+        let (next, line) = command(reader, "a hello command");
+        reader = next;
+        hello_lines.push(line);
+    }
+    assert!(
+        hello_lines.iter().any(|line| line["command"] == "feed"),
+        "a feed went out: {hello_lines:?}"
+    );
+    assert!(
+        hello_lines
+            .iter()
+            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+        "an unscoped recent went out: {hello_lines:?}"
+    );
+    // The introducing status queues its project's scoped ask; no doc
+    // promises its position, so collect until that kind appears.
+    let scoped = loop {
+        let (next, line) = command(reader, "the scoped");
+        reader = next;
+        if line["command"] == "recent" && line["args"]["project"] == "-w" {
+            break line;
+        }
+    };
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
+    assert_eq!(scoped["command"], "recent");
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
+    assert_eq!(scoped["args"]["project"], "-w");
     // The close lines reach the far end, and the step quits with 0.
     assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
     let (reader, subscribe) = command(reader, "the subscribe");
@@ -2061,35 +2148,56 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     pair.main
         .flush()
         .unwrap_or_else(|err| panic!("flush: {err}"));
-    // All four reads run under one deadline: the far end reads the close
-    // lines the quit question sent.
+    // The far end reads the close lines the quit question sent. The
+    // introducing status's scoped ask arrives on the same connection, but
+    // no doc promises its position among the other commands, so assert
+    // presence, not order or total count.
     let hub = BufReader::new(held);
-    let (feed, recent, subscribe, close) =
+    let lines: Vec<serde_json::Value> =
         fakes::within("the close commands", Deadline::after(DEADLINE), move || {
             let mut hub = hub;
             let mut lines = Vec::new();
-            for _ in 0..4 {
+            loop {
                 let mut line = String::new();
                 hub.read_line(&mut line)
                     .unwrap_or_else(|err| panic!("read: {err}"));
-                lines.push(
-                    serde_json::from_str::<serde_json::Value>(&line)
-                        .unwrap_or_else(|err| panic!("{line:?}: {err}")),
-                );
+                let value: serde_json::Value =
+                    serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line:?}: {err}"));
+                let is_close = value["command"] == "close";
+                lines.push(value);
+                if is_close {
+                    break;
+                }
             }
-            let mut lines = lines.into_iter();
-            (
-                lines.next().expect("the feed command"),
-                lines.next().expect("the recent command"),
-                lines.next().expect("the subscribe command"),
-                lines.next().expect("the close command"),
-            )
+            lines
         });
-    assert_eq!(feed["command"], "feed");
-    assert_eq!(recent["command"], "recent");
-    assert_eq!(subscribe["command"], "subscribe");
-    assert_eq!(subscribe["args"]["level"], "summary");
-    assert_eq!(close["command"], "close");
+    assert!(
+        lines.iter().any(|line| line["command"] == "feed"),
+        "a feed went out: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+        "an unscoped recent went out: {lines:?}"
+    );
+    // One scoped ask for the newly seen project.
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["command"] == "recent" && line["args"]["project"] == "-w"),
+        "a scoped recent for -w went out: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["command"] == "subscribe" && line["args"]["level"] == "summary"),
+        "a summary subscribe went out: {lines:?}"
+    );
+    let close = lines
+        .iter()
+        .find(|line| line["command"] == "close")
+        .unwrap_or_else(|| panic!("the close command: {lines:?}"));
     assert_eq!(close["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(close["args"], serde_json::json!({"now": true}));
     assert_eq!(

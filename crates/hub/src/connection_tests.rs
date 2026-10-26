@@ -463,6 +463,7 @@ fn a_subscribe_to_an_exited_session_is_refused_while_a_sessions_stop_runs() {
         &[],
         false,
         None,
+        false,
     )
     .expect("the closing session binds");
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
@@ -867,13 +868,15 @@ impl Starter for GateStarter {
         overrides: &[&str],
         worktree: bool,
         continues: Option<&SessionId>,
+        supervised: bool,
     ) -> std::io::Result<Box<dyn Started>> {
         self.entered.send(()).unwrap_or(());
         if let Some(release) = support::lock(&self.release).take() {
             release.recv().unwrap_or(());
         }
-        self.inner
-            .start(id, workspace, model, overrides, worktree, continues)
+        self.inner.start(
+            id, workspace, model, overrides, worktree, continues, supervised,
+        )
     }
 
     fn resume(
@@ -1481,6 +1484,77 @@ fn start_with_worktree_false_starts_in_place() {
 }
 
 #[test]
+fn start_with_supervised_true_records_supervised() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command(
+        "c_1",
+        "start",
+        json!({"workspace": workspace, "supervised": true}),
+    ));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_1");
+    assert!(result.get("session_id").is_some());
+    // One accepted `start` starts one session (`docs/invocation.md`, "The
+    // hub", `start`: "Starts a session in the workspace ... and answers with
+    // its `session_id`"), so the single launch carries the request's flag.
+    assert_eq!(starter.started_supervised(), [true]);
+}
+
+#[test]
+fn start_without_supervised_records_not_supervised() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_1");
+    assert!(result.get("session_id").is_some());
+    // One accepted `start` starts one session (`docs/invocation.md`, "The
+    // hub", `start`: "Starts a session in the workspace ... and answers with
+    // its `session_id`"), so the single launch carries the absent flag as
+    // false.
+    assert_eq!(starter.started_supervised(), [false]);
+}
+
+#[test]
+fn start_rejects_a_misshaped_supervised() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    for (name, supervised) in [
+        ("c_1", json!("yes")),
+        ("c_2", Value::Null),
+        ("c_3", json!({"supervised": true})),
+    ] {
+        client.send(&command(
+            name,
+            "start",
+            json!({"workspace": workspace, "supervised": supervised}),
+        ));
+        let (code, _, _) = rejected(&client.next("the rejection"));
+        assert_eq!(code, "invalid_arguments", "{name}");
+    }
+    // A rejected `start` launches nothing: `supervised` is a boolean,
+    // optional arg (`docs/invocation.md`, "The hub", `start`), and a request
+    // that does not fit is rejected `invalid_arguments` before any session
+    // starts (same page: a `content` that does not fit `prompt`'s `args` is
+    // "rejected `invalid_arguments` before any session starts"; the arg
+    // validation in `start_args` runs before `start::run` either way).
+    assert!(starter.started_supervised().is_empty());
+}
+
+#[test]
 fn start_without_worktree_starts_in_place() {
     let temp = Temp::new();
     let starter = FakeStarter::bind_and_hold(&temp.dir);
@@ -1827,10 +1901,11 @@ impl Starter for Recording {
         overrides: &[&str],
         worktree: bool,
         continues: Option<&SessionId>,
+        supervised: bool,
     ) -> std::io::Result<Box<dyn Started>> {
         lock(&self.seen).push(overrides.iter().map(|text| text.to_string()).collect());
         self.inner
-            .start(id, workspace, model, &[], worktree, continues)
+            .start(id, workspace, model, &[], worktree, continues, supervised)
     }
 
     fn resume(
@@ -2437,6 +2512,361 @@ fn sessions_over_the_wire_answers_live_and_exited_once() {
     let (code, echoed, _) = rejected(&client.next("the bad project"));
     assert_eq!(code, "invalid_arguments");
     assert_eq!(echoed.as_deref(), Some("c_2"));
+    stop_within(&hub.feed);
+}
+
+#[test]
+fn sessions_default_listing_omits_active() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    // A live session whose log ran on, and an exited row with a readable
+    // log: neither answer names any activity without `active: true`.
+    let live = "s_00000000000000a1";
+    let session = crate::fake::FakeSession::bind(&temp.dir, live);
+    session.say(&crate::fake::status_line(
+        live,
+        &crate::fake::status("n", "/w", "idle", None),
+    ));
+    write_log(
+        &temp,
+        "-w",
+        live,
+        &format!(
+            "{}{}",
+            started_line(live, 100),
+            log_line("session_status", live, 9000)
+        ),
+    );
+    let exited = "s_00000000000000b2";
+    exited_row(&temp, exited, "p", 3, None);
+    write_log(
+        &temp,
+        "p",
+        exited,
+        &format!(
+            "{}{}",
+            started_line(exited, 50),
+            log_line("fiber_exited", exited, 7000)
+        ),
+    );
+    hub.feed.start();
+    assert!(session.await_subscribed(1, DEADLINE));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    // Missing `active` and `active: false` both list without activity.
+    for (id, args) in [("c_1", json!({})), ("c_2", json!({"active": false}))] {
+        client.send(&command(id, "sessions", args));
+        let (echoed, result) = accepted(&client.next("the listing"));
+        assert_eq!(echoed, id);
+        for entries in ["live", "exited"] {
+            let rows = result.get(entries).unwrap().as_array().unwrap();
+            assert_eq!(rows.len(), 1, "{entries}");
+            assert_eq!(rows[0].get("active"), None, "{entries} {id}");
+        }
+    }
+    stop_within(&hub.feed);
+}
+
+#[test]
+fn sessions_rejects_a_misshaped_active_arg() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    // Two live sessions in distinct projects: the `active: true` project
+    // filter below must keep the match and drop the other, so inverting
+    // the `status.project == key` check in the active path fails.
+    let kept = "s_00000000000000a1";
+    let kept_session = crate::fake::FakeSession::bind(&temp.dir, kept);
+    let mut kept_status = crate::fake::status("n", "/w", "idle", None);
+    kept_status["project"] = json!("p");
+    kept_session.say(&crate::fake::status_line(kept, &kept_status));
+    write_log(
+        &temp,
+        "p",
+        kept,
+        &format!(
+            "{}{}",
+            started_line(kept, 100),
+            log_line("session_status", kept, 9000)
+        ),
+    );
+    let dropped = "s_00000000000000b2";
+    let dropped_session = crate::fake::FakeSession::bind(&temp.dir, dropped);
+    let mut dropped_status = crate::fake::status("n", "/w", "idle", None);
+    dropped_status["project"] = json!("q");
+    dropped_session.say(&crate::fake::status_line(dropped, &dropped_status));
+    write_log(
+        &temp,
+        "q",
+        dropped,
+        &format!(
+            "{}{}",
+            started_line(dropped, 100),
+            log_line("session_status", dropped, 8000)
+        ),
+    );
+    let mut client = Client::connect(&hub);
+    client.hello();
+    hub.feed.start();
+    assert!(kept_session.await_subscribed(1, DEADLINE));
+    assert!(dropped_session.await_subscribed(1, DEADLINE));
+    for (id, args) in [
+        ("c_1", json!({"active": "yes"})),
+        ("c_2", json!({"active": Value::Null})),
+        ("c_3", json!({"active": 1})),
+        ("c_4", json!({"project": "p", "active": "yes"})),
+        ("c_5", json!({"active": true, "extra": 1})),
+    ] {
+        client.send(&command(id, "sessions", args));
+        let (code, echoed, _) = rejected(&client.next("the rejection"));
+        assert_eq!(code, "invalid_arguments", "{id}");
+        assert_eq!(echoed.as_deref(), Some(id));
+    }
+    // A project filter composes with `active: true`: only the live entry
+    // in `p` lists, with its activity; the `q` entry is excluded.
+    client.send(&command(
+        "c_6",
+        "sessions",
+        json!({"project": "p", "active": true}),
+    ));
+    let (echoed, result) = accepted(&client.next("the filtered listing"));
+    assert_eq!(echoed, "c_6");
+    let live = result.get("live").unwrap().as_array().unwrap();
+    assert_eq!(live.len(), 1, "only the matching live entry lists");
+    assert_eq!(live[0].get("session_id"), Some(&json!(kept)));
+    assert_eq!(live[0].get("active"), Some(&json!(9000)));
+    assert!(
+        !live
+            .iter()
+            .any(|row| row.get("session_id") == Some(&json!(dropped))),
+        "the other project's live entry is excluded"
+    );
+    assert_eq!(result.get("exited"), Some(&json!([])));
+    stop_within(&hub.feed);
+}
+
+/// A `session_started` first line for `id` at `ts`, as a session writes it.
+fn started_line(id: &str, ts: u64) -> String {
+    let line = json!({
+        "kind": "session_started", "seq": 0, "session_id": id,
+        "ts": ts, "schema_version": 1,
+        "payload": {"workspace": "/w",
+            "variables": {"path": "", "names": [], "source": "login_shell"}},
+    });
+    format!("{line}\n")
+}
+
+/// A complete log line of `kind` for `id` at `ts`.
+fn log_line(kind: &str, id: &str, ts: u64) -> String {
+    let line = json!({
+        "kind": kind, "session_id": id, "ts": ts, "schema_version": 1,
+        "payload": {},
+    });
+    format!("{line}\n")
+}
+
+/// Writes `events.jsonl` for session `id` in `project`.
+fn write_log(temp: &Temp, project: &str, id: &str, text: &str) {
+    let dir = log::session_dir(&temp.dir, project, &SessionId(id.to_owned()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("events.jsonl"), text).unwrap();
+}
+
+/// An exited recent row for `id` in `project` with row `ts`, delegate of
+/// `parent` when given.
+fn exited_row(temp: &Temp, id: &str, project: &str, ts: u64, parent: Option<&str>) {
+    let row: crate::RecentRow = serde_json::from_value(json!({
+        "session_id": id, "ts": ts, "project": project, "workspace": "/w",
+        "name": "n", "how": "exited",
+        "status": crate::fake::status("n", "/w", "idle", parent),
+    }))
+    .unwrap();
+    crate::append(&temp.dir, &row).unwrap();
+}
+
+#[test]
+fn sessions_entries_carry_the_last_line_ts_never_since_or_row_ts() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    // A live session streaming for an hour: its status says `since` 1, its
+    // log's last line is far newer.
+    let live = "s_00000000000000a1";
+    let session = crate::fake::FakeSession::bind(&temp.dir, live);
+    session.say(&crate::fake::status_line(
+        live,
+        &crate::fake::status("n", "/w", "idle", None),
+    ));
+    write_log(
+        &temp,
+        "-w",
+        live,
+        &format!(
+            "{}{}",
+            started_line(live, 100),
+            log_line("session_status", live, 9000)
+        ),
+    );
+    // An exited row from long ago whose log ran on.
+    let exited = "s_00000000000000b2";
+    exited_row(&temp, exited, "p", 3, None);
+    write_log(
+        &temp,
+        "p",
+        exited,
+        &format!(
+            "{}{}",
+            started_line(exited, 50),
+            log_line("fiber_exited", exited, 7000)
+        ),
+    );
+    hub.feed.start();
+    assert!(session.await_subscribed(1, DEADLINE));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&json!({"id": "c_1", "command": "sessions", "args": {"active": true}}));
+    let (echoed, result) = accepted(&client.next("the listing"));
+    assert_eq!(echoed, "c_1");
+    let live_entries = result.get("live").unwrap().as_array().unwrap();
+    assert_eq!(live_entries.len(), 1);
+    assert_eq!(live_entries[0].get("session_id"), Some(&json!(live)));
+    assert_eq!(live_entries[0].get("active"), Some(&json!(9000)));
+    let exited_entries = result.get("exited").unwrap().as_array().unwrap();
+    assert_eq!(exited_entries.len(), 1);
+    assert_eq!(exited_entries[0].get("session_id"), Some(&json!(exited)));
+    assert_eq!(exited_entries[0].get("active"), Some(&json!(7000)));
+    stop_within(&hub.feed);
+}
+
+#[test]
+fn sessions_torn_tail_uses_the_last_complete_line() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    // The first line's `ts` differs from the last complete line's, and a
+    // torn write follows it: the torn bytes are not activity.
+    let id = "s_00000000000000c3";
+    exited_row(&temp, id, "p", 3, None);
+    let mut text = started_line(id, 100);
+    text.push_str(&log_line("session_status", id, 200));
+    text.push_str("{\"kind\": \"sess");
+    write_log(&temp, "p", id, &text);
+    hub.feed.start();
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&json!({"id": "c_1", "command": "sessions", "args": {"active": true}}));
+    let (_, result) = accepted(&client.next("the listing"));
+    let exited_entries = result.get("exited").unwrap().as_array().unwrap();
+    assert_eq!(exited_entries.len(), 1);
+    assert_eq!(exited_entries[0].get("active"), Some(&json!(200)));
+    stop_within(&hub.feed);
+}
+
+#[test]
+fn sessions_ts_less_tail_falls_back_to_the_opening_ts() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    // The tail is complete JSON but carries no `ts`: only the opening
+    // line dates the session.
+    let id = "s_00000000000000d4";
+    exited_row(&temp, id, "p", 3, None);
+    let tail = format!(
+        "{}\n",
+        json!({"kind": "session_status", "session_id": id, "schema_version": 1, "payload": {}})
+    );
+    write_log(
+        &temp,
+        "p",
+        id,
+        &format!("{}{}", started_line(id, 100), tail),
+    );
+    hub.feed.start();
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&json!({"id": "c_1", "command": "sessions", "args": {"active": true}}));
+    let (_, result) = accepted(&client.next("the listing"));
+    let exited_entries = result.get("exited").unwrap().as_array().unwrap();
+    assert_eq!(exited_entries.len(), 1);
+    assert_eq!(exited_entries[0].get("active"), Some(&json!(100)));
+    stop_within(&hub.feed);
+}
+
+#[test]
+fn sessions_row_ts_never_decides_active_either_direction() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    // An ancient row whose log ran on, and a fresh row whose log is older.
+    let old_row = "s_00000000000000e5";
+    exited_row(&temp, old_row, "p", 1, None);
+    write_log(
+        &temp,
+        "p",
+        old_row,
+        &format!(
+            "{}{}",
+            started_line(old_row, 10),
+            log_line("fiber_exited", old_row, 9000)
+        ),
+    );
+    let new_row = "s_00000000000000f6";
+    exited_row(&temp, new_row, "p", 99999, None);
+    write_log(
+        &temp,
+        "p",
+        new_row,
+        &format!(
+            "{}{}",
+            started_line(new_row, 10),
+            log_line("fiber_exited", new_row, 42)
+        ),
+    );
+    hub.feed.start();
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&json!({"id": "c_1", "command": "sessions", "args": {"active": true}}));
+    let (_, result) = accepted(&client.next("the listing"));
+    let exited_entries = result.get("exited").unwrap().as_array().unwrap();
+    assert_eq!(exited_entries.len(), 2);
+    let active = |id: &str| {
+        exited_entries
+            .iter()
+            .find(|row| row.get("session_id") == Some(&json!(id)))
+            .unwrap_or_else(|| panic!("{id} is listed"))
+            .get("active")
+            .cloned()
+    };
+    assert_eq!(active(old_row), Some(json!(9000)));
+    assert_eq!(active(new_row), Some(json!(42)));
+    stop_within(&hub.feed);
+}
+
+#[test]
+fn sessions_empty_log_lists_with_null_active_and_skips_delegates() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    // A directory with an empty log stays listed, with no activity.
+    let empty = "s_0000000000000007";
+    exited_row(&temp, empty, "p", 3, None);
+    write_log(&temp, "p", empty, "");
+    // A delegate row never lists, even with a readable log.
+    let delegate = "s_0000000000000008";
+    exited_row(&temp, delegate, "p", 4, Some("s_0000000000000009"));
+    write_log(
+        &temp,
+        "p",
+        delegate,
+        &format!(
+            "{}{}",
+            started_line(delegate, 10),
+            log_line("fiber_exited", delegate, 5000)
+        ),
+    );
+    hub.feed.start();
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&json!({"id": "c_1", "command": "sessions", "args": {"active": true}}));
+    let (_, result) = accepted(&client.next("the listing"));
+    let exited_entries = result.get("exited").unwrap().as_array().unwrap();
+    assert_eq!(exited_entries.len(), 1);
+    assert_eq!(exited_entries[0].get("session_id"), Some(&json!(empty)));
+    assert_eq!(exited_entries[0].get("active"), Some(&json!(Value::Null)));
     stop_within(&hub.feed);
 }
 

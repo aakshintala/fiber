@@ -177,3 +177,163 @@ fn one_path_noted_under_two_sessions_draws_two_ids() {
         Some(two)
     );
 }
+
+/// A call whose result carried the image at `path`: a ledger row, so
+/// inline sizing grids it.
+fn called(path: &str) -> Vec<Envelope> {
+    use contract::Seq;
+    let image = json!({"type": "image", "path": path,
+        "mime_type": "image/png", "width": 1280, "height": 800});
+    let mut seq = 0;
+    let mut acted = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
+        seq += 1;
+        Envelope {
+            kind: kind.to_owned(),
+            session_id: SessionId(SESSION.to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: action.map(|action| contract::ActionId(action.to_owned())),
+            seq: Some(Seq(seq)),
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        }
+    };
+    vec![
+        acted(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "look"}]}]}),
+        ),
+        acted("step_started", None, json!({})),
+        acted(
+            "tool_call_requested",
+            Some("a_t"),
+            json!({"name": "read", "arguments": {"path": path}}),
+        ),
+        acted(
+            "tool_call_completed",
+            Some("a_t"),
+            json!({"status": "completed", "content": [image]}),
+        ),
+    ]
+}
+
+#[test]
+fn inline_sizing_counts_the_placeholder_grid() {
+    use crate::image::Sizing;
+    let mut pages = pages();
+    for line in called("artifacts/a.png") {
+        pages.apply(&line);
+    }
+    // The ledger draws once its group is open.
+    assert!(
+        pages.open(&crate::app::Target::Group(crate::turn::target_id("a_t"))),
+        "the call's group opens"
+    );
+    let text = pages.rows().len();
+    // 1280 by 800 at 60 columns with a 10 by 20 cell: 24 by 7
+    // placeholders, then the caption line.
+    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    let rows = pages.rows();
+    assert_eq!(rows.len(), text + 7, "the grid replaces the line");
+    let placeholders = rows
+        .iter()
+        .filter(|(line, _)| {
+            line.spans
+                .iter()
+                .any(|span| span.content.as_ref().starts_with('\u{10EEEE}'))
+        })
+        .count();
+    assert_eq!(placeholders, 7);
+    assert!(
+        rows.iter()
+            .any(|(line, _)| line.to_string().ends_with("▣ a.png · 1280×800")),
+        "the caption still counts its row"
+    );
+}
+
+#[test]
+fn set_image_sizing_recounts_only_on_change() {
+    use crate::image::Sizing;
+    let mut pages = pages();
+    pages.apply(&started(&["artifacts/a.png"]));
+    let recounts = pages.recounts;
+    // The same sizing recounts nothing.
+    pages.set_image_sizing(Sizing::Text);
+    assert_eq!(pages.recounts, recounts);
+    // Inline sizing recounts the resident page.
+    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    assert!(pages.recounts > recounts, "the sizing change recounts");
+    let recounts = pages.recounts;
+    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    assert_eq!(pages.recounts, recounts);
+    // A new cell size recounts again.
+    pages.set_image_sizing(Sizing::Inline { cell: (8, 16) });
+    assert!(pages.recounts > recounts, "the new cell recounts");
+    let recounts = pages.recounts;
+    pages.set_image_sizing(Sizing::Text);
+    assert!(pages.recounts > recounts, "sizing back recounts");
+}
+
+#[test]
+fn flat_reports_text_and_draws_the_one_line() {
+    use crate::image::Sizing;
+    let mut pages = pages();
+    for line in called("artifacts/a.png") {
+        pages.apply(&line);
+    }
+    assert!(
+        pages.open(&crate::app::Target::Group(crate::turn::target_id("a_t"))),
+        "the call's group opens"
+    );
+    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    let inline = pages.rows().len();
+    assert!(inline > 2, "the grid takes rows: {inline}");
+    // Flat reports text, so no display fetch goes out for the page.
+    pages.set_flat(true);
+    assert_eq!(pages.image_sizing(), Sizing::Text);
+    // The flat seam draws the image as its one clickable line.
+    let rows = pages.rows();
+    let found: Vec<_> = rows
+        .iter()
+        .filter(|(line, _)| line.to_string().contains("▣ a.png"))
+        .collect();
+    assert_eq!(found.len(), 1);
+    assert!(found[0].0.to_string().ends_with("▣ a.png · 1280×800"));
+    assert!(rows.len() < inline, "the flat page loses the grid rows");
+}
+
+#[test]
+fn a_failed_image_recounts_to_its_one_line() {
+    use crate::image::Sizing;
+    let mut pages = pages();
+    for line in called("artifacts/a.png") {
+        pages.apply(&line);
+    }
+    assert!(
+        pages.open(&crate::app::Target::Group(crate::turn::target_id("a_t"))),
+        "the call's group opens"
+    );
+    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    let inline = pages.rows().len();
+    assert!(inline > 2, "the grid takes rows: {inline}");
+    // Failing the image recounts its resident page to the one-line form.
+    let recounts = pages.recounts;
+    pages.fail_image(&SessionId(SESSION.to_owned()), "artifacts/a.png");
+    assert!(pages.recounts > recounts, "the failure recounts");
+    let rows = pages.rows();
+    assert!(rows.len() < inline, "the failed image loses the grid rows");
+    let found: Vec<_> = rows
+        .iter()
+        .filter(|(line, _)| line.to_string().contains("▣ a.png"))
+        .collect();
+    assert_eq!(found.len(), 1);
+    assert!(found[0].0.to_string().ends_with("▣ a.png · 1280×800"));
+    // The failure names one image in one session.
+    assert!(pages.image_failed(&SessionId(SESSION.to_owned()), "artifacts/a.png"));
+    assert!(!pages.image_failed(&SessionId(SESSION.to_owned()), "artifacts/b.png"));
+    // Clearing the session drops the failure with the layout.
+    pages.clear();
+    assert!(!pages.image_failed(&SessionId(SESSION.to_owned()), "artifacts/a.png"));
+}

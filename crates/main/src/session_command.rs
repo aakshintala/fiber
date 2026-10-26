@@ -49,6 +49,45 @@ impl Drop for OpenedHold {
     }
 }
 
+/// Whether the session may answer an approval: the base run's
+/// answerability, and never when a program drives the session
+/// (`docs/permissions.md`, "Supervised sessions"). Both the fresh and
+/// the resumed path compute their effective value through here, so a
+/// supervised session stays unanswerable however it started.
+pub(crate) fn effective_answerable(base: bool, supervised: bool) -> bool {
+    base && !supervised
+}
+
+/// The loop's turn-start command wiring, shared by the new-session and
+/// resume construction paths: the refresh reads the current extension
+/// commands and replaces the session's rows (the same complete recompute
+/// the construction above builds with, after every reload too), while the
+/// sync keeps the reload baseline the next turn-start check measures
+/// against the installed answer.
+pub(crate) fn command_update_wiring(
+    current: &Arc<crate::session_extensions::Current>,
+    session: &Session,
+    skill_set: &r#loop::SkillSet,
+) -> (r#loop::CommandsRefresh, crate::reload::CommandsSync) {
+    // The loop's turn-start refresh reads the current extensions and
+    // replaces the session's rows: the same complete recompute the
+    // construction above builds with, after every reload too.
+    let commands_refresh = r#loop::CommandsRefresh {
+        extensions: Arc::new({
+            let current = Arc::clone(current);
+            move || current.get().commands()
+        }),
+        replace: session.commands_replacer(),
+    };
+    // A reload's install syncs the same baseline its rows replace, so
+    // the next turn-start check measures against the installed answer.
+    let commands_sync: crate::reload::CommandsSync = {
+        let skill_set = skill_set.clone();
+        Arc::new(move |runnable: &r#loop::RunnableCommands| skill_set.sync_commands(runnable))
+    };
+    (commands_refresh, commands_sync)
+}
+
 /// The internal session command: one session process bound at
 /// `run/<session_id>` (`docs/invocation.md`, "Processes"). The workspace
 /// is entered before signals are installed or any thread starts, so the
@@ -121,7 +160,9 @@ pub(crate) fn run(
     if let Some(old) = args.continues {
         // The original spelling rides along for the identity compare:
         // `current_dir` above already normalized slashes and symlinks
-        // away, while the hub enforced the exact string.
+        // away, while the hub enforced the exact string. A `continues`
+        // start is a new session: only the new request's `supervised`
+        // applies, never the old session's.
         return crate::continue_session::session_continues(
             SessionId(args.id),
             SessionId(old),
@@ -130,6 +171,7 @@ pub(crate) fn run(
             clock,
             &signals,
             fiber,
+            args.supervised,
         );
     }
     // A fork names its point outright: no last line is checked. The
@@ -188,6 +230,7 @@ pub(crate) fn run(
         fiber,
         None,
         parent,
+        args.supervised,
     )
 }
 
@@ -214,6 +257,7 @@ pub(crate) fn new_session(
     fiber: Result<PathBuf, String>,
     case_run: Option<Arc<crate::case::run::CaseRun>>,
     parent: Option<Parent>,
+    supervised: bool,
 ) -> i32 {
     // One reads for the process: the worktree's `git worktree add` and
     // every startup credential read run through it, so one cancel reaches
@@ -226,7 +270,7 @@ pub(crate) fn new_session(
     if !worktree {
         return match run_new(
             id, overrides, prompt, one_turn, None, clock, signals, fiber, host, case_run, parent,
-            None, reads,
+            None, reads, supervised,
         ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),
@@ -280,6 +324,7 @@ pub(crate) fn new_session(
         None,
         reads,
         Some(opened),
+        supervised,
     );
     isolation.end();
     match result {
@@ -308,6 +353,7 @@ pub(crate) fn run_new(
     parent: Option<Parent>,
     rewound: Option<r#loop::Rewound>,
     reads: Arc<crate::switch::Reads>,
+    supervised: bool,
 ) -> Result<i32, Failure> {
     // Held by `run_new_with` for a fresh worktree, empty on every direct
     // call: taking leaves the slot empty, so a panic leaves nothing
@@ -339,10 +385,16 @@ pub(crate) fn run_new(
                 .thinking
                 .as_deref()
                 .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
-            let seed = crate::resume::chain_seed(
-                &log::history_to(&sessions.join(&start.from.session_id.0), start.from.seq)
-                    .map_err(|error| failed(error.code(), error))?,
-            )
+            let segments =
+                log::history_to(&sessions.join(&start.from.session_id.0), start.from.seq)
+                    .map_err(|error| failed(error.code(), error))?;
+            // The fresh terminal has no child on disk yet, so its kind
+            // comes from the continuation: a fork folds `Latest` as of the
+            // point, a rewind at the parent's end.
+            let seed = match &start.how {
+                r#loop::Continuation::Fork { .. } => crate::resume::fork_seed(&segments),
+                r#loop::Continuation::Rewind { .. } => crate::resume::chain_seed(&segments),
+            }
             .map_err(|error| failed(error.code(), error))?;
             parts_with(
                 Vec::new(),
@@ -555,7 +607,7 @@ pub(crate) fn run_new(
     // person, as a headless run does: only the person fallback is removed,
     // so `attended: false` with a reviewer still allows through it.
     let case_attended = case_run.as_ref().is_none_or(|case| case.attended());
-    let answerable = !one_turn && case_attended;
+    let answerable = effective_answerable(!one_turn && case_attended, supervised);
     extensions.answerable(answerable);
     extensions.browse_with(
         Arc::new(extensions::SystemBrowser::default()),
@@ -574,6 +626,9 @@ pub(crate) fn run_new(
         &extensions.commands(),
     );
     mcp.notices.extend(listed.notices);
+    // The turn-start check measures the runnable set against these rows,
+    // so a skill added before the opening lists still refreshes them.
+    skill_set.sync_commands(&listed.runnable);
     session.commands(listed.rows);
     session.quota(quota);
     let door = crate::switch::Door {
@@ -582,6 +637,7 @@ pub(crate) fn run_new(
         backend: extensions.search_backend(),
     };
     let current = Arc::new(crate::session_extensions::Current::new(extensions));
+    let (commands_refresh, commands_sync) = command_update_wiring(&current, &session, &skill_set);
     let readers =
         switching.credential_readers(switching.clone().closure(door), model.reference.clone());
     session.credentials(readers.labels, readers.admitted);
@@ -601,6 +657,7 @@ pub(crate) fn run_new(
         diag.clone(),
         shell_read_only,
         std::sync::Arc::new(std::sync::Mutex::new(repository)),
+        commands_sync,
     );
     // Every notice the startup already wrote, including the ones
     // `mcp_servers_started` writes after this read: the late preparer
@@ -681,6 +738,18 @@ pub(crate) fn run_new(
                         },
                         parent,
                     ),
+                    (None, None) if supervised => Loop::supervised(
+                        r#loop::Session {
+                            log: Arc::clone(&log),
+                            provider,
+                            model,
+                            prompt: prompt_inputs,
+                            inbox,
+                            tools: r#loop::capped(tools, &caps),
+                            permissions,
+                        },
+                        worktree,
+                    ),
                     (None, None) => Loop::start(
                         r#loop::Session {
                             log: Arc::clone(&log),
@@ -727,6 +796,7 @@ pub(crate) fn run_new(
                         .repository_code(offer)
                         .approved_code(load)
                         .skill_set(skill_set)
+                        .commands_refresh(commands_refresh)
                         .server_prompts(r#loop::ServerPrompts {
                             rows: prompt_rows,
                             fetch,
@@ -746,6 +816,7 @@ pub(crate) fn run_new(
                 warm,
                 // One-turn `fiber ask` and unattended session cases run with no client that may answer (`docs/permissions.md`, "Headless").
                 !run_one_turn && case_attended,
+                supervised,
                 reviewer,
                 limits,
                 retry,
@@ -794,11 +865,12 @@ pub(crate) fn run_new_with(
     rewound: Option<r#loop::Rewound>,
     reads: Arc<crate::switch::Reads>,
     opened: Option<doors::WorktreeOpener>,
+    supervised: bool,
 ) -> Result<i32, Failure> {
     let _hold = OpenedHold::set(opened);
     run_new(
         id, overrides, prompt, one_turn, worktree, clock, signals, fiber, host, case_run, parent,
-        rewound, reads,
+        rewound, reads, supervised,
     )
 }
 

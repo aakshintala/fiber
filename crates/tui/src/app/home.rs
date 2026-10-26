@@ -5,13 +5,14 @@
 use serde_json::{Value, json};
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
 use super::{App, Effect, Kind, mint};
 use crate::home::{
-    Chip, Header, HomeScreen, Launch, Left, ListLine, Sessions, Spot, State, cascade_line,
+    Chip, Header, HomeScreen, Launch, Left, ListLine, Section, Sessions, Spot, State, cascade_line,
     delete_line, from_status, import_head, line, recent_rows,
 };
 use crate::keys::{Edit, Key};
@@ -71,6 +72,9 @@ pub(super) struct Home {
     /// The latest `recent` command waiting for its answer, and whether it
     /// asked the first page.
     recent_ask: Option<(String, bool)>,
+    /// The scoped `recent` commands waiting for their answers, command
+    /// id to project: at most one entry per project.
+    scoped_asks: BTreeMap<String, String>,
     /// This connection's subscriptions, the session opening and the
     /// lowering lines queued.
     subs: Subscriptions,
@@ -231,6 +235,7 @@ impl App {
             fed: false,
             feed_id: None,
             recent_ask: None,
+            scoped_asks: BTreeMap::new(),
             subs: Subscriptions::default(),
             focus_list: None,
             list_scroll: Cell::new(0),
@@ -248,6 +253,9 @@ impl App {
         if rail_hidden {
             self.chrome.hide_rail();
         }
+        // The launch carries `tui.inline_images`: size the images now
+        // that it is known.
+        self.refresh_image_sizing();
     }
 
     /// Stores bare `fiber`'s `--model` and `-c`, normalized into the
@@ -369,7 +377,7 @@ impl App {
         let mut list = Vec::new();
         let wall = self.rail_state().wall();
         for section in sections {
-            let hidden_exited = section.hidden();
+            let count = section.total.unwrap_or(section.exited.len());
             let section_spend = section
                 .live
                 .iter()
@@ -379,6 +387,10 @@ impl App {
                 .iter()
                 .filter(|row| row.left.is_none() && row.state == State::Waiting)
                 .count();
+            // The `More` key resolves before the rows below move out of
+            // the section: it names the first hidden loaded row, else the
+            // section's last loaded row, else a live row.
+            let more = more_key(&section);
             list.push(ListLine::Head {
                 start: section.start,
                 name: section.name,
@@ -439,10 +451,10 @@ impl App {
                     },
                 });
             }
-            if !section.exited.is_empty() {
-                list.push(ListLine::ExitedHead {
-                    count: section.exited.len(),
-                });
+            // The header draws the hub's total when one is held,
+            // counting loaded rows only before the first scoped answer.
+            if count > 0 {
+                list.push(ListLine::ExitedHead { count });
             }
             for row in section.exited.iter().take(section.shown_exited) {
                 list.push(ListLine::Exited {
@@ -457,10 +469,12 @@ impl App {
                     }),
                 });
             }
-            if let Some(row) = section.exited.get(section.shown_exited) {
+            // `More` draws total-minus-shown when a total is held,
+            // saturating so a total below loaded rows never underflows.
+            if count > section.shown_exited {
                 list.push(ListLine::More {
-                    key: row.key,
-                    count: hidden_exited,
+                    key: more,
+                    count: count.saturating_sub(section.shown_exited),
                 });
             }
         }
@@ -579,8 +593,11 @@ impl App {
         let recent = mint();
         home.feed_id = Some(feed.clone());
         home.recent_ask = Some((recent.clone(), true));
-        let recent = recent_line(&recent, None);
+        let recent = recent_line(&recent, None, None);
         let mut out = vec![json!({"id": feed, "command": "feed"}).to_string(), recent];
+        // A reconnect queues its scoped refetch before this pass: the
+        // asks ride here, beside the sessions request that follows.
+        out.extend(home.subs.take_outbox());
         out.extend(self.launch_lines());
         out.append(&mut asks);
         out
@@ -618,10 +635,21 @@ impl App {
                             home.left_after_attach = Some(exited.clone());
                         }
                     }
+                    // The project's count may have changed: ask again
+                    // under the one-in-flight-plus-dirty bound, never
+                    // adjusting the count here.
+                    let project = self
+                        .home
+                        .as_ref()
+                        .and_then(|home| home.sessions.row(&exited))
+                        .map(|row| row.project.clone());
+                    let lines = project
+                        .map(|project| self.scoped_first(&project))
+                        .unwrap_or_default();
                     if how == Left::Exited {
                         self.rail_state.note_exited(&exited);
                     }
-                    Some(Vec::new())
+                    Some(lines)
                 }
                 "command_accepted" | "command_rejected" => {
                     let id = hub.payload.get("command_id").and_then(Value::as_str)?;
@@ -683,22 +711,54 @@ impl App {
                             home.recent_ask = None;
                         }
                         if accepted {
-                            let rows = hub
+                            // The unscoped answer's `total` is never
+                            // stored: only a scoped answer sets a
+                            // project's count.
+                            let (rows, _) = hub
                                 .payload
                                 .get("result")
                                 .map(recent_rows)
+                                .unwrap_or_default();
+                            // Projects on home before this page folds:
+                            // only a project first appearing in the page
+                            // earns an ask. The delete path separately asks
+                            // its captured project directly, so a refill
+                            // cannot retry an already-seen refusal.
+                            let before: std::collections::BTreeSet<String> = self
+                                .home
+                                .as_ref()
+                                .map(|home| {
+                                    home.sessions
+                                        .sections(home.launch_project())
+                                        .into_iter()
+                                        .map(|section| section.project.to_owned())
+                                        .collect()
+                                })
                                 .unwrap_or_default();
                             if let Some(home) = self.home.as_mut() {
                                 home.sessions.recent(rows, first);
                                 home.refill_picker();
                             }
                             self.list_answered(first, true);
+                            // Every unscoped page fans out one scoped
+                            // first page per newly seen project.
+                            return Some(self.fan_out_scoped(&before));
                         } else {
                             let code = refusal_code(&hub.payload);
                             self.notices.push(&code, refusal(&hub.payload));
                             self.list_answered(first, false);
                         }
                         return Some(Vec::new());
+                    }
+                    // A scoped answer folds only while its id is still
+                    // pending: a stale answer after a reconnect drops
+                    // untouched.
+                    if let Some(project) = self
+                        .home
+                        .as_ref()
+                        .and_then(|home| home.scoped_asks.get(id).cloned())
+                    {
+                        return Some(self.answer_scoped(id, project, accepted, &hub.payload));
                     }
                     if accepted {
                         let result = hub.payload.get("result");
@@ -726,6 +786,24 @@ impl App {
                         .as_ref()
                         .and_then(|home| home.sessions.row(&session))
                         .is_some_and(|row| row.left.is_some());
+                    // A status introducing a project queues one bounded
+                    // scoped ask for it: the project holds no section
+                    // yet. Later statuses for a known project queue
+                    // nothing.
+                    let fresh = self.home.as_ref().and_then(|home| {
+                        let project = envelope
+                            .payload
+                            .get("project")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        (!project.is_empty()
+                            && !home
+                                .sessions
+                                .sections(home.launch_project())
+                                .iter()
+                                .any(|section| section.project == project))
+                        .then(|| project.to_owned())
+                    });
                     let row = from_status(envelope);
                     if let Some(home) = self.home.as_mut() {
                         home.sessions.status(row);
@@ -739,6 +817,22 @@ impl App {
                             && home.left_after_attach.as_ref() == Some(&session)
                         {
                             home.left_after_attach = None;
+                        }
+                    }
+                    // The queued ask rides in home's outbox, drained by
+                    // `home_outgoing`; while one is in flight it marks the
+                    // project dirty instead. The status still reaches the
+                    // conversation below.
+                    if let Some(project) = fresh
+                        && self
+                            .home
+                            .as_ref()
+                            .is_some_and(|home| home.sessions.total_for(&project).is_none())
+                    {
+                        for line in self.scoped_first(&project) {
+                            if let Some(home) = self.home.as_mut() {
+                                home.subs.queue(line);
+                            }
                         }
                     }
                     self.note_feed(&session);
@@ -1004,6 +1098,26 @@ impl App {
                     home.sessions.expand(&project);
                     self.focus = Some(TargetId::Home(Spot::Entry(key)));
                 }
+                // Opening also asks the project's next scoped page while
+                // its held total says more: the page rides past the
+                // project's last loaded row.
+                let next = self.home.as_ref().and_then(|home| {
+                    let project = home.sessions.by_key(key)?.project.clone();
+                    let total = home.sessions.total_for(&project)?;
+                    let section = home
+                        .sessions
+                        .sections(home.launch_project())
+                        .into_iter()
+                        .find(|section| section.project == project)?;
+                    (total > section.exited.len())
+                        .then(|| (project, section.exited.last().map(|row| row.id.0.clone())))
+                });
+                if let Some((project, before)) = next {
+                    let lines = self.scoped_page(&project, before.as_deref());
+                    if !lines.is_empty() {
+                        return Effect::Send(lines);
+                    }
+                }
                 Effect::None
             }
             Spot::Keep => {
@@ -1088,8 +1202,9 @@ impl App {
     }
 
     /// Asks the first unscoped `recent` page again: an accepted delete
-    /// fills the gap it left.
-    fn ask_recent_first(&mut self) -> Vec<String> {
+    /// fills the gap it left. It also asks the scoped `recent` for the
+    /// deleted row's project, or marks it dirty while one is in flight.
+    fn ask_recent_first(&mut self, delete_project: Option<&str>) -> Vec<String> {
         if !self.outbox.is_up() {
             return Vec::new();
         }
@@ -1098,14 +1213,164 @@ impl App {
         };
         let id = mint();
         home.recent_ask = Some((id.clone(), true));
-        vec![recent_line(&id, None)]
+        let mut out = vec![recent_line(&id, None, None)];
+        if let Some(project) = delete_project {
+            out.extend(self.scoped_first(project));
+        }
+        out
     }
 
-    /// Asks the next unscoped `recent` page past the focused last row,
-    /// using its id as `before`. `None` unless the focused row ends the
-    /// list and is its last recent row, the last
-    /// answer was not empty, and no `recent` is in flight.
+    /// Sends one scoped `recent` first page for `project`, recording its
+    /// id. While one is in flight for the project, marks it dirty instead
+    /// of duplicating the ask: the answer sends exactly one follow-up.
+    /// Nothing goes out with no home, with the link down, or for an
+    /// empty project.
+    fn scoped_first(&mut self, project: &str) -> Vec<String> {
+        if project.is_empty() || !self.outbox.is_up() {
+            return Vec::new();
+        }
+        let Some(home) = self.home.as_mut() else {
+            return Vec::new();
+        };
+        if home.scoped_asks.values().any(|pending| pending == project) {
+            home.sessions.mark_dirty(project);
+            return Vec::new();
+        }
+        let id = mint();
+        home.scoped_asks.insert(id.clone(), project.to_owned());
+        vec![recent_line(&id, Some(project), None)]
+    }
+
+    /// One scoped `recent` first page per project lacking a stored total
+    /// and an in-flight scoped ask, skipping projects in `before`: every
+    /// unscoped page passes the projects already on home and fans out only
+    /// for a project first appearing there, so a refill never retries an
+    /// already-seen project without a new trigger.
+    fn fan_out_scoped(&mut self, before: &std::collections::BTreeSet<String>) -> Vec<String> {
+        let projects: Vec<String> = self
+            .home
+            .as_ref()
+            .map(|home| {
+                home.sessions
+                    .sections(home.launch_project())
+                    .into_iter()
+                    .filter(|section| {
+                        !section.project.is_empty()
+                            && !before.contains(section.project)
+                            && home.sessions.total_for(section.project).is_none()
+                            && !home
+                                .scoped_asks
+                                .values()
+                                .any(|pending| pending == section.project)
+                    })
+                    .map(|section| section.project.to_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for project in &projects {
+            out.extend(self.scoped_first(project));
+        }
+        out
+    }
+
+    /// Folds a scoped `recent` answer for `project`: rows append by
+    /// project, the total keys by project, and a dirty project sends
+    /// exactly one follow-up. A refusal or an unparseable accepted
+    /// payload keeps the last held total with one notice, clears pending
+    /// and dirty, and retries nothing.
+    fn answer_scoped(
+        &mut self,
+        id: &str,
+        project: String,
+        accepted: bool,
+        payload: &serde_json::Map<String, Value>,
+    ) -> Vec<String> {
+        if let Some(home) = self.home.as_mut() {
+            home.scoped_asks.remove(id);
+        }
+        if !accepted {
+            if let Some(home) = self.home.as_mut() {
+                home.sessions.clear_dirty(&project);
+            }
+            let code = refusal_code(payload);
+            self.notices.push(&code, refusal(payload));
+            return Vec::new();
+        }
+        let Some((rows, total)) = scoped_result(payload) else {
+            if let Some(home) = self.home.as_mut() {
+                home.sessions.clear_dirty(&project);
+            }
+            let code = refusal_code(payload);
+            self.notices.push(&code, refusal(payload));
+            return Vec::new();
+        };
+        if let Some(home) = self.home.as_mut() {
+            home.sessions.scoped(rows);
+            home.sessions.note_total(&project, total);
+            home.refill_picker();
+        }
+        let dirty = self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.sessions.is_dirty(&project));
+        if dirty {
+            if let Some(home) = self.home.as_mut() {
+                home.sessions.clear_dirty(&project);
+            }
+            return self.scoped_first(&project);
+        }
+        Vec::new()
+    }
+
+    /// Asks the next scoped `recent` page for `project` past `before`,
+    /// recording its id. While one is in flight for the project, sends
+    /// nothing: paging is not a re-trigger, so it marks nothing dirty.
+    /// Nothing goes out with no home, with the link down, or for an
+    /// empty project.
+    fn scoped_page(&mut self, project: &str, before: Option<&str>) -> Vec<String> {
+        if project.is_empty() || !self.outbox.is_up() {
+            return Vec::new();
+        }
+        let Some(home) = self.home.as_mut() else {
+            return Vec::new();
+        };
+        if home.scoped_asks.values().any(|pending| pending == project) {
+            return Vec::new();
+        }
+        let id = mint();
+        home.scoped_asks.insert(id.clone(), project.to_owned());
+        vec![recent_line(&id, Some(project), before)]
+    }
+
+    /// Asks the next `recent` page past the focused last row. When the
+    /// focused row is its project's last loaded row and the held total
+    /// says more, the page is scoped to that project; else the unscoped
+    /// path asks past the unscoped cursor. `None` unless the focused row
+    /// ends the list and a page may exist, with nothing in flight.
     pub(super) fn page_recent(&mut self, focused: u64) -> Option<Effect> {
+        // The scoped page wins while the project holds more: the held
+        // total is that count's source of truth.
+        let scoped = self.home.as_ref().and_then(|home| {
+            let row = home.sessions.by_key(focused)?;
+            let project = row.project.clone();
+            let total = home.sessions.total_for(&project)?;
+            let section = home
+                .sessions
+                .sections(home.launch_project())
+                .into_iter()
+                .find(|section| section.project == project)?;
+            let last = section.exited.last()?;
+            (last.key == focused && total > section.exited.len())
+                .then(|| (project, Some(last.id.0.clone())))
+        });
+        if let Some((project, before)) = scoped {
+            let lines = self.scoped_page(&project, before.as_deref());
+            if lines.is_empty() {
+                return None;
+            }
+            return Some(Effect::Send(lines));
+        }
         let home = self.home.as_mut()?;
         if !home.sessions.more() || home.recent_ask.is_some() {
             return None;
@@ -1119,7 +1384,11 @@ impl App {
             .clone();
         let id = mint();
         home.recent_ask = Some((id.clone(), false));
-        Some(Effect::Send(vec![recent_line(&id, Some(before.as_str()))]))
+        Some(Effect::Send(vec![recent_line(
+            &id,
+            None,
+            Some(before.as_str()),
+        )]))
     }
 
     /// The text y copies and Ctrl+G opens for `spot`: the row's line;
@@ -1139,8 +1408,14 @@ impl App {
                     .sections(home.launch_project())
                     .into_iter()
                     .find(|section| section.project == row.project)?;
-                let hidden = section.hidden();
-                (hidden > 0).then(|| format!("… {hidden} more"))
+                match section.total {
+                    Some(total) => (total > section.shown_exited)
+                        .then(|| format!("… {} more", total.saturating_sub(section.shown_exited))),
+                    None => {
+                        let hidden = section.hidden();
+                        (hidden > 0).then(|| format!("… {hidden} more"))
+                    }
+                }
             }
             Spot::Stop(_)
             | Spot::Start(_)
@@ -1220,13 +1495,53 @@ impl App {
     }
 }
 
-/// A `recent` line: the first page, or past `before`.
-fn recent_line(id: &str, before: Option<&str>) -> String {
-    match before {
-        Some(before) => {
-            json!({"id": id, "command": "recent", "args": {"before": before}}).to_string()
-        }
-        None => json!({"id": id, "command": "recent"}).to_string(),
+/// A scoped `recent` answer's rows and total: `None` when the payload
+/// carries no readable command answer (a missing, null or foreign
+/// `result`, a missing or foreign `sessions`, or a missing or foreign
+/// `total`), following the `malformed` notice path. The hub contract
+/// carries both (`docs/invocation.md`, "The hub" and `docs/events.md`,
+/// "`command_accepted`").
+fn scoped_result(
+    payload: &serde_json::Map<String, Value>,
+) -> Option<(Vec<crate::home::Row>, usize)> {
+    let result = payload.get("result")?;
+    if !result.is_object() {
+        return None;
+    }
+    result.get("sessions").and_then(Value::as_array)?;
+    let (rows, total) = recent_rows(result);
+    Some((rows, total?))
+}
+
+/// The key `More` carries for its section: the first hidden loaded
+/// row when one hides, else the section's last loaded row, else a live
+/// row, so opening and paging still find the section's project.
+fn more_key(section: &Section<'_>) -> u64 {
+    section
+        .exited
+        .get(section.shown_exited)
+        .or(section.exited.last())
+        .map(|row| row.key)
+        .or(section.live.last().map(|row| row.key))
+        .or(section.start)
+        .unwrap_or(0)
+}
+
+/// A `recent` line: the first page, or past `before`. `project` scopes
+/// the ask to one project, `before` pages past a row; each rides only
+/// when set, so the unscoped first page carries no `args`.
+fn recent_line(id: &str, project: Option<&str>, before: Option<&str>) -> String {
+    let mut args = serde_json::Map::new();
+    if let Some(project) = project {
+        args.insert("project".to_owned(), Value::String(project.to_owned()));
+    }
+    if let Some(before) = before {
+        args.insert("before".to_owned(), Value::String(before.to_owned()));
+    }
+    if args.is_empty() {
+        json!({"id": id, "command": "recent"}).to_string()
+    } else {
+        json!({"id": id, "command": "recent", "args": Value::Object(args)}).to_string()
     }
 }
 
@@ -1253,3 +1568,7 @@ pub(super) fn refusal_code(payload: &serde_json::Map<String, Value>) -> String {
 #[cfg(test)]
 #[path = "home_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "home/scoped_page_tests.rs"]
+mod scoped_page_tests;

@@ -1,12 +1,14 @@
 //! Tests for one image part's line: what is kept, what the line
-//! names, and that it always draws one row.
+//! names, and that it always draws one row. Ledger rows draw the
+//! inline grid with its caption; the prompt and steering forms stay
+//! the one line.
 
 use contract::shapes::ContentPart;
 use ratatui::layout::Alignment;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 
-use super::{Align, Layout, parts};
+use super::{Align, IdAllocator, Layout, parts};
 use crate::app::Target;
 use crate::format;
 use crate::rows::Rows;
@@ -37,6 +39,7 @@ fn part_from_content_keeps_path_and_size() {
         Some(super::Part {
             session: session(),
             path: "artifacts/i_a.png".to_owned(),
+            mime_type: "image/png".to_owned(),
             width: 1280,
             height: 800,
         })
@@ -87,6 +90,7 @@ fn drawn(label: &str, columns: u16) -> Vec<(String, Option<Target>)> {
     let part = super::Part {
         session: session(),
         path: "artifacts/a.png".to_owned(),
+        mime_type: "image/png".to_owned(),
         width: 1280,
         height: 800,
     };
@@ -173,6 +177,7 @@ fn lines_at_indented(columns: u16, indent: u16) -> Vec<Line<'static>> {
     let part = super::Part {
         session: session(),
         path: "artifacts/a.png".to_owned(),
+        mime_type: "image/png".to_owned(),
         width: 1280,
         height: 800,
     };
@@ -214,6 +219,7 @@ fn a_right_aligned_line_stays_right_aligned() {
     let part = super::Part {
         session: session(),
         path: "artifacts/a.png".to_owned(),
+        mime_type: "image/png".to_owned(),
         width: 10,
         height: 20,
     };
@@ -231,6 +237,7 @@ fn a_line_names_its_own_paths_id() {
     let first = super::Part {
         session: session(),
         path: "artifacts/a.png".to_owned(),
+        mime_type: "image/png".to_owned(),
         width: 10,
         height: 20,
     };
@@ -260,4 +267,420 @@ fn one_path_in_two_segments_draws_two_ids() {
     assert_eq!(layout.id(&session(), "artifacts/a.png"), Some(one));
     assert_eq!(layout.id(&other(), "artifacts/a.png"), Some(two));
     assert_eq!(layout.note(&first), one, "refolding keeps the id");
+}
+
+/// A layout sizing inline with `cell`, having noted `part`.
+fn inline_layout(part: &super::Part, cell: (u16, u16)) -> Layout {
+    let mut layout = Layout::default();
+    layout.note(part);
+    layout.sizing = super::Sizing::Inline { cell };
+    layout
+}
+
+#[test]
+fn an_inline_png_draws_placeholders_then_its_caption() {
+    use ratatui::style::Color;
+    // 1280 by 800 at 80 columns with a 10 by 20 cell: 32 by 10
+    // placeholders, then the caption line.
+    let part = sized(1280, 800);
+    let mut out = Rows::default();
+    super::ledger_rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 11);
+    for (at, (line, target)) in rows.iter().enumerate().take(10) {
+        assert_eq!(
+            line.spans.len(),
+            33,
+            "row {at}: the indent and one cell per column"
+        );
+        assert_eq!(line.spans[0].content.as_ref(), "    ");
+        for span in line.spans.iter().skip(1) {
+            assert!(
+                span.content.as_ref().starts_with('\u{10EEEE}'),
+                "row {at}: every grid cell is a placeholder"
+            );
+            assert_eq!(span.style.fg, Some(Color::Indexed(1)));
+        }
+        assert!(matches!(target, Some(Target::Image(1))), "row {at}");
+    }
+    let (caption, target) = &rows[10];
+    assert_eq!(caption.to_string(), "    ▣ a.png · 1280×800");
+    assert!(matches!(target, Some(Target::Image(1))));
+}
+
+#[test]
+fn a_non_png_stays_its_one_line_when_sized_inline() {
+    let jpeg = ContentPart::Image {
+        path: "artifacts/a.jpg".to_owned(),
+        mime_type: "image/jpeg".to_owned(),
+        width: 1280,
+        height: 800,
+    };
+    let part = super::Part::from_content(&session(), &jpeg).expect("the jpeg is kept");
+    let mut out = Rows::default();
+    super::ledger_rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.jpg · 1280×800");
+}
+
+#[test]
+fn the_bubble_and_steering_stay_one_line_when_sized_inline() {
+    let part = sized(1280, 800);
+    let layout = inline_layout(&part, (10, 20));
+    for align in [Align::Right, Align::Left { indent: 0 }] {
+        let mut out = Rows::default();
+        super::ledger_rows(&part, &layout, 80, align, &mut out);
+        let (rows, _) = out.into_parts();
+        assert_eq!(rows.len(), 1, "the bubble and steering stay one line");
+        assert!(
+            rows[0]
+                .0
+                .spans
+                .iter()
+                .all(|span| !span.content.as_ref().starts_with('\u{10EEEE}')),
+            "no placeholders outside a ledger row"
+        );
+    }
+}
+
+#[test]
+fn an_unnoted_part_falls_back_to_its_one_line() {
+    let part = sized(1280, 800);
+    let layout = Layout {
+        sizing: super::Sizing::Inline { cell: (10, 20) },
+        ..Default::default()
+    };
+    let mut out = Rows::default();
+    super::ledger_rows(&part, &layout, 80, Align::Left { indent: 4 }, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.png · 1280×800");
+}
+
+#[test]
+fn a_zero_grid_draws_only_its_caption() {
+    let part = sized(0, 800);
+    let mut out = Rows::default();
+    super::ledger_rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.png · 0×800");
+}
+
+/// A part with `width` by `height` logged pixels.
+fn sized(width: u32, height: u32) -> super::Part {
+    super::Part::from_content(&session(), &image("artifacts/a.png", width, height))
+        .expect("the image is kept")
+}
+
+#[test]
+fn part_keeps_its_mime_type() {
+    assert_eq!(sized(10, 20).mime_type, "image/png");
+    let jpeg = ContentPart::Image {
+        path: "artifacts/a.jpg".to_owned(),
+        mime_type: "image/jpeg".to_owned(),
+        width: 10,
+        height: 20,
+    };
+    assert_eq!(
+        super::Part::from_content(&session(), &jpeg)
+            .expect("the jpeg is kept")
+            .mime_type,
+        "image/jpeg"
+    );
+}
+
+#[test]
+fn the_registry_never_hands_out_31() {
+    let mut layout = Layout::default();
+    let mut ids = Vec::new();
+    for at in 0..35 {
+        let part =
+            super::Part::from_content(&session(), &image(&format!("artifacts/i_{at}.png"), 10, 20))
+                .expect("the image is kept");
+        ids.push(layout.note(&part));
+    }
+    // Id 31 is the graphics probe's: the 31st image takes 32, and every
+    // id stays unique.
+    assert!(
+        !ids.contains(&31),
+        "the probe's id is never an image: {ids:?}"
+    );
+    assert_eq!(ids[30], 32);
+    assert_eq!(ids[31], 33);
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), 35);
+}
+
+#[test]
+fn ids_stop_at_255_and_later_images_keep_their_one_line() {
+    let allocator = IdAllocator::default();
+    let mut layout = Layout::default();
+    layout.set_allocator(allocator.clone());
+    let mut ids = Vec::new();
+    for at in 0..300 {
+        let part =
+            super::Part::from_content(&session(), &image(&format!("artifacts/i_{at}.png"), 10, 20))
+                .expect("the image is kept");
+        ids.push(layout.note(&part));
+    }
+    // 255 colours minus the probe's: every handed-out id stays unique
+    // and paintable, and past exhaustion a part stays unnoted.
+    let mut handed: Vec<u32> = ids.iter().copied().filter(|id| *id != 0).collect();
+    handed.sort_unstable();
+    handed.dedup();
+    assert_eq!(handed.len(), 254, "one id per image but the probe's");
+    assert_eq!(handed.first(), Some(&1));
+    assert_eq!(handed.last(), Some(&255));
+    assert!(!handed.contains(&31), "the probe's id is never an image");
+    assert!(
+        ids.iter().skip(254).all(|id| *id == 0),
+        "past exhaustion nothing is noted"
+    );
+    // An unnoted part draws its one clickable line, never a shared grid.
+    let last = super::Part::from_content(&session(), &image("artifacts/i_299.png", 10, 20))
+        .expect("the image is kept");
+    assert_eq!(layout.id(&session(), "artifacts/i_299.png"), None);
+    layout.sizing = super::Sizing::Inline { cell: (10, 20) };
+    let mut out = Rows::default();
+    super::ledger_rows(&last, &layout, 80, Align::Left { indent: 4 }, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ i_299.png · 10×20");
+
+    // Exhaustion is shared with new page layouts: a later image cannot
+    // receive a previous image's placeholder colour after a refold.
+    let later = super::Part::from_content(&other(), &image("artifacts/after.png", 10, 20))
+        .expect("the later image is kept");
+    let mut next_layout = Layout::default();
+    next_layout.set_allocator(allocator);
+    assert_eq!(next_layout.note(&later), 0);
+    next_layout.sizing = super::Sizing::Inline { cell: (10, 20) };
+    let mut out = Rows::default();
+    super::ledger_rows(
+        &later,
+        &next_layout,
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ after.png · 10×20");
+}
+
+#[test]
+fn ids_follow_image_identity_across_layouts_and_change_by_generation() {
+    let allocator = IdAllocator::default();
+    let first = super::Part::from_content(&session(), &image("artifacts/a.png", 10, 20))
+        .expect("the first image is kept");
+    let other_session = super::Part::from_content(&other(), &image("artifacts/a.png", 10, 20))
+        .expect("the other session's image is kept");
+
+    let mut first_layout = Layout::default();
+    first_layout.set_allocator(allocator.clone());
+    let first_id = first_layout.note(&first);
+    let mut refolded = Layout::default();
+    refolded.set_allocator(allocator.clone());
+    assert_eq!(refolded.note(&first), first_id, "a refold keeps its id");
+    assert_ne!(
+        refolded.note(&other_session),
+        first_id,
+        "distinct sessions never share an id"
+    );
+
+    allocator.advance_generation();
+    let mut next_generation = Layout::default();
+    next_generation.set_allocator(allocator.clone());
+    assert_ne!(
+        next_generation.note(&first),
+        first_id,
+        "an attached generation never reuses an id"
+    );
+    allocator.advance_generation();
+    assert_ne!(
+        first_layout.note(&first),
+        first_id,
+        "an existing layout moves to its new generation's id"
+    );
+}
+
+#[test]
+fn grid_keeps_a_small_image_at_its_natural_cells() {
+    // A small image draws as it is: no upscale past its natural cells.
+    assert_eq!(super::grid(&sized(20, 40), 60, (10, 20)), (2, 2));
+    assert_eq!(super::grid(&sized(25, 45), 60, (10, 20)), (2, 2));
+    assert_eq!(super::grid(&sized(100, 100), 80, (10, 20)), (10, 5));
+    assert_eq!(super::grid(&sized(1, 1), 60, (10, 20)), (1, 1));
+}
+
+#[test]
+fn grid_caps_at_forty_percent_and_twelve_rows() {
+    // 1280 by 800 at 80 columns: the width binds at 32 columns, and the
+    // height follows at 10 rows.
+    assert_eq!(super::grid(&sized(1280, 800), 80, (10, 20)), (32, 10));
+    // A tall image binds the rows instead: 1 column by 12 rows.
+    assert_eq!(super::grid(&sized(100, 2000), 80, (10, 20)), (1, 12));
+    // A wide image binds the columns, holding at least one row.
+    assert_eq!(super::grid(&sized(4000, 100), 80, (10, 20)), (32, 1));
+}
+
+#[test]
+fn grid_binds_on_the_narrower_box() {
+    // At equality the width binds: 32 columns by 12 rows.
+    assert_eq!(super::grid(&sized(1280, 960), 80, (10, 20)), (32, 12));
+    // A pixel wider binds the width with fewer rows.
+    assert_eq!(super::grid(&sized(1281, 960), 80, (10, 20)), (32, 11));
+    // A pixel narrower binds the height with fewer columns.
+    assert_eq!(super::grid(&sized(1279, 960), 80, (10, 20)), (31, 12));
+}
+
+#[test]
+fn grid_clamps_to_297_placeholders() {
+    // 1920 by 1080 at 84 columns: 40% is 33 columns, the height follows
+    // at 9 rows, 33 by 9 placeholders.
+    let (cols, rows) = super::grid(&sized(1920, 1080), 84, (10, 20));
+    assert_eq!((cols, rows), (33, 9));
+    assert_eq!(u32::from(cols) * u32::from(rows), 297);
+}
+
+#[test]
+fn grid_stays_inside_the_diacritic_table() {
+    // Past 160 columns 40% tops 64: the diacritic table's edge.
+    assert_eq!(super::grid(&sized(2000, 100), 160, (10, 20)), (64, 1));
+    assert_eq!(super::grid(&sized(2000, 100), 159, (10, 20)), (63, 1));
+}
+
+#[test]
+fn grid_draws_nothing_without_size_columns_or_cells() {
+    for (width, height, columns, cell) in [
+        (0, 800, 80, (10, 20)),
+        (1280, 0, 80, (10, 20)),
+        (0, 0, 80, (10, 20)),
+        (1280, 800, 0, (10, 20)),
+        (1280, 800, 80, (0, 20)),
+        (1280, 800, 80, (10, 0)),
+    ] {
+        assert_eq!(
+            super::grid(&sized(width, height), columns, cell),
+            (0, 0),
+            "{width} by {height} at {columns} with {cell:?}"
+        );
+    }
+}
+
+#[test]
+fn rows_ignores_the_inline_sizing() {
+    // The prompt and steering forms call `rows`: even sized inline, a
+    // noted PNG stays its one line.
+    let part = sized(1280, 800);
+    let mut out = Rows::default();
+    super::rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.png · 1280×800");
+}
+
+#[test]
+fn a_failed_image_draws_its_one_line() {
+    // A failed display falls back to the clickable line: the grid never
+    // draws for it, and the target stays the image's.
+    let part = sized(1280, 800);
+    let mut layout = inline_layout(&part, (10, 20));
+    layout.fail(&session(), "artifacts/a.png");
+    let mut out = Rows::default();
+    super::ledger_rows(&part, &layout, 80, Align::Left { indent: 4 }, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.png · 1280×800");
+    assert!(matches!(rows[0].1, Some(Target::Image(1))));
+    // Another path still draws inline: the failure names one image.
+    let other = super::Part::from_content(&session(), &image("artifacts/b.png", 1280, 800))
+        .expect("the image is kept");
+    layout.note(&other);
+    let mut out = Rows::default();
+    super::ledger_rows(&other, &layout, 80, Align::Left { indent: 4 }, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 11, "the other image still draws its grid");
+}
+
+#[test]
+fn a_flat_seam_draws_the_one_line() {
+    // A flat page draws every image as its one line: the rows' seam
+    // says flat even where the sizing is inline.
+    let part = sized(1280, 800);
+    let ext = crate::ext::Ext {
+        flat: true,
+        ..Default::default()
+    };
+    let mut out = Rows::default().with_seam(ext.bind(
+        crate::ext::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        crate::ext::SessionCtx {
+            session_id: contract::SessionId("s".into()),
+            halves: None,
+        },
+    ));
+    super::ledger_rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.png · 1280×800");
+    assert!(matches!(rows[0].1, Some(Target::Image(1))));
+}
+
+#[test]
+fn grid_handles_the_largest_logged_size() {
+    // The widest logged size at the widest columns: the products stay
+    // inside 64 bits, and both caps still bind. At 65535 columns 40%
+    // clamps to the diacritic table's 64, and the row cap binds below
+    // the column cap.
+    assert_eq!(
+        super::grid(&sized(u32::MAX, u32::MAX), u16::MAX, (10, 20)),
+        (24, 12)
+    );
+    assert_eq!(
+        super::grid(&sized(u32::MAX, u32::MAX), u16::MAX, (1, 1)),
+        (12, 12)
+    );
+    // A maximum width with a small height still draws: the row cap
+    // binds, and neither side runs past the diacritic table.
+    assert_eq!(
+        super::grid(&sized(u32::MAX, 1), u16::MAX, (10, 20)),
+        (64, 1)
+    );
 }

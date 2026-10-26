@@ -87,6 +87,7 @@ fn held(setup: &Setup) -> (String, Held) {
             false,
             Some(&content),
             None,
+            false,
         );
         done_tx.send(outcome).unwrap_or(());
     });

@@ -1,6 +1,6 @@
-//! A prompt's and a steering message's images, and a call's image
-//! rows: every image draws as its one clickable line
-//! (`docs/tui.md`, "Images").
+//! A prompt's and a steering message's images draw as one clickable line
+//! each; a call's images draw inline where the terminal speaks kitty's
+//! graphics protocol (`docs/tui.md`, "Images").
 
 use contract::shapes::ContentPart;
 
@@ -38,7 +38,9 @@ pub(crate) fn bubble_rows(prompt: &Prompt, width: u16, layout: &image::Layout, o
     }
 }
 
-/// Each image's line at the ledger's indent, under a call's row.
+/// Each image's rows at the ledger's indent, under a call's row: the
+/// placeholder grid with its caption where the sizing is inline, its
+/// one line otherwise.
 pub(crate) fn call_rows(
     images: &[image::Part],
     width: u16,
@@ -46,7 +48,7 @@ pub(crate) fn call_rows(
     out: &mut Rows,
 ) {
     for part in images {
-        image::rows(
+        image::ledger_rows(
             part,
             layout,
             width,

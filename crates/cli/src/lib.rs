@@ -186,11 +186,15 @@ pub use mcp::{DeclaredServer, McpDeclaration, declared_servers, mcp_add, mcp_lis
 pub use mcp_login::{login_target, mcp_login, mcp_logout};
 pub use model_lists::{ModelLists, ModelListsError, model_lists, roles_of};
 pub use models::{models, refresh_model_lists};
+pub use prune::{
+    HubDelete, HubPruneRemoved, HubPruneSelection, HubPruneSession, HubPruneWant, format_size,
+    remove_for_hub, select_for_hub,
+};
 pub use prune::{PruneArgs, prune};
 pub use release::release_install;
 pub use sessions::{delete, export};
 pub use sessions_list::list as sessions_list;
-pub use sessions_list::resolve_listed;
+pub use sessions_list::{latest_listed, resolve_listed};
 pub use sessions_search::search as sessions_search;
 pub use setup::{Completions, Hub, SetupFlags, setup};
 pub use stop::{stop_local, stop_remote};

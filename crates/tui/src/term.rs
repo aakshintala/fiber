@@ -25,10 +25,19 @@ const MOUSE: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const FOCUS: &[u8] = b"\x1b[?1004h";
 /// Mouse reporting of every motion (1003), for hover.
 const MOTION: &[u8] = b"\x1b[?1003h";
-/// Kitty's keyboard flags query, then the primary device attributes query.
-/// The appearance queries go first, so the theme follows the terminal
-/// before detection ends (`docs/tui.md`, "Themes").
-const QUERIES: &[u8] = b"\x1b[?u\x1b[c";
+/// Kitty's graphics probe id: the query image's id, which the image
+/// registry never hands out (`docs/tui.md`, "Images").
+pub(crate) const PROBE_ID: u32 = 31;
+
+/// One cell's fallback size in pixels, while the tty reports none
+/// (`docs/tui.md`, "Images").
+pub(crate) const FALLBACK_CELL: (u16, u16) = (10, 20);
+
+/// Kitty's keyboard flags query, then the primary device attributes query,
+/// then kitty's graphics probe: a one-pixel query image under
+/// [`PROBE_ID`]. The appearance queries go first, so the theme follows
+/// the terminal before detection ends (`docs/tui.md`, "Themes").
+const QUERIES: &[u8] = b"\x1b[?u\x1b[c\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
 /// Pushes kitty's keyboard flag 1, disambiguate escape codes. The loop
 /// writes it when kitty's flags reply arrives.
 pub(crate) const KITTY_PUSH: &[u8] = b"\x1b[>1u";
@@ -77,6 +86,27 @@ pub(crate) fn setup(mut tty: &File, hover: bool) -> io::Result<(u16, u16)> {
 pub(crate) fn size(tty: &File) -> io::Result<(u16, u16)> {
     let size = termios::tcgetwinsize(tty)?;
     Ok((size.ws_col.max(1), size.ws_row.max(1)))
+}
+
+/// The size of `tty` in pixels, or zero when the terminal reports none:
+/// [`cell`] falls back then (`docs/tui.md`, "Images").
+pub(crate) fn pixels(tty: &File) -> (u16, u16) {
+    termios::tcgetwinsize(tty)
+        .map(|size| (size.ws_xpixel, size.ws_ypixel))
+        .unwrap_or((0, 0))
+}
+
+/// One cell's size in pixels from the tty's pixel size over its cell
+/// counts, for the placeholder grid (`docs/tui.md`, "Images"). Zero
+/// pixels or a zero count reads the fallback, so the grid math never
+/// divides by zero.
+pub(crate) fn cell(pixel: (u16, u16), count: (u16, u16)) -> (u16, u16) {
+    let (wide, high) = pixel;
+    let (cols, rows) = count;
+    if wide == 0 || high == 0 || cols == 0 || rows == 0 {
+        return FALLBACK_CELL;
+    }
+    ((wide / cols).max(1), (high / rows).max(1))
 }
 
 /// Restores the terminal `setup` set up, once: pops kitty's keyboard

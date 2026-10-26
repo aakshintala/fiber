@@ -630,3 +630,127 @@ fn marked_ink_draws_the_role_colour_reversed() {
     assert_eq!(style.fg, Some(Role::Added.color()));
     assert!(style.add_modifier.contains(Modifier::REVERSED));
 }
+
+/// A drag over a frame's rows for the selection: press, drag and
+/// release over `area`, mapping through the frame `select_frame` notes
+/// (`docs/tui.md`, "Selection and copy").
+fn drag_over(
+    app: &mut crate::app::App,
+    frame: &Frame,
+    width: u16,
+    height: u16,
+    from: (u16, u16),
+    to: (u16, u16),
+) -> crate::app::Effect {
+    use crate::keys::{Button, Mouse, MouseKind};
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    super::select_frame(app, frame, area, &mut buf);
+    let targets = Vec::new();
+    let _ = app.on_select(
+        &Mouse {
+            kind: MouseKind::Press(Button::Left),
+            col: from.0,
+            row: from.1,
+        },
+        &targets,
+    );
+    let _ = app.on_select(
+        &Mouse {
+            kind: MouseKind::Drag(Button::Left),
+            col: to.0,
+            row: to.1,
+        },
+        &targets,
+    );
+    app.on_select(
+        &Mouse {
+            kind: MouseKind::Release,
+            col: to.0,
+            row: to.1,
+        },
+        &targets,
+    )
+}
+
+fn made_frame(rows: &[&str], below: &[&str], field: Option<(&str, usize)>) -> Frame {
+    Frame {
+        title: "Keys".to_owned(),
+        command: "/keys",
+        rows: rows
+            .iter()
+            .map(|row| vec![((*row).to_owned(), None, Ink::Plain)])
+            .collect(),
+        list: List::gutter(),
+        below: below.iter().map(|line| (*line).to_owned()).collect(),
+        field: field.map(|(text, caret)| (text.to_owned(), caret)),
+        footer: "move".to_owned(),
+    }
+}
+
+fn app() -> crate::app::App {
+    let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
+    app.set_size(80, 24);
+    app
+}
+
+/// A drag over a frame's rows copies their text, the gutter left out:
+/// the title and footer never copy (`docs/tui.md`, "Selection and
+/// copy").
+#[test]
+fn a_drag_over_a_frame_copies_its_rows() {
+    use crate::app::{Effect, SurfaceId};
+    let mut app = app();
+    let frame = made_frame(&["alpha", "beta", "gamma"], &[], None);
+    let area = Rect::new(0, 0, 80, 24);
+    let effect = drag_over(&mut app, &frame, 80, 24, (2, 1), (6, 3));
+    assert_eq!(effect, Effect::Copy("alpha\nbeta\ngamma".to_owned()));
+    // The drag's highlight sits over the rows it covered.
+    assert!(!app.selection_cells(SurfaceId::Swapped, area).is_empty());
+}
+
+/// A drag over the lines below a frame's rows copies them too: what a
+/// write said reads as its own rows (`docs/tui.md`, "Selection and
+/// copy").
+#[test]
+fn a_drag_over_below_lines_copies_them() {
+    use crate::app::Effect;
+    let mut app = app();
+    let frame = made_frame(&["alpha"], &["note one"], None);
+    let effect = drag_over(&mut app, &frame, 80, 24, (0, 22), (7, 22));
+    assert_eq!(effect, Effect::Copy("note one".to_owned()));
+}
+
+/// A frame too short to show its lines below notes none: the rows stop
+/// at the footer (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_cramped_frame_skips_below_at_the_footer() {
+    use crate::app::Effect;
+    let mut app = app();
+    let frame = made_frame(&["alpha", "beta"], &["note one"], None);
+    let effect = drag_over(&mut app, &frame, 80, 2, (0, 1), (7, 1));
+    assert_eq!(effect, Effect::None);
+}
+
+/// A drag over a frame's field copies its text past the prompt: the
+/// field reads as the input box reads past its own (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn a_drag_over_a_frame_field_copies_its_text() {
+    use crate::app::Effect;
+    let mut app = app();
+    let frame = made_frame(&["alpha"], &[], Some(("query text", 10)));
+    let effect = drag_over(&mut app, &frame, 80, 24, (2, 22), (6, 22));
+    assert_eq!(effect, Effect::Copy("query".to_owned()));
+}
+
+/// A frame too short to show its field notes none: the field stops at
+/// the footer (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_cramped_frame_skips_the_field_at_the_footer() {
+    use crate::app::Effect;
+    let mut app = app();
+    let frame = made_frame(&["alpha"], &[], Some(("query text", 10)));
+    let effect = drag_over(&mut app, &frame, 80, 2, (2, 1), (6, 1));
+    assert_eq!(effect, Effect::None);
+}

@@ -34,6 +34,7 @@ mod shutdown;
 mod startup_log;
 mod switch;
 mod theme_setting;
+mod tui_extensions;
 
 #[cfg(test)]
 #[path = "command_reference_tests.rs"]
@@ -137,7 +138,9 @@ fn run() -> i32 {
             }),
             _,
         ) => open::resume(id, credential, hub, fiber),
-        cli::Invocation::Run(Some(cli::Commands::Continue), _) => open::continue_latest(fiber),
+        cli::Invocation::Run(Some(cli::Commands::Continue { hub }), _) => {
+            open::continue_latest(fiber, hub)
+        }
         cli::Invocation::Usage {
             ask: true,
             sentence,
@@ -181,14 +184,18 @@ fn run() -> i32 {
                 clock.as_ref(),
                 fiber,
             ),
-            Some(cli::SessionsCommands::Delete { cascade, yes, id }) => {
-                sessions_delete(&id, cascade, yes, clock.as_ref(), fiber)
-            }
+            Some(cli::SessionsCommands::Delete {
+                hub,
+                cascade,
+                yes,
+                id,
+            }) => sessions_delete(&id, cascade, yes, hub.as_deref(), clock.as_ref(), fiber),
             Some(cli::SessionsCommands::Export { id, path }) => ::cli::export(&id, path.as_deref()),
             Some(cli::SessionsCommands::Search { all, json, text }) => {
                 ::cli::sessions_search(&text, all, json)
             }
             Some(cli::SessionsCommands::Prune {
+                hub,
                 older_than,
                 cascade,
                 dry_run,
@@ -200,6 +207,7 @@ fn run() -> i32 {
                 dry_run,
                 yes,
                 force,
+                hub.as_deref(),
                 clock.as_ref(),
                 fiber,
             ),
@@ -746,6 +754,7 @@ fn ask_new(
         fiber,
         None,
         None,
+        false,
     )
 }
 
@@ -772,9 +781,10 @@ fn ask_permissions(
 
 /// Finishes a loop, however it started: the budget, whether a person may
 /// answer an approval, and the reviewer every session gets, so a change to
-/// the chain is made once. `answerable` is false only for one-turn
-/// `fiber ask`, new or resumed; the session command serves clients that may
-/// answer (`docs/permissions.md`, "Headless").
+/// the chain is made once. The effective answerability is `answerable`
+/// without `supervised`: false for one-turn `fiber ask` and for supervised
+/// sessions, new or resumed; the session command serves clients that may
+/// answer (`docs/permissions.md`, "Headless", "Supervised sessions").
 #[allow(
     clippy::too_many_arguments,
     reason = "one hand-off of the loop's end: budget, answerability, reviewer, retry and cancel"
@@ -785,19 +795,22 @@ fn finish(
     idle: Option<Duration>,
     warm: Option<u32>,
     answerable: bool,
+    supervised: bool,
     reviewer: Result<r#loop::Reviewer, Failure>,
     limits: r#loop::BlockLimits,
     retry: r#loop::Retry,
     cancel: Arc<r#loop::TurnCancel>,
     slot: &mut Option<r#loop::Summary>,
 ) -> Result<(), Failure> {
+    let answerable = crate::session_command::effective_answerable(answerable, supervised);
     looped
         .map(|looped| {
             looped
                 .budget(budget)
                 .idle_exit(idle)
                 // Only one-turn `fiber ask` is not answerable, and it exits
-                // when its run ends: it never warms.
+                // when its run ends: it never warms. A supervised session
+                // never warms either: nothing may answer it.
                 .warm(warm.filter(|_| answerable))
                 .answerable(answerable)
                 .reviewer(reviewer, limits)
@@ -1029,19 +1042,19 @@ fn terminal(
         }
     };
     // `tui.hover`, defaulting to on (`docs/configuration.md`, "Keys").
-    let config = match ::cli::project_of(&home, &workspace)
-        .map_err(Failure::from)
-        .and_then(|(_, project)| {
-            Config::load(Sources {
-                home: home.clone(),
-                workspace: workspace.clone(),
-                project,
-                overrides: Vec::new(),
-            })
-            .map_err(|e| failed(e.code(), e))
-        }) {
+    let project = match ::cli::project_of(&home, &workspace) {
+        Ok((_, project)) => project,
+        Err(error) => return fail(Failure::from(error)),
+    };
+    let sources = Sources {
+        home: home.clone(),
+        workspace: workspace.clone(),
+        project,
+        overrides: Vec::new(),
+    };
+    let config = match Config::load(sources.clone()) {
         Ok(config) => config,
-        Err(e) => return fail(e),
+        Err(error) => return fail(failed(error.code(), error)),
     };
     // A listed hub owns no startup notice: the client's own ignored keys
     // print once to stderr before the terminal takes the screen, while a
@@ -1105,6 +1118,10 @@ fn terminal(
     });
     launch.models = Some(models);
     launch.configure = Some(seam);
+    launch.extensions = Some(Arc::new(tui_extensions::Loader::new(
+        sources,
+        Arc::clone(&clock),
+    )));
     // The interactive door's report writer: `cli::feedback::write`
     // behind the contract seam, beside the model-list reader. It captures
     // the launch directory, so a later `/feedback` reports the same
@@ -1228,38 +1245,46 @@ fn sessions_delete(
     id: &str,
     cascade: bool,
     yes: bool,
+    named: Option<&str>,
     clock: &dyn contract::clock::Clock,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
-    let mut connect = || {
-        connect_hub(
-            &config::fiber_home_from_env().map_err(doors::Error::Config)?,
-            &doors::hub::Target::Local,
-            &fiber,
-            clock,
-        )
+    let (home, target) = match hub_target(named) {
+        Ok(target) => target,
+        Err(error) => return fail(error),
     };
-    ::cli::delete(id, cascade, yes, &mut connect)
+    let hub = match &target {
+        doors::hub::Target::Local => None,
+        doors::hub::Target::Listed { name, .. } => Some(name.as_str()),
+    };
+    let mut connect = || connect_hub(&home, &target, &fiber, clock);
+    ::cli::delete(id, cascade, yes, hub, &mut connect)
 }
 
 /// `fiber sessions prune`: the hub it reaches is started when none runs.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one hand-off of prune's flags: what to prune, the hub, the clock and the binary"
+)]
 fn sessions_prune(
     older_than: Option<String>,
     cascade: bool,
     dry_run: bool,
     yes: bool,
     force: bool,
+    named: Option<&str>,
     clock: &dyn contract::clock::Clock,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
-    let mut connect = || {
-        connect_hub(
-            &config::fiber_home_from_env().map_err(doors::Error::Config)?,
-            &doors::hub::Target::Local,
-            &fiber,
-            clock,
-        )
+    let (home, target) = match hub_target(named) {
+        Ok(target) => target,
+        Err(error) => return fail(error),
     };
+    let hub = match &target {
+        doors::hub::Target::Local => None,
+        doors::hub::Target::Listed { name, .. } => Some(name.as_str()),
+    };
+    let mut connect = || connect_hub(&home, &target, &fiber, clock);
     ::cli::prune(
         &::cli::PruneArgs {
             older_than,
@@ -1268,6 +1293,7 @@ fn sessions_prune(
             yes,
             force,
         },
+        hub,
         clock,
         &mut connect,
     )

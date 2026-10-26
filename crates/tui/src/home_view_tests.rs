@@ -424,6 +424,98 @@ fn home_with_more_rows_than_fit() {
     insta::assert_snapshot!("home_with_more_rows_than_fit", screen(&app, 80, 24));
 }
 
+/// Answers the feed, the first unscoped `recent` page with `rows`, and
+/// every scoped ask with `total` and no rows: the held total with one
+/// loaded row beneath it.
+fn hold_total(app: &mut App, rows: serde_json::Value, total: usize) {
+    fn parse(line: &String) -> serde_json::Value {
+        serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+    }
+    let outgoing: Vec<serde_json::Value> = app.on_line(hello()).iter().map(parse).collect();
+    let feed = outgoing
+        .iter()
+        .find(|line| line["command"] == "feed")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a feed: {outgoing:?}"));
+    let recent = outgoing
+        .iter()
+        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
+    assert!(
+        app.on_line(accepted(feed, serde_json::json!({})))
+            .is_empty()
+    );
+    let fanout: Vec<serde_json::Value> = app
+        .on_line(accepted(recent, rows))
+        .iter()
+        .map(parse)
+        .collect();
+    // `docs/tui.md:268` (one scoped ask for the newly seen project).
+    assert!(!fanout.is_empty(), "the unscoped answer fans out");
+    for line in &fanout {
+        let id = line["id"].as_str().unwrap_or_else(|| panic!("a scoped id"));
+        assert!(
+            app.on_line(accepted(
+                id,
+                serde_json::json!({"sessions": [], "total": total})
+            ))
+            .is_empty()
+        );
+    }
+}
+
+#[test]
+fn home_header_draws_the_held_total_with_more_beneath() {
+    let mut app = home(80, 24);
+    hold_total(
+        &mut app,
+        serde_json::json!({"sessions": [recent_row("s_aaaaaaaaaaaaaaaa", "old work", "exited")]}),
+        3,
+    );
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("exited · 3"), "{frame}");
+    assert!(frame.contains("… 2 more"), "{frame}");
+    insta::assert_snapshot!("home_header_with_a_held_total_80x24", frame);
+}
+
+#[test]
+fn home_header_draws_no_exited_head_at_a_zero_total() {
+    let mut app = home(80, 24);
+    hold_total(
+        &mut app,
+        serde_json::json!({"sessions": [recent_row("s_aaaaaaaaaaaaaaaa", "old work", "exited")]}),
+        0,
+    );
+    let frame = screen(&app, 80, 24);
+    assert!(!frame.contains("exited ·"), "{frame}");
+    assert!(frame.contains("old work"), "{frame}");
+}
+
+#[test]
+fn home_header_counts_loaded_rows_without_a_total() {
+    let mut app = home(80, 24);
+    let outgoing: Vec<serde_json::Value> = app
+        .on_line(hello())
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let recent = outgoing
+        .iter()
+        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a recent: {outgoing:?}"));
+    app.on_line(accepted(
+        recent,
+        serde_json::json!({"sessions": [
+            recent_row("s_aaaaaaaaaaaaaaaa", "old work", "exited"),
+            recent_row("s_bbbbbbbbbbbbbbbb", "dead work", "crashed"),
+        ]}),
+    ));
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("exited · 2"), "{frame}");
+}
+
 /// A `hub_hello` this terminal reads.
 fn hello() -> Line {
     Line::Hub(contract::HubLine {
@@ -1524,6 +1616,116 @@ fn refused(id: &str, code: &str, message: &str) -> Line {
         .into_iter()
         .collect(),
     })
+}
+
+/// Stopping, accepting, and leaving flow through one screen: three live
+/// sessions, two accepted stops, and a leave for the third keep the
+/// home list drawn with no fault line.
+#[test]
+fn home_stop_flow_keeps_the_home_list_drawn() {
+    let mut app = home(80, 24);
+    let outgoing: Vec<serde_json::Value> = app
+        .on_line(hello())
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let feed = outgoing
+        .iter()
+        .find(|line| line["command"] == "feed")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a feed: {outgoing:?}"));
+    assert!(
+        app.on_line(accepted(feed, serde_json::json!({})))
+            .is_empty()
+    );
+    for (session, name) in [
+        ("s_aaaaaaaaaaaaaaaa", "first work"),
+        ("s_bbbbbbbbbbbbbbbb", "second work"),
+        ("s_cccccccccccccccc", "third work"),
+    ] {
+        app.on_line(status(session, name, live()));
+    }
+    let now = fakes::clock::FakeClock::new().now();
+    let mut stopped = Vec::new();
+    focus_first_row(&mut app);
+    for _ in 0..2 {
+        app.on_edit(crate::keys::Edit::Delete);
+        let crate::app::Effect::Send(sent) = app.on_key(Key::Enter, now) else {
+            panic!("Enter sends the stop");
+        };
+        app.on_key(Key::Down, now);
+        let lines: Vec<serde_json::Value> = sent
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect();
+        let close = lines
+            .iter()
+            .find(|line| line["command"] == "close")
+            .unwrap_or_else(|| panic!("the stop closes: {lines:?}"));
+        stopped.push((
+            close["session_id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a session"))
+                .to_owned(),
+            close["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a stop id"))
+                .to_owned(),
+        ));
+        assert!(
+            app.on_line(accepted(
+                &stopped.last().expect("a stop").1,
+                serde_json::json!({"session_id": stopped.last().expect("a stop").0})
+            ))
+            .is_empty()
+        );
+    }
+    assert_ne!(stopped[0].0, stopped[1].0, "two sessions stop");
+    // The third session leaves without a stop: one exited row beneath
+    // two live ones.
+    let third = [
+        "s_aaaaaaaaaaaaaaaa",
+        "s_bbbbbbbbbbbbbbbb",
+        "s_cccccccccccccccc",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .find(|session| !stopped.iter().any(|(id, _)| id == session))
+    .unwrap_or_else(|| panic!("a third session"));
+    app.on_line(left(&third, "exited"));
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("exited · 1"), "{frame}");
+    // `docs/tui.md:254-255` (one exited row beneath two live ones draws one `○`).
+    assert_eq!(frame.matches('○').count(), 1, "{frame}");
+    insta::assert_snapshot!("home_stop_flow_keeps_the_home_list_drawn_80x24", frame);
+}
+
+/// Focuses the first list entry from the entry bar: Up lands on the
+/// last stop, and further Ups hold at the first row.
+fn focus_first_row(app: &mut App) {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(app, area, &mut buf);
+    app.drawn(&targets);
+    let now = fakes::clock::FakeClock::new().now();
+    let first = app
+        .home_screen()
+        .and_then(|screen| {
+            crate::home::home_test_rows(&screen)
+                .first()
+                .map(|row| row.0)
+        })
+        .unwrap_or_else(|| panic!("a first row"));
+    let want = Some(crate::mouse::TargetId::Home(crate::home::Spot::Entry(
+        first,
+    )));
+    for _ in 0..10 {
+        if app.focused() == want {
+            return;
+        }
+        app.on_key(Key::Up, now);
+    }
+    panic!("the first row focuses");
 }
 
 /// A `session_left` for `session`, ending `how`.
@@ -3698,5 +3900,40 @@ fn the_import_offer_swallow_target_needs_a_drawn_slab() {
             .iter()
             .any(|target| target.id == crate::mouse::TargetId::Home(crate::home::Spot::Question)),
         "no slab, no swallow target"
+    );
+}
+
+/// A drag over the import offer copies its row's text: the overlay
+/// reads as its own surface with the legend left out (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn a_drag_over_the_import_offer_copies_its_row() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let mut app = home(80, 24);
+    app.set_import_offer(true);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    let (y, line) = shown
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("Claude Code"))
+        .map(|(y, line)| (u16::try_from(y).unwrap_or(u16::MAX), line.to_owned()))
+        .expect("the import offer lists Claude Code");
+    let x = u16::try_from(line.find("Claude").unwrap_or_default()).unwrap_or(u16::MAX);
+    let mut pointer = Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    let mut report = |kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), x, y);
+    let _ = report(MouseKind::Drag(Button::Left), x + 5, y);
+    assert_eq!(
+        report(MouseKind::Release, x + 5, y),
+        Effect::Copy("Claude".to_owned())
     );
 }

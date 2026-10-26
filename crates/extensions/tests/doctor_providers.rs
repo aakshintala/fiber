@@ -67,7 +67,7 @@ fn a_provider_script_does_not_register_without_running_it() {
 fn a_process_only_package_does_not_register_without_running_it() {
     let setup = Setup::new();
     let mut listed = manifest("acme");
-    listed["process"] = json!({"program": "run"});
+    listed["process"] = json!({"program": "run", "exit_timeout_ms": 0});
     installed(&setup, "acme", listed);
     let providers = loaded(&setup);
     assert_eq!(providers.names().collect::<Vec<_>>(), ["fake"]);
@@ -203,7 +203,10 @@ fn a_process_only_package_supplies_no_lua_registration() {
     let setup = Setup::new();
     let mut listed = manifest("acme");
     if let Some(into) = listed.as_object_mut() {
-        into.insert("process".to_owned(), json!({"program": "run"}));
+        into.insert(
+            "process".to_owned(),
+            json!({"program": "run", "exit_timeout_ms": 0}),
+        );
         into.insert(
             "providers".to_owned(),
             json!({"fake": ["http://127.0.0.1:1/v1"]}),

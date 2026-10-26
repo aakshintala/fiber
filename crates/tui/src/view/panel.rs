@@ -19,6 +19,7 @@ use crate::surface;
 
 pub(crate) mod delegates;
 pub(crate) mod quota;
+mod selection;
 
 /// The permission mode every session runs in (`docs/permissions.md`,
 /// "One mode"): the literal, shared by the Session title row and the
@@ -220,8 +221,18 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     // card's first two rows are its edge and title: the ask range counts
     // from the first delegate row. An empty range asks nothing, so the
     // range needs no guard.
-    // removed: the `to > first` guard; asking an empty range is a no-op
-    // because `ask` only fires on a contained state row.
+    // The selection reads the same shown rows the draw kept.
+    selection::note(
+        app,
+        &rows,
+        skip,
+        x,
+        area.y.saturating_add(1),
+        area.bottom(),
+        text,
+    );
+    super::marks::paint_selection(app, buf, crate::app::SurfaceId::Panel, area);
+    // An empty range asks nothing: `ask` fires only on a contained state row.
     if let Some(span) = span {
         let from = skip.max(span.start);
         let to = skip.saturating_add(drawn).min(span.end);
@@ -512,14 +523,11 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             // cost still null counts as zero until it settles
             // (`docs/loop.md`, "Spending budget"). A known billed cost
             // draws whenever known, `$0.00` included.
-            let cost = match (status.spend.cost, panel.budget()) {
-                (Some(cost), Some(budget)) => {
-                    format!("{} of {}", format::money(cost), format::money(budget))
-                }
-                (None, Some(budget)) => format!("unknown of {}", format::money(budget)),
-                (Some(cost), None) => format::money(cost),
-                (None, None) => "unknown".to_owned(),
-            };
+            let cost = format::spend_against_budget(status.spend.cost, panel.budget())
+                .unwrap_or_else(|| match status.spend.cost {
+                    Some(cost) => format::money(cost),
+                    None => "unknown".to_owned(),
+                });
             out.push(figure_row("cost", cost, Some(Spot::Usage), text));
             // The subscription sum draws on every frame once a status
             // holds it, `$0.00` included.
@@ -856,7 +864,7 @@ fn jobs_rows(app: &App) -> Vec<Row> {
 /// The card text's width: the rect less the slab offset and one margin
 /// column each side, two narrower where a box takes the sides
 /// (`docs/tui.md`, "Look").
-fn card_text_width(width: u16) -> usize {
+pub(super) fn card_text_width(width: u16) -> usize {
     if surface::box_fit(width) {
         text_width(width).saturating_sub(2)
     } else {

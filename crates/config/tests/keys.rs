@@ -20,6 +20,29 @@ const LIST: &str = "a list of strings";
 const WARM_CAP: &str = "a whole number less than 12";
 
 #[test]
+fn tui_slot_winner_is_a_personal_string_key_with_quoted_slot_names() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"tui":{"slots":{"ledger_row:shell":"alpha"}}}"#,
+    );
+    assert_eq!(
+        setup
+            .load(&[])
+            .unwrap()
+            .text("tui.slots.\"ledger_row:shell\"", None),
+        Some("alpha".into())
+    );
+    setup.write(
+        &setup.global(),
+        r#"{"tui":{"slots":{"ledger_row:shell":12}}}"#,
+    );
+    let error = setup.load(&[]).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ConfigInvalid);
+    assert!(error.to_string().contains("ledger_row:shell"));
+}
+
+#[test]
 fn hub_client_keys_prefer_the_persons_project_layer() {
     let setup = Setup::new();
     setup.write(

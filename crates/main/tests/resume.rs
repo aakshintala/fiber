@@ -208,6 +208,7 @@ fn hand_built(setup: &Setup, id: &str, events: Vec<(Event, Option<TurnId>, Optio
             forked_from: None,
             rewind: None,
             worktree: None,
+            supervised: false,
         }),
         None,
         None,

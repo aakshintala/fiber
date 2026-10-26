@@ -318,25 +318,116 @@ pub(crate) fn draw(
         } else {
             super::view::model_picker::draw(&view, below, buf, targets)
         };
+        if !slab.is_empty() {
+            app.note_surface(crate::app::NotedSurface {
+                surface: crate::app::SurfaceId::Swapped,
+                rows: super::view::model_picker::note_selection(&view, below, slab),
+            });
+            crate::view::marks::paint_selection(app, buf, crate::app::SurfaceId::Swapped, slab);
+        }
         return Some(slab);
     }
     let height = usize::from(area.height);
     if let Some(frame) = app.keys_frame(height) {
         render(&frame, area, buf, targets);
+        select_frame(app, &frame, area, buf);
         None
     } else if let Some(login) = app.login_view() {
-        Some(login.draw(area, buf, targets))
+        // The login overlay reads as its own surface over the
+        // conversation's rows (`docs/tui.md`, "Selection and copy").
+        Some(login.draw_noted(app, area, buf, targets))
     } else if let Some(logout) = app.logout_view() {
         Some(logout.draw(area, buf, targets))
     } else if let Some(frame) = app.config_view_screen() {
         render(&frame, area, buf, targets);
+        select_frame(app, &frame, area, buf);
         None
     } else if let Some(frame) = app.session_view_screen(area.width) {
         render(&frame, area, buf, targets);
+        select_frame(app, &frame, area, buf);
         None
     } else {
         None
     }
+}
+
+/// Notes `frame`'s text rows for the selection and paints the
+/// selection over them: each shown row's cells, the focus gutter left
+/// out, with the lines below and the field's text
+/// (`docs/tui.md`, "Selection and copy"). The title row and the
+/// key-hint footer never copy.
+pub(crate) fn select_frame(app: &App, frame: &Frame, area: Rect, buf: &mut Buffer) {
+    if area.is_empty() {
+        return;
+    }
+    let shown = rows_height(frame, usize::from(area.height));
+    let mut noted = Vec::new();
+    let mut y = area.y.saturating_add(1);
+    for cells in frame.rows.iter().skip(frame.list.top()).take(shown) {
+        let gutter = frame.list.is_gutter();
+        let x = if gutter {
+            area.x.saturating_add(crate::text::to_u16(GUTTER))
+        } else {
+            area.x
+        };
+        let mut text = String::new();
+        for (cell, _, _) in cells {
+            text.push_str(cell);
+        }
+        let cut = crate::format::cut(&text, usize::from(area.right().saturating_sub(x)));
+        noted.push(crate::app::SpanRow {
+            y,
+            x,
+            end: area.right(),
+            text: cut,
+            join: crate::rows::Join::Break,
+        });
+        y = y.saturating_add(1);
+    }
+    let footer = area.bottom().saturating_sub(1);
+    let mut y = footer
+        .saturating_sub(u16::try_from(frame.below.len()).unwrap_or(u16::MAX))
+        .saturating_sub(u16::from(frame.field.is_some()))
+        .max(area.y.saturating_add(1));
+    for line in &frame.below {
+        if y >= footer {
+            break;
+        }
+        noted.push(crate::app::SpanRow {
+            y,
+            x: area.x,
+            end: area.right(),
+            text: crate::format::cut(line, usize::from(area.width)),
+            join: crate::rows::Join::Break,
+        });
+        y = y.saturating_add(1);
+    }
+    if let Some((text, caret)) = &frame.field
+        && y < footer
+    {
+        // The field's `> ` prompt marks the edit; the copy reads the
+        // text after it, scrolled as drawn, as the input box reads past
+        // its prompt.
+        let room = usize::from(area.width).saturating_sub(3);
+        let skip = caret.saturating_sub(room);
+        let shown: String = text
+            .chars()
+            .skip(skip)
+            .take(room.saturating_add(1))
+            .collect();
+        noted.push(crate::app::SpanRow {
+            y,
+            x: area.x.saturating_add(2),
+            end: area.right(),
+            text: shown,
+            join: crate::rows::Join::Break,
+        });
+    }
+    app.note_surface(crate::app::NotedSurface {
+        surface: crate::app::SurfaceId::Swapped,
+        rows: noted,
+    });
+    crate::view::marks::paint_selection(app, buf, crate::app::SurfaceId::Swapped, area);
 }
 
 /// Draws `frame` into `area`: the top row, then what fits top down,

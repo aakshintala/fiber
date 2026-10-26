@@ -509,6 +509,7 @@ fn entry_child() {
         delegate_id: None,
         depth: None,
         login_shell: false,
+        supervised: false,
     };
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let code = crate::session_command::run(args, clock, Err("no fiber in test".to_owned()));

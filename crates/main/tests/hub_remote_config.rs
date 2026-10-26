@@ -274,6 +274,21 @@ fn the_hub_searches_its_own_machine_over_the_port() {
     assert_eq!(served.process.wait().code(), Some(143));
 }
 
+fn hooks_source(setup: &Setup) -> String {
+    let base = setup.root.path().join("gh");
+    let repo = base.join("aakshintala/fiber");
+    fs::create_dir_all(&repo).unwrap();
+    fakes::git::git(&repo, &["init", "-q"]);
+    write_json(
+        &repo.join("extensions/hooks/extension.json"),
+        &json!({"name":"github.com/aakshintala/fiber/extensions/hooks","version":"0.1.0","fiber":env!("CARGO_PKG_VERSION"),"api":1}),
+    );
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "-qm", "hooks fixture"]);
+    fakes::git::git(&repo, &["tag", "v0.1.0"]);
+    format!("url.file://{}/.insteadOf", base.display())
+}
+
 #[test]
 fn the_hub_answers_configuration_from_its_own_home_over_the_port() {
     let setup = Setup::new();
@@ -304,6 +319,7 @@ fn the_hub_answers_configuration_from_its_own_home_over_the_port() {
         &json!({"model":"client/model"}),
     );
     let client_before = fs::read(client_home.join("config.json")).unwrap();
+    let hooks_git_key = hooks_source(&setup);
     provider(&setup);
     let served = hub_start::serve_installed(
         &setup,
@@ -314,7 +330,13 @@ fn the_hub_answers_configuration_from_its_own_home_over_the_port() {
                 &setup.home().join("config.json"),
                 &json!({"hub":{"port":port},"model":"acme/m","tui":{"theme":"dark"},"skills":{"disabled":["s"]},"mcp":{"servers":{"x":{"command":"unused","tools":{"disabled":["t"]}}}}}),
             );
-            setup.fiber(&["hub", "serve", "--installed"])
+            let mut command = setup.fiber(&["hub", "serve", "--installed"]);
+            command.envs([
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", hooks_git_key.as_str()),
+                ("GIT_CONFIG_VALUE_0", "https://github.com/"),
+            ]);
+            command
         },
     );
     let port = served.port;
@@ -367,6 +389,45 @@ fn the_hub_answers_configuration_from_its_own_home_over_the_port() {
         json!({"id":"a","command":"authenticate","args":{"token":token}}),
     );
     accepted(client.text(&setup));
+    let hook_key = "extensions.\"github.com/aakshintala/fiber/extensions/hooks\".settings.hooks";
+    let overrides = vec![
+        format!(
+            "{hook_key}.z={{\"point\":\"session_start\",\"command\":\"true\",\"timeout\":1000,\"on_failure\":\"blocking\"}}"
+        ),
+        format!(
+            "{hook_key}.a={{\"point\":\"session_start\",\"command\":\"true\",\"timeout\":1000,\"on_failure\":\"blocking\"}}"
+        ),
+        format!(
+            "{hook_key}.only_override={{\"point\":\"session_start\",\"command\":\"true\",\"timeout\":1000,\"on_failure\":\"blocking\"}}"
+        ),
+        format!("{hook_key}.z.on_failure=non-blocking"),
+    ];
+    let query = json!({"operation":"blocking_hooks","workspace":workspace,"overrides":overrides});
+    // Sorted names per the blocking_hooks contract (`docs/invocation.md:1160`).
+    assert_eq!(
+        accepted(configure(&mut client, &setup, query.clone())),
+        json!({"names":["a","only_override"]})
+    );
+    assert_eq!(
+        accepted(configure(
+            &mut client,
+            &setup,
+            json!({"operation":"install_hooks"})
+        )),
+        json!({})
+    );
+    assert!(
+        setup
+            .home()
+            .join("extensions/hooks/extension.json")
+            .is_file()
+    );
+    assert!(!client_home.join("extensions").exists());
+    // Empty once the hooks package is installed (`docs/invocation.md:1160`).
+    assert_eq!(
+        accepted(configure(&mut client, &setup, query)),
+        json!({"names":[]})
+    );
     let settings = accepted(configure(
         &mut client,
         &setup,

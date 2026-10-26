@@ -1125,7 +1125,9 @@ fn an_extension_for_another_api_or_a_process_extension_starts_no_vm() {
     home.install("proc", Some(&tagging("proc", "transform")), &[]);
     home.install("lua", Some(&tagging("lua", "transform")), &[]);
     home.edit_manifest("old", |m| m["api"] = json!(2));
-    home.edit_manifest("proc", |m| m["process"] = json!({"program": "true"}));
+    home.edit_manifest("proc", |m| {
+        m["process"] = json!({"program": "true", "exit_timeout_ms": 0})
+    });
     let session = home.load(&[]);
     let loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
     assert_eq!(loaded, names(&["lua"]));
@@ -3476,6 +3478,8 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
     let home = Home::new();
     let hooks = config::full_name("hooks");
     // (entries JSON, `None` for no `hooks` key; extension loaded; state)
+    // Every `MissingBlocking` below names the sorted blockers it gates on
+    // (`docs/invocation.md:1160`).
     let cases: &[(Option<&str>, bool, super::HooksState)] = &[
         // No declarations: nothing to gate.
         (None, false, super::HooksState::Ready),
@@ -3485,7 +3489,9 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
         (
             Some(NO_ON_FAILURE_ENTRY),
             false,
-            super::HooksState::MissingBlocking,
+            super::HooksState::MissingBlocking {
+                names: vec!["audit".to_owned()],
+            },
         ),
         // An `on_failure`-less entry beside a `blocking` one still gates.
         (
@@ -3493,19 +3499,26 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
                 r#"{"plain":{"point":"after_tool","command":"true","timeout":1000},"guard":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}"#,
             ),
             false,
-            super::HooksState::MissingBlocking,
+            super::HooksState::MissingBlocking {
+                // Blocker names arrive sorted (`docs/invocation.md:1160`).
+                names: vec!["guard".to_owned(), "plain".to_owned()],
+            },
         ),
         // An unknown `on_failure` is not consent to fail open.
         (
             Some(UNKNOWN_ON_FAILURE_ENTRY),
             false,
-            super::HooksState::MissingBlocking,
+            super::HooksState::MissingBlocking {
+                names: vec!["audit".to_owned()],
+            },
         ),
         // A non-string `on_failure` is not consent either.
         (
             Some(NON_STRING_ON_FAILURE_ENTRY),
             false,
-            super::HooksState::MissingBlocking,
+            super::HooksState::MissingBlocking {
+                names: vec!["audit".to_owned()],
+            },
         ),
         // Watcher entries never gate the start.
         (Some(WATCHER_ENTRY), false, super::HooksState::Ready),
@@ -3530,6 +3543,89 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
 }
 
 #[test]
+fn hooks_state_names_every_blocker_but_no_watcher_or_non_blocking_entry() {
+    let home = Home::new();
+    let entries = r#"{"z":{"on_failure":"blocking"},"a":false,"missing":{},"invalid":{"on_failure":7},"notice":{"on_failure":"non-blocking"},"watch":{"watch":[],"on_failure":"blocking"}}"#;
+    // A non-object entry fails before any installed/missing decision, naming
+    // the first malformed entry in sorted key order (`docs/extensions.md`,
+    // "Hooks declared in configuration").
+    let error = super::hooks_state(&hooks_config(&home, entries), &[]).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ConfigInvalid, "{error:?}");
+    let crate::Error::Config(config::ConfigError::WrongType { key, .. }) = &error else {
+        panic!("expected WrongType, got {error:?}");
+    };
+    assert_eq!(key, "hooks.a");
+    assert!(error.to_string().contains("hooks.a"), "{error}");
+    let objects = r#"{"z":{"on_failure":"blocking"},"a":{"on_failure":"blocking"},"notice":{"on_failure":"non-blocking"},"watch":{"watch":[]}}"#;
+    // Blocker names arrive sorted (`docs/invocation.md:1160`).
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, objects), &[]).unwrap(),
+        super::HooksState::MissingBlocking {
+            names: vec!["a".into(), "z".into()]
+        }
+    );
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, objects), &[config::full_name("hooks")]).unwrap(),
+        super::HooksState::Ready
+    );
+}
+
+/// A non-object entry fails `config_invalid` naming the entry, whatever the
+/// key order and whether or not `hooks` is installed. The named entry is
+/// the malformed one (`docs/extensions.md`, "Hooks declared in
+/// configuration").
+#[test]
+fn hooks_state_rejects_a_non_object_entry_before_any_installed_decision() {
+    let home = Home::new();
+    let hooks = config::full_name("hooks");
+    // Each acceptance map arrives in both file orders: either order names
+    // the malformed entry, `z` here and `a` below.
+    for (entries, expected) in [
+        (r#"{"a":{"on_failure":"blocking"},"z":false}"#, "hooks.z"),
+        (r#"{"z":false,"a":{"on_failure":"blocking"}}"#, "hooks.z"),
+        (r#"{"a":false,"z":{"on_failure":"blocking"}}"#, "hooks.a"),
+        (r#"{"z":{"on_failure":"blocking"},"a":false}"#, "hooks.a"),
+    ] {
+        for loaded in [Vec::new(), vec![hooks.clone()]] {
+            let error = super::hooks_state(&hooks_config(&home, entries), &loaded).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::ConfigInvalid, "entries: {entries}");
+            let crate::Error::Config(config::ConfigError::WrongType { key, .. }) = &error else {
+                panic!("expected WrongType, got {error:?}");
+            };
+            assert_eq!(key, expected, "entries: {entries}");
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+    // Several malformed entries report the first in sorted key order, not the
+    // first in the file order (`docs/extensions.md`, "Hooks declared in
+    // configuration").
+    let error = super::hooks_state(&hooks_config(&home, r#"{"b":false,"a":5}"#), &[]).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ConfigInvalid, "{error:?}");
+    let crate::Error::Config(config::ConfigError::WrongType { key, .. }) = &error else {
+        panic!("expected WrongType, got {error:?}");
+    };
+    assert_eq!(key, "hooks.a");
+    assert!(error.to_string().contains("hooks.a"), "{error}");
+}
+
+/// A non-object `hooks` value fails `config_invalid` naming the `hooks` key,
+/// whether or not `hooks` is installed.
+#[test]
+fn hooks_state_rejects_a_non_object_hooks_value_naming_hooks() {
+    let home = Home::new();
+    let hooks = config::full_name("hooks");
+    for loaded in [Vec::new(), vec![hooks.clone()]] {
+        let error = super::hooks_state(&hooks_config(&home, "false"), &loaded).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ConfigInvalid, "{error:?}");
+        let crate::Error::Config(config::ConfigError::WrongType { key, .. }) = &error else {
+            panic!("expected WrongType, got {error:?}");
+        };
+        assert_eq!(key, "hooks");
+        assert!(error.to_string().contains("hooks"), "{error}");
+    }
+}
+
+#[test]
 fn hooks_state_is_missing_notice_for_unloaded_non_blocking_hooks() {
     let home = Home::new();
     match super::hooks_state(&hooks_config(&home, NON_BLOCKING_ENTRY), &[]).unwrap() {
@@ -3545,7 +3641,7 @@ fn hooks_state_is_missing_notice_for_unloaded_non_blocking_hooks() {
                 notice.message
             );
         }
-        state @ (super::HooksState::Ready | super::HooksState::MissingBlocking) => {
+        state @ (super::HooksState::Ready | super::HooksState::MissingBlocking { .. }) => {
             panic!("expected MissingNotice, got {state:?}");
         }
     }

@@ -20,6 +20,9 @@ fn hub_list_commands_and_client_flags_parse() {
         vec!["fiber", "hub", "add", "--default", "box", "unix:/tmp/hub"],
         vec!["fiber", "hub", "remove", "box"],
         vec!["fiber", "sessions", "--hub", "box", "--json"],
+        vec!["fiber", "sessions", "delete", "s_id", "--hub", "box"],
+        vec!["fiber", "sessions", "prune", "--hub", "box"],
+        vec!["fiber", "continue", "--hub", "box"],
         vec!["fiber", "hub", "refresh", "--hub", "box"],
         vec!["fiber", "hub", "pair", "laptop", "--hub", "box"],
         vec!["fiber", "hub", "token", "list", "--hub", "box"],
@@ -31,12 +34,10 @@ fn hub_list_commands_and_client_flags_parse() {
             "{args:?}: {invocation:?}"
         );
     }
-    for args in [
-        vec!["fiber", "sessions", "delete", "s_id", "--hub", "box"],
-        vec!["fiber", "hub", "status", "--hub", "box"],
-    ] {
-        assert!(matches!(parse_from(args), Invocation::Usage { .. }));
-    }
+    assert!(matches!(
+        parse_from(vec!["fiber", "hub", "status", "--hub", "box"]),
+        Invocation::Usage { .. }
+    ));
 }
 
 #[test]
@@ -439,6 +440,7 @@ fn parses_argv_into_its_invocation() {
                 Some(Commands::Sessions(SessionsArgs {
                     hub: None,
                     command: Some(SessionsCommands::Delete {
+                        hub: None,
                         cascade: false,
                         yes: false,
                         id: "s_abc".to_owned(),
@@ -455,8 +457,26 @@ fn parses_argv_into_its_invocation() {
                 Some(Commands::Sessions(SessionsArgs {
                     hub: None,
                     command: Some(SessionsCommands::Delete {
+                        hub: None,
                         cascade: true,
                         yes: true,
+                        id: "s_abc".to_owned(),
+                    }),
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "sessions", "delete", "s_abc", "--hub", "box"],
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
+                    command: Some(SessionsCommands::Delete {
+                        hub: Some("box".to_owned()),
+                        cascade: false,
+                        yes: false,
                         id: "s_abc".to_owned(),
                     }),
                     all: false,
@@ -471,6 +491,7 @@ fn parses_argv_into_its_invocation() {
                 Some(Commands::Sessions(SessionsArgs {
                     hub: None,
                     command: Some(SessionsCommands::Prune {
+                        hub: None,
                         older_than: None,
                         cascade: false,
                         dry_run: false,
@@ -499,11 +520,31 @@ fn parses_argv_into_its_invocation() {
                 Some(Commands::Sessions(SessionsArgs {
                     hub: None,
                     command: Some(SessionsCommands::Prune {
+                        hub: None,
                         older_than: Some("30d".to_owned()),
                         cascade: true,
                         dry_run: true,
                         yes: true,
                         force: true,
+                    }),
+                    all: false,
+                    json: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "sessions", "prune", "--hub", "box"],
+            Invocation::Run(
+                Some(Commands::Sessions(SessionsArgs {
+                    hub: None,
+                    command: Some(SessionsCommands::Prune {
+                        hub: Some("box".to_owned()),
+                        older_than: None,
+                        cascade: false,
+                        dry_run: false,
+                        yes: false,
+                        force: false,
                     }),
                     all: false,
                     json: false,
@@ -782,6 +823,7 @@ fn parses_argv_into_its_invocation() {
                     depth: None,
                     login_shell: false,
                     credential: None,
+                    supervised: false,
                 })),
                 TopLevel::default(),
             ),
@@ -817,6 +859,7 @@ fn parses_argv_into_its_invocation() {
                     depth: None,
                     login_shell: false,
                     credential: None,
+                    supervised: false,
                 })),
                 TopLevel::default(),
             ),
@@ -848,6 +891,7 @@ fn parses_argv_into_its_invocation() {
                     depth: None,
                     login_shell: false,
                     credential: None,
+                    supervised: false,
                 })),
                 TopLevel::default(),
             ),
@@ -880,6 +924,7 @@ fn parses_argv_into_its_invocation() {
                     depth: None,
                     login_shell: false,
                     credential: None,
+                    supervised: false,
                 })),
                 TopLevel::default(),
             ),
@@ -917,6 +962,7 @@ fn parses_argv_into_its_invocation() {
                     depth: None,
                     login_shell: false,
                     credential: None,
+                    supervised: false,
                 })),
                 TopLevel::default(),
             ),
@@ -956,6 +1002,7 @@ fn parses_argv_into_its_invocation() {
                     depth: None,
                     login_shell: false,
                     credential: None,
+                    supervised: false,
                 })),
                 TopLevel::default(),
             ),
@@ -989,6 +1036,7 @@ fn parses_argv_into_its_invocation() {
                     depth: None,
                     login_shell: false,
                     credential: None,
+                    supervised: false,
                 })),
                 TopLevel::default(),
             ),
@@ -1021,6 +1069,7 @@ fn parses_argv_into_its_invocation() {
                     depth: None,
                     login_shell: true,
                     credential: None,
+                    supervised: false,
                 })),
                 TopLevel::default(),
             ),
@@ -1884,9 +1933,17 @@ fn hub_with_a_subcommand_or_without_an_id_is_a_usage_sentence() {
 
 #[test]
 fn continue_takes_no_arguments() {
-    let Invocation::Run(Some(Commands::Continue), _) = parse_from(["fiber", "continue"]) else {
+    let Invocation::Run(Some(Commands::Continue { hub }), _) = parse_from(["fiber", "continue"])
+    else {
         panic!("bare continue");
     };
+    assert_eq!(hub, None);
+    let Invocation::Run(Some(Commands::Continue { hub }), _) =
+        parse_from(["fiber", "continue", "--hub", "box"])
+    else {
+        panic!("continue --hub");
+    };
+    assert_eq!(hub.as_deref(), Some("box"));
     let help = super::render_help(&["continue"]).unwrap();
     assert!(
         help.contains("Open the most recent session in this project"),
@@ -3756,7 +3813,7 @@ fn round_tripped(args: &SessionArgs) -> SessionArgs {
     got
 }
 
-/// Every field of two sessions is equal: the round-trip keeps all 16.
+/// Every field of two sessions is equal: the round-trip keeps all 17.
 #[track_caller]
 fn assert_same_session(got: &SessionArgs, want: &SessionArgs) {
     assert_eq!(got.id, want.id, "id");
@@ -3775,6 +3832,7 @@ fn assert_same_session(got: &SessionArgs, want: &SessionArgs) {
     assert_eq!(got.delegate_id, want.delegate_id, "delegate_id");
     assert_eq!(got.depth, want.depth, "depth");
     assert_eq!(got.login_shell, want.login_shell, "login_shell");
+    assert_eq!(got.supervised, want.supervised, "supervised");
 }
 
 fn minimal_session() -> SessionArgs {
@@ -3795,6 +3853,7 @@ fn minimal_session() -> SessionArgs {
         delegate_id: None,
         depth: None,
         login_shell: false,
+        supervised: false,
     }
 }
 
@@ -3830,6 +3889,7 @@ fn session_argv_round_trips_a_new_launch_with_overrides() {
         delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
         depth: Some(2),
         login_shell: false,
+        supervised: false,
     };
     let argv = contract::session_argv::SessionArgv::from(&args).to_argv();
     // A plain override travels as two arguments; one starting with `-`
@@ -3901,6 +3961,75 @@ fn session_continues_parses_and_converts() {
         Some(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()))
     );
     assert_same_session(&round_tripped(&args), &args);
+}
+
+#[test]
+fn session_supervised_parses_and_round_trips() {
+    let Invocation::Run(Some(Commands::Session(args)), _) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--supervised",
+    ]) else {
+        panic!("--supervised parses");
+    };
+    assert!(args.supervised);
+    assert!(!contract::session_argv::SessionArgv::from(&minimal_session()).supervised);
+    let rendered: Vec<String> = contract::session_argv::SessionArgv::from(&args)
+        .to_argv()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(rendered.contains(&"--supervised".to_owned()));
+    assert_same_session(&round_tripped(&args), &args);
+}
+
+#[test]
+fn session_supervised_conflicts_with_resume_and_delegate_flags() {
+    for extra in [
+        vec!["--resume"],
+        vec!["--rewound-from", "s_bbbbbbbbbbbbbbbb"],
+        vec![
+            "--prompt",
+            "hi",
+            "--parent",
+            "s_aaaaaaaaaaaaaaaa",
+            "--delegate-id",
+            "j_bbbbbbbbbbbbbbbb",
+        ],
+    ] {
+        let mut argv = vec![
+            "fiber",
+            "session",
+            "--id",
+            "s_0123456789abcdef",
+            "--workspace",
+            "/w",
+            "--supervised",
+        ];
+        argv.extend(extra);
+        let (_, said) = usage(&argv);
+        assert!(said.contains("--supervised"), "{said}");
+    }
+    // A `continues` start is a new session: it may stay supervised.
+    let Invocation::Run(Some(Commands::Session(args)), _) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--supervised",
+        "--continues",
+        "s_aaaaaaaaaaaaaaaa",
+    ]) else {
+        panic!("--supervised with --continues parses");
+    };
+    assert!(args.supervised);
+    assert_eq!(args.continues.as_deref(), Some("s_aaaaaaaaaaaaaaaa"));
 }
 
 #[test]

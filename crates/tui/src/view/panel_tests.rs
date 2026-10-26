@@ -659,7 +659,7 @@ fn budget_preamble(budget: f64) -> Line {
 }
 
 #[test]
-fn cost_against_a_budget() {
+fn cost_reads_billed_spend_against_the_budget() {
     for (cost, row) in [
         (
             serde_json::json!(0.0),
@@ -701,10 +701,6 @@ fn cost_against_a_budget() {
             .iter()
             .any(|row| *row == "cost".to_owned() + &" ".repeat(27) + "$1.25")
     );
-}
-
-#[test]
-fn the_budget_comparison_counts_billed_spend_only() {
     // $1 billed plus $9 on subscription against a $5 budget: the
     // subscription bills nothing per call.
     let mut app = attached(160, 40);
@@ -2112,4 +2108,72 @@ fn the_jobs_title_counts_running_with_a_toggle() {
     assert_eq!(drawn.len(), 20);
     assert_eq!(drawn[17].line.to_string(), "  build");
     assert_eq!(drawn[18].line.to_string(), "  test");
+}
+
+/// A drag across a widget card's text row copies the row's text: the
+/// sidecar reads the drawn rows, so the copy holds what the card
+/// shows, without decoration.
+#[test]
+fn a_drag_on_a_widget_card_copies_its_text() {
+    use super::super::{render, text};
+    use crate::app::Effect;
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    use contract::clock::Clock;
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: vec!["plan/tasks".to_owned()],
+        ..Default::default()
+    });
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.set_size(160, 40);
+    fold_widget(&mut app, "plan", "tasks", &["alpha beta"]);
+    let area = Rect::new(0, 0, 160, 40);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    let byte = shown.find("alpha beta").expect("the widget row shows");
+    let row = shown[..byte].matches('\n').count();
+    let line_start = shown[..byte].rfind('\n').map_or(0, |at| at + 1);
+    let col = shown[line_start..byte].chars().count();
+    let col = u16::try_from(col).expect("a column");
+    let row = u16::try_from(row).expect("a row");
+    let now = fakes::clock::FakeClock::new().now();
+    let mut pointer = Pointer::default();
+    let mut report = |kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    // A press with no movement is a click; the drag between press and
+    // release turns the gesture into a selection, so the release
+    // copies instead of clicking.
+    let _ = report(MouseKind::Press(Button::Left), col, row);
+    let _ = report(MouseKind::Drag(Button::Left), col + 10, row);
+    let effect = report(MouseKind::Release, col + 10, row);
+    assert_eq!(effect, Effect::Copy("alpha beta".to_owned()));
+}
+
+/// A cut row copies what it shows without the cut marker, while a
+/// short row keeps a trailing ellipsis it really shows (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn row_text_drops_only_a_filling_cut_marker() {
+    // A short line ending in `…` keeps it: nothing was cut.
+    assert_eq!(
+        super::selection::row_text(&ratatui::text::Line::from("ab…"), 10),
+        "ab…"
+    );
+    // A row filling its columns drops the marker the fit adds.
+    assert_eq!(
+        super::selection::row_text(&ratatui::text::Line::from("abcd…"), 5),
+        "abcd"
+    );
 }

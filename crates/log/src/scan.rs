@@ -503,6 +503,24 @@ pub fn try_hold(dir: &Path) -> Result<Hold, Error> {
     }
 }
 
+/// Takes `dir`'s lock without waiting, only when `session.lock` already
+/// exists. A missing lock file stays missing, so a dry run that probes it
+/// writes nothing: `None` means no lock file, `Some` is the existing
+/// file's state, held or busy.
+pub fn try_hold_existing(dir: &Path) -> Result<Option<Hold>, Error> {
+    let path = dir.join(LOCK);
+    let file = match OpenOptions::new().read(true).write(true).open(&path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(Error::Io { path, source }),
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(Some(Hold::Held(SessionLock { _file: file }))),
+        Err(TryLockError::WouldBlock) => Ok(Some(Hold::Busy)),
+        Err(TryLockError::Error(source)) => Err(Error::Io { path, source }),
+    }
+}
+
 #[cfg(test)]
 #[path = "scan_tests.rs"]
 mod tests;

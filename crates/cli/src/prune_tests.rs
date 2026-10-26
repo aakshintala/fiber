@@ -16,11 +16,15 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use super::{OldFile, PruneArgs, format_age, format_size, prune, prune_run, remove_diagnostics};
+use super::{
+    HubPruneWant, OldFile, PruneArgs, delete_sessions, format_age, format_size, prune,
+    prune_listed, prune_run, remove_diagnostics, remove_for_hub, select_for_hub,
+};
 use crate::CliError;
 use crate::sessions::Ask;
 use contract::clock::Clock;
-use contract::{ErrorCode, HubLine};
+use contract::shapes::Failure;
+use contract::{ErrorCode, HubLine, SessionId};
 use fakes::Deadline;
 use serde_json::{Map, Value, json};
 
@@ -1106,11 +1110,13 @@ fn prune_exits_zero_on_success_two_on_usage_and_one_on_refusal() {
         let code = match case.as_str() {
             "usage" => prune(
                 &args(Some("30d"), false, false, false),
+                None,
                 clock.as_ref(),
                 &mut || hub.connect(),
             ),
             _ => prune(
                 &args(Some("30d"), false, false, true),
+                None,
                 clock.as_ref(),
                 &mut || hub.connect(),
             ),
@@ -1144,4 +1150,923 @@ fn prune_exits_zero_on_success_two_on_usage_and_one_on_refusal() {
             output.status
         );
     }
+}
+
+/// A session dir under `projects/<project>/sessions/<id>`: the hub-wide
+/// selection finds it whatever the workspace is.
+fn project_session(home: &std::path::Path, project: &str, id: &str, from: Option<&str>) -> PathBuf {
+    let dir = home
+        .join("projects")
+        .join(project)
+        .join("sessions")
+        .join(id);
+    fs::create_dir_all(dir.join("artifacts")).unwrap();
+    let mut payload = json!({"workspace": "/w"});
+    if let Some(from) = from {
+        payload["forked_from"] = json!({"session_id": from, "seq": 1});
+    }
+    let first = json!({"kind": "session_started", "seq": 0, "payload": payload});
+    let last = json!({"kind": "x", "ts": 0});
+    fs::write(dir.join("events.jsonl"), format!("{first}\n{last}\n")).unwrap();
+    fs::write(dir.join("artifacts/a.txt"), b"0123456789").unwrap();
+    dir
+}
+
+#[test]
+fn delete_sessions_passes_each_previewed_expect_set_to_the_callback() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let deletes = vec![
+        super::sessions::Delete {
+            id: SessionId("s_1".into()),
+            cascade: false,
+        },
+        super::sessions::Delete {
+            id: SessionId("s_2".into()),
+            cascade: true,
+        },
+    ];
+    let mut expects: BTreeMap<SessionId, BTreeSet<SessionId>> = BTreeMap::new();
+    expects.insert(SessionId("s_1".into()), BTreeSet::new());
+    expects.insert(
+        SessionId("s_2".into()),
+        BTreeSet::from([SessionId("s_2".into()), SessionId("s_3".into())]),
+    );
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned()));
+        if id.0 == "s_2" {
+            Err(Failure {
+                code: ErrorCode::SessionHeld,
+                message: "held".to_owned(),
+                provider: None,
+                retry_after_ms: None,
+            })
+        } else {
+            Ok(())
+        }
+    };
+    let results = delete_sessions(&deletes, &expects, &mut delete);
+    // An empty set stays unconstrained; a full one travels as `expect`.
+    // Compared as a set: no area doc promises the callback order.
+    calls.sort();
+    assert_eq!(
+        calls,
+        [
+            ("s_1".to_owned(), false, None),
+            (
+                "s_2".to_owned(),
+                true,
+                Some(BTreeSet::from([
+                    SessionId("s_2".into()),
+                    SessionId("s_3".into())
+                ]))
+            ),
+        ]
+    );
+    // One outcome per delete, compared as a set for the same reason.
+    let mut outcomes: Vec<String> = results
+        .iter()
+        .map(|result| match result {
+            Ok(()) => "ok".to_owned(),
+            Err(failure) => format!("err:{:?}", failure.code),
+        })
+        .collect();
+    outcomes.sort();
+    assert_eq!(outcomes, ["err:SessionHeld".to_owned(), "ok".to_owned()]);
+}
+
+#[test]
+fn select_for_hub_lists_every_project_with_matching_lines_and_bytes() {
+    let setup = Setup::new();
+    let root = project_session(&setup.home(), "alpha", "s_00000000000000a1", None);
+    let fork = project_session(
+        &setup.home(),
+        "beta",
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+    );
+    setup.diag(
+        "logs",
+        "old.log",
+        b"0123456789",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    let selection = select_for_hub(
+        &setup.home(),
+        Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        true,
+        false,
+        wall(),
+        clock().as_ref(),
+    );
+    assert_eq!(
+        selection.sessions.len(),
+        1,
+        "one cascade root across both projects"
+    );
+    let session = &selection.sessions[0];
+    assert_eq!(session.id.0, "s_00000000000000a1");
+    assert!(session.cascade);
+    assert_eq!(
+        session.expect,
+        [
+            SessionId("s_00000000000000a1".into()),
+            SessionId("s_00000000000000b2".into())
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+    );
+    let root_bytes = log::session_bytes(&root);
+    let fork_bytes = log::session_bytes(&fork);
+    let listed = root_bytes + fork_bytes;
+    assert_eq!(session.bytes, listed);
+    assert_eq!(
+        selection.worktrees,
+        Vec::<String>::new(),
+        "no git worktrees in the fixture"
+    );
+    assert!(selection.pinned.is_empty());
+    assert_eq!(selection.diagnostics.len(), 1);
+    assert!(selection.diagnostics[0].ends_with("old.log"));
+    assert_eq!(selection.would_free, listed + 10);
+    // The preview prints exactly what the local printers print.
+    assert_eq!(
+        selection.lines,
+        [
+            format!(
+                "session  s_00000000000000a1  {}  {}",
+                format_age(age_days(0)),
+                format_size(root_bytes)
+            ),
+            format!(
+                "session  s_00000000000000b2  {}  {}  continues s_00000000000000a1",
+                format_age(age_days(0)),
+                format_size(fork_bytes)
+            ),
+            format!("log  old.log  31d  {}", format_size(10)),
+        ]
+    );
+}
+
+#[test]
+fn remove_for_hub_rejects_a_newly_selectable_item_before_any_removal() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let setup = Setup::new();
+    let root = project_session(&setup.home(), "alpha", "s_00000000000000a1", None);
+    let fork = project_session(
+        &setup.home(),
+        "beta",
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+    );
+    // Selectable at confirm time but never previewed: the preview was
+    // taken before this session qualified.
+    let fresh = project_session(&setup.home(), "alpha", "s_00000000000000c3", None);
+    setup.diag(
+        "logs",
+        "old.log",
+        b"0123456789",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    let old_log = setup
+        .home()
+        .join("logs")
+        .join("old.log")
+        .display()
+        .to_string();
+    let mut sessions: BTreeMap<SessionId, BTreeSet<SessionId>> = BTreeMap::new();
+    sessions.insert(
+        SessionId("s_00000000000000a1".into()),
+        BTreeSet::from([
+            SessionId("s_00000000000000a1".into()),
+            SessionId("s_00000000000000b2".into()),
+        ]),
+    );
+    let want = HubPruneWant {
+        sessions,
+        worktrees: BTreeSet::new(),
+        pinned: BTreeSet::new(),
+        diagnostics: BTreeSet::from([old_log]),
+    };
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned().unwrap_or_default()));
+        Ok(())
+    };
+    // A newly selectable item rejects the whole request: no callback,
+    // no removal anywhere.
+    let refused = remove_for_hub(
+        &setup.home(),
+        Some(&want),
+        Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        true,
+        false,
+        clock().as_ref(),
+        &mut delete,
+    )
+    .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StaleRequest);
+    assert!(
+        calls.is_empty(),
+        "no session reaches the callback on mismatch"
+    );
+    for dir in [&root, &fork, &fresh] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
+    assert!(
+        setup.home().join("logs").join("old.log").is_file(),
+        "no diagnostic is removed on mismatch"
+    );
+}
+
+#[test]
+fn remove_for_hub_rejects_a_worktree_only_preview_mismatch() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let setup = Setup::new();
+    setup.diag(
+        "logs",
+        "old.log",
+        b"0123456789",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    let old_log = setup
+        .home()
+        .join("logs")
+        .join("old.log")
+        .display()
+        .to_string();
+    // Exactly one set mismatches: diagnostics, pinned and sessions all
+    // equal the reselection, only the worktree set differs. An `&&` in
+    // place of either `||` would accept this preview, so this case kills
+    // both operator flips while the multi-mismatch cases cannot.
+    let want = HubPruneWant {
+        sessions: BTreeMap::new(),
+        worktrees: BTreeSet::from(["/no/such/worktree".to_owned()]),
+        pinned: BTreeSet::new(),
+        diagnostics: BTreeSet::from([old_log]),
+    };
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned().unwrap_or_default()));
+        Ok(())
+    };
+    let refused = remove_for_hub(
+        &setup.home(),
+        Some(&want),
+        Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        false,
+        false,
+        clock().as_ref(),
+        &mut delete,
+    )
+    .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StaleRequest);
+    assert!(
+        calls.is_empty(),
+        "no session reaches the callback on mismatch"
+    );
+    assert!(
+        setup.home().join("logs").join("old.log").is_file(),
+        "no diagnostic is removed on mismatch"
+    );
+}
+
+#[test]
+fn local_prune_numbers_each_delete_command_differently() {
+    let setup = Setup::new();
+    setup.session("s_00000000000000a1", None, 0);
+    setup.session("s_00000000000000b2", None, 0);
+    let mut hub = FakeHub::accept_all();
+    let (_, _, got) = run_prune(
+        &setup,
+        &mut hub,
+        &args(Some("30d"), false, false, true),
+        true,
+        false,
+        &mut Unread,
+    );
+    got.unwrap();
+    // The hub answers by command id, so two deletes sharing one id would
+    // still match their answers in order: the ids must differ.
+    let received = hub.received.lock().unwrap();
+    let ids: Vec<String> = received
+        .iter()
+        .filter_map(|line| line.get("id").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(ids.len(), 2, "both deletes went out");
+    assert_ne!(ids[0], ids[1], "each delete carries its own command id");
+}
+
+/// A kept git worktree under `projects/<project>/worktrees/<name>`, on
+/// its own branch, with listed bytes.
+fn git_worktree(setup: &Setup, project: &str, name: &str) -> PathBuf {
+    let repo = setup.root.path().join(format!("repo-{name}"));
+    fs::create_dir_all(&repo).unwrap();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    fs::write(repo.join("file.txt"), "x").unwrap();
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "--quiet", "-m", "first"]);
+    let dir = setup
+        .home()
+        .join("projects")
+        .join(project)
+        .join("worktrees")
+        .join(name);
+    fs::create_dir_all(dir.parent().unwrap()).unwrap();
+    fakes::git::git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &format!("fiber/{name}"),
+            dir.to_str().unwrap(),
+        ],
+    );
+    dir
+}
+
+/// A 64-hex-digit content hash no tree holds.
+const UNMATCHED_HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// A pinned copy of `hash` owned by `key`'s project record, with listed
+/// bytes, and a session giving the owner a recorded identity in
+/// `identity`, so the hub-wide selection judges it removable.
+fn unmatched_copy(setup: &Setup, key: &str, hash: &str, identity: &std::path::Path) {
+    let servers = setup.home().join("projects").join(key).join("servers");
+    fs::create_dir_all(&servers).unwrap();
+    fs::write(servers.join(hash), b"").unwrap();
+    let dir = setup.home().join("pinned").join(hash);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("file.txt"), b"0123456789").unwrap();
+    let session = setup
+        .home()
+        .join("projects")
+        .join(key)
+        .join("sessions")
+        .join("s_00000000000000d4");
+    fs::create_dir_all(&session).unwrap();
+    let first = json!({"kind": "session_started", "seq": 0,
+        "session_id": "s_00000000000000d4", "ts": 0, "schema_version": 1,
+        "payload": {"workspace": identity.to_str().unwrap(),
+            "variables": {"path": "", "names": [], "source": "login_shell"}}});
+    let last = json!({"kind": "x", "session_id": "s_00000000000000d4",
+        "ts": 0, "schema_version": 1, "payload": {}});
+    fs::write(session.join("events.jsonl"), format!("{first}\n{last}\n")).unwrap();
+}
+
+/// An identity directory with a project key of its own, holding a file
+/// no pinned hash matches.
+fn identity_with_key(setup: &Setup) -> (PathBuf, String) {
+    let raw = setup.root.path().join("identity");
+    fs::create_dir_all(&raw).unwrap();
+    fs::write(raw.join("tree.txt"), b"tree").unwrap();
+    let identity = fs::canonicalize(&raw).unwrap();
+    let key = log::project_key(&identity);
+    (identity, key)
+}
+
+#[test]
+fn select_for_hub_sums_worktree_pinned_and_crash_bytes() {
+    let setup = Setup::new();
+    let worktree = git_worktree(&setup, "wt", "w1");
+    let worktree_bytes = log::session_bytes(&worktree);
+    assert!(worktree_bytes > 0);
+    let (identity, key) = identity_with_key(&setup);
+    unmatched_copy(&setup, &key, UNMATCHED_HASH, &identity);
+    let pinned_bytes = log::session_bytes(&setup.home().join("pinned").join(UNMATCHED_HASH));
+    assert!(pinned_bytes > 0);
+    setup.diag(
+        "crashes",
+        "old.crash",
+        b"1234567",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    let selection = select_for_hub(&setup.home(), None, false, false, wall(), clock().as_ref());
+    assert!(selection.sessions.is_empty());
+    assert_eq!(selection.worktrees, [worktree.display().to_string()]);
+    assert_eq!(selection.pinned, [UNMATCHED_HASH.to_owned()]);
+    assert!(
+        selection
+            .diagnostics
+            .iter()
+            .any(|path| path.ends_with("old.crash"))
+    );
+    // Every side contributes its bytes: a dropped or multiplied addend
+    // shows here.
+    assert_eq!(selection.would_free, worktree_bytes + pinned_bytes + 7);
+    assert!(
+        selection.lines.iter().any(|line| line.contains("w1")),
+        "{:?}",
+        selection.lines
+    );
+    assert!(
+        selection
+            .lines
+            .iter()
+            .any(|line| line.contains(UNMATCHED_HASH))
+    );
+    assert!(
+        selection
+            .lines
+            .iter()
+            .any(|line| line.contains("old.crash"))
+    );
+}
+
+#[test]
+fn remove_for_hub_frees_previewed_worktree_and_pinned_bytes() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let setup = Setup::new();
+    let worktree = git_worktree(&setup, "wt", "w1");
+    let worktree_bytes = log::session_bytes(&worktree);
+    assert!(worktree_bytes > 0);
+    let (identity, key) = identity_with_key(&setup);
+    unmatched_copy(&setup, &key, UNMATCHED_HASH, &identity);
+    let pinned_bytes = log::session_bytes(&setup.home().join("pinned").join(UNMATCHED_HASH));
+    assert!(pinned_bytes > 0);
+    let want = HubPruneWant {
+        sessions: BTreeMap::new(),
+        worktrees: BTreeSet::from([worktree.display().to_string()]),
+        pinned: BTreeSet::from([UNMATCHED_HASH.to_owned()]),
+        diagnostics: BTreeSet::new(),
+    };
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned()));
+        Ok(())
+    };
+    let removed = remove_for_hub(
+        &setup.home(),
+        Some(&want),
+        None,
+        false,
+        false,
+        clock().as_ref(),
+        &mut delete,
+    )
+    .unwrap();
+    assert!(calls.is_empty());
+    assert!(removed.failures.is_empty());
+    assert_eq!(removed.total, 2);
+    // Both removals free their listed bytes: a subtracted addend shows
+    // here.
+    assert_eq!(removed.freed, worktree_bytes + pinned_bytes);
+    assert!(!worktree.exists(), "the previewed worktree is gone");
+    assert!(
+        !setup.home().join("pinned").join(UNMATCHED_HASH).exists(),
+        "the previewed copy is gone"
+    );
+}
+
+#[test]
+fn remove_for_hub_rejects_a_session_that_left_the_selection() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let setup = Setup::new();
+    let dir = project_session(&setup.home(), "alpha", "s_00000000000000a1", None);
+    let mut sessions: BTreeMap<SessionId, BTreeSet<SessionId>> = BTreeMap::new();
+    sessions.insert(SessionId("s_00000000000000a1".into()), BTreeSet::new());
+    let want = HubPruneWant {
+        sessions,
+        worktrees: BTreeSet::new(),
+        pinned: BTreeSet::new(),
+        diagnostics: BTreeSet::new(),
+    };
+    // The session runs again while confirmation is open: its last line
+    // is now, younger than `--older-than`.
+    let clock = clock();
+    let now_ms = contract::clock::wall_ms(clock.wall());
+    let fresh = json!({"kind": "x", "ts": now_ms});
+    let mut log = fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("events.jsonl"))
+        .unwrap();
+    writeln!(log, "{fresh}").unwrap();
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned()));
+        Ok(())
+    };
+    // A previewed session that no longer qualifies rejects the whole
+    // request: no callback, nothing removed.
+    let refused = remove_for_hub(
+        &setup.home(),
+        Some(&want),
+        Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        false,
+        false,
+        clock.as_ref(),
+        &mut delete,
+    )
+    .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StaleRequest);
+    assert!(
+        calls.is_empty(),
+        "no session reaches the callback on mismatch"
+    );
+    assert!(dir.join("events.jsonl").is_file(), "nothing was removed");
+}
+
+#[test]
+fn remove_for_hub_rejects_a_changed_cascade_set_before_any_removal() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let setup = Setup::new();
+    let root = project_session(&setup.home(), "alpha", "s_00000000000000a1", None);
+    // A fork made while confirmation is open: the cascade set the
+    // preview named no longer matches.
+    let fork = project_session(
+        &setup.home(),
+        "beta",
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+    );
+    let mut sessions: BTreeMap<SessionId, BTreeSet<SessionId>> = BTreeMap::new();
+    sessions.insert(
+        SessionId("s_00000000000000a1".into()),
+        BTreeSet::from([SessionId("s_00000000000000a1".into())]),
+    );
+    let want = HubPruneWant {
+        sessions,
+        worktrees: BTreeSet::new(),
+        pinned: BTreeSet::new(),
+        diagnostics: BTreeSet::new(),
+    };
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned().unwrap_or_default()));
+        Ok(())
+    };
+    let refused = remove_for_hub(
+        &setup.home(),
+        Some(&want),
+        Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        true,
+        false,
+        clock().as_ref(),
+        &mut delete,
+    )
+    .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StaleRequest);
+    assert!(
+        calls.is_empty(),
+        "no session reaches the callback on mismatch"
+    );
+    for dir in [&root, &fork] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
+}
+
+#[test]
+fn remove_for_hub_without_expect_removes_the_current_selection() {
+    use std::collections::BTreeSet;
+    let setup = Setup::new();
+    let root = project_session(&setup.home(), "alpha", "s_00000000000000a1", None);
+    let fork = project_session(
+        &setup.home(),
+        "beta",
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+    );
+    setup.diag(
+        "logs",
+        "old.log",
+        b"0123456789",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    let listed = log::session_bytes(&root) + log::session_bytes(&fork);
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned()));
+        Ok(())
+    };
+    // Without `expect` (`--yes`) the confirm removes the current
+    // selection, as the local path does.
+    let removed = remove_for_hub(
+        &setup.home(),
+        None,
+        Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        true,
+        false,
+        clock().as_ref(),
+        &mut delete,
+    )
+    .unwrap();
+    // The cascade set travels as `expect`, as with a preview.
+    assert_eq!(
+        calls,
+        [(
+            "s_00000000000000a1".to_owned(),
+            true,
+            Some(
+                [
+                    SessionId("s_00000000000000a1".into()),
+                    SessionId("s_00000000000000b2".into())
+                ]
+                .into_iter()
+                .collect()
+            ),
+        )]
+    );
+    assert_eq!(removed.total, 2);
+    assert!(removed.failures.is_empty());
+    assert_eq!(removed.freed, listed + 10);
+}
+
+/// Runs `prune_listed` against `hub`: its stdout, stderr and result.
+fn run_prune_listed(
+    hub: &mut FakeHub,
+    args: &PruneArgs,
+    yes: bool,
+    terminal: bool,
+    input: &mut dyn BufRead,
+) -> (String, String, Result<(), CliError>) {
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let ask = Ask {
+        yes,
+        terminal,
+        input,
+        err: &mut err,
+    };
+    let got = prune_listed(args, ask, &mut out, &mut || hub.connect());
+    (
+        String::from_utf8(out).unwrap(),
+        String::from_utf8(err).unwrap(),
+        got,
+    )
+}
+
+/// The previewed items a hub dry run answers.
+fn preview_items() -> Value {
+    json!({
+        "sessions": [{"id": "s_11111111111111a1", "cascade": ["s_11111111111111a1"]}],
+        "worktrees": [],
+        "pinned": [],
+        "diagnostics": [],
+    })
+}
+
+/// A hub `prune` dry-run answer: the lines prune would print, the space
+/// it would free, and the items it would remove.
+fn preview_answer() -> Value {
+    json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_prune", "result": {
+            "lines": ["session  s_11111111111111a1  30d  10 B"],
+            "would_free": 10,
+            "items": preview_items()}}})
+}
+
+/// A hub `prune` confirm answer: the space freed, how many items it
+/// tried, and each item that failed.
+fn confirm_answer(freed: u64, total: usize, failures: Vec<Value>) -> Value {
+    json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_prune", "result": {
+            "freed": freed, "total": total, "failures": failures}}})
+}
+
+/// Answers a dry run with the preview and a confirm with an empty
+/// outcome; anything else is `invalid_arguments`, so a wrong send fails
+/// loudly instead of hanging the test.
+fn preview_then_confirm() -> FakeHub {
+    FakeHub::new(|request| {
+        if request["command"] != "prune" {
+            return reject_line("c_prune", "invalid_arguments", "expected prune");
+        }
+        if request["args"].get("dry_run").is_some() {
+            preview_answer()
+        } else {
+            confirm_answer(10, 1, vec![])
+        }
+    })
+}
+
+#[test]
+fn hub_prune_dry_run_prints_the_preview_and_deletes_nothing() {
+    let mut hub = FakeHub::new(|_| preview_answer());
+    let args = PruneArgs {
+        force: true,
+        ..args(Some("30d"), true, true, false)
+    };
+    // A dry run needs no terminal and reads no input.
+    let (out, err, got) = run_prune_listed(&mut hub, &args, false, false, &mut Unread);
+    got.unwrap();
+    assert_eq!(
+        out,
+        "session  s_11111111111111a1  30d  10 B\nwould free 10 B\n"
+    );
+    assert_eq!(err, "");
+    // One request: a dry run prints the preview and deletes nothing
+    // (docs/invocation.md:1474-1476), so it connects once and sends no confirm.
+    assert_eq!(hub.connects, 1);
+    let received = hub.received.lock().unwrap();
+    assert_eq!(received.len(), 1, "a dry run sends no confirm");
+    assert_eq!(
+        received[0]["args"],
+        json!({"older_than": "30d", "cascade": true, "force": true, "dry_run": true})
+    );
+}
+
+#[test]
+fn hub_prune_confirm_sends_the_previewed_items_as_expect() {
+    let mut hub = preview_then_confirm();
+    let (out, err, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("30d"), true, false, false),
+        false,
+        true,
+        &mut io::Cursor::new(b"y\n".to_vec()),
+    );
+    got.unwrap();
+    assert_eq!(out, "session  s_11111111111111a1  30d  10 B\nfreed 10 B\n");
+    assert_eq!(err, "prune? [y/N] ");
+    let received = hub.received.lock().unwrap();
+    // Two requests in order, dry run then confirm
+    // (docs/invocation.md:1479-1483: without `--yes` the command first
+    // asks for the dry run, prints it and asks, then sends those items
+    // back as `expect`).
+    assert_eq!(received.len(), 2);
+    assert!(
+        received[0]["args"].get("expect").is_none(),
+        "the preview carries no expect"
+    );
+    assert_eq!(
+        received[1]["args"]["expect"],
+        preview_items(),
+        "the confirm sends the previewed items back"
+    );
+}
+
+#[test]
+fn hub_prune_decline_deletes_nothing() {
+    let mut hub = preview_then_confirm();
+    let (out, err, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("30d"), true, false, false),
+        false,
+        true,
+        &mut io::Cursor::new(b"n\n".to_vec()),
+    );
+    got.unwrap();
+    assert_eq!(out, "session  s_11111111111111a1  30d  10 B\n");
+    assert_eq!(err, "prune? [y/N] nothing deleted\n");
+    let received = hub.received.lock().unwrap();
+    // A decline stops after the dry run (docs/invocation.md:1479-1480),
+    // so it sends no confirm.
+    assert_eq!(received.len(), 1, "a decline sends no confirm");
+}
+
+#[test]
+fn hub_prune_yes_sends_one_confirm_without_expect() {
+    let mut hub = FakeHub::new(|request| {
+        if request["args"].get("dry_run").is_some() {
+            return reject_line("c_prune", "invalid_arguments", "no dry run with --yes");
+        }
+        confirm_answer(10, 1, vec![])
+    });
+    let (out, err, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("30d"), false, false, true),
+        true,
+        false,
+        &mut Unread,
+    );
+    got.unwrap();
+    assert_eq!(out, "freed 10 B\n");
+    assert_eq!(err, "");
+    let received = hub.received.lock().unwrap();
+    // With `--yes` one confirm and no dry run (docs/invocation.md:1475-1476:
+    // `--yes` confirms without asking; the local `--yes` sends no `expect`,
+    // docs/invocation.md:1415).
+    assert_eq!(received.len(), 1, "--yes sends one confirm");
+    // The exact line proves neither `dry_run` nor `expect` is sent.
+    assert_eq!(
+        received[0],
+        json!({"id": "c_prune", "command": "prune", "args": {"older_than": "30d"}})
+    );
+}
+
+#[test]
+fn hub_prune_stale_preview_keeps_its_code() {
+    let mut hub = FakeHub::new(|request| {
+        if request["args"].get("dry_run").is_some() {
+            preview_answer()
+        } else {
+            reject_line("c_prune", "stale_request", "the prune selection changed")
+        }
+    });
+    let (out, err, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("30d"), true, false, false),
+        false,
+        true,
+        &mut io::Cursor::new(b"y\n".to_vec()),
+    );
+    let error = got.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::Rejected {
+                code: ErrorCode::StaleRequest,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "the prune selection changed");
+    assert_eq!(out, "session  s_11111111111111a1  30d  10 B\n");
+    assert_eq!(err, "prune? [y/N] ");
+    let received = hub.received.lock().unwrap();
+    // Two requests, dry run then confirm (docs/invocation.md:1479-1484:
+    // without `--yes` the dry run comes first, and the hub rejects the
+    // confirm `stale_request` when the set changed, deleting nothing).
+    assert_eq!(received.len(), 2, "preview then one confirm");
+}
+
+#[test]
+fn hub_prune_without_a_terminal_never_connects() {
+    let mut hub = FakeHub::new(|_| panic!("must not connect"));
+    let (_, _, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("30d"), false, false, false),
+        false,
+        false,
+        &mut Unread,
+    );
+    let error = got.unwrap_err();
+    assert!(matches!(&error, CliError::NobodyToAsk { .. }), "{error:?}");
+    assert_eq!(error.code(), ErrorCode::Usage);
+    // Nobody to ask fails before connecting
+    // (docs/invocation.md:1475-1476: prune asks as delete does, and
+    // docs/invocation.md:1418-1420: with no terminal to ask on, asking is
+    // a usage error), so the hub is never reached.
+    assert_eq!(hub.connects, 0);
+}
+
+#[test]
+fn hub_prune_unreadable_duration_surfaces_the_hub_refusal() {
+    // Duration validation stays machine-side: the client sends the raw
+    // string, and the hub's `invalid_arguments` names it.
+    let mut hub = FakeHub::new(|_| reject_line("c_prune", "invalid_arguments", "bad duration"));
+    let (out, _, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("soon"), false, true, false),
+        false,
+        false,
+        &mut Unread,
+    );
+    let error = got.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::Rejected {
+                code: ErrorCode::InvalidArguments,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "bad duration");
+    assert_eq!(out, "");
+    let received = hub.received.lock().unwrap();
+    // A refused preview yields no items to confirm
+    // (docs/invocation.md:1480-1483: the confirm sends the dry run's items
+    // back as `expect`), so nothing follows it.
+    assert_eq!(received.len(), 1, "nothing follows a refused preview");
+    assert_eq!(received[0]["args"]["older_than"], "soon");
+}
+
+#[test]
+fn hub_prune_failures_print_and_exit_through_finish() {
+    let failure = json!({
+        "item": "session  s_11111111111111a1",
+        "code": "io_failed",
+        "message": "gone",
+    });
+    let mut hub = FakeHub::new(move |_| confirm_answer(10, 3, vec![failure.clone()]));
+    let (out, err, got) = run_prune_listed(
+        &mut hub,
+        &args(Some("30d"), false, false, true),
+        true,
+        false,
+        &mut Unread,
+    );
+    let error = got.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::PruneFailed {
+                code: ErrorCode::IoFailed,
+                failed: 1,
+                total: 3,
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "1 of 3 could not be deleted");
+    assert_eq!(out, "freed 10 B\n");
+    assert_eq!(
+        err,
+        "fiber: session  s_11111111111111a1 could not be deleted: gone\n"
+    );
 }

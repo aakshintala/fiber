@@ -280,3 +280,18 @@ fn drawn(row: &str) -> Vec<Drawn> {
 #[cfg(test)]
 #[path = "results_tests.rs"]
 mod tests;
+
+/// Each entry's drawn texts: the path row and the match row, cut as
+/// drawn (`docs/tui.md`, "Selection and copy"). The caller maps them to
+/// rows: each entry takes three, path then match.
+pub(crate) fn selection_rows(view: &ResultsView, width: u16) -> Vec<(String, String)> {
+    view.entries
+        .iter()
+        .map(|entry| {
+            (
+                crate::format::cut(&entry.path, usize::from(width)),
+                entry_row(entry, width).0,
+            )
+        })
+        .collect()
+}

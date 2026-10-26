@@ -234,3 +234,125 @@ fn continues_keeps_the_worktree_in_both_exit_orders() {
         .expect("the hub ran")
         .kill_and_wait();
 }
+
+/// The `supervised` on the first line of session `id`'s own log, `None`
+/// when absent.
+fn logged_supervised(setup: &Setup, id: &str) -> Option<bool> {
+    let text =
+        std::fs::read_to_string(session_dir(setup, id).join("events.jsonl")).expect("the log");
+    let first = complete_lines(&text)
+        .into_iter()
+        .next()
+        .expect("the log has a first line");
+    // `session_started` is "the first line of every session's log"
+    // (`docs/events.md`, "`session_started`").
+    assert_eq!(first["kind"], "session_started", "{first:?}");
+    first["payload"]
+        .get("supervised")
+        .map(|value| value.as_bool().expect("a recorded supervised is a boolean"))
+}
+
+/// Starts a session continuing `old` in `path` with `supervised` as the
+/// request's own argument (absent when `None`), runs its one turn, and
+/// returns its id.
+fn start_continuing(
+    client: &Socket,
+    path: &str,
+    old: &str,
+    supervised: Option<bool>,
+    tag: &str,
+) -> String {
+    let mut args = json!({
+        "workspace": path,
+        "continues": old,
+        "content": [{"type": "text", "text": "Say hello."}],
+    });
+    if let Some(supervised) = supervised {
+        args["supervised"] = supervised.into();
+    }
+    send(client, &format!("c_new_{tag}"), None, "start", args);
+    let ack = until_ack(
+        client,
+        "the new start acknowledgement",
+        &format!("c_new_{tag}"),
+    );
+    assert_eq!(ack.last().unwrap()["kind"], "command_accepted", "{ack:?}");
+    let id = ack.last().unwrap()["payload"]["result"]["session_id"]
+        .as_str()
+        .expect("the start answers with a session id")
+        .to_owned();
+    send(
+        client,
+        &format!("s_new_{tag}"),
+        Some(&id),
+        "subscribe",
+        json!({"level": "full"}),
+    );
+    until_ack(
+        client,
+        "the new subscribe acknowledgement",
+        &format!("s_new_{tag}"),
+    );
+    until(client, "the new turn_completed", |line| {
+        line["kind"] == "turn_completed" && line["session_id"] == id
+    });
+    id
+}
+
+#[test]
+fn continues_takes_supervised_from_the_new_request_only() {
+    let setup = Setup::new();
+    let server = ProviderServer::start_with_fallback([], hello()).unwrap();
+    setup.provider(&server);
+    init_repo(setup.deadline, &setup.workspace());
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+
+    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let guard_ws = SessionGuard::arm(setup.deadline, &workspace);
+
+    let (old, path) = start_old(&client, &workspace, "sup");
+    assert_eq!(
+        logged_supervised(&setup, &old),
+        None,
+        "the old session is not supervised"
+    );
+    let guard_w = SessionGuard::arm(setup.deadline, &path);
+    let supervised = start_continuing(&client, &path, &old, Some(true), "true");
+    assert_eq!(
+        logged_supervised(&setup, &supervised),
+        Some(true),
+        "a supervised continuation records supervised"
+    );
+    // A continuation of the supervised session that does not ask for
+    // supervised is not supervised: the flag is never inherited.
+    let plain = start_continuing(&client, &path, &supervised, None, "absent");
+    assert_eq!(
+        logged_supervised(&setup, &plain),
+        None,
+        "an unsupervised continuation records no supervised"
+    );
+    let explicit = start_continuing(&client, &path, &supervised, Some(false), "false");
+    assert_eq!(
+        logged_supervised(&setup, &explicit),
+        None,
+        "an explicit false records no supervised"
+    );
+    for (id, tag) in [
+        (&explicit, "explicit"),
+        (&plain, "plain"),
+        (&supervised, "supervised"),
+        (&old, "old"),
+    ] {
+        close_wait(&client, id, tag);
+    }
+
+    drop(client);
+    guard_ws.wait_gone();
+    guard_w.wait_gone();
+    hub.lock()
+        .unwrap()
+        .take()
+        .expect("the hub ran")
+        .kill_and_wait();
+}

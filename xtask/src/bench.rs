@@ -2,7 +2,10 @@
 //! against the budget table in `docs/performance.md` and writes the pull
 //! request comment. Exact, memory, paging growth-ratio and gated timing
 //! budgets fail the run; timings without an eligible class gate stay advisory
-//! with their reason ("When a budget is exceeded"). The comment also names the stripped binary's size each
+//! with their reason ("When a budget is exceeded"). When a gated timing row
+//! breaches on a pull request, the job remeasures that row alone, 4 more
+//! samples per side, and judges the median of all 7 (`--remeasure`,
+//! `--head-extra`, `--base-extra`). The comment also names the stripped binary's size each
 //! compared file records, and the head-minus-base change when both record
 //! one. Ceilings are read from the table at run time; an exact row's
 //! formula is code here, so its cell text is pinned. On a pull request the
@@ -17,15 +20,17 @@ mod attach;
 mod judge;
 mod results;
 
+use std::collections::BTreeSet;
+
 use self::judge::{
-    Base, Line, MEASURED, NOT_MEASURED, TEN_TURNS_BUDGET, TEN_TURNS_SKIP_NOTE, head_skipped_rows,
-    judge, ten_turns_skipped,
+    Base, Check, Line, MEASURED, NOT_MEASURED, TEN_TURNS_BUDGET, TEN_TURNS_SKIP_NOTE,
+    TIMING_WORKLOADS, head_skipped_rows, judge, ten_turns_skipped,
 };
 #[cfg(test)]
 use self::judge::{Quantity, ceiling};
 #[cfg(test)]
 use self::results::median;
-use self::results::parse_results;
+use self::results::{merge_remeasure, parse_results};
 
 /// The comment's first line, which the posting job finds it by.
 pub(crate) const MARKER: &str = "<!-- fiber-benchmarks -->";
@@ -58,6 +63,11 @@ pub(crate) struct Report {
     pub(crate) failures: Vec<String>,
     /// Markdown whose first line is `MARKER`.
     pub(crate) comment: String,
+    /// The `--skip-rows` value for the remeasure run: every
+    /// `TIMING_WORKLOADS` entry but the breached rows. `Some` only on a
+    /// pull request with at least one breached timing row; the CLI writes
+    /// it to `--remeasure`.
+    pub(crate) remeasure_skip: Option<String>,
 }
 
 /// The backstop's stored results for the base or its nearest stored
@@ -72,7 +82,10 @@ pub(crate) struct Stored {
 /// `performance`, the text of `docs/performance.md`. `base` is the base
 /// result file's text, or why it could not be read. `stored` is the
 /// backstop's stored results the memory and exact rows compare against.
-/// `base_commit` names the commit the base binary is from.
+/// `base_commit` names the commit the base binary is from. Test-only: the
+/// CLI judges through `report_with_extra`, while the unit tests pin the
+/// first pass through this shorthand.
+#[cfg(test)]
 pub(crate) fn report(
     performance: &str,
     head: &str,
@@ -80,6 +93,46 @@ pub(crate) fn report(
     stored: Option<Stored>,
     event: Event,
     base_commit: &str,
+) -> Report {
+    report_with_extra(performance, head, base, stored, event, base_commit, None)
+}
+
+/// The pair the comment's CPU, size and metadata lines read: the merged
+/// results once the extras merged cleanly, else the first pass's. Only the
+/// second pass's verdict lines carry the merged timing medians, so which
+/// pair this selects changes no line the comment prints.
+// Exempt: the arm choice changes no line the comment prints: `cpu_lines` and
+// `size_lines` read the same values from the merged pair as from the first
+// pass, and `comment` reads none of the fields `merge_pair` changes.
+#[cfg_attr(false, mutants::skip)]
+fn comment_views<'a>(
+    head: Option<&'a results::Results>,
+    base: &'a Base,
+    merged_head: Option<&'a results::Results>,
+    merged_base: Option<&'a Base>,
+) -> (Option<&'a results::Results>, &'a Base) {
+    match (merged_head, merged_base) {
+        (Some(head), Some(base)) => (Some(head), base),
+        _ => (head, base),
+    }
+}
+
+/// Judges like `report`, then, when `extra` carries the remeasure run's
+/// files and the first pass breached gated timing rows, merges the extra
+/// samples and judges again on all samples. `extra` holds the head extra
+/// file's text and, when the base was remeasured, the base extra file's
+/// text or why it could not be read. The first pass's breached rows decide
+/// which timing metrics merge; memory failures from the first pass are kept
+/// in the second verdict; any problem with the extra files keeps the first
+/// pass and adds a `remeasure:` failure.
+pub(crate) fn report_with_extra(
+    performance: &str,
+    head: &str,
+    base: Option<Result<String, String>>,
+    stored: Option<Stored>,
+    event: Event,
+    base_commit: &str,
+    extra: Option<(String, Option<Result<String, String>>)>,
 ) -> Report {
     let mut failures = Vec::new();
     let head = match parse_results(head) {
@@ -131,30 +184,16 @@ pub(crate) fn report(
     if rows.is_empty() {
         failures.push("docs/performance.md has no table under \"Budgets\"".to_owned());
     }
-    let mut lines = Vec::new();
     // Over-at-base names the stored commit: the live base feeds only the
     // timing columns.
     let stored_commit = stored.as_ref().map(|s| s.commit.as_str()).unwrap_or("");
-    for cells in &rows {
-        let budget = cells.first().map_or("", String::as_str);
-        let cell = cells.get(1).map_or("", String::as_str);
-        if let Some((_, check)) = MEASURED.iter().find(|(b, _)| *b == budget) {
-            let (broken, line) = judge(
-                budget,
-                cell,
-                *check,
-                (head.as_ref(), stored_results.as_ref(), stored_commit),
-                &base,
-                &rows,
-            );
-            failures.extend(broken.into_iter().map(|f| format!("{budget}: {f}")));
-            lines.push(line);
-        } else if !NOT_MEASURED.iter().any(|(b, _)| *b == budget) {
-            failures.push(format!(
-                "{budget}: a budget row with no benchmark and no \"not measured\" entry in xtask/src/bench.rs"
-            ));
-        }
-    }
+    let (mut row_failures, mut lines) = judge_rows(
+        &rows,
+        head.as_ref(),
+        stored_results.as_ref(),
+        stored_commit,
+        &base,
+    );
     for budget in MEASURED
         .iter()
         .map(|(b, _)| *b)
@@ -170,21 +209,103 @@ pub(crate) fn report(
         }
     }
 
-    let idle_secs = head.as_ref().map(|h| h.idle_secs);
-    let mut cpus = cpu_lines(
+    // The first pass's breached timing rows, distinct, in table order: they
+    // decide the merge and the skip list below.
+    let mut breached: Vec<&str> = Vec::new();
+    for line in &lines {
+        if let Some(row) = line.breached_row
+            && !breached.contains(&row)
+        {
+            breached.push(row);
+        }
+    }
+    let remeasure_skip = if event == Event::PullRequest && !breached.is_empty() {
+        Some(
+            TIMING_WORKLOADS
+                .iter()
+                .filter(|workload| !breached.contains(workload))
+                .copied()
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+    } else {
+        None
+    };
+
+    // The second pass, on all samples: the merged results below live until
+    // the comment is built.
+    let mut merged_head: Option<results::Results> = None;
+    let mut merged_base: Option<Base> = None;
+    let mut remeasured: Vec<&str> = Vec::new();
+    if let Some((head_extra, base_extra)) = &extra
+        && !breached.is_empty()
+        && let Some(head_results) = head.as_ref()
+    {
+        match merge_pair(
+            head_results,
+            &base,
+            head_extra,
+            base_extra.as_ref(),
+            &breached,
+        ) {
+            Ok((second_head, second_base)) => {
+                merged_head = Some(second_head);
+                merged_base = Some(second_base);
+                let (second_failures, second_lines) = judge_rows(
+                    &rows,
+                    merged_head.as_ref(),
+                    stored_results.as_ref(),
+                    stored_commit,
+                    merged_base.as_ref().unwrap_or(&base),
+                );
+                // The merge never touches memory metrics, but the
+                // first pass's memory failures stand regardless of
+                // what the extras show; every other row is judged
+                // on all samples, so a sibling that passed on the
+                // first pass can fail here.
+                let memory = memory_budgets();
+                row_failures = row_failures
+                    .into_iter()
+                    .filter(|(budget, _)| memory.contains(budget.as_str()))
+                    .chain(
+                        second_failures
+                            .into_iter()
+                            .filter(|(budget, _)| !memory.contains(budget.as_str())),
+                    )
+                    .collect();
+                lines = second_lines;
+                remeasured = breached.clone();
+            }
+            Err(e) => {
+                failures.push(format!("remeasure: {e}"));
+            }
+        }
+    }
+    failures.extend(
+        row_failures
+            .into_iter()
+            .map(|(budget, failure)| format!("{budget}: {failure}")),
+    );
+
+    let (head_view, base_view) = comment_views(
         head.as_ref(),
         &base,
+        merged_head.as_ref(),
+        merged_base.as_ref(),
+    );
+    let mut cpus = cpu_lines(
+        head_view,
+        base_view,
         base_commit,
         stored_results.as_ref(),
         stored_commit,
     );
-    cpus.extend(size_lines(head.as_ref(), &base, base_commit));
+    cpus.extend(size_lines(head_view, base_view, base_commit));
     let comment = comment(
         &lines,
         &failures,
-        &base,
-        idle_secs,
-        head.as_ref(),
+        base_view,
+        head_view,
         stored_line(
             &stored,
             stored_results.as_ref(),
@@ -193,15 +314,106 @@ pub(crate) fn report(
         )
         .as_deref(),
         &cpus,
+        &remeasured,
     );
-    Report { failures, comment }
+    Report {
+        failures,
+        comment,
+        remeasure_skip,
+    }
+}
+
+/// Judges every budget row of `rows` on `head` against `base`, with
+/// `stored_results` for over-at-base. Returns each row's failures with its
+/// budget, and the comment lines.
+// Exempt: `NOT_MEASURED` is empty, so the `NOT_MEASURED` `.any(...)` predicate
+// never matters; flipping its `==` to `!=` changes no verdict, and no test can
+// fail under the flip without changing the list.
+#[cfg_attr(false, mutants::skip)]
+fn judge_rows(
+    rows: &[Vec<String>],
+    head: Option<&results::Results>,
+    stored_results: Option<&results::Results>,
+    stored_commit: &str,
+    base: &Base,
+) -> (Vec<(String, String)>, Vec<Line>) {
+    let mut failures = Vec::new();
+    let mut lines = Vec::new();
+    for cells in rows {
+        let budget = cells.first().map_or("", String::as_str);
+        let cell = cells.get(1).map_or("", String::as_str);
+        if let Some((_, check)) = MEASURED.iter().find(|(b, _)| *b == budget) {
+            let (broken, line) = judge(
+                budget,
+                cell,
+                *check,
+                (head, stored_results, stored_commit),
+                base,
+                rows,
+            );
+            failures.extend(broken.into_iter().map(|f| (budget.to_owned(), f)));
+            lines.push(line);
+        } else if !NOT_MEASURED.iter().any(|(b, _)| *b == budget) {
+            failures.push((
+                budget.to_owned(),
+                "a budget row with no benchmark and no \"not measured\" entry in xtask/src/bench.rs"
+                    .to_owned(),
+            ));
+        }
+    }
+    (failures, lines)
+}
+
+/// The budgets that read memory, by Budget cell: their failures come from
+/// the first pass even after a remeasure, since the merge never touches
+/// memory metrics.
+fn memory_budgets() -> BTreeSet<&'static str> {
+    MEASURED
+        .iter()
+        .filter(|(_, check)| is_memory(*check))
+        .map(|(budget, _)| *budget)
+        .collect()
+}
+
+/// Whether `check` reads memory rather than timings.
+fn is_memory(check: Check) -> bool {
+    matches!(check, Check::Memory(_) | Check::Within { .. })
+}
+
+/// Merges the remeasure run's samples into the first pass's for `rows`:
+/// the head pair always, the base pair when the base was remeasured. A base
+/// that was not remeasured stays as the first pass judged it.
+fn merge_pair(
+    head: &results::Results,
+    base: &Base,
+    head_extra: &str,
+    base_extra: Option<&Result<String, String>>,
+    rows: &[&str],
+) -> Result<(results::Results, Base), String> {
+    let extra = parse_results(head_extra).map_err(|e| format!("head extra results: {e}"))?;
+    let merged_head = merge_remeasure(head, &extra, rows)?;
+    let merged_base = match base {
+        Base::Ok(results) => match base_extra {
+            Some(Ok(text)) => {
+                let extra = parse_results(text).map_err(|e| format!("base extra results: {e}"))?;
+                Base::Ok(merge_remeasure(results, &extra, rows)?)
+            }
+            Some(Err(e)) => return Err(format!("base extra results: {e}")),
+            None => base.clone(),
+        },
+        Base::None | Base::Failed(_) => base.clone(),
+    };
+    Ok((merged_head, merged_base))
 }
 
 /// The run-count sentence for the head file: the full count, and the
 /// timing count when it differs. The paging jig runs the timing count
 /// on a pull request, paired with the base pass at the same count.
-fn run_sentence(head: Option<&results::Results>) -> String {
-    match head {
+/// `remeasured` holds the rows a breach remeasured in the job, empty on
+/// the first pass: each named row was measured 4 more times per side and
+/// is judged on the median of all 7.
+fn run_sentence(head: Option<&results::Results>, remeasured: &[&str]) -> String {
+    let mut sentence = match head {
         None => "Each number is the median of its runs on Linux x86_64 (`docs/performance.md`)."
             .to_owned(),
         Some(results) if results.timing_runs != results.runs => format!(
@@ -212,7 +424,14 @@ fn run_sentence(head: Option<&results::Results>) -> String {
             "Each number is the median of {} runs on Linux x86_64 (`docs/performance.md`).",
             results.runs
         ),
+    };
+    if !remeasured.is_empty() {
+        sentence.push_str(&format!(
+            " {} used 7 samples per side after a breach.",
+            remeasured.join(", ")
+        ));
     }
+    sentence
 }
 
 /// The stored-results sentence on a pull request: which stored results the
@@ -405,13 +624,14 @@ fn comment(
     lines: &[Line],
     failures: &[String],
     base: &Base,
-    idle_secs: Option<u64>,
     head: Option<&results::Results>,
     stored_line: Option<&str>,
     cpus: &[String],
+    remeasured: &[&str],
 ) -> String {
     let ten_turns_skipped = ten_turns_skipped(head);
-    let run_sentence = run_sentence(head);
+    let run_sentence = run_sentence(head, remeasured);
+    let idle_secs = head.map(|results| results.idle_secs);
     let with_base = !matches!(base, Base::None);
     let mut out = format!("{MARKER}\n## Benchmarks\n\n");
     out.push_str("Exact, memory, paging growth-ratio and gated timing budgets fail the run; timings without an eligible class gate stay advisory with their reason. ");

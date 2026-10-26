@@ -340,6 +340,7 @@ the envelope's `ts`.
 | `forked_from` | object | no | for a fork or a rewind: `session_id` and `seq`, the point it continues from (`docs/delegates.md`, "Forks"; "Rewind" below) |
 | `rewind` | object | no | for a rewind: `summary` (string, optional) and `note` (string) |
 | `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind, a fork, or a `start` `continues` continues: `path` and `branch` (strings), and `repository` (string), the absolute path of the repository's git common directory, which a resume recreates a removed worktree from; `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
+| `supervised` | boolean | no | true when a program drives the session (`docs/permissions.md`, "Supervised sessions"): fixed at `start`, kept across a resume; absent means false |
 
 #### `rewound`
 
@@ -450,6 +451,7 @@ sent the latest.
 | `workspace` | string | yes | the workspace path |
 | `project` | string | yes | the project's key (`docs/state.md`, "Projects") |
 | `parent` | string | no | on a delegate, the parent's `session_id` |
+| `supervised` | boolean | no | true when a program drives the session (`docs/permissions.md`, "Supervised sessions"): fixed at `start`, kept across a resume; absent means false |
 | `model` | string | yes | the model reference in use |
 | `thinking` | string | no | the thinking level in use, as on `preamble_built`; absent when there is none |
 | `state` | string | yes | `streaming`, `tool`, `retrying`, `waiting`, `jobs` (no turn running, jobs running) or `idle` (nothing in flight); a closed set |
@@ -1213,6 +1215,37 @@ Durable. A program an extension ran outside a tool call.
 | `cwd` | string | yes | its working directory |
 | `process` | `process` | yes | how it ended |
 
+#### `extension_hello`
+
+Ephemeral. The first line Fiber sends a process extension, with the session's
+identity, why it started, its workspace, the extension's data directories and
+its folded state. Sent again after a restart, with the state as it stands in
+the session. Behaviour is `docs/extensions.md` ("Process extensions").
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `session_id` | string | yes | the session's id |
+| `reason` | string | yes | why the session started: `new`, `resume`, `fork`, `rewind` or `handoff`; a closed set |
+| `workspace` | string | yes | the workspace root |
+| `data_dirs` | object | yes | the paths `host.data_dir` returns: `machine` and `project` path strings |
+| `state` | object | yes | the extension's folded state, as `state.get` reads it |
+
+#### `extension_request`
+
+Ephemeral. One callback Fiber asks a process extension to run, answered with a
+driver `reply` naming its `request_id`. Stream items, meaning hooks, watcher
+deliveries and commands, are sent one at a time, each after the reply to the
+last one; tool calls are sent as they arrive, so several can be outstanding. A
+reply to a request that is no longer pending is rejected `stale_request` and
+changes nothing. Behaviour is `docs/extensions.md` ("Process extensions").
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `request_id` | string | yes | the request the extension answers |
+| `registration` | string | yes | the registering `call` command's id |
+| `key` | string | yes | the function's key, or its 1-based position as a string for a positional argument |
+| `args` | array | yes | the arguments the Lua function receives, as a JSON array |
+
 Extension state is a fold: the latest `extension_state_set` or
 `extension_state_unset` for each extension and key, up to the point being
 read. A write made inside a hook is written just before the line that hook
@@ -1226,7 +1259,7 @@ last write up to the point decides what the new session gets:
 | `on_fork` | The new session gets |
 |---|---|
 | `at_point` | the value as of the point |
-| `latest` | the value at the end of the parent's log when the new session starts |
+| `latest` | the value at the end of the parent's log when the new session starts. For a delegate's fork, the end of the parent's log is the fork's point, `forked_from.seq`, so the first run and every resume get the same values. |
 | `fresh` | nothing |
 
 ### Jobs
@@ -1388,6 +1421,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `status` | `running` (boolean, always true), `fiber_version` (string), `clients` (integer, the open connections, the asker included) and `variables` (object, as `session_started` carries it: the environment sessions the hub starts now get), over the hub (`docs/invocation.md`, "The hub") |
 | `stop` | `sessions_stopped` (integer, the sessions that confirmed closed), with `sessions` true; `result` is absent without `sessions`, over the hub (`docs/invocation.md`, "The hub") |
 | `placeholder_env` | `values` (object, the hub's captured value by requested placeholder name, absent names omitted, never logged), over the hub (`docs/invocation.md`, "What the hub speaks") |
+| `call` | `value` (any JSON value, absent when the call returns nothing), what the Lua call returns (`docs/extensions.md`, "Process extensions") |
 
 #### `command_rejected`
 

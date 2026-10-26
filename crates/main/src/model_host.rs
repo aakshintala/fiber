@@ -15,6 +15,7 @@ use contract::provider::{CallError, CallUsage, Delta, ImageRef, Input, ModelCall
 use contract::shapes::{ContentPart, Failure};
 use contract::tool::Cancel;
 use contract::{ErrorCode, GenerationId, SessionId};
+use support::lock;
 
 use crate::switch::{Reach, Reached};
 
@@ -58,11 +59,7 @@ struct Guard<'a> {
 
 impl Drop for Guard<'_> {
     fn drop(&mut self) {
-        *self
-            .gate
-            .in_flight
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = false;
+        *lock(&self.gate.in_flight) = false;
         self.gate.changed.notify_one();
     }
 }
@@ -76,10 +73,7 @@ struct GateWake {
 impl Wake for GateWake {
     fn wake(&self) {
         if let Some(gate) = self.gate.upgrade() {
-            let _guard = gate
-                .in_flight
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let _guard = lock(&gate.in_flight);
             gate.changed.notify_all();
         }
     }
@@ -94,7 +88,7 @@ struct WaitWake {
 impl Wake for WaitWake {
     fn wake(&self) {
         if let Some(state) = self.state.upgrade() {
-            let _guard = state.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let _guard = lock(&state.0);
             state.1.notify_all();
         }
     }
@@ -199,11 +193,7 @@ impl ModelHost {
     /// deadline the wait blocks on the condvar itself: a fake clock's
     /// unbounded wait returns at once, so parking through it would spin.
     fn acquire(&self, bound: &Bound) -> Result<(), Failure> {
-        let mut guard = self
-            .gate
-            .in_flight
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut guard = lock(&self.gate.in_flight);
         loop {
             if !*guard {
                 *guard = true;
@@ -225,11 +215,7 @@ impl ModelHost {
                     match parked {
                         Some(held) => guard = held,
                         None => {
-                            guard = self
-                                .gate
-                                .in_flight
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner);
+                            guard = lock(&self.gate.in_flight);
                         }
                     }
                 }
@@ -295,13 +281,7 @@ impl ModelHost {
             })?;
             by_id.insert(line.generation_id.clone(), line);
         }
-        for line in self
-            .gate
-            .lines
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-        {
+        for line in lock(&self.gate.lines).iter() {
             by_id.insert(line.generation_id.clone(), line.clone());
         }
         Ok(log::usage(by_id.values()).cost.unwrap_or(0.0))
@@ -337,7 +317,7 @@ impl ModelHost {
             move || Self::watch(call, clock, cancel, deadline, finished)
         });
         let outcome = rx.recv();
-        *finished.0.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        *lock(&finished.0) = true;
         finished.1.notify_all();
         let _joined = watcher.join();
         match outcome {
@@ -391,7 +371,7 @@ impl ModelHost {
         clock.subscribe(Arc::downgrade(&wake));
         cancel.subscribe(Arc::downgrade(&wake));
         loop {
-            let guard = finished.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let guard = lock(&finished.0);
             if *guard {
                 return;
             }
@@ -439,7 +419,7 @@ impl ModelHost {
             if bound.clock.now() >= target {
                 return Ok(());
             }
-            let guard = waiting.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let guard = lock(&waiting.0);
             let parked =
                 support::clock::park(&*bound.clock, Some(target), None, &waiting.1, guard, |_| {
                     false
@@ -522,11 +502,7 @@ impl ModelHost {
     /// Keeps the produced line, then passes it to the callback: the spend is
     /// real and counted before the inbox writes it.
     fn emit(&self, line: &UsageRecorded, bound: &Bound) {
-        self.gate
-            .lines
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(line.clone());
+        lock(&self.gate.lines).push(line.clone());
         (bound.lines)(line.clone());
     }
 }

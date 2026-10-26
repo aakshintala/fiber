@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -110,19 +110,19 @@ impl CaseRun {
             .name("fiber-case-driver".to_owned())
             .spawn(move || {
                 let verdict = case.drive(driver, watcher, cancel);
-                *lock(&case.verdict) = Some(verdict);
+                *support::lock(&case.verdict) = Some(verdict);
             })
     }
 
     /// Adds a failure when the driver could not start or return a verdict.
     pub(crate) fn record_failure(&self, reason: String) {
-        let mut verdict = lock(&self.verdict);
+        let mut verdict = support::lock(&self.verdict);
         verdict.get_or_insert_with(Vec::new).push(reason);
     }
 
     /// The child's final case verdict, after its session has stopped.
     pub(crate) fn verdict(&self) -> Option<Vec<String>> {
-        lock(&self.verdict).clone()
+        support::lock(&self.verdict).clone()
     }
 
     fn drive(
@@ -545,6 +545,7 @@ pub(crate) fn extension_case(
         fiber,
         Some(Arc::clone(&case_run)),
         None,
+        false,
     );
     let failures = case_run
         .verdict()
@@ -621,10 +622,6 @@ fn verdict(name: &str, failures: &[String], code: i32) -> i32 {
         println!("  {failure}");
     }
     code
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

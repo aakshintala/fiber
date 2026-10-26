@@ -66,7 +66,9 @@ pub(crate) struct Held {
 /// the hub does not know, a session with no recorded worktree, or a
 /// worktree that is not the workspace is `invalid_arguments`, while a
 /// missing or unreadable log is `session_not_found` and an unreadable
-/// first line is `log_corrupt`.
+/// first line is `log_corrupt`. A `continues` start is a new session:
+/// its `supervised` comes only from the new request, never from the old
+/// session.
 /// With `content`, the
 /// prompt is held, not sent: the caller answers first, then sends it with
 /// [`prompt`].
@@ -83,6 +85,7 @@ pub(crate) fn run(
     worktree: bool,
     content: Option<&Value>,
     continues: Option<&SessionId>,
+    supervised: bool,
 ) -> Outcome {
     // Admission first: the increment precedes the flag load, so a
     // sessions stop stored before this refuses it, and one stored
@@ -114,16 +117,20 @@ pub(crate) fn run(
             return outcome;
         }
     }
-    let started =
-        match hub
-            .starter
-            .start(&id, workspace_path, model, overrides, worktree, continues)
-        {
-            Ok(started) => started,
-            Err(error) => {
-                return io_failed(hub, &id, &format!("{error}."));
-            }
-        };
+    let started = match hub.starter.start(
+        &id,
+        workspace_path,
+        model,
+        overrides,
+        worktree,
+        continues,
+        supervised,
+    ) {
+        Ok(started) => started,
+        Err(error) => {
+            return io_failed(hub, &id, &format!("{error}."));
+        }
+    };
     let socket = hub.home.join("run").join(&id.0);
     let stream = match await_bind(hub, &socket, started.as_ref()) {
         Bind::Connected(stream) => {

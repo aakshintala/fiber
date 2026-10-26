@@ -206,6 +206,10 @@ pub struct Launch {
     /// Where the viewer writes the copies it opens: `cache/images` in
     /// Fiber home (`docs/tui.md`, "Images").
     pub images: PathBuf,
+    /// `tui.inline_images`: images draw inline where the terminal
+    /// speaks kitty's graphics protocol (`docs/tui.md`, "Images").
+    /// False in the default, so tests opt in per case.
+    pub inline_images: bool,
     /// `tui.rail.width`: the rail's share of the screen's width, in
     /// percent (`docs/tui.md`, "Layout").
     pub rail_share: f64,
@@ -241,6 +245,8 @@ pub struct Launch {
     /// (`docs/tui.md`, "Swapped views"); with none, each says it is not
     /// available.
     pub configure: Option<std::sync::Arc<dyn crate::Configure>>,
+    /// Loads terminal-home renderers on the terminal thread.
+    pub extensions: Option<std::sync::Arc<dyn crate::ext::Load>>,
 }
 
 /// One chip on home's chip row.
@@ -528,8 +534,19 @@ pub(crate) struct Sessions {
     next_key: u64,
     /// Projects whose loaded exited rows are expanded.
     expanded: std::collections::BTreeSet<String>,
-    /// The last `recent` answer carried rows: an older page may exist.
+    /// The last unscoped `recent` answer carried rows: an older unscoped
+    /// page may exist. Scoped pages never touch it.
     more: bool,
+    /// The hub's scoped `recent` total per project: the only source of a
+    /// project's exited count. The unscoped answer's total is never
+    /// stored here.
+    totals: HashMap<String, usize>,
+    /// Projects with a trigger while their scoped ask is in flight: the
+    /// answer sends exactly one follow-up and clears the flag.
+    dirty: std::collections::BTreeSet<String>,
+    /// The last row of the unscoped `recent` pages: `page_recent` sends
+    /// its id as `before`. Scoped folds and pages never move it.
+    unscoped_last: Option<SessionId>,
 }
 
 /// One project's live sessions and loaded exited sessions, in display order.
@@ -540,6 +557,9 @@ pub(crate) struct Section<'a> {
     pub(crate) live: Vec<&'a Row>,
     pub(crate) exited: Vec<&'a Row>,
     pub(crate) shown_exited: usize,
+    /// The hub's scoped total for the project: `None` means count the
+    /// loaded rows.
+    pub(crate) total: Option<usize>,
 }
 
 impl Section<'_> {
@@ -599,6 +619,7 @@ impl Sessions {
                 .filter(|n| !n.is_empty())
                 .unwrap_or(&row.project)
                 .to_owned();
+            let total = self.totals.get(&row.project).copied();
             sections.push(Section {
                 project: &row.project,
                 name,
@@ -606,6 +627,7 @@ impl Sessions {
                 live,
                 exited,
                 shown_exited,
+                total,
             });
         }
         sections.sort_by_key(|section| {
@@ -681,10 +703,12 @@ impl Sessions {
         }
     }
 
-    /// Folds a `recent` page into the rows: the first page replaces them,
-    /// an older page appends. Neither adds an id already in the feed or,
-    /// for an older page, already listed; a first page listing an id
-    /// again keeps its key. An empty answer ends paging.
+    /// Folds an unscoped `recent` page into the rows: the first page
+    /// replaces them, an older page appends. Neither adds an id already
+    /// in the feed or, for an older page, already listed; a first page
+    /// listing an id again keeps its key. An empty answer ends paging.
+    /// The only writer of the unscoped cursor and `more()`: scoped folds
+    /// never touch either. The answer's `total` is never stored here.
     pub(crate) fn recent(&mut self, rows: Vec<Row>, first: bool) {
         self.more = !rows.is_empty();
         if first {
@@ -703,7 +727,13 @@ impl Sessions {
                 kept.push(row);
             }
             self.recent = kept;
+            // A first page replaces every row, scoped ones included, so
+            // the cursor is the kept page's last row.
+            self.unscoped_last = self.recent.last().map(|row| row.id.clone());
         } else {
+            // An older page appends past the scoped rows, so the cursor
+            // is the appended page's last row; an empty page keeps it.
+            let mut last = None;
             for mut row in rows {
                 if self.feed.iter().any(|feed| feed.id == row.id)
                     || self.recent.iter().any(|recent| recent.id == row.id)
@@ -711,9 +741,68 @@ impl Sessions {
                     continue;
                 }
                 row.key = self.fresh();
+                last = Some(row.id.clone());
                 self.recent.push(row);
             }
+            if last.is_some() {
+                self.unscoped_last = last;
+            }
         }
+    }
+
+    /// Appends a project-scoped `recent` page: rows of other projects
+    /// stay untouched. A feed duplicate is skipped, as is an id an
+    /// earlier page already listed, so scoped pages accumulate newest
+    /// first. Never touches the unscoped cursor or `more()`.
+    pub(crate) fn scoped(&mut self, rows: Vec<Row>) {
+        // The hub already scoped the page to the project, so the fold
+        // only deduplicates.
+        for mut row in rows {
+            if self.feed.iter().any(|feed| feed.id == row.id)
+                || self.recent.iter().any(|recent| recent.id == row.id)
+            {
+                continue;
+            }
+            row.key = self.fresh();
+            self.recent.push(row);
+        }
+    }
+
+    /// Stores a scoped answer's total keyed by project: the only source
+    /// of that project's exited count.
+    pub(crate) fn note_total(&mut self, project: &str, total: usize) {
+        self.totals.insert(project.to_owned(), total);
+    }
+
+    /// The stored scoped total for `project`: `None` means count the
+    /// loaded rows.
+    pub(crate) fn total_for(&self, project: &str) -> Option<usize> {
+        self.totals.get(project).copied()
+    }
+
+    /// Drops every held total and dirty flag, on a reconnect: pending
+    /// scoped ids match nothing afterwards. Rows stay.
+    pub(crate) fn drop_all_totals(&mut self) {
+        self.totals.clear();
+        self.dirty.clear();
+    }
+
+    /// Marks `project` dirty: a trigger arrived while its scoped ask is
+    /// in flight, so the answer sends exactly one follow-up. The caller
+    /// marks only while an ask for the project is in flight.
+    pub(crate) fn mark_dirty(&mut self, project: &str) {
+        self.dirty.insert(project.to_owned());
+    }
+
+    /// Clears `project`'s dirty flag: its follow-up went out, or its
+    /// answer is dropped without one.
+    pub(crate) fn clear_dirty(&mut self, project: &str) {
+        self.dirty.remove(project);
+    }
+
+    /// Whether `project` owes exactly one follow-up scoped ask.
+    pub(crate) fn is_dirty(&self, project: &str) -> bool {
+        self.dirty.contains(project)
     }
 
     /// The live feed rows, in feed order.
@@ -734,15 +823,18 @@ impl Sessions {
             .collect()
     }
 
-    /// Whether an older `recent` page may exist: the last answer carried
-    /// rows.
+    /// Whether an older unscoped `recent` page may exist: the last
+    /// unscoped answer carried rows.
     pub(crate) fn more(&self) -> bool {
         self.more
     }
 
-    /// The last recent row, whose id pages the older `recent` rows.
+    /// The last row of the unscoped `recent` pages, whose id pages the
+    /// older unscoped rows. Scoped pages never move it.
     pub(crate) fn last_recent(&self) -> Option<&Row> {
-        self.recent.last()
+        self.unscoped_last
+            .as_ref()
+            .and_then(|id| self.recent.iter().find(|row| &row.id == id))
     }
 
     /// The project of the newest row in this workspace, first row on ties.
@@ -875,9 +967,15 @@ pub(crate) fn from_status(envelope: &Envelope) -> Row {
 
 /// The rows of a `recent` answer's `result`: `{"sessions":[…]}`, each
 /// with its session, project, workspace, name, how it ended, and its last
-/// status when it wrote one. A row without a session id is skipped.
-pub(crate) fn recent_rows(result: &Value) -> Vec<Row> {
-    result
+/// status when it wrote one, plus the answer's `total`: the hub's count
+/// of listed rows, `None` when it carries none or no integer. A row
+/// without a session id is skipped.
+pub(crate) fn recent_rows(result: &Value) -> (Vec<Row>, Option<usize>) {
+    let total = result
+        .get("total")
+        .and_then(Value::as_u64)
+        .and_then(|total| usize::try_from(total).ok());
+    let rows = result
         .get("sessions")
         .and_then(Value::as_array)
         .map(|sessions| {
@@ -941,7 +1039,8 @@ pub(crate) fn recent_rows(result: &Value) -> Vec<Row> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    (rows, total)
 }
 
 /// The quit question's count line: how many sessions work, and of them
