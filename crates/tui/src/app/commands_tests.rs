@@ -1108,10 +1108,14 @@ fn a_skill_named_like_a_built_in_keeps_the_built_in() {
 }
 
 #[test]
-fn rewind_opens_the_rewind_view_and_sends_nothing() {
+fn rewind_opens_the_rewind_view_and_asks_history() {
     let mut app = attached();
-    assert_eq!(enter(&mut app, "/rewind"), Effect::None);
+    let lines = sent(enter(&mut app, "/rewind"));
     assert_eq!(app.draft(), "");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "history");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(lines[0]["args"], json!({}));
     let frame = app.session_view_screen(80).expect("the view is open");
     assert_eq!(frame.title, "Rewind");
     assert_eq!(frame.command, "/rewind");

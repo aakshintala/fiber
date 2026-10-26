@@ -763,8 +763,14 @@ impl<B: Backend> Loop<B> {
         // The reconciler's subscribes go out before the frame pages: an
         // acknowledgement arriving late is reconciled on the step that
         // brings it.
-        let due = self.app.items_due(self.clock.now());
+        let now = self.clock.now();
+        let due = self.app.items_due(now);
         self.hub.send(&due, &mut self.app);
+        // A rewind `history` wait past its bound ends as a lost
+        // connection, exactly as the loop's own history wait does.
+        if self.app.rewind_due(now) {
+            self.hub.lost(&mut self.app);
+        }
         // The open's tail reads before the frame pages: the first frame
         // draws the preview it installs.
         self.open_tail(rx);

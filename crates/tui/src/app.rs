@@ -414,7 +414,7 @@ impl App {
             attention: attention::State::default(),
             config_views: config_views::ConfigViews::default(),
             session_views: session_views::SessionViews::default(),
-            rewind: rewind::Rewind,
+            rewind: rewind::Rewind::default(),
             items: items::Items::default(),
             reconnect: reconnect::Reconnect::default(),
             launch_overrides: Vec::new(),
@@ -461,7 +461,7 @@ impl App {
         self.panel_state.attached();
         // A new attachment folds no old rewind state: the next open
         // pages the new session's chain from its tip.
-        self.rewind = rewind::Rewind;
+        self.rewind = rewind::Rewind::default();
         // A new session's images start over: a late answer or viewer
         // completion from the last one is dropped.
         self.forget_images();
@@ -1192,6 +1192,7 @@ impl App {
         self.picker_disconnected();
         self.find_lost();
         self.call_view_lost();
+        self.rewind_lost();
         self.abandon_copy();
         self.settle();
     }
@@ -1753,6 +1754,12 @@ impl App {
             }
             // The hub holds no subscription for the open session any more:
             // keep what arrived, say so, and leave the retry to a reopen.
+            "stream_reopened" => {
+                // A reopening ends a `history` wait at once: its late
+                // answer folds nowhere.
+                self.rewind_reopened();
+                Vec::new()
+            }
             "stream_closed" => {
                 let closed = hub_string(&hub.payload, "session_id");
                 if closed.as_deref() == self.session().map(|session| session.0.as_str())
