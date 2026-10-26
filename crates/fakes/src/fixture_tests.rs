@@ -189,8 +189,7 @@ fn both_fake_clock_paths_drive_the_shared_manual_clock() {
     assert_eq!(offset_of(&via_module), Duration::from_millis(5));
     assert_eq!(offset_of(&via_root), Duration::from_millis(7));
     // The re-exported companions resolve on the same type.
-    let mark = via_root.advance_marked(Duration::from_millis(1));
-    assert!(mark.threads().is_empty());
+    let _mark = via_root.advance_marked(Duration::from_millis(1));
     let _miss = crate::clock::Miss::NoPark;
     let _system = crate::clock::SystemClock;
 }

@@ -5641,36 +5641,28 @@ fn advance_when_parked_in_on_a_saturated_clock_errors_before_waiting() {
     let clock = FakeClock::with_sleep(Sleep::Waits);
     clock.advance(Duration::MAX);
     let now = clock.now();
-    let start = System.now();
-    let result = clock.advance_when_parked_in(Duration::from_secs(1), Duration::from_secs(10));
-    let elapsed = System.now().saturating_duration_since(start);
+    // A zero bound proves the overflow guard wins: without it the wait ends
+    // in the no-park error, which never names the overflow.
+    let result = clock.advance_when_parked_in(Duration::from_secs(1), Duration::ZERO);
     let message = result.expect_err("a saturated clock rejects the advance");
     assert!(
         message.contains("overflow"),
         "the failure names the overflow: {message}"
     );
     assert_eq!(clock.now(), now, "a rejected wait moves no time");
-    assert!(
-        elapsed < Duration::from_secs(10),
-        "the error comes back before the bound: {elapsed:?}"
-    );
 }
 
 #[test]
 fn advance_when_parked_in_past_what_the_clock_can_represent_errors_before_waiting() {
     let clock = FakeClock::with_sleep(Sleep::Waits);
     let now = clock.now();
-    let start = System.now();
-    let result = clock.advance_when_parked_in(Duration::MAX, Duration::from_secs(10));
-    let elapsed = System.now().saturating_duration_since(start);
+    // A zero bound proves the overflow guard wins: without it the wait ends
+    // in the no-park error, which never names the overflow.
+    let result = clock.advance_when_parked_in(Duration::MAX, Duration::ZERO);
     let message = result.expect_err("an unrepresentable advance is rejected");
     assert!(
         message.contains("overflow"),
         "the failure names the overflow: {message}"
     );
     assert_eq!(clock.now(), now, "a rejected wait moves no time");
-    assert!(
-        elapsed < Duration::from_secs(10),
-        "the error comes back before the bound: {elapsed:?}"
-    );
 }
