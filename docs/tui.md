@@ -2624,10 +2624,73 @@ itself is a separate client of the hub, not a TUI extension.
 | `question_form` | The question form, draw-only |
 | `repository_offer` | The offer of what a repository ships, draw-only |
 
-A slot receives what its built-in renderer receives, and all of it comes from
-the event stream. A ledger row, for example, receives the call's name,
+A slot receives what its built-in renderer receives. All of it comes from the
+event stream, except whether the row is open, which the person's clicks and
+keys set, and notices the terminal raises itself, such as a configuration or
+I/O failure. A ledger row, for example, receives the call's name,
 arguments, status, exit code, duration, line count, `changes` and error, folded
 from its `tool_call_*` events. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
+
+Each slot's input holds exactly what its built-in renderer reads:
+
+**`turn_card`** draws a turn's card whole: its prompts, every entry, and its
+ending. A replaced card is drawn whole by the extension, so no nested slot
+runs inside it; `prompt` draws only when the card itself is built in.
+
+| Field | What it holds |
+|---|---|
+| `prompts` | The turn's prompts in order, each its `text` and `images` (`path`, `width`, `height` in pixels) |
+| `entries` | The card's items in order, each tagged with `kind` (below) |
+| `started` | When the turn started |
+| `calls` | How many model calls the turn made |
+| `usage` | The turn's totals: `tokens` (`input`, `cache_read`, `cache_write`, `output`), `cost`, `subscription_cost` |
+| `ended` | How the turn ended: `outcome`, `ended_ts`, and on a failure its `error` (`code`, `message`); absent while the turn runs |
+| `running` | Whether the turn is still running |
+| `flat` | Whether the screen reader drops every style |
+
+An entry is one of `{kind = "reply", text}` (one text part of a reply,
+Markdown included); `{kind = "steer", text, images, ts}` (a steering message
+and when it landed); `{kind = "group", first, last, running, open, cut,
+sections, streaming, failed}` (the tool group inlined: `sections` carry the
+`step`, its `thoughts` with `text`, `started`, `ended` and `open`, and its
+`calls` with `name`, `arguments`, `status`, `exit`, `duration_ms`, `lines`,
+`changes`, `error`, `output`, `headline`, `content`, `answer`, `images`,
+`open` and `asking`; `streaming` the calls still emitting; `failed` the
+retried model calls with `code` and `attempt`); `{kind = "aside", aside}` (a
+line from outside the turn: `{kind = "line", text}`, `{kind = "warning",
+message}`, or `{kind = "orphans", jobs, open}` with each job its `name` and
+`message`); `{kind = "band", trigger, ts, state, sizes?}` (a handoff's band
+without its note: `state` is `writing`, `done` or `unchanged`, and `sizes`
+with `before` and `after` rides a done band); `{kind = "answers", outcome,
+parts, note?, ts?}` (`outcome` is `given` or `declined`; each part its
+`header`, `text`, and whether `skipped`).
+
+**`prompt`** draws a person's prompt bubble.
+
+| Field | What it holds |
+|---|---|
+| `text` | The prompt's text |
+| `images` | Its images in order, each `path`, `width` and `height` in pixels |
+| `flat` | Whether the screen reader drops every style |
+
+**`reply`** draws an assistant reply.
+
+| Field | What it holds |
+|---|---|
+| `text` | The reply's text, Markdown included |
+| `flat` | Whether the screen reader drops every style |
+
+**`thinking_line`** draws a thinking line.
+
+| Field | What it holds |
+|---|---|
+| `text` | The thought's text |
+| `started` | When the thought started |
+| `ended` | When it ended; absent while it streams |
+| `open` | Whether the thought is open |
+| `flat` | Whether the screen reader drops every style |
+
+An empty `thinking_line` result draws no row and no opened body.
 
 `layout` places regions and never draws them. It receives the screen's size
 and returns a rectangle for each region it shows. A region it leaves out is not
