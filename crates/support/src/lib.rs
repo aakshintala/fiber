@@ -22,6 +22,9 @@ pub mod cancel;
 /// (`docs/testing.md`, "Values that change every run").
 pub mod clock;
 
+/// One deadline for a test's waits (`docs/testing.md`, "Waits and timeouts").
+pub mod deadline;
+
 /// The process-group guard, the process-wide list and the signals
 /// (`docs/testing.md`, "Running tests").
 pub mod group;

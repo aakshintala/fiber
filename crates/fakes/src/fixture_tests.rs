@@ -9,6 +9,7 @@ use std::time::Duration;
 use super::{lua_fixture, mcp_fixture, script};
 use crate::TempDir;
 use crate::deadline::Deadline;
+use contract::clock::Clock;
 
 /// How long a script child may take. A wait that reaches it fails the test.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -168,4 +169,27 @@ fn lua_fixture_is_the_fixture_directory_beside_the_crate() {
         lua_fixture(),
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lua-fixture")
     );
+}
+
+/// Both `FakeClock` paths resolve to the shared manual clock: the module
+/// path and the root re-export build the same Advances-mode clock, so the
+/// workspace's `fakes::clock::FakeClock` users keep their behaviour.
+#[test]
+fn both_fake_clock_paths_drive_the_shared_manual_clock() {
+    fn offset_of(clock: &crate::clock::FakeClock) -> Duration {
+        clock.now().duration_since(clock.origin())
+    }
+    let via_module = crate::clock::FakeClock::new();
+    let via_root = crate::FakeClock::new();
+    // One shared type: a root-path clock passes where a module-path one is
+    // expected, and the default mode is Advances: `sleep` moves time at once.
+    assert_eq!(offset_of(&via_root), Duration::ZERO);
+    via_module.sleep(Duration::from_millis(5));
+    via_root.advance(Duration::from_millis(7));
+    assert_eq!(offset_of(&via_module), Duration::from_millis(5));
+    assert_eq!(offset_of(&via_root), Duration::from_millis(7));
+    // The re-exported companions resolve on the same type.
+    let _mark = via_root.advance_marked(Duration::from_millis(1));
+    let _miss = crate::clock::Miss::NoPark;
+    let _system = crate::clock::SystemClock;
 }

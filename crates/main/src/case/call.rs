@@ -9,8 +9,8 @@ use config::Secret;
 use contract::GenerationId;
 use contract::clock::Clock;
 use serde_json::{Value, json};
+use support::clock::{Manual, Sleep};
 
-use super::clock::CaseClock;
 use super::format::{Call, CallCase, CallOperation, CallOutcome};
 use super::run::{malformed, report};
 
@@ -56,7 +56,7 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
         Err(error) => return report(&name, &[error.to_string()]),
     };
     let host = extensions::HostScript::new(case.host.http, case.host.exec, case.host.oauth);
-    let case_clock = CaseClock::new();
+    let case_clock = Manual::with_sleep(Sleep::Waits);
     let clock: Arc<dyn Clock> = case_clock.clone();
     let extension = match provider_extension(
         &installed,
@@ -122,7 +122,7 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
                     }
                 };
                 for advance in advances.take().unwrap_or_default() {
-                    if let Err(error) = case_clock.advance_when_parked(
+                    if let Err(error) = case_clock.advance_when_parked_in(
                         Duration::from_millis(advance.advance_ms),
                         super::run::ADVANCE_WAIT,
                     ) {
