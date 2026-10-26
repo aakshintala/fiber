@@ -198,9 +198,11 @@ fn ancestors_name_the_4097th_ancestor() {
 
 #[test]
 fn peer_pid_of_a_socket_pair_is_the_caller() {
+    let caller = std::process::id();
+    assert_ne!(caller, 1, "this test must distinguish a fabricated PID 1");
     let (first, second) = UnixStream::pair().unwrap();
-    assert_eq!(super::peer_pid(&first).unwrap(), std::process::id());
-    assert_eq!(super::peer_pid(&second).unwrap(), std::process::id());
+    assert_eq!(super::peer_pid(&first).unwrap(), caller);
+    assert_eq!(super::peer_pid(&second).unwrap(), caller);
 }
 
 #[test]
@@ -210,19 +212,21 @@ fn the_caller_reads_its_own_kernel_identity() {
         read.current_euid().unwrap(),
         rustix::process::geteuid().as_raw()
     );
-    #[cfg(target_os = "linux")]
-    {
-        let pid = std::process::id();
-        assert_eq!(read.euid(pid).unwrap(), rustix::process::geteuid().as_raw());
-        let ppid = u32::try_from(rustix::process::getppid().unwrap().as_raw_pid()).unwrap();
-        assert_eq!(read.parent(pid).unwrap(), ppid);
-        let argv = read.argv(pid).unwrap();
-        assert!(!argv.is_empty());
-        let expected: Vec<Vec<u8>> = std::env::args_os()
-            .map(|arg| arg.as_encoded_bytes().to_vec())
-            .collect();
-        assert_eq!(argv, expected);
-    }
+    let pid = std::process::id();
+    let caller_euid = rustix::process::geteuid().as_raw();
+    assert!(
+        caller_euid > 1,
+        "the kernel reader test needs a non-root uid"
+    );
+    assert_eq!(read.euid(pid).unwrap(), caller_euid);
+    let ppid = u32::try_from(rustix::process::getppid().unwrap().as_raw_pid()).unwrap();
+    assert!(ppid > 1, "the kernel reader test needs a non-init parent");
+    assert_eq!(read.parent(pid).unwrap(), ppid);
+    let argv = read.argv(pid).unwrap();
+    let expected: Vec<Vec<u8>> = std::env::args_os()
+        .map(|arg| arg.as_encoded_bytes().to_vec())
+        .collect();
+    assert_eq!(argv, expected);
 }
 
 #[cfg(target_os = "linux")]
@@ -356,6 +360,109 @@ fn procargs2_refuses_a_missing_or_empty_count_or_exec() {
     buffer = procargs2(1, b"", 0, &[b"session"]);
     assert_eq!(
         super::parse_procargs2(&buffer, 7).unwrap_err(),
+        ReadError::Unreadable {
+            pid: 7,
+            what: "argv"
+        }
+    );
+}
+
+fn fake_sysctl(
+    data: Vec<u8>,
+    probe_result: i32,
+    fill_result: i32,
+    probe_len: usize,
+    fill_len: usize,
+) -> (
+    impl FnMut(&mut [i32; 3], Option<&mut [u8]>, &mut usize) -> i32,
+    std::rc::Rc<std::cell::Cell<usize>>,
+) {
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let called = std::rc::Rc::clone(&calls);
+    let query = move |_mib: &mut [i32; 3], buffer: Option<&mut [u8]>, length: &mut usize| {
+        called.set(called.get() + 1);
+        match buffer {
+            None => {
+                *length = probe_len;
+                probe_result
+            }
+            Some(buffer) => {
+                let copied = buffer.len().min(data.len());
+                buffer[..copied].copy_from_slice(&data[..copied]);
+                *length = fill_len;
+                fill_result
+            }
+        }
+    };
+    (query, calls)
+}
+
+#[test]
+fn sysctl_mib_orders_kernel_query_and_pid() {
+    assert_eq!(super::sysctl_mib(17, 1, 49).unwrap(), [1, 49, 17]);
+}
+
+#[test]
+fn sysctl_argv_reads_and_parses_the_exact_filled_bytes() {
+    let data = procargs2(2, b"/bin/fiber", 3, &[b"/bin/fiber", b"session"]);
+    let length = data.len();
+    let (query, calls) = fake_sysctl(data, 0, 0, length, length);
+    assert_eq!(
+        super::argv_from_sysctl(7, [1, 49, 7], query).unwrap(),
+        [b"/bin/fiber".to_vec(), b"session".to_vec()]
+    );
+    assert_eq!(calls.get(), 2);
+}
+
+#[test]
+fn sysctl_argv_rejects_failed_zero_and_oversized_probes_without_filling() {
+    for (probe_result, length) in [(1, 64), (0, 0), (0, (1 << 20) + 1)] {
+        let (query, calls) = fake_sysctl(Vec::new(), probe_result, 0, length, length);
+        assert_eq!(
+            super::argv_from_sysctl(7, [1, 49, 7], query).unwrap_err(),
+            ReadError::Unreadable {
+                pid: 7,
+                what: "argv"
+            }
+        );
+        assert_eq!(calls.get(), 1, "invalid probe never fills the buffer");
+    }
+}
+
+#[test]
+fn sysctl_argv_accepts_the_exact_size_limit() {
+    let mut data = procargs2(2, b"/bin/fiber", 3, &[b"/bin/fiber", b"session"]);
+    data.resize(1 << 20, 0);
+    let (query, calls) = fake_sysctl(data, 0, 0, 1 << 20, 1 << 20);
+    assert_eq!(
+        super::argv_from_sysctl(7, [1, 49, 7], query).unwrap(),
+        [b"/bin/fiber".to_vec(), b"session".to_vec()]
+    );
+    assert_eq!(calls.get(), 2);
+}
+
+#[test]
+fn sysctl_argv_refuses_a_failed_fill() {
+    let data = procargs2(2, b"/bin/fiber", 3, &[b"/bin/fiber", b"session"]);
+    let length = data.len();
+    let (query, calls) = fake_sysctl(data, 0, 1, length, length);
+    assert_eq!(
+        super::argv_from_sysctl(7, [1, 49, 7], query).unwrap_err(),
+        ReadError::Unreadable {
+            pid: 7,
+            what: "argv"
+        }
+    );
+    assert_eq!(calls.get(), 2);
+}
+
+#[test]
+fn sysctl_argv_parses_only_the_bytes_the_kernel_says_it_filled() {
+    let data = procargs2(2, b"/bin/fiber", 3, &[b"/bin/fiber", b"session"]);
+    let length = data.len();
+    let (query, _) = fake_sysctl(data, 0, 0, length, 1);
+    assert_eq!(
+        super::argv_from_sysctl(7, [1, 49, 7], query).unwrap_err(),
         ReadError::Unreadable {
             pid: 7,
             what: "argv"

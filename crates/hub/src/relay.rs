@@ -438,7 +438,8 @@ pub(crate) fn route(
     // An initial route receives attribution from the accepted connection.
     // A reroute can start in the relay thread or the queue pump, so recover
     // the same immutable connection attribution from its Relays state.
-    let fallback_admit = (admit.is_none() && from.is_some())
+    let fallback_admit = admit
+        .is_none()
         .then(|| lock(relays).attribution.clone())
         .flatten();
     let admit = admit.or(fallback_admit.as_ref());

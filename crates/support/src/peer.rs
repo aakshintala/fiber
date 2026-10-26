@@ -7,6 +7,9 @@
 use std::collections::HashSet;
 use std::os::unix::net::UnixStream;
 
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+compile_error!("socket process attribution is supported only on Linux and macOS");
+
 /// The kernel could not report a peer process id for the socket.
 #[derive(Debug, thiserror::Error)]
 pub enum PeerCredentialError {
@@ -228,14 +231,6 @@ fn peer_pid_inner(stream: &UnixStream) -> Result<u32, PeerCredentialError> {
         .map_err(PeerCredentialError::Unavailable)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn peer_pid_inner(_stream: &UnixStream) -> Result<u32, PeerCredentialError> {
-    Err(PeerCredentialError::Unavailable(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "no peer process id on this platform",
-    )))
-}
-
 #[cfg(target_os = "linux")]
 fn proc_path(pid: u32, file: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(format!("/proc/{pid}/{file}"))
@@ -362,7 +357,6 @@ fn bsdinfo_of(pid: u32) -> Result<libc::proc_bsdinfo, ReadError> {
 }
 
 /// The next NUL-terminated word and what follows it.
-#[cfg(any(target_os = "macos", test))]
 fn take_word(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
     let end = bytes.iter().position(|byte| *byte == 0)?;
     let word = bytes.get(..end)?;
@@ -375,7 +369,6 @@ fn take_word(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
 /// wordless-first buffer reads as unreadable, never as a shorter vector:
 /// padding zeros are skipped only before the first word, so a corrupt
 /// buffer fails instead of shifting words.
-#[cfg(any(target_os = "macos", test))]
 fn parse_procargs2(bytes: &[u8], pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
     let missing = || ReadError::Unreadable { pid, what: "argv" };
     let argc_at: [u8; 4] = bytes
@@ -413,10 +406,29 @@ fn parse_procargs2(bytes: &[u8], pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
     Ok(argv)
 }
 
-#[cfg(target_os = "macos")]
-fn sysctl_mib(pid: u32, second: libc::c_int) -> Result<[libc::c_int; 4], ReadError> {
-    let pid = libc::c_int::try_from(pid).map_err(|_| ReadError::Unreadable { pid, what: "pid" })?;
-    Ok([libc::CTL_KERN, libc::KERN_PROC, second, pid])
+fn sysctl_mib(pid: u32, ctl_kern: i32, query: i32) -> Result<[i32; 3], ReadError> {
+    let pid = i32::try_from(pid).map_err(|_| ReadError::Unreadable { pid, what: "pid" })?;
+    Ok([ctl_kern, query, pid])
+}
+
+fn argv_from_sysctl(
+    pid: u32,
+    mut mib: [i32; 3],
+    mut query: impl FnMut(&mut [i32; 3], Option<&mut [u8]>, &mut usize) -> i32,
+) -> Result<Vec<Vec<u8>>, ReadError> {
+    let unreadable = || ReadError::Unreadable { pid, what: "argv" };
+    let mut length = 0usize;
+    let sized = query(&mut mib, None, &mut length);
+    if sized != 0 || length == 0 || length > 1 << 20 {
+        return Err(unreadable());
+    }
+    let mut buffer = vec![0u8; length];
+    let read = query(&mut mib, Some(&mut buffer), &mut length);
+    if read != 0 {
+        return Err(unreadable());
+    }
+    buffer.truncate(length);
+    parse_procargs2(&buffer, pid)
 }
 
 #[cfg(target_os = "macos")]
@@ -435,59 +447,15 @@ fn parent_of(pid: u32) -> Result<u32, ReadError> {
     reason = "sysctl KERN_PROCARGS2 with a fixed mib: the name pointer and count are fixed, the size probe passes no buffers, and the fill passes a buffer the first call sized"
 )]
 fn argv_of(pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
-    let mut mib = sysctl_mib(pid, libc::KERN_PROCARGS2)?;
-    let mut length: libc::size_t = 0;
-    // SAFETY: `mib` holds four valid ints; both buffer arguments are null
-    // with zero lengths, so the kernel writes only the needed size.
-    let sized = unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            4,
-            std::ptr::null_mut(),
-            &mut length,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if sized != 0 || length == 0 || length > 1 << 20 {
-        return Err(ReadError::Unreadable { pid, what: "argv" });
-    }
-    let mut buffer = vec![0u8; length as usize];
-    // SAFETY: `mib` is unchanged and valid, and `buffer` is `length` bytes
-    // the kernel fills or fails.
-    let read = unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            4,
-            buffer.as_mut_ptr().cast::<libc::c_void>(),
-            &mut length,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if read != 0 {
-        return Err(ReadError::Unreadable { pid, what: "argv" });
-    }
-    buffer.truncate(length as usize);
-    parse_procargs2(&buffer, pid)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn euid_of(pid: u32) -> Result<u32, ReadError> {
-    Err(ReadError::Unreadable { pid, what: "euid" })
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn parent_of(pid: u32) -> Result<u32, ReadError> {
-    Err(ReadError::Unreadable {
-        pid,
-        what: "parent",
+    let mib = sysctl_mib(pid, libc::CTL_KERN, libc::KERN_PROCARGS2)?;
+    argv_from_sysctl(pid, mib, |mib, buffer, length| {
+        let old = buffer.map_or(std::ptr::null_mut(), |bytes| {
+            bytes.as_mut_ptr().cast::<libc::c_void>()
+        });
+        // SAFETY: `mib` is three valid ints, the size probe passes a null
+        // buffer, and the fill passes the sized mutable output buffer.
+        unsafe { libc::sysctl(mib.as_mut_ptr(), 3, old, length, std::ptr::null_mut(), 0) }
     })
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn argv_of(pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
-    Err(ReadError::Unreadable { pid, what: "argv" })
 }
 
 #[cfg(test)]

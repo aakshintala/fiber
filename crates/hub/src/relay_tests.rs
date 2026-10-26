@@ -19,6 +19,40 @@ use super::ack::Verdict;
 use super::*;
 use fakes::Deadline;
 
+struct TargetRead;
+
+impl support::peer::ProcessRead for TargetRead {
+    fn current_euid(&self) -> Result<u32, support::peer::ReadError> {
+        Ok(1000)
+    }
+
+    fn euid(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+        match pid {
+            30 => Ok(1000),
+            1 => Ok(0),
+            _ => Err(support::peer::ReadError::Unreadable { pid, what: "euid" }),
+        }
+    }
+
+    fn parent(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+        match pid {
+            41 | 42 => Ok(30),
+            30 => Ok(1),
+            1 => Ok(0),
+            _ => Err(support::peer::ReadError::Unreadable {
+                pid,
+                what: "parent",
+            }),
+        }
+    }
+
+    fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
+        (pid == 30)
+            .then(|| vec![b"sh".to_vec()])
+            .ok_or(support::peer::ReadError::Unreadable { pid, what: "argv" })
+    }
+}
+
 #[test]
 fn a_reroute_uses_a_live_relay_with_a_strictly_newer_epoch() {
     use std::sync::{Arc, Mutex};
@@ -26,6 +60,11 @@ fn a_reroute_uses_a_live_relay_with_a_strictly_newer_epoch() {
     const SID: &str = "s_0123456789abcdef";
     let held = fakes::TempDir::new("epoch");
     let hub = Arc::new(hub(&held));
+    *crate::connection::lock(&hub.test_read) = Some(Arc::new(TargetRead));
+    let attribution = crate::connection::Attribution::Local {
+        peer_pid: 10,
+        session_process_pids: vec![41],
+    };
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     let (old_epoch, new_epoch) = {
         let mut held = crate::connection::lock(&relays);
@@ -75,7 +114,7 @@ fn a_reroute_uses_a_live_relay_with_a_strictly_newer_epoch() {
         &relays,
         Some(old_epoch),
         false,
-        None,
+        Some(&attribution),
     );
 
     let mut text = String::new();
@@ -87,6 +126,92 @@ fn a_reroute_uses_a_live_relay_with_a_strictly_newer_epoch() {
     assert!(
         matches!(std::io::Read::read(&mut stale_peer, &mut stale_byte), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
     );
+    stop_tx.send(()).unwrap();
+    crate::connection::lock(&relays).entries[1]
+        .thread
+        .take()
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn authorization_uses_the_target_session_relay_not_another_session() {
+    use std::sync::{Arc, Mutex};
+
+    const A: &str = "s_0123456789abcdef";
+    const B: &str = "s_fedcba9876543210";
+    let held = fakes::TempDir::new("relay-session-selection");
+    let hub = Arc::new(hub(&held));
+    *crate::connection::lock(&hub.test_read) = Some(Arc::new(TargetRead));
+    let attribution = crate::connection::Attribution::Local {
+        peer_pid: 10,
+        session_process_pids: vec![41],
+    };
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    let (blocked_writer, _blocked_peer) = UnixStream::pair().unwrap();
+    let (allowed_writer, allowed_peer) = UnixStream::pair().unwrap();
+    allowed_peer
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+    let live_thread = std::thread::spawn(move || {
+        stop_rx.recv_timeout(MUST_SUCCEED_WITHIN).unwrap_or(());
+    });
+    {
+        let mut held = crate::connection::lock(&relays);
+        let first = held.mint();
+        let second = held.mint();
+        held.entries.extend([
+            Relay {
+                session: A.to_owned(),
+                epoch: first,
+                writer: blocked_writer,
+                kept: Kept::default(),
+                replayed: Replayed::default(),
+                thread: None,
+                retiring: None,
+                target: RelayTarget::Live { pid: 41 },
+            },
+            Relay {
+                session: B.to_owned(),
+                epoch: second,
+                writer: allowed_writer,
+                kept: Kept::default(),
+                replayed: Replayed::default(),
+                thread: Some(live_thread),
+                retiring: None,
+                target: RelayTarget::Live { pid: 42 },
+            },
+        ]);
+    }
+    let (client_writer, client_reader) = UnixStream::pair().unwrap();
+    client_reader
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
+    let client_writer = Arc::new(Mutex::new(client_writer));
+    let line = json!({"id": "c_1", "command": "steer", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+
+    route(
+        &contract::CommandId("c_1".to_owned()),
+        B,
+        line,
+        &hub,
+        &client_writer,
+        &relays,
+        None,
+        false,
+        Some(&attribution),
+    );
+
+    let mut text = String::new();
+    BufReader::new(allowed_peer).read_line(&mut text).unwrap();
+    let routed: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(routed["id"], "c_1", "session B receives its command");
+    assert_eq!(routed["command"], "steer");
     stop_tx.send(()).unwrap();
     crate::connection::lock(&relays).entries[1]
         .thread
