@@ -165,6 +165,8 @@ fn completion(rx: &Receiver<Input>, wait: &Deadline) -> Input {
             | Input::Feedback(_)
             | Input::Models(_)
             | Input::Install { .. }
+            | Input::HooksOfferNames { .. }
+            | Input::HooksInstalled { .. }
             | Input::Login { .. }
             | Input::Tick,
         ) => panic!("the worker answered something else"),
@@ -199,6 +201,8 @@ fn a_click_on_an_image_line_reads_the_file_and_opens_it() {
         | Input::Feedback(_)
         | Input::Models(_)
         | Input::Install { .. }
+        | Input::HooksOfferNames { .. }
+        | Input::HooksInstalled { .. }
         | Input::Login { .. }
         | Input::Tick => panic!("the worker answered something else"),
     }

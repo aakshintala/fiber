@@ -44,18 +44,18 @@ pub(super) fn before_handoff(
                 notices,
             };
         }
-        let Some(extension) = session.lua.get(entry.extension) else {
+        let Some(name) = session.runtime.owner_name(&entry.hook) else {
             continue;
         };
-        let name = extension.name();
         let arg = shown(
             &messages,
             handoff,
             note.as_ref().map(|(_, text)| text.as_str()),
         );
-        let returned = extension
-            .hook_with(BEFORE_HANDOFF, entry.index, arg, |value| {
-                let change = decode(name, value)?;
+        let returned = session
+            .runtime
+            .hook_with(&entry.hook, arg, |value| {
+                let change = decode(&name, value)?;
                 let changed = change.is_some();
                 Ok((change, changed))
             })
@@ -79,7 +79,7 @@ pub(super) fn before_handoff(
                     notices,
                 };
             }
-            Err(error) => notices.push(failed_notice(name, &error)),
+            Err(error) => notices.push(failed_notice(&name, &error)),
         }
     }
     if note.is_some() {

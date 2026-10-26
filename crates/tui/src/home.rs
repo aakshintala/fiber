@@ -47,6 +47,9 @@ pub(crate) enum Spot {
     /// A clear choice while the clear question is open: clicking it
     /// does what its key does.
     Clear(ClearChoice),
+    /// A hooks install choice while the install offer is open: clicking
+    /// it does what its key does.
+    HooksOffer(HooksChoice),
     /// The delete question's ✕: clicking it does what Esc does, keeping
     /// the session.
     Keep,
@@ -70,6 +73,7 @@ impl Spot {
             | Spot::Pick(_)
             | Spot::Quit(_)
             | Spot::Clear(_)
+            | Spot::HooksOffer(_)
             | Spot::Keep
             | Spot::Question => None,
         }
@@ -88,7 +92,8 @@ impl Spot {
             | Spot::Keep
             | Spot::Question
             | Spot::Quit(_)
-            | Spot::Clear(_) => false,
+            | Spot::Clear(_)
+            | Spot::HooksOffer(_) => false,
         }
     }
 }
@@ -101,6 +106,16 @@ pub(crate) enum ClearChoice {
     Clear,
     /// Esc, or the title's ✕: stay.
     Stay,
+}
+
+/// A hooks install choice: installing and starting, or cancelling.
+/// Enter installs with the staged retry, Esc cancels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HooksChoice {
+    /// Enter: install `hooks` and start.
+    Install,
+    /// Esc, the title's ✕, or a click outside: cancel.
+    Cancel,
 }
 
 /// A quit choice: leaving working sessions running, closing them all

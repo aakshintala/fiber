@@ -84,10 +84,14 @@ pub(crate) struct Kept {
 /// written-but-unanswered session commands except `subscribe` and
 /// `commands`, which a reconnect sends afresh. Kept ids are always
 /// pending keys: `start` carries no `session_id`, so it is never kept.
+/// `starts` holds every constructed `start` line with no answer yet, by
+/// command id: the hooks install offer's retry resends them unchanged.
 #[derive(Debug, Default)]
 pub(crate) struct Outbox {
     /// The hub connection, as the terminal sees it.
     pub(crate) link: Link,
+    /// The constructed `start` lines with no answer yet, by command id.
+    starts: HashMap<String, String>,
     /// Commands waiting for their answer: kind and the draft they carried.
     pub(crate) pending: HashMap<String, (Kind, Draft)>,
     /// Lines held until the hub connects: the `start` of an early Enter.
@@ -109,6 +113,12 @@ impl Outbox {
         self.pending.insert(id, (kind, draft));
     }
 
+    /// The retained `start` line for `id`, if a start sent it and no
+    /// answer settled it yet.
+    pub(crate) fn start_line(&self, id: &str) -> Option<String> {
+        self.starts.get(id).cloned()
+    }
+
     /// Records a made command, sending its line when the link is up and
     /// holding it until `hub_hello` otherwise.
     pub(crate) fn send(
@@ -118,6 +128,9 @@ impl Outbox {
         draft: Draft,
         line: String,
     ) -> Option<String> {
+        if kind == Kind::Start {
+            self.starts.insert(id.clone(), line.clone());
+        }
         self.pending.insert(id, (kind, draft));
         if self.is_up() {
             Some(line)
@@ -133,6 +146,7 @@ impl Outbox {
     /// failure needs, without reaching the queue, the offer, the phase
     /// or the draft.
     pub(crate) fn fail(&mut self, id: &str) -> Option<(Kind, Draft)> {
+        self.starts.remove(id);
         self.pending.remove(id)
     }
 
@@ -140,6 +154,7 @@ impl Outbox {
     /// longer kept for resending.
     pub(crate) fn answered(&mut self, id: &str) -> Option<(Kind, Draft)> {
         self.kept.retain(|kept| kept.id != id);
+        self.starts.remove(id);
         self.pending.remove(id)
     }
 

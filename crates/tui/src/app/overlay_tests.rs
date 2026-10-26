@@ -3313,6 +3313,13 @@ mod stacked {
                 if first != Surface::Report && second != Surface::Report {
                     continue;
                 }
+                // The hooks install offer owns the keys above the
+                // report, so neither branch below reads it: the offer's
+                // own topology tests cover that pair, including the
+                // report drawing above it.
+                if app.top_surface() == Surface::HooksOffer {
+                    continue;
+                }
                 let text = crate::view::text(&rendered(&app));
                 let title = app.import_report().map(|report| report.title().to_owned());
                 let title = title.unwrap_or_default();
@@ -3322,6 +3329,31 @@ mod stacked {
                 } else {
                     assert!(text.contains("leave them running"), "{text}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn the_report_frame_draws_above_the_hooks_offer() {
+        for (set, make) in [
+            (&ON_SESSION[..], session_app as fn() -> App),
+            (&ON_HOME[..], home_app as fn() -> App),
+        ] {
+            for (first, second, app) in stacked(set, make) {
+                let offer_pair = (first == Surface::HooksOffer && second == Surface::Report)
+                    || (first == Surface::Report && second == Surface::HooksOffer);
+                if !offer_pair {
+                    continue;
+                }
+                // Both frames draw whole: the report's above the offer's.
+                let text = crate::view::text(&rendered(&app));
+                let title = app.import_report().map(|report| report.title().to_owned());
+                let title = title.unwrap_or_default();
+                assert!(text.contains(&title), "{first:?} then {second:?}\n{text}");
+                assert!(
+                    text.contains("Install hooks?"),
+                    "{first:?} then {second:?}\n{text}"
+                );
             }
         }
     }

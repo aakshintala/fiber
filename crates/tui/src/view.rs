@@ -24,6 +24,7 @@ mod drag;
 mod history;
 #[path = "home_view.rs"]
 mod home;
+mod hooks_offer;
 mod input_box;
 pub(crate) mod item;
 mod key_map;
@@ -137,6 +138,8 @@ pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
     let mut targets = Vec::new();
     if frame == Surface::Quit {
         quit::draw(app, area, &mut buf, &mut targets)
+    } else if frame == Surface::HooksOffer {
+        hooks_offer::draw(app, area, &mut buf, &mut targets)
     } else if frame == Surface::Clear {
         clear::draw(app, area, &mut buf, &mut targets)
     } else if frame == Surface::Notice {
@@ -164,6 +167,9 @@ fn draw_framed(
         } else if surface == Surface::Quit {
             let slab = quit::draw(app, area, buf, targets);
             app.frames().note(Surface::Quit, slab);
+        } else if surface == Surface::HooksOffer {
+            let slab = hooks_offer::draw(app, area, buf, targets);
+            app.frames().note(Surface::HooksOffer, slab);
         } else if surface == Surface::Clear {
             let slab = clear::draw(app, area, buf, targets);
             app.frames().note(Surface::Clear, slab);

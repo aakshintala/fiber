@@ -23,7 +23,7 @@ use fakes::clock::FakeClock;
 use serde_json::json;
 
 use super::SessionCommands;
-use crate::commands::CommandSource;
+use crate::commands::{CommandRunner, CommandSource};
 use crate::lua::LuaExtension;
 use crate::{Origin, Request, plan};
 use fakes::FakeLock;
@@ -80,7 +80,7 @@ fn sources(home: &std::path::Path, items: &[Source<'_>]) -> Vec<CommandSource> {
             extension: (*name).to_owned(),
             replaces: replaces.clone(),
             commands: commands.clone(),
-            lua: extension(name, dir, home),
+            runner: CommandRunner::Lua(extension(name, dir, home)),
         })
         .collect()
 }
@@ -569,15 +569,16 @@ fn run_return_values_are_ignored() {
         );
         let recorder = Arc::new(fakes::EventLog::default());
         for src in &all {
-            src.lua
-                .set_emit(Arc::clone(&recorder) as Arc<dyn contract::emit::Emit>);
+            if let CommandRunner::Lua(lua) = &src.runner {
+                lua.set_emit(Arc::clone(&recorder) as Arc<dyn contract::emit::Emit>);
+            }
         }
         let built = SessionCommands::build(&all, &config_with(&home, &[]));
         let admitted = built
             .admit_with(&contract::CommandId("c_cmd".into()), "cmd", "")
             .expect("admitted");
-        admitted.queued().release();
-        let queued = std::sync::Arc::clone(admitted.queued());
+        admitted.wait().release();
+        let queued = admitted.wait().clone();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let _sent = tx.send(queued.wait());
