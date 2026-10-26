@@ -141,6 +141,74 @@ fn start(
     (looped, tx, provider, dir)
 }
 
+#[test]
+fn an_isolated_fork_records_its_effective_worktree_instead_of_the_inherited_one() {
+    let parent = parent();
+    let home = parent.dir.parent().unwrap().to_path_buf();
+    let log = Arc::new(
+        log::Log::create(&home, SessionId("s_isolated".into()), parent.clock.clone()).unwrap(),
+    );
+    let dir = log.dir().to_path_buf();
+    let (_tx, rx) = mpsc::channel();
+    let inherited = Worktree {
+        path: "/inherited".into(),
+        branch: "parent".into(),
+        repository: Some("/repo".into()),
+    };
+    let effective = Worktree {
+        path: "/isolated".into(),
+        branch: "fork".into(),
+        repository: Some("/repo".into()),
+    };
+    let looped = Loop::rewound_with_worktree(
+        r#loop::Session {
+            log,
+            provider: Arc::new(ScriptedProvider::new(vec![Scripted::text("done")])),
+            model: Model {
+                reference: MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: PromptInputs::new(
+                home,
+                "/bin/sh".into(),
+                dir.join("events.jsonl").display().to_string(),
+                parent.clock.clone(),
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: Permissions {
+                workspace: "/isolated".into(),
+                credentials: parent.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: parent.rules.clone(),
+            },
+        },
+        Rewound {
+            from: point(&parent.dir, 2),
+            worktree: Some(inherited),
+            how: Continuation::Fork {
+                parent: Parent {
+                    session_id: SessionId("s_test".into()),
+                    delegate_id: JobId("j_fork".into()),
+                },
+            },
+            factory: None,
+        },
+        Some(effective.clone()),
+    )
+    .unwrap();
+    let lines = log::read(&dir).unwrap();
+    assert_eq!(kinds(&lines), ["session_started"]);
+    assert_eq!(
+        lines[0].payload["worktree"],
+        serde_json::to_value(effective).unwrap()
+    );
+    assert_eq!(lines[0].payload["workspace"], "/isolated");
+    drop(looped);
+}
+
 fn fork(
     session: &Session,
     from: Point,

@@ -732,7 +732,7 @@ pub(crate) fn run_new(
             // delegate opens through `Loop::delegate`, naming its parent.
             let committed = signals.commit(|| {
                 let started = match (rewound, parent) {
-                    (Some(start), _) => Loop::rewound(
+                    (Some(start), _) => Loop::rewound_with_worktree(
                         r#loop::Session {
                             log: Arc::clone(&log),
                             provider,
@@ -743,6 +743,7 @@ pub(crate) fn run_new(
                             permissions,
                         },
                         start,
+                        worktree,
                     ),
                     (None, Some(parent)) => Loop::delegate(
                         r#loop::Session {

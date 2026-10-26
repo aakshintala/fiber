@@ -6357,6 +6357,10 @@ fn a_delegate_fork_starts_a_fork_of_the_calling_turn() {
     let task = new_content.last().unwrap();
     assert_eq!(task["role"], json!("user"));
     let text = task["content"].as_str().unwrap().to_owned();
+    assert!(
+        !text.contains("Your workspace is"),
+        "equal workspaces add no notice: {text}"
+    );
     for part in [
         format!("you are a fork of session {parent_id}"),
         "started at delegate depth 1".to_owned(),

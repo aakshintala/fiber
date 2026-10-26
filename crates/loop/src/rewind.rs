@@ -58,6 +58,17 @@ impl Loop {
     /// logged preamble verbatim, without writing a new `preamble_built`.
     /// Everything a new loop runs on rides [`crate::Session`].
     pub fn rewound(session: Session, start: Rewound) -> Result<Self, Error> {
+        let worktree = start.worktree.clone();
+        Self::rewound_with_worktree(session, start, worktree)
+    }
+
+    /// Starts a continuation in its effective worktree, which may differ from
+    /// the inherited worktree when a fork has its own isolation.
+    pub fn rewound_with_worktree(
+        session: Session,
+        start: Rewound,
+        worktree: Option<Worktree>,
+    ) -> Result<Self, Error> {
         let (parent, rewind, name, reason) = match start.how {
             Continuation::Rewind {
                 note,
@@ -80,7 +91,7 @@ impl Loop {
                 parent,
                 forked_from: Some(start.from),
                 rewind,
-                worktree: start.worktree,
+                worktree,
                 // A rewind or fork starts a new session: it is never a
                 // supervised resume of the old one.
                 supervised: false,
