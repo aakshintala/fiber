@@ -184,10 +184,7 @@ fn prompt_bubble_shows_the_local_time_under_it() {
     );
     assert!(row_text(&buf, at.saturating_sub(2)).contains(" go ▐"));
     insta::assert_snapshot!("prompt_bubble_with_time", screen(&app));
-}
-
-#[test]
-fn prompt_bubble_defaults_to_utc() {
+    // Without a set zone the same instant draws in UTC.
     let mut app = empty();
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started_at("s_aaaaaaaaaaaaaaaa", "go", 1791468900000));
