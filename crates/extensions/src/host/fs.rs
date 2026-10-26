@@ -297,17 +297,17 @@ fn lock(opts: &LuaValue) -> Result<bool, failure::Raise> {
 }
 
 /// What `stat` reports for a path that exists.
-struct Stat {
-    kind: &'static str,
-    size: i64,
-    modified_ms: i64,
+pub(crate) struct Stat {
+    pub kind: &'static str,
+    pub size: i64,
+    pub modified_ms: i64,
 }
 
 /// The files one extension reaches through `host.fs`: its workspace for
 /// relative paths, the session's lock when one is offered, its two data
 /// directories, created on first write, and the bound `read` refuses past.
 #[derive(Clone)]
-struct Fs {
+pub(crate) struct Fs {
     workspace: PathBuf,
     locks: Option<Arc<dyn PathLock>>,
     machine_dir: Option<PathBuf>,
@@ -315,7 +315,29 @@ struct Fs {
     memory_cap: usize,
 }
 
+/// What a process extension may read at once: the same 1 MiB the Lua
+/// half allows, so a base64 answer fits the wire framing with room to
+/// spare.
+pub(crate) const PROCESS_READ_CAP: usize = 1 << 20;
+
 impl Fs {
+    /// The `host.fs` handle for a process extension: the workspace its
+    /// paths resolve under, the folded data directories and the process
+    /// read bound. Without a session there are no path locks to hold.
+    pub(crate) fn for_process(
+        workspace: PathBuf,
+        machine_dir: String,
+        project_dir: String,
+    ) -> Self {
+        Self {
+            workspace,
+            locks: None,
+            machine_dir: Some(PathBuf::from(machine_dir)),
+            project_dir: Some(PathBuf::from(project_dir)),
+            memory_cap: PROCESS_READ_CAP,
+        }
+    }
+
     /// The absolute path `raw` names: a relative path joins the workspace,
     /// an absolute path is used as given, and `~` is not expanded.
     fn absolute(&self, raw: &[u8]) -> PathBuf {
@@ -323,7 +345,7 @@ impl Fs {
         self.workspace.join(Path::new(OsStr::from_bytes(raw)))
     }
 
-    fn read(&self, raw: &[u8]) -> Result<Vec<u8>, Failed> {
+    pub(crate) fn read(&self, raw: &[u8]) -> Result<Vec<u8>, Failed> {
         let path = self.absolute(raw);
         let cap = u64::try_from(self.memory_cap).unwrap_or(u64::MAX);
         // Refuse past the cap before allocating: the bytes would land in
@@ -343,14 +365,14 @@ impl Fs {
         Ok(data)
     }
 
-    fn write(&self, raw: &[u8], data: &[u8], with_lock: bool) -> Result<(), Failed> {
+    pub(crate) fn write(&self, raw: &[u8], data: &[u8], with_lock: bool) -> Result<(), Failed> {
         let path = self.absolute(raw);
         self.ensure_data_dir("write", &path)?;
         let mut op = || fs::write(&path, data).map_err(|err| fail("write", &path, err));
         self.locked(vec![path.clone()], with_lock, &mut op)
     }
 
-    fn list(&self, raw: &[u8]) -> Result<Vec<Vec<u8>>, Failed> {
+    pub(crate) fn list(&self, raw: &[u8]) -> Result<Vec<Vec<u8>>, Failed> {
         let path = self.absolute(raw);
         let entries = fs::read_dir(&path).map_err(|err| fail("list", &path, err))?;
         let mut names = Vec::new();
@@ -362,7 +384,7 @@ impl Fs {
         Ok(names)
     }
 
-    fn stat(&self, raw: &[u8]) -> Result<Option<Stat>, Failed> {
+    pub(crate) fn stat(&self, raw: &[u8]) -> Result<Option<Stat>, Failed> {
         let path = self.absolute(raw);
         let meta = match fs::symlink_metadata(&path) {
             Ok(meta) => meta,
@@ -392,14 +414,14 @@ impl Fs {
         }))
     }
 
-    fn mkdir(&self, raw: &[u8], with_lock: bool) -> Result<(), Failed> {
+    pub(crate) fn mkdir(&self, raw: &[u8], with_lock: bool) -> Result<(), Failed> {
         let path = self.absolute(raw);
         self.ensure_data_dir("mkdir", &path)?;
         let mut op = || fs::create_dir_all(&path).map_err(|err| fail("mkdir", &path, err));
         self.locked(vec![path.clone()], with_lock, &mut op)
     }
 
-    fn remove(&self, raw: &[u8], with_lock: bool) -> Result<(), Failed> {
+    pub(crate) fn remove(&self, raw: &[u8], with_lock: bool) -> Result<(), Failed> {
         let path = self.absolute(raw);
         let mut op = || {
             let is_dir = fs::symlink_metadata(&path)
@@ -414,7 +436,12 @@ impl Fs {
         self.locked(vec![path.clone()], with_lock, &mut op)
     }
 
-    fn rename(&self, from_raw: &[u8], to_raw: &[u8], with_lock: bool) -> Result<(), Failed> {
+    pub(crate) fn rename(
+        &self,
+        from_raw: &[u8],
+        to_raw: &[u8],
+        with_lock: bool,
+    ) -> Result<(), Failed> {
         let from = self.absolute(from_raw);
         let to = self.absolute(to_raw);
         let mut op = || {

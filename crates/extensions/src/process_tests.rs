@@ -1528,6 +1528,90 @@ impl FakeDrive {
     }
 }
 
+/// Fake host/state services behind the seam: records each operation's
+/// variant with the callback's attribution, answering from the script.
+/// A test scripts the answer, makes the wire call, then reads the record
+/// to prove the operation ran with its attribution, or, when the call
+/// refuses before dispatch, that nothing ran at all.
+struct FakeServices {
+    calls: Mutex<Vec<(String, Option<String>)>>,
+    answer: Mutex<Result<Option<Value>, (ErrorCode, String)>>,
+}
+
+impl FakeServices {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            calls: Mutex::new(Vec::new()),
+            answer: Mutex::new(Ok(None)),
+        })
+    }
+
+    /// Scripts every later operation's answer until set again.
+    fn answer_with(&self, answer: Result<Option<Value>, (ErrorCode, String)>) {
+        *support::lock(&self.answer) = answer;
+    }
+
+    /// The recorded `(variant, ran_by)` pairs, in arrival order.
+    fn calls(&self) -> Vec<(String, Option<String>)> {
+        support::lock(&self.calls).clone()
+    }
+}
+
+/// The operation's variant, naming which host or state call ran.
+fn service_variant(operation: &super::process::context::HostOperation) -> &'static str {
+    use super::process::context::HostOperation as Op;
+    match operation {
+        Op::Http { .. } => "http",
+        Op::Exec { .. } => "exec",
+        Op::FsRead { .. } => "fs.read",
+        Op::FsWrite { .. } => "fs.write",
+        Op::FsList { .. } => "fs.list",
+        Op::FsStat { .. } => "fs.stat",
+        Op::FsMkdir { .. } => "fs.mkdir",
+        Op::FsRemove { .. } => "fs.remove",
+        Op::FsRename { .. } => "fs.rename",
+        Op::ConfigGet { .. } => "config.get",
+        Op::ConfigSet { .. } => "config.set",
+        Op::Secret { .. } => "secret",
+        Op::DataDir { .. } => "data_dir",
+        Op::Sha256 { .. } => "sha256",
+        Op::HmacSha256 { .. } => "hmac_sha256",
+        Op::Status { .. } => "status",
+        Op::Widget { .. } => "widget",
+        Op::Emit { .. } => "emit",
+        Op::Log { .. } => "log",
+        Op::Tool { .. } => "tool",
+        Op::Model { .. } => "model",
+        Op::Delegate { .. } => "delegate",
+        Op::OAuthCallback { .. } => "oauth.callback",
+        Op::OAuthOpen { .. } => "oauth.open",
+        Op::OAuthShow { .. } => "oauth.show",
+        Op::OAuthPkcs => "oauth.pkce",
+        Op::OAuthPoll { .. } => "oauth.poll",
+        Op::OAuthRefresh { .. } => "oauth.refresh",
+        Op::StateGet { .. } => "state.get",
+        Op::StateKeys => "state.keys",
+        Op::StateSet { .. } => "state.set",
+        Op::StateUnset { .. } => "state.unset",
+    }
+}
+
+impl super::process::context::ProcessHostServices for FakeServices {
+    fn perform(
+        &self,
+        _context: &super::process::context::ProcessContext,
+        callback: &crate::host::admission::CallbackContext,
+        operation: super::process::context::HostOperation,
+        _cancel: &dyn contract::tool::Cancel,
+    ) -> Result<Option<Value>, (ErrorCode, String)> {
+        support::lock(&self.calls).push((
+            service_variant(&operation).to_owned(),
+            callback.ran_by().map(str::to_owned),
+        ));
+        support::lock(&self.answer).clone()
+    }
+}
+
 /// One owner behind the package seam, with its scratch dir and registry:
 /// the package holds both, and the session fold reads what the child
 /// registers.
@@ -1538,6 +1622,8 @@ struct Harness {
     /// The frozen clock the owner reads: the test moves it to fire
     /// timeouts, since nothing else does.
     clock: Arc<fakes::clock::FakeClock>,
+    /// The fake services the owner's host and state calls run through.
+    services: Arc<FakeServices>,
 }
 
 impl Harness {
@@ -1584,6 +1670,7 @@ impl Harness {
         let mut argv = vec!["-c".to_owned(), script.to_owned()];
         argv.extend(args.iter().map(|arg| (*arg).to_owned()));
         let launch_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+        let services = FakeServices::new();
         let extension = ProcessExtension::start(super::process::Launch {
             owner: "fiber.test/proc".to_owned(),
             runtime,
@@ -1592,6 +1679,7 @@ impl Harness {
             args: argv,
             context,
             drive,
+            services: services.clone(),
             clock: launch_clock,
             limits: super::process::transport::Limits::default(),
         })
@@ -1601,6 +1689,7 @@ impl Harness {
             registry,
             extension: Arc::new(extension),
             clock,
+            services,
         }
     }
 
@@ -2375,4 +2464,332 @@ open(sys.argv[1], "w").write(sys.stdin.readline())"#;
         answer["payload"]["message"],
         json!("host.drive: the session is closing")
     );
+}
+
+/// Every host and state family reaches the injected services with timer
+/// attribution: the peer sends one valid call per family after `ready`,
+/// and the fake records each operation's variant. `host.ask` declines
+/// with nobody to answer, and `host.oauth.refresh` refuses without a
+/// holder; neither reaches the services.
+#[test]
+fn host_calls_reach_services_with_timer_attribution() {
+    let b64 = |bytes: &[u8]| Value::String(crate::host::admission::encode_bytes(bytes));
+    let calls = vec![
+        ("h1", "host.http", json!([{"url": "https://x.test"}])),
+        ("e1", "host.exec", json!(["prog"])),
+        ("t1", "host.tool", json!(["t", {"a": 1}])),
+        (
+            "m1",
+            "host.model",
+            json!([{"model": "a/b", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 8}]),
+        ),
+        (
+            "d1",
+            "host.delegate",
+            json!([{"description": "d", "prompt": "p"}, {"timeout": 9, "run": true}]),
+        ),
+        ("a1", "host.ask", json!(["confirm", {"prompt": "go?"}])),
+        ("c1", "host.oauth.callback", json!([8080, "/cb"])),
+        ("o1", "host.oauth.open", json!(["https://x.test"])),
+        ("s1", "host.oauth.show", json!(["https://x.test", "code-1"])),
+        ("p1", "host.oauth.pkce", json!([])),
+        ("w1", "host.oauth.poll", json!(["https://x.test"])),
+        ("r1", "host.oauth.refresh", json!([true])),
+        ("f1", "host.fs.read", json!(["a.txt"])),
+        (
+            "f2",
+            "host.fs.write",
+            json!(["a.txt", b64(b"hi"), {"lock": true}]),
+        ),
+        ("f3", "host.fs.list", json!(["d"])),
+        ("f4", "host.fs.stat", json!(["a.txt"])),
+        ("f5", "host.fs.mkdir", json!(["d"])),
+        ("f6", "host.fs.remove", json!(["d"])),
+        ("f7", "host.fs.rename", json!(["a", "b"])),
+        ("g1", "host.config.get", json!(["a.b"])),
+        ("g2", "host.config.set", json!(["a.b", 7, "machine"])),
+        ("n1", "host.secret", json!(["t"])),
+        ("q1", "host.data_dir", json!(["machine"])),
+        ("y1", "host.sha256", json!([b64(b"x")])),
+        ("y2", "host.hmac_sha256", json!([b64(b"k"), b64(b"d")])),
+        ("u1", "host.status", json!(["line"])),
+        ("u2", "host.widget", json!(["w", ["l"]])),
+        ("u3", "host.emit", json!([{"k": 1}])),
+        ("l1", "host.log", json!(["line"])),
+        ("l2", "host.log", json!([7])),
+        ("k1", "state.get", json!(["k"])),
+        ("k2", "state.keys", json!([])),
+        ("k3", "state.set", json!(["k", 1])),
+        ("k4", "state.unset", json!(["k"])),
+    ];
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+read()
+calls = json.loads(sys.argv[2])
+write({"id": "ready", "command": "ready"})
+for (cid, call, args) in calls:
+    write({"id": cid, "command": "call", "args": {"call": call, "args": args}})
+answers = {}
+for _ in range(len(calls) + 1):
+    answer = read()
+    answers[answer["payload"]["command_id"]] = answer
+del answers["ready"]
+open(sys.argv[1], "w").write(json.dumps(answers))"#;
+    let out = fakes::TempDir::new("fiber-process-host-calls");
+    let out_path = out.path().join("answers.json");
+    let owner = Harness::start(
+        script,
+        &[
+            out_path.to_str().unwrap(),
+            &serde_json::to_string(&calls).unwrap(),
+        ],
+        serde_json::Map::new(),
+        None,
+    );
+    for _ in 0..(calls.len() + 1) {
+        owner.pump();
+    }
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let answers = read_json_file(&out_path, "the host call answers");
+    assert_eq!(answers.as_object().unwrap().len(), calls.len());
+    for (id, _, _) in &calls {
+        let answer = &answers[id];
+        if *id == "r1" {
+            assert_eq!(answer["kind"], json!("command_rejected"), "refresh refuses");
+            assert_eq!(answer["payload"]["code"], json!("invalid_arguments"));
+            assert_eq!(
+                answer["payload"]["message"],
+                json!("host.oauth.refresh: a timer has no provider credential to refresh")
+            );
+            continue;
+        }
+        assert_eq!(answer["kind"], json!("command_accepted"), "{id} stands");
+    }
+    assert_eq!(
+        answers["a1"]["payload"]["result"]["value"],
+        json!({"declined": true}),
+        "an ask with no request declines"
+    );
+    let mut recorded = owner.services.calls();
+    recorded.sort();
+    let mut expected = vec![
+        ("config.get", "g1"),
+        ("config.set", "g2"),
+        ("data_dir", "q1"),
+        ("delegate", "d1"),
+        ("emit", "u3"),
+        ("exec", "e1"),
+        ("fs.list", "f3"),
+        ("fs.mkdir", "f5"),
+        ("fs.read", "f1"),
+        ("fs.remove", "f6"),
+        ("fs.rename", "f7"),
+        ("fs.stat", "f4"),
+        ("fs.write", "f2"),
+        ("hmac_sha256", "y2"),
+        ("http", "h1"),
+        ("log", "l1"),
+        ("log", "l2"),
+        ("model", "m1"),
+        ("oauth.callback", "c1"),
+        ("oauth.open", "o1"),
+        ("oauth.pkce", "p1"),
+        ("oauth.poll", "w1"),
+        ("oauth.show", "s1"),
+        ("secret", "n1"),
+        ("sha256", "y1"),
+        ("state.get", "k1"),
+        ("state.keys", "k2"),
+        ("state.set", "k3"),
+        ("state.unset", "k4"),
+        ("status", "u1"),
+        ("tool", "t1"),
+        ("widget", "u2"),
+    ];
+    expected.sort();
+    assert_eq!(recorded.len(), expected.len());
+    for ((variant, ran_by), (want_variant, _)) in recorded.iter().zip(expected.iter()) {
+        assert_eq!(variant, want_variant);
+        // Every call ran from a timer, which attributes nothing.
+        assert_eq!(ran_by, &None);
+    }
+}
+
+/// A failing service rejects with its own code and message, proving the
+/// service's answer reaches the wire unchanged.
+#[test]
+fn a_failing_service_rejects_with_its_code() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+read()
+write({"id": "ready", "command": "ready"})
+write({"id": "c1", "command": "call", "args": {"call": "host.log", "args": ["hi"]}})
+read()
+answer = read()
+open(sys.argv[1], "w").write(json.dumps(answer))"#;
+    let out = fakes::TempDir::new("fiber-process-failing");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.services.answer_with(Err((
+        contract::ErrorCode::IoFailed,
+        "the service fell over".to_owned(),
+    )));
+    owner.pump();
+    owner.pump();
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let answer = read_json_file(&out_path, "the service answer");
+    assert_eq!(answer["kind"], json!("command_rejected"));
+    assert_eq!(answer["payload"]["code"], json!("io_failed"));
+    assert_eq!(answer["payload"]["message"], json!("the service fell over"));
+}
+
+/// A refused host call answers rejected and runs nothing: the services
+/// record no operation.
+#[test]
+fn a_refused_host_call_runs_nothing() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+read()
+write({"id": "ready", "command": "ready"})
+write({"id": "c1", "command": "call", "args": {"call": "host.exec", "args": [7]}})
+read()
+answer = read()
+open(sys.argv[1], "w").write(json.dumps(answer))"#;
+    let out = fakes::TempDir::new("fiber-process-refused");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    owner.pump();
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let answer = read_json_file(&out_path, "the refused answer");
+    assert_eq!(answer["kind"], json!("command_rejected"));
+    assert_eq!(answer["payload"]["code"], json!("invalid_arguments"));
+    assert_eq!(
+        answer["payload"]["message"],
+        json!("host.exec: `program` must be a string")
+    );
+    assert!(
+        owner.services.calls().is_empty(),
+        "a refused call runs no operation"
+    );
+}
+
+/// The entry script's refusals land before decoding: `host.exec`
+/// refuses with the entry sentence, and the services record nothing.
+#[test]
+fn entry_refusals_land_before_decode() {
+    let script = r#"import sys, json
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+read()
+write({"id": "c1", "command": "call", "args": {"call": "host.exec", "args": ["prog"]}})
+answer = read()
+open(sys.argv[1], "w").write(json.dumps(answer))"#;
+    let out = fakes::TempDir::new("fiber-process-entry");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    let answer = read_json_file(&out_path, "the entry answer");
+    assert_eq!(answer["kind"], json!("command_rejected"));
+    assert_eq!(answer["payload"]["code"], json!("invalid_arguments"));
+    assert_eq!(
+        answer["payload"]["message"],
+        json!("host.exec: not available while init.lua runs")
+    );
+    assert!(
+        owner.services.calls().is_empty(),
+        "an entry call runs no operation"
+    );
+}
+
+/// A host call inside a tool request runs under its attribution: the
+/// services record the operation with `tool t`, and the reply settles
+/// the dispatch with its value.
+#[test]
+fn a_tool_request_anchors_its_inner_call() {
+    let script = r#"import sys, json
+TOOL = json.loads(sys.argv[2])
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+read()
+write({"id": "c1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
+write({"id": "ready", "command": "ready"})
+read()
+read()
+request = read()
+rid = request["payload"]["request_id"]
+write({"id": "c2", "command": "call", "args": {"call": "host.tool", "args": ["inner", {}], "request_id": rid}})
+answer = read()
+write({"id": "p-r", "command": "reply", "args": {"request_id": rid, "result": 7}})
+open(sys.argv[1], "w").write(json.dumps(answer))"#;
+    let out = fakes::TempDir::new("fiber-process-attribution");
+    let out_path = out.path().join("answer.json");
+    let owner = Harness::start(
+        script,
+        &[out_path.to_str().unwrap(), &wire_tool_spec().to_string()],
+        serde_json::Map::new(),
+        None,
+    );
+    owner.pump();
+    owner.pump();
+    let func = {
+        let registry = support::lock(&owner.registry);
+        registry.tools()["t"].run.clone()
+    };
+    let extension = Arc::clone(&owner.extension);
+    let cancel = support::cancel::Token::new();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = extension.dispatch_tool(&func, json!({}), Duration::from_secs(60), &cancel);
+        match done_tx.send(outcome) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    owner.pump();
+    owner.pump();
+    let outcome = fakes::Deadline::after(WITHIN)
+        .recv(&done_rx)
+        .expect("the dispatch answers within the bound");
+    assert_eq!(
+        outcome.expect("the dispatch succeeds"),
+        Some(json!(7)),
+        "the peer's reply settles the dispatch"
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    assert_eq!(
+        owner.services.calls(),
+        vec![("tool".to_owned(), Some("tool t".to_owned()))],
+        "the inner call runs under the tool's attribution"
+    );
+    let answer = read_json_file(&out_path, "the inner call answer");
+    assert_eq!(answer["kind"], json!("command_accepted"));
 }

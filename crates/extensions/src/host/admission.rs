@@ -128,6 +128,26 @@ impl CallbackContext {
             CallbackKind::Entry | CallbackKind::Timer => None,
         }
     }
+
+    /// The inner call `host.tool` may run under here, if any.
+    pub(crate) fn tool_anchor(&self) -> Option<ToolAnchor> {
+        tool_anchor(self.ran_by())
+    }
+
+    /// Whether `host.model` may run in this callback.
+    pub(crate) fn model_permitted(&self) -> bool {
+        model_permitted(self.ran_by())
+    }
+
+    /// Whether `host.delegate` may run in this callback.
+    pub(crate) fn delegate_permitted(&self) -> bool {
+        delegate_permitted(self.ran_by())
+    }
+
+    /// Whether a finished `host.exec` run here is logged.
+    pub(crate) fn exec_logged(&self) -> bool {
+        exec_logged(self.ran_by())
+    }
 }
 
 #[allow(
@@ -145,6 +165,167 @@ impl std::fmt::Debug for CallbackContext {
             .field("state_call", &self.state_call)
             .finish_non_exhaustive()
     }
+}
+
+/// What `host.tool` may run under: a tool or command callback anchors
+/// an inner call. Every other callback, and no callback at all, refuses
+/// `host.tool` with the Lua sentence, starting no tool work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "asserted by tests; production use lands in a later part"
+)]
+pub(crate) enum ToolAnchor {
+    /// Inside a tool request, judged by that tool's `executes`.
+    Tool(String),
+    /// Inside a command request, which anchors an inner call as a
+    /// tool's does.
+    Command(String),
+}
+
+/// The inner call `host.tool` may run under: a tool or command request
+/// anchors it. The `ran_by` is the request's, or `None` outside one.
+#[allow(
+    dead_code,
+    reason = "asserted by tests; production use lands in a later part"
+)]
+pub(crate) fn tool_anchor(ran_by: Option<&str>) -> Option<ToolAnchor> {
+    let ran_by = ran_by?;
+    if let Some(name) = ran_by.strip_prefix("tool ") {
+        // "tool {name} effects" is the effects function, not the run:
+        // only a bare tool name anchors.
+        if !name.contains(' ') {
+            return Some(ToolAnchor::Tool(name.to_owned()));
+        }
+        return None;
+    }
+    if let Some(name) = ran_by.strip_prefix("command ") {
+        if !name.contains(' ') {
+            return Some(ToolAnchor::Command(name.to_owned()));
+        }
+        return None;
+    }
+    None
+}
+
+/// Whether `host.model` may run under `ran_by`: everywhere but an
+/// effects, provider or search-backend request, as in Lua. `None` is a
+/// timer, which may call the session's model.
+#[allow(
+    dead_code,
+    reason = "asserted by tests; production use lands in a later part"
+)]
+pub(crate) fn model_permitted(ran_by: Option<&str>) -> bool {
+    let Some(ran_by) = ran_by else {
+        return true;
+    };
+    if ran_by.ends_with(" effects") {
+        return false;
+    }
+    if ran_by.starts_with("provider ") || ran_by.starts_with("search ") {
+        return false;
+    }
+    true
+}
+
+/// Whether `host.delegate` may run under `ran_by`: everywhere but a
+/// provider, watcher, search-backend or effects request, as in Lua.
+/// `None` is a timer, which may start a delegate.
+#[allow(
+    dead_code,
+    reason = "asserted by tests; production use lands in a later part"
+)]
+pub(crate) fn delegate_permitted(ran_by: Option<&str>) -> bool {
+    let Some(ran_by) = ran_by else {
+        return true;
+    };
+    if ran_by.ends_with(" effects") {
+        return false;
+    }
+    if ran_by.starts_with("provider ")
+        || ran_by.starts_with("watcher ")
+        || ran_by.starts_with("search ")
+    {
+        return false;
+    }
+    true
+}
+
+/// Whether a finished `host.exec` run is logged as `extension_exec`:
+/// every run but one inside a tool request, whose effects the tool's
+/// own run already judged.
+#[allow(
+    dead_code,
+    reason = "asserted by tests; production use lands in a later part"
+)]
+pub(crate) fn exec_logged(ran_by: Option<&str>) -> bool {
+    !matches!(tool_anchor(ran_by), Some(ToolAnchor::Tool(_)))
+}
+
+/// The entry-script refusal for `call`: the sentence and code the Lua
+/// half raises before it yields. `None` runs in the entry script as it
+/// does anywhere else.
+#[allow(
+    dead_code,
+    reason = "asserted by tests; production use lands in a later part"
+)]
+pub(crate) fn entry_refusal(call: &str) -> Option<(ErrorCode, String)> {
+    let string = |message: &str| Some((ErrorCode::InvalidArguments, message.to_owned()));
+    let closing = |message: &str| Some((ErrorCode::Closing, message.to_owned()));
+    match call {
+        "host.tool" => string("host.tool: not available while init.lua runs"),
+        "host.exec" => string("host.exec: not available while init.lua runs"),
+        "host.model" => closing("host.model: not available while init.lua runs"),
+        "host.delegate" => closing("host.delegate: not available while init.lua runs"),
+        "host.drive" => closing("host.drive: not available while init.lua runs"),
+        "host.ask" => string("host.ask: not available while init.lua runs"),
+        "host.oauth.callback" => {
+            string("host.oauth.callback: needs a running callback, not the entry script")
+        }
+        "host.oauth.poll" => {
+            string("host.oauth.poll: needs a running callback, not the entry script")
+        }
+        "host.oauth.refresh" => {
+            string("host.oauth.refresh: needs a running callback, not the entry script")
+        }
+        _ => None,
+    }
+}
+
+/// The lock failure `host.oauth.refresh` raises without a provider
+/// credential: the sentence names the callback, as in Lua. `None` is a
+/// timer, which holds no credential either.
+#[allow(
+    dead_code,
+    reason = "asserted by tests; production use lands in a later part"
+)]
+pub(crate) fn lock_arg_error(call: &str, ran_by: Option<&str>) -> String {
+    let kind = match ran_by {
+        None => "a timer",
+        Some(ran_by) => {
+            if ran_by.starts_with("tool ") {
+                "a tool"
+            } else if ran_by.starts_with("command ") {
+                "a command"
+            } else if ran_by.starts_with("hook ") {
+                "a hook"
+            } else if ran_by.starts_with("watcher ") {
+                "a watcher"
+            } else if ran_by.starts_with("search ") {
+                "a search backend"
+            } else if ran_by.starts_with("harness ") {
+                "a harness function"
+            } else if let Some(pair) = ran_by.strip_prefix("provider ") {
+                // A provider function names its own pair, as in Lua.
+                return format!(
+                    "{call}: {pair} has no credential to refresh; only credential() refreshes"
+                );
+            } else {
+                "a delegate run"
+            }
+        }
+    };
+    format!("{call}: {kind} has no provider credential to refresh")
 }
 
 /// Decodes a bytes position carried as standard base64, both ways. Invalid

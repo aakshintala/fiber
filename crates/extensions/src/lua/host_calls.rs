@@ -101,6 +101,23 @@ pub(super) struct Call<'t> {
     pub(super) http: Option<host::HttpObservation>,
 }
 
+/// What the callback runs as, in the process adapter's words: the shared
+/// admission policy judges the same string for both backends, so a Lua
+/// target and its process twin admit the same calls.
+fn ran_by(target: &Target) -> Option<String> {
+    match target {
+        Target::Tool(name) => Some(format!("tool {name}")),
+        Target::Command(name) => Some(format!("command {name}")),
+        Target::Hook { point, .. } => Some(format!("hook {point}")),
+        Target::Watcher { index } => Some(format!("watcher {index}")),
+        Target::Provider { name, function, .. } => Some(format!("provider {name}.{function}")),
+        Target::Search(name) => Some(format!("search {name}")),
+        Target::Effects(name) => Some(format!("tool {name} effects")),
+        Target::Delegate { .. } => Some("delegate".to_owned()),
+        Target::Timer { .. } => None,
+    }
+}
+
 /// What an admitted request leaves `settle` to do. The first two still hold
 /// the admission lock and suspend under it; the rest released it, and suspend
 /// under a fresh lock.
@@ -425,16 +442,12 @@ pub(super) fn admit<'a>(
         Request::Tool(request) => {
             // An admitted command or running tool call anchors an inner call: every other
             // target, and a tool call with no runner, answers the error at
-            // once, starting no tool work and writing no line.
-            let runner = match target {
-                Target::Tool(_) | Target::Command(_) => shared.runners.get(&id).cloned(),
-                Target::Provider { .. }
-                | Target::Hook { .. }
-                | Target::Watcher { .. }
-                | Target::Timer { .. }
-                | Target::Search(_)
-                | Target::Delegate { .. }
-                | Target::Effects(_) => None,
+            // once, starting no tool work and writing no line. The anchor
+            // is the shared policy's, so the process twin admits the same
+            // callbacks.
+            let runner = match crate::host::admission::tool_anchor(ran_by(target).as_deref()) {
+                Some(_) => shared.runners.get(&id).cloned(),
+                None => None,
             };
             match runner {
                 Some(runner) => {
@@ -472,17 +485,13 @@ pub(super) fn admit<'a>(
             }
         }
         Request::Model(spec) => {
-            // A command, tool, hook or timer callback may call the
+            // A command, tool, hook, watcher, delegate or timer callback may call the
             // session's model; an effects function, a provider function or
             // a search backend answers now, as the tool arm does for a
-            // target with no runner.
-            match target {
-                Target::Tool(_)
-                | Target::Command(_)
-                | Target::Hook { .. }
-                | Target::Watcher { .. }
-                | Target::Delegate { .. }
-                | Target::Timer { .. } => {
+            // target with no runner. The permission is the shared policy's,
+            // so the process twin admits the same callbacks.
+            match crate::host::admission::model_permitted(ran_by(target).as_deref()) {
+                true => {
                     match model {
                         Some(model) => {
                             // The registration stays in the hub, so the
@@ -548,7 +557,7 @@ pub(super) fn admit<'a>(
                         }
                     }
                 }
-                Target::Provider { .. } | Target::Search(_) | Target::Effects(_) => {
+                false => {
                     drop(shared);
                     Admitted::Replied(Reply::Model(Err((
                         contract::ErrorCode::InvalidArguments,
@@ -562,26 +571,20 @@ pub(super) fn admit<'a>(
             handle,
             timeout,
         } => {
-            // The target comes first, as the `Request::Model` arm does: a
-            // provider function, a search function or an effects function
-            // never reaches the service. A delegate `run` may start
-            // another delegate, as a tool's `run` may.
-            match target {
-                Target::Provider { .. }
-                | Target::Watcher { .. }
-                | Target::Search(_)
-                | Target::Effects(_) => {
+            // The permission comes first, as the `Request::Model` arm does: a
+            // provider function, a watcher, a search function or an effects
+            // function never reaches the service. A delegate `run` may start
+            // another delegate, as a tool's `run` may. The permission is the
+            // shared policy's, so the process twin admits the same callbacks.
+            match crate::host::admission::delegate_permitted(ran_by(target).as_deref()) {
+                false => {
                     drop(shared);
                     Admitted::Replied(Reply::Delegate(Err((
                         contract::ErrorCode::InvalidArguments,
                         "host.delegate: not available here".to_owned(),
                     ))))
                 }
-                Target::Tool(_)
-                | Target::Command(_)
-                | Target::Hook { .. }
-                | Target::Delegate { .. }
-                | Target::Timer { .. } => match delegate {
+                true => match delegate {
                     // No service is injected: only a sealed hub sees this;
                     // it answers `closing`, as `host.drive` does.
                     None => {
@@ -666,18 +669,11 @@ pub(super) fn admit<'a>(
             }
         }
         Request::Lock => {
-            // A command, hook, timer or tool holds no provider credential: calling
-            // `refresh` there is an error in the calling code, raised as
-            // a string.
-            let no_credential = |what: &str| {
-                crate::host::LockError::Arg(format!(
-                    "host.oauth.refresh: a {what} has no provider credential to refresh"
-                ))
-            };
             // Only a provider credential starts a wait, under the admission
             // lock below, so no cancel or stop lands between admission and
             // the start. Every other target releases the lock first and
-            // delivers its error after.
+            // delivers its error after. The sentence is the shared policy's,
+            // so the process twin refuses the same callbacks.
             match target {
                 Target::Provider {
                     credential: Some(CredentialFor::Stored(pair)),
@@ -703,42 +699,27 @@ pub(super) fn admit<'a>(
                     Admitted::Replied(Reply::Lock(Ok(Holder::Login(Arc::clone(slot)))))
                 }
                 Target::Provider {
-                    name,
-                    function,
-                    credential: None,
-                } => {
-                    drop(shared);
-                    Admitted::Replied(Reply::Lock(Err(crate::host::LockError::Arg(format!(
-                        "host.oauth.refresh: {name}.{function} has no credential to refresh; only credential() refreshes"
-                    )))))
+                    credential: None, ..
                 }
-                Target::Command(_) => {
+                | Target::Command(_)
+                | Target::Hook { .. }
+                | Target::Watcher { .. }
+                | Target::Timer { .. }
+                | Target::Tool(_)
+                | Target::Search(_)
+                | Target::Effects(_)
+                | Target::Delegate { .. } => {
+                    // Every target but a stored or login credential holds
+                    // no provider credential: calling `refresh` there is
+                    // an error in the calling code, raised as a string.
+                    // The sentence is the shared policy's, so the process
+                    // twin refuses the same callbacks.
+                    let message = crate::host::admission::lock_arg_error(
+                        "host.oauth.refresh",
+                        ran_by(target).as_deref(),
+                    );
                     drop(shared);
-                    Admitted::Replied(Reply::Lock(Err(no_credential("command"))))
-                }
-                Target::Hook { .. } => {
-                    drop(shared);
-                    Admitted::Replied(Reply::Lock(Err(no_credential("hook"))))
-                }
-                Target::Watcher { .. } => {
-                    drop(shared);
-                    Admitted::Replied(Reply::Lock(Err(no_credential("watcher"))))
-                }
-                Target::Timer { .. } => {
-                    drop(shared);
-                    Admitted::Replied(Reply::Lock(Err(no_credential("timer"))))
-                }
-                Target::Tool(_) | Target::Effects(_) => {
-                    drop(shared);
-                    Admitted::Replied(Reply::Lock(Err(no_credential("tool"))))
-                }
-                Target::Search(_) => {
-                    drop(shared);
-                    Admitted::Replied(Reply::Lock(Err(no_credential("search backend"))))
-                }
-                Target::Delegate { .. } => {
-                    drop(shared);
-                    Admitted::Replied(Reply::Lock(Err(no_credential("delegate run"))))
+                    Admitted::Replied(Reply::Lock(Err(crate::host::LockError::Arg(message))))
                 }
             }
         }

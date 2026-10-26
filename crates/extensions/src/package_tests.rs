@@ -181,6 +181,196 @@ fn package_undeclared_provider_fails_the_package() {
 
 /// A `commands` key makes the package lazy-only: declared commands
 /// register, and anything else fails the package.
+/// Fake host/state services behind the seam: records each operation's
+/// variant, answering nothing. The package tests prove dispatch reaches
+/// the injected services; the services' own behavior rides their tests.
+struct FakeServices {
+    calls: std::sync::Mutex<Vec<String>>,
+}
+
+/// The operation's variant, naming which host or state call ran.
+fn service_variant(operation: &super::process::context::HostOperation) -> &'static str {
+    use super::process::context::HostOperation as Op;
+    match operation {
+        Op::Http { .. } => "http",
+        Op::Exec { .. } => "exec",
+        Op::FsRead { .. } => "fs.read",
+        Op::FsWrite { .. } => "fs.write",
+        Op::FsList { .. } => "fs.list",
+        Op::FsStat { .. } => "fs.stat",
+        Op::FsMkdir { .. } => "fs.mkdir",
+        Op::FsRemove { .. } => "fs.remove",
+        Op::FsRename { .. } => "fs.rename",
+        Op::ConfigGet { .. } => "config.get",
+        Op::ConfigSet { .. } => "config.set",
+        Op::Secret { .. } => "secret",
+        Op::DataDir { .. } => "data_dir",
+        Op::Sha256 { .. } => "sha256",
+        Op::HmacSha256 { .. } => "hmac_sha256",
+        Op::Status { .. } => "status",
+        Op::Widget { .. } => "widget",
+        Op::Emit { .. } => "emit",
+        Op::Log { .. } => "log",
+        Op::Tool { .. } => "tool",
+        Op::Model { .. } => "model",
+        Op::Delegate { .. } => "delegate",
+        Op::OAuthCallback { .. } => "oauth.callback",
+        Op::OAuthOpen { .. } => "oauth.open",
+        Op::OAuthShow { .. } => "oauth.show",
+        Op::OAuthPkcs => "oauth.pkce",
+        Op::OAuthPoll { .. } => "oauth.poll",
+        Op::OAuthRefresh { .. } => "oauth.refresh",
+        Op::StateGet { .. } => "state.get",
+        Op::StateKeys => "state.keys",
+        Op::StateSet { .. } => "state.set",
+        Op::StateUnset { .. } => "state.unset",
+    }
+}
+
+impl super::process::context::ProcessHostServices for FakeServices {
+    fn perform(
+        &self,
+        _context: &super::process::context::ProcessContext,
+        _callback: &crate::host::admission::CallbackContext,
+        operation: super::process::context::HostOperation,
+        _cancel: &dyn contract::tool::Cancel,
+    ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
+        support::lock(&self.calls).push(service_variant(&operation).to_owned());
+        Ok(None)
+    }
+}
+
+/// The process context behind the seam: the session's identity, the
+/// package directory as its workspace and home, and empty folded state.
+fn process_context(dir: &fakes::TempDir) -> super::process::context::ProcessContext {
+    super::process::context::ProcessContext {
+        session_id: contract::SessionId("s_test".into()),
+        reason: contract::events::ExtensionReason::New,
+        workspace: dir.path().to_path_buf(),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: dir.path().join("machine").display().to_string(),
+            project: dir.path().join("project").display().to_string(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".into(),
+        home: dir.path().to_path_buf(),
+    }
+}
+
+/// Loads the package with `script` as its manifest-declared program:
+/// the script reads its hello, registers, answers and exits, while the
+/// test pumps the owner to its close.
+fn load_process(
+    script: &str,
+    script_args: &[&str],
+) -> (fakes::TempDir, Arc<Package>, Arc<FakeServices>) {
+    let mut argv = vec!["python3".to_owned(), "-c".to_owned(), script.to_owned()];
+    argv.extend(script_args.iter().map(|arg| (*arg).to_owned()));
+    let dir = package_dir(json!({"process": {
+        "program": "python3",
+        "args": argv[1..],
+        "exit_timeout_ms": 1000,
+    }}));
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let services = Arc::new(FakeServices {
+        calls: std::sync::Mutex::new(Vec::new()),
+    });
+    let package = Package::load_process_with(
+        PackageOptions {
+            dir: dir.path().to_path_buf(),
+            clock: Arc::clone(&clock),
+        },
+        super::runtime::Runtime::new(clock),
+        process_context(&dir),
+        services.clone(),
+    )
+    .expect("the manifest program starts");
+    // A watcher stops and kills a wedged peer once the bound passes,
+    // so the test fails instead of hanging it.
+    let watched = Arc::clone(&package);
+    std::thread::spawn(move || {
+        // The held sender keeps the channel live, so the receive ends
+        // only when the bound passes, never from a hangup.
+        let (_held, never) = std::sync::mpsc::channel::<()>();
+        if fakes::Deadline::after(WITHIN).recv(&never).is_err() {
+            let Some(extension) = watched.extension() else {
+                return;
+            };
+            extension.transport().stop();
+            match extension.transport().signal(rustix::process::Signal::KILL) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    });
+    (dir, package, services)
+}
+
+/// The bound a stuck child runs before the watchdog kills it: fast on
+/// success, failing instead of hanging.
+const WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Pumps the package's owner until the child closes, then reaps it.
+/// `load_process` watches the peer past the bound, so a wedged child
+/// fails the test instead of hanging this loop.
+fn drain(package: &Package) {
+    let extension = package
+        .extension()
+        .expect("the package started its process");
+    while matches!(extension.pump_once(), super::process::Pumped::Handled) {}
+    extension.transport().wait_exit().expect("the child reaps");
+    extension.transport().join();
+}
+
+#[test]
+fn load_process_with_shares_the_registry_with_the_child() {
+    let script = r#"import sys, json
+TOOL = json.loads(sys.argv[1])
+def write(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def read():
+    return json.loads(sys.stdin.readline())
+answers = {}
+read()
+write({"id": "c1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
+write({"id": "ready", "command": "ready"})
+write({"id": "c2", "command": "call", "args": {"call": "host.log", "args": ["hi"]}})
+for _ in range(3):
+    answer = read()
+    answers[answer["payload"]["command_id"]] = answer
+open(sys.argv[2], "w").write(json.dumps(answers))"#;
+    let out = fakes::TempDir::new("fiber-package-process");
+    let out_path = out.path().join("answers.json");
+    let tool = tool_spec().to_string();
+    let (_dir, package, services) = load_process(script, &[&tool, out_path.to_str().unwrap()]);
+    assert!(package.is_process());
+    assert!(package.extension().is_some());
+    drain(&package);
+    {
+        let registry = package
+            .registry()
+            .expect("a process package holds a registry");
+        assert!(
+            registry.tools().contains_key("t"),
+            "the child registers through the shared registry"
+        );
+    }
+    assert_eq!(
+        support::lock(&services.calls).clone(),
+        vec!["log".to_owned()],
+        "the child's host call reaches the injected services"
+    );
+    let answers: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out_path).expect("the peer writes answers"))
+            .expect("one JSON object");
+    for id in ["c1", "ready", "c2"] {
+        assert_eq!(
+            answers[id]["kind"],
+            json!("command_accepted"),
+            "{id} stands"
+        );
+    }
+}
+
 #[test]
 fn package_lazy_commands_restrict_registrations() {
     let (_dir, package) = load(json!({"commands": {"cmd": {"description": "Runs it."}}}));

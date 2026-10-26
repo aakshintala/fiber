@@ -261,6 +261,29 @@ impl Table {
         inner.pending.get(id).is_some_and(|pending| !pending.done)
     }
 
+    /// Waits until `id` is no longer live: answered, timed out,
+    /// cancelled, or retired with its generation. Every end settles
+    /// under the gate's notify, so the wait always ends; a stale id
+    /// returns at once. The pump's parked calls wait here, never on the
+    /// pump thread.
+    pub(crate) fn wait_end(&self, id: &RequestId, clock: &dyn Clock) {
+        let mut inner = support::lock(&self.inner);
+        while inner.pending.get(id).is_some_and(|pending| !pending.done) {
+            let parked = support::clock::park(
+                clock,
+                None,
+                Some(Self::WAIT_POLL),
+                &self.stream_gate,
+                inner,
+                |_| false,
+            );
+            inner = match parked {
+                Some(guard) => guard,
+                None => support::lock(&self.inner),
+            };
+        }
+    }
+
     /// The live request's callback context, for attributing a call made
     /// under it. A stale id names none.
     pub(crate) fn context(&self, id: &RequestId) -> Option<CallbackContext> {

@@ -631,6 +631,8 @@ pub(crate) struct Launch {
     pub context: context::ProcessContext,
     /// What answers its driver commands, absent while closing.
     pub drive: Option<Arc<dyn contract::extension::Drive>>,
+    /// What answers its host and state calls.
+    pub services: Arc<dyn context::ProcessHostServices>,
     /// The clock its timeouts read.
     pub clock: Arc<dyn contract::clock::Clock>,
     /// The pipe limits; the tests inject small ones.
@@ -650,6 +652,7 @@ struct Shared {
     table: Arc<requests::Table>,
     transport: transport::Transport,
     drive: Option<Arc<dyn contract::extension::Drive>>,
+    services: Arc<dyn context::ProcessHostServices>,
     clock: Arc<dyn contract::clock::Clock>,
     context: context::ProcessContext,
 }
@@ -686,6 +689,7 @@ impl ProcessExtension {
             args,
             context,
             drive,
+            services,
             clock,
             limits,
         } = launch;
@@ -699,6 +703,7 @@ impl ProcessExtension {
                 table: Arc::new(requests::Table::new()),
                 transport,
                 drive,
+                services,
                 clock,
                 context,
             }),
@@ -937,19 +942,142 @@ impl ProcessExtension {
             Ok(calls::Route::Drive { command, args }) => {
                 self.drive_command(id, command, args);
             }
-            Ok(calls::Route::Host { call: name, .. }) => {
-                // Host and state calls dispatch through the injected
-                // services, which land in a later part; until then no call
-                // stands, and the registry stays untouched.
-                self.answer_rejected(
-                    &id,
-                    ErrorCode::InvalidArguments,
-                    format!("unknown call `{name}`"),
-                );
+            Ok(calls::Route::Host { call: name, args }) => {
+                self.host_call(id, &name, args, &context);
             }
             Err((code, message)) => {
                 self.answer_rejected(&id, code, message);
             }
+        }
+    }
+
+    /// Answers one host or state `call` through the injected services.
+    /// The entry script's refusals land before decoding, as the Lua half
+    /// refuses before it yields. A decoded service operation runs on a
+    /// worker, so a slow service never holds up the pump; an ask parks
+    /// on its request, then declines; a refresh refuses, since Task 3
+    /// owns the holder continuation and no credential exists yet. A
+    /// refusal carries the Lua sentence back, as registrations do.
+    fn host_call(
+        &self,
+        id: contract::CommandId,
+        call: &str,
+        args: Vec<Value>,
+        callback: &crate::host::admission::CallbackContext,
+    ) {
+        use crate::host::admission::CallbackKind;
+        let refusal = if matches!(callback.kind, CallbackKind::Entry) {
+            crate::host::admission::entry_refusal(call)
+        } else {
+            None
+        };
+        if let Some((code, message)) = refusal {
+            self.answer_rejected(&id, code, message);
+            return;
+        }
+        let decoded = match calls::decode_host(call, &args) {
+            Ok(decoded) => decoded,
+            Err((code, message)) => {
+                self.answer_rejected(&id, code, message);
+                return;
+            }
+        };
+        match decoded {
+            calls::DecodedCall::Service(operation) => {
+                self.serve_host(id, call.to_owned(), operation, callback.clone());
+            }
+            calls::DecodedCall::Ask(_) => {
+                self.serve_ask(id, callback.clone());
+            }
+            calls::DecodedCall::Refresh => {
+                // No holder exists yet: every refresh refuses as a call
+                // with no provider credential does, in the shared words.
+                self.answer_rejected(
+                    &id,
+                    ErrorCode::InvalidArguments,
+                    crate::host::admission::lock_arg_error("host.oauth.refresh", callback.ran_by()),
+                );
+            }
+        }
+    }
+
+    /// Runs one decoded host operation on a worker, answering accepted
+    /// with its value or rejected with its code and sentence.
+    fn serve_host(
+        &self,
+        id: contract::CommandId,
+        call: String,
+        operation: context::HostOperation,
+        callback: crate::host::admission::CallbackContext,
+    ) {
+        let shared = Arc::clone(&self.shared);
+        let answer_id = id.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("process host {}", shared.owner))
+            .spawn(move || {
+                let id = answer_id;
+                let cancel = callback.cancel.clone();
+                match shared
+                    .services
+                    .perform(&shared.context, &callback, operation, &cancel)
+                {
+                    Ok(value) => answer_on(
+                        &shared,
+                        &id,
+                        value.map(|value| {
+                            contract::events::CommandResult::Call(contract::events::CallResult {
+                                value: Some(value),
+                            })
+                        }),
+                    ),
+                    Err((code, message)) => {
+                        answer_off(&shared, &id, contract::inbox::Rejection { code, message })
+                    }
+                }
+            });
+        if spawned.is_err() {
+            self.answer_rejected(
+                &id,
+                ErrorCode::IoFailed,
+                format!("{call}: Fiber could not start the host call"),
+            );
+        }
+    }
+
+    /// Answers one `host.ask`: at once when no request is answered, and
+    /// parked on the request's end otherwise, declining either way, as
+    /// the Lua half declines with nobody to answer. The park runs on a
+    /// worker, never on the pump thread.
+    fn serve_ask(
+        &self,
+        id: contract::CommandId,
+        callback: crate::host::admission::CallbackContext,
+    ) {
+        let declined = || {
+            let value = serde_json::json!({"declined": true});
+            contract::events::CommandResult::Call(contract::events::CallResult {
+                value: Some(value),
+            })
+        };
+        let Some(request) = callback.request_id().cloned() else {
+            answer_on(&self.shared, &id, Some(declined()));
+            return;
+        };
+        let shared = Arc::clone(&self.shared);
+        let answer_id = id.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("process ask {}", shared.owner))
+            .spawn(move || {
+                let id = answer_id;
+                shared.table.wait_end(&request, shared.clock.as_ref());
+                answer_on(&shared, &id, Some(declined()));
+            });
+        if spawned.is_err() {
+            self.answer_rejected(
+                &id,
+                ErrorCode::IoFailed,
+                "host.ask: Fiber could not start the host call".to_owned(),
+            );
         }
     }
 
