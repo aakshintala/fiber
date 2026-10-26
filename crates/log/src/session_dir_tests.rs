@@ -118,6 +118,60 @@ fn require_dir_on_a_dangling_link_is_not_found_naming_it() {
 }
 
 #[test]
+fn dir_is_at_matches_the_directory_at_its_expected_place() {
+    let home = fakes::TempDir::new("log-dir-is-at-match");
+    let sessions = sessions_in(home.path());
+    fs::create_dir_all(&sessions).unwrap();
+    let dir = SessionDir::new(&sessions, &id());
+    fs::create_dir(dir.path()).unwrap();
+    let expected = fs::canonicalize(dir.path()).unwrap();
+    assert!(dir_is_at(dir.path(), &expected));
+}
+
+#[test]
+fn dir_is_at_refuses_a_different_directory() {
+    let home = fakes::TempDir::new("log-dir-is-at-other");
+    let sessions = sessions_in(home.path());
+    fs::create_dir_all(&sessions).unwrap();
+    let dir = SessionDir::new(&sessions, &id());
+    fs::create_dir(dir.path()).unwrap();
+    let other = SessionDir::new(&sessions, &SessionId("s_2".to_owned()));
+    fs::create_dir(other.path()).unwrap();
+    let dir_expected = fs::canonicalize(dir.path()).unwrap();
+    let other_expected = fs::canonicalize(other.path()).unwrap();
+    assert!(!dir_is_at(dir.path(), &other_expected));
+    assert!(!dir_is_at(other.path(), &dir_expected));
+}
+
+#[test]
+fn dir_is_at_refuses_a_missing_directory() {
+    let home = fakes::TempDir::new("log-dir-is-at-missing");
+    let sessions = sessions_in(home.path());
+    fs::create_dir_all(&sessions).unwrap();
+    let dir = SessionDir::new(&sessions, &id());
+    let expected = fs::canonicalize(&sessions).unwrap().join("s_1");
+    assert!(!dir_is_at(dir.path(), &expected));
+}
+
+#[cfg(unix)]
+#[test]
+fn dir_is_at_compares_the_link_target_with_the_expected_place() {
+    let home = fakes::TempDir::new("log-dir-is-at-link");
+    let sessions = sessions_in(home.path());
+    fs::create_dir_all(&sessions).unwrap();
+    let dir = SessionDir::new(&sessions, &id());
+    fs::create_dir(dir.path()).unwrap();
+    let other = SessionDir::new(&sessions, &SessionId("s_2".to_owned()));
+    fs::create_dir(other.path()).unwrap();
+    let expected = fs::canonicalize(dir.path()).unwrap();
+    let other_expected = fs::canonicalize(other.path()).unwrap();
+    let link = sessions.join("s_link");
+    std::os::unix::fs::symlink(&expected, &link).unwrap();
+    assert!(dir_is_at(&link, &expected));
+    assert!(!dir_is_at(&link, &other_expected));
+}
+
+#[test]
 fn require_dir_with_a_file_as_parent_is_io_naming_the_directory() {
     let home = fakes::TempDir::new("log-session-dir-parent");
     let sessions = sessions_in(home.path());

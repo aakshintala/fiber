@@ -83,10 +83,18 @@ fn resolve(home: &Path, session: &SessionId, path: &str) -> Result<File, Refused
     // sit at its own place under the canonical Fiber home, so a link at
     // or above it is refused like a path outside. Both sides start from
     // the canonical Fiber home, so a home reached through a link still
-    // matches. An open file is dropped with the refusal.
-    let placed = dir.strip_prefix(home).ok().is_some_and(|relative| {
-        fs::canonicalize(&dir).is_ok_and(|real| real == home_real.join(relative))
-    });
+    // matches. The session directory's own canonicalization lives in
+    // `log`; a failure there is not placed, so it refuses as outside.
+    // An open file is dropped with the refusal.
+    // `dir` is built from a project directory entry and a validated
+    // session id, so `relative` has only normal components. Joining it to
+    // the canonical home gives the expected location without following a
+    // link in the project/session path; canonicalizing that candidate
+    // would accept the link this guard must refuse.
+    let placed = dir
+        .strip_prefix(home)
+        .ok()
+        .is_some_and(|relative| log::dir_is_at(&dir, &home_real.join(relative)));
     if !placed {
         return Err(outside(path));
     }
