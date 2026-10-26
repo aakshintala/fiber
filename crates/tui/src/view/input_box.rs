@@ -16,6 +16,21 @@ use crate::theme::{Role, style};
 /// (`docs/tui.md`, "Steering").
 const EDITING_HINT: &str = "editing a queued message · Enter amends · ⌥X drops · Esc stops";
 
+/// The item view's input hint while its draft is empty and no queued
+/// message is edited: steering for a delegate, job input for a job;
+/// `None` anywhere else (`docs/tui.md`, "Swapped views").
+fn item_hint(app: &App) -> Option<String> {
+    if !app.item_open() || app.steering_selected().is_some() || !app.input().expand().is_empty() {
+        return None;
+    }
+    let view = app.item_view()?;
+    if view.kind_glyph == "◆" {
+        Some(format!("steering goes to ◆ {}", view.description))
+    } else {
+        Some("type into the job".to_owned())
+    }
+}
+
 /// Draws the input box on the rows above `bottom`: its rows on the surface
 /// tint with edges where they fit, token targets over them. The Ctrl+R
 /// panel draws centred over the conversation instead of in reserved rows,
@@ -95,6 +110,8 @@ pub(super) fn draw(
     }
     if app.steering_selected().is_some() {
         draw_editing_hint(area, below, &rows, (cursor_row, cursor_col), buf);
+    } else if let Some(hint) = item_hint(app) {
+        draw_item_hint(area, below, &rows, (cursor_row, cursor_col), &hint, buf);
     }
     if cursor_shown(app) {
         let (x, y) = caret_cell(area, below, &rows, cursor_row, cursor_col);
@@ -231,6 +248,43 @@ fn draw_editing_hint(
     (cursor_row, cursor_col): (usize, u16),
     buf: &mut Buffer,
 ) {
+    draw_hint(
+        area,
+        below,
+        rows,
+        (cursor_row, cursor_col),
+        EDITING_HINT,
+        buf,
+    );
+}
+
+/// Draws the item view's hint at the box's right end on its last text
+/// row, with the editing hint's placement: right-aligned and dim, only
+/// over cells past the draft's text and never over the caret
+/// (`docs/tui.md`, "Swapped views").
+fn draw_item_hint(
+    area: Rect,
+    below: u16,
+    rows: &[String],
+    (cursor_row, cursor_col): (usize, u16),
+    hint: &str,
+    buf: &mut Buffer,
+) {
+    draw_hint(area, below, rows, (cursor_row, cursor_col), hint, buf);
+}
+
+/// Draws `hint` at the box's right end on its last text row,
+/// right-aligned and dim: only over cells past the draft's text and never
+/// over the caret, so a long draft clips it at the right edge instead of
+/// covering text (`docs/tui.md`, "Steering").
+fn draw_hint(
+    area: Rect,
+    below: u16,
+    rows: &[String],
+    (cursor_row, cursor_col): (usize, u16),
+    hint: &str,
+    buf: &mut Buffer,
+) {
     let Some(last) = rows.last() else {
         return;
     };
@@ -247,15 +301,14 @@ fn draw_editing_hint(
     } else {
         area.right()
     };
-    // The hint is a fixed literal of one-cell characters, drawn
-    // right-aligned only over free cells: past the draft's text, never
-    // over the caret (`docs/tui.md`, "Steering"). Cells past the box
-    // clip in the buffer write.
-    let mut x = right.saturating_sub(to_u16(format::width(EDITING_HINT)));
+    // The hint draws right-aligned only over free cells: past the
+    // draft's text, never over the caret. Cells past the box clip in
+    // the buffer write.
+    let mut x = right.saturating_sub(to_u16(format::width(hint)));
     // Without colour the hint keeps clear of the box's right side; with
     // colour overlong hints still clip in the buffer write.
     let boxed = surface::box_fit(area.width);
-    for ch in EDITING_HINT.chars() {
+    for ch in hint.chars() {
         let wide = to_u16(format::width(&ch.to_string()));
         if x >= end && (x, y) != caret && (!boxed || x < right) {
             buf.set_stringn(x, y, ch.to_string(), usize::from(wide), style(Role::Muted));
