@@ -197,6 +197,8 @@ fn an_expired_end_with_no_stop_finishes_the_partial_round() {
             .await_parked(end, fakes::Deadline::after(DEADLINE)),
         "the loop waits for the close"
     );
+    // Late wake past the end park to SESSIONS_STOP_WITHIN + 1 s; the park
+    // is proven just above (ruling 6261259790).
     temp.clock
         .advance(SESSIONS_STOP_WITHIN + Duration::from_secs(1));
     let outcome = join(rx);

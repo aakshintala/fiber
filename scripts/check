@@ -96,6 +96,7 @@ if [ "$scope" != platform ]; then
     fi
     echo "== signal sites, compiled-in list, image and tui isolation, preserve-order"
     cargo xtask signal-sites
+    cargo xtask raw-advance-sites
     cargo xtask compiled-in
     cargo xtask image-isolation
     cargo xtask tui-isolation

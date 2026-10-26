@@ -3,7 +3,7 @@
 //! `docs/code-quality.md`, the crate list in `docs/dependencies.md`, and
 //! that process signals stay in the guarded helpers.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::{TokenStream, TokenTree};
 
@@ -357,6 +357,877 @@ fn is_ident(tree: Option<&TokenTree>, word: &str) -> bool {
 
 /// Whether `tree` is the `"kill"` argument: the command's name on its
 /// own, not a longer string that merely mentions it.
+/// One kept raw fake-clock advance outside `crates/fakes`: the checker
+/// reports every raw `FakeClock::advance` or `advance_marked` call it can
+/// prove, and each proved call needs exactly one of these entries.
+pub(crate) struct RawAdvanceAllowance {
+    pub(crate) path: &'static str,
+    pub(crate) function: &'static str,
+    pub(crate) occurrence: u32,
+    pub(crate) reason: &'static str,
+    pub(crate) ruling: &'static str,
+}
+
+macro_rules! raw_advance {
+    ($path:literal, $function:literal, $occurrence:literal, $reason:expr, $ruling:literal) => {
+        RawAdvanceAllowance {
+            path: $path,
+            function: $function,
+            occurrence: $occurrence,
+            reason: $reason,
+            ruling: $ruling,
+        }
+    };
+}
+
+/// The keep-raw reasons (`docs/testing.md`, "Waits and timeouts").
+pub(crate) const NO_PARK: &str = "no code under test waits on the clock";
+pub(crate) const PANIC_RELEASE: &str = "panic-handler release that re-raises the original payload";
+pub(crate) const POLL_PAUSE: &str =
+    "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline";
+pub(crate) const LATE_WAKE: &str =
+    "late wake: one advance past a park proven at its exact instant just before";
+pub(crate) const STALL_DRIVER: &str =
+    "stall driver: a shared test-support driver whose callers own the bounds";
+
+/// Every kept raw `FakeClock` advance outside `crates/fakes`, emitted by a
+/// one-off inventory script and hand-checked at each non-no-park reason.
+#[rustfmt::skip]
+pub(crate) const RAW_ADVANCE_ALLOWANCES: &[RawAdvanceAllowance] = &[
+    raw_advance!("crates/bench/examples/bench/main_tests.rs", "a_stall_shifts_one_sample_not_a_side", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/bench/examples/bench/run_tests.rs", "a_startup_timing_starts_at_the_clock_read_just_before_the_spawn", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/bench/examples/bench/wheel_tests.rs", "the_send_stamp_is_read_before_the_write_it_precedes", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/bench/examples/bench/wheel_tests.rs", "the_send_stamp_is_read_before_the_write_it_precedes", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/cli/src/hub_service_tests.rs", "a_hung_command_is_killed_and_reaped_past_its_wait", 1, LATE_WAKE, "6261259790"),
+    raw_advance!("crates/cli/src/hub_service_tests.rs", "an_exited_child_with_a_lingering_descendant_is_reaped_within_its_wait", 1, LATE_WAKE, "6261259790"),
+    raw_advance!("crates/cli/src/sessions_search_tests.rs", "session", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/cli/src/sessions_search_tests.rs", "control_characters_in_paths_stay_on_their_lines", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/cli/src/stop_tests.rs", "a_silent_hub_fails_at_the_deadline", 1, LATE_WAKE, "6261259790"),
+    raw_advance!("crates/cli/src/stop_tests.rs", "a_failed_close_read_is_lost_not_late", 1, LATE_WAKE, "6261259790"),
+    raw_advance!("crates/doors/src/isolation/timing_tests.rs", "create_opens_one_stamped_line_and_a_second_open_writes_nothing", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/doors/src/isolation/timing_tests.rs", "recreation_stamp_excludes_the_lock_claim_and_the_downgrade", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/doors/src/isolation/timing_tests.rs", "recreation_stamp_excludes_the_lock_claim_and_the_downgrade", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/git_tests.rs", "a_stalled_diff_fails_at_the_git_deadline", 1, POLL_PAUSE, "6260728504"),
+    raw_advance!("crates/extensions/src/hooks_tests.rs", "process_watcher_uses_the_session_clock", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "quota_now_refetches_only_after_the_freshness_boundary", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "quota_now_refetches_only_after_the_freshness_boundary", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "quota_cached_never_starts_a_fetch_even_after_the_freshness_boundary", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_fetch_times_out_at_exactly_eight_seconds", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_failed_fetch_is_unreachable_with_the_last_value_and_its_age", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_window_reads_as_reset_once_its_reset_time_passes", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_window_reads_as_reset_once_its_reset_time_passes", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "an_unreachable_last_value_maps_a_passed_reset_time", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_model_call_refetches_only_past_five_minutes", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_model_call_refetches_only_past_five_minutes", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "the_observed_factory_respects_freshness_for_its_bound_pair", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "the_observed_factory_respects_freshness_for_its_bound_pair", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/lua_tests.rs", "the_thread_quits_after_the_running_callback_once_stopped", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/prepare_tests.rs", "a_stalled_install_step_is_stopped_at_its_deadline", 1, POLL_PAUSE, "6260728504"),
+    raw_advance!("crates/extensions/src/repository/declared_tests.rs", "stalled_ls_files_child", 1, POLL_PAUSE, "6260728504"),
+    raw_advance!("crates/extensions/src/repository/store_tests.rs", "a_stalled_install_step_approves_nothing_and_leaves_no_copy", 1, POLL_PAUSE, "6260728504"),
+    raw_advance!("crates/extensions/src/tui_vm_tests.rs", "loading_deadline_starts_before_source_read_and_precedes_read_error", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/src/tui_vm_tests.rs", "call_advancing", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/tests/common/mod.rs", "drive", 1, STALL_DRIVER, "6263191610"),
+    raw_advance!("crates/extensions/tests/credential_headers.rs", "a_refresh_replaces_the_token_and_its_headers_together", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/tests/credential_headers.rs", "a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_history_values", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/tests/lazy_commands.rs", "stalled_first_run", 1, LATE_WAKE, "6261259790"),
+    raw_advance!("crates/extensions/tests/lua.rs", "a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives", 1, LATE_WAKE, "6261259790"),
+    raw_advance!("crates/extensions/tests/lua_provider.rs", "a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/tests/lua_provider.rs", "sign_sees_the_extension_clocks_time_in_unix_seconds", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/extensions/tests/oauth.rs", "poll_that_times_out_while_sleeping_is_a_timeout", 1, LATE_WAKE, "6261259790"),
+    raw_advance!("crates/hub/src/connection_tests.rs", "the_idle_timer_starts_when_the_open_count_reaches_zero", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/hub/src/connection_tests.rs", "the_idle_timer_starts_when_the_open_count_reaches_zero", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/hub/src/connection_tests.rs", "rollback_removes_the_count_and_restarts_the_timer_at_zero", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/hub/src/connection_tests.rs", "rollback_removes_the_count_and_restarts_the_timer_at_zero", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/hub/src/idle_tests.rs", "an_accept_after_the_exit_claim_gets_eof_without_hello", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/hub/src/pairing_tests.rs", "authenticate_updates_last_connected", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/hub/src/resume_tests.rs", "a_command_whose_write_to_the_exiting_relay_fails_follows_the_rerouted_one", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "an_expired_end_with_no_stop_finishes_the_partial_round", 1, LATE_WAKE, "6261259790"),
+    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "a_dead_peer_abandons_the_write_as_gone", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "a_newline_terminated_ack_answers_without_a_close", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "buffered_events_plus_the_acknowledgement_answer_at_once", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "an_unconnected_socket_is_gone_not_waited_on", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/hub/src/timing_tests.rs", "a_held_summary_handshake_ends_the_timer_at_bind", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/hub/src/timing_tests.rs", "a_failed_transfer_is_stamped_for_the_next_drain", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/jobs/src/delegate/run_tests.rs", "wake_until_draining", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/jobs/src/delegate/run_tests.rs", "the_watch_stats_the_log_once_per_poll_interval", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/jobs/src/timing_tests.rs", "through_launch", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/src/diag_tests.rs", "timed_text", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/src/search/session_tests.rs", "add", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/src/search/session_tests.rs", "add_action", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/src/search_tests.rs", "session", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/src/search_timing_tests.rs", "timed", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 3, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 4, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 5, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/tests/search.rs", "a_search_never_returns_session_search_own_calls_or_results", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/tests/search.rs", "a_search_never_returns_session_search_own_calls_or_results", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/tests/search.rs", "a_search_never_returns_session_search_own_calls_or_results", 3, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/tests/search.rs", "a_search_never_returns_session_search_own_calls_or_results", 4, NO_PARK, "6179406086"),
+    raw_advance!("crates/log/tests/writing.rs", "a_line_carries_the_envelope_the_log_fills_in", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/loop/src/inbox/session_message_tests.rs", "a_hook_parked_past_its_registered_timeout_answers_hook_failed", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/loop/src/retry_tests.rs", "now", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/loop/src/timing_tests.rs", "a_warming_refresh_runs_but_adds_no_turn_scope", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/loop/src/wire_tests.rs", "a_warming_refresh_uses_the_session_factory_at_the_first_attempt", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/loop/src/wire_tests.rs", "a_cancelled_turn_cancels_its_warming_refresh", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/loop/src/wire_tests.rs", "a_switch_moves_session_reviewer_and_warm_to_the_new_factories", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/loop/tests/changes.rs", "a_later_date_appends_one_line", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/loop/tests/support/mod.rs", "run", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/loop/tests/warm.rs", "a_refresh_reached_only_at_the_cap_is_not_sent", 1, LATE_WAKE, "6261259790"),
+    raw_advance!("crates/loop/tests/warm.rs", "no_refresh_while_a_job_runs_and_one_at_once_when_it_ends_in_time", 1, LATE_WAKE, "6261259790"),
+    raw_advance!("crates/loop/tests/warm.rs", "call", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "timeout_leaves_a_stubborn_group_listed_at_its_bound", 1, POLL_PAUSE, "6260728504"),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "timeout_with_a_live_leader_answers_at_the_bound_without_the_reap", 1, POLL_PAUSE, "6260728504"),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "a_key_finished_after_its_timeout_is_refused", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "settle_withheld_reap_spends_the_bound_with_the_group_listed", 1, POLL_PAUSE, "6260728504"),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "settle_withheld_reap_spends_the_bound_with_the_group_listed", 2, POLL_PAUSE, "6260728504"),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "settle_retries_a_perm_group_until_the_bound_then_fails", 1, POLL_PAUSE, "6260728504"),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "settle_retries_a_perm_group_until_the_bound_then_fails", 2, POLL_PAUSE, "6260728504"),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "an_empty_shutdown_answers_true_past_its_end", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/src/tui_extensions_tests.rs", "render_deadline_reports_typed_extension_failure_and_switches_off", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/tests/look.rs", "a_reader_past_its_deadline_ends", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/tests/look.rs", "until_hub_exits_with_panics_naming_what_when_the_hub_outlives_the_deadline", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/tests/mcp_elicit.rs", "read_fifo_past_a_spent_deadline_times_out", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/tests/mcp_elicit.rs", "a_hold_that_never_reaches_the_server_is_named", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/tests/rail_focus.rs", "hint_lift_reports_which_condition_was_false_on_a_spent_deadline", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/tests/rail_focus.rs", "hint_lift_reports_which_condition_was_false_on_a_spent_deadline", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/tests/rail_focus.rs", "spent_wait_message_with_a_painted_first_card", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/tests/session_search.rs", "session", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/tests/sessions_search.rs", "session", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/tests/support/pty.rs", "wait_screen_panics_with_the_checked_grid_and_names_the_deadline_left", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/main/tests/support/pty.rs", "wait_screen_leading_puts_the_lead_before_the_wait_and_the_screen", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/mcp/src/login_tests.rs", "drive_releasing_on_panic", 1, PANIC_RELEASE, "6203478697"),
+    raw_advance!("crates/mcp/src/login_tests.rs", "a_reset_in_the_drain_breaks_the_drain", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 3, NO_PARK, "6179406086"),
+    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 4, NO_PARK, "6179406086"),
+    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 5, NO_PARK, "6179406086"),
+    raw_advance!("crates/provider/src/call_tests.rs", "a_backwards_clock_contributes_zero", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/provider/src/call_tests.rs", "the_first_latch_wins", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/provider/src/call_tests.rs", "the_first_latch_wins", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/provider/src/call_tests.rs", "finish_writes_once", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/provider/src/http_tests.rs", "an_observed_open_with_timing_times_one_connector_scope", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/provider/src/http_tests.rs", "an_observed_run_with_timing_times_one_scope_and_reads_the_reply", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/provider/src/http_tests.rs", "the_net_scope_ends_while_the_response_is_held", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tools/src/job_timing_tests.rs", "through_open", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tools/src/shell/monitor_tests.rs", "flood", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tools/src/web_fetch_tests.rs", "a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "hub_session_not_found_refusal_retries_the_open_delegate_subscribe", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 3, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_card_refused_summary_is_resent_likewise", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "no_resend_after_the_parent_lists_the_job_completed", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "no_resend_with_the_link_down", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_refusal_with_another_code_is_never_resent_and_leaves_no_wish", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "the_wake_is_the_retry_then_nothing_once_in_flight", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_close_while_full_is_in_flight_waits_for_its_acknowledgement", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "two_refusals_keep_two_wishes", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/items_tests.rs", "a_pair_refused_session_not_found_retries_while_running", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/keyboard_screen_tests.rs", "ctrl_c_twice_within_the_window_quits_with_the_screen_open", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/keyboard_screen_tests.rs", "ctrl_c_with_the_notice_overlay_open_still_clears_then_quits", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app_tests.rs", "ctrl_c_twice_within_the_window_quits", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app_tests.rs", "ctrl_c_at_the_window_edge_rearms", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/event_loop/attach_tests.rs", "an_answer_at_the_deadline_is_stashed_and_lost", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/lib_motion_tests.rs", "a_waiting_card_arms_for_ten_seconds_then_stops", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/lib_motion_tests.rs", "a_waiting_card_arms_for_ten_seconds_then_stops", 2, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/lib_rail_tests.rs", "the_loop_gives_the_app_the_wall_time", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/paste_image_tests.rs", "event_wakes_the_worker_before_the_advance", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/view/item_tests.rs", "completed_delegate_header_freezes_the_elapsed_and_drops_the_stop", 1, NO_PARK, "6179406086"),
+];
+
+/// A raw `FakeClock::advance` or `advance_marked` call the checker proved.
+struct RawAdvanceCall {
+    line: usize,
+    function: String,
+}
+
+/// The ban on raw fake-clock advances outside `crates/fakes`
+/// (`docs/testing.md`, "Waits and timeouts"): every raw `FakeClock::advance`
+/// or `advance_marked` call the checker proves needs exactly one
+/// `RAW_ADVANCE_ALLOWANCES` entry keyed by path, enclosing function and
+/// occurrence index, or it fails with path and line. Non-`FakeClock` methods
+/// (`CaseClock`, `GateClock`, `Home`, `SourceCursor`, an in-file type's own
+/// `advance`) are ignored, not allowances; no path is excluded for them.
+/// Comments and string contents never count, as for `signal_sites`.
+///
+/// A receiver counts as `FakeClock` when the same file proves it: a function
+/// parameter or `let` binding with a `FakeClock` type, a binding initialized
+/// by a `FakeClock` constructor, a clone of a proved receiver
+/// (`x.clone()`, `Arc::clone(&x)`, `Arc::new(x)`), a field access whose field
+/// an in-file struct declares with a `FakeClock` type, or `self` inside an
+/// `impl` over `FakeClock`. The proof is local on purpose: it cannot follow
+/// a `FakeClock` value passed through a helper (a fixture constructor, a
+/// helper's return, a cross-file field), so such sites are not reported and
+/// carry no entry.
+///
+/// The clock's own implementation and self-tests are skipped by path below,
+/// as `crates/fakes` is: they exercise the primitive itself with raw moves,
+/// so the ban does not apply to them.
+pub(crate) fn raw_advance_sites(files: &[RustFile]) -> Vec<String> {
+    raw_advance_sites_with(files, RAW_ADVANCE_ALLOWANCES)
+}
+
+fn raw_advance_sites_with(files: &[RustFile], allowances: &[RawAdvanceAllowance]) -> Vec<String> {
+    let mut remaining: Vec<&RawAdvanceAllowance> = allowances.iter().collect();
+    let mut failures = Vec::new();
+    for file in files {
+        if file.path == "crates/fakes" || file.path.starts_with("crates/fakes/") {
+            continue;
+        }
+        // The clock implementation moved to support::clock (#3426); its own
+        // files exercise the primitive itself, so the ban skips them too.
+        if file.path == "crates/support/src/clock.rs"
+            || file.path == "crates/support/src/clock_tests.rs"
+        {
+            continue;
+        }
+        let tokens = match source_tokens(&file.source) {
+            Ok(tokens) => tokens,
+            Err(stalled) => {
+                failures.push(stalled_cursor_diagnostic(file, stalled));
+                continue;
+            }
+        };
+        let mut seen: BTreeMap<String, u32> = BTreeMap::new();
+        for call in raw_advance_calls(&tokens) {
+            let occurrence = seen
+                .entry(call.function.clone())
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
+            let occurrence = *occurrence;
+            let matched: Vec<usize> = remaining
+                .iter()
+                .enumerate()
+                .filter(|(_, allowance)| {
+                    allowance.path == file.path
+                        && allowance.function == call.function
+                        && allowance.occurrence == occurrence
+                })
+                .map(|(index, _)| index)
+                .collect();
+            let duplicates = matched.len();
+            if duplicates == 1 {
+                if let Some(index) = matched.first() {
+                    remaining.remove(*index);
+                }
+            } else {
+                let reasons = matched
+                    .iter()
+                    .filter_map(|index| remaining.get(*index))
+                    .map(|allowance| format!("{} (ruling {})", allowance.reason, allowance.ruling))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                for index in matched.into_iter().rev() {
+                    remaining.remove(index);
+                }
+                failures.push(if duplicates == 0 {
+                    format!(
+                        "{}:{}: raw FakeClock advance without an allowance (function {}, occurrence {})",
+                        file.path, call.line, call.function, occurrence
+                    )
+                } else {
+                    format!(
+                        "{}:{}: raw FakeClock advance matches {} allowances, want exactly one (function {}, occurrence {}; {})",
+                        file.path,
+                        call.line,
+                        duplicates,
+                        call.function,
+                        occurrence,
+                        reasons
+                    )
+                });
+            }
+        }
+    }
+    for allowance in remaining {
+        failures.push(format!(
+            "{} {} occurrence {} ({}; ruling {}): allowance matches no raw FakeClock advance",
+            allowance.path,
+            allowance.function,
+            allowance.occurrence,
+            allowance.reason,
+            allowance.ruling
+        ));
+    }
+    failures
+}
+
+/// Whether the tokens from `start` up to `end` name `FakeClock`.
+fn range_mentions_fake_clock(tokens: &[SourceToken], start: usize, end: usize) -> bool {
+    let mut i = start;
+    while i < end && i < tokens.len() {
+        if ident(tokens.get(i), "FakeClock") {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Whether the token opens a bracket group.
+fn is_open(kind: Option<&SourceKind>) -> bool {
+    matches!(
+        kind,
+        Some(SourceKind::Punct('(') | SourceKind::Punct('[') | SourceKind::Punct('{'))
+    )
+}
+
+/// Whether the token closes a bracket group.
+fn is_close(kind: Option<&SourceKind>) -> bool {
+    matches!(
+        kind,
+        Some(SourceKind::Punct(')') | SourceKind::Punct(']') | SourceKind::Punct('}'))
+    )
+}
+
+/// The last identifier before the `:` at `colon`, if any.
+fn last_field_name(tokens: &[SourceToken], start: usize, colon: usize) -> Option<String> {
+    let mut name = None;
+    let mut s = start;
+    while s < colon {
+        if let Some(word) = tokens.get(s).and_then(|token| match &token.kind {
+            SourceKind::Ident(word) => Some(word.clone()),
+            SourceKind::String(_) | SourceKind::Punct(_) => None,
+        }) {
+            name = Some(word);
+        }
+        s += 1;
+    }
+    name
+}
+
+/// Whether the field type after `colon` names `FakeClock` before its
+/// closing comma or brace.
+fn type_mentions_fake_clock(tokens: &[SourceToken], mut m: usize) -> bool {
+    let mut inner: usize = 0;
+    while m < tokens.len() {
+        let kind = tokens.get(m).map(|token| &token.kind);
+        if is_open(kind) {
+            inner += 1;
+        } else if is_close(kind) {
+            break;
+        } else if inner == 0 {
+            if matches!(kind, Some(SourceKind::Punct(','))) {
+                break;
+            }
+            if matches!(kind, Some(SourceKind::Ident(word)) if word.as_str() == "FakeClock") {
+                return true;
+            }
+        }
+        m += 1;
+    }
+    false
+}
+
+/// Names of fields an in-file `struct` declares with a `FakeClock` type.
+fn fake_clock_fields(tokens: &[SourceToken]) -> BTreeSet<String> {
+    let mut fields = BTreeSet::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if ident(tokens.get(i), "struct") {
+            let mut j = i + 1;
+            while j < tokens.len()
+                && !punct(tokens.get(j), '{')
+                && !punct(tokens.get(j), ';')
+                && !punct(tokens.get(j), '(')
+            {
+                j += 1;
+            }
+            if punct(tokens.get(j), '{') {
+                let mut depth: usize = 1;
+                let mut k = j + 1;
+                let mut segment_start = k;
+                while k < tokens.len() && depth > 0 {
+                    let kind = tokens.get(k).map(|token| &token.kind);
+                    if is_open(kind) {
+                        depth += 1;
+                    } else if is_close(kind) {
+                        depth = depth.saturating_sub(1);
+                    }
+                    if depth == 1
+                        && punct(tokens.get(k), ':')
+                        && let Some(name) = last_field_name(tokens, segment_start, k)
+                        && name != "pub"
+                        && type_mentions_fake_clock(tokens, k + 1)
+                    {
+                        fields.insert(name);
+                    }
+                    if depth == 1 && punct(tokens.get(k), ',') {
+                        segment_start = k + 1;
+                    }
+                    k += 1;
+                }
+                i = k;
+            }
+        }
+        i += 1;
+    }
+    fields
+}
+
+/// The receiver chain before the `.` at `dot`, base first: idents joined by
+/// dots, with `[...]` index groups skipped.
+fn receiver_chain(tokens: &[SourceToken], dot: usize) -> Vec<String> {
+    let mut chain = Vec::new();
+    if dot == 0 {
+        return chain;
+    }
+    let mut j = dot - 1;
+    loop {
+        match tokens.get(j).map(|token| &token.kind) {
+            Some(SourceKind::Ident(name)) => {
+                chain.push(name.clone());
+                let Some(before) = j.checked_sub(1).and_then(|at| tokens.get(at)) else {
+                    break;
+                };
+                if matches!(before.kind, SourceKind::Punct('.')) {
+                    let Some(prev) = j.checked_sub(2) else {
+                        break;
+                    };
+                    j = prev;
+                } else {
+                    break;
+                }
+            }
+            Some(SourceKind::Punct(']')) => {
+                let mut inner: usize = 1;
+                let Some(mut at) = j.checked_sub(1) else {
+                    break;
+                };
+                while inner > 0 {
+                    match tokens.get(at).map(|token| &token.kind) {
+                        Some(SourceKind::Punct(']')) => inner += 1,
+                        Some(SourceKind::Punct('[')) => {
+                            inner = inner.saturating_sub(1);
+                        }
+                        Some(SourceKind::Ident(_))
+                        | Some(SourceKind::String(_))
+                        | Some(SourceKind::Punct(_)) => {}
+                        None => break,
+                    }
+                    if inner == 0 {
+                        break;
+                    }
+                    let Some(prev) = at.checked_sub(1) else {
+                        break;
+                    };
+                    at = prev;
+                }
+                j = at;
+                let Some(before) = j.checked_sub(1).and_then(|at| tokens.get(at)) else {
+                    break;
+                };
+                if matches!(before.kind, SourceKind::Punct('.')) {
+                    let Some(prev) = j.checked_sub(2) else {
+                        break;
+                    };
+                    j = prev;
+                } else {
+                    break;
+                }
+            }
+            Some(SourceKind::String(_)) | Some(SourceKind::Punct(_)) | None => break,
+        }
+    }
+    chain.reverse();
+    chain
+}
+
+struct AdvanceFnFrame {
+    name: String,
+    depth: usize,
+    fake: BTreeSet<String>,
+}
+/// The parameter from `start` up to `end`: its name when its type names
+/// `FakeClock`, `self` included only with its own `FakeClock` type.
+fn param_proves_fake(tokens: &[SourceToken], start: usize, end: usize) -> Option<String> {
+    let mut words = Vec::new();
+    let mut i = start;
+    while i < end {
+        if let Some(word) = tokens.get(i).and_then(|token| match &token.kind {
+            SourceKind::Ident(word) => Some(word.as_str()),
+            SourceKind::String(_) | SourceKind::Punct(_) => None,
+        }) {
+            words.push(word);
+        }
+        i += 1;
+    }
+    if words.first().is_some_and(|word| *word == "mut") {
+        words.remove(0);
+    }
+    let first = words.first().copied()?;
+    let mut colon = false;
+    let mut c = start;
+    while c < end {
+        if matches!(
+            tokens.get(c).map(|token| &token.kind),
+            Some(SourceKind::Punct(':'))
+        ) {
+            colon = true;
+            break;
+        }
+        c += 1;
+    }
+    if !colon || !range_mentions_fake_clock(tokens, start, end) {
+        return None;
+    }
+    if first == "self" {
+        return Some("self".to_owned());
+    }
+    Some(first.to_owned())
+}
+
+/// The `fn` signature at `tokens[at]`: its name and the parameters with a
+/// `FakeClock` type, `self` included when its own type names one.
+fn fn_signature(tokens: &[SourceToken], at: usize) -> Option<(String, BTreeSet<String>)> {
+    let name = tokens.get(at + 1).and_then(|token| match &token.kind {
+        SourceKind::Ident(name) => Some(name.clone()),
+        SourceKind::String(_) | SourceKind::Punct(_) => None,
+    })?;
+    let mut open = None;
+    let mut cursor = at + 2;
+    while cursor < tokens.len() {
+        let kind = tokens.get(cursor).map(|token| &token.kind);
+        if matches!(kind, Some(SourceKind::Punct('('))) {
+            open = Some(cursor);
+            break;
+        }
+        if matches!(kind, Some(SourceKind::Punct('{') | SourceKind::Punct(';'))) {
+            return None;
+        }
+        cursor += 1;
+    }
+    let open = open?;
+    let mut depth: usize = 1;
+    let mut close = None;
+    cursor = open + 1;
+    while cursor < tokens.len() {
+        let kind = tokens.get(cursor).map(|token| &token.kind);
+        if is_open(kind) {
+            depth += 1;
+        } else if is_close(kind) {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                close = Some(cursor);
+                break;
+            }
+        }
+        cursor += 1;
+    }
+    let close = close?;
+    let mut fake = BTreeSet::new();
+    let mut start = open + 1;
+    let mut inner: usize = 0;
+    let mut end = open + 1;
+    while end <= close {
+        let kind = tokens.get(end).map(|token| &token.kind);
+        let is_edge = end == close || (inner == 0 && matches!(kind, Some(SourceKind::Punct(','))));
+        if is_open(kind) {
+            inner += 1;
+        } else if is_close(kind) {
+            inner = inner.saturating_sub(1);
+        }
+        if is_edge {
+            if let Some(param) = param_proves_fake(tokens, start, end) {
+                fake.insert(param);
+            }
+            start = end + 1;
+        }
+        end += 1;
+    }
+    Some((name, fake))
+}
+
+/// Whether the receiver atom from `start` up to `end` is proved: a single
+/// proved binding, `self` with a proved receiver, or a field access whose
+/// field an in-file struct declares with a `FakeClock` type.
+fn atom_proves_fake(
+    tokens: &[SourceToken],
+    start: usize,
+    end: usize,
+    fake: &BTreeSet<String>,
+    fake_fields: &BTreeSet<String>,
+    self_fake: bool,
+) -> bool {
+    let mut cursor = start;
+    while cursor < end {
+        let kind = tokens.get(cursor).map(|token| &token.kind);
+        if matches!(kind, Some(SourceKind::Punct('&'))) {
+            cursor += 1;
+            continue;
+        }
+        if matches!(kind, Some(SourceKind::Ident(word)) if word.as_str() == "mut") {
+            cursor += 1;
+            continue;
+        }
+        break;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    while cursor < end {
+        match tokens.get(cursor).map(|token| &token.kind) {
+            Some(SourceKind::Ident(word)) => current.push_str(word.as_str()),
+            Some(SourceKind::Punct('.')) => {
+                parts.push(std::mem::take(&mut current));
+            }
+            Some(SourceKind::Punct('[')) => {
+                let mut inner: usize = 1;
+                cursor += 1;
+                while cursor < end && inner > 0 {
+                    let kind = tokens.get(cursor).map(|token| &token.kind);
+                    if matches!(kind, Some(SourceKind::Punct('['))) {
+                        inner += 1;
+                    } else if matches!(kind, Some(SourceKind::Punct(']'))) {
+                        inner = inner.saturating_sub(1);
+                    }
+                    cursor += 1;
+                }
+                continue;
+            }
+            Some(SourceKind::String(_)) | Some(SourceKind::Punct(_)) | None => break,
+        }
+        cursor += 1;
+    }
+    parts.push(current);
+    parts.retain(|part| !part.is_empty());
+    if parts.len() == 1 {
+        return parts.first().is_some_and(|only| {
+            fake.contains(only.as_str()) || (only.as_str() == "self" && self_fake)
+        });
+    }
+    parts
+        .last()
+        .is_some_and(|last| fake_fields.contains(last.as_str()))
+}
+
+/// Whether the initializer from `start` up to `end` proves a `FakeClock`:
+/// a `FakeClock` constructor, or a clone of an already proved receiver.
+fn init_proves_fake(
+    tokens: &[SourceToken],
+    start: usize,
+    end: usize,
+    fake: &BTreeSet<String>,
+    fake_fields: &BTreeSet<String>,
+    self_fake: bool,
+) -> bool {
+    let mut i = start;
+    while i + 2 < end {
+        let first = tokens.get(i).map(|token| &token.kind);
+        let second = tokens.get(i + 1).map(|token| &token.kind);
+        let third = tokens.get(i + 2).map(|token| &token.kind);
+        if matches!(first, Some(SourceKind::Ident(word)) if word.as_str() == "FakeClock")
+            && matches!(second, Some(SourceKind::Punct(':')))
+            && matches!(third, Some(SourceKind::Punct(':')))
+        {
+            return true;
+        }
+        i += 1;
+    }
+    // `x.clone()`
+    if end.saturating_sub(start) >= 5
+        && matches!(
+            tokens.get(start).map(|token| &token.kind),
+            Some(SourceKind::Ident(_))
+        )
+        && punct(tokens.get(start + 1), '.')
+        && ident(tokens.get(start + 2), "clone")
+        && punct(tokens.get(start + 3), '(')
+        && punct(tokens.get(start + 4), ')')
+    {
+        return atom_proves_fake(tokens, start, start + 1, fake, fake_fields, self_fake);
+    }
+    // `Arc::clone(&x)`, `Arc::clone(x)`, `Arc::new(x)`
+    if end.saturating_sub(start) >= 6
+        && matches!(
+            tokens.get(start).map(|token| &token.kind),
+            Some(SourceKind::Ident(word)) if word.as_str() == "Arc"
+        )
+        && punct(tokens.get(start + 1), ':')
+        && punct(tokens.get(start + 2), ':')
+        && tokens.get(start + 3).is_some_and(|token| {
+            matches!(
+                &token.kind,
+                SourceKind::Ident(word) if word == "clone" || word == "new"
+            )
+        })
+        && punct(tokens.get(start + 4), '(')
+    {
+        let mut inner: usize = 1;
+        let mut close = end;
+        let mut cursor = start + 5;
+        while cursor < end {
+            let kind = tokens.get(cursor).map(|token| &token.kind);
+            if is_open(kind) {
+                inner += 1;
+            } else if is_close(kind) {
+                inner = inner.saturating_sub(1);
+                if inner == 0 {
+                    close = cursor;
+                    break;
+                }
+            }
+            cursor += 1;
+        }
+        return atom_proves_fake(tokens, start + 5, close, fake, fake_fields, self_fake);
+    }
+    false
+}
+/// Every `.advance(` or `.advance_marked(` call whose receiver the same file
+/// proves is a `FakeClock`, in source order.
+fn raw_advance_calls(tokens: &[SourceToken]) -> Vec<RawAdvanceCall> {
+    let fake_fields = fake_clock_fields(tokens);
+    let mut calls = Vec::new();
+    let mut depth: usize = 0;
+    let mut pending_impl_fake: Option<bool> = None;
+    let mut pending_fn: Option<(String, BTreeSet<String>)> = None;
+    let mut impl_frames: Vec<(usize, bool)> = Vec::new();
+    let mut fn_frames: Vec<AdvanceFnFrame> = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if ident(tokens.get(i), "impl") {
+            let mut header_fake = false;
+            let mut j = i + 1;
+            while j < tokens.len() && !punct(tokens.get(j), '{') {
+                if ident(tokens.get(j), "FakeClock") {
+                    header_fake = true;
+                }
+                j += 1;
+            }
+            pending_impl_fake = Some(header_fake);
+        } else if ident(tokens.get(i), "fn") {
+            if let Some((name, fake)) = fn_signature(tokens, i) {
+                pending_fn = Some((name, fake));
+            }
+        } else if ident(tokens.get(i), "let") && !fn_frames.is_empty() {
+            let frame_fake = fn_frames
+                .last()
+                .map_or_else(BTreeSet::new, |frame| frame.fake.clone());
+            let frame_self_fake =
+                impl_frames.last().is_some_and(|(_, fake)| *fake) || frame_fake.contains("self");
+            let Some(frame) = fn_frames.last_mut() else {
+                i += 1;
+                continue;
+            };
+            let mut j = i + 1;
+            if ident(tokens.get(j), "mut") {
+                j += 1;
+            }
+            if let Some(name) = tokens.get(j).and_then(|token| match &token.kind {
+                SourceKind::Ident(name) => Some(name.clone()),
+                SourceKind::String(_) | SourceKind::Punct(_) => None,
+            }) {
+                let mut k = j + 1;
+                let mut typed_fake = false;
+                if punct(tokens.get(k), ':') {
+                    let mut m = k + 1;
+                    let mut inner: usize = 0;
+                    while m < tokens.len() {
+                        let kind = tokens.get(m).map(|token| &token.kind);
+                        if is_open(kind) {
+                            inner += 1;
+                        } else if is_close(kind) {
+                            inner = inner.saturating_sub(1);
+                        } else if inner == 0 {
+                            if matches!(kind, Some(SourceKind::Punct('=' | ';'))) {
+                                break;
+                            }
+                            if matches!(kind, Some(SourceKind::Ident(word)) if word.as_str() == "FakeClock")
+                            {
+                                typed_fake = true;
+                            }
+                        }
+                        m += 1;
+                    }
+                    k = m;
+                }
+                if punct(tokens.get(k), '=') {
+                    let mut m = k + 1;
+                    let mut inner: usize = 0;
+                    while m < tokens.len() {
+                        let kind = tokens.get(m).map(|token| &token.kind);
+                        if is_open(kind) {
+                            inner += 1;
+                        } else if is_close(kind) {
+                            inner = inner.saturating_sub(1);
+                        } else if inner == 0 && matches!(kind, Some(SourceKind::Punct(';'))) {
+                            break;
+                        }
+                        m += 1;
+                    }
+                    let proved = typed_fake
+                        || init_proves_fake(
+                            tokens,
+                            k + 1,
+                            m,
+                            &frame_fake,
+                            &fake_fields,
+                            frame_self_fake,
+                        );
+                    if proved {
+                        frame.fake.insert(name);
+                    } else {
+                        frame.fake.remove(&name);
+                    }
+                }
+            }
+        } else if punct(tokens.get(i), '.')
+            && tokens.get(i + 1).is_some_and(|token| {
+                matches!(
+                    &token.kind,
+                    SourceKind::Ident(name) if name == "advance" || name == "advance_marked"
+                )
+            })
+            && punct(tokens.get(i + 2), '(')
+        {
+            let chain = receiver_chain(tokens, i);
+            let self_fake = impl_frames.last().is_some_and(|(_, fake)| *fake);
+            let proved = match chain.as_slice() {
+                [] => false,
+                [base] if base.as_str() == "self" => {
+                    self_fake
+                        || fn_frames
+                            .last()
+                            .is_some_and(|frame| frame.fake.contains("self"))
+                }
+                [base] => fn_frames
+                    .last()
+                    .is_some_and(|frame| frame.fake.contains(base.as_str())),
+                [_, _, ..] => chain
+                    .last()
+                    .is_some_and(|last| fake_fields.contains(last.as_str())),
+            };
+            if proved && let Some(dot) = tokens.get(i) {
+                calls.push(RawAdvanceCall {
+                    line: dot.line,
+                    function: fn_frames
+                        .last()
+                        .map_or_else(String::new, |frame| frame.name.clone()),
+                });
+            }
+        } else if punct(tokens.get(i), '{') {
+            depth += 1;
+            if let Some(fake) = pending_impl_fake.take() {
+                impl_frames.push((depth, fake));
+            }
+            if let Some((name, fake)) = pending_fn.take() {
+                fn_frames.push(AdvanceFnFrame { name, depth, fake });
+            }
+        } else if punct(tokens.get(i), '}') {
+            depth = depth.saturating_sub(1);
+            impl_frames.retain(|(frame_depth, _)| *frame_depth <= depth);
+            fn_frames.retain(|frame| frame.depth <= depth);
+        } else if punct(tokens.get(i), ';') {
+            pending_fn = None;
+        }
+        i += 1;
+    }
+    calls
+}
+
 fn is_kill_literal(tree: Option<&TokenTree>) -> bool {
     match tree {
         Some(TokenTree::Group(group)) => group

@@ -2823,3 +2823,212 @@ fn unrecognized_tool_names_reject_nearby_owned_string_spellings() {
     let other = token_with_ident(&tokens, "other");
     assert!(!unrecognized_tool_definition(&tokens, other), "{source}");
 }
+
+fn raw_file(path: &str, source: &str) -> RustFile {
+    RustFile {
+        krate: "hub".to_owned(),
+        path: path.to_owned(),
+        rel: "src/x_tests.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+fn raw_allowance(
+    path: &'static str,
+    function: &'static str,
+    occurrence: u32,
+) -> RawAdvanceAllowance {
+    RawAdvanceAllowance {
+        path,
+        function,
+        occurrence,
+        reason: NO_PARK,
+        ruling: "6179406086",
+    }
+}
+
+#[test]
+fn raw_advance_detects_a_typed_parameter_receiver() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn drive(clock: &FakeClock) { clock.advance(D); }\n",
+    )];
+    assert_eq!(
+        raw_advance_sites_with(&files, &[]),
+        [
+            "crates/hub/src/x_tests.rs:1: raw FakeClock advance without an allowance (function drive, occurrence 1)"
+        ]
+    );
+}
+
+#[test]
+fn raw_advance_detects_a_constructor_binding() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t() { let clock = FakeClock::new(); clock.advance(D); }\n",
+    )];
+    assert_eq!(raw_advance_sites_with(&files, &[]).len(), 1);
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t() { let clock = Arc::new(FakeClock::new()); clock.advance(D); }\n",
+    )];
+    assert_eq!(raw_advance_sites_with(&files, &[]).len(), 1);
+}
+
+#[test]
+fn raw_advance_detects_a_clone_and_a_struct_field_receiver() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "struct F { clock: Arc<FakeClock> }\nfn t(f: F) { let c = Arc::clone(&f.clock); c.advance(D); f.clock.advance(D); }\n",
+    )];
+    let failures = raw_advance_sites_with(&files, &[]);
+    assert_eq!(failures.len(), 2, "{failures:?}");
+}
+
+#[test]
+fn raw_advance_ignores_advance_when_parked() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t() { let clock = FakeClock::new(); clock.advance_when_parked(Some(e), None, D, &dl); clock.try_advance_when_parked(Some(e), None, D, p); }\n",
+    )];
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn raw_advance_skips_crates_fakes() {
+    let files = [RustFile {
+        krate: "fakes".to_owned(),
+        path: "crates/fakes/src/clock.rs".to_owned(),
+        rel: "src/clock.rs".to_owned(),
+        source: "fn t() { let clock = FakeClock::new(); clock.advance(D); }\n".to_owned(),
+    }];
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn raw_advance_skips_the_support_clock_itself() {
+    for path in [
+        "crates/support/src/clock.rs",
+        "crates/support/src/clock_tests.rs",
+    ] {
+        let files = [RustFile {
+            krate: "support".to_owned(),
+            path: path.to_owned(),
+            rel: "src/clock_tests.rs".to_owned(),
+            source: "fn t() { let clock = FakeClock::new(); clock.advance(D); }\n".to_owned(),
+        }];
+        assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+    }
+}
+
+#[test]
+fn raw_advance_ignores_unrelated_receivers() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "struct GateClock; impl GateClock { fn advance(&self) {} }\nstruct Home; impl Home { fn advance(&self) {} }\nstruct CaseClock; impl CaseClock { fn advance(&self) {} }\nstruct SourceCursor; impl SourceCursor { fn advance(&mut self) {} }\nstruct Run; impl Run { fn advance(&mut self) {} }\nfn t(g: GateClock, h: Home, c: CaseClock, s: SourceCursor) { g.advance(); h.advance(); c.advance(); s.advance(); }\nimpl Run { fn key(&mut self) { self.advance(); } }\n",
+    )];
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn raw_advance_ignores_strings_and_comments() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t() { let _ = \"clock.advance(D)\"; /* clock.advance(D); */ // clock.advance(D);\n }\n",
+    )];
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn raw_advance_matches_an_allowlist_entry() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t() { let clock = FakeClock::new(); clock.advance(A); clock.advance(B); }\n",
+    )];
+    let allowances = [
+        raw_allowance("crates/hub/src/x_tests.rs", "t", 1),
+        raw_allowance("crates/hub/src/x_tests.rs", "t", 2),
+    ];
+    assert_eq!(
+        raw_advance_sites_with(&files, &allowances),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn raw_advance_matches_each_allowlist_reason() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn a(clock: &FakeClock) { clock.advance(A); }\nfn b(clock: &FakeClock) { clock.advance(B); }\nfn c(clock: &FakeClock) { clock.advance(C); }\nfn d(clock: &FakeClock) { clock.advance(D); }\nfn e(clock: &FakeClock) { clock.advance(E); }\n",
+    )];
+    let reasons = [
+        (NO_PARK, "6179406086"),
+        (PANIC_RELEASE, "6203478697"),
+        (POLL_PAUSE, "6260728504"),
+        (LATE_WAKE, "6261259790"),
+        (STALL_DRIVER, "6263191610"),
+    ];
+    let allowances: Vec<RawAdvanceAllowance> = ["a", "b", "c", "d", "e"]
+        .iter()
+        .zip(reasons)
+        .map(|(function, (reason, ruling))| RawAdvanceAllowance {
+            path: "crates/hub/src/x_tests.rs",
+            function,
+            occurrence: 1,
+            reason,
+            ruling,
+        })
+        .collect();
+    assert_eq!(
+        raw_advance_sites_with(&files, &allowances),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn raw_advance_rejects_duplicate_allowances() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t() { let clock = FakeClock::new(); clock.advance(A); }\n",
+    )];
+    let allowances = [
+        raw_allowance("crates/hub/src/x_tests.rs", "t", 1),
+        raw_allowance("crates/hub/src/x_tests.rs", "t", 1),
+    ];
+    let failures = raw_advance_sites_with(&files, &allowances);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].contains("want exactly one"), "{failures:?}");
+}
+
+#[test]
+fn raw_advance_rejects_unused_allowances() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t() { let clock = FakeClock::new(); }\n",
+    )];
+    let allowances = [raw_allowance("crates/hub/src/x_tests.rs", "t", 1)];
+    let failures = raw_advance_sites_with(&files, &allowances);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].contains("matches no raw FakeClock advance"),
+        "{failures:?}"
+    );
+}
+
+#[test]
+fn raw_advance_table_covers_all_five_reasons() {
+    for ruling in [
+        "6179406086",
+        "6203478697",
+        "6260728504",
+        "6261259790",
+        "6263191610",
+    ] {
+        assert!(
+            RAW_ADVANCE_ALLOWANCES
+                .iter()
+                .any(|allowance| allowance.ruling == ruling),
+            "no allowlist entry cites ruling {ruling}"
+        );
+    }
+}

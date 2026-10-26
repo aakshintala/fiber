@@ -2795,7 +2795,12 @@ fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
     let (statuses, notices) = observe(&session);
     // Retire the loop's fresh boot park (unbounded, from loading): only
     // parks made after this move count toward the wait below.
-    clock.advance(Duration::ZERO);
+    clock.advance_when_parked(
+        None,
+        None,
+        Duration::ZERO,
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
     let before = clock.now();
     session.deliver(&noticed("x"), None);
     // The `sleeping` line proves the run reached the exec call; the park

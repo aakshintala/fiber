@@ -4622,12 +4622,22 @@ fn a_silent_hub_ends_the_history_wait_as_a_lost_connection() {
     ));
     tx.send(Input::Bytes(b"x".to_vec()))
         .unwrap_or_else(|err| panic!("send: {err}"));
-    clock.advance(Duration::from_millis(WAIT_MS - 1));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(WAIT_MS - 1),
+        &Deadline::after(DEADLINE),
+    );
     assert!(matches!(
         finished.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     let (result, mut lp, rx) = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
@@ -4726,7 +4736,12 @@ fn an_answer_just_before_the_deadline_draws() {
         clock.await_parked(deadline, Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the ticker to park at the wait's deadline"
     );
-    clock.advance(Duration::from_millis(WAIT_MS - 1));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(WAIT_MS - 1),
+        &Deadline::after(DEADLINE),
+    );
     tx.send(Input::Hub(Line::Session(command_answer(
         "a_1",
         want.clone(),
@@ -4772,6 +4787,8 @@ fn an_answer_at_the_deadline_is_stashed_and_lost() {
         }
         std::thread::yield_now();
     }
+    // No code under test waits on the clock here: the ticker stays idle
+    // and hub::answer blocks on rx.recv (ruling 6179406086).
     clock.advance(super::super::hub::HISTORY_WAIT);
     // The channel is empty, so the receive below unblocks only after
     // this send, which is after the clock moves.
@@ -4808,7 +4825,12 @@ fn a_tick_at_the_deadline_ends_the_wait_before_a_late_answer() {
         clock.await_parked(deadline, Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the ticker to park at the wait's deadline"
     );
-    clock.advance(super::super::hub::HISTORY_WAIT);
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        super::super::hub::HISTORY_WAIT,
+        &Deadline::after(DEADLINE),
+    );
     let (result, lp, rx) = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
@@ -4843,7 +4865,12 @@ fn a_frame_tick_during_the_wait_is_acked_and_the_answer_draws() {
         clock.await_parked(frame, Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the ticker to park at the frame's deadline"
     );
-    let mark = clock.advance_marked(Duration::from_millis(120));
+    let mark = clock.advance_when_parked(
+        Some(frame),
+        None,
+        Duration::from_millis(120),
+        &Deadline::after(DEADLINE),
+    );
     // The re-arm proves the tick was received and acked before the
     // answer is sent: the wait holds at its own deadline again, so the
     // answer cannot win the race.
@@ -4890,7 +4917,12 @@ fn after_a_frame_tick_the_wait_still_ends_at_its_deadline() {
         clock.await_parked(frame, Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the ticker to park at the frame's deadline"
     );
-    let mark = clock.advance_marked(Duration::from_millis(120));
+    let mark = clock.advance_when_parked(
+        Some(frame),
+        None,
+        Duration::from_millis(120),
+        &Deadline::after(DEADLINE),
+    );
     // The ack re-arms the wait: the ticker parks at its deadline again
     // before the clock moves on.
     let deadline = wait_deadline(&clock);
@@ -4898,10 +4930,13 @@ fn after_a_frame_tick_the_wait_still_ends_at_its_deadline() {
         clock.await_parked_since(&mark, Some(deadline), Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the ticker to park at the wait's deadline again"
     );
-    clock.advance(
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
         super::super::hub::HISTORY_WAIT
             .checked_sub(Duration::from_millis(120))
             .expect("within the wait"),
+        &Deadline::after(DEADLINE),
     );
     let (result, lp, _) = Deadline::after(DEADLINE)
         .recv(&finished)
@@ -5010,7 +5045,12 @@ fn a_later_frame_deadline_leaves_the_wait_deadline_first() {
         clock.await_parked(deadline, Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the ticker to park at the wait's deadline"
     );
-    clock.advance(super::super::hub::HISTORY_WAIT);
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        super::super::hub::HISTORY_WAIT,
+        &Deadline::after(DEADLINE),
+    );
     let (result, lp, _) = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
