@@ -850,7 +850,12 @@ impl Pages {
     }
 
     /// Whether page `at`'s load failed since the width last changed.
+    /// Only a closed page can fail: the open page holds the live fold
+    /// and never loads, and an unknown page holds nothing.
     pub(crate) fn page_failed(&self, at: usize) -> bool {
+        if at >= self.residency.len() {
+            return false;
+        }
         self.residency.page_failed(at)
     }
 

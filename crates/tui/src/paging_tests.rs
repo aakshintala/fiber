@@ -1165,10 +1165,6 @@ fn open_jobs_add_no_seed_text_however_many_cuts_they_cross() {
         for line in &stream.lines {
             pages.apply(line);
         }
-        // `docs/tui.md`, "History and paging": pages cut inside turns at
-        // `step_started`, about 64 lines each. The 64-line pad fills the
-        // open page to `PAGE_LINES` with nothing in flight, so each
-        // `turn_started` below closes exactly one page.
         assert_eq!(pages.residency.len(), cuts, "{cuts} cuts");
         for job in 0..5 {
             let held = held(&pages, &format!("open job {job}"));
@@ -4872,6 +4868,74 @@ fn a_failed_ancestor_page_keeps_every_count() {
     assert!(
         got.len() < whole(&pages, &log).len(),
         "the failed page draws nothing"
+    );
+}
+
+/// Only a closed page's load can fail: the open page holds the live
+/// fold and never loads, and an unknown page holds nothing. Kills the
+/// `at >= len` guard's removal (a pass-through would report the open
+/// page failed).
+#[test]
+fn page_failed_names_only_a_closed_page_failure() {
+    let (_ancestor, log) = chain();
+    let mut pages = Pages::new(80);
+    for line in &log {
+        pages.apply(line);
+    }
+    let open = pages.residency.len();
+    assert!(open > 0, "the chain closes a page");
+    let failed = pages.index().pages()[0].clone();
+    drop_all(&mut pages);
+    pages.fail(&failed.session, failed.first_seq);
+    assert!(pages.page_failed(0), "a closed page's failure reports");
+    // The open page never loads: even with its index in the failed set
+    // it reports nothing, as does an unknown page.
+    pages.residency.failed_mut().insert(open);
+    assert!(!pages.page_failed(open), "the open page never fails");
+    assert!(!pages.page_failed(open + 1), "an unknown page never fails");
+}
+
+/// A width change clears what failed since the last one: the failed
+/// page is asked for again. Kills `replace Residency::on_width_change
+/// with ()`.
+#[test]
+fn a_width_change_asks_for_a_failed_page_again() {
+    let (_ancestor, log) = chain();
+    let mut pages = Pages::new(80);
+    for line in &log {
+        pages.apply(line);
+    }
+    let seam = pages
+        .index()
+        .pages()
+        .iter()
+        .position(|page| page.session == SessionId(SESSION.to_owned()))
+        .expect("the own run starts past a seam");
+    let failed = pages.index().pages()[seam - 1].clone();
+    drop_all(&mut pages);
+    pages.fail(&failed.session, failed.first_seq);
+    assert!(
+        pages.page_failed(seam - 1),
+        "the failure reports before the width change"
+    );
+    let top = pages.index().total();
+    assert!(
+        !pages
+            .needs(0, top)
+            .contains(&(failed.session.clone(), failed.first_seq..=failed.last_seq)),
+        "the failed ask is gone"
+    );
+    pages.set_width(100);
+    assert!(
+        !pages.page_failed(seam - 1),
+        "a new width clears the failure"
+    );
+    let top = pages.index().total();
+    assert!(
+        pages
+            .needs(0, top)
+            .contains(&(failed.session.clone(), failed.first_seq..=failed.last_seq)),
+        "the failed ask returns"
     );
 }
 
