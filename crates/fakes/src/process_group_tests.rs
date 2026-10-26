@@ -192,24 +192,56 @@ fn group_alive_sees_a_killed_child_until_it_is_reaped() {
         .spawn()
         .unwrap();
     let group = child.id();
-    let guard = KillOnDrop(group);
+    let mut guard = KillAndReap(Some(child), group);
     assert!(group_alive(group), "a live group must read as alive");
     assert!(
         kill_group(group, "KILL").unwrap(),
         "the kill must reach the group"
     );
     // No reap yet: the killed child is a zombie, and the instantaneous
-    // probe still reports a zombie's group as alive. Holding the reap is
-    // the pause point that forces the interleaving the flaky assertion saw.
+    // probe still reports a zombie's group as alive. Holding the reap
+    // holds the killed child as a zombie, forcing the probe to read the
+    // killed-but-unreaped state.
     assert!(
         group_alive(group),
         "an unreaped zombie's group must read as alive"
     );
+    let child = guard.0.take().unwrap();
     drop(guard);
     reaped(child, "the killed child");
     assert!(
         group_empties(group, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited {MUST_SUCCEED_WITHIN:?} for the reaped group to empty"
+    );
+}
+
+/// Unwinding through [`KillAndReap`] kills the group and reaps the child:
+/// a simulated assertion failure after the kill leaves no zombie behind.
+#[test]
+fn kill_and_reap_kills_and_reaps_on_unwind() {
+    let child = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let pid = child.id();
+    let failed = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _guard = KillAndReap(Some(child), group);
+        assert!(
+            kill_group(group, "KILL").unwrap(),
+            "the kill must reach the group"
+        );
+        panic!("simulated assertion failure");
+    }));
+    assert!(failed.is_err(), "the simulated failure must unwind");
+    assert!(
+        !alive(pid),
+        "the unwound child must be reaped, not a zombie"
+    );
+    assert!(
+        group_empties(group, Deadline::after(MUST_SUCCEED_WITHIN)),
+        "waited {MUST_SUCCEED_WITHIN:?} for the unwound group to empty"
     );
 }
 
@@ -539,6 +571,21 @@ struct KillOnDrop(u32);
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
         kill_group(self.0, "KILL").unwrap_or(false);
+    }
+}
+
+/// Kills a process group and reaps its child on drop, so a failed
+/// assertion leaves neither a running process nor a zombie.
+struct KillAndReap(Option<Child>, u32);
+
+impl Drop for KillAndReap {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            kill_group(self.1, "KILL").unwrap_or(false);
+            match child.wait() {
+                Ok(_) | Err(_) => {}
+            }
+        }
     }
 }
 
