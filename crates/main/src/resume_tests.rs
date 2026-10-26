@@ -153,22 +153,22 @@ fn recreatable_needs_a_repository_and_a_missing_path() {
 fn a_recreatable_worktree_is_allowed_outside_the_launch_project() {
     let home = fakes::TempDir::new("main-resume-recreatable-outside");
     // A missing path with a recorded repository recreates, so the launch
-    // predicate is never consulted even though it would refuse.
+    // predicate is never consulted even though it would refuse. The session
+    // log is valid, so `in_launch_project` would reach the predicate if the
+    // recreatable check did not short-circuit first.
     let recorded = Worktree {
         path: home.path().join("wt").to_string_lossy().into_owned(),
         branch: "fiber/x".to_owned(),
         repository: Some("/repo/.git".to_owned()),
     };
+    let dir = home.path().join("sessions").join("s_0123456789abcdef");
+    let _log = session_with(&dir, Some(recorded.clone()));
     let seen = RefCell::new(Vec::new());
     assert!(
-        !resume_refused(
-            Some(&recorded),
-            &home.path().join("sessions").join("s_0123456789abcdef"),
-            &|started: &str| {
-                seen.borrow_mut().push(started.to_owned());
-                false
-            }
-        ),
+        !resume_refused(Some(&recorded), &dir, &|started: &str| {
+            seen.borrow_mut().push(started.to_owned());
+            false
+        }),
         "a missing but recreatable worktree is allowed outside the launch project"
     );
     assert!(
