@@ -3046,7 +3046,9 @@ fn group_line_and_ledger_show_parsed_arguments_never_json() {
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     assert!(text(&buf).contains("{\"questions\""), "{}", text(&buf));
-    // Once requested, the parsed form draws as one row, never JSON.
+    // Once requested, the parsed form draws as one row, never JSON:
+    // collapsed, the group is one line (`docs/tui.md`, "Tool groups and
+    // the ledger").
     app.on_line(at(
         "tool_call_requested",
         Some("a_1"),
@@ -3063,7 +3065,9 @@ fn group_line_and_ledger_show_parsed_arguments_never_json() {
         .filter(|row| row.contains("4 questions"))
         .collect();
     assert_eq!(holding.len(), 1, "{shown}");
-    // Ten calls in flight still draw one row, cut with "…".
+    // Ten calls in flight still draw one row, cut with "…", the toggle
+    // staying put: what does not fit is cut (`docs/tui.md`, "Tool groups
+    // and the ledger").
     for n in 0..9 {
         app.on_line(at(
             "tool_call_requested",
@@ -3082,7 +3086,9 @@ fn group_line_and_ledger_show_parsed_arguments_never_json() {
     assert!(row.contains('…'), "{row}");
     assert!(row.ends_with('▸'), "{row}");
     assert!(crate::format::width(&row) <= usize::from(W), "{row}");
-    // At a narrow width the one row is cut there instead.
+    // At a narrow width the one row is cut there instead: the summary line
+    // is cut with "…" so the duration and the toggle stay put
+    // (`docs/tui.md`, "Tool groups and the ledger").
     app.set_size(40, H);
     let narrow = Rect::new(0, 0, 40, H);
     let mut buf = Buffer::empty(narrow);
@@ -3093,7 +3099,9 @@ fn group_line_and_ledger_show_parsed_arguments_never_json() {
     assert!(row.ends_with('▸'), "{row}");
     assert!(crate::format::width(&row) <= 40, "{row}");
     assert!(!shown.contains("{\""), "{shown}");
-    // A finished call's ledger row shows its parsed summary, never JSON.
+    // A finished call's ledger row shows its parsed summary, never JSON:
+    // the ledger holds one row per call (`docs/tui.md`, "Tool groups and
+    // the ledger").
     {
         let mut app = empty();
         attach(&mut app, "s_aaaaaaaaaaaaaaaa");
