@@ -213,7 +213,7 @@ impl App {
             width: fetch.width,
             height: fetch.height,
         };
-        let columns = self.screen.pages().column_width();
+        let columns = self.screen.pages().wrap_width();
         let (cols, rows) = crate::image::grid(&part, columns, cell);
         self.images
             .out
