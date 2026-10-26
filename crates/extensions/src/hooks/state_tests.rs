@@ -449,7 +449,7 @@ fn state_own_command_failure_drops_earlier_changes_not_other_writes() {
             .commands
             .admit_with(&contract::CommandId("state-own".into()), "go", "")
             .unwrap();
-        let queued = admitted.queued().clone();
+        let queued = admitted.wait().clone();
         let (tx, done) = std::sync::mpsc::channel();
         queued.release();
         std::thread::spawn(move || {

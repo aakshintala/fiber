@@ -14,11 +14,25 @@ use serde_json::{Map, Value};
 
 use crate::Error;
 use crate::lua::LuaExtension;
+use crate::runtime::{FunctionRef, Runtime};
 
 /// One installed search backend, running in its extension's VM.
 pub(crate) struct LuaSearch {
     extension: Arc<LuaExtension>,
     name: String,
+}
+
+/// One installed process search backend, running behind the session's
+/// runtime.
+pub(crate) struct ProcessSearch {
+    /// The session's runtime, holding the backend's reference.
+    runtime: Runtime,
+    /// The extension that registered the backend.
+    owner: String,
+    /// The backend's name.
+    name: String,
+    /// Its `run` behind the runtime.
+    run: FunctionRef,
 }
 
 impl LuaSearch {
@@ -28,44 +42,88 @@ impl LuaSearch {
     }
 }
 
+impl ProcessSearch {
+    /// The backend `name` of `owner` behind `runtime`, running `run`.
+    pub(crate) fn new(runtime: Runtime, owner: String, name: String, run: FunctionRef) -> Self {
+        Self {
+            runtime,
+            owner,
+            name,
+            run,
+        }
+    }
+}
+
+/// The query a search backend runs, with the domain filter Fiber's own
+/// `web_search` passes: `{ query }` with `allowed_domains` or
+/// `blocked_domains` when the call gave one.
+fn search_arg(query: &str, domains: &Domains) -> Value {
+    let mut arg = Map::new();
+    arg.insert("query".to_owned(), Value::String(query.to_owned()));
+    match domains {
+        Domains::Any => {}
+        Domains::Allowed(domains) => {
+            arg.insert(
+                "allowed_domains".to_owned(),
+                Value::Array(domains.iter().cloned().map(Value::String).collect()),
+            );
+        }
+        Domains::Blocked(domains) => {
+            arg.insert(
+                "blocked_domains".to_owned(),
+                Value::Array(domains.iter().cloned().map(Value::String).collect()),
+            );
+        }
+    }
+    Value::Object(arg)
+}
+
+/// The backend's answer as results, or its failure: `Ok(None)` once
+/// `cancel` stopped the search, a timeout past its timeout, and any other
+/// extension error as `tool_error` with its message, so a malformed return
+/// keeps its backend, extension and position.
+fn search_outcome(
+    backend: &str,
+    extension: &str,
+    returned: Result<Option<Value>, Error>,
+) -> Result<Option<Vec<SearchResult>>, Failure> {
+    match returned {
+        Ok(None) => Ok(None),
+        Ok(Some(value)) => read_results(backend, extension, value).map(Some),
+        Err(e @ Error::Timeout { .. }) => Err(failure(ErrorCode::Timeout, e.to_string())),
+        Err(e) => Err(failure(ErrorCode::ToolError, e.to_string())),
+    }
+}
+
 impl SearchBackend for LuaSearch {
     /// Runs the backend's `run` on the query and the domain filter, in the
-    /// backend's order. `Ok(None)` once `cancel` stopped the search. A
-    /// backend past its timeout fails `timeout`; any other extension error
-    /// fails `tool_error` with its message, so a malformed return keeps its
-    /// backend, extension and position.
+    /// backend's order.
     fn search(
         &self,
         query: &str,
         domains: &Domains,
         cancel: &dyn Cancel,
     ) -> Result<Option<Vec<SearchResult>>, Failure> {
-        let mut arg = Map::new();
-        arg.insert("query".to_owned(), Value::String(query.to_owned()));
-        match domains {
-            Domains::Any => {}
-            Domains::Allowed(domains) => {
-                arg.insert(
-                    "allowed_domains".to_owned(),
-                    Value::Array(domains.iter().cloned().map(Value::String).collect()),
-                );
-            }
-            Domains::Blocked(domains) => {
-                arg.insert(
-                    "blocked_domains".to_owned(),
-                    Value::Array(domains.iter().cloned().map(Value::String).collect()),
-                );
-            }
-        }
         let returned = self
             .extension
-            .search_run(&self.name, Value::Object(arg), cancel);
-        match returned {
-            Ok(None) => Ok(None),
-            Ok(Some(value)) => read_results(&self.name, self.extension.name(), value).map(Some),
-            Err(e @ Error::Timeout { .. }) => Err(failure(ErrorCode::Timeout, e.to_string())),
-            Err(e) => Err(failure(ErrorCode::ToolError, e.to_string())),
-        }
+            .search_run(&self.name, search_arg(query, domains), cancel);
+        search_outcome(&self.name, self.extension.name(), returned)
+    }
+}
+
+impl SearchBackend for ProcessSearch {
+    /// Runs the backend's `run` behind the runtime on the query and the
+    /// domain filter, in the backend's order.
+    fn search(
+        &self,
+        query: &str,
+        domains: &Domains,
+        cancel: &dyn Cancel,
+    ) -> Result<Option<Vec<SearchResult>>, Failure> {
+        let returned = self
+            .runtime
+            .search_run(&self.run, search_arg(query, domains), cancel);
+        search_outcome(&self.name, &self.owner, returned)
     }
 }
 
@@ -114,24 +172,64 @@ pub(crate) type Choice = (Option<Arc<dyn SearchBackend>>, Vec<Notice>);
 /// the choice raised.
 type Selection = (Option<usize>, Vec<Notice>);
 
+/// One installed search backend, in load order: its extension, its name,
+/// and how it runs.
+pub(crate) struct SearchSource {
+    /// The extension that registered the backend.
+    pub(crate) extension: String,
+    /// The backend's name.
+    pub(crate) name: String,
+    /// How the backend runs.
+    pub(crate) backend: SearchBackendKind,
+}
+
+/// How an installed search backend runs: in its VM, or behind the
+/// session's runtime.
+#[derive(Clone)]
+pub(crate) enum SearchBackendKind {
+    /// A Lua backend, running in its extension's VM.
+    Lua(Arc<LuaExtension>),
+    /// A process backend, running behind the session's runtime.
+    Process(ProcessSearchBackend),
+}
+
+/// A process backend's run: the runtime and reference behind it.
+#[derive(Clone)]
+pub(crate) struct ProcessSearchBackend {
+    /// The session's runtime, holding the backend's reference.
+    pub(crate) runtime: Runtime,
+    /// The extension that registered the backend.
+    pub(crate) owner: String,
+    /// Its `run` behind the runtime.
+    pub(crate) run: FunctionRef,
+}
+
 /// Chooses the backend Fiber's own `web_search` runs: `backends` holds the
 /// extension, the backend name and the handle in load order, and `setting`
 /// is `web_search.backend`. With one backend installed, it is used. With
 /// more than one, the setting names the one used. When two extensions
 /// register one backend name, neither registers, as two tools of one name
 /// neither gets (`docs/extensions.md`, "Registering").
-pub(crate) fn choose(
-    backends: Vec<(String, String, Arc<LuaExtension>)>,
-    setting: Option<&str>,
-) -> Choice {
+pub(crate) fn choose(backends: Vec<SearchSource>, setting: Option<&str>) -> Choice {
     let pairs: Vec<(String, String)> = backends
         .iter()
-        .map(|(extension, name, _)| (extension.clone(), name.clone()))
+        .map(|source| (source.extension.clone(), source.name.clone()))
         .collect();
     let (chosen, notices) = select(&pairs, setting);
     let backend = chosen.and_then(|index| {
-        let (_, name, handle) = backends.get(index)?;
-        Some(Arc::new(LuaSearch::new(Arc::clone(handle), name.clone())) as Arc<dyn SearchBackend>)
+        let source = backends.get(index)?;
+        match &source.backend {
+            SearchBackendKind::Lua(handle) => Some(Arc::new(LuaSearch::new(
+                Arc::clone(handle),
+                source.name.clone(),
+            )) as Arc<dyn SearchBackend>),
+            SearchBackendKind::Process(process) => Some(Arc::new(ProcessSearch::new(
+                process.runtime.clone(),
+                process.owner.clone(),
+                source.name.clone(),
+                process.run.clone(),
+            )) as Arc<dyn SearchBackend>),
+        }
     });
     (backend, notices)
 }

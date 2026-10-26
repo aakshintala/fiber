@@ -23,17 +23,6 @@ mod tests;
 #[path = "keys_tests.rs"]
 mod keys_tests;
 
-/// Refuses only the own hook reached while the loop serves a command's chain.
-pub(super) fn own_command_failure(
-    extension: &crate::LuaExtension,
-    point: &str,
-) -> Option<HookFailure> {
-    extension.runs_own_command_call().then(|| HookFailure {
-        extension: extension.name().to_owned(),
-        message: format!("The `{point}` hook would wait behind its extension's command"),
-    })
-}
-
 /// Runs the `sanitize` and `transform` `before_tool` hooks on `call`, in
 /// order: a `check` hook judges what will actually run, so it runs later,
 /// in [`check_tool`].
@@ -46,20 +35,20 @@ pub(super) fn before_tool(
     let mut changed_by = Vec::new();
     let mut notices = Vec::new();
     for entry in session.before_tool.iter().filter(|entry| !entry.check) {
-        let Some(extension) = session.lua.get(entry.extension) else {
+        let Some(name) = session.runtime.owner_name(&entry.hook) else {
             continue;
         };
-        if let Some(failure) = own_command_failure(extension, BEFORE_TOOL) {
+        if let Some(failure) = session.runtime.runs_own_command(&entry.hook, BEFORE_TOOL) {
             return BeforeToolAnswer {
                 outcome: BeforeToolOutcome::Failed(failure),
                 notices,
             };
         }
-        let name = extension.name();
         let arg = shown(call, &arguments);
-        let returned = extension
-            .hook_with(BEFORE_TOOL, entry.index, arg, |value| {
-                let change = decode_tool(name, value)?;
+        let returned = session
+            .runtime
+            .hook_with(&entry.hook, arg, |value| {
+                let change = decode_tool(&name, value)?;
                 let changed = matches!(&change, ToolReturn::Rewrite(_));
                 Ok((change, changed))
             })
@@ -75,7 +64,7 @@ pub(super) fn before_tool(
             Ok(ToolReturn::Nothing) => {}
             Ok(ToolReturn::Rewrite(rewritten)) => {
                 arguments = rewritten;
-                name_once(&mut changed_by, name);
+                name_once(&mut changed_by, &name);
             }
             Ok(ToolReturn::Refuse(reason)) => {
                 return BeforeToolAnswer {
@@ -95,7 +84,7 @@ pub(super) fn before_tool(
                     notices,
                 };
             }
-            Err(error) => notices.push(failed_notice(BEFORE_TOOL, name, &error)),
+            Err(error) => notices.push(failed_notice(BEFORE_TOOL, &name, &error)),
         }
     }
     BeforeToolAnswer {
@@ -116,20 +105,20 @@ pub(super) fn before_tool(
 pub(super) fn check_tool(session: &SessionExtensions, call: &BeforeToolCall<'_>) -> CheckAnswer {
     let mut notices = Vec::new();
     for entry in session.before_tool.iter().filter(|entry| entry.check) {
-        let Some(extension) = session.lua.get(entry.extension) else {
+        let Some(name) = session.runtime.owner_name(&entry.hook) else {
             continue;
         };
-        if let Some(failure) = own_command_failure(extension, BEFORE_TOOL) {
+        if let Some(failure) = session.runtime.runs_own_command(&entry.hook, BEFORE_TOOL) {
             return CheckAnswer {
                 outcome: CheckOutcome::Failed(failure),
                 notices,
             };
         }
-        let name = extension.name();
         let arg = shown(call, call.arguments);
-        let returned = extension
-            .hook_with(BEFORE_TOOL, entry.index, arg, |value| {
-                decode_check(name, value).map(|change| (change, false))
+        let returned = session
+            .runtime
+            .hook_with(&entry.hook, arg, |value| {
+                decode_check(&name, value).map(|change| (change, false))
             })
             .map(|(change, lines, _)| {
                 session.state.queue(lines);
@@ -155,7 +144,7 @@ pub(super) fn check_tool(session: &SessionExtensions, call: &BeforeToolCall<'_>)
                     notices,
                 };
             }
-            Err(error) => notices.push(failed_notice(BEFORE_TOOL, name, &error)),
+            Err(error) => notices.push(failed_notice(BEFORE_TOOL, &name, &error)),
         }
     }
     CheckAnswer {
@@ -175,15 +164,15 @@ pub(super) fn before_message(
     let mut context = Vec::new();
     let mut notices = Vec::new();
     for entry in &session.before_message {
-        let Some(extension) = session.lua.get(entry.extension) else {
+        let Some(name) = session.runtime.owner_name(&entry.hook) else {
             continue;
         };
-        let name = extension.name();
         let current = content.as_deref().unwrap_or(message.content);
         let arg = shown_message(current, message);
-        let returned = extension
-            .hook_with(BEFORE_MESSAGE, entry.index, arg, |value| {
-                let change = decode_message(name, current, value, entry.check)?;
+        let returned = session
+            .runtime
+            .hook_with(&entry.hook, arg, |value| {
+                let change = decode_message(&name, current, value, entry.check)?;
                 let changed = matches!(&change, MessageReturn::Change { .. });
                 Ok((change, changed))
             })
@@ -200,7 +189,7 @@ pub(super) fn before_message(
             Ok((MessageReturn::Change { replace, text }, lines)) => {
                 if let Some(parts) = replace {
                     content = Some(parts);
-                    name_once(&mut changed_by, name);
+                    name_once(&mut changed_by, &name);
                 }
                 if let Some(text) = text {
                     context.push(Context {
@@ -230,7 +219,7 @@ pub(super) fn before_message(
                     notices,
                 };
             }
-            Err(error) => notices.push(failed_notice(BEFORE_MESSAGE, name, &error)),
+            Err(error) => notices.push(failed_notice(BEFORE_MESSAGE, &name, &error)),
         }
     }
     if content.is_some() || !context.is_empty() {

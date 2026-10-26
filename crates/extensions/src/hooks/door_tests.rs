@@ -288,7 +288,7 @@ fn an_admitted_command_holds_its_runner_through_success_and_lua_error() {
             .admit_with(&contract::CommandId("c_admitted".into()), "go", "")
             .unwrap();
         assert_eq!(session.lua[0].runners_held(), 1);
-        let queued = admitted.queued().clone();
+        let queued = admitted.wait().clone();
         queued.release();
         let (send, result) = mpsc::channel();
         thread::spawn(move || {
@@ -331,7 +331,7 @@ fn a_command_deadline_ends_its_runner_at_but_not_below_the_boundary() {
             .commands
             .admit_with(&contract::CommandId("c_timeout".into()), "go", "")
             .unwrap();
-        let queued = admitted.queued().clone();
+        let queued = admitted.wait().clone();
         queued.release();
         let (send, result) = mpsc::channel();
         let caller = thread::spawn(move || {
@@ -431,7 +431,7 @@ fn an_untaken_request_keeps_stream_order_under_both_timeout_orders() {
             .commands
             .admit_with(&contract::CommandId("c_wait".into()), "go", "")
             .unwrap();
-        let queued = admitted.queued().clone();
+        let queued = admitted.wait().clone();
         queued.release();
         let (send, command_result) = mpsc::channel();
         let command_thread = thread::spawn(move || {
@@ -525,7 +525,7 @@ fn the_commands_own_tool_runs_in_a_gap_without_tool_hooks() {
         .commands
         .admit_with(&contract::CommandId("c_gap".into()), "go", "")
         .unwrap();
-    let queued = admitted.queued().clone();
+    let queued = admitted.wait().clone();
     queued.release();
     let (send, result) = mpsc::channel();
     thread::spawn(move || {
@@ -575,7 +575,7 @@ fn own_tool_hooks_fail_when_reached_and_run_normally_after_the_answer() {
             .commands
             .admit_with(&contract::CommandId("c_own".into()), "go", "")
             .unwrap();
-        let queued = admitted.queued().clone();
+        let queued = admitted.wait().clone();
         queued.release();
         let (send, result) = mpsc::channel();
         thread::spawn(move || {
@@ -705,7 +705,7 @@ fn earlier_hooks_run_and_a_refusal_before_the_own_hook_wins() {
             .commands
             .admit_with(&contract::CommandId("c_order".into()), "go", "")
             .unwrap();
-        let queued = admitted.queued().clone();
+        let queued = admitted.wait().clone();
         queued.release();
         let (send, result) = mpsc::channel();
         thread::spawn(move || {

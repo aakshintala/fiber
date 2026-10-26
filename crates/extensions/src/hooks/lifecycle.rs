@@ -84,13 +84,13 @@ pub(super) fn before_model_call(
                 notices,
             };
         }
-        let Some(extension) = session.lua.get(entry.extension) else {
+        let Some(name) = session.runtime.owner_name(&entry.hook) else {
             continue;
         };
-        let name = extension.name();
-        let returned = extension
-            .hook_with(BEFORE_MODEL_CALL, entry.index, arg.clone(), |value| {
-                decode_additive(name, BEFORE_MODEL_CALL, "refuse", value)
+        let returned = session
+            .runtime
+            .hook_with(&entry.hook, arg.clone(), |value| {
+                decode_additive(&name, BEFORE_MODEL_CALL, "refuse", value)
                     .map(|change| (change, false))
             })
             .map(|(change, lines, _)| {
@@ -117,7 +117,7 @@ pub(super) fn before_model_call(
                     notices,
                 };
             }
-            Err(error) => notices.push(failed_notice(BEFORE_MODEL_CALL, name, &error)),
+            Err(error) => notices.push(failed_notice(BEFORE_MODEL_CALL, &name, &error)),
         }
     }
     CheckAnswer {
@@ -153,13 +153,13 @@ fn run_additive(
                 notices,
             };
         }
-        let Some(extension) = session.lua.get(entry.extension) else {
+        let Some(name) = session.runtime.owner_name(&entry.hook) else {
             continue;
         };
-        let name = extension.name();
-        let returned = extension
-            .hook_with(point, entry.index, arg.clone(), |value| {
-                let change = decode_additive(name, point, key, value)?;
+        let returned = session
+            .runtime
+            .hook_with(&entry.hook, arg.clone(), |value| {
+                let change = decode_additive(&name, point, key, value)?;
                 let changed = change.is_some();
                 Ok((change, changed))
             })
@@ -186,7 +186,7 @@ fn run_additive(
                     notices,
                 };
             }
-            Err(error) => notices.push(failed_notice(point, name, &error)),
+            Err(error) => notices.push(failed_notice(point, &name, &error)),
         }
     }
     ContextAnswer {

@@ -1159,6 +1159,7 @@ mod timers;
 mod tool;
 mod vm;
 
+pub(crate) use declared::{DeclaredHook, DeclaredWatcher, is_known_kind};
 #[cfg(test)]
 pub(crate) use host_calls::{
     Pause, pause_observed_execution, pause_settle, unpause_observed_execution, unpause_settle,
@@ -1168,7 +1169,7 @@ use hub::{CallbackTimeouts, Gate, Next, Phase, Shared};
 pub(crate) use hub::{DeclaredHooks, DeclaredWatchers, HookPhase};
 #[cfg(test)]
 pub(crate) use schedule::fail_next_spawn_for;
-pub(crate) use tool::{DeclaredTool, effects_from, urls_from};
+pub(crate) use tool::{DeclaredTool, StaticEffects, effects_from, urls_from};
 use vm::{Step, Vm};
 
 #[cfg(test)]
