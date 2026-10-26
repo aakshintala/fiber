@@ -107,8 +107,8 @@ fn row_y(app: &App, width: u16, label: &str) -> usize {
 #[test]
 fn session_card_rows_hold_their_positions_as_figures_land() {
     use crate::app::panel::Spot;
-    use crate::markdown::{Role, style};
     use crate::mouse::TargetId;
+    use crate::theme::{Role, style};
     const LABELS: [&str; 6] = [
         "tokens in / out",
         "cache hits",
@@ -359,7 +359,7 @@ fn hide_rail(app: &mut App) {
 #[test]
 fn the_session_card_ends_with_the_hidden_rail_line() {
     use crate::app::panel::Spot;
-    use crate::markdown::{Role, style};
+    use crate::theme::{Role, style};
     use ratatui::style::Modifier;
     let mut app = attached(160, 40);
     app.on_line(status_line(
@@ -1543,7 +1543,7 @@ fn a_row_of_spans_is_cut_in_the_overflowing_span() {
 /// marker (`docs/tui.md`, "The panel").
 #[test]
 fn the_context_bar_is_drawn_in_its_roles() {
-    use crate::markdown::{Role, style};
+    use crate::theme::{Role, style};
     let spans = super::bar_spans(500, 1000, Some(800), 17);
     // Ten of 17 cells fill: info over a rule track of the same cell,
     // then the marker in attention.
@@ -1691,7 +1691,7 @@ fn status_only() -> App {
 /// panel"): at the 34-column panel and at the 30-column floor.
 #[test]
 fn the_session_title_names_the_workspace_with_auto_right_aligned() {
-    use crate::markdown::{Role, style};
+    use crate::theme::{Role, style};
     use ratatui::style::Modifier;
     for (width, title) in [
         (34u16, "/Users/you/work/fiber     auto"),
@@ -1878,7 +1878,7 @@ fn full_session_on_main(app: &mut App) {
 #[test]
 fn session_card_rows_match_the_doc_at_width_34() {
     use crate::app::panel::Spot;
-    use crate::markdown::{Role, style};
+    use crate::theme::{Role, style};
     use ratatui::style::Modifier;
     let mut app = attached(160, 40);
     full_session_on_main(&mut app);
@@ -1982,7 +1982,7 @@ fn fail_server(app: &mut App, server: &str) {
 #[test]
 fn the_tools_row_shows_only_while_a_server_is_down() {
     use crate::app::panel::Spot;
-    use crate::markdown::{Role, style};
+    use crate::theme::{Role, style};
     let app = status_only();
     assert!(
         rows(&app, 40)
@@ -2029,7 +2029,7 @@ fn the_tools_row_shows_only_while_a_server_is_down() {
 #[test]
 fn seven_files_count_two_more() {
     use crate::app::panel::Spot;
-    use crate::markdown::{Role, style};
+    use crate::theme::{Role, style};
     use ratatui::style::Modifier;
     let mut app = attached(160, 40);
     fold_changes(
@@ -2083,7 +2083,7 @@ fn seven_files_count_two_more() {
 #[test]
 fn the_jobs_title_counts_running_with_a_toggle() {
     use crate::app::panel::Spot;
-    use crate::markdown::{Role, style};
+    use crate::theme::{Role, style};
     let mut app = attached(160, 40);
     fold_job(&mut app, "j_1", "build");
     fold_job(&mut app, "j_2", "test");

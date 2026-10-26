@@ -14,9 +14,9 @@ use super::overlay::{self, Place, Row};
 use crate::app::App;
 use crate::app::NoticeLine;
 use crate::format;
-use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
 use crate::text::to_u16;
+use crate::theme::{Role, style};
 
 /// The overlay's preferred content width (`docs/tui.md`, "Overlays").
 const PREFER: u16 = 71;

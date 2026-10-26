@@ -7,10 +7,10 @@ use ratatui::style::{Modifier, Style};
 
 use crate::app::App;
 use crate::format;
-use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
 use crate::surface;
 use crate::text::to_u16;
+use crate::theme::{Role, style};
 
 /// The hint at the box's right end while a queued message is edited
 /// (`docs/tui.md`, "Steering").

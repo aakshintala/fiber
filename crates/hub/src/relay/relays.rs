@@ -26,6 +26,8 @@ pub(crate) type ReplayKey = (String, u64, String);
 #[derive(Default)]
 pub(crate) struct Relays {
     pub(crate) entries: Vec<Relay>,
+    /// The accepted client's attribution, reused when commands are rerouted.
+    pub(crate) attribution: Option<crate::connection::Attribution>,
     pub(crate) minted: u64,
     /// One gate per session this connection opened: an opener holds its
     /// session's gate from its check until its attach publishes, so two

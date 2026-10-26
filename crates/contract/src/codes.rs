@@ -88,6 +88,8 @@ codes! {
     FetchFailed,
     /// A monitor was suppressed for 30 seconds.
     Flooded,
+    /// A connection from inside a session is refused this command.
+    FromSession,
     /// The terminal is still reading the session's history.
     HistoryLoading,
     /// An extension hook errored or ran out of time.

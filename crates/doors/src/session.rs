@@ -188,6 +188,11 @@ pub(crate) struct Gate {
     /// What a test observes, or holds, at a [`tests::Probe`] point.
     #[cfg(test)]
     pub(crate) probe: Mutex<Option<tests::Prober>>,
+    /// Tests only: scripted process reads for the session-socket refusal
+    /// paths; production always reads the kernel.
+    #[cfg(test)]
+    pub(crate) test_read:
+        Mutex<Option<std::sync::Arc<dyn support::peer::ProcessRead + Send + Sync>>>,
     clients: ClientCounts,
     one_turn: AtomicBool,
     /// The live connections, their writers, and whether the session stopped.
@@ -1054,6 +1059,8 @@ fn open_in(
         answered: AtomicBool::new(false),
         #[cfg(test)]
         probe: Mutex::new(None),
+        #[cfg(test)]
+        test_read: Mutex::new(None),
         clients: ClientCounts::new(),
         one_turn: AtomicBool::new(false),
         conns: Conns::new(),
