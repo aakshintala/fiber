@@ -281,7 +281,11 @@ fn bad_arguments_fail_invalid_arguments_and_never_start() {
         .iter()
         .filter_map(|input| match input {
             Input::ToolResult { text, is_error, .. } => Some((text.as_str(), *is_error)),
-            _ => None,
+            Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     assert_eq!(results.len(), 4);

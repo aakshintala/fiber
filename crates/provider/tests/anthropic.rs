@@ -3031,7 +3031,11 @@ fn replayed_blocks(arguments: Value, provider_id: Option<ProviderCallId>) -> (Va
     for message in body["messages"].as_array().unwrap() {
         match &message["content"] {
             Value::Array(content) => blocks.extend(content.clone()),
-            content => blocks.push(content.clone()),
+            Value::Null
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::String(_)
+            | Value::Object(_) => panic!("no block array in {body}"),
         }
     }
     let tool_use = blocks

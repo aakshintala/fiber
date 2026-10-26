@@ -186,15 +186,15 @@ fn malformed_kinds() -> Vec<&'static str> {
     kinds
 }
 
-/// The event kinds of a resumed turn answering in text.
-const RESUME_HELLO_KINDS: [&str; 13] = [
+/// The event kinds of a resumed turn answering in text: the reply streams
+/// `Hello.` as one delta.
+const RESUME_HELLO_KINDS: [&str; 12] = [
     "fiber_started",
     "extensions_loaded",
     "preamble_built",
     "turn_started",
     "step_started",
     "assistant_message_started",
-    "assistant_message_delta",
     "assistant_message_delta",
     "text_completed",
     "usage_recorded",
@@ -360,16 +360,16 @@ fn converse_frame(event_type: &str, payload: &[u8]) -> Vec<u8> {
         (":content-type", "application/json"),
         (":message-type", "event"),
     ] {
-        headers.push(name.len() as u8);
+        headers.push(u8::try_from(name.len()).unwrap());
         headers.extend_from_slice(name.as_bytes());
         headers.push(7u8);
-        headers.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        headers.extend_from_slice(&u16::try_from(value.len()).unwrap().to_be_bytes());
         headers.extend_from_slice(value.as_bytes());
     }
-    let total = (12 + headers.len() + payload.len() + 4) as u32;
+    let total = u32::try_from(12 + headers.len() + payload.len() + 4).unwrap();
     let mut out = Vec::new();
     out.extend_from_slice(&total.to_be_bytes());
-    out.extend_from_slice(&(headers.len() as u32).to_be_bytes());
+    out.extend_from_slice(&u32::try_from(headers.len()).unwrap().to_be_bytes());
     out.extend_from_slice(&crc32(&out).to_be_bytes());
     out.extend_from_slice(&headers);
     out.extend_from_slice(payload);
