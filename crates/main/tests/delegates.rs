@@ -5073,6 +5073,14 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
                     .unwrap()
                     .contains(path.to_str().unwrap())
             );
+            if mode == "missing-repository" {
+                assert!(
+                    completed["payload"]["error"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains(repository.join(".git").to_str().unwrap())
+                );
+            }
             assert_eq!(child.requests().len(), 1);
             assert_eq!(
                 child_lines

@@ -372,6 +372,9 @@ fn resume_workspace_recovery_reads_the_childs_record_and_never_sets_worktree() {
                     "{}",
                     content(&output)
                 );
+                if mode == "missing-repository" || mode == "repository-file" {
+                    assert!(content(&output).contains(repository.to_str().unwrap()));
+                }
                 assert!(rig.launched.lock().unwrap().is_empty());
             }
             "read-error" | "read-error-present" => {

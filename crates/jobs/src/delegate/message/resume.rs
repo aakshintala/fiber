@@ -146,17 +146,28 @@ impl DelegateMessage {
             // Inside the resume gate, after the "ended" check: no other
             // run can start between the read and the spawn.
             let workspace = Path::new(&resumable.delegate.workspace);
-            let recorded = (self.worktree_record)(workspace, &resumable.delegate.delegate_session_id)
-                .map_err(StartFailed::Boundary)?;
+            let recorded =
+                (self.worktree_record)(workspace, &resumable.delegate.delegate_session_id)
+                    .map_err(StartFailed::Boundary)?;
+            let repository = recorded
+                .as_ref()
+                .and_then(|record| record.repository.as_deref())
+                .map(Path::new);
             let launch_workspace = if workspace.is_dir() {
                 workspace.to_path_buf()
-            } else if let Some(repository) = recorded.as_ref()
-                .and_then(|record| record.repository.as_deref()).map(Path::new)
-                .filter(|repository| repository.is_dir()) {
+            } else if let Some(repository) = repository.filter(|repository| repository.is_dir()) {
                 repository.to_path_buf()
             } else {
+                let reason = match repository {
+                    Some(repository) => format!(
+                        "recorded repository `{}` is unavailable",
+                        repository.display()
+                    ),
+                    None => "there is no recorded repository".to_owned(),
+                };
                 return Err(StartFailed::Workspace(format!(
-                    "Cannot resume delegate in missing workspace `{}`; its recorded repository is unavailable.", workspace.display()
+                    "Cannot resume delegate in missing workspace `{}`; {reason}.",
+                    workspace.display()
                 )));
             };
             let after = match last_seq(workspace, &resumable.delegate.delegate_session_id) {
