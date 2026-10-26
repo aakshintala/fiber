@@ -24,6 +24,7 @@ use crate::ext::{Handle, Renderer};
 use crate::home::Level;
 use crate::import_report::ImportReport;
 use crate::input::Draft;
+use crate::install_worker::HooksJob;
 use crate::keys::Edit;
 use crate::keys::Key;
 use crate::link::Line;
@@ -328,6 +329,13 @@ pub(crate) struct App {
     /// session, that `start`'s id, the credential its args named, and
     /// whether its `close` goes with `now`.
     clear_pending: Option<ClearPending>,
+    /// The hooks install offer's worker ticket source: each refused
+    /// start the offer holds takes the next one, so a late result for
+    /// an older ticket never folds.
+    hooks_ticket: u64,
+    /// The offer's worker job the loop has not started yet, once: the
+    /// names query the refusal queued, or the install Enter committed.
+    hooks_job: Option<HooksJob>,
     /// The `/clear` `close` waiting for its answer: its id, so a lost
     /// link names it.
     clear_close: Option<String>,
@@ -399,6 +407,8 @@ impl App {
             reconnect: reconnect::Reconnect::default(),
             launch_overrides: Vec::new(),
             clear_pending: None,
+            hooks_ticket: 0,
+            hooks_job: None,
             clear_close: None,
             motion: crate::motion::Motion::default(),
             frames: top::Frames::default(),
@@ -1159,6 +1169,7 @@ impl App {
         // A lost connection closes an open item view first, swapping the
         // screen back before anything clears it, and drops every wish:
         // the hub connection and its levels are gone.
+        self.hooks_disconnected();
         self.drop_items();
         self.sessions_dropped();
         self.images_disconnected();
@@ -1694,6 +1705,9 @@ impl App {
                 if let Some(id) = command_id {
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
                     let code = hub_code(&hub.payload);
+                    if self.intercept_hooks_offer(&id, &code, &message) {
+                        return Vec::new();
+                    }
                     if self.clear_rejected(&id, &code, &message) {
                         return Vec::new();
                     }

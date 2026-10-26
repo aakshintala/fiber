@@ -5,6 +5,7 @@
 //! thread never calls it.
 
 use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::thread;
@@ -13,7 +14,7 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 
 use crate::Input;
-use crate::configure::ConfigureError;
+use crate::configure::{Configure, ConfigureError};
 use crate::model_picker::InstallStart;
 
 /// Starts `start`'s install on a `tui-install` thread, posting its result.
@@ -58,6 +59,109 @@ pub(crate) fn start_with(
                 message: format!("terminal: could not start the install: {source}"),
             }),
         }));
+    }
+}
+
+/// The hooks install offer's names query: the refused start's
+/// workspace with the exact ordered per-run overrides. Runs on its own
+/// thread; the answer arrives as `Input::HooksOfferNames`.
+pub(crate) struct HooksQuery {
+    /// The offer waiting on the names.
+    pub ticket: u64,
+    /// The workspace the refused start named.
+    pub workspace: PathBuf,
+    /// The refused start's ordered overrides, repeated keys kept.
+    pub overrides: Vec<String>,
+    /// The seam the query runs through.
+    pub seam: Arc<dyn Configure>,
+}
+
+/// The hooks install offer's install: the existing global
+/// `install_hooks` plan and commit, never `--project`. Runs on its own
+/// thread; the answer arrives as `Input::HooksInstalled`.
+pub(crate) struct HooksInstall {
+    /// The offer waiting on the install.
+    pub ticket: u64,
+    /// The seam the install runs through.
+    pub seam: Arc<dyn Configure>,
+}
+
+/// The hooks offer's one background job: its names query, or its
+/// install once Enter commits it.
+pub(crate) enum HooksJob {
+    /// The refused start's blocking-hooks query.
+    Query(HooksQuery),
+    /// The committed global hooks install.
+    Install(HooksInstall),
+}
+
+/// Starts the offer's `job` on a `tui-install` thread, posting its
+/// result.
+pub(crate) fn start_hooks(job: HooksJob, clock: Arc<dyn Clock>, out: Sender<Input>) {
+    start_hooks_with(job, clock, out, |builder, body| builder.spawn(body));
+}
+
+/// Starts as [`start_hooks`] does, with the thread spawn as a closure
+/// so tests fail it. A thread that cannot be spawned posts the failure
+/// as the result, so the offer never waits with no answer.
+pub(crate) fn start_hooks_with(
+    job: HooksJob,
+    clock: Arc<dyn Clock>,
+    out: Sender<Input>,
+    spawn: impl FnOnce(
+        thread::Builder,
+        Box<dyn FnOnce() + Send + 'static>,
+    ) -> io::Result<thread::JoinHandle<()>>,
+) {
+    let ticket = match &job {
+        HooksJob::Query(query) => query.ticket,
+        HooksJob::Install(install) => install.ticket,
+    };
+    let is_query = matches!(job, HooksJob::Query(_));
+    let spawned = match job {
+        HooksJob::Query(query) => {
+            let out = out.clone();
+            spawn(
+                crate::sources::builder("tui-install"),
+                Box::new(move || {
+                    let result = query
+                        .seam
+                        .blocking_hooks(&query.workspace, &query.overrides);
+                    drop(out.send(Input::HooksOfferNames {
+                        ticket: query.ticket,
+                        result,
+                    }));
+                }),
+            )
+        }
+        HooksJob::Install(install) => {
+            let out = out.clone();
+            spawn(
+                crate::sources::builder("tui-install"),
+                Box::new(move || {
+                    let result = install.seam.install_hooks(clock);
+                    drop(out.send(Input::HooksInstalled {
+                        ticket: install.ticket,
+                        result,
+                    }));
+                }),
+            )
+        }
+    };
+    if let Err(source) = spawned {
+        if is_query {
+            let result = Err(ConfigureError {
+                code: ErrorCode::IoFailed,
+                message: format!("terminal: could not start the names query: {source}"),
+            });
+            drop(out.send(Input::HooksOfferNames { ticket, result }));
+        } else {
+            let result = Err(ConfigureError {
+                code: ErrorCode::IoFailed,
+                message: format!("terminal: could not start the install: {source}"),
+            });
+            drop(out.send(Input::HooksInstalled { ticket, result }));
+        }
     }
 }
 

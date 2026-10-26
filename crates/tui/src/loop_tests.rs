@@ -625,6 +625,8 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::Files { .. }
             | Input::Models(_)
             | Input::Install { .. }
+            | Input::HooksOfferNames { .. }
+            | Input::HooksInstalled { .. }
             | Input::Login { .. }
             | Input::Image { .. }
             | Input::Feedback(_)

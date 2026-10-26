@@ -315,6 +315,8 @@ fn identity(input: &Input) -> String {
         | Input::Viewed { .. }
         | Input::Models(_)
         | Input::Install { .. }
+        | Input::HooksOfferNames { .. }
+        | Input::HooksInstalled { .. }
         | Input::Login { .. } => panic!("a hub line, not another input"),
     }
 }

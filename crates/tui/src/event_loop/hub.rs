@@ -405,6 +405,8 @@ impl Connection {
                 | Input::Models(_)
                 | Input::Feedback(_)
                 | Input::Install { .. }
+                | Input::HooksOfferNames { .. }
+                | Input::HooksInstalled { .. }
                 | Input::Login { .. }
                 | Input::Files { .. }) => self.push_stash(other),
             }
