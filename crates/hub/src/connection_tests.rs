@@ -682,7 +682,12 @@ fn a_written_but_undrained_answer_waits_out_the_bound() {
         clock.await_parked(end, fakes::Deadline::after(DEADLINE)),
         "the answer waits for the drain"
     );
-    clock.advance(crate::port::STOP_CLOSE_WAIT + Duration::from_secs(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        crate::port::STOP_CLOSE_WAIT,
+        &fakes::Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE).recv_or_fail(&done_rx, "the wait ends at the bound");
     let line: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(
@@ -2293,9 +2298,11 @@ fn the_idle_timer_starts_when_the_open_count_reaches_zero() {
     let first = hub.register(&a).expect("the clone succeeds");
     assert_eq!(hub.zero_since(), None, "an open client clears the timer");
     let second = hub.register(&b).expect("the clone succeeds");
+    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
     clock.advance(Duration::from_secs(5));
     disconnect(&hub, first);
     assert_eq!(hub.zero_since(), None, "one client is still open");
+    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
     clock.advance(Duration::from_secs(5));
     disconnect(&hub, second);
     assert_eq!(hub.zero_since(), Some(clock.now()), "0 at the departure");
@@ -2328,10 +2335,12 @@ fn rollback_removes_the_count_and_restarts_the_timer_at_zero() {
     let first = hub.register(&a).expect("the clone succeeds");
     let second = hub.register(&b).expect("the clone succeeds");
     assert_eq!(hub.clients(), 2);
+    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
     clock.advance(Duration::from_secs(5));
     hub.rollback(first);
     assert_eq!(hub.clients(), 1);
     assert_eq!(hub.zero_since(), None, "one client is still open");
+    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
     clock.advance(Duration::from_secs(5));
     hub.rollback(second);
     assert_eq!(hub.clients(), 0);
