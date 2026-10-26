@@ -523,6 +523,7 @@ fn slash_completions_carry_their_window() {
     type_text(&mut app, "/re");
     let completions = app.completions().expect("the panel shows");
     assert_eq!(completions.query, "re");
+    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
     assert_eq!(completions.total, 7);
     assert_eq!(completions.start, 0);
     assert_eq!(completions.selected, Some(0));

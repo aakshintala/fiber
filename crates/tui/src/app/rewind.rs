@@ -668,11 +668,15 @@ fn finish(
         previous = Some(step);
     }
     if let Some(end) = building.end {
+        // The last step ends where the turn does: its summary rides on
+        // the end boundary, as every step's summary shows at its end
+        // (`docs/tui.md`, "Rewind").
+        let summary = previous.map(|ended| ended.text.clone()).unwrap_or_default();
         bounds.push(Boundary {
             session: building.session.clone(),
             seq: end,
             kind: BoundKind::End,
-            summary: String::new(),
+            summary,
         });
     }
     bounds.retain(|bound| answered(&bound.session, bound.seq, started, completed));
@@ -1289,7 +1293,14 @@ fn bound_label(bound: &Boundary) -> String {
                 format!("  after step {step} · {first}")
             }
         }
-        BoundKind::End => "  end of turn".to_owned(),
+        BoundKind::End => {
+            let first = bound.summary.split('\n').next().unwrap_or_default().trim();
+            if first.is_empty() {
+                "  end of turn".to_owned()
+            } else {
+                format!("  end of turn · {first}")
+            }
+        }
     }
 }
 

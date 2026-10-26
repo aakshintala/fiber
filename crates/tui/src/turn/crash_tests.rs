@@ -183,8 +183,44 @@ fn a_rewound_session_places_the_line_naming_the_new_session() {
     let lines = texts(&app);
     // The old session's `rewound` folds through `turn.rs` into the
     // crash fold's aside, naming the session that continues it; the
-    // open card indents it.
-    assert!(lines.iter().any(|line| line.trim_start() == "⟲ s_ccc"));
+    // line also says what was not restored and which jobs stopped
+    // (`docs/tui.md`, "Rewind"). The open card indents it.
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start() == "⟲ s_ccc · nothing restored · jobs stopped: none"),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_rewound_session_lists_the_jobs_that_stopped() {
+    let mut app = crashed();
+    // Two jobs still running when the session is rewound: both stop
+    // with it (`docs/tui.md`, "Rewind"; `docs/events.md`, "Rewind").
+    feed(
+        &mut app,
+        "job_started",
+        None,
+        10_000,
+        json!({"job_id": "j_2", "description": "second task", "output_path": "/tmp/out"}),
+    );
+    feed(
+        &mut app,
+        "job_started",
+        None,
+        11_000,
+        json!({"job_id": "j_1", "description": "first task", "output_path": "/tmp/out"}),
+    );
+    rewound(&mut app, 60_000);
+    let lines = texts(&app);
+    // Sorted by description, so the line is stable no matter which
+    // `job_started` arrived first.
+    assert!(
+        lines.iter().any(|line| line.trim_start()
+            == "⟲ s_ccc · nothing restored · jobs stopped: first task, second task"),
+        "{lines:?}"
+    );
 }
 
 #[test]

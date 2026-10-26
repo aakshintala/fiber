@@ -230,10 +230,31 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             false
         }
         "rewound" => read!(envelope, Rewound).is_some_and(|rewound| {
+            // The line names the new session and says what was not
+            // restored and which jobs stopped (`docs/tui.md`, "Rewind"):
+            // a rewind never restores files, and every job still running
+            // stops with the old session.
+            let mut stopped: Vec<String> = fold
+                .crash
+                .jobs
+                .values()
+                .chain(fold.crash.earlier.values())
+                .cloned()
+                .collect();
+            stopped.sort();
+            stopped.dedup();
+            let jobs = if stopped.is_empty() {
+                "none".to_owned()
+            } else {
+                stopped.join(", ")
+            };
             place(
                 turns,
                 fold,
-                Aside::Line(Line::raw(format!("⟲ {}", rewound.new_session_id.0))),
+                Aside::Line(Line::raw(format!(
+                    "⟲ {} · nothing restored · jobs stopped: {jobs}",
+                    rewound.new_session_id.0
+                ))),
             );
             true
         }),

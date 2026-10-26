@@ -2823,6 +2823,7 @@ fn short_home_slash_keeps_its_selection_barred() {
     let row = row_text(&buf, selected, 80);
     assert!(row.contains("credential"), "{shown}");
     // Every built-in is a row of the list.
+    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
     assert!(shown.contains("of 37"), "{shown}");
 }
 

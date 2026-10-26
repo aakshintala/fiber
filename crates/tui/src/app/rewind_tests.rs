@@ -212,6 +212,7 @@ fn rewind_asks_history_on_open() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();
     let lines = open(&mut app, &clock);
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "history");
     assert_eq!(lines[0]["session_id"], SESSION);
@@ -219,6 +220,7 @@ fn rewind_asks_history_on_open() {
     let frame = app.session_view_screen(80).expect("the view is open");
     assert_eq!(frame.title, "Rewind");
     assert_eq!(frame.command, "/rewind");
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(rows(&app), [CHECK, ACTION]);
 }
 
@@ -231,19 +233,24 @@ fn two_segments_fold_with_the_default_on_the_latest_turn() {
     // session and stopping at the point A continues from: one request
     // on the wire.
     let next = accept(&mut app, &lines[0]["id"], segment_a());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(
         rows(&app),
         ["before: first", "before: second", CHECK, ACTION]
     );
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert_eq!(next.len(), 1);
     let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert_eq!(asked["command"], "history");
     assert_eq!(asked["session_id"], SESSION);
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert_eq!(asked["args"], json!({"session_id": OTHER, "to_seq": 3}));
     // B's answer folds its turn before A's, and the walk ends at the
     // root: nothing more goes out.
     let id = asked["id"].clone();
     let done = accept(&mut app, &id, segment_b());
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert!(done.is_empty());
     assert_eq!(
         rows(&app),
@@ -258,9 +265,12 @@ fn two_segments_fold_with_the_default_on_the_latest_turn() {
     // The default is the start of the latest turn: turn-start seq minus
     // one, distinct from the after-input boundary at turn-start seq.
     let frame = app.session_view_screen(80).expect("the view is open");
+    // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(frame.list.selected(), 2);
+    // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(point(&app), Some((SESSION.to_owned(), 3)));
     let bounds = app.rewind_turn_bounds(2);
+    // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(
         bounds,
         vec![
@@ -330,6 +340,7 @@ fn a_summary_turn_lists_but_does_not_take_the_default() {
         ),
     ];
     let done = accept(&mut app, &lines[0]["id"], held);
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert!(done.is_empty());
     assert_eq!(
         rows(&app),
@@ -344,8 +355,11 @@ fn a_summary_turn_lists_but_does_not_take_the_default() {
     // The default is the latest turn that is not a summary's, while the
     // summary turn still lists its step boundaries.
     let frame = app.session_view_screen(80).expect("the view is open");
+    // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(frame.list.selected(), 2);
+    // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(point(&app), Some((SESSION.to_owned(), 5)));
+    // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(
         app.rewind_turn_bounds(1),
         vec![
@@ -374,7 +388,9 @@ fn an_empty_log_lists_no_turns() {
         )],
     ] {
         let done = accept(&mut app, &lines[0]["id"], held);
+        // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
         assert!(done.is_empty());
+        // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
         assert_eq!(rows(&app), [CHECK, ACTION]);
         let frame = app.session_view_screen(80).expect("the view is open");
         assert_eq!(frame.below, ["No turns to rewind."]);
@@ -387,6 +403,7 @@ fn post_point_lines_refuse_the_whole_segment() {
     let mut app = attached();
     let lines = open(&mut app, &clock);
     let next = accept(&mut app, &lines[0]["id"], segment_a());
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert_eq!(next.len(), 1);
     // B's answer reaches past the point A continues from: the segment
     // is refused, so the cut-off turn never lists and the walk ends.
@@ -401,6 +418,7 @@ fn post_point_lines_refuse_the_whole_segment() {
     ));
     let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
     let done = accept(&mut app, &asked["id"], past);
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert!(done.is_empty());
     assert_eq!(
         rows(&app),
@@ -439,6 +457,7 @@ fn the_point_itself_belongs_to_the_parent() {
     ];
     let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
     let done = accept(&mut app, &asked["id"], at);
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert!(done.is_empty());
     assert_eq!(
         rows(&app),
@@ -450,6 +469,7 @@ fn the_point_itself_belongs_to_the_parent() {
             ACTION
         ]
     );
+    // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(
         app.rewind_turn_bounds(0),
         vec![
@@ -471,10 +491,12 @@ fn an_unreadable_answer_ends_the_walk_with_the_error() {
         "command_accepted",
         json!({"command_id": lines[0]["id"], "result": {}}),
     ));
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert!(done.is_empty());
     let frame = app.session_view_screen(80).expect("the view is open");
     assert_eq!(frame.below, ["the answer could not be read"]);
     accept(&mut app, &lines[0]["id"], segment_a());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(rows(&app), [CHECK, ACTION]);
 }
 
@@ -489,17 +511,22 @@ fn a_gapped_answer_ends_the_walk() {
     let mut first = segment_a();
     first.drain(..5);
     let next = accept(&mut app, &lines[0]["id"], first);
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert_eq!(next.len(), 1);
     // The next page stops just below the lines read so far.
     let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert_eq!(asked["command"], "history");
     assert_eq!(asked["session_id"], SESSION);
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert_eq!(asked["args"], json!({"to_seq": 4}));
     let mut older = segment_a();
     older.truncate(4);
     older.remove(1);
     let done = accept(&mut app, &asked["id"], older);
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert!(done.is_empty());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(rows(&app), [CHECK, ACTION]);
 }
 
@@ -541,6 +568,7 @@ fn unanswered_calls_drop_later_boundaries() {
         ),
     ];
     let done = accept(&mut app, &lines[0]["id"], held);
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert!(done.is_empty());
     assert_eq!(
         app.rewind_turn_bounds(0),
@@ -589,6 +617,7 @@ fn unanswered_calls_drop_later_boundaries() {
         ),
     ];
     let done = accept(&mut app, &lines[0]["id"], held);
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
     assert!(done.is_empty());
     assert_eq!(
         app.rewind_turn_bounds(0),
@@ -609,16 +638,20 @@ fn history_wait_times_out_as_a_lost_connection() {
     let sent_at = clock.now();
     // The wait arms the frame's wake at its deadline: the signal the
     // test advances past.
+    // A `history` wait ends as a lost connection after 10 s (`docs/tui.md`, "History and paging").
     assert_eq!(app.take_wake(), Some(sent_at + Duration::from_secs(10)));
     clock.advance(Duration::from_secs(11));
     app.set_now(clock.now(), contract::clock::wall_ms(clock.wall()));
+    // A `history` wait ends as a lost connection after 10 s (`docs/tui.md`, "History and paging").
     assert!(app.rewind_due(clock.now()));
     // Past the bound the wait ends as a lost connection, and the late
     // answer finds no pending id, so it folds nowhere.
     app.disconnected();
     assert_eq!(app.notice(), Some("Connection lost."));
+    // A `history` wait ends as a lost connection after 10 s (`docs/tui.md`, "History and paging").
     assert_eq!(app.take_wake(), None);
     accept(&mut app, &lines[0]["id"], segment_a());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(rows(&app), [CHECK, ACTION]);
 }
 
@@ -628,12 +661,15 @@ fn the_history_wait_ends_exactly_at_ten_seconds() {
     let mut app = attached();
     open(&mut app, &clock);
     let sent_at = clock.now();
+    // A `history` wait ends as a lost connection after 10 s (`docs/tui.md`, "History and paging").
     assert!(!app.rewind_due(sent_at + Duration::from_secs(9)));
     let almost = (sent_at + Duration::from_secs(10))
         .checked_sub(Duration::from_nanos(1))
         .expect("one nanosecond in");
+    // A `history` wait ends as a lost connection after 10 s (`docs/tui.md`, "History and paging").
     assert!(!app.rewind_due(almost));
     assert!(app.rewind_due(sent_at + Duration::from_secs(10)));
+    // A `history` wait ends as a lost connection after 10 s (`docs/tui.md`, "History and paging").
     assert!(app.rewind_due(sent_at + Duration::from_secs(11)));
 }
 
@@ -648,9 +684,11 @@ fn stream_reopened_ends_the_wait_at_once() {
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     }));
+    // A `history` wait ends as a lost connection after 10 s (`docs/tui.md`, "History and paging").
     assert_eq!(app.take_wake(), None);
     // The late answer matches no pending id and folds nowhere.
     accept(&mut app, &lines[0]["id"], segment_a());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(rows(&app), [CHECK, ACTION]);
 }
 
@@ -665,9 +703,11 @@ fn close_and_reopen_drops_the_old_answer() {
     assert_ne!(first[0]["id"], second[0]["id"]);
     // The old answer arrives after the reopen: it folds nowhere.
     accept(&mut app, &first[0]["id"], segment_a());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(rows(&app), [CHECK, ACTION]);
     // The new answer folds.
     accept(&mut app, &second[0]["id"], segment_a());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(
         rows(&app),
         ["before: first", "before: second", CHECK, ACTION]
@@ -684,11 +724,13 @@ fn a_rejected_history_keeps_the_error() {
         json!({"command_id": lines[0]["id"], "code": "invalid_arguments",
             "message": "from_session_id is off the chain"}),
     ));
+    // A `history` wait ends as a lost connection after 10 s (`docs/tui.md`, "History and paging").
     assert_eq!(app.take_wake(), None);
     let frame = app.session_view_screen(80).expect("the view is open");
     assert_eq!(frame.below, ["from_session_id is off the chain"]);
     // A late answer for the dropped id folds nowhere.
     accept(&mut app, &lines[0]["id"], segment_a());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(rows(&app), [CHECK, ACTION]);
 }
 
@@ -844,6 +886,7 @@ fn enter_opens_the_selected_turn_into_its_boundaries() {
     accept(&mut app, &lines[0]["id"], segment_a());
     // Enter opens the selected turn: its step boundaries draw under it.
     app.on_key(crate::keys::Key::Enter, clock.now());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(
         rows(&app),
         [
@@ -862,6 +905,7 @@ fn enter_opens_the_selected_turn_into_its_boundaries() {
         app.on_key(crate::keys::Key::Enter, clock.now()),
         Effect::None
     );
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(
         rows(&app),
         ["before: first", "before: second", CHECK, ACTION]
@@ -870,9 +914,13 @@ fn enter_opens_the_selected_turn_into_its_boundaries() {
     app.on_key(crate::keys::Key::Enter, clock.now());
     goto(&mut app, &clock, 3);
     let out = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out.len(), 1);
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out[0]["command"], "rewind");
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out[0]["session_id"], SESSION);
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out[0]["args"], json!({"seq": 4, "summarise": false}));
 }
 
@@ -892,9 +940,13 @@ fn the_send_names_an_ancestor_holding_session() {
     app.on_key(crate::keys::Key::Enter, clock.now());
     goto(&mut app, &clock, 1);
     let out = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out.len(), 1);
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out[0]["command"], "rewind");
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out[0]["session_id"], SESSION);
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(
         out[0]["args"],
         json!({"from_session_id": OTHER, "seq": 0, "summarise": false})
@@ -910,6 +962,7 @@ fn the_point_past_the_calls_details_nothing() {
     app.on_key(crate::keys::Key::Enter, clock.now());
     // The turn's end sits past every call: the detail empties.
     goto(&mut app, &clock, 4);
+    // The detail names files, calls, no-undo and stopping jobs (`docs/tui.md`, "Rewind").
     assert_eq!(
         below(&app),
         [
@@ -921,6 +974,7 @@ fn the_point_past_the_calls_details_nothing() {
     );
     // The start sits before every call: everything lists.
     goto(&mut app, &clock, 1);
+    // The detail names files, calls, no-undo and stopping jobs (`docs/tui.md`, "Rewind").
     assert_eq!(
         below(&app),
         [
@@ -941,6 +995,7 @@ fn the_detail_names_files_calls_jobs_and_no_restore() {
     accept(&mut app, &lines[0]["id"], calls_segment());
     // The default point is the turn's start: everything after it lists.
     app.on_key(crate::keys::Key::Enter, clock.now());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(
         rows(&app),
         [
@@ -953,6 +1008,7 @@ fn the_detail_names_files_calls_jobs_and_no_restore() {
             ACTION,
         ]
     );
+    // The detail names files, calls, no-undo and stopping jobs (`docs/tui.md`, "Rewind").
     assert_eq!(
         below(&app),
         [
@@ -965,6 +1021,7 @@ fn the_detail_names_files_calls_jobs_and_no_restore() {
     // Past the calls the detail empties, while the delegate still lists
     // with no marker of its own.
     goto(&mut app, &clock, 4);
+    // The detail names files, calls, no-undo and stopping jobs (`docs/tui.md`, "Rewind").
     assert_eq!(
         below(&app),
         [
@@ -972,6 +1029,60 @@ fn the_detail_names_files_calls_jobs_and_no_restore() {
             "Calls that may have changed files: none",
             "None of it is undone.",
             "Jobs that stop: task one, delegate work",
+        ]
+    );
+}
+
+#[test]
+fn the_final_steps_summary_shows_at_the_end_of_turn() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    // One turn whose only step says something: the step's text has no
+    // later step to close it, so it rides on the end boundary
+    // (`docs/tui.md`, "Rewind": every step boundary shows its summary).
+    let held = vec![
+        history_line(SESSION, "session_started", 0, None, None, started(None)),
+        history_line(
+            SESSION,
+            "turn_started",
+            1,
+            Some("t_1"),
+            None,
+            message_input("first"),
+        ),
+        history_line(SESSION, "step_started", 2, Some("t_1"), None, json!({})),
+        history_line(
+            SESSION,
+            "text_completed",
+            3,
+            Some("t_1"),
+            Some("a_m"),
+            json!({"text": "final words"}),
+        ),
+        history_line(
+            SESSION,
+            "turn_completed",
+            4,
+            Some("t_1"),
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ];
+    let done = accept(&mut app, &lines[0]["id"], held);
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
+    assert!(done.is_empty());
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+    assert_eq!(
+        rows(&app),
+        [
+            "before: first",
+            "  start of turn",
+            "  after input",
+            "  end of turn · final words",
+            CHECK,
+            ACTION,
         ]
     );
 }
@@ -1007,7 +1118,9 @@ fn each_refusal_replaces_the_rewind_button() {
         let lines = open(&mut app, &clock);
         accept(&mut app, &lines[0]["id"], segment_a());
         let out = send_rewind(&mut app, &clock);
+        // The point names the holding session and seq (`docs/tui.md`, "Rewind").
         assert_eq!(out.len(), 1);
+        // The point names the holding session and seq (`docs/tui.md`, "Rewind").
         assert_eq!(out[0]["command"], "rewind");
         refuse(&mut app, &out[0]["id"], code);
         // The refusal's text stands in place of the button, the view
@@ -1028,6 +1141,7 @@ fn esc_closes_only_when_no_send_is_pending() {
     let lines = open(&mut app, &clock);
     accept(&mut app, &lines[0]["id"], segment_a());
     let out = send_rewind(&mut app, &clock);
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out.len(), 1);
     // Esc while the rewind is pending is ignored: the view stays open.
     assert_eq!(app.on_key(crate::keys::Key::Esc, clock.now()), Effect::None);
@@ -1045,6 +1159,7 @@ fn one_rewind_at_a_time() {
     let lines = open(&mut app, &clock);
     accept(&mut app, &lines[0]["id"], segment_a());
     let out = send_rewind(&mut app, &clock);
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out.len(), 1);
     // A second Enter on the sending row sends nothing more.
     let again = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
@@ -1075,6 +1190,7 @@ fn clicks_select_toggle_and_close() {
     // A click selects the row: the default sat on the second turn.
     app.session_view_click(crate::swapped::Spot::Row(0));
     let frame = app.session_view_screen(80).expect("the view is open");
+    // Step boundaries and the default point (`docs/tui.md`, "Rewind").
     assert_eq!(frame.list.selected(), 0);
     // A click on the checkbox cell toggles it.
     let at = frame.rows.len() - 2;
@@ -1114,6 +1230,7 @@ fn the_send_line_names_the_point_exactly() {
     let lines = open(&mut app, &clock);
     accept(&mut app, &lines[0]["id"], segment_a());
     let out = send_rewind(&mut app, &clock);
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out.len(), 1);
     let id = out[0]["id"].clone();
     // The whole line on the wire: the attached session, the point's
@@ -1205,6 +1322,7 @@ fn a_hub_relayed_rejection_settles_with_the_start_code() {
     assert!(answered.is_empty());
     // The start's code stands in place of the button, the terminal
     // never moves, and the settled send lets Esc close the view.
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(rows(&app).last(), Some(&"start failed".to_owned()));
     assert_eq!(
         app.session().map(|session| session.0.as_str()),
@@ -1226,6 +1344,7 @@ fn a_hub_rejection_for_another_command_leaves_the_send_pending() {
     // The rejection names another command: the rows still show the
     // sending state, and Esc stays ignored while the rewind waits.
     let _ = out;
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(rows(&app).last(), Some(&"Sending…".to_owned()));
     assert_eq!(app.on_key(crate::keys::Key::Esc, clock.now()), Effect::None);
     assert!(app.session_view_screen(80).is_some());
@@ -1255,8 +1374,10 @@ fn summary_failed_offers_retry_without_summary_and_cancel() {
     // checkbox says: it is off here.
     goto(&mut app, &clock, grown.len() - 3);
     let out = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out.len(), 1);
     assert_ne!(out[0]["id"], first);
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(
         out[0]["args"],
         json!({"seq": 3, "summarise": true}),
@@ -1272,6 +1393,7 @@ fn summary_failed_offers_retry_without_summary_and_cancel() {
     let grown = rows(&app);
     goto(&mut app, &clock, grown.len() - 2);
     let out = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
+    // The point names the holding session and seq (`docs/tui.md`, "Rewind").
     assert_eq!(out.len(), 1);
     assert_eq!(
         out[0]["args"],
