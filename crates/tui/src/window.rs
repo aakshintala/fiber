@@ -632,7 +632,7 @@ impl Pages {
         let before_drew = before.turns.last().map(|card| {
             let mut scratch = Rows::default();
             card.rows(
-                self.column_width(),
+                self.wrap_width(),
                 &self.zone,
                 Edges::BOTH,
                 &self.images,
@@ -643,7 +643,7 @@ impl Pages {
         let next_drew = next.turns.first().map(|card| {
             let mut scratch = Rows::default();
             card.rows(
-                self.column_width(),
+                self.wrap_width(),
                 &self.zone,
                 Edges::BOTH,
                 &self.images,
@@ -697,7 +697,7 @@ impl Pages {
         let drew = self.open.turns.first().map(|card| {
             let mut scratch = Rows::default();
             card.rows(
-                self.column_width(),
+                self.wrap_width(),
                 &self.zone,
                 Edges::BOTH,
                 &self.images,
@@ -1809,7 +1809,7 @@ impl Pages {
         for at in 0..=part.turns.len() {
             let after = part.first.saturating_add(at);
             while let Some((_, (_, aside))) = asides.next_if(|(_, (turns, _))| *turns <= after) {
-                aside.rows(crate::surface::inset(self.column_width()), &mut out);
+                aside.rows(crate::surface::inset(self.wrap_width()), &mut out);
             }
             // Shell output lives in the page and turn-after bucket it ran
             // in: only those candidates are examined, in the order they
@@ -1843,13 +1843,7 @@ impl Pages {
                 top: !(at == 0 && part.joins_previous),
                 bottom: !(at + 1 == part.turns.len() && part.joins_next),
             };
-            card.rows(
-                self.column_width(),
-                &self.zone,
-                edges,
-                &self.images,
-                &mut out,
-            );
+            card.rows(self.wrap_width(), &self.zone, edges, &self.images, &mut out);
             if first < out.len() {
                 turns.push((after, first..out.len()));
             }

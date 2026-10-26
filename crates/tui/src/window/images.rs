@@ -57,12 +57,6 @@ impl Pages {
         self.images.parts.get(&id)
     }
 
-    /// The conversation's width in columns: what an image's line is cut
-    /// to (`docs/tui.md`, "Images").
-    pub(crate) fn column_width(&self) -> u16 {
-        self.width
-    }
-
     /// How the images size: the one line, or the inline grid with its
     /// cell size (`docs/tui.md`, "Images"). A flat page reports text:
     /// flat rendering never fetches (`docs/tui.md`, "Screen readers").
