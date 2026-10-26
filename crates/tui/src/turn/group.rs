@@ -13,8 +13,7 @@ use crate::app::Target;
 use crate::ext::{Input, LedgerRow, RowError, Status};
 use crate::format::{Kind, Kinds, count, dim, heading, kind, label, opened, summary};
 use crate::rows::{RowText, Rows};
-use crate::theme::Role;
-use crate::theme::style;
+use crate::theme::{Role, style};
 
 /// Everything between two pieces of assistant text.
 #[derive(Debug, Clone, Default)]

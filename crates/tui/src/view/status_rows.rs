@@ -13,7 +13,6 @@ use crate::app::panel::Spot;
 use crate::format;
 use crate::mouse::{Target, TargetId};
 use crate::text::to_u16;
-use crate::theme;
 use crate::theme::{Role, style};
 use crate::view::panel::{Card, bar_spans, branch_text, cards, fit_spans};
 
@@ -486,7 +485,7 @@ pub(super) fn draw_status(
         if !boxed {
             buf.set_style(
                 Rect::new(area.x, at, area.width, 1),
-                Style::new().bg(theme::Role::Panel.color()),
+                Style::new().bg(Role::Panel.color()),
             );
         }
         let x = area.x.saturating_add(1);

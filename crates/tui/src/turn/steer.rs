@@ -8,8 +8,7 @@ use ratatui::text::{Line, Span};
 use crate::format::wrap_joined;
 use crate::local_time::time_of_day;
 use crate::rows::{RowText, Rows};
-use crate::theme::Role;
-use crate::theme::style;
+use crate::theme::{Role, style};
 
 /// A steering message where it landed in the card, and when
 /// (`docs/tui.md`, "Turns").

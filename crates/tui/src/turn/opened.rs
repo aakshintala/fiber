@@ -12,8 +12,7 @@ use crate::diff::{diff_lines, gutter_prefix, gutter_width, safe_line, styled_spa
 use crate::format::{count, dim};
 use crate::rows::{RowText, Rows};
 use crate::swapped::Ink;
-use crate::theme::Role;
-use crate::theme::style;
+use crate::theme::{Role, style};
 
 /// An opened call shows at most this many logical lines, then a dim
 /// "… N more lines (Enter to view)" row (`docs/tui.md`, "Tool groups
