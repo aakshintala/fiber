@@ -699,7 +699,7 @@ fn sgr_mouse(params: &[u8], release: bool) -> Option<Mouse> {
 /// `CSI` with an arrow, Home or End final byte (`A`, `B`, `C`, `D`, `H`,
 /// `F`): that key, plain or `CSI 1;<modifiers>` with the kitty modifier
 /// bits. A bare `1` is no modifiers for `C` and `D` only; a bare `1` with
-/// any other letter is nothing, as the old arms read it. A modifier the
+/// any other letter is nothing. A modifier the
 /// bindings do not name (hyper, meta) reads as nothing.
 fn csi_letter(final_byte: u8, params: &[u8]) -> Option<Event> {
     let mods = if params.is_empty() {
