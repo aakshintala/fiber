@@ -115,14 +115,15 @@ pub(crate) const PREPARE_CHECKPOINTS: &[&str] = &[
 
 /// Test-only rendering of a prepare progress record: the last reached
 /// checkpoint, or the first expected one when nothing was reached.
-/// The record is read after the prepare wait expires, and the wait
-/// leaves its work thread running, so the line names that read.
+/// The record is read in the failure path: when the prepare wait
+/// expired instead, the wait leaves its work thread running, so the
+/// read may include later checkpoints.
 #[cfg(test)]
 pub(crate) fn describe_prepare_progress(checkpoints: &[&str]) -> String {
     match checkpoints.last() {
         None => format!(
-            "prepare progress: no checkpoint reached as read after the prepare wait expired \
-             (the wait leaves its work thread running, so this includes post-timeout checkpoints); \
+            "prepare progress: no checkpoint reached as read in the failure path \
+             (when the prepare wait expired, the wait leaves its work thread running, so this may include later checkpoints); \
              the next expected step is {}",
             PREPARE_CHECKPOINTS[0]
         ),
@@ -132,13 +133,13 @@ pub(crate) fn describe_prepare_progress(checkpoints: &[&str]) -> String {
             .and_then(|at| PREPARE_CHECKPOINTS.get(at + 1))
         {
             Some(next) => format!(
-                "prepare progress: last reached checkpoint {last} as read after the prepare wait expired \
-                 (the wait leaves its work thread running, so this includes post-timeout checkpoints); \
+                "prepare progress: last reached checkpoint {last} as read in the failure path \
+                 (when the prepare wait expired, the wait leaves its work thread running, so this may include later checkpoints); \
                  the next expected step is {next}"
             ),
             None => format!(
-                "prepare progress: last reached checkpoint {last} as read after the prepare wait expired \
-                 (the wait leaves its work thread running, so this includes post-timeout checkpoints); \
+                "prepare progress: last reached checkpoint {last} as read in the failure path \
+                 (when the prepare wait expired, the wait leaves its work thread running, so this may include later checkpoints); \
                  the prepare reached the final checkpoint"
             ),
         },

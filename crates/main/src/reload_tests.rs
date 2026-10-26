@@ -296,14 +296,15 @@ impl Fixture {
 
     /// Runs the reload preparation, dumping the last reached prepare
     /// checkpoint and every fake MCP server's `stderr.log` and
-    /// `requests.log` into the failure when the wait expires or the
-    /// preparation panics. The checkpoint record is test-only:
+    /// `requests.log` into the failure when the prepare wait fails:
+    /// the wait expired, the worker panicked, or the worker thread
+    /// failed to start. The checkpoint record is test-only:
     /// `prepare_inner` appends each stage boundary it passes, with no
     /// pause and no branch, because no outside seam reaches those steps:
     /// the fake servers log a request on arrival, before handling or
-    /// answering it. The record and the logs are read after
-    /// `fakes::within` expires, which never joins its work thread, so
-    /// both include post-timeout entries.
+    /// answering it. The record and the logs are read in the failure
+    /// path; when the wait expired instead, `fakes::within` never joins
+    /// its work thread, so both may include later entries.
     #[track_caller]
     fn prepare(&self) -> r#loop::ReloadPrepared {
         let state = self.state.clone();
@@ -374,16 +375,17 @@ fn fake_server_dirs(root: &std::path::Path) -> Vec<(String, std::path::PathBuf)>
 
 /// Every fake server directory under the rig's root, sorted by name.
 /// Each entry shows the server's stderr and every line it received as
-/// read after the prepare wait expired: `fakes::within` never joins its
-/// work thread, so the dump includes post-timeout traffic.
+/// read in the failure path: when the prepare wait expired instead,
+/// `fakes::within` never joins its work thread, so the dump may
+/// include later traffic.
 fn dump_fake_servers(root: &std::path::Path) -> String {
     let servers = fake_server_dirs(root);
     if servers.is_empty() {
         return format!("fake MCP servers: none under {}", root.display());
     }
     let mut dump = String::from(
-        "fake MCP servers read after the prepare wait expired \
-         (the wait leaves its work thread running, so this includes post-timeout traffic):",
+        "fake MCP servers read in the failure path \
+         (when the prepare wait expired, the wait leaves its work thread running, so this may include later traffic):",
     );
     for (name, dir) in &servers {
         dump.push_str(&dump_fake_server(dir, name));
@@ -2637,15 +2639,15 @@ fn a_prepare_timeout_dump_shows_each_fake_servers_stderr_and_requests_log() {
     );
     assert!(!dump.contains("plain"), "skips a non-server: {dump}");
     assert!(!dump.contains("stray"), "skips a file: {dump}");
-    // `fakes::within` never joins its work thread, so a timeout read
-    // may hold lines the prepare wrote after the wait expired: the
-    // headline must say so.
+    // `fakes::within` never joins its work thread, so when the wait
+    // expired the read may hold lines the prepare wrote later: the
+    // headline must say so, without claiming every failure is a timeout.
     assert!(
-        dump.contains("post-timeout traffic"),
-        "the dump names its post-expiry read: {dump}"
+        dump.contains("may include later traffic"),
+        "the dump names its conditional later read: {dump}"
     );
     assert!(
-        dump.contains("after the prepare wait expired"),
+        dump.contains("read in the failure path"),
         "the dump names when it was read: {dump}"
     );
 }
@@ -2681,8 +2683,8 @@ fn describe_prepare_progress_names_the_last_checkpoint_and_its_next_step() {
         "names the unfinished step: {line}"
     );
     assert!(
-        line.contains("post-timeout checkpoints"),
-        "the read names its post-expiry timing: {line}"
+        line.contains("may include later checkpoints"),
+        "the read names its conditional later timing: {line}"
     );
     // The final arm flips when the last checkpoint gains a successor:
     // a completed record says so instead of naming a next step.
