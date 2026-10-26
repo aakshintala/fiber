@@ -251,37 +251,14 @@ impl App {
         if self.hooks_offer_installing() {
             return Some(Effect::None);
         }
-        Some(match key {
-            Key::Enter => self.commit_hooks_offer(),
-            Key::Esc => {
+        if matches!(key, Key::Enter) {
+            Some(self.commit_hooks_offer())
+        } else {
+            if matches!(key, Key::Esc) {
                 self.decline_hooks_offer();
-                Effect::None
             }
-            Key::Char(_)
-            | Key::Backspace
-            | Key::Up
-            | Key::Down
-            | Key::PageUp
-            | Key::PageDown
-            | Key::End
-            | Key::AltA
-            | Key::Tab
-            | Key::BackTab
-            | Key::F1
-            | Key::CtrlO
-            | Key::CtrlG
-            | Key::CtrlR
-            | Key::CtrlV
-            | Key::CtrlL
-            | Key::CtrlF
-            | Key::CtrlC
-            | Key::AltUp
-            | Key::AltDown
-            | Key::AltX
-            | Key::AltP
-            | Key::AltR
-            | Key::AltDigit(_) => Effect::None,
-        })
+            Some(Effect::None)
+        }
     }
 
     /// The offer's choice: installing commits the install and the

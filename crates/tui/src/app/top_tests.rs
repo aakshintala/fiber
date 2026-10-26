@@ -29,9 +29,10 @@ use contract::{JobId, SessionId};
 pub(in crate::app) const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
 /// The 19 surfaces, top first, as the ticket orders them. The hooks
-/// offer asserts apart below: the ticket needs it only above the
-/// delete question and the input box, and `docs/tui.md`, "Contexts"
-/// promises no order past that.
+/// offer asserts apart below: see #3000's `overlay integration` ruling
+/// (the offer takes precedence over background questions) for its place
+/// above the delete question and the input box; `docs/tui.md`, "Keys",
+/// "Rules" names the Overlay context but promises no order past that.
 const ORDER: [Surface; 19] = [
     Surface::Quit,
     Surface::Report,

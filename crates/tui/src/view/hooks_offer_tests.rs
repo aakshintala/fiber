@@ -114,14 +114,17 @@ fn row_text(buf: &Buffer, y: u16, width: u16) -> String {
 fn offer_names_the_sorted_blocking_hooks() {
     let (mut app, _) = home(80, 24);
     enter(&mut app, "hi");
-    offer(&mut app, vec!["zeta".to_owned(), "a\tb".to_owned()]);
+    offer(
+        &mut app,
+        vec!["zeta".to_owned(), "a\tb".to_owned(), "c\nd".to_owned()],
+    );
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     draw(&app, area, &mut buf, &mut Vec::new());
     let shown = crate::view::text(&buf);
     assert!(shown.contains("Install hooks?"), "{shown}");
     assert!(
-        shown.contains("Configuration declares blocking hooks: a b, zeta."),
+        shown.contains("Configuration declares blocking hooks: a b, c d, zeta."),
         "{shown}"
     );
     assert!(shown.contains("install and start"), "{shown}");

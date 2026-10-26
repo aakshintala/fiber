@@ -1812,7 +1812,7 @@ of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
   close-all and stop questions, the import report, the reviewer setup, the home screen's delete question or workspace picker, the
-  key map, an approval or question, an offer, the Ctrl+R panel, or a
+  key map, an approval or question, an offer, the hooks install offer, the Ctrl+R panel, or a
   notice's whole text; or the `/` or `@` completion panel while focus is not
   in the conversation. An overlay's own keys, such as an approval's ↑ and ↓,
   are not bindings.
