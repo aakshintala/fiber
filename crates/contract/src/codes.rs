@@ -245,6 +245,8 @@ codes! {
     /// `web_search` is not declared: several search backends are installed and
     /// none is chosen, or the chosen one is not installed.
     WebSearchUnavailable,
+    /// `/pwd` shows the attached session's recorded workspace root.
+    Workspace,
 }
 
 #[cfg(test)]

@@ -1927,6 +1927,7 @@ later release still applies.
 | `/status` | Opens the status view ("Swapped views"). |
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
+| `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |

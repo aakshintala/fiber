@@ -107,6 +107,9 @@ pub(crate) struct PanelState {
     start_credential: Option<String>,
     /// Whether the attached session runs in a worktree Fiber created.
     worktree: bool,
+    /// The attached session's recorded workspace root, from the latest
+    /// `session_started`: `/pwd` shows it.
+    workspace: Option<String>,
     window: Option<u64>,
     trigger_at: Option<u64>,
     budget: Option<f64>,
@@ -150,6 +153,7 @@ impl PanelState {
             "session_started" => {
                 if let Some(started) = super::read!(envelope, SessionStarted) {
                     self.worktree = started.worktree.is_some();
+                    self.workspace = Some(started.workspace.clone());
                 }
             }
             "preamble_built" => {
@@ -344,6 +348,13 @@ impl PanelState {
     /// Whether the attached session runs in a worktree Fiber created.
     pub(crate) fn worktree(&self) -> bool {
         self.worktree
+    }
+
+    /// The attached session's recorded workspace root, from the latest
+    /// `session_started` (`docs/tui.md`, "Slash commands"): `/pwd` shows
+    /// it. `None` before the first fold.
+    pub(crate) fn workspace(&self) -> Option<&str> {
+        self.workspace.as_deref()
     }
 
     /// The latest `preamble_built`'s context window, in tokens.
