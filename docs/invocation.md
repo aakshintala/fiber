@@ -815,6 +815,12 @@ rationale and the rejected layouts are
   runs no image code; the child reads the header too
   (`docs/model-routing.md`, "Image limits"). The same child, run with `pdf`,
   counts a PDF's pages and cuts a page range (`docs/tools.md`, "read").
+  Run with `--png`, the same child reads the named file's JPEG, PNG, GIF
+  or WebP bytes and writes one PNG to standard output, exiting 0. A JPEG
+  or WebP over 50 megapixels is refused from the header, and an image the
+  child cannot decode fails with the decoder's reason on standard error:
+  both exit 1. A standard-output write failure exits 3, and bad usage
+  exits 2.
   Spawning a child that does
   nothing takes 1.7 ms on macOS, measured with the probe in
   `research/image-limits/README.md`.
