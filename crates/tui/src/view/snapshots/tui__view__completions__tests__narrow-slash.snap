@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/view/completions_tests.rs
+assertion_line: 400
 expression: "screen(&app, 100, 40)"
 ---
 
