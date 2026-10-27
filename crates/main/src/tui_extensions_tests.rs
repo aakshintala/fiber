@@ -485,3 +485,340 @@ fn entrypoint_symlink_cannot_execute_outside_package() {
         SlotSelection::Absent
     );
 }
+
+fn render_slot(
+    renderer: &dyn Renderer,
+    ctx: &SessionCtx,
+    slot: &str,
+    input: &Input<'_>,
+) -> Decision {
+    renderer.render(ctx, slot, input, 80, &|_, _| vec![])
+}
+
+fn prompt_input<'a>(text: &'a str, images: Vec<tui::ext::PromptImage<'a>>) -> Input<'a> {
+    Input::Prompt(tui::ext::Prompt {
+        text,
+        images,
+        flat: false,
+    })
+}
+
+/// The 4a tables reach Lua with the doc's keys: a prompt renderer reads
+/// the text, the first image's path and the flat flag.
+#[test]
+fn a_prompt_renderer_reads_the_docs_keys() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('prompt',{timeout=100,render=function(input) return {{{text=input.text .. '|' .. input.images[1].path .. '|' .. tostring(input.flat)}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let input = prompt_input(
+        "go",
+        vec![tui::ext::PromptImage {
+            path: "a.png",
+            width: 10,
+            height: 8,
+        }],
+    );
+    let Decision::Draw { lines, .. } = render_slot(&*renderer, &ctx(None), "prompt", &input) else {
+        panic!("a prompt draws")
+    };
+    assert_eq!(lines[0][0].text, "go|a.png|false");
+}
+
+#[test]
+fn the_prompt_table_holds_text_images_and_flat() {
+    let input = prompt_input(
+        "go",
+        vec![tui::ext::PromptImage {
+            path: "a.png",
+            width: 10,
+            height: 8,
+        }],
+    );
+    assert_eq!(
+        input_value(&input),
+        json!({"text": "go", "images": [{"path": "a.png", "width": 10, "height": 8}], "flat": false}),
+    );
+    // No image carries the log's type: the one-line rows never read it.
+    let table = input_value(&input);
+    assert!(table.get("mime_type").is_none());
+    for image in table["images"].as_array().expect("images") {
+        assert_eq!(
+            image
+                .as_object()
+                .expect("object")
+                .keys()
+                .collect::<Vec<_>>(),
+            ["height", "path", "width"],
+        );
+        assert!(image.get("mime_type").is_none());
+    }
+}
+
+#[test]
+fn the_reply_table_holds_text_and_flat() {
+    let input = Input::Reply(tui::ext::ReplyText {
+        text: "ok",
+        flat: true,
+    });
+    assert_eq!(input_value(&input), json!({"text": "ok", "flat": true}));
+}
+
+#[test]
+fn the_thinking_line_table_holds_when_and_open() {
+    for ended in [None, Some(2)] {
+        let input = Input::ThinkingLine(tui::ext::ThinkingLine {
+            text: "plan",
+            started: 1,
+            ended,
+            open: true,
+            flat: false,
+        });
+        assert_eq!(
+            input_value(&input),
+            json!({"text": "plan", "started": 1, "ended": ended, "open": true, "flat": false}),
+        );
+    }
+}
+
+/// A card input holding one reply entry and running totals.
+fn card() -> tui::ext::TurnCard<'static> {
+    tui::ext::TurnCard {
+        prompts: vec![tui::ext::CardPrompt {
+            text: "go",
+            images: vec![tui::ext::PromptImage {
+                path: "a.png",
+                width: 10,
+                height: 8,
+            }],
+        }],
+        entries: vec![tui::ext::TurnEntry::Reply { text: "ok" }],
+        started: 1,
+        calls: 2,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 3,
+                cache_read: 4,
+                cache_write: [("ephemeral".to_owned(), 5)].into_iter().collect(),
+                output: 6,
+            },
+            cost: Some(0.5),
+            subscription_cost: 1.5,
+        },
+        ended: Some(tui::ext::TurnEnded {
+            outcome: "failed",
+            ended_ts: 7,
+            error: Some(tui::ext::TurnError {
+                code: contract::ErrorCode::IoFailed,
+                message: "boom",
+            }),
+        }),
+        running: false,
+        flat: false,
+    }
+}
+
+#[test]
+fn the_turn_card_table_matches_the_doc() {
+    let table = input_value(&Input::TurnCard(card()));
+    assert_eq!(
+        table,
+        json!({
+            "prompts": [{"text": "go", "images": [{"path": "a.png", "width": 10, "height": 8}]}],
+            "entries": [{"kind": "reply", "text": "ok"}],
+            "started": 1,
+            "calls": 2,
+            "usage": {"tokens": {"input": 3, "cache_read": 4, "cache_write": {"ephemeral": 5}, "output": 6}, "cost": 0.5, "subscription_cost": 1.5},
+            "ended": {"outcome": "failed", "ended_ts": 7, "error": {"code": "io_failed", "message": "boom"}},
+            "running": false,
+            "flat": false,
+        }),
+    );
+}
+
+#[test]
+fn the_turn_card_entries_groups_and_ending_follow_the_doc() {
+    use tui::ext::{TurnAnswers, TurnAside, TurnBand, TurnBandState, TurnEntry};
+    let entries = vec![
+        TurnEntry::Reply { text: "ok" },
+        TurnEntry::Steer {
+            text: "wait",
+            images: vec![],
+            ts: 1,
+        },
+        TurnEntry::Aside(TurnAside::Warning { message: "down" }),
+        TurnEntry::Aside(TurnAside::Orphans {
+            jobs: vec![tui::ext::TurnOrphan {
+                name: "job",
+                message: "left",
+            }],
+            open: true,
+        }),
+        TurnEntry::Band(TurnBand {
+            trigger: "automatic",
+            ts: 2,
+            state: TurnBandState::Unchanged { cancelled: true },
+            sizes: None,
+        }),
+        TurnEntry::Answers(TurnAnswers::Declined),
+    ];
+    let table = input_value(&Input::TurnCard(tui::ext::TurnCard {
+        prompts: vec![],
+        entries,
+        started: 0,
+        calls: 0,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: Default::default(),
+                output: 0,
+            },
+            cost: None,
+            subscription_cost: 0.0,
+        },
+        ended: None,
+        running: true,
+        flat: true,
+    }));
+    let entries = table["entries"].as_array().expect("entries");
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry["kind"].as_str().expect("kind"))
+            .collect::<Vec<_>>(),
+        ["reply", "steer", "aside", "aside", "band", "answers"],
+    );
+    assert_eq!(
+        entries[1],
+        json!({"kind": "steer", "text": "wait", "images": [], "ts": 1}),
+    );
+    assert_eq!(
+        entries[2],
+        json!({"kind": "aside", "aside": {"kind": "warning", "message": "down"}}),
+    );
+    assert_eq!(
+        entries[3],
+        json!({"kind": "aside", "aside": {"kind": "orphans", "jobs": [{"name": "job", "message": "left"}], "open": true}}),
+    );
+    assert_eq!(
+        entries[4],
+        json!({"kind": "band", "trigger": "automatic", "ts": 2, "state": {"kind": "unchanged", "cancelled": true}, "sizes": null}),
+    );
+    assert_eq!(
+        entries[5],
+        json!({"kind": "answers", "outcome": "declined", "parts": [], "note": null, "ts": null}),
+    );
+    assert_eq!(table["ended"], Value::Null);
+    assert_eq!(table["running"], true);
+}
+
+#[test]
+fn the_turn_card_group_entry_lists_sections_streaming_and_failed() {
+    use tui::ext::{
+        Status, TurnEntry, TurnFailed, TurnGroup, TurnSection, TurnStreaming, TurnThought,
+    };
+    let table = input_value(&Input::TurnCard(tui::ext::TurnCard {
+        prompts: vec![],
+        entries: vec![TurnEntry::Group(TurnGroup {
+            first: 1,
+            last: 2,
+            running: true,
+            open: false,
+            cut: false,
+            sections: vec![TurnSection {
+                step: 3,
+                thoughts: vec![TurnThought {
+                    text: "plan",
+                    started: 4,
+                    ended: None,
+                    open: false,
+                }],
+                calls: vec![tui::ext::TurnCall {
+                    name: "read",
+                    arguments: &json!({"path": "a.rs"}),
+                    status: Status::Running,
+                    exit: None,
+                    duration_ms: None,
+                    lines: 1,
+                    changes: &[],
+                    error: None,
+                    output: "first",
+                    headline: "",
+                    content: "first\nsecond",
+                    answer: None,
+                    images: vec![],
+                    open: true,
+                    asking: false,
+                }],
+                failed: vec![TurnFailed {
+                    code: "rate_limited",
+                    attempt: 1,
+                }],
+            }],
+            streaming: vec![TurnStreaming {
+                message: "m",
+                index: 0,
+                name: Some("shell"),
+                text: "arg",
+            }],
+        })],
+        started: 0,
+        calls: 1,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: Default::default(),
+                output: 0,
+            },
+            cost: None,
+            subscription_cost: 0.0,
+        },
+        ended: None,
+        running: true,
+        flat: false,
+    }));
+    let entries = table["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0],
+        json!({
+            "kind": "group",
+            "first": 1,
+            "last": 2,
+            "running": true,
+            "open": false,
+            "cut": false,
+            "sections": [{
+                "step": 3,
+                "thoughts": [{"text": "plan", "started": 4, "ended": null, "open": false}],
+                "calls": [{
+                    "name": "read",
+                    "arguments": {"path": "a.rs"},
+                    "status": "running",
+                    "exit": null,
+                    "duration_ms": null,
+                    "lines": 1,
+                    "changes": [],
+                    "error": null,
+                    "output": "first",
+                    "headline": "",
+                    "content": "first\nsecond",
+                    "answer": null,
+                    "images": [],
+                    "open": true,
+                    "asking": false,
+                }],
+                "failed": [{"code": "rate_limited", "attempt": 1}],
+            }],
+            "streaming": [{"message": "m", "index": 0, "name": "shell", "text": "arg"}],
+        }),
+    );
+}
