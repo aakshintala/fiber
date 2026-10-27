@@ -1747,7 +1747,14 @@ impl Harness {
 
     /// Pumps one line, which must arrive and be handled.
     fn pump(&self) {
-        assert_eq!(self.extension.pump_once(), Pumped::Handled);
+        let pumped = self.extension.pump_once();
+        if pumped != Pumped::Handled {
+            let stderr = self.extension.transport().take_stderr();
+            panic!(
+                "expected a handled peer line, got {pumped:?}; peer stderr: {}",
+                String::from_utf8_lossy(&stderr)
+            );
+        }
     }
 
     /// Pumps until the pipe closes, then reaps and joins: a watcher stops
@@ -4335,18 +4342,19 @@ fn read_json_lines(path: &std::path::Path, count: usize, what: &str) -> Vec<Valu
 }
 
 /// The shared-restart peer: like the one-round peer, but it answers
-/// every delivery until the kill, so two concurrent dispatches share
-/// one respawn.
+/// every delivery until the kill, ignoring acknowledgements until a
+/// delivery arrives so either message order is accepted. `args.3` records
+/// each delivery for deterministic test synchronization.
 const RESTART_LOOP: &str = r#"[
     {"read": {"as": "hello"}},
     {"append_file": {"path": {"$ref": "args.2"}, "value": {"$ref": "hello.payload.state"}}},
     {"send": {"id": "t1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", {"$json": "args.1"}]}}},
     {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
     {"send": {"id": "ready", "command": "ready"}},
-    {"repeat": {"count": 3, "actions": [{"read": {"expect": {"kind": "command_accepted"}}}]}},
     {"loop": [
         {"read": {"as": "incoming"}},
         {"if": {"path": "incoming.kind", "equals": "extension_request", "then": [
+            {"append_file": {"path": {"$ref": "args.3"}, "value": {"request_id": {"$ref": "incoming.payload.request_id"}}}},
             {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "incoming.payload.request_id"}, "result": "done"}}}
         ]}}
     ]}
@@ -4354,15 +4362,15 @@ const RESTART_LOOP: &str = r#"[
 
 /// The refold peer: like the one-round peer, but the first hello's
 /// child writes `k` under its delivery, so the restart hello carries
-/// the committed write back. The respawn reads the refold instead.
+/// the committed write back. The respawn skips acknowledgements until its
+/// delivery, then reads the refold instead.
 const RESTART_FOLD: &str = r#"[
     {"read": {"as": "hello"}},
     {"append_file": {"path": {"$ref": "args.2"}, "value": {"$ref": "hello.payload.state"}}},
     {"send": {"id": "t1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", {"$json": "args.1"}]}}},
     {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
     {"send": {"id": "ready", "command": "ready"}},
-    {"repeat": {"count": 3, "actions": [{"read": {"expect": {"kind": "command_accepted"}}}]}},
-    {"read": {"as": "delivery", "expect": {"kind": "extension_request"}}},
+    {"read_until": {"as": "delivery", "path": "kind", "equals": "extension_request"}},
     {"if": {"path": "hello.payload.state.k", "equals": 1, "then": [
         {"send": {"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 2], "request_id": {"$ref": "delivery.payload.request_id"}}}},
         {"read": {"expect": {"kind": "command_accepted"}}}
@@ -4379,12 +4387,14 @@ fn restart_owner(
     state: serde_json::Map<String, Value>,
     log: &std::path::Path,
 ) -> Harness {
+    let deliveries = log.with_extension("deliveries.jsonl");
     Harness::start(
         script,
         &[
             &wire_hook_spec().to_string(),
             &wire_tool_spec().to_string(),
             log.to_str().unwrap(),
+            deliveries.to_str().unwrap(),
         ],
         state,
         None,
@@ -4408,6 +4418,32 @@ fn dispatch_hook(
             timeout,
             state_call,
             &caller,
+        )
+    })
+}
+
+/// Starts a dispatch, pausing after admission so concurrent callers are
+/// resolved before the process re-registers.
+fn dispatch_hook_after_admission(
+    owner: &Harness,
+    hook: super::runtime::FunctionRef,
+    timeout: Duration,
+    resolved: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+) -> std::thread::JoinHandle<Result<Option<Value>, crate::Error>> {
+    let extension = Arc::clone(&owner.extension);
+    std::thread::spawn(move || {
+        let caller = support::cancel::Token::new();
+        extension.dispatch_stream_with_admission_pause(
+            &hook,
+            json!({"event": "turn_end"}),
+            timeout,
+            None,
+            &caller,
+            || {
+                let _sent = resolved.send(());
+                let _released = release.recv();
+            },
         )
     })
 }
@@ -4515,6 +4551,7 @@ fn restart_after_first_death_serves_the_next_dispatch() {
 fn concurrent_dispatches_share_the_sole_restart() {
     let out = fakes::TempDir::new("fiber-process-restart-shared");
     let log_path = out.path().join("hellos.jsonl");
+    let deliveries_path = log_path.with_extension("deliveries.jsonl");
     let owner = restart_owner(RESTART_LOOP, serde_json::Map::new(), &log_path);
     owner.pump();
     owner.pump();
@@ -4529,8 +4566,39 @@ fn concurrent_dispatches_share_the_sole_restart() {
     assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
     kill_peer(&owner);
     pump_closed(&owner, "the kill closes the pipe");
-    let second_a = dispatch_hook(&owner, hook.clone(), Duration::from_millis(100), None);
-    let second_b = dispatch_hook(&owner, hook.clone(), Duration::from_millis(100), None);
+    std::fs::remove_file(&deliveries_path).expect("the first delivery trace exists");
+    let stream_waiting = owner.extension.shared().table.observe_next_stream_wait();
+    let (resolved, resolved_rx) = std::sync::mpsc::channel();
+    let (release_a, release_rx_a) = std::sync::mpsc::channel();
+    let (release_b, release_rx_b) = std::sync::mpsc::channel();
+    let second_a = dispatch_hook_after_admission(
+        &owner,
+        hook.clone(),
+        Duration::from_millis(100),
+        resolved.clone(),
+        release_rx_a,
+    );
+    let second_b = dispatch_hook_after_admission(
+        &owner,
+        hook.clone(),
+        Duration::from_millis(100),
+        resolved.clone(),
+        release_rx_b,
+    );
+    drop(resolved);
+    let resolved_deadline = fakes::Deadline::after(WITHIN);
+    for _ in 0..2 {
+        resolved_deadline.recv_or_fail(
+            &resolved_rx,
+            "both dispatches to resolve before the restart registers again",
+        );
+    }
+    release_a
+        .send(())
+        .expect("dispatch A reached the restart gate");
+    release_b
+        .send(())
+        .expect("dispatch B reached the restart gate");
     let hellos = read_json_lines(&log_path, 2, "the restart hello");
     assert_eq!(
         hellos,
@@ -4540,7 +4608,13 @@ fn concurrent_dispatches_share_the_sole_restart() {
     owner.pump();
     owner.pump();
     owner.pump();
+    fakes::Deadline::after(WITHIN).recv_or_fail(
+        &stream_waiting,
+        "the second delivery to wait behind the first",
+    );
+    read_json_lines(&deliveries_path, 1, "the first restart delivery");
     owner.pump();
+    read_json_lines(&deliveries_path, 2, "the second restart delivery");
     owner.pump();
     for second in [second_a, second_b] {
         let outcome = second.join().expect("the hook thread ends");

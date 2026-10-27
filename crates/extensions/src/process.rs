@@ -294,8 +294,41 @@ impl ProcessExtension {
         state_call: Option<u64>,
         caller: &dyn contract::tool::Cancel,
     ) -> Result<Option<Value>, Error> {
-        self.shared.runtime.resolve(func)?;
-        match self.family_of(func) {
+        self.dispatch_stream_after_admission(func, args, timeout, state_call, caller, || {})
+    }
+
+    #[cfg(test)]
+    pub(crate) fn dispatch_stream_with_admission_pause(
+        &self,
+        func: &FunctionRef,
+        args: Value,
+        timeout: Duration,
+        state_call: Option<u64>,
+        caller: &dyn contract::tool::Cancel,
+        after_admission: impl FnOnce(),
+    ) -> Result<Option<Value>, Error> {
+        self.dispatch_stream_after_admission(
+            func,
+            args,
+            timeout,
+            state_call,
+            caller,
+            after_admission,
+        )
+    }
+
+    fn dispatch_stream_after_admission(
+        &self,
+        func: &FunctionRef,
+        args: Value,
+        timeout: Duration,
+        state_call: Option<u64>,
+        caller: &dyn contract::tool::Cancel,
+        after_admission: impl FnOnce(),
+    ) -> Result<Option<Value>, Error> {
+        let family = self.resolve_family(func)?;
+        after_admission();
+        match family {
             // A hook delivery joins its state transaction: the run begins
             // it, success commits it, and any failure discards it, as the
             // Lua scheduler does around its hook calls. Watchers and
@@ -356,8 +389,7 @@ impl ProcessExtension {
         timeout: Duration,
         caller: &dyn contract::tool::Cancel,
     ) -> Result<Option<Value>, Error> {
-        self.shared.runtime.resolve(func)?;
-        match self.family_of(func) {
+        match self.resolve_family(func)? {
             Some(Family::Tool { name }) => self.send_request(
                 requests::Dispatch::tool(func, format!("tool {name}"), args, timeout),
                 caller,
@@ -491,6 +523,16 @@ impl ProcessExtension {
                 "host.drive: Fiber could not start the driver call".to_owned(),
             );
         }
+    }
+
+    /// Resolves `func`'s family before checking its runtime generation.
+    /// The returned family is the call's admission snapshot: a restart
+    /// after the runtime check cannot turn an admitted call stale by
+    /// replacing the registry before dispatch uses it.
+    fn resolve_family(&self, func: &FunctionRef) -> Result<Option<Family>, Error> {
+        let family = self.family_of(func);
+        self.shared.runtime.resolve(func)?;
+        Ok(family)
     }
 
     /// Which registered family `func` names, for dispatching it as a
