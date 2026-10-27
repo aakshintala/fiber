@@ -496,7 +496,12 @@ fn run_delegates(app: &mut App, _rest: &str) -> Option<Effect> {
 /// after the command are ignored, as `/delegates` ignores them.
 fn run_jobs(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
-    if app.session().is_some() && app.panel_state().running_jobs().is_empty() {
+    // No session first: the shared no-session notice path answers, and
+    // the empty-jobs check only judges an attached session.
+    if app.session().is_none() {
+        return Some(app.open_session_view(super::SessionView::Jobs));
+    }
+    if app.panel_state().running_jobs().is_empty() {
         app.push_notice("no_jobs_running", "No jobs running".to_owned());
         return Some(Effect::None);
     }

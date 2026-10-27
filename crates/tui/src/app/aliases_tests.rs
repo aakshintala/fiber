@@ -171,7 +171,7 @@ fn jobs_opens_the_running_jobs_view_as_tasks_and_ps_do() {
         assert_eq!(run(&mut app, command), Effect::None, "{command}");
         let frame = app.session_view_screen(80).expect("the view is open");
         assert_eq!(frame.title, "Running jobs", "{command}");
-        // The Jobs card uses this heading and lists one row per running job (`docs/tui.md:604`).
+        // The Jobs card has this heading and one row per job (`docs/tui.md:427-428,594`).
         assert_eq!(
             frame
                 .rows

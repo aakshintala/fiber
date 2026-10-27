@@ -379,9 +379,12 @@ fn running_case(command: &str) {
     run.write(b"go\r");
     // Child readiness: the background job's group id.
     let group = ready.wait(setup.deadline)[0];
-    // The finished turn proves the background call folded before the
-    // reply drew, so the job list holds the job.
-    run.wait_screen("the finished turn", |grid| grid.contents.contains("Done."));
+    // The finished turn plus the Jobs rail chip's `1 running` are the
+    // stronger signal: Fiber has folded `job_started`, so the job list
+    // holds the job.
+    run.wait_screen("the finished turn", |grid| {
+        grid.contents.contains("Done.") && grid.contents.contains("1 running")
+    });
     // The slash row carries the aliases; Enter opens the list.
     let prefix_input = run.output().len();
     run.write(command.as_bytes());
@@ -391,7 +394,7 @@ fn running_case(command: &str) {
     run.wait_bytes(prefix_input, FRAME_END, "the slash-list frame");
     let view_input = run.output().len();
     run.write(b"\r");
-    // The Jobs card defines this heading and one row per running job (`docs/tui.md:604`).
+    // The Jobs card has this heading and one row per job (`docs/tui.md:427-428,594`).
     let view = run.wait_screen("the jobs list", |grid| {
         grid.contents.contains("Jobs · 1 running")
     });
