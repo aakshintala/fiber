@@ -2823,8 +2823,8 @@ fn short_home_slash_keeps_its_selection_barred() {
     let row = row_text(&buf, selected, 80);
     assert!(row.contains("credential"), "{shown}");
     // The range counts matching entries, including every built-in
-    // (`docs/tui.md:1682-1685,1995`).
-    assert!(shown.contains("of 44"), "{shown}");
+    // (`docs/tui.md`, "Slash commands").
+    assert!(shown.contains("of 45"), "{shown}");
 }
 
 /// A git home at 80x24 with two live rows in the launch project and no

@@ -3000,8 +3000,8 @@ fn tail_open_prepared(
                             }
                             Full::Hung => {}
                             Full::ManualReplay => {
-                                write(session_ack(&id, json!({})));
-                                // The test feeds the replay itself: read
+                                // The test injects the ack itself before
+                                // replay: read
                                 // its `commands`, answer none, and hang up
                                 // when the loop does.
                                 replaying = true;
@@ -3545,8 +3545,8 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         .pop()
         .unwrap_or_else(|| panic!("a preview frame"));
     assert!(first.contains("quokkas"), "{first}");
-    // Drain first: the hub's own ack may still sit queued, and the
-    // worker must see exactly one pass, this ack, then the replay.
+    // Drain first: the test injects the ack itself before replay, and
+    // the worker must see exactly one pass, this ack, then the replay.
     while open.rx.try_recv().is_ok() {}
     let raise_id = open
         .seen

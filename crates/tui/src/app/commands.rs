@@ -20,7 +20,7 @@ use crate::slash;
 
 /// What the notice says when a command needs a session and none is
 /// attached.
-pub(crate) const NO_SESSION: &str = "No session on screen.";
+const NO_SESSION: &str = "No session on screen.";
 
 /// The `@` panel's state.
 pub(crate) use crate::completion_rows::{Completions, Rows};
@@ -185,7 +185,7 @@ pub(crate) static TABLE: &[CommandEntry] = &[
     },
     CommandEntry {
         name: "pwd",
-        description: "Shows the session's workspace; on home, shows the notice 'No session on screen.'.",
+        description: "Shows the session's workspace; on home, shows the notice 'No session on screen'.",
         hint: None,
         run: run_pwd,
     },

@@ -74,6 +74,17 @@ fn live(session: &str, name: &str) -> Line {
     })
 }
 
+/// A live status reporting active output.
+fn working(session: &str, name: &str) -> Line {
+    let mut status = live(session, name);
+    if let Line::Session(envelope) = &mut status {
+        envelope
+            .payload
+            .insert("state".to_owned(), Value::String("streaming".to_owned()));
+    }
+    status
+}
+
 /// A hub `session_left` for `session`, ending `how`.
 fn left(session: &str, how: &str) -> Line {
     Line::Hub(contract::HubLine {
@@ -112,6 +123,30 @@ fn rejected(id: &str, code: &str, message: &str) -> Line {
             .as_object()
             .cloned()
             .unwrap_or_default(),
+    })
+}
+
+/// A delete refusal carrying its ordered busy ids.
+fn rejected_with_held(id: &str, message: &str, held: &[&str]) -> Line {
+    rejected_with_held_value(id, message, json!(held))
+}
+
+/// A delete refusal carrying an arbitrary structured `held` value.
+fn rejected_with_held_value(id: &str, message: &str, held: Value) -> Line {
+    let mut payload = json!({
+        "command_id": id,
+        "code": "session_held",
+        "message": message
+    })
+    .as_object()
+    .cloned()
+    .unwrap_or_default();
+    payload.insert("held".to_owned(), held);
+    Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload,
     })
 }
 
@@ -505,6 +540,124 @@ fn confirm_stops_every_held_id_with_now_and_nothing_else() {
 }
 
 #[test]
+fn no_feed_delegate_is_closed_but_does_not_gate_delete() {
+    let mut app = attached();
+    // B represents a live delegate that is absent from the session feed.
+    let raw = asked(&mut app, &[A, B], &[A, B]);
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let stopped = closes(&lines);
+    assert_eq!(stopped.len(), 2);
+    assert_eq!(
+        stopped
+            .iter()
+            .map(|line| line["session_id"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        [A, B]
+    );
+    assert!(deletes(&lines).is_empty());
+
+    // A hypothetical delegate exit is not feed evidence and cannot gate
+    // or trigger the exact-set delete.
+    assert!(deletes(&fold_lines(&mut app, left(B, "exited"))).is_empty());
+    let deletion = deletes(&fold_lines(&mut app, left(A, "exited")));
+    assert_eq!(deletion.len(), 1);
+    assert_eq!(
+        deletion[0]["args"],
+        json!({"session": A, "cascade": true, "expect": [A, B]})
+    );
+    assert!(deletes(&fold_lines(&mut app, left(A, "exited"))).is_empty());
+}
+
+#[test]
+fn an_old_exited_row_does_not_count_as_fresh_stop_evidence() {
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    app.on_line(left(B, "exited"));
+    let raw = asked(&mut app, &[A, B], &[A, B]);
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let stopped = closes(&lines);
+    assert_eq!(stopped.len(), 2, "the old Left row still gets a close-now");
+    assert!(stopped.iter().any(|line| line["session_id"] == B));
+    assert!(deletes(&lines).is_empty());
+
+    assert!(deletes(&fold_lines(&mut app, left(A, "exited"))).is_empty());
+    let deletion = deletes(&fold_lines(&mut app, left(B, "exited")));
+    assert_eq!(
+        deletion.len(),
+        1,
+        "a fresh post-confirm exit completes once"
+    );
+    assert_eq!(
+        deletion[0]["args"],
+        json!({"session": A, "cascade": true, "expect": [A, B]})
+    );
+}
+
+#[test]
+fn an_exit_after_discovery_and_before_confirm_needs_no_close() {
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    let command = discovery(&mut app);
+    assert!(answer_discovery(&mut app, &command, &[A, B], &[A, B]).is_empty());
+    assert!(fold_lines(&mut app, left(B, "exited")).is_empty());
+
+    let raw = confirm(&mut app);
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let stopped = closes(&lines);
+    assert_eq!(stopped.len(), 1);
+    assert_eq!(stopped[0]["session_id"], A);
+    assert!(deletes(&lines).is_empty());
+    let deletion = deletes(&fold_lines(&mut app, left(A, "exited")));
+    assert_eq!(deletion.len(), 1);
+    assert_eq!(
+        deletion[0]["args"],
+        json!({"session": A, "cascade": true, "expect": [A, B]})
+    );
+}
+
+/// A `session_status` after the post-discovery exit resumes the feed
+/// row, so confirmation no longer trusts the stale exit and closes the
+/// session again before the exact-set delete.
+#[test]
+fn a_resume_after_the_fresh_exit_needs_a_close_again() {
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    let command = discovery(&mut app);
+    assert!(answer_discovery(&mut app, &command, &[A, B], &[A, B]).is_empty());
+    assert!(fold_lines(&mut app, left(B, "exited")).is_empty());
+    // The fork resumes before the person confirms: its row is live
+    // again, so the marked exit is stale.
+    assert!(fold_lines(&mut app, live(B, "forked")).is_empty());
+
+    let raw = confirm(&mut app);
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let stopped = closes(&lines);
+    assert_eq!(stopped.len(), 2, "the resumed fork gets a close-now again");
+    assert!(stopped.iter().any(|line| line["session_id"] == B));
+    assert!(deletes(&lines).is_empty());
+    let deletion = deletes(&fold_lines(&mut app, left(B, "exited")));
+    assert!(deletion.is_empty(), "the parent is still live");
+    let deletion = deletes(&fold_lines(&mut app, left(A, "exited")));
+    assert_eq!(deletion.len(), 1);
+    assert_eq!(
+        deletion[0]["args"],
+        json!({"session": A, "cascade": true, "expect": [A, B]})
+    );
+}
+
+#[test]
 fn unheld_ids_get_no_close() {
     let mut app = attached();
     app.on_line(live(B, "forked"));
@@ -537,6 +690,26 @@ fn held_empty_confirms_straight_to_the_exact_delete() {
     assert_eq!(
         gone[0]["args"],
         json!({"session": A, "cascade": true, "expect": [A]})
+    );
+}
+
+#[test]
+fn finishing_stops_preserves_a_quit_prompt_opened_in_the_meantime() {
+    let mut app = attached();
+    let _lines: Vec<String> = app.on_line(working(A, "a"));
+    let _raw = asked(&mut app, &[A], &[A]);
+    assert_eq!(app.quit(), Effect::None);
+    assert!(app.quit_open());
+
+    let deletion = deletes(&fold_lines(&mut app, left(A, "exited")));
+    assert_eq!(deletion.len(), 1);
+    assert_eq!(
+        deletion[0]["args"],
+        json!({"session": A, "cascade": true, "expect": [A]})
+    );
+    assert!(
+        app.quit_open(),
+        "sending delete must not replace the quit prompt"
     );
 }
 
@@ -682,9 +855,10 @@ fn write_failure_is_uncertain_and_sends_no_delete() {
 }
 
 #[test]
-fn post_stop_session_held_keeps_the_screen_with_the_exact_notice() {
+fn post_stop_session_held_absent_or_empty_uses_the_single_notice() {
     let mut app = attached();
-    // B has no row: the notice falls back to its id.
+    // There is no `held` field. The notice falls back to target A instead
+    // of parsing B from the message.
     let _raw = asked(&mut app, &[A, B], &[A, B]);
     let mut out = fold_lines(&mut app, left(A, "exited"));
     out.extend(fold_lines(&mut app, left(B, "exited")));
@@ -704,16 +878,41 @@ fn post_stop_session_held_keeps_the_screen_with_the_exact_notice() {
     );
     assert_eq!(
         app.notice(),
-        Some("Not deleted: s_bbbbbbbbbbbbbbbb is running again. Nothing was deleted.")
+        Some("Not deleted: old work is running again. Nothing was deleted.")
     );
     // The attached screen stays, the question stays closed, no retry.
     assert!(!app.on_home());
     assert_eq!(app.session(), Some(&SessionId(A.to_owned())));
     assert!(!open(&app));
+
+    let mut empty = attached();
+    let _raw = asked(&mut empty, &[A, B], &[A, B]);
+    let mut out = fold_lines(&mut empty, left(A, "exited"));
+    out.extend(fold_lines(&mut empty, left(B, "exited")));
+    let gone = deletes(&out);
+    assert_eq!(gone.len(), 1);
+    let delete = gone[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"));
+    assert!(
+        empty
+            .on_line(rejected_with_held(
+                delete,
+                "Session `s_bbbbbbbbbbbbbbbb` is held by another process.",
+                &[],
+            ))
+            .is_empty()
+    );
+    assert_eq!(
+        empty.notice(),
+        Some("Not deleted: old work is running again. Nothing was deleted.")
+    );
+    assert!(!empty.on_home());
+    assert!(!open(&empty));
 }
 
 #[test]
-fn post_stop_session_held_with_several_names_the_first_and_count() {
+fn post_stop_session_held_uses_structured_ids_for_name_and_count() {
     let mut app = attached();
     app.on_line(live(B, "forked"));
     let _raw = asked(&mut app, &[A, B], &[A, B]);
@@ -725,19 +924,48 @@ fn post_stop_session_held_with_several_names_the_first_and_count() {
         .as_str()
         .unwrap_or_else(|| panic!("delete id"));
     assert!(
-        app.on_line(rejected(
+        app.on_line(rejected_with_held(
             delete,
-            "session_held",
-            "Session `s_aaaaaaaaaaaaaaaa` and 1 more are held by another process."
+            "Session `s_aaaaaaaaaaaaaaaa` is held by another process.",
+            &[A, B],
         ))
         .is_empty()
     );
     assert_eq!(
         app.notice(),
-        Some("Not deleted: old work and 1 more are running again. Nothing was deleted.")
+        Some("Not deleted: old work is running again and 1 more. Nothing was deleted.")
     );
     assert!(!app.on_home());
     assert!(!open(&app));
+}
+
+#[test]
+fn post_stop_held_array_is_validated_in_full_before_using_it() {
+    for held in [
+        json!([B, "not-a-session-id"]),
+        json!([B, B]),
+        json!([B, 17]),
+        json!([]),
+        json!("not-an-array"),
+    ] {
+        let mut app = attached();
+        let _raw = asked(&mut app, &[A], &[A]);
+        let deletion = deletes(&fold_lines(&mut app, left(A, "exited")));
+        assert_eq!(deletion.len(), 1);
+        let delete = deletion[0]["id"].as_str().unwrap();
+        assert!(
+            app.on_line(rejected_with_held_value(
+                delete,
+                "Session `s_bbbbbbbbbbbbbbbb` and 99 more are held.",
+                held,
+            ))
+            .is_empty()
+        );
+        assert_eq!(
+            app.notice(),
+            Some("Not deleted: old work is running again. Nothing was deleted.")
+        );
+    }
 }
 
 #[test]
@@ -823,6 +1051,13 @@ fn unanswered_delete_is_uncertain_and_stays_attached() {
     );
     assert!(!app.on_home());
     assert_eq!(app.session(), Some(&SessionId(A.to_owned())));
+    // A command whose answer was lost no longer owns the state: a new
+    // slash command on the same attached session can start.
+    let _next = discovery(&mut app);
+    assert!(matches!(
+        app.home.as_ref().unwrap().questions.delete_command.state,
+        State::Discovering { .. }
+    ));
 }
 
 #[test]

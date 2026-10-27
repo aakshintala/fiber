@@ -10,7 +10,7 @@ use super::super::super::reconnect::UNANSWERED;
 use super::super::super::{App, Effect, Phase, mint};
 use super::super::{refusal, refusal_code};
 use super::Prompt;
-use crate::home::{dependents, title};
+use crate::home::title;
 use contract::SessionId;
 
 /// `/delete`'s feature-owned lifecycle under home's questions: one
@@ -40,6 +40,7 @@ enum State {
         target: SessionId,
         sessions: Vec<SessionId>,
         held: Vec<SessionId>,
+        fresh_exited: BTreeSet<SessionId>,
         question: String,
     },
     /// Stops are out for every still-live held id; each `session_left`
@@ -213,6 +214,7 @@ impl App {
                 target,
                 sessions,
                 held,
+                fresh_exited: BTreeSet::new(),
                 question,
             };
         }
@@ -353,13 +355,21 @@ impl App {
         if !self.outbox.is_up() {
             return Effect::None;
         }
-        let (target, sessions, held) = match self.delete_asked_sets() {
+        let (target, sessions, held, fresh_exited) = match self.delete_asked_sets() {
             Some(sets) => sets,
             None => return Effect::None,
         };
+        // A marked exit is trusted only while the feed row is still left:
+        // a later `session_status` resumes the row, so the session must
+        // be closed again rather than assumed stopped.
         let live: Vec<SessionId> = held
             .iter()
-            .filter(|id| self.delete_still_live(id))
+            .filter(|id| !self.delete_exit_is_current(id, &fresh_exited))
+            .cloned()
+            .collect();
+        let waiting: BTreeSet<SessionId> = live
+            .iter()
+            .filter(|id| self.delete_feed_represented(id))
             .cloned()
             .collect();
         // The answered question closes; the continuation owns the wait.
@@ -373,7 +383,13 @@ impl App {
                 false => Effect::Send(lines),
             };
         }
-        let (lines, pairs) = self.close_lines(&live);
+        let (mut lines, pairs) = self.close_lines(&live);
+        if waiting.is_empty() {
+            // The closes still cover sessions absent from the feed, but
+            // there is no feed event to await for them.
+            lines.extend(self.delete_command_send(target, sessions));
+            return Effect::Send(lines);
+        }
         if let Some(home) = self.home.as_mut() {
             for (session, close) in &pairs {
                 home.questions
@@ -383,7 +399,7 @@ impl App {
             home.questions.delete_command.state = State::Stopping {
                 target,
                 sessions,
-                waiting: live.into_iter().collect(),
+                waiting,
                 closes: pairs
                     .into_iter()
                     .map(|(session, close)| (close, session))
@@ -394,15 +410,28 @@ impl App {
     }
 
     /// The asked command's confirmed sets, while its question is open.
-    fn delete_asked_sets(&self) -> Option<(SessionId, Vec<SessionId>, Vec<SessionId>)> {
+    fn delete_asked_sets(
+        &self,
+    ) -> Option<(
+        SessionId,
+        Vec<SessionId>,
+        Vec<SessionId>,
+        BTreeSet<SessionId>,
+    )> {
         let home = self.home.as_ref()?;
         match &home.questions.delete_command.state {
             State::Asked {
                 target,
                 sessions,
                 held,
+                fresh_exited,
                 ..
-            } => Some((target.clone(), sessions.clone(), held.clone())),
+            } => Some((
+                target.clone(),
+                sessions.clone(),
+                held.clone(),
+                fresh_exited.clone(),
+            )),
             State::Idle
             | State::Discovering { .. }
             | State::Stopping { .. }
@@ -410,19 +439,47 @@ impl App {
         }
     }
 
-    /// Whether `id` may still run: a proven-exited row needs no stop,
-    /// and the attached session is live while attached. Anything without
-    /// a row might run, so it is stopped rather than waited on forever.
-    fn delete_still_live(&self, id: &SessionId) -> bool {
-        if let Phase::Attached { session, .. } = &self.phase
-            && session == id
-        {
-            return true;
+    /// Records only exits observed after the dry-run answer opened the
+    /// confirmation question. A row's old `left` value is not stop
+    /// evidence: the session may have resumed since that feed event.
+    pub(in crate::app) fn delete_command_note_session_left(
+        &mut self,
+        id: &SessionId,
+        exited: bool,
+    ) {
+        if !exited {
+            return;
         }
-        !self
-            .home
+        if let Some(home) = self.home.as_mut()
+            && let State::Asked {
+                held, fresh_exited, ..
+            } = &mut home.questions.delete_command.state
+            && held.contains(id)
+            && home.sessions.row(id).is_some()
+        {
+            fresh_exited.insert(id.clone());
+        }
+    }
+
+    /// Whether the feed can provide fresh exit evidence for `id`. A
+    /// missing row is not evidence of exit: delegates are not represented
+    /// in the feed, and their parent shutdown covers them.
+    fn delete_feed_represented(&self, id: &SessionId) -> bool {
+        self.home
             .as_ref()
-            .is_some_and(|home| home.sessions.row(id).is_some_and(|row| row.left.is_some()))
+            .is_some_and(|home| home.sessions.row(id).is_some())
+    }
+
+    /// Whether `id` both exited after the discovery answer and has not
+    /// resumed since: the feed row still exists and is still left. A
+    /// `session_status` clears the row's `left`, resuming the session.
+    fn delete_exit_is_current(&self, id: &SessionId, fresh_exited: &BTreeSet<SessionId>) -> bool {
+        fresh_exited.contains(id)
+            && self
+                .home
+                .as_ref()
+                .and_then(|home| home.sessions.row(id))
+                .is_some_and(|row| row.left.is_some())
     }
 
     /// Sends the confirmed delete through the existing delete path with
@@ -434,17 +491,24 @@ impl App {
             self.delete_command_delete_unknown(&sessions);
             return Vec::new();
         }
-        if let Some(home) = self.home.as_mut() {
+        let old_prompt = if let Some(home) = self.home.as_mut() {
             home.questions.delete_command.state = State::Deleting {
                 target: target.clone(),
                 sessions: sessions.clone(),
             };
+            let old = home.questions.prompt.take();
             home.questions.prompt = Some(Prompt::Delete {
                 id: target,
-                expect: Some(sessions),
+                expect: Some(sessions.clone()),
                 scroll: 0,
             });
-        }
+            old
+        } else {
+            None
+        };
+        // Reuse the ordinary delete path so it registers Ask::Delete and
+        // retains exact-set answer correlation. Restore another question
+        // before the event loop can draw or fold an answer.
         let lines = match self.send_delete() {
             Effect::Send(lines) => lines,
             Effect::None
@@ -460,16 +524,13 @@ impl App {
             | Effect::OpenLink(_)
             | Effect::OpenFile(_) => Vec::new(),
         };
+        if let Some(home) = self.home.as_mut() {
+            home.questions.prompt = old_prompt;
+        }
         if lines.is_empty() {
-            // Unreachable with the link up and the staged question, but
-            // a line that never goes out must never wedge the wait.
-            if let Some(home) = self.home.as_mut() {
-                home.questions.delete_command.state = State::Idle;
-            }
+            self.delete_command_delete_unknown(&sessions);
             return Vec::new();
         }
-        // The wait now lives in the asked delete, not in a prompt.
-        self.close_prompt();
         // Stopped sessions need no resume line.
         if let Some(home) = self.home.as_mut()
             && let State::Deleting { sessions, .. } = &home.questions.delete_command.state
@@ -512,13 +573,13 @@ impl App {
         let code = refusal_code(payload);
         let message = refusal(payload);
         if code == "session_held" {
-            let (first, more) = held_refusal_parts(&message, &target);
+            let (first, more) = held_refusal_parts(payload, &target, &sessions);
             let display = self.delete_display(&first);
             let notice = if more == 0 {
                 format!("Not deleted: {display} is running again. Nothing was deleted.")
             } else {
                 format!(
-                    "Not deleted: {display} and {more} more are running again. Nothing was deleted."
+                    "Not deleted: {display} is running again and {more} more. Nothing was deleted."
                 )
             };
             self.delete_command_finish(false);
@@ -598,8 +659,22 @@ impl App {
     /// Settles a dropped connection or a write failure for the command:
     /// discovery with no question yet drops silently; stops with no
     /// answer end in the stop uncertainty, keeping the attached screen;
-    /// the deleting ask settles through its own answer.
+    /// a deleting command ends as unknown and releases its state.
     pub(super) fn delete_command_disconnected(&mut self) {
+        let deleting =
+            self.home
+                .as_ref()
+                .and_then(|home| match &home.questions.delete_command.state {
+                    State::Deleting { sessions, .. } => Some(sessions.clone()),
+                    State::Idle
+                    | State::Discovering { .. }
+                    | State::Asked { .. }
+                    | State::Stopping { .. } => None,
+                });
+        if let Some(sessions) = deleting {
+            self.delete_command_delete_unknown(&sessions);
+            return;
+        }
         let waiting = match self.delete_waiting_sets() {
             Some(waiting) => waiting,
             None => {
@@ -810,27 +885,36 @@ fn command_question(name: &str, target: &SessionId, sessions: &[SessionId]) -> S
     )
 }
 
-/// The refused delete's first busy id and how many more follow: the hub
-/// names the first busy session in backticks and appends `and N more`.
-/// A message naming nothing valid falls back to the command's target.
-fn held_refusal_parts(message: &str, target: &SessionId) -> (SessionId, usize) {
-    let mut names = dependents(message);
-    if names.is_empty() {
-        names.push(target.clone());
+/// The refused delete's first busy id and how many more follow. The
+/// structured `held` field is trusted only as a complete, valid unique
+/// list; otherwise fall back to the target and single-session wording.
+fn held_refusal_parts(
+    payload: &Map<String, Value>,
+    target: &SessionId,
+    sessions: &[SessionId],
+) -> (SessionId, usize) {
+    let Some(held) = payload.get("held").and_then(Value::as_array) else {
+        return (target.clone(), 0);
+    };
+    let allowed: BTreeSet<&str> = sessions.iter().map(|session| session.0.as_str()).collect();
+    if held.is_empty() {
+        return (target.clone(), 0);
     }
-    let more = and_more(message);
-    let first = names.remove(0);
-    (first, names.len() + more)
-}
-
-/// The `and N more` count in a refusal message, or none.
-fn and_more(message: &str) -> usize {
-    message
-        .split(" and ")
-        .nth(1)
-        .and_then(|rest| rest.split_whitespace().next())
-        .and_then(|word| word.parse().ok())
-        .unwrap_or(0)
+    let mut seen = BTreeSet::new();
+    let mut ids = Vec::with_capacity(held.len());
+    for value in held {
+        let Some(id) = value.as_str().filter(|id| minted(id)) else {
+            return (target.clone(), 0);
+        };
+        if !seen.insert(id) || !allowed.contains(id) {
+            return (target.clone(), 0);
+        }
+        ids.push(id);
+    }
+    let Some(first) = ids.first() else {
+        return (target.clone(), 0);
+    };
+    (SessionId((*first).to_owned()), ids.len() - 1)
 }
 
 #[cfg(test)]

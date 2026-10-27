@@ -28,7 +28,7 @@ use crate::resume::not_found;
 /// With `dry_run`, answers `sessions`, the ids the delete would remove,
 /// and `held`, those another process holds, and deletes nothing. Accepted
 /// with no `result`, except the dry run's answer.
-pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
+pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Value>, DeleteRefused> {
     let parsed = parse(args).ok_or_else(invalid)?;
     let session = parsed.session;
     let cascade = parsed.cascade;
@@ -42,7 +42,7 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     // every candidate before refusing, so one busy session never hides a
     // later lock failure, and refuses before removing any part of the set.
     let mut locks = Vec::with_capacity(set.len());
-    let mut busy: Vec<&str> = Vec::new();
+    let mut busy: Vec<String> = Vec::new();
     for (id, dir) in &set {
         let lock = if parsed.dry_run {
             log::try_hold_existing(dir).map_err(|error| io_failed(id, &error))?
@@ -52,15 +52,15 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
         match lock {
             None => {}
             Some(log::Hold::Held(lock)) => locks.push(lock),
-            Some(log::Hold::Busy) => busy.push(id.0.as_str()),
+            Some(log::Hold::Busy) => busy.push(id.0.clone()),
         }
     }
     if parsed.dry_run {
         let ids: Vec<&str> = set.iter().map(|(id, _)| id.0.as_str()).collect();
         return Ok(Some(serde_json::json!({"sessions": ids, "held": busy})));
     }
-    if let Some((first, rest)) = busy.split_first() {
-        return Err(held_refused(first, rest.len()));
+    if let Some(first) = busy.first().cloned() {
+        return Err(held_refused(&first, busy));
     }
     // Discovery order puts each session after the one it continues, so in
     // reverse no survivor points at a removed session.
@@ -194,19 +194,36 @@ fn session_dir(hub: &Hub, session: &SessionId) -> Option<PathBuf> {
     log::is_plain_dir(&dir).then_some(dir)
 }
 
-/// A real delete blocked by busy sessions: the first busy id, with `and
-/// N more` when several are busy. The code and the one-id wording are
-/// unchanged; a later lock-probe failure still refuses `io_failed`
-/// instead, without deleting.
-fn held_refused(first: &str, more: usize) -> Refused {
-    let message = if more == 0 {
-        format!("Session `{first}` is held by another process.")
-    } else {
-        format!("Session `{first}` and {more} more are held by another process.")
-    };
-    Refused {
+/// A delete refusal: only a real `session_held` refusal carries the busy
+/// ids, in the order the hub checked them.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DeleteRefused {
+    /// The rejection code.
+    pub(crate) code: ErrorCode,
+    /// The rejection message.
+    pub(crate) message: String,
+    /// Busy ids in check order, only for a real `session_held` refusal.
+    pub(crate) held: Option<Vec<String>>,
+}
+
+impl From<Refused> for DeleteRefused {
+    fn from(refused: Refused) -> Self {
+        Self {
+            code: refused.code,
+            message: refused.message,
+            held: None,
+        }
+    }
+}
+
+/// A real delete blocked by busy sessions. Keep the single-session
+/// wording even when `held` names several ids. A later lock-probe failure
+/// still refuses `io_failed` instead, without deleting.
+fn held_refused(first: &str, held: Vec<String>) -> DeleteRefused {
+    DeleteRefused {
         code: ErrorCode::SessionHeld,
-        message,
+        message: format!("Session `{first}` is held by another process."),
+        held: Some(held),
     }
 }
 

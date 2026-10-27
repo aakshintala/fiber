@@ -44,6 +44,11 @@ A failed model call adds two optional fields:
   header value the credential, `credential()` or `sign()` supplied is replaced
   with `[redacted]`. Fiber's `message` then names the provider and the function, such as "codex's credential() failed. Run `fiber login codex`." or, for a provider `fiber login` cannot fix, "bedrock's credential() failed.", and a `credential()` that fails at startup adds the same `provider` to `fiber_exited.error`.
 
+A hub `command_rejected` for `delete` with `code: session_held` also carries
+`held`: the ids of every session in the set another process holds, in the order
+the hub checked them. Other `session_held` refusals omit it (`docs/events.md`,
+"`command_rejected`").
+
 ## Where a code comes from
 
 Each library crate has its own error enum (`docs/code-quality.md`, "Errors").

@@ -81,7 +81,7 @@ fn hold(dir: &std::path::Path) -> File {
     file
 }
 
-fn refused(hub: &Hub, value: serde_json::Value) -> Refused {
+fn refused(hub: &Hub, value: serde_json::Value) -> DeleteRefused {
     delete(hub, &args(value)).unwrap_err()
 }
 
@@ -102,7 +102,7 @@ fn sessions_as_set(answer: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-/// The answer's `held` ids as a set: order is not a public guarantee.
+/// The dry-run answer's `held` ids as a set: order is not public.
 fn held_as_set(answer: &Value) -> BTreeSet<String> {
     answer["held"]
         .as_array()
@@ -172,6 +172,14 @@ fn a_refusal_over_the_wire_carries_its_code() {
     assert_eq!(answer["kind"], "command_rejected");
     assert_eq!(answer["payload"]["command_id"], "7");
     assert_eq!(answer["payload"]["code"], "session_not_found");
+    assert!(answer["payload"].get("held").is_none());
+
+    let generic_session_held = crate::connection::rejection(
+        Some(&contract::CommandId("generic".to_owned())),
+        &ErrorCode::SessionHeld,
+        "A session is held.",
+    );
+    assert!(generic_session_held.get("held").is_none());
 }
 
 #[test]
@@ -747,30 +755,42 @@ fn real_delete_with_one_held_keeps_the_single_message() {
         refused.message,
         format!("Session `{}` is held by another process.", id(2))
     );
+    assert_eq!(refused.held, Some(vec![id(2)]));
     for dir in [&root, &fork] {
         assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
     }
 }
 
 #[test]
-fn real_delete_with_several_held_names_the_first_and_how_many_more() {
+fn a_multi_session_held_delete_refusal_carries_ordered_ids_over_the_wire() {
     let temp = Temp::new();
     let root = temp.session("-p", 1, None);
     let fork = temp.session("-p", 2, Some(1));
     let deep = temp.session("-p", 3, Some(1));
     let hub = temp.hub();
     let _locks = [hold(&root), hold(&fork), hold(&deep)];
-    let before = snapshot_tree(&temp.dir);
-    let refused = refused(&hub, json!({"session": id(1), "cascade": true}));
-    assert_eq!(refused.code, ErrorCode::SessionHeld);
+    let before = [&root, &fork, &deep].map(|dir| snapshot_tree(dir));
+    let line = json!({
+        "id": "c_delete",
+        "command": "delete",
+        "args": {"session": id(1), "cascade": true}
+    });
+
+    let answer = over_the_wire(&hub, &line.to_string());
+
+    assert_eq!(answer["kind"], "command_rejected");
+    assert_eq!(answer["payload"]["command_id"], "c_delete");
+    assert_eq!(answer["payload"]["code"], "session_held");
     assert_eq!(
-        refused.message,
-        format!(
-            "Session `{}` and 2 more are held by another process.",
-            id(1)
-        )
+        answer["payload"]["message"],
+        format!("Session `{}` is held by another process.", id(1))
     );
-    assert_eq!(snapshot_tree(&temp.dir), before, "nothing is removed");
+    assert_eq!(answer["payload"]["held"], json!([id(1), id(2), id(3)]));
+    assert_eq!(
+        [&root, &fork, &deep].map(|dir| snapshot_tree(dir)),
+        before,
+        "session data remains"
+    );
 }
 
 #[test]

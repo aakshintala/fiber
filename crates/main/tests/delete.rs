@@ -1,7 +1,7 @@
-//! Binary-level tests of `fiber sessions delete` (`docs/invocation.md`,
-//! "Deleting and pruning"): the built `fiber` runs with no hub running,
-//! starts one, and the hub removes session directories built by hand.
-//! Every run and every wait carries a deadline.
+//! Binary-level tests of session deletion (`docs/invocation.md`,
+//! "Deleting and pruning"): CLI cases start without a hub, and `/delete`
+//! pty journeys run against the hub the built `fiber` starts. Every run
+//! and every wait carries a deadline.
 
 #![allow(
     clippy::unwrap_used,
@@ -576,20 +576,20 @@ fn held_fork_refusal_keeps_both_sessions() {
             && line["payload"]["session_id"] == leaving.as_str()
             && line["payload"]["how"] == "exited"
     });
-    // The notice row truncates the long hub message, so the screen pins
-    // its visible prefix; both directories staying proves the outcome
-    // the cut-off sentence states. The exact full notice is `Stop
-    // refused for {b}: session {b} is held by a process whose pid is not
-    // yet recorded; only one Fiber process may write a session. Nothing
-    // was deleted.` (`delete.rs`, "Stop refused"; `log/src/lib.rs`, the
-    // held-lock error).
+    // The delete's exact-set refusal carries the structured `held`
+    // data: the busy fork is named in the notice. The full notice is
+    // `Not deleted: {b} is running again. Nothing was deleted.`
+    // (`delete.rs`, "Not deleted"; the refusal's `session_held` code).
     let refused = run.wait_screen("the held refusal", |grid| {
-        grid.contents.contains(&format!("Stop refused for {b}:"))
-            && grid.contents.contains("is held by a pro")
+        grid.contents.contains("session_held")
+            && grid.contents.contains("Not deleted:")
+            && grid.contents.contains(&format!("{b} is running again"))
+            && grid.contents.contains("Nothing was deleted")
     });
     assert!(refused.contents.contains("session_held"));
-    assert!(refused.contents.contains(&format!("Stop refused for {b}:")));
-    assert!(refused.contents.contains("is held by a pro"));
+    assert!(refused.contents.contains("Not deleted:"));
+    assert!(refused.contents.contains(&format!("{b} is running again")));
+    assert!(refused.contents.contains("Nothing was deleted"));
     assert!(
         refused.contents.contains("turns"),
         "the attached screen stays"
@@ -604,6 +604,180 @@ fn held_fork_refusal_keeps_both_sessions() {
         "no retry deletes the parent after"
     );
     assert!(b_dir.exists(), "no retry deletes the fork after");
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
+
+/// A real live fork delegate is in a cascading delete set but absent from
+/// the feed: its close goes out, the parent reports exited, and deletion
+/// completes without waiting for a delegate feed row.
+#[test]
+fn cascading_delete_waits_for_live_parent_exit_not_delegate_feed_row() {
+    const COLS: u16 = 160;
+    const ROWS: u16 = 48;
+    let setup = Setup::new();
+    let hold = setup.workspace().join("delegate.hold.fifo");
+    fakes::fifo(&hold);
+    let hold_arg = hold.to_string_lossy().into_owned();
+    let server_parent = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
+        let body = String::from_utf8_lossy(&request.body);
+        if !body.contains("\"tools\":[") || body.contains("\"tools\":[]") {
+            return text_reply("allow");
+        }
+        if body.contains("Started delegate") {
+            return hello();
+        }
+        if body.contains("you are a fork of session") {
+            return stream(&[function_call(
+                "call_hold",
+                "shell",
+                &json!({"command": format!("read line < '{hold_arg}'")}),
+            )]);
+        }
+        stream(&[function_call(
+            "call_fork",
+            "delegate_fork",
+            &json!({"description": "work", "prompt": "run the fork"}),
+        )])
+    })
+    .unwrap();
+    for (name, server) in [("pa", &server_parent)] {
+        let source = setup.root.path().join(format!("src-{name}"));
+        let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+        manifest["providers"] = Value::Object(
+            [(name.to_owned(), json!([format!("{}/v1", server.url())]))]
+                .into_iter()
+                .collect(),
+        );
+        write_json(&source.join("extension.json"), &manifest);
+        write_json(
+            &source.join(format!("providers/{name}.json")),
+            &json!({"name": name, "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+                "models": [{"id": "m", "protocol": "openai-responses",
+                    "base_url": format!("{}/v1", server.url()), "context_window": 100000}]}),
+        );
+        extensions::plan(
+            &setup.home(),
+            &extensions::Request::Path(source),
+            "0.0.0",
+            &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+    }
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "session": {"idle_exit_ms": 3600000}, "hub": {"idle_exit_ms": 200}}),
+    );
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n{}\n",
+            json!({"decision": "allow", "tool": "delegate_fork", "prefix": ""}),
+            json!({"decision": "allow", "tool": "shell", "prefix": ""})
+        ),
+    )
+    .unwrap();
+
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let mut run = Run::spawn(
+        &setup,
+        COLS,
+        ROWS,
+        &[],
+        &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+    );
+    run.ready();
+    run.write(b"run it\r");
+    let sessions_dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    fakes::wait_until("the delegate start event", setup.deadline, move || {
+        stored_at(&sessions_dir).is_some_and(|ids| {
+            ids.iter().any(|id| {
+                fs::read_to_string(sessions_dir.join(id).join("events.jsonl"))
+                    .is_ok_and(|events| events.contains("delegate_started"))
+            })
+        })
+    });
+    let parent = stored(&setup)
+        .into_iter()
+        .find(|id| {
+            fs::read_to_string(session_dir(&setup, id).join("events.jsonl"))
+                .is_ok_and(|events| events.contains("delegate_started"))
+        })
+        .unwrap();
+    let parent_dir = session_dir(&setup, &parent);
+    let events = fs::read_to_string(parent_dir.join("events.jsonl")).unwrap();
+    let delegate = events
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|event| event["kind"] == "delegate_started")
+        .unwrap()["payload"]["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(delegate, parent);
+    fakes::wait_until(
+        "the parent's delegate-fork turn to finish",
+        setup.deadline,
+        move || {
+            fs::read_to_string(parent_dir.join("events.jsonl"))
+                .is_ok_and(|events| events.contains("turn_completed"))
+        },
+    );
+    // A writer opening the FIFO proves the real delegate shell is blocked
+    // in its read, so the delegate is still running when delete confirms.
+    let hold_writer = support::bounded(setup.deadline, "the delegate shell to hold", {
+        let hold = hold.clone();
+        move || fs::OpenOptions::new().write(true).open(hold).unwrap()
+    });
+
+    let feed_watch = Socket::connect(setup.deadline, &setup.hub_socket());
+    feed(&feed_watch);
+    let parent_status = parent.clone();
+    until(&feed_watch, "the parent in the live feed", move |line| {
+        line["kind"] == "session_status" && line["session_id"] == parent_status.as_str()
+    });
+    run.write(b"/delete\r");
+    let question = run.wait_screen("the cascading delete question", |grid| {
+        grid.contents.contains("It cannot be undone")
+            && grid.contents.contains("delete all")
+            && grid.contents.contains(&delegate)
+    });
+    assert!(question.contents.contains(&delegate));
+    run.write(b"\r");
+
+    let leaving = parent.clone();
+    let exited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        until(&feed_watch, "the parent to leave exited", move |line| {
+            line["kind"] == "session_left"
+                && line["payload"]["session_id"] == leaving.as_str()
+                && line["payload"]["how"] == "exited"
+        })
+    }));
+    assert!(
+        exited.is_ok(),
+        "parent exit missing; screen: {}; hub: {}; parent log: {}",
+        run.screen().contents,
+        setup.hub_log(),
+        fs::read_to_string(session_dir(&setup, &parent).join("events.jsonl")).unwrap_or_default()
+    );
+    run.wait_screen("home after the exact-set delete", |grid| {
+        grid.contents.contains("No sessions yet.")
+    });
+    assert!(
+        !session_dir(&setup, &parent).exists(),
+        "the parent was deleted"
+    );
+    assert!(
+        !session_dir(&setup, &delegate).exists(),
+        "the delegate was deleted"
+    );
+    drop(hold_writer);
+    drop(feed_watch);
+    quit_pty(run, guard);
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
 

@@ -627,6 +627,7 @@ impl App {
                         _ => return Some(Vec::new()),
                     };
                     let exited = SessionId(id.to_owned());
+                    self.delete_command_note_session_left(&exited, how == Left::Exited);
                     // An exit for the attached session arrived after the
                     // attach: the session is dead, so quitting owes it no
                     // resume line. An exited row from before the attach

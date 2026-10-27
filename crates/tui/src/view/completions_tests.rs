@@ -121,8 +121,8 @@ fn slash_eight_of_long_list() {
     // Eight entries and the range line, with the first match focused.
     let shown = screen(&app, 160, 48);
     // The range counts matching entries, not just visible rows
-    // (`docs/tui.md:1682-1685,1995`).
-    assert!(shown.contains("1–8 of 61 · ↓ 53 more"), "{shown}");
+    // (`docs/tui.md`, "Slash commands").
+    assert!(shown.contains("1–8 of 62 · ↓ 54 more"), "{shown}");
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
     // The first match is focused (`docs/tui.md:1682`).
@@ -212,11 +212,10 @@ fn a_scrolled_slash_list_counts_both_directions() {
     }
     let shown = screen(&app, 160, 48);
     // The window follows the selection; the total and the count below
-    // follow the list.
+    // follow the list. The range counts matching entries, not just visible
+    // rows (`docs/tui.md`, "Slash commands").
     assert!(
-        // The range counts matching entries, not just visible rows
-        // (`docs/tui.md:1682-1685,1995`).
-        shown.contains("↑ 3 above · 4–11 of 61 · ↓ 50 more"),
+        shown.contains("↑ 3 above · 4–11 of 62 · ↓ 51 more"),
         "{shown}"
     );
     let buf = buffer(&app, 160, 48);
@@ -401,11 +400,10 @@ fn narrow_slash() {
     app.set_size(100, 40);
     type_text(&mut app, "/");
     // The focused match and range line follow the slash-panel rules
-    // (`docs/tui.md:1682-1685,1995`).
+    // (`docs/tui.md`, "Slash commands").
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
-    // The range counts matching entries, not just visible rows
-    // (`docs/tui.md:1682-1685,1995`).
-    assert!(screen(&app, 100, 40).contains("1–8 of 61 · ↓ 53 more"));
+    // The range counts matching entries, not just visible rows.
+    assert!(screen(&app, 100, 40).contains("1–8 of 62 · ↓ 54 more"));
 }
 
 #[test]
@@ -732,13 +730,12 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     let buf = buffer(&app, 80, 12);
     let shown = screen(&app, 80, 12);
     let bars = barred(&buf);
-    // The selected match stays focused (`docs/tui.md:1682`).
+    // The selected match stays focused (`docs/tui.md`, "Slash commands").
     assert_eq!(bars.len(), 1, "{shown}");
-    // `/hooks` follows `/tools` (`docs/tui.md:1956-1957,1993`): ten downs bar `/context`.
+    // `/hooks` follows `/tools` (`docs/tui.md`, "Slash commands"): ten downs bar `/context`.
     assert!(row_text(&buf, bars[0]).contains("context"), "{shown}");
-    // The range counts matching entries, not just visible rows
-    // (`docs/tui.md:1682-1685,1995`).
-    assert!(shown.contains("of 61"), "{shown}");
+    // The range counts matching entries, not just visible rows.
+    assert!(shown.contains("of 62"), "{shown}");
 }
 
 /// A short conversation with an `@` list: the third path stays barred,
