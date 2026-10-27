@@ -175,6 +175,7 @@ _Avoid_: clone, branch
 
 A new session that continues an existing one from an earlier point, sharing its
 history rather than copying it. The existing session keeps its history.
+`/fork` is a rewind to the latest point.
 _Avoid_: branch, backtrack, checkpoint, undo
 
 ### Handoff

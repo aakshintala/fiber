@@ -237,6 +237,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_rewind,
     },
     CommandEntry {
+        name: "fork",
+        description: "Rewinds to the end of the conversation.",
+        hint: None,
+        run: run_fork,
+    },
+    CommandEntry {
         name: "handoff",
         description: "Starts a handoff.",
         hint: Some("[instructions]"),
@@ -475,6 +481,15 @@ fn run_skills(app: &mut App, _rest: &str) -> Option<Effect> {
 fn run_rewind(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::Rewind))
+}
+
+fn run_fork(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    let Phase::Attached { .. } = &app.phase else {
+        app.push_notice("session_not_found", NO_SESSION.to_owned());
+        return Some(Effect::None);
+    };
+    Some(app.send_fork())
 }
 
 fn run_delegates(app: &mut App, _rest: &str) -> Option<Effect> {
