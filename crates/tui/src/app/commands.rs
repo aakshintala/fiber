@@ -160,6 +160,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_diff,
     },
     CommandEntry {
+        name: "release-notes",
+        description: "Opens the running version's release notes.",
+        hint: None,
+        run: run_release_notes,
+    },
+    CommandEntry {
         name: "copy",
         description: "Copies the newest reply.",
         hint: None,
@@ -513,6 +519,11 @@ fn run_status(app: &mut App, _rest: &str) -> Option<Effect> {
 fn run_diff(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::ChangedFiles))
+}
+
+fn run_release_notes(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::ReleaseNotes))
 }
 
 fn run_copy(app: &mut App, _rest: &str) -> Option<Effect> {
