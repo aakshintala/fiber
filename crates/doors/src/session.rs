@@ -911,6 +911,10 @@ impl Gate {
         lock(&self.door).clone()
     }
 
+    pub(crate) fn hooks(&self) -> Option<Arc<dyn contract::hook::Hooks>> {
+        lock(&self.hooks).clone()
+    }
+
     pub(crate) fn repository(&self) -> Option<Arc<dyn contract::repository::RepositoryCode>> {
         self.repository.get().cloned()
     }

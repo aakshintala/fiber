@@ -57,6 +57,7 @@ const DRAWN_ORDER: &[&str] = &[
     "credential",
     "scoped-models",
     "tools",
+    "hooks",
     "mcp",
     "context",
     "usage",

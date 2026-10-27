@@ -11,8 +11,8 @@ use serde_json::{Map, Value};
 use crate::ErrorCode;
 use crate::SessionId;
 use crate::events::{
-    CallStatus, Event, ExtensionStateSet, ExtensionStateUnset, HandoffTrigger, InputItem, Notice,
-    OnFork,
+    CallStatus, Event, ExtensionStateSet, ExtensionStateUnset, HandoffTrigger, HookInfo, InputItem,
+    Notice, OnFork,
 };
 use crate::provider::Input;
 use crate::shapes::{ContentPart, DeclaredEffects, Process, Usage};
@@ -448,6 +448,15 @@ pub trait Hooks: Send + Sync {
     /// to the session inbox has ended and its `extension_exec` line is queued.
     /// Every VM that delivers to the session inbox is waited on.
     fn wait_for_runs(&self) {}
+
+    /// The hooks and watchers the session registered, hooks first in
+    /// hook-point table order and run order, then watchers in registration
+    /// order (`docs/invocation.md`, "What each command does", `hooks`).
+    // The default is an empty list either way: `vec![]` changes no behaviour a consumer sees.
+    #[cfg_attr(false, mutants::skip)]
+    fn registrations(&self) -> Vec<HookInfo> {
+        Vec::new()
+    }
 }
 
 /// Why a session started, as a `session_start` hook is told

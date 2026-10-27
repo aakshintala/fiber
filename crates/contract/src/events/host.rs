@@ -479,6 +479,12 @@ pub enum CommandResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<Box<crate::shapes::Failure>>,
     },
+    /// For `hooks`: one row per hook and watcher the session registered.
+    Hooks {
+        /// One per hook and watcher, hooks first in hook-point table
+        /// order and run order, then watchers in registration order.
+        hooks: Vec<HookInfo>,
+    },
     /// For `call`: what the Lua call returned.
     Call(CallResult),
 }
@@ -737,6 +743,39 @@ pub enum ToolState {
     Deferred,
     /// Deferred and since loaded.
     Loaded,
+}
+
+/// One hook or watcher `hooks` lists (`docs/invocation.md`, "What each
+/// command does", `hooks`): what the session registered, with no generated
+/// names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HookInfo {
+    /// One registered hook.
+    Hook {
+        /// The extension that registered it; `hooks` for a declared entry.
+        extension: String,
+        /// The declared configuration key, only for a declared entry.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<String>,
+        /// The hook point's name.
+        point: String,
+        /// `blocking` or `non-blocking`, as registered.
+        on_failure: String,
+        /// The declared phase, absent when the registration named none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
+    },
+    /// One registered watcher.
+    Watcher {
+        /// The extension that registered it; `hooks` for a declared entry.
+        extension: String,
+        /// The declared configuration key, only for a declared entry.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<String>,
+        /// The event kinds it watches.
+        kinds: Vec<String>,
+    },
 }
 
 /// `command_rejected`.
