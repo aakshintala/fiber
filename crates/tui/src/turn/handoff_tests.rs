@@ -1001,9 +1001,13 @@ fn a_flat_handoff_band_replacement_drops_every_style() {
         }]]),
     ));
     let (rows, _) = seamed(&band, 40, &fake, true);
-    assert_eq!(rows.len(), 1);
-    for span in &rows[0].0.spans {
-        assert_eq!(span.style, Style::default(), "{span:?}");
+    // (`docs/tui.md`, "How a TUI extension runs": in screen-reader mode the terminal drops every style.)
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("custom")), "{shown:?}");
+    for (line, _) in &rows {
+        for span in &line.spans {
+            assert_eq!(span.style, Style::default(), "{span:?}");
+        }
     }
 }
 

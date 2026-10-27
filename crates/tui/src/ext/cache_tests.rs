@@ -169,6 +169,7 @@ fn a_wrong_shape_is_a_cached_failure_listed_once() {
     assert!(draw().is_none());
     assert_eq!(calls.get(), 1);
     let listed = cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": the failure is cached against the item's input.)
     assert_eq!(listed.len(), 1);
     assert_eq!(listed.first().expect("one failure").0, "ledger_row");
     let failure = listed.first().expect("one failure").1.clone();
@@ -198,6 +199,7 @@ fn an_error_is_listed_once_and_a_hit_lists_nothing() {
             .is_none()
     );
     let listed = cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": the failure is cached against the item's input.)
     assert_eq!(listed.len(), 1);
     assert_eq!(
         listed.first().expect("one failure"),

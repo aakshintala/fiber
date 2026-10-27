@@ -550,14 +550,14 @@ fn the_prompt_table_holds_text_images_and_flat() {
     let table = input_value(&input);
     assert!(table.get("mime_type").is_none());
     for image in table["images"].as_array().expect("images") {
-        assert_eq!(
-            image
-                .as_object()
-                .expect("object")
-                .keys()
-                .collect::<Vec<_>>(),
-            ["height", "path", "width"],
-        );
+        // (`docs/tui.md`, "The slots", `prompt`: each image carries `path`, `width` and `height`.)
+        let mut keys = image
+            .as_object()
+            .expect("object")
+            .keys()
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(keys, ["height", "path", "width"]);
         assert!(image.get("mime_type").is_none());
     }
 }
@@ -772,6 +772,7 @@ fn the_turn_card_group_entry_lists_sections_streaming_and_failed() {
         flat: false,
     }));
     let entries = table["entries"].as_array().expect("entries");
+    // (`docs/tui.md`, "The slots", `turn_card`: the card's items in order, each with its `kind`.)
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0],

@@ -4033,6 +4033,7 @@ fn a_home_range_bound_notice_stays_inert_without_notice() {
     assert!(shown.contains('⚠'), "{shown}");
     assert!(!shown.contains("custom"), "{shown}");
     // Inert without notice: no incompatibility notice joins the one
-    // already showing.
+    // already showing (`docs/tui.md`, "How a TUI extension runs": a
+    // range-bound half stays inert without notice).
     assert_eq!(app.notices().len(), 1);
 }

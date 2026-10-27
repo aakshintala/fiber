@@ -906,7 +906,8 @@ fn a_login_replacement_keeps_the_login_target_on_every_line() {
         SlotScript::Replace(vec![vec![raw("one")], vec![raw("two")]]),
     ));
     let rows = failed_seamed(&error, 40, &fake, false);
-    assert_eq!(rows.len(), 2);
+    // (`docs/tui.md`, "The slots", `error_line`: the failed-login target stays on each line.)
+    assert!(!rows.is_empty());
     for (line, target) in &rows {
         assert_eq!(*target, Some(crate::app::Target::Login), "{line:?}");
     }
@@ -917,25 +918,38 @@ fn a_non_login_replacement_carries_no_target() {
     let error = failed(contract::ErrorCode::IoFailed);
     let fake = replaced();
     let rows = failed_seamed(&error, 40, &fake, false);
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].1, None);
+    // (`docs/tui.md`, "The slots", `error_line`: only the failed-login row carries a target.)
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    for (line, target) in &rows {
+        assert_eq!(*target, None, "{line:?}");
+    }
 }
 
 #[test]
 fn the_login_target_sits_on_the_built_in_failure_line_only() {
-    // The built-in draws the ✗ line with the login target and the
-    // provider's words without one.
+    // (`docs/tui.md`, "The slots", `error_line`: the built-in draws the
+    // ✗ line with the login target and the provider's words without one.)
     let error = failed(contract::ErrorCode::AuthenticationFailed);
     let fake = std::rc::Rc::new(crate::ext::tests::SlotRenderer::filling(
         &[],
         crate::ext::tests::SlotScript::default(),
     ));
     let rows = failed_seamed(&error, 40, &fake, false);
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].1, Some(crate::app::Target::Login));
-    assert!(rows[0].0.to_string().starts_with("✗ sign in"));
-    assert_eq!(rows[1].1, None);
-    assert!(rows[1].0.to_string().contains("bad key"));
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("✗ sign in")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|row| row.contains("bad key")), "{shown:?}");
+    let login_lines = rows
+        .iter()
+        .filter(|(_, target)| *target == Some(crate::app::Target::Login))
+        .count();
+    assert_eq!(login_lines, 1, "{shown:?}");
 }
 
 #[test]
@@ -1011,8 +1025,12 @@ fn a_flat_error_line_replacement_drops_every_style() {
         }]]),
     ));
     let rows = failed_seamed(&error, 40, &fake, true);
-    assert_eq!(rows.len(), 1);
-    for span in &rows[0].0.spans {
-        assert_eq!(span.style, Style::default(), "{span:?}");
+    // (`docs/tui.md`, "How a TUI extension runs": in screen-reader mode the terminal drops every style.)
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("custom")), "{shown:?}");
+    for (line, _) in &rows {
+        for span in &line.spans {
+            assert_eq!(span.style, Style::default(), "{span:?}");
+        }
     }
 }

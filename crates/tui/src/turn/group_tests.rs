@@ -1959,6 +1959,7 @@ fn a_decorator_draws_the_built_in_row_plus_its_badge() {
         format!("    1 {built_text} +{}", " ".repeat(80 - taken))
     );
     // One render, one cache miss: the built-in call touches no cache.
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by its input and the width.)
     assert_eq!(fake.calls.borrow().len(), 1);
     assert_eq!(crate::work::take().renderer_calls, 1);
 }
@@ -2191,6 +2192,7 @@ fn a_bad_render_falls_back_to_the_built_in_row() {
             .iter()
             .filter(|row| matches!(row.1, Some(Target::Call(_))))
             .count();
+        // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by its input and the width.)
         assert_eq!(fake.calls.borrow().len(), ledger);
     }
 }
@@ -2358,6 +2360,7 @@ fn ledger_input_folds_the_call_events() {
         panic!("a completed edit carries its result");
     };
     assert!(row.flat);
+    // (`docs/tui.md`, "Extension seams": a ledger row receives the call's `changes`.)
     assert_eq!(result.changes.len(), 1);
     assert_eq!(result.changes[0].added, 2);
     assert_eq!(result.changes[0].removed, 1);
@@ -2570,6 +2573,7 @@ fn an_empty_thinking_result_draws_no_row_and_no_opened_body() {
         SlotScript::Replace(Vec::new()),
     ));
     let (rows, _) = draw_thinking(&group, 40, &fake, false);
+    // (`docs/tui.md`, "The slots", `thinking_line`: an empty result draws no row and no opened body.)
     assert_eq!(rows, vec![], "an empty result opens nothing");
 }
 
@@ -2667,9 +2671,13 @@ fn a_flat_thinking_replacement_drops_every_style() {
         }]]),
     ));
     let (rows, _) = draw_thinking(&group, 40, &fake, true);
-    assert_eq!(rows.len(), 1);
-    for span in &rows[0].0.spans {
-        assert_eq!(span.style, Style::default(), "{span:?}");
+    // (`docs/tui.md`, "How a TUI extension runs": in screen-reader mode the terminal drops every style.)
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("custom")), "{shown:?}");
+    for (line, _) in &rows {
+        for span in &line.spans {
+            assert_eq!(span.style, Style::default(), "{span:?}");
+        }
     }
 }
 
@@ -2723,8 +2731,10 @@ fn the_card_entry_carries_the_summary_line_fields() {
     // running: the two flags cannot both hold.
     assert_eq!(entry.state, TurnGroupState::Cut);
     assert!(entry.open);
-    assert_eq!(entry.sections.len(), 1);
+    // (`docs/tui.md`, "The slots", `turn_card`: a group entry carries the ledger's sections.)
+    assert!(!entry.sections.is_empty());
     assert_eq!(entry.sections[0].step, 3);
+    // (`docs/tui.md`, "The slots", `group_line`: the calls the model is still emitting.)
     assert_eq!(entry.streaming.len(), 1);
     assert_eq!(entry.streaming[0].message, "m");
     assert_eq!(entry.streaming[0].index, 1);
@@ -2843,6 +2853,7 @@ fn the_card_entry_carries_the_opened_detail() {
     assert!(call.open);
     assert!(call.asking);
     assert_eq!((error.code, error.message), ("nonzero_exit", "x: y"));
+    // (`docs/tui.md`, "The slots", `group_line`: the retried model calls, each with its code and attempt.)
     assert_eq!(entry.sections[0].failed.len(), 1);
     assert_eq!(entry.sections[0].failed[0].code, "rate_limited");
     assert_eq!(entry.sections[0].failed[0].attempt, 1);

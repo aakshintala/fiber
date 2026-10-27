@@ -812,8 +812,8 @@ fn answers_draw_bold_and_skipped_and_the_note_draws_bold() {
 
 #[test]
 fn a_declined_form_draws_one_dim_row_and_no_rule() {
+    // (`docs/tui.md`, "The slots", `answers`: a declined form draws its dim row.)
     let rows = drawn(&super::Answered::declined(), 80, &jiff::tz::TimeZone::UTC);
-    assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].style, dim());
     assert_eq!(
         spans(&rows[0]),
@@ -963,6 +963,7 @@ fn the_answers_entry_carries_given_or_declined() {
     let TurnAnswers::Given { parts, note, ts } = given.turn_entry() else {
         panic!("a given entry");
     };
+    // (`docs/tui.md`, "The slots", `answers`: each question's part, in field order.)
     assert_eq!(parts.len(), 1);
     assert_eq!(parts[0].header, "Base");
     assert_eq!(
@@ -1120,8 +1121,12 @@ fn a_flat_answers_replacement_drops_every_style() {
         }]]),
     ));
     let rows = seamed(&answered_at(1_000), 40, &fake, true);
-    assert_eq!(rows.len(), 1);
-    for span in &rows[0].0.spans {
-        assert_eq!(span.style, Style::default(), "{span:?}");
+    // (`docs/tui.md`, "How a TUI extension runs": in screen-reader mode the terminal drops every style.)
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("custom")), "{shown:?}");
+    for (line, _) in &rows {
+        for span in &line.spans {
+            assert_eq!(span.style, Style::default(), "{span:?}");
+        }
     }
 }

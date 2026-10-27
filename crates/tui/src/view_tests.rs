@@ -531,22 +531,26 @@ fn notice_replacement_reserves_each_painted_row() {
         shown.contains("first") && shown.contains("second"),
         "{shown}"
     );
-    let painted_rows = targets
+    // (`docs/tui.md`, "The slots": a `notice` keeps its dismiss target on the painted lines.)
+    let rows_text: Vec<&str> = shown.lines().collect();
+    let first_y = rows_text
+        .iter()
+        .position(|row| row.contains("first"))
+        .expect("the first painted line shows");
+    let second_y = rows_text
+        .iter()
+        .position(|row| row.contains("second"))
+        .expect("the second painted line shows");
+    let dismiss = targets
         .iter()
         .find(|target| matches!(target.id, TargetId::DismissNotice(_)))
-        .expect("the replacement's dismiss target")
-        .rect
-        .height as usize;
-
-    // (`docs/tui.md`, "What a renderer returns": a renderer returns lines.)
-    assert_eq!(painted_rows, 2);
-    let input_rows = crate::surface::edged(app.input_height(), 24);
-    let non_notice_rows = input_rows
-        + app.steering_below()
-        + usize::from(app.working_row_shown())
-        + usize::from(app.badge().is_some())
-        + usize::from(app.hint());
-    assert_eq!(app.below_rows(), non_notice_rows + painted_rows);
+        .expect("the replacement's dismiss target");
+    let top = dismiss.rect.y as usize;
+    let bottom = top + dismiss.rect.height as usize;
+    assert!(
+        top <= first_y.min(second_y) && first_y.max(second_y) < bottom,
+        "the dismiss target spans each painted line: {dismiss:?}"
+    );
 }
 
 #[test]

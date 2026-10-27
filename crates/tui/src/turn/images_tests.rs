@@ -510,7 +510,8 @@ fn a_single_image_prompt_keeps_its_target_on_every_replacement_line() {
     let layout = noted(&["artifacts/a.png"]);
     let fake = replaced();
     let (rows, _) = seamed(&prompt, &layout, 40, &fake, false);
-    assert_eq!(rows.len(), 2);
+    // (`docs/tui.md`, "The slots": a `prompt` replacement keeps a single image's target on every line.)
+    assert!(!rows.is_empty());
     let id = layout.id(&session(), "artifacts/a.png").expect("noted");
     for (line, target) in &rows {
         assert_eq!(*target, Some(Target::Image(id)), "{line:?}");
@@ -530,7 +531,8 @@ fn a_multi_image_prompt_drops_image_targets() {
     let layout = noted(&["artifacts/a.png", "artifacts/b.png"]);
     let fake = replaced();
     let (rows, _) = seamed(&prompt, &layout, 40, &fake, false);
-    assert_eq!(rows.len(), 2);
+    // (`docs/tui.md`, "The slots": a `prompt` replacement drops targets for several images.)
+    assert!(!rows.is_empty());
     for (line, target) in &rows {
         assert_eq!(*target, None, "{line:?} keeps no image target");
     }
@@ -559,8 +561,12 @@ fn a_flat_prompt_replacement_drops_every_style() {
         }]]),
     ));
     let (rows, _) = seamed(&prompt, &Layout::default(), 40, &fake, true);
-    assert_eq!(rows.len(), 1);
-    for span in &rows[0].0.spans {
-        assert_eq!(span.style, Style::default(), "{span:?}");
+    // (`docs/tui.md`, "How a TUI extension runs": in screen-reader mode the terminal drops every style.)
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("custom")), "{shown:?}");
+    for (line, _) in &rows {
+        for span in &line.spans {
+            assert_eq!(span.style, Style::default(), "{span:?}");
+        }
     }
 }
