@@ -26,8 +26,8 @@ use crate::resume::not_found;
 /// continues it, dependents first. With `cascade`, `expect` holds the set
 /// the person confirmed; without `cascade` it is checked but not compared.
 /// With `dry_run`, answers `sessions`, the ids the delete would remove,
-/// and deletes nothing. Accepted with no `result`, except the dry run's
-/// answer.
+/// and `held`, those another process holds, and deletes nothing. Accepted
+/// with no `result`, except the dry run's answer.
 pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
     let parsed = parse(args).ok_or_else(invalid)?;
     let session = parsed.session;
@@ -36,31 +36,31 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     // No resume starts a process for a session while it is deleted.
     let _gate = support::lock(&hub.resume_gate);
     let set = resolve(hub, &session, cascade, expect.as_ref())?;
-    // Held until every removal ends. The dry run probes existing locks
-    // without creating missing ones, so a lockless tree is unchanged; the
-    // guards it takes stay held until the answer, so a session another
-    // process holds is refused exactly as a real delete refuses it.
+    // Held until every removal ends. A dry run probes existing locks
+    // without creating missing ones and reports busy ids without refusing;
+    // guards it takes stay held until the answer. A real delete probes
+    // every candidate before refusing, so one busy session never hides a
+    // later lock failure, and refuses before removing any part of the set.
     let mut locks = Vec::with_capacity(set.len());
+    let mut busy: Vec<&str> = Vec::new();
     for (id, dir) in &set {
-        let held: Option<log::Hold> = if parsed.dry_run {
+        let lock = if parsed.dry_run {
             log::try_hold_existing(dir).map_err(|error| io_failed(id, &error))?
         } else {
             Some(log::try_hold(dir).map_err(|error| io_failed(id, &error))?)
         };
-        match held {
+        match lock {
             None => {}
             Some(log::Hold::Held(lock)) => locks.push(lock),
-            Some(log::Hold::Busy) => {
-                return Err(Refused {
-                    code: ErrorCode::SessionHeld,
-                    message: format!("Session `{}` is held by another process.", id.0),
-                });
-            }
+            Some(log::Hold::Busy) => busy.push(id.0.as_str()),
         }
     }
     if parsed.dry_run {
         let ids: Vec<&str> = set.iter().map(|(id, _)| id.0.as_str()).collect();
-        return Ok(Some(serde_json::json!({"sessions": ids})));
+        return Ok(Some(serde_json::json!({"sessions": ids, "held": busy})));
+    }
+    if let Some((first, rest)) = busy.split_first() {
+        return Err(held_refused(first, rest.len()));
     }
     // Discovery order puts each session after the one it continues, so in
     // reverse no survivor points at a removed session.
@@ -192,6 +192,22 @@ fn confirm(set_ids: &BTreeSet<&SessionId>, expect: &BTreeSet<&SessionId>) -> Res
 fn session_dir(hub: &Hub, session: &SessionId) -> Option<PathBuf> {
     let (_, dir) = crate::recent::lookup_logged(&hub.home, session)?;
     log::is_plain_dir(&dir).then_some(dir)
+}
+
+/// A real delete blocked by busy sessions: the first busy id, with `and
+/// N more` when several are busy. The code and the one-id wording are
+/// unchanged; a later lock-probe failure still refuses `io_failed`
+/// instead, without deleting.
+fn held_refused(first: &str, more: usize) -> Refused {
+    let message = if more == 0 {
+        format!("Session `{first}` is held by another process.")
+    } else {
+        format!("Session `{first}` and {more} more are held by another process.")
+    };
+    Refused {
+        code: ErrorCode::SessionHeld,
+        message,
+    }
 }
 
 fn io_failed(session: &SessionId, error: &impl std::fmt::Display) -> Refused {

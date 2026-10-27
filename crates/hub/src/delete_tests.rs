@@ -102,6 +102,16 @@ fn sessions_as_set(answer: &Value) -> BTreeSet<String> {
         .collect()
 }
 
+/// The answer's `held` ids as a set: order is not a public guarantee.
+fn held_as_set(answer: &Value) -> BTreeSet<String> {
+    answer["held"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap().to_owned())
+        .collect()
+}
+
 /// Sends one line on a served connection and returns the answer after
 /// `hub_hello`.
 fn over_the_wire(hub: &Arc<Hub>, line: &str) -> Value {
@@ -260,6 +270,7 @@ fn a_dry_run_answers_the_set_and_deletes_nothing() {
         json!({"session": id(1), "cascade": true, "dry_run": true}),
     );
     assert_eq!(sessions_as_set(&answer), BTreeSet::from([id(1), id(2)]));
+    assert_eq!(answer["held"], json!([]));
     for dir in [&root, &fork, &other] {
         assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
         assert!(dir.join("session.lock").is_file(), "{}", dir.display());
@@ -267,7 +278,7 @@ fn a_dry_run_answers_the_set_and_deletes_nothing() {
     assert!(fork.join("artifacts/a_1.txt").is_file());
     // Without `cascade` the dry run names only the session itself.
     let answer = dry_run(&hub, json!({"session": id(3), "dry_run": true}));
-    assert_eq!(answer, json!({"sessions": [id(3)]}));
+    assert_eq!(answer, json!({"sessions": [id(3)], "held": []}));
     assert!(other.join("events.jsonl").is_file());
 }
 
@@ -286,23 +297,90 @@ fn a_dry_run_keeps_the_refusals_and_still_removes_nothing() {
         json!({"session": id(1), "cascade": true, "expect": [id(1)], "dry_run": true}),
     );
     assert_eq!(stale.code, ErrorCode::StaleRequest);
-    // A held session refuses, as a real delete does.
-    let _lock = hold(&root);
-    let held = refused(
-        &hub,
-        json!({"session": id(1), "cascade": true, "dry_run": true}),
-    );
-    assert_eq!(held.code, ErrorCode::SessionHeld);
     for dir in [&root, &fork] {
         assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
     }
 }
 
 #[test]
-fn a_dry_run_over_the_wire_answers_the_sessions() {
+fn a_dry_run_reports_held_candidates_and_real_delete_still_refuses_without_changes() {
     let temp = Temp::new();
-    temp.session("-p", 1, None);
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let unrelated = temp.session("-p", 3, None);
+    let _locks = [hold(&root), hold(&fork), hold(&unrelated)];
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
+
+    let answer = dry_run(
+        &hub,
+        json!({"session": id(1), "cascade": true, "dry_run": true}),
+    );
+    assert_eq!(sessions_as_set(&answer), BTreeSet::from([id(1), id(2)]));
+    assert_eq!(held_as_set(&answer), BTreeSet::from([id(1), id(2)]));
+    assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
+
+    let refused = refused(&hub, json!({"session": id(1), "cascade": true}));
+    assert_eq!(refused.code, ErrorCode::SessionHeld);
+    assert_eq!(
+        snapshot_tree(&temp.dir),
+        before,
+        "real delete removes nothing"
+    );
+    for dir in [&root, &fork, &unrelated] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
+}
+
+#[test]
+fn a_dry_run_reports_a_held_dependent_without_removing_unheld_root() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let _lock = hold(&fork);
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
+
+    let answer = dry_run(
+        &hub,
+        json!({"session": id(1), "cascade": true, "dry_run": true}),
+    );
+    assert_eq!(sessions_as_set(&answer), BTreeSet::from([id(1), id(2)]));
+    assert_eq!(held_as_set(&answer), BTreeSet::from([id(2)]));
+    assert_eq!(snapshot_tree(&temp.dir), before);
+
+    let refused = refused(&hub, json!({"session": id(1), "cascade": true}));
+    assert_eq!(refused.code, ErrorCode::SessionHeld);
+    assert_eq!(
+        snapshot_tree(&temp.dir),
+        before,
+        "the acquired root lock is released"
+    );
+    assert!(root.join("events.jsonl").is_file());
+    assert!(fork.join("events.jsonl").is_file());
+}
+
+#[test]
+fn a_dry_run_lock_path_error_is_io_failed_and_writes_nothing() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    fs::remove_file(root.join("session.lock")).unwrap();
+    fs::create_dir(root.join("session.lock")).unwrap();
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
+
+    let refused = refused(&hub, json!({"session": id(1), "dry_run": true}));
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    assert!(refused.message.contains(&id(1)), "{}", refused.message);
+    assert_eq!(snapshot_tree(&temp.dir), before);
+}
+
+#[test]
+fn a_dry_run_over_the_wire_answers_the_sessions_and_held_ids() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
     temp.session("-p", 2, Some(1));
+    let _lock = hold(&root);
     let hub = temp.hub();
     let line = json!({
         "id": "c_dry",
@@ -316,6 +394,7 @@ fn a_dry_run_over_the_wire_answers_the_sessions() {
         sessions_as_set(&answer["payload"]["result"]),
         BTreeSet::from([id(1), id(2)])
     );
+    assert_eq!(answer["payload"]["result"]["held"], json!([id(1)]));
 }
 
 /// Every path under `dir`, sorted: file bytes for files, so a comparison
@@ -359,6 +438,7 @@ fn a_dry_run_on_a_lockless_tree_answers_and_writes_nothing() {
         json!({"session": id(1), "cascade": true, "dry_run": true}),
     );
     assert_eq!(sessions_as_set(&answer), BTreeSet::from([id(1), id(2)]));
+    assert_eq!(answer["held"], json!([]));
     assert_eq!(snapshot_tree(&temp.dir), before);
     for dir in [&root, &fork] {
         assert!(!dir.join("session.lock").exists(), "{}", dir.display());
@@ -382,7 +462,7 @@ fn a_dry_run_keeps_the_feed_entry() {
     let hub = temp.hub();
     hub.feed.start();
     let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
-    assert_eq!(answer, json!({"sessions": [id(1)]}));
+    assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
     // The entry is still in the feed: nothing was forgotten.
     assert_eq!(hub.feed.dismiss(&args(json!({"session": id(1)}))), Ok(None));
     hub.feed.stop();
@@ -652,6 +732,61 @@ fn cascade_with_one_held_dependent_removes_nothing() {
     // The locks the hub took before the refusal were let go.
     drop(hold(&root));
     drop(hold(&deep));
+}
+
+#[test]
+fn real_delete_with_one_held_keeps_the_single_message() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let hub = temp.hub();
+    let _lock = hold(&fork);
+    let refused = refused(&hub, json!({"session": id(1), "cascade": true}));
+    assert_eq!(refused.code, ErrorCode::SessionHeld);
+    assert_eq!(
+        refused.message,
+        format!("Session `{}` is held by another process.", id(2))
+    );
+    for dir in [&root, &fork] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
+}
+
+#[test]
+fn real_delete_with_several_held_names_the_first_and_how_many_more() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let deep = temp.session("-p", 3, Some(1));
+    let hub = temp.hub();
+    let _locks = [hold(&root), hold(&fork), hold(&deep)];
+    let before = snapshot_tree(&temp.dir);
+    let refused = refused(&hub, json!({"session": id(1), "cascade": true}));
+    assert_eq!(refused.code, ErrorCode::SessionHeld);
+    assert_eq!(
+        refused.message,
+        format!(
+            "Session `{}` and 2 more are held by another process.",
+            id(1)
+        )
+    );
+    assert_eq!(snapshot_tree(&temp.dir), before, "nothing is removed");
+}
+
+#[test]
+fn real_delete_io_error_after_a_busy_candidate_is_io_failed() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let _lock = hold(&root);
+    fs::remove_file(fork.join("session.lock")).unwrap();
+    fs::create_dir(fork.join("session.lock")).unwrap();
+    let hub = temp.hub();
+    let refused = refused(&hub, json!({"session": id(1), "cascade": true}));
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    for dir in [&root, &fork] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
 }
 
 #[test]
