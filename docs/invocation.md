@@ -820,7 +820,8 @@ rationale and the rejected layouts are
   or WebP over 50 megapixels is refused from the header, and an image the
   child cannot decode fails with the decoder's reason on standard error:
   both exit 1. A standard-output write failure exits 3, and bad usage
-  exits 2.
+  exits 2. The terminal runs it as `fiber image --png /dev/stdin` with
+  the stored JPEG or WebP bytes on stdin for inline display on Kitty.
   Spawning a child that does
   nothing takes 1.7 ms on macOS, measured with the probe in
   `research/image-limits/README.md`.

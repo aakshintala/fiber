@@ -1479,15 +1479,6 @@ impl App {
             && self.graphics
     }
 
-    /// Whether the image child's converter is available: the launch
-    /// names the running executable, so a stored JPEG or WebP converts
-    /// to PNG before Kitty transmission (`docs/tui.md`, "Images").
-    fn converts_images(&self) -> bool {
-        self.home
-            .as_ref()
-            .is_some_and(|home| home.launch.fiber.is_some())
-    }
-
     /// Resizes the attached and shown screens' images between the
     /// one-line form and the inline grid, recounting where the sizing
     /// changed. The attached screen is the stashed one while a
@@ -1496,7 +1487,13 @@ impl App {
     fn refresh_image_sizing(&mut self) {
         let inline = self.inline_images();
         let cell = self.cell;
-        let converts = self.converts_images();
+        // The converter is available when the launch names the running
+        // executable, so a stored JPEG or WebP converts to PNG before
+        // Kitty transmission (`docs/tui.md`, "Images").
+        let converts = self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.launch.fiber.is_some());
         let sizing_of = |flat: bool| {
             if inline && !flat {
                 crate::image::Sizing::Inline { cell, converts }

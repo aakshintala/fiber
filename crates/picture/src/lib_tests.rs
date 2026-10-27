@@ -221,6 +221,43 @@ fn the_png_form_refused_is_exit_1_with_the_reason() {
 }
 
 #[test]
+fn the_png_form_refuses_over_50_megapixels_from_the_header() {
+    let dir = fakes::TempDir::new("fiber-picture-png-limit");
+    let input = dir.path().join("big.png");
+    // Header only: 8000 x 7000 and no pixels.
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut ihdr = 8000_u32.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&7000_u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    for (kind, data) in [(b"IHDR", ihdr), (b"IDAT", vec![0x78, 0x9C, 0x00])] {
+        let mut body = kind.to_vec();
+        body.extend_from_slice(&data);
+        bytes.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+        bytes.extend_from_slice(&body);
+        let mut crc = 0xFFFF_FFFF_u32;
+        for byte in &body {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        bytes.extend_from_slice(&(!crc).to_be_bytes());
+    }
+    std::fs::write(&input, bytes).unwrap();
+    let (code, stdout, stderr) = child(&[OsString::from("--png"), input.into_os_string()]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert_eq!(
+        stderr,
+        "8000x7000 is 56000000 pixels; the limit is 50000000\n"
+    );
+}
+
+#[test]
 fn the_png_form_missing_input_is_exit_1() {
     let dir = fakes::TempDir::new("fiber-picture-png-missing");
     let (code, stdout, stderr) = child(&[

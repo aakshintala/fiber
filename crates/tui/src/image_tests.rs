@@ -631,9 +631,9 @@ fn a_viewer_only_bubble_image_keeps_its_one_line() {
 }
 
 #[test]
-fn a_non_png_bubble_stays_its_one_line() {
-    // Only PNG draws inline (ticket #687 Part 2b): a JPEG in a bubble
-    // stays its one clickable line, cut to the block width.
+fn a_jpeg_bubble_without_a_converter_stays_its_one_line() {
+    // The converter is off, so a JPEG in a bubble stays its one
+    // clickable line, cut to the block width.
     let jpeg = ContentPart::Image {
         path: "artifacts/a.jpg".to_owned(),
         mime_type: "image/jpeg".to_owned(),

@@ -141,4 +141,4 @@ fn run(argv: &[OsString], convert: &Convert, cap: usize) -> Result<String, Strin
 
 #[cfg(test)]
 #[path = "convert_tests.rs"]
-mod tests;
+pub(crate) mod tests;

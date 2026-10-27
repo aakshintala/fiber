@@ -236,12 +236,11 @@ impl App {
     }
 
     /// Queues the transmit and place of `data` over the placeholders, and
-    /// marks `key` shown. False when the sizing is text: the ask no
-    /// longer applies and a later draw asks again (`docs/tui.md`,
-    /// "Images").
-    fn transmit(&mut self, key: (String, String), fetch: Display, data: &str) -> bool {
+    /// marks `key` shown. When the sizing is text the ask no longer
+    /// applies and a later draw asks again (`docs/tui.md`, "Images").
+    fn transmit(&mut self, key: (String, String), fetch: Display, data: &str) {
         let crate::image::Sizing::Inline { cell, .. } = self.screen.pages().image_sizing() else {
-            return false;
+            return;
         };
         let part = crate::image::Part {
             session: contract::SessionId(key.0.clone()),
@@ -268,7 +267,6 @@ impl App {
                 ..fetch
             },
         );
-        true
     }
 
     /// Fails the display fetch `fetch` for `key` with one notice: the
