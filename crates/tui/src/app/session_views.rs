@@ -29,6 +29,8 @@ pub(crate) enum SessionView {
     Status,
     /// The Changed files list.
     ChangedFiles,
+    /// `/release-notes`.
+    ReleaseNotes,
     /// The running delegates, from "N delegates running".
     Delegates,
     /// The running jobs, from "N jobs running".
@@ -54,6 +56,8 @@ pub(in crate::app) enum Open {
     Status(List),
     /// Changed files' paths.
     Files(List),
+    /// `/release-notes`.
+    ReleaseNotes(List),
     /// The running delegates.
     Delegates(List),
     /// The running jobs.
@@ -104,6 +108,18 @@ impl App {
     /// pushed and nothing opens. The draft is left for panel and status-line
     /// clicks; a slash command clears it before calling this method.
     pub(crate) fn open_session_view(&mut self, view: SessionView) -> Effect {
+        if matches!(view, SessionView::ReleaseNotes) {
+            // The notes read the client's launch, never the session:
+            // they open on home too, sending no driver command.
+            self.model_picker.close();
+            self.close_config_view();
+            self.close_keymap();
+            self.session_views.open = Some(Open::ReleaseNotes(List::default()));
+            // Opening another view drops the rewind's wait: its late
+            // answer folds nowhere.
+            self.rewind = super::rewind::Rewind::default();
+            return Effect::None;
+        }
         if self.session().is_none() {
             self.notices
                 .push("session_not_found", "No session on screen.".to_owned());
@@ -121,6 +137,7 @@ impl App {
             SessionView::Context => Open::Context(List::default()),
             SessionView::Status => Open::Status(List::default()),
             SessionView::ChangedFiles => Open::Files(List::default()),
+            SessionView::ReleaseNotes => Open::ReleaseNotes(List::default()),
             SessionView::Delegates => Open::Delegates(List::default()),
             SessionView::Jobs => Open::Jobs(List::default()),
             SessionView::AllDelegates => Open::AllDelegates(List::default()),
@@ -195,7 +212,11 @@ impl App {
             return Some(Effect::None);
         }
         if let Some(
-            Open::Usage(list) | Open::Quota(list) | Open::Context(list) | Open::Status(list),
+            Open::Usage(list)
+            | Open::Quota(list)
+            | Open::Context(list)
+            | Open::Status(list)
+            | Open::ReleaseNotes(list),
         ) = self.session_views.open.as_mut()
         {
             list.key(key, rows, height);
@@ -284,7 +305,11 @@ impl App {
         }
         if let Spot::Row(at) = spot
             && let Some(
-                Open::Usage(list) | Open::Quota(list) | Open::Context(list) | Open::Status(list),
+                Open::Usage(list)
+                | Open::Quota(list)
+                | Open::Context(list)
+                | Open::Status(list)
+                | Open::ReleaseNotes(list),
             ) = self.session_views.open.as_mut()
         {
             list.select(at, rows, height);
@@ -305,6 +330,7 @@ impl App {
             | Some(Open::Context(_))
             | Some(Open::Status(_))
             | Some(Open::Files(_))
+            | Some(Open::ReleaseNotes(_))
             | Some(Open::Call(_))
             | Some(Open::Rewind(_))
             | None => {
@@ -343,14 +369,17 @@ impl App {
             | Some(Open::Context(_))
             | Some(Open::Status(_))
             | Some(Open::Files(_))
+            | Some(Open::ReleaseNotes(_))
             | Some(Open::Call(_))
             | Some(Open::Rewind(_))
             | None => Vec::new(),
         }
     }
 
-    /// The open session view's frame. Its row count does not depend on
-    /// `width`, which lets key handling count rows at width zero.
+    /// The open session view's frame. Every view's row count except the
+    /// release notes' is independent of `width`, which lets key handling
+    /// count rows at width zero; the notes wrap at the width, so width
+    /// zero resolves to the width the draw uses.
     pub(crate) fn session_view_screen(&self, width: u16) -> Option<Frame> {
         match self.session_views.open.as_ref()? {
             Open::Usage(list) => Some(crate::usage_view::frame(
@@ -416,6 +445,23 @@ impl App {
                     list,
                 ))
             }
+            Open::ReleaseNotes(list) => {
+                let home = self.home.as_ref()?;
+                // Width zero means a metrics call, not a draw: wrap at
+                // the width the draw uses.
+                let width = if width == 0 {
+                    self.notes_width()
+                } else {
+                    width
+                };
+                Some(crate::release_notes::frame(
+                    home.launch.release_notes,
+                    home.launch.version.as_str(),
+                    *list,
+                    width,
+                    self.notes_height(),
+                ))
+            }
             Open::Delegates(list) => Some(crate::running_view::delegates_frame(self, *list)),
             Open::Jobs(list) => Some(crate::running_view::jobs_frame(self, *list)),
             Open::AllDelegates(list) => Some(crate::running_view::all_delegates_frame(self, *list)),
@@ -429,10 +475,38 @@ impl App {
 
     fn session_view_list_metrics(&self) -> Option<(usize, usize)> {
         let frame = self.session_view_screen(0)?;
+        // The notes page the drawn height: the conversation's attached,
+        // the whole screen's on home.
+        let height = if matches!(self.session_views.open, Some(Open::ReleaseNotes(_))) {
+            self.notes_height()
+        } else {
+            self.conversation_height()
+        };
         Some((
             frame.rows.len(),
-            crate::swapped::rows_height(&frame, self.conversation_height()),
+            crate::swapped::rows_height(&frame, height),
         ))
+    }
+
+    /// The width the release-notes frame wraps at when no draw width is
+    /// given: the conversation column attached, the whole screen on
+    /// home, matching the draw.
+    fn notes_width(&self) -> u16 {
+        if self.session().is_some() {
+            self.column_width()
+        } else {
+            self.screen_size().0
+        }
+    }
+
+    /// The height the release-notes frame pages at: the conversation's
+    /// attached, the whole screen's on home, matching the draw.
+    fn notes_height(&self) -> usize {
+        if self.session().is_some() {
+            self.conversation_height()
+        } else {
+            usize::from(self.screen_size().1)
+        }
     }
 
     /// Starts the selected file's diff request, or leaves an empty list when

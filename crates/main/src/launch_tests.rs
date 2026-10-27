@@ -720,3 +720,47 @@ fn inline_images_default_off_and_reads_config() {
         .inline_images
     );
 }
+
+/// The embedded changelog `launch()` carries: the repository file
+/// compiled in, holding the title-only stub at this base, beside the
+/// binary's own package version. An empty field would still draw the
+/// no-notes view, so only this content assertion proves the embed.
+#[test]
+fn launch_carries_the_embedded_changelog() {
+    let dir = fakes::TempDir::new("fiber-launch-notes");
+    let workspace = dir.path().to_path_buf();
+    let identity = workspace
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("canonical: {err}"));
+    let config = config(dir.path(), &workspace, Vec::new());
+    let made = fresh_launch(&dir, &workspace, &identity, &config, None, Vec::new());
+    assert_eq!(
+        made.release_notes,
+        include_str!("../../../CHANGELOG.md"),
+        "launch carries the compiled-in changelog"
+    );
+    assert!(
+        made.release_notes.contains("# Changelog\n"),
+        "the stub holds its title line"
+    );
+    assert_eq!(made.version, env!("CARGO_PKG_VERSION"));
+}
+
+/// The hub conversion keeps the client's embedded changelog and
+/// version: the notes view reads the client's launch, never the hub.
+#[test]
+fn remote_keeps_the_embedded_changelog() {
+    let dir = fakes::TempDir::new("fiber-launch-notes-remote");
+    let workspace = dir.path().to_path_buf();
+    let identity = workspace
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("canonical: {err}"));
+    let config = config(dir.path(), &workspace, Vec::new());
+    let baseline = fresh_launch(&dir, &workspace, &identity, &config, None, Vec::new());
+    let made = remote(
+        fresh_launch(&dir, &workspace, &identity, &config, None, Vec::new()),
+        "box",
+    );
+    assert_eq!(made.release_notes, baseline.release_notes);
+    assert_eq!(made.version, baseline.version);
+}
