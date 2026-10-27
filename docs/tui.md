@@ -569,7 +569,7 @@ a click on it returns too. The views are:
   cards as the conversation, and the input box sends steering messages to
   that delegate. The breadcrumb is bold. The status card is a `surface`
   slab: "harness <name>", then " · model <model> · <level>" dim; under it,
-  dim, the calls, "elapsed <time>" and "session <id>"; then "■ stop <id>" in
+  dim, the calls, "elapsed <time>" and "session <id>"; then "■ stop <session id>" in
   `error`. The input box's hint reads "steering goes to ◆ <description>",
   dim. A delegate that has not bound its socket yet answers
   `session_not_found`; while its parent lists it running, the terminal asks
@@ -588,7 +588,7 @@ a click on it returns too. The views are:
   attached. Carriage return, line feed, backspace, tab, cursor movement and
   erasing in a line or the display are applied; other escape sequences are
   dropped. Its status row is "job <id> · <command> · running <time>", then
-  " · " dim and "■ stop ends it" in `error`; under it, "live screen · 80
+  " · " dim and "■ stop <job id>" in `error`; under it, "live screen · 80
   columns × 24 rows from attach" dim. The screen sits on a `turn` slab 80
   columns wide, and the input box's hint reads "type into the job", dim.
 - **The running delegates or jobs,** from "N delegates running" or "N jobs
@@ -1927,6 +1927,7 @@ later release still applies.
 | `/status` | Opens the status view ("Swapped views"). |
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
+| `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
@@ -1950,6 +1951,8 @@ later release still applies.
 | `/?`, `/help` | Opens the key map. |
 
 The `/` list shows built-in commands in this order.
+
+The range line's total counts every entry the query matches: the matching built-in rows plus the matching session commands.
 
 A row's second name, such as `/exit`, is an alias: typing it runs the same
 command, and the `/` list shows it after the name on that command's row,

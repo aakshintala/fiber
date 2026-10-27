@@ -616,6 +616,7 @@ impl DelegateMessage {
             | ErrorCode::Usage
             | ErrorCode::VersionConflict
             | ErrorCode::WebSearchUnavailable
+            | ErrorCode::Workspace
             | ErrorCode::Other(_) => Attempt::Done(
                 JobsError::SteerRefusedOther {
                     id: JobId(id.to_owned()),
