@@ -850,23 +850,6 @@ struct HomeSnapshot {
     logs: Vec<String>,
 }
 
-/// The first line of the startup-timeout report: the `fiber_started`
-/// phase still awaited, the configured servers, and the child status.
-/// An empty server list names itself, so a server-less stall reads as
-/// one instead of as an empty pair of brackets.
-fn startup_timeout_head(servers: &[String], child: &str) -> String {
-    if servers.is_empty() {
-        format!(
-            "waited until the deadline for fiber_started with no servers configured; child {child}"
-        )
-    } else {
-        format!(
-            "waited until the deadline for fiber_started with servers [{}]; child {child}",
-            servers.join(", ")
-        )
-    }
-}
-
 /// The state the startup wait had observed when it expired: every
 /// stderr line so far, showing the first 30 with the total when there
 /// are more, then the runtime snapshot. An empty stderr names itself,
@@ -908,9 +891,13 @@ fn startup_timeout_report(
     stderr: &[String],
     snap: &HomeSnapshot,
 ) -> String {
+    let servers = if servers.is_empty() {
+        String::from("no servers configured")
+    } else {
+        format!("servers [{}]", servers.join(", "))
+    };
     format!(
-        "{}\n{}",
-        startup_timeout_head(servers, child),
+        "waited until the deadline for fiber_started with {servers}; child {child}\n{}",
         startup_timeout_sections(stderr, snap)
     )
 }
@@ -972,7 +959,7 @@ fn home_snapshot(home: &Path) -> HomeSnapshot {
 /// runtime directories under the test home — instead of only the
 /// deadline. The Timeout branch itself is not forceable live by
 /// design, so these unit tests pin the builder, the reader, and the
-/// snapshot, and review checks the branch against them.
+/// snapshot.
 #[test]
 fn startup_timeout_report_names_servers_child_stderr_and_snapshot() {
     let snap = HomeSnapshot {
