@@ -1926,6 +1926,20 @@ fn an_answer_that_leaves_a_gap_is_refused() {
         app.notice(),
         Some("Could not load history: the answer was out of order")
     );
+
+    // A same-sequence boundary at the integer limit has no successor.
+    // Saturating addition would turn MAX + 1 back into MAX and accept it.
+    let mut tail = Tail::new();
+    let mut held = plain(1);
+    held[0].seq = Some(contract::Seq(u64::MAX));
+    tail.prepend(held)
+        .unwrap_or_else(|_| panic!("the held window"));
+    let mut duplicate = plain(1);
+    duplicate[0].seq = Some(contract::Seq(u64::MAX));
+    assert!(
+        tail.prepend(duplicate).is_err(),
+        "the maximal seq has no contiguous successor"
+    );
 }
 
 /// An answer disordered within itself is refused: a descending,
