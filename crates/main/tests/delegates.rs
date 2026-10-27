@@ -6146,6 +6146,188 @@ fn a_finished_delegate_opens_its_replayed_view_from_a_click_and_from_enter() {
     });
     quit(run);
 }
+/// A `delegate_spawn` call starting scan `name`: one per delegate, each
+/// with its own call id and description.
+fn spawn_scan(name: &str) -> Value {
+    function_call(
+        &format!("call_{name}"),
+        "delegate_spawn",
+        &json!({"description": format!("scan {name}"), "prompt": format!("run scan {name}"), "model": "fiber:pb/m"}),
+    )
+}
+
+fn delegates_list_header(grid: &Grid) -> bool {
+    grid.rows
+        .first()
+        .is_some_and(|row| row.contains("Delegates") && row.contains("/delegates"))
+}
+
+#[test]
+fn delegates_view_lists_every_delegate_and_opens_from_enter() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    // The gate holds every child's first model answer until the test
+    // releases it: nothing can finish before the running assertions run,
+    // and every wait below still ends on a grid predicate with its own
+    // deadline, never on this gate.
+    // The test owns the release sender: dropping it releases every held
+    // child at once, and a failure before the release drops it too, so
+    // the server can always shut down instead of hanging a responder
+    // (docs/testing.md, "Waits and timeouts").
+    let (release, release_rx) = mpsc::channel::<()>();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let child_gate = Arc::clone(&release_rx);
+    // The parent spawns four delegates from one reply, exactly once: a
+    // later request echoing the calls answers over, never respawns.
+    let spawned = Arc::new(AtomicBool::new(false));
+    let parent = ProviderServer::start_responding(move |request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        if text.contains("Started delegate") {
+            return support::hello();
+        }
+        if spawned.swap(true, Ordering::SeqCst) {
+            return support::hello();
+        }
+        support::stream(&[
+            spawn_scan("one"),
+            spawn_scan("two"),
+            spawn_scan("three"),
+            spawn_scan("four"),
+        ])
+    })
+    .unwrap();
+    let child = ProviderServer::start_responding(move |_: &Request| {
+        // Held until the test drops the release sender: no deadline of
+        // its own. The grid waits below bound the test, and the dropped
+        // sender releases every holder at once.
+        let gate = child_gate.lock().unwrap();
+        let _released = gate.recv();
+        text_reply(CHILD_TEXT)
+    })
+    .unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    // The hub exits a second after its last client leaves, so the run's
+    // wait sees it go; the session itself keeps its 30-minute default.
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "hub": {"idle_exit_ms": 1000}}),
+    );
+
+    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(support::TRUECOLOUR)
+        .collect();
+    // 120x10 is the smallest size the terminal draws: the list viewport
+    // stays under eight rows, so four delegates scroll.
+    let mut run = Run::spawn(&setup, 120, 10, &[], &env);
+    run.ready();
+    run.write(b"start the scans\r");
+    // The session spawns all four delegates first: Enter during the turn
+    // would steer it instead of dispatching the command.
+    run.wait_screen("the four spawned delegates", |grid| {
+        grid.contents.contains("Started 4 delegates") && grid.contents.contains("completed ·")
+    });
+    // The view opens over four running delegates: the gate holds every
+    // child, so each row still spins.
+    run.write(b"/delegates\r");
+    let grid = run.wait_screen("the running delegates", |grid| {
+        delegates_list_header(grid)
+            && grid.contents.contains("◆ scan one")
+            && grid.contents.contains("◆ scan three")
+    });
+    assert!(grid.contents.contains("Delegates"), "{}", grid.contents);
+    assert!(
+        !grid.contents.contains("Running delegates"),
+        "{}",
+        grid.contents
+    );
+    assert!(
+        !grid.contents.contains("Nothing running."),
+        "{}",
+        grid.contents
+    );
+    // Two rows per delegate (docs/tui.md, "The panel"): six Downs reach
+    // the fourth delegate's first row, scrolling the first delegate's
+    // first row out (docs/tui.md, "Swapped views").
+    run.write(b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B");
+    let grid = run.wait_screen("the fourth delegate scrolled in", |grid| {
+        delegates_list_header(grid)
+            && grid.contents.contains("scan four")
+            && !grid.contents.contains("scan one")
+    });
+    assert!(grid.contents.contains("◆ scan four"), "{}", grid.contents);
+    // Enter opens the fourth delegate's live view.
+    run.write(b"\r");
+    run.wait_screen("the fourth delegate's view", |grid| {
+        grid.rows
+            .first()
+            .is_some_and(|row| row.contains("Delegate") && row.contains("scan four"))
+    });
+    // Esc returns to the conversation: the breadcrumb is gone.
+    run.write(b"\x1b[27u");
+    run.wait_screen("the conversation back", |grid| {
+        grid.rows
+            .first()
+            .is_some_and(|row| !row.contains("Delegate"))
+    });
+    // Release the gate: dropping the sender answers every held child
+    // at once, and each finishes.
+    drop(release);
+    // The reopened view morphs to finished rows: done words, no heading,
+    // no count.
+    run.write(b"/delegates\r");
+    let grid = run.wait_screen("the finished delegates", |grid| {
+        delegates_list_header(grid)
+            && grid.contents.contains("✓ scan one")
+            && grid.contents.contains("✓ scan two")
+    });
+    assert!(grid.contents.contains("Delegates"), "{}", grid.contents);
+    assert!(
+        !grid.contents.contains("Running delegates"),
+        "{}",
+        grid.contents
+    );
+    assert!(grid.contents.contains("done"), "{}", grid.contents);
+    // The taller delegate header leaves no transcript row at this
+    // height: grow the viewport before opening the replay, keeping the
+    // small-viewport scroll proof above intact.
+    run.resize(120, 32);
+    run.wait_screen("the finished delegates at replay size", |grid| {
+        delegates_list_header(grid) && grid.rows.len() == 32
+    });
+    // Enter on the first finished row opens its replay.
+    run.write(b"\r");
+    run.wait_screen("the replayed transcript", |grid| {
+        grid.rows
+            .first()
+            .is_some_and(|row| row.contains("Delegate") && row.contains("scan one"))
+            && grid.contents.contains(CHILD_TEXT)
+    });
+    // Esc returns to the conversation; the alias opens the same view.
+    run.write(b"\x1b[27u");
+    run.wait_screen("the conversation back again", |grid| {
+        grid.rows
+            .first()
+            .is_some_and(|row| !row.contains("Delegate"))
+            && !grid.contents.contains(CHILD_TEXT)
+    });
+    run.write(b"/agents\r");
+    let grid = run.wait_screen("the alias view", |grid| {
+        delegates_list_header(grid) && grid.contents.contains("✓ scan one")
+    });
+    assert!(
+        !grid.contents.contains("Running delegates"),
+        "{}",
+        grid.contents
+    );
+    quit(run);
+}
+
 /// Answers a session tree on one provider server: `spawn` answers
 /// the root's first request, `reviewer` every reviewer request,
 /// `delegate_first` the depth-1 delegate's first request (named by the

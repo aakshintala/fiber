@@ -62,6 +62,7 @@ pub(crate) fn alias_of(name: &str) -> Option<&'static str> {
         "name" => Some("rename"),
         "feedback" => Some("bug"),
         "quit" => Some("exit"),
+        "delegates" => Some("agents"),
         _ => None,
     }
 }
@@ -303,6 +304,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         hint: None,
         run: run_keymap,
     },
+    CommandEntry {
+        name: "delegates",
+        description: "Opens the delegates view: every delegate of the session on screen, running and finished.",
+        hint: None,
+        run: run_delegates,
+    },
 ];
 
 fn run_home(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -457,6 +464,11 @@ fn run_skills(app: &mut App, _rest: &str) -> Option<Effect> {
 fn run_rewind(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::Rewind))
+}
+
+fn run_delegates(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::AllDelegates))
 }
 
 fn run_context(app: &mut App, _rest: &str) -> Option<Effect> {
