@@ -52,6 +52,16 @@ fn an_image_line_name_reads_id() {
     assert_eq!(one("  ▣ i_3fz9.png · 1×1", &[]), "  ▣ i_[id].png · 1×1");
     assert_eq!(one("  ▣ i_[id].png · 1×1", &[]), "  ▣ i_[id].png · 1×1");
     assert_eq!(one("  i_.png", &[]), "  i_.png");
+    // A width-capped caption shortens the name but keeps the shape:
+    // the shortened hash prefix reads as one canonical name.
+    assert_eq!(one("  ▣ i_1d43… · 1×1", &[]), "  ▣ i_[id]… · 1×1");
+    assert_eq!(one("  ▣ i_f900abcd… · 1×1", &[]), "  ▣ i_[id]… · 1×1");
+    assert_eq!(one("  ▣ i_1d43.png · 1×1", &[]), "  ▣ i_[id].png · 1×1");
+    // Hex without the ellipsis, or an ellipsis without hex, is not a
+    // shortened image name and stays as drawn.
+    assert_eq!(one("  ▣ i_1d43 · 1×1", &[]), "  ▣ i_1d43 · 1×1");
+    assert_eq!(one("  i_xyz…", &[]), "  i_xyz…");
+    assert_eq!(one("  i_…", &[]), "  i_…");
 }
 
 #[test]

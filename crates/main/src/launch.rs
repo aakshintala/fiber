@@ -81,6 +81,10 @@ pub(crate) fn launch(
         reduced_motion,
         version: env!("CARGO_PKG_VERSION").to_owned(),
         commit: option_env!("FIBER_COMMIT").map(str::to_owned),
+        // The changelog travels with the binary: the notes match what
+        // runs, with no network call (`docs/releasing.md`, "The
+        // changelog").
+        release_notes: include_str!("../../../CHANGELOG.md"),
         model,
         overrides: layer,
         thinking,
