@@ -965,3 +965,93 @@ fn a_login_hold_reads_nil_and_keeps_writes_in_its_slot() {
         "release dropped the login's result"
     );
 }
+
+// The native refresh continuation judges with these, as `Held::due`
+// judges for the Lua half.
+
+#[test]
+fn due_at_refuses_the_unusable_and_the_expired() {
+    use super::held::due_at;
+    let now = 1_700_000_000;
+    // Not a credential at all: no token, an empty token, a missing or
+    // non-integer expiry.
+    assert!(due_at(now, &serde_json::json!({})));
+    assert!(due_at(
+        now,
+        &serde_json::json!({"token": "", "expires_at": now + 10_000})
+    ));
+    assert!(due_at(now, &serde_json::json!({"token": "t"})));
+    assert!(due_at(
+        now,
+        &serde_json::json!({"token": "t", "expires_at": 1.5})
+    ));
+    // Expired, and expiring within the five-minute window: the boundary
+    // belongs to refresh.
+    assert!(due_at(
+        now,
+        &serde_json::json!({"token": "t", "expires_at": now - 1})
+    ));
+    assert!(due_at(
+        now,
+        &serde_json::json!({"token": "t", "expires_at": now})
+    ));
+    assert!(due_at(
+        now,
+        &serde_json::json!({"token": "t", "expires_at": now + 299})
+    ));
+    assert!(due_at(
+        now,
+        &serde_json::json!({"token": "t", "expires_at": now + 300})
+    ));
+    // Past the window the stored pair stands.
+    assert!(!due_at(
+        now,
+        &serde_json::json!({"token": "t", "expires_at": now + 301})
+    ));
+}
+
+#[test]
+fn unix_seconds_counts_since_the_epoch() {
+    use super::held::unix_seconds;
+    use std::time::{Duration, UNIX_EPOCH};
+    assert_eq!(unix_seconds(UNIX_EPOCH), 0);
+    assert_eq!(unix_seconds(UNIX_EPOCH + Duration::from_secs(65)), 65);
+    // Before the epoch reads as expired, never as a far future.
+    assert_eq!(unix_seconds(UNIX_EPOCH - Duration::from_secs(1)), 0);
+}
+
+#[test]
+fn check_fresh_refuses_what_held_write_refuses() {
+    use super::held::check_fresh;
+    use contract::ErrorCode;
+    let now = 1_700_000_000;
+    let fresh = serde_json::json!({"token": "t", "expires_at": now + 60});
+    assert_eq!(check_fresh(now, &fresh), Ok(()));
+    // The expiry may sit one second past now, but never on it.
+    let edge = serde_json::json!({"token": "t", "expires_at": now + 1});
+    assert_eq!(check_fresh(now, &edge), Ok(()));
+    for bad in [
+        serde_json::json!({}),
+        serde_json::json!({"token": "", "expires_at": now + 60}),
+        serde_json::json!({"token": 7, "expires_at": now + 60}),
+        serde_json::json!({"token": "t"}),
+        serde_json::json!({"token": "t", "expires_at": 1.5}),
+    ] {
+        assert_eq!(
+            check_fresh(now, &bad),
+            Err((
+                ErrorCode::InvalidArguments,
+                "host.oauth.refresh: the function must return a table with a `token` string and an `expires_at` whole number of seconds"
+                    .to_owned()
+            )),
+            "unusable shape passes: {bad}"
+        );
+    }
+    assert_eq!(
+        check_fresh(now, &serde_json::json!({"token": "t", "expires_at": now})),
+        Err((
+            ErrorCode::AuthenticationFailed,
+            "host.oauth.refresh: the refreshed token has already expired".to_owned()
+        ))
+    );
+}

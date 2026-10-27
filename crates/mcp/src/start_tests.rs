@@ -1,8 +1,8 @@
-//! Parallel start, filtering, overrides and failures, through the
-//! public [`start`].
+//! Parallel start, filtering, overrides and failures, through
+//! [`Setup::start`] and [`start_observed_tracked`].
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use contract::ErrorCode;
@@ -15,7 +15,7 @@ use contract::shapes::Effect;
 use fakes::Deadline;
 use serde_json::json;
 
-use super::{DEFAULT_STARTUP_TIMEOUT, start};
+use super::{DEFAULT_STARTUP_TIMEOUT, start, start_observed_tracked};
 use crate::effects::Hints;
 use crate::error::McpError;
 use crate::test_support::{FakeImages, Setup, WITHIN};
@@ -593,14 +593,27 @@ fn servers_stop_at_once() {
             }
         })
         .collect();
+    // Warm the checked-in fixture past its first-exec stall before the
+    // start keeps its own deadline: a `fail-start` directory makes the
+    // fixture exit 1 before reading anything, so the warm-up never
+    // blocks on input.
+    let fixture = fakes::mcp_fixture();
+    let warm_dir = fakes::TempDir::new("fiber-mcp-warm");
+    std::fs::write(warm_dir.path().join("fail-start"), "").expect("warm-up dir");
+    let warm_arg = warm_dir.path().display().to_string();
+    fakes::warm_up(&fixture, &[warm_arg.as_str()], 1);
     let clock = setups[0].clock();
     let workspace = setups[0].workspace();
     let artifacts = setups[0].artifacts();
     let cache = workspace.join("cache");
+    // Each server leaves the outstanding set when its start reports, so
+    // a missed deadline names exactly the servers that did not report.
+    let outstanding: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
+    let watching = Arc::clone(&outstanding);
     let (opened, started) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         opened
-            .send(start(
+            .send(start_observed_tracked(
                 specs,
                 &workspace,
                 &artifacts,
@@ -608,12 +621,21 @@ fn servers_stop_at_once() {
                 &cache,
                 &clock,
                 "0.0.0",
+                None,
+                Some(watching),
             ))
             .expect("collected");
     });
-    let started = Deadline::after(WITHIN)
-        .recv(&started)
-        .unwrap_or_else(|_| panic!("both servers start within {WITHIN:?}"));
+    let started = Deadline::after(WITHIN).recv(&started).unwrap_or_else(|_| {
+        let waiting = outstanding
+            .lock()
+            .expect("the outstanding set")
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        panic!("waited {WITHIN:?} for the start, waiting on [{waiting}]")
+    });
     assert_eq!(started.failed.len(), 0);
     let grace = setups[0].fake.now() + Duration::from_millis(800);
     let (done, stopped) = std::sync::mpsc::channel();
