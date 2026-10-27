@@ -148,6 +148,21 @@ fn describe_park_event(
     }
 }
 
+/// Takes the stdout reader's acknowledgement, skipping the supervisor's
+/// park observations, with one deadline for the whole wait: consecutive
+/// receives that drain one stream take one deadline, never a fresh one
+/// per receive.
+#[track_caller]
+fn recv_stdout_read(rx: &mpsc::Receiver<super::ExecTestEvent>, wait: &Deadline, what: &str) {
+    loop {
+        match wait.recv(rx) {
+            Ok(super::ExecTestEvent::StdoutRead) => return,
+            Ok(super::ExecTestEvent::Park { .. }) => {}
+            Err(error) => panic!("{what}: {error:?}"),
+        }
+    }
+}
+
 #[test]
 fn park_diagnostic_names_state() {
     use super::ExecTestEvent;
@@ -1190,9 +1205,11 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
     clock
         .mark_parked(drain_until, fakes::Deadline::after(DEADLINE))
         .expect("waited {DEADLINE:?} for the pid-mode run to park for the 2 s drain");
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv(&stdout_read_rx)
-        .expect("waited for stdout to be read before the drain bound");
+    recv_stdout_read(
+        &stdout_read_rx,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+        "waited for stdout to be read before the drain bound",
+    );
     let unanswered_before_advance = matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty));
     clock.advance_when_parked(Some(drain_until), None, DRAIN, &Deadline::after(DEADLINE));
     let outcome = Deadline::after(DEADLINE).recv(&done);
@@ -1271,11 +1288,11 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
             .unwrap_or_else(|| {
                 panic!("waited {MUST_SUCCEED_WITHIN:?} for the pid-mode run to park for the 2 s drain ({case})")
             });
-        Deadline::after(MUST_SUCCEED_WITHIN)
-            .recv(&stdout_read_rx)
-            .unwrap_or_else(|_| {
-                panic!("waited for stdout to be read before the drain bound ({case})")
-            });
+        recv_stdout_read(
+            &stdout_read_rx,
+            &Deadline::after(MUST_SUCCEED_WITHIN),
+            &format!("waited for stdout to be read before the drain bound ({case})"),
+        );
         let unanswered_before_advance = matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty));
         // Reach one step before the drain bound first. For the `before`
         // case this is also the deadline: expiry must not start a stop once
