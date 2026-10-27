@@ -1944,21 +1944,21 @@ later release still applies.
 | `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
-| `/rules` | Opens the standing rules. |
+| `/rules`, `/permissions` | Opens the standing rules. |
 | `/reviewer-setup` | Sets up the reviewer's notes with you (`docs/permissions.md`, "Setting up the notes"). |
 | `/settings`, `/config` | Opens the configuration keys. |
 | `/theme [<name>]` | Opens the theme picker; with a name, sets the theme at once and saves `tui.theme`. |
-| `/keys`, `/keybindings` | Opens the rebinding screen ("Bindings"). |
+| `/keys`, `/keybindings`, `/keymap` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |
 | `/rewind` | Opens the rewind view. |
-| `/handoff [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
+| `/handoff [instructions]`, `/compact [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
 | `/name <text>`, `/rename <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |
 | `/logout` | Logs out ("Logging out"). |
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/clear` | Starts a fresh session in place, closing the session on screen ("Clearing"). |
-| `/close [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
+| `/close [all]`, `/stop [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
 | `/feedback <description>`, `/bug <description>` | Writes a feedback report with the description, version, platform, doctor output and the diagnostics of the session on screen, and prints its path and the issue link. With no session on screen, the diagnostics are the hub's lines only. A session this machine holds no diagnostic lines for, such as one on a remote hub, still gets its id, the instruction to export its log privately and the hub's lines, with a notice that this machine has no diagnostic lines for it. The report is the one `fiber feedback` writes (`docs/invocation.md`, "Commands and flags"). |
 | `/quit`, `/exit` | Quits ("Quit"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
@@ -1969,9 +1969,7 @@ The `/` list shows built-in commands in this order.
 
 The range line's total counts every entry the query matches: the matching built-in rows plus the matching session commands.
 
-A row's second name, such as `/exit`, is an alias: typing it runs the same
-command, and the `/` list shows it after the name on that command's row,
-never as a row of its own.
+A row's other names, such as `/exit`, are aliases: typing one runs the same command, and the `/` list shows them after the name on that command's row, never as rows of their own.
 
 The rest of the list is the session's answer to the `commands` driver command
 (`docs/invocation.md`, "What each command does"): its skills, prompt templates

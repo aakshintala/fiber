@@ -238,6 +238,88 @@ fn the_point_runs_after_the_argument_check_and_before_admission() {
 }
 
 #[test]
+fn malformed_isolation_fails_before_reading_the_point() {
+    let rig = rig();
+    let forked = tool(&rig);
+    for value in [
+        serde_json::json!(1),
+        serde_json::json!(null),
+        serde_json::json!("sometimes"),
+    ] {
+        let mut args = arguments();
+        args.insert("isolation".into(), value);
+        let output = forked.run(&args, &fakes::CancelToken::new(), &Recorder::default());
+        assert_eq!(
+            output.error.unwrap().code,
+            contract::ErrorCode::InvalidArguments
+        );
+        assert!(output.jobs.is_empty());
+    }
+    assert_eq!(rig.point_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn isolation_creates_on_the_parent_workspace() {
+    let rig = rig();
+    let mut forked = tool(&rig);
+    let workspace = forked.wiring.workspace.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    forked.wiring.create = Arc::new(
+        #[allow(
+            clippy::result_large_err,
+            reason = "the jobs boundary returns its typed error by value"
+        )]
+        move |workspace, id| {
+            tx.send((workspace.to_path_buf(), id.clone())).unwrap();
+            Ok((
+                super::super::EndWorktree {
+                    path: workspace.join(&id.0),
+                    branch: format!("fiber/{}", id.0),
+                    base: Some("base".into()),
+                    remove: true,
+                },
+                super::super::WorktreeGuard::new(|| {}),
+            ))
+        },
+    );
+    let mut args = arguments();
+    args.insert("isolation".into(), serde_json::json!("worktree"));
+    let output = forked.run(&args, &fakes::CancelToken::new(), &Recorder::default());
+    let _watchdog = child_group(&rig);
+    assert!(output.error.is_none(), "{:?}", output.error);
+    let launched = Deadline::after(DEADLINE).recv_or_fail(&rig.launched, "the fork launches");
+    let (created_in, id) =
+        Deadline::after(DEADLINE).recv_or_fail(&rx, "the fork creates its worktree");
+    assert_eq!(created_in, workspace);
+    assert_eq!(id, launched.session_id);
+    let worktree = launched.worktree.unwrap();
+    assert_eq!(worktree.path, workspace.join(&id.0).to_string_lossy());
+    assert_eq!(worktree.branch, format!("fiber/{}", id.0));
+    assert_eq!(launched.workspace, std::path::PathBuf::from(&worktree.path));
+    let [_, JobRecord::DelegateStarted(delegate)] = &output.jobs[..] else {
+        panic!("the fork records its start");
+    };
+    assert_eq!(delegate.worktree.as_ref(), Some(&worktree));
+    rig.registry.stop_delegates();
+}
+
+#[test]
+fn explicit_none_isolation_keeps_the_parent_workspace() {
+    let rig = rig();
+    let forked = tool(&rig);
+    let mut args = arguments();
+    args.insert("isolation".into(), serde_json::json!("none"));
+    let output = forked.run(&args, &fakes::CancelToken::new(), &Recorder::default());
+    let _watchdog = child_group(&rig);
+    assert!(output.error.is_none());
+    let launched = Deadline::after(DEADLINE).recv_or_fail(&rig.launched, "the fork launches");
+    assert!(launched.worktree.is_none());
+    assert_eq!(launched.workspace, forked.wiring.workspace);
+    rig.registry.stop_delegates();
+}
+
+#[test]
 fn the_calling_action_reaches_the_point() {
     let rig = rig();
     let forked = tool(&rig);
@@ -329,7 +411,7 @@ fn the_start_writes_the_point_model_verbatim_with_its_point() {
 }
 
 #[test]
-fn the_schema_names_only_description_prompt_and_timeout_ms() {
+fn the_schema_names_only_description_prompt_isolation_and_timeout_ms() {
     let rig = rig();
     let definition = tool(&rig).definition();
     assert_eq!(definition.name, "delegate_fork");
@@ -338,15 +420,18 @@ fn the_schema_names_only_description_prompt_and_timeout_ms() {
         .expect("an object schema");
     let mut keys: Vec<_> = properties.keys().cloned().collect();
     keys.sort();
-    assert_eq!(keys, ["description", "prompt", "timeout_ms"]);
+    assert_eq!(keys, ["description", "isolation", "prompt", "timeout_ms"]);
     assert_eq!(
         definition.input_schema["required"],
         serde_json::json!(["description", "prompt"])
     );
-    assert!(
-        !properties.contains_key("isolation"),
-        "a fork takes no isolation key"
+    assert_eq!(
+        properties["isolation"],
+        serde_json::json!({
+            "type": "string", "enum": ["none", "worktree"]
+        })
     );
+    assert_eq!(definition.input_schema["additionalProperties"], false);
     assert!(!properties.contains_key("model"), "a fork takes no model");
     // The optional `timeout_ms` keeps the schema out of the strict
     // subset, so it is sent `strict: false`.

@@ -127,7 +127,8 @@ fn delegate_message_refuses_an_extensions_running_and_ended_job_without_contacti
         launch: Arc::new(|_| panic!("an extension delegate must not resume")),
         watch: Arc::new(|_, _, _| panic!("an extension delegate must not be watched")),
         steer: Arc::new(|_, _, _, _, _| panic!("an extension delegate must not be steered")),
-        last_seq: Arc::new(|_| panic!("an extension delegate must not be read")),
+        worktree_record: Arc::new(|_, _| Ok(None)),
+        last_seq: Arc::new(|_, _| panic!("an extension delegate must not be read")),
     };
     let args = serde_json::json!({"id":"j_ext", "message":"hi"});
     let assert_refused = || {
