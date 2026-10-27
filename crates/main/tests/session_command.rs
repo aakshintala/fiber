@@ -4070,22 +4070,22 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
     let second_turn = until_session(&client, "the second turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
-    assert!(
-        second_turn.iter().any(|line| {
-            line["kind"] == "notice"
-                && line["payload"]["code"] == "skill_shadowed"
-                && line["payload"]["extension"] == "fiber.test/clashbox"
-        }),
-        "the turn-start refresh forwards the template's shadow notice: second_turn={second_turn:?} notices={:?} before={before:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
-        turn_notices(&second_turn),
-        clash_diagnostic(),
-    );
     send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
     let answered = until_session(&client, "the commands answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
     });
     let result = answered.last().unwrap()["payload"]["result"].clone();
     let rows = result["commands"].as_array().unwrap();
+    assert!(
+        second_turn.iter().any(|line| {
+            line["kind"] == "notice"
+                && line["payload"]["code"] == "skill_shadowed"
+                && line["payload"]["extension"] == "fiber.test/clashbox"
+        }),
+        "the turn-start refresh forwards the template's shadow notice: second_turn={second_turn:?} result={result:?} notices={:?} before={before:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
+    );
     assert_eq!(
         rows.len(),
         3,
