@@ -59,6 +59,14 @@ enum State {
     },
 }
 
+/// The asked command's confirmed sets while its question is open.
+struct AskedSets {
+    target: SessionId,
+    sessions: Vec<SessionId>,
+    held: Vec<SessionId>,
+    fresh_exited: BTreeSet<SessionId>,
+}
+
 impl App {
     /// `/delete` for the session on screen: sends the cascading dry run
     /// for the attached session and asks once its answer names the
@@ -355,7 +363,12 @@ impl App {
         if !self.outbox.is_up() {
             return Effect::None;
         }
-        let (target, sessions, held, fresh_exited) = match self.delete_asked_sets() {
+        let AskedSets {
+            target,
+            sessions,
+            held,
+            fresh_exited,
+        } = match self.delete_asked_sets() {
             Some(sets) => sets,
             None => return Effect::None,
         };
@@ -410,14 +423,7 @@ impl App {
     }
 
     /// The asked command's confirmed sets, while its question is open.
-    fn delete_asked_sets(
-        &self,
-    ) -> Option<(
-        SessionId,
-        Vec<SessionId>,
-        Vec<SessionId>,
-        BTreeSet<SessionId>,
-    )> {
+    fn delete_asked_sets(&self) -> Option<AskedSets> {
         let home = self.home.as_ref()?;
         match &home.questions.delete_command.state {
             State::Asked {
@@ -426,12 +432,12 @@ impl App {
                 held,
                 fresh_exited,
                 ..
-            } => Some((
-                target.clone(),
-                sessions.clone(),
-                held.clone(),
-                fresh_exited.clone(),
-            )),
+            } => Some(AskedSets {
+                target: target.clone(),
+                sessions: sessions.clone(),
+                held: held.clone(),
+                fresh_exited: fresh_exited.clone(),
+            }),
             State::Idle
             | State::Discovering { .. }
             | State::Stopping { .. }
