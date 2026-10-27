@@ -4,20 +4,16 @@ use serde_json::Value;
 
 use super::results::{Results, median, metric};
 
-/// The attaching row's formula, 50 ms plus 10 ms per MiB of session log:
-/// its base and its rate, in milliseconds.
-const ATTACH_BASE_MS: f64 = 50.0;
-const ATTACH_MS_PER_MIB: f64 = 10.0;
-/// One MiB in bytes, which the attaching formula counts the log in.
-const MIB_BYTES: f64 = 1_048_576.0;
 /// The logs the attach workload samples, by fixture name.
 const ATTACH_FIXTURES: [&str; 2] = ["1 MiB", "10 MiB"];
 
-/// Each fixture's samples against the attaching formula, and what the
-/// head or base column shows: one `fixture (bytes): median ms of ceiling
-/// ms` part per fixture. A slow median is advisory and adds no failure;
-/// a malformed metric is one failure naming `id`.
-pub(super) fn per_mib(id: &str, results: Option<&Results>) -> (Vec<String>, String) {
+/// Each fixture's median ms, and what the head or base column shows: one
+/// `fixture (bytes): median ms` part per fixture. The flat first-frame
+/// bound and the pass-end ordinary ceiling live in the table's cells, so
+/// no formula renders here. A malformed metric is one failure naming `id`.
+/// The attach row always takes 5 samples per fixture
+/// (`docs/performance.md:184-185`): any other declared count fails.
+pub(super) fn fixture_medians(id: &str, results: Option<&Results>) -> (Vec<String>, String) {
     let entries = match metric(results, id).and_then(|value| {
         value
             .as_array()
@@ -53,6 +49,15 @@ pub(super) fn per_mib(id: &str, results: Option<&Results>) -> (Vec<String>, Stri
     let mut shown = Vec::new();
     // `metric` fails on `None`, so results exists past here.
     let runs = results.map(|results| results.runs_of(id)).unwrap_or(0);
+    // The attach row always takes 5 samples per fixture
+    // (`docs/performance.md:184-185`): a declared count of 3 is malformed,
+    // even when the samples match it.
+    if runs != 5 {
+        return (
+            vec![format!("{id}: {runs} runs, expected 5")],
+            String::new(),
+        );
+    }
     for fixture in ATTACH_FIXTURES {
         let Some(samples) = by_fixture.get(fixture) else {
             failures.push(format!("{id}: no {fixture} fixture"));
@@ -69,24 +74,13 @@ pub(super) fn per_mib(id: &str, results: Option<&Results>) -> (Vec<String>, Stri
         let ms: Vec<f64> = samples.iter().map(|(_, ms)| *ms).collect();
         match median(&ms, runs) {
             Ok(middle) => shown.push(format!(
-                "{fixture} ({} bytes): {middle:.1} ms of {:.1} ms",
-                commas(bytes),
-                ceiling_ms(bytes)
+                "{fixture} ({} bytes): {middle:.1} ms",
+                commas(bytes)
             )),
             Err(e) => failures.push(format!("{id}: {fixture}: {e}")),
         }
     }
     (failures, shown.join("; "))
-}
-
-/// The attaching ceiling for a fixture whose largest log is `bytes`:
-/// 50 ms plus 10 ms per MiB.
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "a session log under 9 PiB holds exactly in an f64"
-)]
-fn ceiling_ms(bytes: u64) -> f64 {
-    ATTACH_BASE_MS + ATTACH_MS_PER_MIB * (bytes as f64) / MIB_BYTES
 }
 
 /// `1050231` as `"1,050,231"`, for the comment's byte counts.

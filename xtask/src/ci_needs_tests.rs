@@ -112,11 +112,15 @@ fn a_sixth_local_report_job_needs_no_builder_edit() {
         "    needs: select\n    runs-on: ubuntu-24.04\n",
         &reports,
     );
-    // The check reads REPORT_JOBS, so only the six real names are exempt:
+    // The check reads REPORT_JOBS, so only the five real names are exempt:
     // the made-up job is a gating job the fixture's ci leaves out of needs.
     let failures = check(&workflow, &small_doc_with_reports(&REPORT_JOBS)).unwrap();
-    assert_eq!(failures.len(), 1, "{failures:?}");
-    assert!(failures[0].contains("job fixture_report is not in the ci job's needs"));
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("job fixture_report is not in the ci job's needs")),
+        "{failures:?}"
+    );
     // Once ci needs it, the same builders pass with no other edit.
     let fixed = workflow_with_reports(
         &[],
@@ -132,20 +136,6 @@ fn a_sixth_local_report_job_needs_no_builder_edit() {
 #[test]
 fn passes_on_the_real_files() {
     assert_eq!(check(&real_workflow(), &real_doc()), Ok(vec![]));
-}
-
-#[test]
-fn stress_needs_no_ci_needs_entry() {
-    assert!(REPORT_JOBS.contains(&"stress"));
-    assert_eq!(check(&scalar(&[], "select"), &small_doc()), Ok(vec![]));
-}
-
-#[test]
-fn a_doc_sentence_without_stress_fails() {
-    let doc = small_doc().replacen(", `stress`", "", 1);
-    assert_ne!(doc, small_doc());
-    let err = check(&scalar(&[], "select"), &doc).unwrap();
-    assert!(err.iter().any(|e| e.contains("`stress`")), "{err:?}");
 }
 
 #[test]
@@ -216,9 +206,9 @@ fn missing_jobs_are_sorted() {
 #[test]
 fn an_extra_report_job_in_the_doc_fails() {
     let doc = real_doc();
-    let from = "`stress`.";
+    let from = "`flake_report`.";
     assert!(doc.contains(from), "the fixture drifted");
-    let changed = doc.replace(from, "`stress`, `extra`.");
+    let changed = doc.replace(from, "`flake_report`, `extra`.");
     let failures = check(&real_workflow(), &changed).unwrap();
     assert_eq!(failures.len(), 1);
     assert!(

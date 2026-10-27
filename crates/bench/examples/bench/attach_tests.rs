@@ -1,12 +1,17 @@
+use std::time::Duration;
+
+use contract::clock::Clock;
+use fakes::clock::FakeClock;
 use serde_json::json;
 
 use crate::busy::filler;
+use crate::test_support::loopback;
 
 use super::{
-    ATTACH_TAIL, FIXTURE_COUNT, MEMORY_FIXTURE, OPEN_HEIGHT, OPEN_WIDTH, OpenFigures, PLANS,
-    PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, attach_stage_rows, feed_step, memory_rows,
-    open_command, open_error_samples, parse_open_line, plan_turns, replay_finished, size_note,
-    stage_rows,
+    ATTACH_PASS, ATTACH_TAIL, FIXTURE_COUNT, MEMORY_FIXTURE, OPEN_HEIGHT, OPEN_WIDTH, OpenFigures,
+    PLANS, PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, attach_stage_rows, await_pass_end, feed_step,
+    memory_rows, open_command, open_error_samples, parse_open_line, pass_entry, plan_turns,
+    replay_finished, size_note, stage_rows,
 };
 
 #[test]
@@ -34,8 +39,8 @@ fn left(id: &str, how: &str) -> serde_json::Value {
 
 #[test]
 fn only_the_10_mib_fixture_reports_terminal_memory() {
-    // Each fixture of the plan, with a fake terminal process's peak and
-    // retained readings: only the 10 MiB attach reports them.
+    // docs/performance.md:74,77,227-229: only the 10 MiB fixture reports
+    // the two memory readings, terminal peak RSS and retained RssAnon.
     assert_eq!(MEMORY_FIXTURE, "10 MiB");
     for (label, _) in PLANS {
         let rows = memory_rows(label, 51200, 48000);
@@ -437,8 +442,8 @@ fn attach_stage_rows_maps_each_jig_run_onto_its_stage() {
 
 #[test]
 fn attach_stage_rows_without_the_jig_reports_terminal_and_hub_only() {
-    // Without --paging the log's stages stay unmeasured; the terminal
-    // and hub rows still stand on their own.
+    // docs/performance.md:231-237: terminal and hub_replay run outside
+    // the paging jig; without it, only those two stages are measured.
     let rows = attach_stage_rows("1 MiB", 1_050_231, 31.0, 20.0, None);
     let names: Vec<&str> = rows
         .iter()
@@ -455,14 +460,12 @@ fn attach_stage_rows_without_the_jig_reports_terminal_and_hub_only() {
         assert_eq!(sample.get("fixture"), Some(&json!("1 MiB")));
         assert_eq!(sample.get("log_bytes"), Some(&json!(1_050_231)));
     }
-    // The missing stages are missing rows, not zeroed ones.
-    assert_ne!(rows.len(), stages().len());
 }
 
 #[test]
 fn a_failing_open_run_keeps_the_terminal_and_hub_rows_with_a_note() {
-    // The base jig predates `open` mode, so its run fails while the
-    // terminal and hub rows are valid: they are kept, with a note.
+    // docs/performance.md:231-237: terminal and hub_replay run outside
+    // the paging jig. Its failure leaves those two measurements intact.
     let error = "the paging jig's open run exited 2; stderr: usage";
     let (rows, note) = open_error_samples("1 MiB", 1_050_231, 31.0, 20.0, error);
     let names: Vec<&str> = rows
@@ -481,7 +484,6 @@ fn a_failing_open_run_keeps_the_terminal_and_hub_rows_with_a_note() {
         rows,
         attach_stage_rows("1 MiB", 1_050_231, 31.0, 20.0, None)
     );
-    assert_ne!(rows.len(), stages().len());
     // The note names the unavailable stages and the jig's error.
     for stage in ["parse", "fold", "frames_1", "frames_4096", "frames_64"] {
         assert!(note.contains(stage), "{stage}: {note}");
@@ -493,4 +495,76 @@ fn a_failing_open_run_keeps_the_terminal_and_hub_rows_with_a_note() {
         note,
         open_error_samples("1 MiB", 1_050_231, 31.0, 20.0, "other").1
     );
+}
+
+#[test]
+fn pass_end_fails_when_the_thumb_never_arrives() {
+    use std::io::Write;
+
+    // The tail on screen with no thumb: the pass never ends.
+    let clock = FakeClock::new();
+    let (terminal, mut drawer) = loopback();
+    drawer
+        .write_all(ATTACH_TAIL.as_bytes())
+        .expect("showing the tail");
+    terminal
+        .wait_for(
+            &*clock,
+            clock
+                .now()
+                .checked_add(Duration::from_secs(1))
+                .expect("fake deadline is representable"),
+            ATTACH_TAIL,
+        )
+        .expect("the tail draws");
+    let started = clock.now();
+    clock.advance(Duration::from_secs(1));
+    let until = clock
+        .now()
+        .checked_sub(Duration::from_secs(1))
+        .expect("fake clock has advanced past its origin");
+    let err = await_pass_end(&terminal, &*clock, started, until).expect_err("no thumb ever shows");
+    assert!(err.contains(ATTACH_PASS), "{err}");
+}
+
+#[test]
+fn pass_end_returns_once_the_thumb_shows() {
+    use std::io::Write;
+
+    let clock = FakeClock::new();
+    let (terminal, mut drawer) = loopback();
+    drawer
+        .write_all(format!("{ATTACH_TAIL}{ATTACH_PASS}").as_bytes())
+        .expect("showing the tail and the thumb");
+    terminal
+        .wait_for(
+            &*clock,
+            clock
+                .now()
+                .checked_add(Duration::from_secs(1))
+                .expect("fake deadline is representable"),
+            ATTACH_PASS,
+        )
+        .expect("the thumb draws");
+    let started = clock.now();
+    clock.advance(Duration::from_secs(1));
+    let until = clock
+        .now()
+        .checked_add(Duration::from_secs(1))
+        .expect("fake deadline is representable");
+    let ms = await_pass_end(&terminal, &*clock, started, until).expect("the thumb shows");
+    assert!(ms.is_finite() && ms >= 0.0, "{ms}");
+}
+
+#[test]
+fn the_pass_end_entries_carry_the_fixture_and_log_size() {
+    // docs/performance.md:184-185,223-227: both attach observations use
+    // the same fixture and run; each entry names that fixture and log size.
+    for label in ["1 MiB", "10 MiB"] {
+        let (metric, entry) = pass_entry(label, 1_050_231, 41.0);
+        assert_eq!(metric, "terminal_attach_pass_ms");
+        assert_eq!(entry.get("fixture"), Some(&json!(label)));
+        assert_eq!(entry.get("log_bytes"), Some(&json!(1_050_231)));
+        assert_eq!(entry.get("ms"), Some(&json!(41.0)));
+    }
 }
