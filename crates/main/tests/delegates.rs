@@ -6277,6 +6277,10 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
         grid.contents
     );
     assert!(grid.contents.contains("done"), "{}", grid.contents);
+    // The taller delegate header leaves no transcript row at this
+    // height: grow the viewport before opening the replay, keeping the
+    // small-viewport scroll proof above intact.
+    run.resize(120, 32);
     // Enter on the first finished row opens its replayed transcript.
     run.write(b"\r");
     run.wait_screen("the replayed transcript", |grid| {
