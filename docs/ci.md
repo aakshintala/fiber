@@ -91,7 +91,7 @@ A pull request runs only what its diff can affect.
   `docs/invocation.md` runs `contract`, whose tests check
   the code against them. A change to `docs/extensions.md` runs `extensions`,
   whose tests check its hook keys table against the code. A change to `docs/tui.md` runs `contract` and
-  `tui`. A change to `docs/ci.md` or `docs/performance.md` runs `xtask`, whose tests pin the fast attaching ceiling to the 9V45 class data in `xtask/tests/class_data/`, recomputed from it by the `docs/performance.md` rule. A change to a built-in skill under `docs/skills/` runs `loop`, whose
+  `tui`. A change to `docs/ci.md` or `docs/performance.md` runs `xtask`, whose tests pin the fast session_list ceiling to the 9V45 class data in `xtask/tests/class_data/`, recomputed from it by the `docs/performance.md` rule. A change to a built-in skill under `docs/skills/` runs `loop`, whose
   tests check it parses, and `main`, whose tests install it. The selector lists these files. The gate fails when
   the list and the source disagree, or when an include's argument is not a
   string literal. Tests read a repository file only by compiling it in,
@@ -533,8 +533,7 @@ workflow file is on `main`.
   one artifact: `perf.data`, the folded stacks and flamegraph SVGs for every
   process and for the fiber processes alone, the fiber processes' self time per
   function (`fiber-symbols.txt`), and the harness's JSON. Its timings run under perf,
-  so they are not budget evidence: the 60 and 150 ms attach ceilings are judged
-  by the Release job's "Print the attach stages" only.
+  so they are not budget evidence.
 
 ## Job time limits
 

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Regenerates the attach and session_list class data pinned by
-# xtask/tests/class_data/9v45-attach-10mib.json and
+# Regenerates the session_list class data pinned by
 # xtask/tests/class_data/9v45-session-list.json from the benchmarks-<sha>
 # artifacts of main runs, through the same Actions artifact listing
 # scripts/stored-results uses. It keeps the artifacts whose CPU model is
@@ -14,14 +13,10 @@
 #
 #   class    fast, middle or slow, as docs/performance.md names them.
 #   row      the benchmark row, as docs/performance.md names it; only
-#            "Terminal to its first frame, attaching" (read from the
-#            terminal_attach_ms metric) and "`session_list`, waiting for
-#            every running session's status" (read from the
-#            session_list_ms metric) are supported.
+#            "`session_list`, waiting for every running session's status"
+#            (read from the session_list_ms metric) is supported.
 #   fixture  the row's fixture, as docs/performance.md names it; only
-#            "10 MiB" (the gated attach fixture, GATED_ATTACH_FIXTURE in
-#            xtask/src/bench/judge.rs) and "none" (session_list has no
-#            fixture) are supported.
+#            "none" (session_list has no fixture) is supported.
 #   dir      a directory holding listing.json (the artifact listing as the
 #            API returns it) and one benchmarks-<sha>/head.json per
 #            artifact. With no dir, the script reads the live API.
@@ -30,7 +25,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: scripts/class-data <class: fast|middle|slow> <row: Terminal to its first frame, attaching | \`session_list\`, waiting for every running session's status> <fixture: 10 MiB|none> [<dir>]" >&2
+  echo "usage: scripts/class-data <class: fast|middle|slow> <row: \`session_list\`, waiting for every running session's status> <fixture: none> [<dir>]" >&2
 }
 
 if [ $# -ne 3 ] && [ $# -ne 4 ]; then
@@ -43,8 +38,7 @@ fixture=$3
 dir=${4:-}
 
 # The session_list slow ceiling covers both slow-class models (7763 and
-# 9V74, both SpeedClass::Slow in xtask/src/bench/judge.rs); the attach
-# row's class filters stay exactly as they were.
+# 9V74, both SpeedClass::Slow in xtask/src/bench/judge.rs).
 slow_second_model="amd epyc 9v74 80-core processor"
 # The class's CPU model from docs/performance.md, "The class columns",
 # lowercased: the file's cpu strings match case-insensitively.
@@ -59,11 +53,8 @@ case $class in
 esac
 
 # The supported rows as entries: name|metric|fixture|second slow-class CPU.
-# Attaching reads {fixture, ms} objects filtered by fixture, session_list
-# reads plain-number samples. The attach row keeps its single-CPU class
-# filter, so its fourth field stays empty.
+# session_list reads plain-number samples.
 rows=(
-  "Terminal to its first frame, attaching|terminal_attach_ms|10 MiB|"
   "\`session_list\`, waiting for every running session's status|session_list_ms|none|$slow_second_model"
 )
 metric=""
@@ -92,18 +83,13 @@ second=$model
 if [ "$class" = "slow" ] && [ -n "$row_second" ]; then
   second=$row_second
 fi
-# The extraction filter, chosen once by metric shape: plain numbers for
-# session_list_ms, the .fixture filter for terminal_attach_ms.
-# shellcheck disable=SC2016 # $id and $fixture expand in jq, not the shell.
-if [ "$metric" = "session_list_ms" ]; then
-  extract='(.metrics[$id] // []) as $vals
-    | if ($vals | type) != "array" then error("\($id): not an array")
-      elif ([$vals[] | select(type != "number" or isnan or ((isfinite | not)) or . < 0)] | length) > 0 then error("\($id): not a finite number at or above zero")
-      else [$vals[] | ((. * 1000 | round) / 1000 | tostring)] | join(", ")
-      end'
-else
-  extract='[.metrics[$id] // [] | .[] | select(.fixture == $fixture) | ((.ms * 1000 | round) / 1000 | tostring)] | join(", ")'
-fi
+# The extraction filter: plain numbers for session_list_ms.
+# shellcheck disable=SC2016 # $id expands in jq, not the shell.
+extract='(.metrics[$id] // []) as $vals
+  | if ($vals | type) != "array" then error("\($id): not an array")
+    elif ([$vals[] | select(type != "number" or isnan or ((isfinite | not)) or . < 0)] | length) > 0 then error("\($id): not a finite number at or above zero")
+    else [$vals[] | ((. * 1000 | round) / 1000 | tostring)] | join(", ")
+    end'
 
 lines=$(mktemp)
 scratch=$(mktemp -d)

@@ -543,6 +543,10 @@ fn a_pair_refused_session_not_found_retries_while_running() {
     // The retry waits: nothing goes out before its delay.
     assert!(commands(app.items_due(clock.now())).is_empty());
     // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(500));
     tick(&mut app, &clock);
     let resent = subscribes(&commands(app.items_due(clock.now())));

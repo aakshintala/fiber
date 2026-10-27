@@ -90,12 +90,20 @@ fn trickled_header_bytes_fail_within_the_request_bound() {
         // A header line, one byte at a time, across more than the bound
         // overall: its first bytes arrive inside the bound, the rest past
         // it, while every underlying read still succeeds.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(WAIT / 2);
         for byte in b"content-length: 0\r\n".iter().take(10) {
             client
                 .write_all(std::slice::from_ref(byte))
                 .expect("the trickle writes");
         }
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(WAIT / 2 + Duration::from_secs(1));
         client.write_all(b"0").expect("the trickle writes");
         let caught = Deadline::after(WAIT)

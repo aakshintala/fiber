@@ -104,8 +104,8 @@ fn row_text(buf: &Buffer, y: u16) -> String {
         .collect()
 }
 
-/// An app with a 43-row `/` list: the built-ins and 17 session skills.
-fn forty() -> App {
+/// An app with a long `/` list: the built-ins and 17 session skills.
+fn slash_list_with_skills() -> App {
     let mut app = attached(160, 48);
     let skills: Vec<String> = (0..17).map(|n| format!("skill{n:02}")).collect();
     let refs: Vec<&str> = skills.iter().map(String::as_str).collect();
@@ -114,16 +114,18 @@ fn forty() -> App {
 }
 
 #[test]
-fn slash_eight_of_forty() {
-    let mut app = forty();
+fn slash_eight_of_long_list() {
+    let mut app = slash_list_with_skills();
     type_text(&mut app, "/");
     insta::assert_snapshot!("slash", screen(&app, 160, 48));
     // Eight entries and the range line, with the first match focused.
     let shown = screen(&app, 160, 48);
-    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
-    assert!(shown.contains("1–8 of 60 · ↓ 52 more"), "{shown}");
+    // The range counts matching entries, not just visible rows
+    // (`docs/tui.md:1682-1685,1995`).
+    assert!(shown.contains("1–8 of 61 · ↓ 53 more"), "{shown}");
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
+    // The first match is focused (`docs/tui.md:1682`).
     assert_eq!(bars.len(), 1, "{shown}");
     assert!(row_text(&buf, bars[0]).contains("home"), "{shown}");
 }
@@ -147,8 +149,8 @@ fn slash_exit_alias() {
 #[test]
 fn slash_keys_aliases_render_and_filter_independently() {
     // Each alias, whole or in part, finds exactly the keys row, which
-    // carries both aliases on it (`docs/tui.md:1944,1965`).
-    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1944,1965`).
+    // carries both aliases on it (`docs/tui.md:1974,1997`).
+    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1974,1997`).
     for query in ["keymap", "keybindings", "keyma", "keybind"] {
         let mut app = attached(160, 48);
         type_text(&mut app, &format!("/{query}"));
@@ -202,7 +204,7 @@ fn slash_keys_alias_spans_match_only_the_queried_alias() {
 
 #[test]
 fn a_scrolled_slash_list_counts_both_directions() {
-    let mut app = forty();
+    let mut app = slash_list_with_skills();
     type_text(&mut app, "/");
     let now = fakes::clock::FakeClock::new().now();
     for _ in 0..10 {
@@ -212,8 +214,9 @@ fn a_scrolled_slash_list_counts_both_directions() {
     // The window follows the selection; the total and the count below
     // follow the list.
     assert!(
-        // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
-        shown.contains("↑ 3 above · 4–11 of 60 · ↓ 49 more"),
+        // The range counts matching entries, not just visible rows
+        // (`docs/tui.md:1682-1685,1995`).
+        shown.contains("↑ 3 above · 4–11 of 61 · ↓ 50 more"),
         "{shown}"
     );
     let buf = buffer(&app, 160, 48);
@@ -394,12 +397,15 @@ fn a_file_error_is_one_dim_row_with_no_bar() {
 
 #[test]
 fn narrow_slash() {
-    let mut app = forty();
+    let mut app = slash_list_with_skills();
     app.set_size(100, 40);
     type_text(&mut app, "/");
+    // The focused match and range line follow the slash-panel rules
+    // (`docs/tui.md:1682-1685,1995`).
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
-    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
-    assert!(screen(&app, 100, 40).contains("1–8 of 60 · ↓ 52 more"));
+    // The range counts matching entries, not just visible rows
+    // (`docs/tui.md:1682-1685,1995`).
+    assert!(screen(&app, 100, 40).contains("1–8 of 61 · ↓ 53 more"));
 }
 
 #[test]
@@ -716,7 +722,7 @@ fn fit_windows_around_the_selection_with_exactly_one_bar() {
 /// barred, counted of the whole list.
 #[test]
 fn short_conversation_slash_keeps_its_selection_barred() {
-    let mut app = forty();
+    let mut app = slash_list_with_skills();
     app.set_size(80, 12);
     type_text(&mut app, "/");
     let now = fakes::clock::FakeClock::new().now();
@@ -726,11 +732,13 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     let buf = buffer(&app, 80, 12);
     let shown = screen(&app, 80, 12);
     let bars = barred(&buf);
+    // The selected match stays focused (`docs/tui.md:1682`).
     assert_eq!(bars.len(), 1, "{shown}");
-    // `/hooks` sits after `/tools`: ten downs bar `/context` now.
+    // `/hooks` follows `/tools` (`docs/tui.md:1956-1957,1993`): ten downs bar `/context`.
     assert!(row_text(&buf, bars[0]).contains("context"), "{shown}");
-    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
-    assert!(shown.contains("of 60"), "{shown}");
+    // The range counts matching entries, not just visible rows
+    // (`docs/tui.md:1682-1685,1995`).
+    assert!(shown.contains("of 61"), "{shown}");
 }
 
 /// A short conversation with an `@` list: the third path stays barred,

@@ -194,6 +194,10 @@ fn a_readiness_wait_after_a_wake_parks_instead_of_spinning() {
             "the wake-consuming readiness park",
         );
         assert_eq!(ack.phase, "to read the test bytes");
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(1));
         gate.release();
         assert!(
@@ -287,6 +291,10 @@ fn a_woken_condvar_wait_counts_no_sleep() {
             clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the wait parks before the clock moves"
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(1));
         assert!(
             matches!(
@@ -405,6 +413,10 @@ fn a_consumed_wake_does_not_end_the_next_readiness_wait() {
         let deadline = Deadline::after(OP);
         let ack = next_acknowledgment(&deadline, &acks, "the readiness wait");
         assert_eq!(ack.phase, "to read the test bytes");
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(1));
         gate.release();
         for _ in 0..2 {

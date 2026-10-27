@@ -584,6 +584,10 @@ fn at_debug_a_dropped_guard_writes_one_line_and_no_file_before() {
     let diag = debug_diag(&home, &spy);
     let start = inner.now();
     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     inner.advance(Duration::from_millis(7));
     let timer = timed(&diag, Op::ToolRun, Some("read"), Some(start));
     assert!(timer.is_some(), "a debug guard is active");
@@ -640,12 +644,24 @@ fn stop_stamps_completion_and_drop_emits_it() {
     let diag = debug_diag(&home, &spy);
     let start = inner.now();
     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     inner.advance(Duration::from_millis(5));
     let mut timer = timed(&diag, Op::TurnModelCall, None, Some(start)).expect("debug guard");
     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     inner.advance(Duration::from_millis(100));
     timer.stop();
     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     inner.advance(Duration::from_secs(1));
     drop(timer);
     let line = op_line(&home, "hub.log");
@@ -661,9 +677,17 @@ fn a_discarded_timer_writes_no_line() {
     // Stopped, then discarded: no line, though an end was stamped.
     let start = inner.now();
     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     inner.advance(Duration::from_millis(5));
     let mut timer = timed(&diag, Op::TurnRequest, None, Some(start)).expect("debug guard");
     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     inner.advance(Duration::from_millis(100));
     timer.stop();
     timer.discard();
@@ -674,9 +698,17 @@ fn a_discarded_timer_writes_no_line() {
     // Stopped, then dropped: one line with the stamped `ms`.
     let start = inner.now();
     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     inner.advance(Duration::from_millis(5));
     let mut timer = timed(&diag, Op::TurnRequest, None, Some(start)).expect("debug guard");
     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     inner.advance(Duration::from_millis(100));
     timer.stop();
     drop(timer);
@@ -733,9 +765,17 @@ fn the_callable_times_without_a_second_check_and_emits_once() {
     let time = diag.timings();
     let start = inner.now();
     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     inner.advance(Duration::from_millis(3));
     let guard = time(Op::StartupConfig, None, Some(start)).expect("debug guard");
     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     inner.advance(Duration::from_millis(100));
     drop(guard);
     let line = op_line(&home, "hub.log");
@@ -770,6 +810,10 @@ fn timed_text(op: Op, elapsed: Duration) -> String {
     let diag = Diag::new(home.path(), Process::Hub, Level::Debug, clock);
     let start = inner.now();
     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     inner.advance(elapsed);
     drop(timed(&diag, op, None, Some(start)).expect("debug guard"));
     fs::read_to_string(home.file("hub.log")).unwrap_or_default()

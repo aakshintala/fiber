@@ -22,6 +22,10 @@ fn loading_deadline_starts_before_source_read_and_precedes_read_error() {
         let result = TuiVm::load_with_source(
             "test",
             || {
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "no code under test waits on the clock (ruling 6179406086)"
+                )]
                 clock.advance(crate::lua::LOAD_TIMEOUT + MS);
                 if read_error {
                     Err(Error::TuiLua("read failed".into()))
@@ -68,6 +72,10 @@ fn call_advancing(
     by: Duration,
 ) -> Result<Vec<Vec<Span>>, Error> {
     let advance = |_: &Value, _: u16| {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
         clock.advance(by);
         Vec::new()
     };
