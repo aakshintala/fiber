@@ -421,8 +421,9 @@ fn ledger_indent_zero_stays_one_line_when_sized_inline() {
 
 #[test]
 fn a_bubble_without_a_text_width_stays_one_line_when_sized_inline() {
-    // No text bubble means no block width: even sized inline, a noted
-    // PNG stays its one clickable line, right-aligned.
+    // `None` marks a non-bubble caller: even sized inline, a noted PNG
+    // stays its one clickable line, right-aligned. `bubble_rows` passes
+    // the conversation width for an image-only prompt bubble.
     let part = sized(1280, 800);
     let layout = inline_layout(&part, (10, 20));
     let mut out = Rows::default();
@@ -438,7 +439,7 @@ fn a_bubble_without_a_text_width_stays_one_line_when_sized_inline() {
             .spans
             .iter()
             .all(|span| !span.content.as_ref().starts_with('\u{10EEEE}')),
-        "no placeholders without a text bubble"
+        "no placeholders for a non-bubble caller"
     );
 }
 

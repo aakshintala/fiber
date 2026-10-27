@@ -495,6 +495,62 @@ fn the_same_image_stays_one_line_with_the_flag_off() {
 }
 
 #[test]
+fn image_only_paste_draws_inline_in_its_prompt_bubble() {
+    let setup = Setup::new();
+    script_reads(&setup, true, 0, false);
+    let bin = setup.root.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let (clipboard, body) = if cfg!(target_os = "macos") {
+        let hex: String = PNG.iter().map(|byte| format!("{byte:02X}")).collect();
+        (
+            "osascript",
+            format!("printf '\\302\\253data PNGf{hex}\\302\\273\\n'"),
+        )
+    } else {
+        let octal: String = PNG.iter().map(|byte| format!("\\{byte:03o}")).collect();
+        ("wl-paste", format!("printf '{octal}'"))
+    };
+    fakes::script(&bin, clipboard, &body);
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap()
+    .into_string()
+    .unwrap();
+    let mut env: Vec<(&str, &str)> = vec![("FIBER_TEST_FAKE_KEY", "sk-test"), ("PATH", &path)];
+    if !cfg!(target_os = "macos") {
+        env.push(("WAYLAND_DISPLAY", "fiber-test"));
+    }
+    let mut run = Run::spawn_pixels(&setup, 100, 30, 1000, 600, &[], &env);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.write(&[0x16]);
+    run.wait_screen("the pasted image", |grid| {
+        grid.contents.contains("[Image #1]")
+    });
+    let from = run.output().len();
+    run.write(b"\r");
+    let placeholder = run.wait_bytes(from, PLACEHOLDER, "the image-only prompt grid");
+    run.wait_bytes(placeholder, FRAME_END, "the image-only prompt frame");
+    let grid = run.wait_screen("the image-only prompt bubble", |grid| {
+        grid.contents.contains("120×80") && grid.contents.contains("Seen.")
+    });
+    assert!(
+        grid.rows.iter().any(|row| row.contains('▣')),
+        "the prompt bubble has an image caption"
+    );
+    assert!(
+        count(&run.output()[from..], PLACEHOLDER) > 0,
+        "the image-only prompt draws inline placeholders"
+    );
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+#[test]
 fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
     // 255 distinct PNG reads: the first 254 fill the kitty placeholder
     // colours, so the last image is the one past the range. It keeps its

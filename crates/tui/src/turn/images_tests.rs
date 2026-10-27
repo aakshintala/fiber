@@ -42,11 +42,6 @@ fn noted(paths: &[&str]) -> Layout {
     layout
 }
 
-fn texts(out: Rows) -> Vec<String> {
-    let (rows, _) = out.into_parts();
-    rows.into_iter().map(|(line, _)| line.to_string()).collect()
-}
-
 #[test]
 fn a_prompt_keeps_its_images_in_order() {
     let prompt = prompt_of(
@@ -282,10 +277,10 @@ fn bubble_block_width_follows_the_bubble_rows_formula() {
     // At, just below and just above the bubble cap's edge: a short
     // prompt takes its widest row plus pads, a 40-wide prompt takes
     // the cap exactly, and longer prompts stay capped. Below four
-    // columns the width is the columns, and an empty prompt takes no
-    // width at all.
-    assert_eq!(super::bubble_block_width("", 60), None);
-    assert_eq!(super::bubble_block_width("   ", 60), None);
+    // columns the width is the columns; an image-only prompt also uses
+    // the conversation width for its bubble.
+    assert_eq!(super::bubble_block_width("", 60), Some(60));
+    assert_eq!(super::bubble_block_width("   ", 60), Some(60));
     assert_eq!(super::bubble_block_width("hi", 0), None);
     assert_eq!(super::bubble_block_width("hi", 1), Some(1));
     assert_eq!(super::bubble_block_width("hi", 3), Some(3));
@@ -347,15 +342,24 @@ fn steer_rows_stay_one_line_when_sized_inline() {
 }
 
 #[test]
-fn an_image_only_prompt_draws_its_line() {
-    // No empty bubble row: the image line is the only row.
+fn an_image_only_prompt_draws_inline_in_its_bubble() {
     let prompt = prompt_of(&session(), &[image("artifacts/a.png")]);
     assert!(prompt.text.trim().is_empty());
-    let layout = noted(&["artifacts/a.png"]);
+    let layout = inline_layout(&["artifacts/a.png"], (10, 20));
     let mut out = Rows::default();
     bubble_rows(&prompt, 60, &layout, &mut out);
-    let shown = texts(out);
-    assert_eq!(shown, ["▣ a.png · 1280×800"]);
+    let (rows, _) = out.into_parts();
+    assert!(rows.len() > 1, "the bubble holds grid rows and a caption");
+    assert!(
+        rows.iter().any(|(line, _)| line
+            .spans
+            .iter()
+            .any(|span| span.content.as_ref().starts_with('\u{10EEEE}'))),
+        "the prompt image draws inline"
+    );
+    let (caption, target) = rows.last().unwrap_or_else(|| panic!("the image caption"));
+    assert!(caption.to_string().starts_with("▣ a.png"));
+    assert!(matches!(target, Some(Target::Image(_))));
 }
 
 #[test]

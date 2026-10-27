@@ -31,8 +31,8 @@ pub(crate) fn prompt_of(session: &contract::SessionId, content: &[ContentPart]) 
 /// The prompt's bubble, then each image's rows under its text,
 /// right-aligned with the bubble: the inline grid with its caption
 /// where the terminal speaks kitty's graphics protocol, else each
-/// image's one line. An image-only prompt draws only its lines: no
-/// empty bubble row, pending the surveyor ruling on that shape.
+/// image's one line. An image-only prompt's bubble holds only its image
+/// rows and caption, with no empty text row.
 pub(crate) fn bubble_rows(prompt: &Prompt, width: u16, layout: &image::Layout, out: &mut Rows) {
     crate::bubble::rows(&prompt.text, width, out);
     let block = bubble_block_width(&prompt.text, width);
@@ -41,14 +41,18 @@ pub(crate) fn bubble_rows(prompt: &Prompt, width: u16, layout: &image::Layout, o
     }
 }
 
-/// The prompt text's actual wrapped bubble block width, as
-/// `bubble::rows` computes it: `None` for an empty or missing bubble,
-/// `Some(columns)` below four columns where the bubble cap's
-/// `clamp(4, columns)` cannot run, else the widest wrapped row plus
-/// pads capped at 72% of the columns.
+/// The prompt bubble's width for image rows: `Some(columns)` when its
+/// text is empty, the actual wrapped block width when text is present,
+/// and `None` only at zero columns. Below four columns it uses the
+/// columns directly, where the bubble cap's `clamp(4, columns)` cannot
+/// run; otherwise it uses the widest wrapped row plus pads capped at
+/// 72% of the columns.
 fn bubble_block_width(text: &str, columns: u16) -> Option<u16> {
-    if text.trim().is_empty() || columns == 0 {
+    if columns == 0 {
         return None;
+    }
+    if text.trim().is_empty() {
+        return Some(columns);
     }
     if columns < 4 {
         return Some(columns);

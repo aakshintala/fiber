@@ -318,10 +318,10 @@ pub(crate) enum Align {
 /// reads `▣ <name>` in the link look and ` · <dims>` dim
 /// (`docs/tui.md`, "Images", "Links"). A prompt bubble's PNG draws its
 /// inline grid with its caption under its text where the sizing is
-/// inline; steering and text-less images stay the one line. `columns`
-/// always sizes the shared grid, while `bubble_block_width` caps a
-/// prompt bubble's caption and fallback text at its actual wrapped
-/// width; `None` keeps the one-line path where no text bubble exists.
+/// inline, with or without text; steering images stay the one line.
+/// `columns` always sizes the shared grid, while `bubble_block_width`
+/// caps a prompt bubble's caption and fallback text at its actual
+/// width; `None` keeps the one-line path for non-bubble callers.
 pub(crate) fn rows(
     part: &Part,
     layout: &Layout,
