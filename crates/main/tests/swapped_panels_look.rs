@@ -1,6 +1,6 @@
-//! Binary-level tests of the `/tools`, `/rules` and `/settings` views
-//! (`docs/tui.md`, "Swapped views"): the real binary on a 160x48 pty in
-//! truecolour, with the scripted provider answering, draws the doc's
+//! Binary-level tests of the `/tools`, `/rules`, `/settings` and `/skills`
+//! views (`docs/tui.md`, "Swapped views"): the real binary on a 160x48 pty
+//! in truecolour, with the scripted provider answering, draws the doc's
 //! rows. Source headings are bold, a switch reads `[on]` bold or `[off]`
 //! dim, a rule's ✕ is in `error`, the settings table has a dim header and
 //! aligned columns, and each view's last rows are dim. The focused row
@@ -493,6 +493,149 @@ fn the_changed_files_hunk_row_is_dim() {
     });
     let hunk = row_with(&grid, "@@ -1 +1 @@");
     assert!(is_dim(&grid, hunk, "@@ -1 +1 @@"), "{}", grid.contents);
+    run.write(b"\x03\x03\r");
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+/// A setup with same-name repo and personal `review` skills: the repo
+/// copy wins and shadows the personal one. The scripted provider only
+/// needs to keep the session alive, as for `/rules`.
+fn skills_setup() -> Setup {
+    let setup = Setup::new();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [{"text": ["Done."]}]}),
+    );
+    config(&setup, json!({}));
+    for (dir, description) in [
+        (
+            setup.workspace().join(".agents/skills/review"),
+            "Checks a diff.",
+        ),
+        (setup.home().join("skills/review"), "Personal notes."),
+    ] {
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: review\ndescription: {description}\n---\nBody.\n"),
+        )
+        .unwrap();
+    }
+    setup
+}
+
+/// The `/skills` row for the winning `review` skill: its text from the name on.
+/// Only the row's own cells are read: the view does not span the full
+/// grid, so a side panel may draw to its right.
+fn skill_row(grid: &Grid) -> Option<(u16, String)> {
+    let want = "review · Checks a diff. · repo · seen · shadows personal · this project›[on] · everywhere [on]";
+    let y = find_row(grid, "shadows personal")?;
+    let x = col_at_or(grid, y, "review · Checks a diff.")?;
+    let end = x.checked_add(want.chars().count() as u16)?;
+    if end > 160 {
+        return None;
+    }
+    let text: String = (x..end).map(|x| grid.cell(x, y).symbol.clone()).collect();
+    Some((y, text))
+}
+
+/// Whether `text` reads the doc's row: `review · Checks a diff. · repo ·
+/// seen · shadows personal · this project›[on] · everywhere [on]`, the
+/// mark "›" on the focused this-project switch's side and a space on the
+/// other.
+fn reads_as_skill_row(text: &str) -> bool {
+    text == "review · Checks a diff. · repo · seen · shadows personal · this project›[on] · everywhere [on]"
+}
+
+/// The `/skills` screen once every property the test reads has drawn:
+/// the winner's row with its two `[on]` switches, the "› " gutter on it
+/// and the dim last row.
+fn skills_ready(grid: &Grid) -> bool {
+    let Some((y, text)) = skill_row(grid) else {
+        return false;
+    };
+    if !reads_as_skill_row(&text) {
+        return false;
+    }
+    let Some(x) = col_at_or(grid, y, "review · Checks a diff.") else {
+        return false;
+    };
+    if x < 2 || grid.cell(x - 2, y).symbol != "›" || grid.cell(x - 1, y).symbol != " " {
+        return false;
+    }
+    let after = |label: &str| col_at_or(grid, y, label).map(|x| x + label.chars().count() as u16);
+    let (Some(at_project), Some(at_everywhere)) = (after("this project"), after("everywhere"))
+    else {
+        return false;
+    };
+    // The mark is bold on the focused side and a plain space on the
+    // other; the switch follows it.
+    let project = grid.cell(at_project, y);
+    let everywhere = grid.cell(at_everywhere, y);
+    if project.symbol != "›" || !project.bold || everywhere.symbol != " " || everywhere.bold {
+        return false;
+    }
+    if !(switch_weighs(grid, y, at_project + 1, "[on]")
+        && switch_weighs(grid, y, at_everywhere + 1, "[on]"))
+    {
+        return false;
+    }
+    let Some(footer) = find_row(grid, "Enter shows the text · Ctrl+G opens its file") else {
+        return false;
+    };
+    is_dim(
+        &grid,
+        footer,
+        "Enter shows the text · Ctrl+G opens its file",
+    )
+}
+
+#[test]
+fn the_skills_view_matches_the_doc() {
+    let setup = skills_setup();
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    // `/skills` reads the session on screen, so start one first.
+    let from = run.output().len();
+    run.write(b"go\r");
+    run.turn_finished(from);
+    run.write(b"/skills\r");
+    let grid = run.wait_screen("the skills rows", skills_ready);
+    // The winner's row reads exactly as the doc says it does.
+    let (y, text) = skill_row(&grid).expect("the skill row");
+    assert!(reads_as_skill_row(&text), "{text}");
+    let x = col_at(&grid, y, "review · Checks a diff.");
+    assert_eq!(grid.cell(x - 2, y).symbol, "›");
+    assert!(!grid.cell(x - 2, y).inverse);
+    assert!(is_plain_of_reverse(&grid, y, "review · Checks a diff. · "));
+    assert!(is_plain_of_reverse(&grid, y, "›[on] · everywhere [on]"));
+    // `[on]` is bold and not dim on both switches.
+    assert!(is_bold(&grid, y, "[on]"));
+    let after = |label: &str| col_at(&grid, y, label) + label.chars().count() as u16;
+    assert!(switch_weighs(&grid, y, after("this project") + 1, "[on]"));
+    assert!(switch_weighs(&grid, y, after("everywhere") + 1, "[on]"));
+    // The shadowed personal copy keeps its own row with no clause. Only
+    // the row's own cells are read, as above.
+    let loser = row_with(&grid, "personal · hidden");
+    let loser_x = col_at(&grid, loser, "review · Personal notes.");
+    let loser_text: String = (loser_x..loser_x + 100)
+        .map(|x| grid.cell(x, loser).symbol.clone())
+        .collect::<String>()
+        .to_owned();
+    assert!(
+        loser_text.contains("review · Personal notes."),
+        "{loser_text}"
+    );
+    assert!(!loser_text.contains("shadows"), "{loser_text}");
+    // The last row is the doc's hint line, dim.
+    assert!(!grid.contents.contains("↑↓ move"), "{}", grid.contents);
+    assert!(!grid.contents.contains("choose a switch"));
+    let footer = row_with(&grid, "Enter shows the text · Ctrl+G opens its file");
+    assert!(is_dim(
+        &grid,
+        footer,
+        "Enter shows the text · Ctrl+G opens its file"
+    ));
     run.write(b"\x03\x03\r");
     assert_eq!(run.wait().status.code(), Some(0));
 }
