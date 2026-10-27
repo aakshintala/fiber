@@ -600,7 +600,7 @@ fn the_reader_folds_additions_after_wiring() {
         "s_parent",
         &[log_envelope("s_parent", 0, &started("/w", None))],
     );
-    assert!(inherited(None).is_empty());
+    assert!(inherited().is_empty());
     // Written after the wiring was built: the launch-time read folds
     // the current tail, so the late addition is captured.
     write_typed_log(
@@ -611,7 +611,7 @@ fn the_reader_folds_additions_after_wiring() {
             log_envelope("s_parent", 1, &added_dir("/shared")),
         ],
     );
-    assert_eq!(inherited(None), [std::path::PathBuf::from("/shared")]);
+    assert_eq!(inherited(), [std::path::PathBuf::from("/shared")]);
 }
 
 #[test]
@@ -630,13 +630,10 @@ fn the_reader_folds_a_fork_from_the_launch_tail_not_its_selected_point() {
         ],
     );
     // The delegate's conversation point precedes `/later`, but its
-    // boundary is the parent's launch-time state.
-    let at = contract::shapes::Point {
-        session_id: SessionId("s_parent".into()),
-        seq: contract::Seq(1),
-    };
+    // boundary is the parent's launch-time state: the point never
+    // narrows these roots.
     assert_eq!(
-        inherited(Some(&at)),
+        inherited(),
         [
             std::path::PathBuf::from("/shared"),
             std::path::PathBuf::from("/later")
@@ -672,7 +669,7 @@ fn a_descendant_launch_folds_the_childs_own_log() {
             log_envelope("s_child", 1, &added_dir("/shared")),
         ],
     );
-    assert_eq!(inherited(None), [std::path::PathBuf::from("/shared")]);
+    assert_eq!(inherited(), [std::path::PathBuf::from("/shared")]);
 }
 
 fn tool_depth() -> u32 {

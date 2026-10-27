@@ -2,6 +2,7 @@
 //! The idle wait, a step boundary, the end-of-turn check and an approval
 //! wait all admit a delivery through the same rules.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
@@ -931,31 +932,39 @@ impl Loop {
     }
 
     /// Takes an `add_directory` command: resolves the path against the
-    /// workspace, requires an existing directory, and writes it as
-    /// `directory_added` unless the effective boundary already covers it,
-    /// accepted with no event then. The write is fsynced before the ack
-    /// runs, so a later call judges against the widened boundary. A
-    /// failed append returns before folding or acknowledging, as every
-    /// other take does.
+    /// workspace, requires an existing directory outside a metadata
+    /// tree, and writes it as `directory_added` unless the effective
+    /// boundary already covers it, accepted with no event then. The
+    /// write is fsynced before the ack runs, so a later call judges
+    /// against the widened boundary. A failed append returns before
+    /// folding or acknowledging, as every other take does.
     pub(crate) fn take_add_directory(
         &mut self,
         args: AddDirectoryArgs,
         ack: Ack,
     ) -> Result<(), Error> {
-        match self.resolve_added(&args.path) {
+        match self.resolve_added(Path::new(&args.path)) {
             Ok(None) => accept(ack),
             Ok(Some(resolved)) => {
-                let event = Event::DirectoryAdded(DirectoryAdded {
-                    path: resolved.display().to_string(),
-                    inherited: false,
-                });
-                self.write(&event, None, None)?;
-                self.changes.track_added(&resolved);
-                self.added.push(resolved);
+                self.record_added(&resolved, false)?;
                 accept(ack);
             }
             Err(message) => reject(ack, ErrorCode::InvalidArguments, &message),
         }
+        Ok(())
+    }
+
+    /// Writes one added folder as its `directory_added` event and tracks
+    /// it, in that order: a later call judges against it only once its
+    /// line is durable. A failed append returns before tracking, as
+    /// every other take does.
+    fn record_added(&mut self, resolved: &Path, inherited: bool) -> Result<(), Error> {
+        let event = Event::DirectoryAdded(DirectoryAdded {
+            path: resolved.display().to_string(),
+            inherited,
+        });
+        self.write(&event, None, None)?;
+        self.changes.track_added(resolved);
         Ok(())
     }
 
@@ -966,25 +975,17 @@ impl Loop {
     /// tools"). A fresh spawn marks these as inherited because its
     /// opening lists them. A fork marks a root added after its point as
     /// a normal addition, whose message follows the prefix. A covered
-    /// root writes nothing, and a removed root is skipped. Every folded
-    /// root is a logged path string, so its lossy render is exact.
+    /// root writes nothing, and a removed root is skipped: it permits
+    /// nothing.
     pub(crate) fn seed_inherited(
         &mut self,
         inherited: Vec<std::path::PathBuf>,
         is_fresh_spawn: bool,
     ) -> Result<(), Error> {
         for root in inherited {
-            match self.resolve_added(&root.to_string_lossy()) {
+            match self.resolve_added(&root) {
                 Ok(None) => {}
-                Ok(Some(resolved)) => {
-                    let event = Event::DirectoryAdded(DirectoryAdded {
-                        path: resolved.display().to_string(),
-                        inherited: is_fresh_spawn,
-                    });
-                    self.write(&event, None, None)?;
-                    self.changes.track_added(&resolved);
-                    self.added.push(resolved);
-                }
+                Ok(Some(resolved)) => self.record_added(&resolved, is_fresh_spawn)?,
                 Err(_) => {}
             }
         }
@@ -993,12 +994,13 @@ impl Loop {
 
     /// Resolves `raw` against the workspace with symlinks resolved: the
     /// folder's path when it names an existing directory outside the
-    /// effective boundary, `None` when the boundary already covers it,
-    /// and a rejection sentence otherwise.
-    fn resolve_added(&self, raw: &str) -> Result<Option<std::path::PathBuf>, String> {
-        use std::path::{Path, PathBuf};
-        let joined: PathBuf = if Path::new(raw).is_absolute() {
-            PathBuf::from(raw)
+    /// effective boundary and no metadata tree, `None` when the boundary
+    /// already covers it, and a rejection sentence otherwise. A covered
+    /// metadata path stays an accepted no-op; only a folder the command
+    /// would add is rejected for sitting at or below `.git` or `.fiber`.
+    fn resolve_added(&self, raw: &Path) -> Result<Option<std::path::PathBuf>, String> {
+        let joined: std::path::PathBuf = if raw.is_absolute() {
+            raw.to_path_buf()
         } else {
             self.workspace.join(raw)
         };
@@ -1008,8 +1010,11 @@ impl Loop {
         if !resolved.is_dir() {
             return Err(NOT_A_DIRECTORY.to_owned());
         }
-        if covered(&resolved, &self.workspace, &self.added) {
+        if covered(&resolved, &self.workspace, self.changes.added()) {
             return Ok(None);
+        }
+        if super::permission::is_metadata(&resolved) {
+            return Err(METADATA.to_owned());
         }
         Ok(Some(resolved))
     }
@@ -1031,6 +1036,10 @@ fn covered(
 
 /// An `add_directory` path that names nothing usable.
 const NOT_A_DIRECTORY: &str = "That path names no directory to add.";
+
+/// An `add_directory` path at or below a metadata directory: such a
+/// folder never joins the boundary.
+const METADATA: &str = "That path sits at or under a metadata directory.";
 
 /// The loop's steering-queue emitter: appends about the drain or boundary
 /// that reconciled, inside the shared queue's lock section. A poisoned log

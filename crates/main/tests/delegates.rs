@@ -1277,6 +1277,8 @@ fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
     let first_request = String::from_utf8_lossy(&requests[0].body);
     assert!(first_request.contains(resolved_b.to_str().unwrap()));
     assert!(first_request.contains(resolved_a.to_str().unwrap()));
+    // The opening lists folders in first-event order (`docs/events.md`,
+    // "`directory_added`").
     assert!(
         first_request.find(resolved_b.to_str().unwrap()).unwrap()
             < first_request.find(resolved_a.to_str().unwrap()).unwrap(),
@@ -1296,6 +1298,8 @@ fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
         .iter()
         .filter(|line| line["kind"] == "directory_added")
         .collect();
+    // Two parent folders, two events, in parent event order
+    // (`docs/events.md`, "`directory_added`").
     assert_eq!(added.len(), 2, "the child wrote both inherited events");
     assert_eq!(
         added
@@ -1353,6 +1357,8 @@ fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
         !resumed_request.contains("Added folder "),
         "the resume does not reveal inherited roots as separate messages"
     );
+    // The resume folds the two events and writes none of its own
+    // (`docs/events.md`, "`directory_added`").
     assert_eq!(
         child_log()
             .iter()

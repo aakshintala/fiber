@@ -2007,10 +2007,17 @@ fn directory_added_keeps_each_path_at_its_first_position_after_resume() {
         ],
     );
     let folded = resumed(&sessions.join(A)).unwrap();
-    // B, A, B folds to B, A; a repeated path keeps its first-event position.
+    // B, A, B folds to B, A; a repeated path keeps its first-event
+    // position (`docs/events.md`, "`directory_added`").
     assert_eq!(
         folded.added,
         [PathBuf::from("/other"), PathBuf::from("/shared")]
+    );
+    // Through the accessor the delegate launch and the seed read: the
+    // folded roots are returned in that same order.
+    assert_eq!(
+        folded.added(),
+        &[PathBuf::from("/other"), PathBuf::from("/shared")]
     );
 }
 

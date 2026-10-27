@@ -384,13 +384,13 @@ fn a_spawn_reads_its_inherited_roots_at_launch() {
     let mut spawned = tool(&rig);
     // Read at launch, not at wiring: the roots below are added after
     // the tool was built, and the start still captures them. A spawn
-    // folds the parent's current tail, so no point arrives.
-    let seen = Arc::new(Mutex::new(None));
+    // folds the parent's current tail.
+    let seen = Arc::new(Mutex::new(false));
     let seen_in = Arc::clone(&seen);
     let late = Arc::new(Mutex::new(Vec::new()));
     let late_in = Arc::clone(&late);
-    spawned.wiring.inherited = Arc::new(move |point| {
-        *seen_in.lock().unwrap() = point.cloned();
+    spawned.wiring.inherited = Arc::new(move || {
+        *seen_in.lock().unwrap() = true;
         late_in.lock().unwrap().clone()
     });
     late.lock().unwrap().push(PathBuf::from("/late"));
@@ -403,7 +403,7 @@ fn a_spawn_reads_its_inherited_roots_at_launch() {
     // before any assertion that could fail and strand it.
     let _watchdog = child_group(&rig);
     assert!(output.error.is_none());
-    assert_eq!(*seen.lock().unwrap(), None);
+    assert!(*seen.lock().unwrap(), "the roots are read at launch");
     let launched = Deadline::after(DEADLINE)
         .recv(&rig.launched)
         .expect("the launcher ran");

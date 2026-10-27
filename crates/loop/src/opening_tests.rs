@@ -1192,7 +1192,8 @@ fn added_folders_are_listed_in_first_event_order_but_never_read_at_the_opening()
     let fake = clock();
     let first = canon(&first);
     let second = canon(&second);
-    // These are the folded roots for B, A, B: B keeps its first position.
+    // These are the folded roots for B, A, B: B keeps its first position
+    // (`docs/events.md`, "`directory_added`").
     let message = collect_with_added(
         &inputs(&home, &fake),
         &workspace,

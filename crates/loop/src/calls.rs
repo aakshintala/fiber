@@ -569,7 +569,7 @@ impl Loop {
             &self.grants,
             &self.known_hosts,
             &self.workspace,
-            &self.added,
+            self.changes.added(),
             &self.prompt.home,
             &self.credentials,
             &self.credential_files,
@@ -968,7 +968,7 @@ impl Loop {
                 prepared,
                 &entry.call.name,
                 &self.workspace_label,
-                &self.added,
+                self.changes.added(),
             );
             let reply = self.send_stage2(endpoint, prompt, &item, staged.cut, None);
             let second = match reply {

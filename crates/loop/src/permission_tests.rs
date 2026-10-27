@@ -1418,3 +1418,77 @@ fn writes_in_an_added_folder_take_the_fast_path_with_per_root_exclusions() {
     let workspace_git = workspace.join(".git/config").display().to_string();
     assert!(matches!(writes(&[&workspace_git]), Verdict::Review));
 }
+
+#[test]
+fn a_metadata_root_itself_grants_no_fast_path() {
+    let (_root, workspace, home, credentials) = dirs();
+    // The command rejects such a root outright; this pins the judgment
+    // closed if one ever arrives another way
+    // (`docs/permissions.md`, "Fast paths").
+    let outer = _root.path().join("outer");
+    std::fs::create_dir_all(outer.join(".git")).unwrap();
+    let outer = outer.canonicalize().unwrap();
+    let added = [outer.join(".git")];
+    let writes = |paths: &[&str]| {
+        judge(
+            "write",
+            &call(
+                vec![Effect::Reads, Effect::Writes],
+                Some(paths.to_vec()),
+                Some(""),
+            ),
+            &empty_rules(),
+            &[],
+            &crate::known_hosts::KnownHosts::default(),
+            &workspace,
+            &added,
+            &home,
+            &credentials,
+            &[],
+        )
+    };
+    // At the metadata root, just below it and deeper: all reviewed.
+    for denied in [
+        outer.join(".git").display().to_string(),
+        outer.join(".git/hooks").display().to_string(),
+        outer.join(".git/hooks/x").display().to_string(),
+    ] {
+        assert!(matches!(writes(&[&denied]), Verdict::Review), "{denied}");
+    }
+}
+
+#[test]
+fn a_root_nested_below_metadata_grants_no_fast_path() {
+    let (_root, workspace, home, credentials) = dirs();
+    // A root nested below a metadata directory grants nothing either
+    // (`docs/permissions.md`, "Fast paths").
+    let outer = _root.path().join("outer");
+    std::fs::create_dir_all(outer.join(".git/hooks")).unwrap();
+    let outer = outer.canonicalize().unwrap();
+    let added = [outer.join(".git/hooks")];
+    let writes = |paths: &[&str]| {
+        judge(
+            "write",
+            &call(
+                vec![Effect::Reads, Effect::Writes],
+                Some(paths.to_vec()),
+                Some(""),
+            ),
+            &empty_rules(),
+            &[],
+            &crate::known_hosts::KnownHosts::default(),
+            &workspace,
+            &added,
+            &home,
+            &credentials,
+            &[],
+        )
+    };
+    // At the nested root and below it: reviewed, never fast.
+    for denied in [
+        outer.join(".git/hooks").display().to_string(),
+        outer.join(".git/hooks/x").display().to_string(),
+    ] {
+        assert!(matches!(writes(&[&denied]), Verdict::Review), "{denied}");
+    }
+}

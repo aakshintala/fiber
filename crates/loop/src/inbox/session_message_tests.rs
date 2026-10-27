@@ -2077,7 +2077,7 @@ fn add_directory_while_an_approval_waits_is_written_and_a_later_call_sees_it() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &looped.workspace,
-        &looped.added,
+        looped.changes.added(),
         home.path(),
         &looped.credentials,
         &[],

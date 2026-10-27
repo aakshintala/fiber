@@ -28,16 +28,6 @@ thread_local! {
     /// session-path allowance names, while `run_new` keeps the signature
     /// `rewind.rs` calls.
     static OPENED: RefCell<Option<doors::WorktreeOpener>> = RefCell::new(None);
-    /// The delegate's launch-time folders, set by `run` for a spawn or
-    /// fork and taken by its session start: a fresh spawn marks them as
-    /// inherited, while a fork records only roots missing from its
-    /// point-based history. Empty for other starts, so `run_new` keeps
-    /// the signature `rewind.rs` and `continue_session.rs` call.
-    static INHERITED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
-}
-
-pub(crate) fn set_inherited_roots(roots: Vec<PathBuf>) {
-    INHERITED.with(|cell| *cell.borrow_mut() = roots);
 }
 
 /// Holds a worktree opener for `run_new`: set on entry, the previous
@@ -244,10 +234,9 @@ pub(crate) fn run(
     if parent.is_some() {
         signals.lifeline(Box::new(std::io::stdin()));
     }
-    // The fresh delegate's inherited roots ride to `run_new` through the
-    // slot above: only its commit takes them, so any other start leaves
-    // the slot empty.
-    INHERITED.with(|cell| *cell.borrow_mut() = args.added.clone());
+    // The child session command carries the delegate's launch-time
+    // folders: a fresh spawn marks them inherited, while a fork records
+    // only the roots missing from its point-based history.
     new_session(
         SessionId(args.id),
         crate::per_run(args.model, args.overrides),
@@ -261,6 +250,7 @@ pub(crate) fn run(
         None,
         parent,
         args.supervised,
+        args.added.clone(),
     )
 }
 
@@ -289,6 +279,7 @@ pub(crate) fn new_session(
     case_run: Option<Arc<crate::case::run::CaseRun>>,
     parent: Option<Parent>,
     supervised: bool,
+    inherited: Vec<PathBuf>,
 ) -> i32 {
     // One reads for the process: the worktree's `git worktree add` and
     // every startup credential read run through it, so one cancel reaches
@@ -301,7 +292,7 @@ pub(crate) fn new_session(
     if !worktree || adopted.is_some() {
         return match run_new(
             id, overrides, prompt, one_turn, adopted, clock, signals, fiber, host, case_run,
-            parent, None, reads, supervised,
+            parent, None, reads, supervised, inherited,
         ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),
@@ -356,6 +347,7 @@ pub(crate) fn new_session(
         reads,
         Some(opened),
         supervised,
+        inherited,
     );
     isolation.end();
     match result {
@@ -385,6 +377,7 @@ pub(crate) fn run_new(
     rewound: Option<r#loop::Rewound>,
     reads: Arc<crate::switch::Reads>,
     supervised: bool,
+    inherited: Vec<PathBuf>,
 ) -> Result<i32, Failure> {
     // Held by `run_new_with` for a fresh worktree, empty on every direct
     // call: taking leaves the slot empty, so a panic leaves nothing
@@ -759,12 +752,7 @@ pub(crate) fn run_new(
                             permissions,
                         };
                         if is_fork {
-                            Loop::fork_with_added(
-                                session,
-                                start,
-                                worktree,
-                                INHERITED.with(|cell| cell.take()),
-                            )
+                            Loop::fork_with_added(session, start, worktree, inherited)
                         } else {
                             Loop::rewound_with_worktree(session, start, worktree)
                         }
@@ -784,7 +772,7 @@ pub(crate) fn run_new(
                         },
                         parent,
                         worktree,
-                        INHERITED.with(|cell| cell.take()),
+                        inherited,
                     ),
                     (None, None) if supervised => Loop::supervised(
                         r#loop::Session {
@@ -914,11 +902,12 @@ pub(crate) fn run_new_with(
     reads: Arc<crate::switch::Reads>,
     opened: Option<doors::WorktreeOpener>,
     supervised: bool,
+    inherited: Vec<PathBuf>,
 ) -> Result<i32, Failure> {
     let _hold = OpenedHold::set(opened);
     run_new(
         id, overrides, prompt, one_turn, worktree, clock, signals, fiber, host, case_run, parent,
-        rewound, reads, supervised,
+        rewound, reads, supervised, inherited,
     )
 }
 
@@ -994,36 +983,6 @@ mod opened_hold_tests {
         );
         OPENED.with(|cell| {
             cell.replace(stash);
-        });
-    }
-}
-
-/// The inherited-roots slot hands each value out once: whatever the
-/// thread ran before, the take empties the slot, so a later commit on
-/// the same thread sees no earlier roots.
-#[cfg(test)]
-mod inherited_slot_tests {
-    #![allow(clippy::panic, reason = "test assertions")]
-
-    use super::*;
-
-    #[test]
-    fn take_empties_the_slot() {
-        // Whatever the thread ran before: start known, hand back after.
-        let stash = INHERITED.with(|cell| cell.take());
-        INHERITED.with(|cell| {
-            *cell.borrow_mut() = vec![PathBuf::from("/shared")];
-        });
-        assert_eq!(
-            INHERITED.with(|cell| cell.take()),
-            [PathBuf::from("/shared")]
-        );
-        assert!(
-            INHERITED.with(|cell| cell.take()).is_empty(),
-            "the take leaves nothing for a later commit"
-        );
-        INHERITED.with(|cell| {
-            *cell.borrow_mut() = stash;
         });
     }
 }

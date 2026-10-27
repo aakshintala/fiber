@@ -279,6 +279,14 @@ impl State {
             .map(|section| section.extension.as_str())
     }
 
+    /// The session's added folders, canonical, in first-event order: the
+    /// fold of the `directory_added` lines (`docs/events.md`,
+    /// "`directory_added`"). Later calls judge against them with the
+    /// workspace.
+    pub(crate) fn added(&self) -> &[PathBuf] {
+        &self.added
+    }
+
     /// Records an added folder, canonical, in log order: tracked, never
     /// walked. The next call whose declared paths touch it queues its
     /// instruction file through [`State::touch_subdirs`].

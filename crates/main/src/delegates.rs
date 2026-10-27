@@ -748,7 +748,7 @@ fn steerer(home: &Path) -> jobs::Steer {
 pub(crate) fn inherited_roots_reader(sessions: &Path, parent: &SessionId) -> jobs::InheritedRoots {
     let sessions = sessions.to_owned();
     let parent = parent.clone();
-    Arc::new(move |_| {
+    Arc::new(move || {
         let dir = log::SessionDir::new(&sessions, &parent);
         r#loop::resumed(dir.path())
             .map(|folded| folded.added().to_vec())

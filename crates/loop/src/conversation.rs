@@ -280,11 +280,11 @@ impl Rendered {
             // one still without a result gets its fixed one first, before
             // the round's own input. Each is listed, so a new kind does
             // not compile until it is placed.
-            Event::SessionStarted(_)
-            | Event::TurnStarted(_)
+            Event::TurnStarted(_)
             | Event::SteeringApplied(_)
             | Event::ContextAdded(_)
             | Event::OpeningMessage(_)
+            | Event::SessionStarted(_)
             | Event::InstructionFile(_)
             | Event::SkillsChanged(_)
             | Event::DateChanged(_)

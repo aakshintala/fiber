@@ -260,11 +260,6 @@ pub struct Loop {
     replaced: Vec<ToolReplaced>,
     /// The workspace, symlinks resolved.
     workspace: PathBuf,
-    /// The session's added folders, resolved, in the order added: the
-    /// fold of the `directory_added` lines (`docs/events.md`,
-    /// "`directory_added`"). Later calls judge against them with the
-    /// workspace.
-    added: Vec<PathBuf>,
     /// Fiber home's `credentials/` directory, symlinks resolved.
     credentials: PathBuf,
     /// Each configured `file` credential source, resolved at start.
@@ -503,7 +498,6 @@ struct Seed {
     tools: BTreeMap<String, calls::Registered>,
     replaced: Vec<ToolReplaced>,
     workspace: PathBuf,
-    added: Vec<PathBuf>,
     credentials: PathBuf,
     mode: Mode,
 }
@@ -660,7 +654,6 @@ impl Loop {
                 tools,
                 replaced,
                 workspace,
-                added: Vec::new(),
                 credentials,
                 mode,
             },
@@ -703,7 +696,6 @@ impl Loop {
             tools,
             replaced,
             workspace,
-            added,
             credentials,
             mode,
         } = seed;
@@ -760,7 +752,6 @@ impl Loop {
             tools,
             replaced,
             workspace,
-            added,
             credentials,
             credential_files: permissions
                 .credential_files

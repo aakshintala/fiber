@@ -535,7 +535,7 @@ impl Loop {
             under.prepared,
             &under.call.name,
             &self.workspace_label,
-            &self.added,
+            self.changes.added(),
         );
         (
             stage_conversation(&self.reviewed, cut, item, stage, note),
@@ -566,7 +566,7 @@ impl Loop {
             under.prepared,
             &under.call.name,
             &self.workspace_label,
-            &self.added,
+            self.changes.added(),
         );
         let conversation = stage_conversation(&self.reviewed, cut, item, stage, note);
         let request = self.review_request(
@@ -779,7 +779,7 @@ impl Loop {
             under.prepared,
             &under.call.name,
             &self.workspace_label,
-            &self.added,
+            self.changes.added(),
         );
         let conversation = stage_conversation(&self.reviewed, cut, item, &prompt.first, Some(note));
         let request = self.review_request(

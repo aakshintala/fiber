@@ -228,7 +228,10 @@ pub(crate) fn fast_path(
 /// Whether `path`, symlinks resolved, sits in the workspace or an added
 /// folder and under no `.git` or `.fiber` directory below the root it
 /// sits under. Every root but the workspace is resolved, as the loop
-/// holds them; the workspace resolves with the path.
+/// holds them; the workspace resolves with the path. A root that is
+/// itself a metadata directory, or sits below one, grants nothing: the
+/// command rejects such a root, and this keeps the judgment closed if
+/// one ever arrives another way.
 fn inside(path: &Path, workspace: &Path, added: &[PathBuf]) -> bool {
     let Some(resolved) = super::calls::resolve(path) else {
         return false;
@@ -236,7 +239,18 @@ fn inside(path: &Path, workspace: &Path, added: &[PathBuf]) -> bool {
     if under_root(&resolved, workspace) {
         return true;
     }
-    added.iter().any(|root| under_root(&resolved, root))
+    added
+        .iter()
+        .filter(|root| !is_metadata(root))
+        .any(|root| under_root(&resolved, root))
+}
+
+/// Whether `path` is itself a `.git` or `.fiber` directory or sits below
+/// one: such a folder never joins the boundary (`docs/permissions.md`,
+/// "Fast paths").
+pub(crate) fn is_metadata(path: &Path) -> bool {
+    path.components()
+        .any(|c| c.as_os_str() == ".git" || c.as_os_str() == ".fiber")
 }
 
 /// Whether `resolved` sits under `root` with no `.git` or `.fiber`

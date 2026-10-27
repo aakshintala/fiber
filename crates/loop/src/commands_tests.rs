@@ -684,6 +684,98 @@ fn add_directory_accepts_a_covered_path_without_an_event() {
 }
 
 #[test]
+fn add_directory_rejects_a_metadata_directory_and_anything_below_it() {
+    let tree = Tree::new();
+    let git = tree.root.join("outer").join(".git");
+    std::fs::create_dir_all(git.join("hooks")).unwrap();
+    let (mut looped, _) = started(&tree);
+    for path in [
+        git.display().to_string(),
+        git.join("hooks").display().to_string(),
+    ] {
+        let (ack, rx) = capture();
+        looped
+            .take_add_directory(AddDirectoryArgs { path: path.clone() }, ack)
+            .unwrap();
+        let Err(rejection) = answered(&rx) else {
+            panic!("{path} was accepted");
+        };
+        assert_eq!(rejection.code, ErrorCode::InvalidArguments, "{path}");
+    }
+    assert!(added(&tree).is_empty(), "no rejected root writes an event");
+}
+
+#[test]
+fn add_directory_treats_an_added_root_and_what_sits_below_it_as_covered() {
+    let tree = Tree::new();
+    let shared = tree.root.join("shared");
+    std::fs::create_dir_all(shared.join("sub")).unwrap();
+    let resolved = shared.canonicalize().unwrap().display().to_string();
+    let (mut looped, _) = started(&tree);
+    let (ack, rx) = capture();
+    looped
+        .take_add_directory(
+            AddDirectoryArgs {
+                path: resolved.clone(),
+            },
+            ack,
+        )
+        .unwrap();
+    assert!(matches!(answered(&rx), Ok(None)));
+    // The root itself and a path nested below it are already inside the
+    // boundary: accepted, with no further event (`docs/events.md`,
+    // "`directory_added`").
+    for path in [resolved.clone(), shared.join("sub").display().to_string()] {
+        let (ack, rx) = capture();
+        looped
+            .take_add_directory(AddDirectoryArgs { path: path.clone() }, ack)
+            .unwrap();
+        assert!(matches!(answered(&rx), Ok(None)), "{path}");
+    }
+    assert_eq!(added(&tree), [resolved]);
+}
+
+#[test]
+fn add_directory_writes_an_event_beside_an_added_root() {
+    let tree = Tree::new();
+    let shared = tree.root.join("shared");
+    let other = tree.root.join("other");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let (mut looped, _) = started(&tree);
+    let (ack, rx) = capture();
+    looped
+        .take_add_directory(
+            AddDirectoryArgs {
+                path: shared.display().to_string(),
+            },
+            ack,
+        )
+        .unwrap();
+    assert!(matches!(answered(&rx), Ok(None)));
+    // Beside the added root, outside the workspace: not covered, so the
+    // folder is added with its own event (`docs/events.md`,
+    // "`directory_added`").
+    let (ack, rx) = capture();
+    looped
+        .take_add_directory(
+            AddDirectoryArgs {
+                path: other.display().to_string(),
+            },
+            ack,
+        )
+        .unwrap();
+    assert!(matches!(answered(&rx), Ok(None)));
+    assert_eq!(
+        added(&tree),
+        [
+            shared.canonicalize().unwrap().display().to_string(),
+            other.canonicalize().unwrap().display().to_string()
+        ]
+    );
+}
+
+#[test]
 fn add_directory_adds_an_already_added_folder_only_once() {
     let tree = Tree::new();
     let shared = tree.root.join("shared");

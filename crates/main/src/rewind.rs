@@ -184,7 +184,6 @@ pub(crate) fn session_forked(
         r#loop::fork_workspace(&workspace.to_string_lossy(), &parent_workspace)
     };
     let task = r#loop::fork_task(&parent.session_id, depth, &prompt, &notice);
-    super::session_command::set_inherited_roots(inherited);
     match super::session_command::run_new(
         new,
         Vec::new(),
@@ -205,6 +204,7 @@ pub(crate) fn session_forked(
         }),
         context.reads,
         false,
+        inherited,
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),
@@ -283,6 +283,7 @@ pub(crate) fn session_rewound(
         }),
         context.reads,
         false,
+        Vec::new(),
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),

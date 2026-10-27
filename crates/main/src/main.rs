@@ -756,6 +756,7 @@ fn ask_new(
         None,
         None,
         false,
+        Vec::new(),
     )
 }
 

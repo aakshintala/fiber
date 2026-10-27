@@ -351,16 +351,17 @@ fn the_calling_action_reaches_the_point() {
 }
 
 #[test]
-fn a_fork_reads_its_inherited_roots_through_its_point() {
+fn a_fork_reads_its_inherited_roots_at_launch() {
     let rig = rig();
     let mut forked = tool(&rig);
-    // The start passes the fork's selected point, never the tail: the
-    // roots fold through the cutoff, so additions past it are excluded.
-    let seen = Arc::new(Mutex::new(None));
+    // Read at launch, not at wiring, like a spawn: the fork's point
+    // selects its conversation prefix through the launch start, never
+    // these roots.
+    let seen = Arc::new(Mutex::new(false));
     let seen_in = Arc::clone(&seen);
-    forked.wiring.inherited = Arc::new(move |point| {
-        *seen_in.lock().unwrap() = point.cloned();
-        vec![PathBuf::from("/at-point")]
+    forked.wiring.inherited = Arc::new(move || {
+        *seen_in.lock().unwrap() = true;
+        vec![PathBuf::from("/at-launch")]
     });
     let output = forked.run(
         &arguments(),
@@ -371,11 +372,15 @@ fn a_fork_reads_its_inherited_roots_through_its_point() {
     // before any assertion that could fail and strand it.
     let _watchdog = child_group(&rig);
     assert!(output.error.is_none());
-    assert_eq!(*seen.lock().unwrap(), Some(forking().point));
+    assert!(*seen.lock().unwrap(), "the roots are read at launch");
     let launched = Deadline::after(DEADLINE)
         .recv(&rig.launched)
         .expect("the launcher ran");
-    assert_eq!(launched.added, [PathBuf::from("/at-point")]);
+    assert_eq!(launched.added, [PathBuf::from("/at-launch")]);
+    assert!(
+        matches!(launched.start, Start::Fresh(Fresh::Fork { .. })),
+        "the point still rides the start"
+    );
     assert_eq!(rig.registry.stop_delegates(), 1);
 }
 
