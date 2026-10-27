@@ -48,8 +48,11 @@ fn duration_len(text: &str) -> Option<usize> {
     }
 }
 
-/// Each `i_<id>.png` image line name reads `i_[id].png`.
-fn image_ids(row: &str) -> String {
+/// Each `i_<id>.png` image line name reads `i_[id].png`; a
+/// width-capped caption's shortened `i_<id>…` reads `i_[id]…`, so the
+/// variable hash prefix never reaches a snapshot (`docs/tui.md`,
+/// "Images").
+pub(crate) fn image_ids(row: &str) -> String {
     let mut out = String::new();
     let mut rest = row;
     while let Some(at) = rest.find("i_") {
@@ -60,8 +63,15 @@ fn image_ids(row: &str) -> String {
             out.push_str("i_[id].png");
             rest = &after[id_len + ".png".len()..];
         } else {
-            out.push_str(&rest[..at + 2]);
-            rest = after;
+            let hex_len = after.bytes().take_while(u8::is_ascii_hexdigit).count();
+            if hex_len > 0 && after[hex_len..].starts_with('…') {
+                out.push_str(&rest[..at]);
+                out.push_str("i_[id]…");
+                rest = &after[hex_len + '…'.len_utf8()..];
+            } else {
+                out.push_str(&rest[..at + 2]);
+                rest = after;
+            }
         }
     }
     out.push_str(rest);

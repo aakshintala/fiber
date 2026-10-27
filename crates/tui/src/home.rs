@@ -206,6 +206,11 @@ pub struct Launch {
     /// The commit Fiber was built from, when the build recorded one:
     /// compared with the hub's (`docs/invocation.md`, "What the hub speaks").
     pub commit: Option<String>,
+    /// The changelog embedded in the binary at build time, so
+    /// `/release-notes` shows the running binary's own notes without a
+    /// network call (`docs/releasing.md`, "The changelog"). Empty in the
+    /// jigs, which embed nothing.
+    pub release_notes: &'static str,
     /// `model`: the chip's model, unset on a fresh install with no key.
     pub model: Option<String>,
     /// Bare `fiber`'s `--model` and `-c`, normalized into the per-run

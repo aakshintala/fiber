@@ -48,22 +48,26 @@ pub(crate) struct CommandEntry {
     pub(crate) run: fn(&mut App, &str) -> Option<Effect>,
 }
 
-/// A second name typed after `/` that runs the same command, drawn
-/// on the same list row: `/exit` on the quit row. `None` elsewhere,
-/// so the alias never doubles the row. The `/` list and dispatch both
-/// read it beside the table.
-pub(crate) fn alias_of(name: &str) -> Option<&'static str> {
+/// Other names typed after `/` that run the same command, drawn
+/// on the same list row: `/exit` on the quit row, `/keybindings` and
+/// `/keymap` on the keys row. Empty elsewhere, so an alias never
+/// doubles the row. The `/` list and dispatch both read it beside
+/// the table.
+pub(crate) fn aliases_of(name: &str) -> &'static [&'static str] {
     match name {
-        "thinking" => Some("effort"),
-        "usage" => Some("cost"),
-        "pwd" => Some("cwd"),
-        "settings" => Some("config"),
-        "keys" => Some("keybindings"),
-        "name" => Some("rename"),
-        "feedback" => Some("bug"),
-        "quit" => Some("exit"),
-        "delegates" => Some("agents"),
-        _ => None,
+        "thinking" => &["effort"],
+        "usage" => &["cost"],
+        "pwd" => &["cwd"],
+        "settings" => &["config"],
+        "keys" => &["keybindings", "keymap"],
+        "handoff" => &["compact"],
+        "rules" => &["permissions"],
+        "close" => &["stop"],
+        "name" => &["rename"],
+        "feedback" => &["bug"],
+        "quit" => &["exit"],
+        "delegates" => &["agents"],
+        _ => &[],
     }
 }
 
@@ -153,6 +157,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         description: "Opens the Changed files view.",
         hint: None,
         run: run_diff,
+    },
+    CommandEntry {
+        name: "release-notes",
+        description: "Opens the running version's release notes.",
+        hint: None,
+        run: run_release_notes,
     },
     CommandEntry {
         name: "copy",
@@ -490,6 +500,11 @@ fn run_diff(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_session_view(super::SessionView::ChangedFiles))
 }
 
+fn run_release_notes(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::ReleaseNotes))
+}
+
 fn run_copy(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.copy_last_reply())
 }
@@ -703,7 +718,7 @@ impl App {
         // draw goes out as typed. An alias runs its row's command.
         let entry = TABLE
             .iter()
-            .find(|entry| entry.name == name || alias_of(entry.name) == Some(name))?;
+            .find(|entry| entry.name == name || aliases_of(entry.name).contains(&name))?;
         (entry.run)(self, &rest)
     }
 
@@ -987,7 +1002,7 @@ impl App {
             .completion
             .slash_rows
             .iter()
-            .any(|row| row.name == name || row.alias.as_deref() == Some(name))
+            .any(|row| row.name == name || row.aliases.iter().any(|alias| alias == name))
         {
             return false;
         }

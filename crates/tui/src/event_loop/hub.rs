@@ -41,6 +41,17 @@ pub(super) enum Answer {
     Reopened,
 }
 
+/// Which history read runs: the pre-frame tail or the post-frame
+/// count. The caller selects it once; the fetch routes each
+/// answered request through it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Phase {
+    /// Pre-frame own-tail windows until the display fills.
+    Tail,
+    /// Post-frame count windows to the chain root.
+    Count,
+}
+
 /// A batch always holds its first input, with the inputs ready behind
 /// it folded after in arrival order.
 pub(super) struct Batch {
@@ -276,13 +287,17 @@ impl Connection {
         Ok(lines)
     }
 
-    /// Reads the open's tail with `history`, oldest windows first, until
-    /// it fills or ends: one command per window, each answered before
-    /// the next is sent. A rejected or unreadable answer ends the tail as
-    /// failed with its message; a reopening abandons it without one. A
-    /// lost connection ends the read; the loop's `disconnected` already
-    /// ended the overlay.
-    pub(super) fn fetch_tail(
+    /// Reads the open's history with one answered request at a time,
+    /// routed by its phase: pre-frame own-tail windows until the
+    /// display fills, post-frame count windows to the chain root. A
+    /// rejected or unreadable answer ends its read as failed with its
+    /// message; a reopening abandons it without one. A lost connection
+    /// ends the read; the loop's `disconnected` already ended the overlay.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fetch carries the session, the app, the tick, the clock and the frame's deadline"
+    )]
+    pub(super) fn fetch_history(
         &mut self,
         rx: &Receiver<Input>,
         session: &SessionId,
@@ -290,8 +305,16 @@ impl Connection {
         tick: &TickThread,
         clock: &dyn Clock,
         frame_deadline: Option<Instant>,
+        phase: Phase,
     ) -> Result<(), String> {
-        while let Some(args) = app.tail_next() {
+        loop {
+            let args = match phase {
+                Phase::Count => app.tail_count_next(),
+                Phase::Tail => app.tail_next(),
+            };
+            let Some(args) = args else {
+                return Ok(());
+            };
             let id = mint();
             let command = session_command(&id, "history", session, Some(args)).to_string();
             let written = self
@@ -303,19 +326,27 @@ impl Connection {
                 return Err(LOST.to_owned());
             }
             match self.answer(rx, &id, app, tick, clock, frame_deadline) {
-                Ok(Answer::Lines(lines)) => app.tail_lines(lines),
+                Ok(Answer::Lines(lines)) => match phase {
+                    Phase::Count => app.tail_count_lines(lines),
+                    Phase::Tail => app.tail_lines(lines),
+                },
                 Ok(Answer::Reopened) => {
-                    app.tail_ended(None);
+                    match phase {
+                        Phase::Count => app.tail_count_ended(None),
+                        Phase::Tail => app.tail_ended(None),
+                    }
                     return Ok(());
                 }
                 Err(message) if message == LOST => return Err(message),
                 Err(message) => {
-                    app.tail_ended(Some(&message));
+                    match phase {
+                        Phase::Count => app.tail_count_ended(Some(&message)),
+                        Phase::Tail => app.tail_ended(Some(&message)),
+                    }
                     return Ok(());
                 }
             }
         }
-        Ok(())
     }
 
     /// Waits for the answer to command `id`, holding every other input for
