@@ -4439,6 +4439,7 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
             .map(|command| &command["args"])
             .collect::<Vec<_>>(),
         vec![&json!({}), &json!({"session_id": ROOT, "to_seq": point}),],
+        // docs/tui.md:2426-2440 ("History and paging"): own window before ancestor count.
         "the own window, then the ancestor's under its session: {histories:?}"
     );
     let mut preview = crate::window::Pages::new(60);
@@ -4448,6 +4449,7 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
     assert_eq!(
         open.lp.app.scroll().1,
         preview.index().total(),
+        // docs/tui.md:2432-2434 ("History and paging"): count carries ancestor runs above the preview for the joint total.
         "the joint total spans the chain"
     );
     // The preview follows to the bottom: the last frame shows the
@@ -4460,6 +4462,7 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
     // pre- and post-count frames are pixel-identical while following
     // the bottom, so no frame-content assert can state it.
     let drawn = frames(&open).join("\n");
+    // docs/tui.md:2431-2432 ("History and paging"): the first frame draws the preview.
     assert!(drawn.contains("child reply 29"), "the child shows: {drawn}");
     let pages = open.lp.app.pages();
     let total = pages.index().total();
@@ -4467,6 +4470,7 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
     assert!(
         top_needs.iter().any(|(session, range)| session.0 == ROOT
             && *range == (contract::Seq(0)..=contract::Seq(point))),
+        // docs/tui.md:2470-2480 ("History and paging"): chain as one history, ancestor pages under its session.
         "the ancestor stays paged under its session: {top_needs:?}"
     );
 }
@@ -4560,6 +4564,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     }
     assert!(
         filled.index().total() >= height,
+        // docs/tui.md:2430-2431 ("History and paging"): older own-segment windows until the preview fills.
         "the own window fills the screen"
     );
     // Acking the summary starts the tail read on a worker; the first
@@ -4591,6 +4596,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     let read = socket_line(&mut reader).unwrap_or_else(|| panic!("the tail read"));
     let read: serde_json::Value = serde_json::from_str(&read).unwrap_or_default();
     assert_eq!(read["command"], "history");
+    // docs/tui.md:2428-2430 ("History and paging"): asks history with no from_seq for the last lines.
     assert_eq!(read["args"], json!({}), "the newest own window first");
     let history = read["id"]
         .as_str()
@@ -4607,36 +4613,30 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     // The first frame draws before any ancestor read: the parked flush
     // reports, while any hub command on the socket fails: the ancestor
     // count and the raise both follow the frame.
+    // docs/tui.md:2431-2434 ("History and paging"): the first frame draws
+    // the preview before the ancestor count and the raise.
+    let wait = Deadline::after(DEADLINE);
+    let first = wait.recv_or_fail(&events, "the first frame");
+    assert!(first.starts_with("frame\n"), "{first:?}");
+    assert_eq!(
+        wait.recv_or_fail(&events, "the parked first flush"),
+        "frame-enter"
+    );
+    // While the flush parks, no hub command goes out: the socket reads
+    // non-blocking and finds none.
     reader
         .get_mut()
         .set_nonblocking(true)
         .unwrap_or_else(|err| panic!("non-blocking: {err}"));
-    let wait = Deadline::after(DEADLINE);
-    let mut drawn = Vec::new();
-    loop {
-        while let Ok(event) = events.try_recv() {
-            drawn.push(event);
-        }
-        if drawn.iter().any(|event| event == "frame-enter") {
-            break;
-        }
-        if let Some(text) = socket_line(&mut reader) {
-            let command: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-            panic!("a hub command went out before the first frame drew: {command:?}");
-        }
-        if wait.left().is_zero() {
-            panic!("waited {DEADLINE:?} for the first frame");
-        }
-        std::thread::yield_now();
-    }
+    assert!(
+        socket_line(&mut reader).is_none(),
+        "a hub command went out before the first frame drew"
+    );
     reader
         .get_mut()
         .set_nonblocking(false)
         .unwrap_or_else(|err| panic!("blocking: {err}"));
-    let first = drawn
-        .iter()
-        .find(|event| event.starts_with("frame\n"))
-        .unwrap_or_else(|| panic!("a first frame"));
+    // docs/tui.md:2431-2432 ("History and paging"): the first frame draws the preview.
     assert!(
         first.contains("child reply 29"),
         "the first frame shows the child's last page: {first}"
@@ -4653,6 +4653,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     assert_eq!(
         count["args"],
         json!({"session_id": ROOT, "to_seq": point}),
+        // docs/tui.md:2432-2434 ("History and paging"): after the frame, older windows and ancestors for the joint total.
         "the ancestor count follows the frame"
     );
     let count_id = count["id"]
@@ -4673,6 +4674,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     assert_eq!(
         raise["args"],
         json!({"level": "full"}),
+        // docs/tui.md:2436-2437 ("History and paging"): then raises the subscription to full.
         "the raise follows the count"
     );
     let (lp, out) = worker.join().unwrap_or_else(|_| panic!("the worker"));
@@ -4686,6 +4688,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     assert_eq!(
         lp.app.scroll().1,
         joint.index().total(),
+        // docs/tui.md:2432-2434 ("History and paging"): count carries ancestor runs above the preview for the joint total.
         "the joint total spans the chain"
     );
     let pages = lp.app.pages();
@@ -4702,6 +4705,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     assert!(
         held.iter()
             .any(|(session, first, last)| session == ROOT && *first == 0 && *last == point),
+        // docs/tui.md:2470-2480 ("History and paging"): chain as one history, ancestor pages under its session.
         "the ancestor stays paged under its session: {held:?}"
     );
     assert!(
@@ -4713,6 +4717,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
                 .iter()
                 .skip_while(|(session, _, _)| session == ROOT)
                 .all(|(session, _, _)| session == CHILD),
+        // docs/tui.md:2470-2480 ("History and paging"): chain as one history, ancestors before the own run.
         "ancestors first, then the own run: {held:?}"
     );
 }

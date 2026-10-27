@@ -276,18 +276,77 @@ impl Connection {
         Ok(lines)
     }
 
-    /// Reads the open's retained count with `history`, until the walk
-    /// reaches the chain root or ends: one command per window, each
-    /// answered before the next is sent. A rejected or unreadable
-    /// answer ends the count as failed with its message; a reopening
-    /// abandons it without one. A lost connection ends the read; the
-    /// loop's `disconnected` already ended the overlay. The preview
-    /// stays untouched throughout: the count folds once at its end,
-    /// above it.
+    /// Reads the open's history with one answered request at a time,
+    /// branching on the pre/post phase: pre-frame own-tail windows until
+    /// the display fills, post-frame count windows to the chain root. A
+    /// rejected or unreadable answer ends its read as failed with its
+    /// message; a reopening abandons it without one. A lost connection
+    /// ends the read; the loop's `disconnected` already ended the overlay.
     #[allow(
         clippy::too_many_arguments,
         reason = "the fetch carries the session, the app, the tick, the clock and the frame's deadline"
     )]
+    fn fetch_history(
+        &mut self,
+        rx: &Receiver<Input>,
+        session: &SessionId,
+        app: &mut App,
+        tick: &TickThread,
+        clock: &dyn Clock,
+        frame_deadline: Option<Instant>,
+        post: bool,
+    ) -> Result<(), String> {
+        loop {
+            let args = if post {
+                app.tail_count_next()
+            } else {
+                app.tail_next()
+            };
+            let Some(args) = args else {
+                return Ok(());
+            };
+            let id = mint();
+            let command = session_command(&id, "history", session, Some(args)).to_string();
+            let written = self
+                .hub
+                .as_ref()
+                .is_some_and(|hub| link::write_line(hub, &command).is_ok());
+            if !written {
+                self.lost(app);
+                return Err(LOST.to_owned());
+            }
+            match self.answer(rx, &id, app, tick, clock, frame_deadline) {
+                Ok(Answer::Lines(lines)) => {
+                    if post {
+                        app.tail_count_lines(lines);
+                    } else {
+                        app.tail_lines(lines);
+                    }
+                }
+                Ok(Answer::Reopened) => {
+                    if post {
+                        app.tail_count_ended(None);
+                    } else {
+                        app.tail_ended(None);
+                    }
+                    return Ok(());
+                }
+                Err(message) if message == LOST => return Err(message),
+                Err(message) => {
+                    if post {
+                        app.tail_count_ended(Some(&message));
+                    } else {
+                        app.tail_ended(Some(&message));
+                    }
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    /// Reads the open's retained count with `history`, until the walk
+    /// reaches the chain root or ends. The preview stays untouched
+    /// throughout: the count folds once at its end, above it.
     pub(super) fn fetch_count(
         &mut self,
         rx: &Receiver<Input>,
@@ -297,39 +356,11 @@ impl Connection {
         clock: &dyn Clock,
         frame_deadline: Option<Instant>,
     ) -> Result<(), String> {
-        while let Some(args) = app.tail_count_next() {
-            let id = mint();
-            let command = session_command(&id, "history", session, Some(args)).to_string();
-            let written = self
-                .hub
-                .as_ref()
-                .is_some_and(|hub| link::write_line(hub, &command).is_ok());
-            if !written {
-                self.lost(app);
-                return Err(LOST.to_owned());
-            }
-            match self.answer(rx, &id, app, tick, clock, frame_deadline) {
-                Ok(Answer::Lines(lines)) => app.tail_count_lines(lines),
-                Ok(Answer::Reopened) => {
-                    app.tail_count_ended(None);
-                    return Ok(());
-                }
-                Err(message) if message == LOST => return Err(message),
-                Err(message) => {
-                    app.tail_count_ended(Some(&message));
-                    return Ok(());
-                }
-            }
-        }
-        Ok(())
+        self.fetch_history(rx, session, app, tick, clock, frame_deadline, true)
     }
 
     /// Reads the open's tail with `history`, oldest windows first, until
-    /// it fills or ends: one command per window, each answered before
-    /// the next is sent. A rejected or unreadable answer ends the tail as
-    /// failed with its message; a reopening abandons it without one. A
-    /// lost connection ends the read; the loop's `disconnected` already
-    /// ended the overlay.
+    /// it fills or ends.
     pub(super) fn fetch_tail(
         &mut self,
         rx: &Receiver<Input>,
@@ -339,31 +370,7 @@ impl Connection {
         clock: &dyn Clock,
         frame_deadline: Option<Instant>,
     ) -> Result<(), String> {
-        while let Some(args) = app.tail_next() {
-            let id = mint();
-            let command = session_command(&id, "history", session, Some(args)).to_string();
-            let written = self
-                .hub
-                .as_ref()
-                .is_some_and(|hub| link::write_line(hub, &command).is_ok());
-            if !written {
-                self.lost(app);
-                return Err(LOST.to_owned());
-            }
-            match self.answer(rx, &id, app, tick, clock, frame_deadline) {
-                Ok(Answer::Lines(lines)) => app.tail_lines(lines),
-                Ok(Answer::Reopened) => {
-                    app.tail_ended(None);
-                    return Ok(());
-                }
-                Err(message) if message == LOST => return Err(message),
-                Err(message) => {
-                    app.tail_ended(Some(&message));
-                    return Ok(());
-                }
-            }
-        }
-        Ok(())
+        self.fetch_history(rx, session, app, tick, clock, frame_deadline, false)
     }
 
     /// Waits for the answer to command `id`, holding every other input for
