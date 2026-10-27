@@ -6434,10 +6434,12 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     let (release_late, release_late_rx) = mpsc::channel::<()>();
     let release_late_rx = Arc::new(Mutex::new(release_late_rx));
     let late_gate = Arc::clone(&release_late_rx);
-    // The late pair's held calls announce themselves: the test drops the
-    // early gate only after a late child is parked on its own, so the
-    // partial completion below is forced, never raced.
-    let (held_tx, held_rx) = mpsc::channel::<()>();
+    // A late arrival announces itself: the test drops the early gate only
+    // after one late child request reaches its server, while that server's
+    // gate stays shut. Arrival plus a shut gate proves the late pair
+    // cannot finish before the early pair does; no signal claims a parked
+    // state (docs/code-quality.md, "What a reviewer checks").
+    let (arrived_tx, arrived_rx) = mpsc::channel::<()>();
     // The parent spawns four delegates from one reply, exactly once: a
     // later request echoing the calls answers over, never respawns.
     let spawned = Arc::new(AtomicBool::new(false));
@@ -6461,10 +6463,10 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     })
     .unwrap();
     // The early pair answers once its gate drops; the late pair holds
-    // until its own gate drops, announcing each held call first. A held
-    // call blocks under its server's lock, so only the first late call
-    // announces before the release; the other late child still runs,
-    // queued behind it.
+    // until its own gate drops, announcing each arrival first. The
+    // responder runs under its server's lock, so the first late arrival
+    // announces while the other late child still runs, queued behind that
+    // lock; the wait below reads the arrival as arrival, never as parked.
     let child_early = ProviderServer::start_responding(move |_: &Request| {
         // Held until the test drops the early sender: no deadline of
         // its own. The grid waits below bound the test, and the dropped
@@ -6475,9 +6477,12 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     })
     .unwrap();
     let child_late = ProviderServer::start_responding(move |_: &Request| {
-        // The receiver outlives the servers, so this never fails: a
-        // failure is the test's, as the module header allows.
-        held_tx.send(()).unwrap();
+        // Arrival, announced after the state it names: serve() records the
+        // request before the responder runs, and the shut gate below is
+        // what holds the late pair. The receiver outlives the servers, so
+        // this never fails: a failure is the test's, as the module header
+        // allows.
+        arrived_tx.send(()).unwrap();
         let gate = late_gate.lock().unwrap();
         let _released = gate.recv();
         text_reply(CHILD_TEXT)
@@ -6557,10 +6562,11 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
             .first()
             .is_some_and(|row| !row.contains("Delegate"))
     });
-    // The late pair is parked on its gate: the partial completion below
-    // is forced, not raced.
+    // A late child reached its model server while that gate stays shut:
+    // the partial completion below is forced, not raced. The late pair
+    // cannot finish before its release, which waits further below.
     Deadline::after(Duration::from_secs(20))
-        .recv_or_fail(&held_rx, "a late delegate held its model call");
+        .recv_or_fail(&arrived_rx, "a late delegate reached its model call");
     // Release the early pair: scans one and two finish while three and
     // four still run.
     drop(release_early);
@@ -6568,19 +6574,27 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // precede finished ones in start order (docs/tui.md, "Every
     // delegate"). The old wait stopped here and pressed Enter, opening
     // the running scan's live view instead of a replay (#3490). The
-    // small viewport shows three delegates, so this wait names the first
-    // running row and the first finished one; the all-four wait below
-    // runs at replay size.
+    // small viewport shows three delegates, so this wait pins only a
+    // running late row with no early row still running, plus a finished
+    // one; the all-four wait below runs at replay size.
     run.write(b"/delegates\r");
+    // Either late scan may sort first and either early scan may finish
+    // first: running sorts in start order, never spawn-call order, so the
+    // wait names no scan. Both early scans finished leaves no early row
+    // still running, so the first running row below is observed, then
+    // checked against the late pair.
     let grid = run.wait_screen("the partial delegates list", |grid| {
         delegates_list_header(grid)
-            && grid.contents.contains("◆ scan three")
-            && grid.contents.contains("✓ scan one")
+            && (grid.contents.contains("◆ scan three") || grid.contents.contains("◆ scan four"))
+            && !grid.contents.contains("◆ scan one")
+            && !grid.contents.contains("◆ scan two")
+            && grid.contents.contains("✓ scan")
     });
-    // The unfinished scan stays first while the finished rows sit below
-    // it: Enter here opens the running scan, not the first replay. Rows
-    // match by containment: a clipped viewport marks its first column
-    // with an overflow glyph, so the marker is not always first.
+    // An unfinished late scan stays first while the finished rows sit
+    // below it: Enter here would open the running scan, not the first
+    // replay. Rows match by containment: a clipped viewport marks its
+    // first column with an overflow glyph, so the marker is not always
+    // first.
     let running = grid.rows.iter().position(|row| row.contains("◆ scan"));
     let finished = grid.rows.iter().position(|row| row.contains("✓ scan"));
     let (Some(running), Some(finished)) = (running, finished) else {
@@ -6591,9 +6605,13 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
         "a running scan above finished ones in\n{}",
         grid.contents
     );
+    // The observed first running row is a late scan: with no early row
+    // still running, only three or four can run, and only one or two can
+    // sit finished below.
+    let running_row = &grid.rows[running];
     assert!(
-        grid.rows[running].contains("scan three"),
-        "{}",
+        running_row.contains("scan three") || running_row.contains("scan four"),
+        "a late scan above finished ones in\n{}",
         grid.contents
     );
     // Release the late pair: every delegate now runs to completion.
