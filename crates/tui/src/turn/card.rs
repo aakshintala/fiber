@@ -8,7 +8,9 @@ use contract::events::{TurnCompleted, TurnOutcome};
 use jiff::tz::TimeZone;
 
 use super::{Ending, Entry, Turn};
-use crate::ext::{CardPrompt, Input, PromptImage, TurnCard, TurnEnded, TurnEntry, TurnError};
+use crate::ext::{
+    CardPrompt, Input, PromptImage, TurnCard, TurnCardState, TurnEnded, TurnEntry, TurnError,
+};
 use crate::format;
 use crate::rows::Rows;
 use crate::surface::{self, Edges};
@@ -111,6 +113,16 @@ impl Turn {
     ) -> TurnCard<'a> {
         let ended = summary.as_ref().and_then(|view| view.ended);
         let running = ended.is_none() && self.ended.is_none();
+        let state = match ended {
+            Some((done, ts)) => TurnCardState::Ended(ended_of(done, *ts)),
+            None => match &self.ended {
+                Some((Ending::Done(done), ts)) => TurnCardState::Ended(ended_of(done, *ts)),
+                Some((Ending::CutShort, ts)) => {
+                    TurnCardState::Ended(TurnEnded::CutShort { ended_ts: *ts })
+                }
+                None => TurnCardState::Running,
+            },
+        };
         TurnCard {
             prompts: self
                 .prompts
@@ -147,14 +159,7 @@ impl Turn {
             usage: summary
                 .as_ref()
                 .map_or_else(|| self.spend.usage(), |view| view.spend.usage()),
-            ended: match ended {
-                Some((done, ts)) => Some(ended_of(done, *ts)),
-                None => self.ended.as_ref().map(|(ending, ts)| match ending {
-                    Ending::Done(done) => ended_of(done, *ts),
-                    Ending::CutShort => TurnEnded::CutShort { ended_ts: *ts },
-                }),
-            },
-            running,
+            state,
             flat,
         }
     }

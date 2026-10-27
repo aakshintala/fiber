@@ -11,8 +11,8 @@ use serde_json::Value;
 use super::target_id;
 use crate::app::Target;
 use crate::ext::{
-    GroupLine, Input, LedgerRow, PromptImage, RowError, Status, TurnCall, TurnFailed, TurnGroup,
-    TurnSection, TurnStreaming, TurnThought,
+    CallState, GroupLine, Input, LedgerResult, LedgerRow, PromptImage, RowError, TurnCall,
+    TurnCallResult, TurnFailed, TurnGroup, TurnGroupState, TurnSection, TurnStreaming, TurnThought,
 };
 use crate::format::{Kind, Kinds, count, dim, heading, kind, label, opened, summary};
 use crate::rows::{RowText, Rows};
@@ -647,28 +647,68 @@ impl Group {
             .find(|line| !line.trim().is_empty())
             .unwrap_or("done");
         let row = self.ledger_input(call, first, false);
+        let images = call
+            .images
+            .iter()
+            .map(|part| PromptImage {
+                path: &part.path,
+                width: part.width,
+                height: part.height,
+            })
+            .collect::<Vec<_>>();
+        let content = call.content();
+        let state = match row.state {
+            CallState::Pending => CallState::Pending,
+            CallState::Running => CallState::Running,
+            CallState::Unknown => CallState::Unknown,
+            CallState::Completed(result) => CallState::Completed(TurnCallResult {
+                exit: result.exit,
+                duration_ms: result.duration_ms,
+                lines: result.lines,
+                changes: result.changes,
+                output: result.output,
+                content,
+                images,
+            }),
+            CallState::Failed { result, error } => CallState::Failed {
+                result: TurnCallResult {
+                    exit: result.exit,
+                    duration_ms: result.duration_ms,
+                    lines: result.lines,
+                    changes: result.changes,
+                    output: result.output,
+                    content,
+                    images,
+                },
+                error,
+            },
+            CallState::Denied { result, .. } => CallState::Denied {
+                result: TurnCallResult {
+                    exit: result.exit,
+                    duration_ms: result.duration_ms,
+                    lines: result.lines,
+                    changes: result.changes,
+                    output: result.output,
+                    content,
+                    images,
+                },
+                detail: call.headline(),
+            },
+            CallState::Cancelled(result) => CallState::Cancelled(TurnCallResult {
+                exit: result.exit,
+                duration_ms: result.duration_ms,
+                lines: result.lines,
+                changes: result.changes,
+                output: result.output,
+                content,
+                images,
+            }),
+        };
         TurnCall {
             name: row.name,
             arguments: row.arguments,
-            status: row.status,
-            exit: row.exit,
-            duration_ms: row.duration_ms,
-            lines: row.lines,
-            changes: row.changes,
-            error: row.error,
-            output: first,
-            headline: call.headline(),
-            content: call.content(),
+            state,
             answer: row.answer,
-            images: call
-                .images
-                .iter()
-                .map(|part| PromptImage {
-                    path: &part.path,
-                    width: part.width,
-                    height: part.height,
-                })
-                .collect(),
             open: call.open,
             asking: call.asking,
         }
@@ -676,14 +716,21 @@ impl Group {
 
     /// Its card entry: the summary line's fields with the ledger's
     /// sections. `running` is the turn running with this as its open
-    /// group.
+    /// group. A cut group maps to [`TurnGroupState::Cut`] even when the
+    /// caller still names it running.
     pub(crate) fn turn_entry(&self, running: bool) -> TurnGroup<'_> {
+        let state = if self.cut {
+            TurnGroupState::Cut
+        } else if running {
+            TurnGroupState::Running
+        } else {
+            TurnGroupState::Finished
+        };
         TurnGroup {
             first: self.first,
             last: self.last,
-            running,
+            state,
             open: self.open,
-            cut: self.cut,
             sections: self
                 .sections
                 .iter()
@@ -779,24 +826,30 @@ impl Group {
     /// turn has status unknown; a failed call carries its headline's code
     /// and message.
     fn ledger_input<'a>(&self, call: &'a Call, output: &'a str, flat: bool) -> LedgerRow<'a> {
-        let status = match call.status {
-            Some(CallStatus::Completed) => Status::Completed,
-            Some(CallStatus::Failed) => Status::Failed,
-            Some(CallStatus::Denied) => Status::Denied,
-            Some(CallStatus::Cancelled) => Status::Cancelled,
-            None if self.cut && call.has_started() => Status::Unknown,
-            None if call.has_started() => Status::Running,
-            None => Status::Pending,
+        let result = LedgerResult {
+            exit: call.exit,
+            duration_ms: call.duration_ms(),
+            lines: call.lines,
+            changes: &call.changes,
+            output,
         };
-        let error = match call.status {
-            Some(CallStatus::Failed) => Some(match call.headline().split_once(": ") {
-                Some((code, message)) => RowError { code, message },
-                None => RowError {
-                    code: "",
-                    message: call.headline(),
+        let state = match call.status {
+            Some(CallStatus::Completed) => CallState::Completed(result),
+            Some(CallStatus::Failed) => CallState::Failed {
+                result,
+                error: match call.headline().split_once(": ") {
+                    Some((code, message)) => RowError { code, message },
+                    None => RowError {
+                        code: "",
+                        message: call.headline(),
+                    },
                 },
-            }),
-            _ => None,
+            },
+            Some(CallStatus::Denied) => CallState::Denied { result, detail: () },
+            Some(CallStatus::Cancelled) => CallState::Cancelled(result),
+            None if self.cut && call.has_started() => CallState::Unknown,
+            None if call.has_started() => CallState::Running,
+            None => CallState::Pending,
         };
         let answer = call
             .asked
@@ -806,13 +859,7 @@ impl Group {
         LedgerRow {
             name: &call.name,
             arguments: &call.arguments,
-            status,
-            exit: call.exit,
-            duration_ms: call.duration_ms(),
-            lines: call.lines,
-            changes: &call.changes,
-            error,
-            output,
+            state,
             answer,
             flat,
         }
@@ -826,12 +873,14 @@ impl Group {
         let kind = kind(row.name, row.arguments);
         // The glyph: what the call is doing, or how it ended. A
         // call that started and never completed may have run.
-        let (glyph, glyph_style) = match row.status {
-            Status::Completed => ("✓", style(Role::Success)),
-            Status::Cancelled => ("⊘", Style::default().add_modifier(Modifier::DIM)),
-            Status::Failed | Status::Denied => ("✗", Style::default().add_modifier(Modifier::DIM)),
-            Status::Unknown => ("?", style(Role::Attention)),
-            Status::Pending | Status::Running => ("○", style(Role::Attention)),
+        let (glyph, glyph_style) = match row.state {
+            CallState::Completed(_) => ("✓", style(Role::Success)),
+            CallState::Cancelled(_) => ("⊘", Style::default().add_modifier(Modifier::DIM)),
+            CallState::Failed { .. } | CallState::Denied { .. } => {
+                ("✗", Style::default().add_modifier(Modifier::DIM))
+            }
+            CallState::Unknown => ("?", style(Role::Attention)),
+            CallState::Pending | CallState::Running => ("○", style(Role::Attention)),
         };
         let result = self.builtin_result(row);
         // Past the gutter, the glyph, one space and nine of
@@ -868,37 +917,36 @@ impl Group {
         if let Some(answer) = row.answer {
             return vec![dim_span(answer.to_owned())];
         }
-        match row.status {
-            Status::Unknown => {
+        let completed = match row.state {
+            CallState::Unknown => {
                 return vec![dim_span("? may have run; not run again".to_owned())];
             }
-            Status::Pending | Status::Running => {
+            CallState::Pending | CallState::Running => {
                 if matches!(kind(row.name, row.arguments), Kind::Ask(_)) {
                     return vec![Span::styled("waiting on you", style(Role::Attention))];
                 }
                 return vec![Span::styled("running", style(Role::Attention))];
             }
-            Status::Cancelled => return vec![dim_span("cancelled".to_owned())],
-            Status::Denied => return vec![dim_span("denied".to_owned())],
-            Status::Failed => {
-                let headline = match row.error {
-                    Some(error) if !error.message.is_empty() => {
-                        if error.code.is_empty() {
-                            error.message.to_owned()
-                        } else {
-                            format!("{}: {}", error.code, error.message)
-                        }
+            CallState::Cancelled(_) => return vec![dim_span("cancelled".to_owned())],
+            CallState::Denied { .. } => return vec![dim_span("denied".to_owned())],
+            CallState::Failed { result, error } => {
+                let headline = if !error.message.is_empty() {
+                    if error.code.is_empty() {
+                        error.message.to_owned()
+                    } else {
+                        format!("{}: {}", error.code, error.message)
                     }
-                    _ => row.output.to_owned(),
+                } else {
+                    result.output.to_owned()
                 };
                 return vec![dim_span(headline)];
             }
-            Status::Completed => {}
-        }
+            CallState::Completed(result) => result,
+        };
         if matches!(kind(row.name, row.arguments), Kind::Edit | Kind::Write)
-            && !row.changes.is_empty()
+            && !completed.changes.is_empty()
         {
-            let (added, removed) = row.changes.iter().fold((0u64, 0u64), |(a, r), c| {
+            let (added, removed) = completed.changes.iter().fold((0u64, 0u64), |(a, r), c| {
                 (a.saturating_add(c.added), r.saturating_add(c.removed))
             });
             return vec![
@@ -908,14 +956,14 @@ impl Group {
             ];
         }
         match kind(row.name, row.arguments) {
-            Kind::Read => vec![dim_span(count(row.lines, "line", "lines"))],
-            Kind::Search => vec![dim_span(count(row.lines, "match", "matches"))],
-            Kind::List => vec![dim_span(count(row.lines, "path", "paths"))],
-            Kind::Shell if row.exit.is_some() => {
-                let exit = row.exit.unwrap_or(0);
+            Kind::Read => vec![dim_span(count(completed.lines, "line", "lines"))],
+            Kind::Search => vec![dim_span(count(completed.lines, "match", "matches"))],
+            Kind::List => vec![dim_span(count(completed.lines, "path", "paths"))],
+            Kind::Shell if completed.exit.is_some() => {
+                let exit = completed.exit.unwrap_or(0);
                 vec![dim_span(format!(
                     "exit {exit} · {}",
-                    count(row.lines, "line", "lines")
+                    count(completed.lines, "line", "lines")
                 ))]
             }
             Kind::Edit
@@ -924,7 +972,7 @@ impl Group {
             | Kind::Delegate
             | Kind::Jobs
             | Kind::Ask(_)
-            | Kind::Other => vec![dim_span(row.output.to_owned())],
+            | Kind::Other => vec![dim_span(completed.output.to_owned())],
         }
     }
 }

@@ -36,10 +36,11 @@ mod turn;
 
 pub use slots::{
     Answers, ErrorLine, GroupLine, HandoffBand, LedgerRow, Notice, Prompt, PromptImage, ReplyText,
-    RowError, Status, Steer, ThinkingLine,
+    RowError, Steer, ThinkingLine,
 };
 pub use turn::{
-    CardPrompt, TurnAnswerPart, TurnAnswers, TurnAside, TurnBand, TurnBandState, TurnCall,
-    TurnCard, TurnEnded, TurnEntry, TurnError, TurnFailed, TurnGroup, TurnOrphan, TurnSection,
+    AnswerDisposition, CallState, CardPrompt, LedgerResult, TurnAnswerPart, TurnAnswers, TurnAside,
+    TurnBand, TurnBandState, TurnCall, TurnCallResult, TurnCard, TurnCardState, TurnEnded,
+    TurnEntry, TurnError, TurnFailed, TurnGroup, TurnGroupState, TurnOrphan, TurnSection,
     TurnSizes, TurnStreaming, TurnThought,
 };

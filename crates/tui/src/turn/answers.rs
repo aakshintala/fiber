@@ -83,8 +83,11 @@ impl Answered {
                     .iter()
                     .map(|part| crate::ext::TurnAnswerPart {
                         header: &part.header,
-                        text: &part.text,
-                        skipped: part.skipped,
+                        disposition: if part.skipped {
+                            crate::ext::AnswerDisposition::Skipped
+                        } else {
+                            crate::ext::AnswerDisposition::Answered { text: &part.text }
+                        },
                     })
                     .collect(),
                 note: note.as_deref(),

@@ -1,10 +1,11 @@
 //! Tests for the seam types: the input key and the renderer handle.
 
-use super::{Decision, Ext, FailureKind, SessionCtx, SlotSelection};
 use super::{
-    Failure, Handle, Input, LedgerRow, Prompt, PromptImage, RawSpan, Renderer, ReplyText, RowError,
-    Status, ThinkingLine, TurnCard,
+    AnswerDisposition, CallState, Failure, Handle, Input, LedgerResult, LedgerRow, Prompt,
+    PromptImage, RawSpan, Renderer, ReplyText, RowError, ThinkingLine, TurnCallResult, TurnCard,
+    TurnCardState, TurnEnded, TurnGroupState,
 };
+use super::{Decision, Ext, FailureKind, SessionCtx, SlotSelection};
 use contract::events::FileChange;
 use std::cell::{Cell, RefCell};
 
@@ -175,35 +176,6 @@ impl Renderer for Fake {
     }
 }
 
-#[allow(clippy::too_many_arguments, reason = "one argument per keyed field")]
-fn ledger<'a>(
-    name: &'a str,
-    arguments: &'a serde_json::Value,
-    status: Status,
-    exit: Option<i32>,
-    duration_ms: Option<u64>,
-    lines: u64,
-    changes: &'a [FileChange],
-    error: Option<RowError<'a>>,
-    output: &'a str,
-    answer: Option<&'a str>,
-    flat: bool,
-) -> LedgerRow<'a> {
-    LedgerRow {
-        name,
-        arguments,
-        status,
-        exit,
-        duration_ms,
-        lines,
-        changes,
-        error,
-        output,
-        answer,
-        flat,
-    }
-}
-
 struct Base {
     arguments: serde_json::Value,
     changes: Vec<FileChange>,
@@ -229,22 +201,25 @@ fn base() -> Base {
 }
 
 fn base_row(base: &Base) -> LedgerRow<'_> {
-    ledger(
-        "shell",
-        &base.arguments,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "first",
-        Some("yes"),
-        false,
-    )
+    LedgerRow {
+        name: "shell",
+        arguments: &base.arguments,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(12),
+                lines: 7,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: y",
+            },
+        },
+        answer: Some("yes"),
+        flat: false,
+    }
 }
 
 fn key_of(row: &LedgerRow<'_>) -> u64 {
@@ -268,22 +243,25 @@ fn the_slot_is_in_the_key() {
 fn the_name_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
-    let renamed = ledger(
-        "read",
-        &base.arguments,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "first",
-        Some("yes"),
-        false,
-    );
+    let renamed = LedgerRow {
+        name: "read",
+        arguments: &base.arguments,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(12),
+                lines: 7,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: y",
+            },
+        },
+        answer: Some("yes"),
+        flat: false,
+    };
     assert_ne!(key_of(&row), key_of(&renamed));
 }
 
@@ -292,22 +270,25 @@ fn a_nested_argument_value_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
     let changed = serde_json::json!({"command": "ls", "nested": {"depth": 2}});
-    let varied = ledger(
-        "shell",
-        &changed,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "first",
-        Some("yes"),
-        false,
-    );
+    let varied = LedgerRow {
+        name: "shell",
+        arguments: &changed,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(12),
+                lines: 7,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: y",
+            },
+        },
+        answer: Some("yes"),
+        flat: false,
+    };
     assert_ne!(key_of(&row), key_of(&varied));
 }
 
@@ -323,38 +304,44 @@ fn argument_key_order_is_not_in_the_key() {
     let row = base_row(&base);
     let one_value = serde_json::Value::Object(first);
     let two_value = serde_json::Value::Object(second);
-    let one = ledger(
-        "shell",
-        &one_value,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "first",
-        Some("yes"),
-        false,
-    );
-    let two = ledger(
-        "shell",
-        &two_value,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "first",
-        Some("yes"),
-        false,
-    );
+    let one = LedgerRow {
+        name: "shell",
+        arguments: &one_value,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(12),
+                lines: 7,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: y",
+            },
+        },
+        answer: Some("yes"),
+        flat: false,
+    };
+    let two = LedgerRow {
+        name: "shell",
+        arguments: &two_value,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(12),
+                lines: 7,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: y",
+            },
+        },
+        answer: Some("yes"),
+        flat: false,
+    };
     assert_ne!(key_of(&row), key_of(&one));
     assert_eq!(key_of(&one), key_of(&two));
 }
@@ -363,22 +350,13 @@ fn argument_key_order_is_not_in_the_key() {
 fn the_status_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
-    let running = ledger(
-        "shell",
-        &base.arguments,
-        Status::Running,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "first",
-        Some("yes"),
-        false,
-    );
+    let running = LedgerRow {
+        name: "shell",
+        arguments: &base.arguments,
+        state: CallState::Running,
+        answer: Some("yes"),
+        flat: false,
+    };
     assert_ne!(key_of(&row), key_of(&running));
 }
 
@@ -386,22 +364,25 @@ fn the_status_is_in_the_key() {
 fn the_exit_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
-    let failed = ledger(
-        "shell",
-        &base.arguments,
-        Status::Completed,
-        Some(1),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "first",
-        Some("yes"),
-        false,
-    );
+    let failed = LedgerRow {
+        name: "shell",
+        arguments: &base.arguments,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(1),
+                duration_ms: Some(12),
+                lines: 7,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: y",
+            },
+        },
+        answer: Some("yes"),
+        flat: false,
+    };
     assert_ne!(key_of(&row), key_of(&failed));
 }
 
@@ -409,22 +390,25 @@ fn the_exit_is_in_the_key() {
 fn the_duration_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
-    let slower = ledger(
-        "shell",
-        &base.arguments,
-        Status::Completed,
-        Some(0),
-        Some(13),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "first",
-        Some("yes"),
-        false,
-    );
+    let slower = LedgerRow {
+        name: "shell",
+        arguments: &base.arguments,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(13),
+                lines: 7,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: y",
+            },
+        },
+        answer: Some("yes"),
+        flat: false,
+    };
     assert_ne!(key_of(&row), key_of(&slower));
 }
 
@@ -432,22 +416,25 @@ fn the_duration_is_in_the_key() {
 fn the_line_count_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
-    let longer = ledger(
-        "shell",
-        &base.arguments,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        8,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "first",
-        Some("yes"),
-        false,
-    );
+    let longer = LedgerRow {
+        name: "shell",
+        arguments: &base.arguments,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(12),
+                lines: 8,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: y",
+            },
+        },
+        answer: Some("yes"),
+        flat: false,
+    };
     assert_ne!(key_of(&row), key_of(&longer));
 }
 
@@ -508,22 +495,25 @@ fn a_change_is_in_the_key() {
     .into_iter()
     .enumerate()
     {
-        let other = ledger(
-            "shell",
-            &base.arguments,
-            Status::Completed,
-            Some(0),
-            Some(12),
-            7,
-            &varied,
-            Some(RowError {
-                code: "nonzero_exit",
-                message: "x: y",
-            }),
-            "first",
-            Some("yes"),
-            false,
-        );
+        let other = LedgerRow {
+            name: "shell",
+            arguments: &base.arguments,
+            state: CallState::Failed {
+                result: LedgerResult {
+                    exit: Some(0),
+                    duration_ms: Some(12),
+                    lines: 7,
+                    changes: &varied,
+                    output: "first",
+                },
+                error: RowError {
+                    code: "nonzero_exit",
+                    message: "x: y",
+                },
+            },
+            answer: Some("yes"),
+            flat: false,
+        };
         assert_ne!(key_of(&row), key_of(&other), "case {index}");
     }
 }
@@ -532,51 +522,57 @@ fn a_change_is_in_the_key() {
 fn the_error_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
-    let code = ledger(
-        "shell",
-        &base.arguments,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "tool_error",
-            message: "x: y",
+    let code = LedgerRow {
+        name: "shell",
+        arguments: &base.arguments,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(12),
+                lines: 7,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "tool_error",
+                message: "x: y",
+            },
+        },
+        answer: Some("yes"),
+        flat: false,
+    };
+    let message = LedgerRow {
+        name: "shell",
+        arguments: &base.arguments,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(12),
+                lines: 7,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: z",
+            },
+        },
+        answer: Some("yes"),
+        flat: false,
+    };
+    let missing = LedgerRow {
+        name: "shell",
+        arguments: &base.arguments,
+        state: CallState::Completed(LedgerResult {
+            exit: Some(0),
+            duration_ms: Some(12),
+            lines: 7,
+            changes: &base.changes,
+            output: "first",
         }),
-        "first",
-        Some("yes"),
-        false,
-    );
-    let message = ledger(
-        "shell",
-        &base.arguments,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: z",
-        }),
-        "first",
-        Some("yes"),
-        false,
-    );
-    let missing = ledger(
-        "shell",
-        &base.arguments,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        None,
-        "first",
-        Some("yes"),
-        false,
-    );
+        answer: Some("yes"),
+        flat: false,
+    };
     assert_ne!(key_of(&row), key_of(&code));
     assert_ne!(key_of(&row), key_of(&message));
     assert_ne!(key_of(&row), key_of(&missing));
@@ -586,22 +582,25 @@ fn the_error_is_in_the_key() {
 fn the_output_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
-    let other = ledger(
-        "shell",
-        &base.arguments,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "second",
-        Some("yes"),
-        false,
-    );
+    let other = LedgerRow {
+        name: "shell",
+        arguments: &base.arguments,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(12),
+                lines: 7,
+                changes: &base.changes,
+                output: "second",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: y",
+            },
+        },
+        answer: Some("yes"),
+        flat: false,
+    };
     assert_ne!(key_of(&row), key_of(&other));
 }
 
@@ -609,38 +608,44 @@ fn the_output_is_in_the_key() {
 fn the_answer_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
-    let other = ledger(
-        "shell",
-        &base.arguments,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "first",
-        Some("no"),
-        false,
-    );
-    let missing = ledger(
-        "shell",
-        &base.arguments,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "first",
-        None,
-        false,
-    );
+    let other = LedgerRow {
+        name: "shell",
+        arguments: &base.arguments,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(12),
+                lines: 7,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: y",
+            },
+        },
+        answer: Some("no"),
+        flat: false,
+    };
+    let missing = LedgerRow {
+        name: "shell",
+        arguments: &base.arguments,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(12),
+                lines: 7,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: y",
+            },
+        },
+        answer: None,
+        flat: false,
+    };
     assert_ne!(key_of(&row), key_of(&other));
     assert_ne!(key_of(&row), key_of(&missing));
 }
@@ -649,22 +654,25 @@ fn the_answer_is_in_the_key() {
 fn flat_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
-    let flat = ledger(
-        "shell",
-        &base.arguments,
-        Status::Completed,
-        Some(0),
-        Some(12),
-        7,
-        &base.changes,
-        Some(RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        }),
-        "first",
-        Some("yes"),
-        true,
-    );
+    let flat = LedgerRow {
+        name: "shell",
+        arguments: &base.arguments,
+        state: CallState::Failed {
+            result: LedgerResult {
+                exit: Some(0),
+                duration_ms: Some(12),
+                lines: 7,
+                changes: &base.changes,
+                output: "first",
+            },
+            error: RowError {
+                code: "nonzero_exit",
+                message: "x: y",
+            },
+        },
+        answer: Some("yes"),
+        flat: true,
+    };
     assert_ne!(key_of(&row), key_of(&flat));
 }
 
@@ -897,9 +905,8 @@ fn card() -> TurnCard<'static> {
             TurnEntry::Group(TurnGroup {
                 first: 1,
                 last: 2,
-                running: true,
+                state: TurnGroupState::Running,
                 open: false,
-                cut: false,
                 sections: vec![TurnSection {
                     step: 3,
                     thoughts: vec![TurnThought {
@@ -911,17 +918,16 @@ fn card() -> TurnCard<'static> {
                     calls: vec![TurnCall {
                         name: "read",
                         arguments: &serde_json::Value::Null,
-                        status: Status::Completed,
-                        exit: None,
-                        duration_ms: None,
-                        lines: 1,
-                        changes: &[],
-                        error: None,
-                        output: "done",
-                        headline: "",
-                        content: "done",
+                        state: CallState::Completed(TurnCallResult {
+                            exit: None,
+                            duration_ms: None,
+                            lines: 1,
+                            changes: &[],
+                            output: "done",
+                            content: "done",
+                            images: Vec::new(),
+                        }),
                         answer: None,
-                        images: Vec::new(),
                         open: false,
                         asking: false,
                     }],
@@ -949,8 +955,7 @@ fn card() -> TurnCard<'static> {
             TurnEntry::Answers(TurnAnswers::Given {
                 parts: vec![super::TurnAnswerPart {
                     header: "Base",
-                    text: "main",
-                    skipped: false,
+                    disposition: AnswerDisposition::Answered { text: "main" },
                 }],
                 note: None,
                 ts: 8,
@@ -968,8 +973,7 @@ fn card() -> TurnCard<'static> {
             cost: None,
             subscription_cost: 0.0,
         },
-        ended: None,
-        running: true,
+        state: TurnCardState::Running,
         flat: false,
     }
 }
@@ -1119,7 +1123,7 @@ fn the_turn_card_slot_and_prompts_are_in_the_key() {
     varied.calls = 1;
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
-    varied.running = false;
+    varied.state = TurnCardState::Ended(TurnEnded::Completed { ended_ts: 0 });
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
     varied.flat = true;
@@ -1140,9 +1144,8 @@ fn each_entry_kind_changes_the_key() {
         TurnEntry::Group(TurnGroup {
             first: 9,
             last: 9,
-            running: false,
+            state: TurnGroupState::Finished,
             open: false,
-            cut: false,
             sections: Vec::new(),
             streaming: Vec::new(),
         }),
@@ -1183,6 +1186,22 @@ where
     band
 }
 
+/// The base card's first group call: still Completed, so its result is
+/// the part of the key the result-field cases vary.
+fn card_result<'a, 'x>(card: &'a mut TurnCard<'x>) -> &'a mut TurnCallResult<'x>
+where
+    'x: 'a,
+{
+    use super::{CallState, TurnEntry};
+    let TurnEntry::Group(group) = &mut card.entries[2] else {
+        panic!("the third entry stays a group");
+    };
+    let CallState::Completed(result) = &mut group.sections[0].calls[0].state else {
+        panic!("the base call stays completed");
+    };
+    result
+}
+
 #[test]
 fn the_group_entry_is_in_the_key() {
     let one = card_key(&card());
@@ -1193,13 +1212,13 @@ fn the_group_entry_is_in_the_key() {
     card_group(&mut varied).last = 10;
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
-    card_group(&mut varied).running = false;
+    card_group(&mut varied).state = TurnGroupState::Finished;
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
     card_group(&mut varied).open = true;
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
-    card_group(&mut varied).cut = true;
+    card_group(&mut varied).state = TurnGroupState::Cut;
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
     card_group(&mut varied).sections[0].step = 4;
@@ -1220,13 +1239,27 @@ fn the_group_entry_is_in_the_key() {
     card_group(&mut varied).sections[0].calls[0].name = "shell";
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
-    card_group(&mut varied).sections[0].calls[0].output = "other";
+    card_result(&mut varied).output = "other";
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
-    card_group(&mut varied).sections[0].calls[0].headline = "x: y";
+    card_group(&mut varied).sections[0].calls[0].state = CallState::Failed {
+        result: TurnCallResult {
+            exit: None,
+            duration_ms: None,
+            lines: 1,
+            changes: &[],
+            output: "done",
+            content: "done",
+            images: Vec::new(),
+        },
+        error: RowError {
+            code: "x",
+            message: "y",
+        },
+    };
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
-    card_group(&mut varied).sections[0].calls[0].content = "other";
+    card_result(&mut varied).content = "other";
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
     card_group(&mut varied).sections[0].calls[0].answer = Some("yes");
@@ -1238,13 +1271,13 @@ fn the_group_entry_is_in_the_key() {
     card_group(&mut varied).sections[0].calls[0].asking = true;
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
-    card_group(&mut varied).sections[0].calls[0].exit = Some(1);
+    card_result(&mut varied).exit = Some(1);
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
-    card_group(&mut varied).sections[0].calls[0].duration_ms = Some(3);
+    card_result(&mut varied).duration_ms = Some(3);
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
-    card_group(&mut varied).sections[0].calls[0].lines = 2;
+    card_result(&mut varied).lines = 2;
     assert_ne!(one, card_key(&varied));
     let mut varied = card();
     card_group(&mut varied).sections[0].failed[0].code = "busy";
@@ -1262,15 +1295,35 @@ fn the_group_entry_is_in_the_key() {
 
 #[test]
 fn the_call_status_and_error_are_in_the_key() {
-    use super::{RowError, TurnCall, TurnEntry};
+    use super::{CallState, RowError, TurnCallResult, TurnEntry};
+    fn empty_result() -> TurnCallResult<'static> {
+        TurnCallResult {
+            exit: None,
+            duration_ms: None,
+            lines: 0,
+            changes: &[],
+            output: "",
+            content: "",
+            images: Vec::new(),
+        }
+    }
     let one = card_key(&card());
-    for (index, status) in [
-        Status::Pending,
-        Status::Running,
-        Status::Failed,
-        Status::Denied,
-        Status::Cancelled,
-        Status::Unknown,
+    for (index, state) in [
+        CallState::Pending,
+        CallState::Running,
+        CallState::Failed {
+            result: empty_result(),
+            error: RowError {
+                code: "x",
+                message: "y",
+            },
+        },
+        CallState::Denied {
+            result: empty_result(),
+            detail: "no",
+        },
+        CallState::Cancelled(empty_result()),
+        CallState::Unknown,
     ]
     .into_iter()
     .enumerate()
@@ -1279,30 +1332,31 @@ fn the_call_status_and_error_are_in_the_key() {
         let TurnEntry::Group(group) = &mut varied.entries[2] else {
             panic!("the third entry stays a group");
         };
-        group.sections[0].calls[0].status = status;
+        group.sections[0].calls[0].state = state;
         assert_ne!(one, card_key(&varied), "status {index}");
     }
+    let failed = |code: &'static str, message: &'static str| CallState::Failed {
+        result: empty_result(),
+        error: RowError { code, message },
+    };
     let mut varied = card();
     let TurnEntry::Group(group) = &mut varied.entries[2] else {
         panic!("the third entry stays a group");
     };
-    group.sections[0].calls[0].error = Some(RowError {
-        code: "nonzero_exit",
-        message: "x: y",
-    });
+    group.sections[0].calls[0].state = failed("nonzero_exit", "x: y");
     let erred = card_key(&varied);
     assert_ne!(one, erred);
+    let mut varied = card();
     let TurnEntry::Group(group) = &mut varied.entries[2] else {
         panic!("the third entry stays a group");
     };
-    let TurnCall { error, .. } = &mut group.sections[0].calls[0];
-    error.as_mut().expect("an error").code = "tool_error";
+    group.sections[0].calls[0].state = failed("tool_error", "x: y");
     assert_ne!(erred, card_key(&varied));
+    let mut varied = card();
     let TurnEntry::Group(group) = &mut varied.entries[2] else {
         panic!("the third entry stays a group");
     };
-    let TurnCall { error, .. } = &mut group.sections[0].calls[0];
-    error.as_mut().expect("an error").message = "x: z";
+    group.sections[0].calls[0].state = failed("nonzero_exit", "x: z");
     assert_ne!(erred, card_key(&varied));
 }
 
@@ -1384,7 +1438,7 @@ fn the_steer_aside_and_answers_are_in_the_key() {
     let TurnEntry::Answers(TurnAnswers::Given { parts, note, ts }) = &mut varied.entries[5] else {
         panic!("the sixth entry stays given");
     };
-    parts[0].text = "other";
+    parts[0].disposition = AnswerDisposition::Answered { text: "other" };
     *note = Some("note");
     *ts = 9;
     assert_ne!(one, card_key(&varied));
@@ -1392,10 +1446,10 @@ fn the_steer_aside_and_answers_are_in_the_key() {
 
 #[test]
 fn the_ending_and_usage_are_in_the_key() {
-    use super::{TurnEnded, TurnError};
+    use super::{TurnCardState, TurnEnded, TurnError};
     let one = card_key(&card());
     let mut varied = card();
-    varied.ended = Some(TurnEnded::Completed { ended_ts: 2 });
+    varied.state = TurnCardState::Ended(TurnEnded::Completed { ended_ts: 2 });
     let ended = card_key(&varied);
     assert_ne!(one, ended);
     for (index, ending) in [
@@ -1410,11 +1464,11 @@ fn the_ending_and_usage_are_in_the_key() {
     .enumerate()
     {
         let mut varied = card();
-        varied.ended = Some(ending);
+        varied.state = TurnCardState::Ended(ending);
         assert_ne!(ended, card_key(&varied), "outcome {index}");
     }
     let mut varied = card();
-    varied.ended = Some(TurnEnded::Failed {
+    varied.state = TurnCardState::Ended(TurnEnded::Failed {
         ended_ts: 3,
         error: Some(TurnError {
             code: contract::ErrorCode::IoFailed,
@@ -1424,7 +1478,7 @@ fn the_ending_and_usage_are_in_the_key() {
     let failed = card_key(&varied);
     assert_ne!(ended, failed);
     let mut varied = card();
-    varied.ended = Some(TurnEnded::Failed {
+    varied.state = TurnCardState::Ended(TurnEnded::Failed {
         ended_ts: 3,
         error: Some(TurnError {
             code: contract::ErrorCode::ConnectionFailed,
@@ -1433,7 +1487,7 @@ fn the_ending_and_usage_are_in_the_key() {
     });
     assert_ne!(failed, card_key(&varied));
     let mut varied = card();
-    varied.ended = Some(TurnEnded::Failed {
+    varied.state = TurnCardState::Ended(TurnEnded::Failed {
         ended_ts: 3,
         error: Some(TurnError {
             code: contract::ErrorCode::IoFailed,
@@ -1481,17 +1535,16 @@ fn group_call(name: &'static str) -> super::TurnCall<'static> {
     super::TurnCall {
         name,
         arguments: &serde_json::Value::Null,
-        status: Status::Completed,
-        exit: None,
-        duration_ms: None,
-        lines: 0,
-        changes: &[],
-        error: None,
-        output: "",
-        headline: "",
-        content: "",
+        state: CallState::Completed(TurnCallResult {
+            exit: None,
+            duration_ms: None,
+            lines: 0,
+            changes: &[],
+            output: "",
+            content: "",
+            images: Vec::new(),
+        }),
         answer: None,
-        images: Vec::new(),
         open: false,
         asking: false,
     }
@@ -1647,8 +1700,7 @@ fn every_answers_field_is_in_the_key() {
         answers: TurnAnswers::Given {
             parts: vec![TurnAnswerPart {
                 header: "Base",
-                text: "main",
-                skipped: false,
+                disposition: AnswerDisposition::Answered { text: "main" },
             }],
             note: Some("go"),
             ts: 1,
@@ -1668,13 +1720,11 @@ fn every_answers_field_is_in_the_key() {
                 parts: vec![
                     TurnAnswerPart {
                         header: "Base",
-                        text: "main",
-                        skipped: false,
+                        disposition: AnswerDisposition::Answered { text: "main" },
                     },
                     TurnAnswerPart {
                         header: "Name",
-                        text: "skipped",
-                        skipped: true,
+                        disposition: AnswerDisposition::Skipped,
                     },
                 ],
                 note: Some("go"),
@@ -1686,8 +1736,7 @@ fn every_answers_field_is_in_the_key() {
             answers: TurnAnswers::Given {
                 parts: vec![TurnAnswerPart {
                     header: "Changed",
-                    text: "main",
-                    skipped: false,
+                    disposition: AnswerDisposition::Answered { text: "main" },
                 }],
                 note: Some("go"),
                 ts: 1,
@@ -1698,8 +1747,7 @@ fn every_answers_field_is_in_the_key() {
             answers: TurnAnswers::Given {
                 parts: vec![TurnAnswerPart {
                     header: "Base",
-                    text: "changed",
-                    skipped: false,
+                    disposition: AnswerDisposition::Answered { text: "changed" },
                 }],
                 note: Some("go"),
                 ts: 1,
@@ -1710,8 +1758,7 @@ fn every_answers_field_is_in_the_key() {
             answers: TurnAnswers::Given {
                 parts: vec![TurnAnswerPart {
                     header: "Base",
-                    text: "main",
-                    skipped: true,
+                    disposition: AnswerDisposition::Skipped,
                 }],
                 note: Some("go"),
                 ts: 1,
@@ -1722,8 +1769,7 @@ fn every_answers_field_is_in_the_key() {
             answers: TurnAnswers::Given {
                 parts: vec![TurnAnswerPart {
                     header: "Base",
-                    text: "main",
-                    skipped: false,
+                    disposition: AnswerDisposition::Answered { text: "main" },
                 }],
                 note: None,
                 ts: 1,
@@ -1734,8 +1780,7 @@ fn every_answers_field_is_in_the_key() {
             answers: TurnAnswers::Given {
                 parts: vec![TurnAnswerPart {
                     header: "Base",
-                    text: "main",
-                    skipped: false,
+                    disposition: AnswerDisposition::Answered { text: "main" },
                 }],
                 note: Some("go"),
                 ts: 2,
@@ -1746,8 +1791,7 @@ fn every_answers_field_is_in_the_key() {
             answers: TurnAnswers::Given {
                 parts: vec![TurnAnswerPart {
                     header: "Base",
-                    text: "main",
-                    skipped: false,
+                    disposition: AnswerDisposition::Answered { text: "main" },
                 }],
                 note: Some("go"),
                 ts: 1,

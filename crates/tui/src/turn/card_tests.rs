@@ -1691,11 +1691,18 @@ fn a_turn_card_timeout_lists_one_extension_failed() {
 
 #[test]
 fn the_card_running_follows_the_open_turn() {
+    use crate::ext::TurnCardState;
     let mut cards = fresh();
     start(&mut cards, "go");
-    assert!(cards.turns[0].card_input(None, false).running);
+    assert!(matches!(
+        cards.turns[0].card_input(None, false).state,
+        TurnCardState::Running
+    ));
     done(&mut cards);
-    assert!(!cards.turns[0].card_input(None, false).running);
+    assert!(matches!(
+        cards.turns[0].card_input(None, false).state,
+        TurnCardState::Ended(_)
+    ));
 }
 
 #[test]
@@ -1720,7 +1727,10 @@ fn the_card_input_uses_the_summary_totals_and_ending() {
     // summary's empty spend.
     let turn = &cards.turns[0];
     assert_eq!(turn.spend.usage().tokens.input, 10);
-    assert!(turn.card_input(None, false).running);
+    assert!(matches!(
+        turn.card_input(None, false).state,
+        crate::ext::TurnCardState::Running
+    ));
     let empty = crate::format::Spend::default();
     let done = (
         TurnCompleted {
@@ -1742,22 +1752,22 @@ fn the_card_input_uses_the_summary_totals_and_ending() {
     assert_eq!(input.usage.tokens.input, 0);
     assert!(
         matches!(
-            input.ended,
-            Some(crate::ext::TurnEnded::Completed { ended_ts: 5_000 })
+            input.state,
+            crate::ext::TurnCardState::Ended(crate::ext::TurnEnded::Completed { ended_ts: 5_000 })
         ),
         "the summary's ending names the close: {:?}",
-        input.ended
+        input.state
     );
-    assert!(!input.running);
+    assert!(matches!(input.state, crate::ext::TurnCardState::Ended(_)));
     let group_running = input.entries.iter().find_map(|entry| match entry {
-        crate::ext::TurnEntry::Group(group) => Some(group.running),
+        crate::ext::TurnEntry::Group(group) => Some(group.state),
         crate::ext::TurnEntry::Reply { .. }
         | crate::ext::TurnEntry::Steer { .. }
         | crate::ext::TurnEntry::Aside(_)
         | crate::ext::TurnEntry::Band(_)
         | crate::ext::TurnEntry::Answers(_) => None,
     });
-    assert_eq!(group_running, Some(false));
+    assert_eq!(group_running, Some(crate::ext::TurnGroupState::Finished));
     // An open summary keeps the card's own ending and running: the
     // turn the summary does not close still runs.
     let open = DrawSummary {
@@ -1768,8 +1778,7 @@ fn the_card_input_uses_the_summary_totals_and_ending() {
     };
     let input = turn.card_input(Some(open), false);
     assert_eq!(input.started, 9);
-    assert!(input.ended.is_none());
-    assert!(input.running);
+    assert!(matches!(input.state, crate::ext::TurnCardState::Running));
 }
 
 #[test]
@@ -1781,8 +1790,7 @@ fn the_card_input_holds_every_entry_variant() {
     assert_eq!(card.prompts[0].text, "go");
     assert!(card.prompts[0].images.is_empty());
     assert_eq!(card.started, 0);
-    assert!(card.running);
-    assert!(card.ended.is_none());
+    assert!(matches!(card.state, crate::ext::TurnCardState::Running));
     assert!(!card.flat);
     let kinds: Vec<&str> = card
         .entries
@@ -1814,7 +1822,10 @@ fn the_card_input_holds_every_entry_variant() {
                     .flat_map(|section| section.calls.iter().map(|call| &call.name))
                     .collect();
                 assert_eq!(calls, [&"read", &"ask_user", &"ask_user"]);
-                assert!(!group.running || group.open || !group.cut);
+                assert!(matches!(
+                    group.state,
+                    crate::ext::TurnGroupState::Running | crate::ext::TurnGroupState::Finished
+                ));
                 "group"
             }
             TurnEntry::Aside(TurnAside::Warning { message }) => {

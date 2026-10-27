@@ -11,7 +11,7 @@ use serde_json::json;
 use super::{Call, CallResult, Group, Section, Streaming, Thought, Timing};
 use crate::app::Target;
 use crate::ext::cache::Cache;
-use crate::ext::{Bound, Failure, Handle, Input, RawSpan, Renderer, Status as ExtStatus};
+use crate::ext::{Bound, CallState, Failure, Handle, Input, RawSpan, Renderer, TurnGroupState};
 use crate::theme::Role;
 
 #[test]
@@ -2271,20 +2271,13 @@ fn ledger_input_folds_the_call_events() {
     let row = group.ledger_input(&pending, "", false);
     assert_eq!(row.name, "shell");
     assert_eq!(row.arguments, &json!({"command": "sleep 1"}));
-    assert_eq!(row.status, ExtStatus::Pending);
-    assert_eq!(row.exit, None);
-    assert_eq!(row.duration_ms, None);
-    assert_eq!(row.lines, 0);
-    assert!(row.changes.is_empty());
-    assert_eq!(row.error, None);
-    assert_eq!(row.output, "");
+    assert!(matches!(row.state, CallState::Pending));
     assert_eq!(row.answer, None);
     assert!(!row.flat);
     // A started call with no completion is running.
     let running = running_call(2, "shell", json!({"command": "sleep 1"}));
     let row = group.ledger_input(&running, "", false);
-    assert_eq!(row.status, ExtStatus::Running);
-    assert_eq!(row.duration_ms, None);
+    assert!(matches!(row.state, CallState::Running));
     // A completed shell carries its exit and its lines.
     let done = Call {
         timing: Timing::Took(2500),
@@ -2292,11 +2285,13 @@ fn ledger_input_folds_the_call_events() {
     };
     let output = super::first_result_line(done.content());
     let row = group.ledger_input(&done, &output, false);
-    assert_eq!(row.status, ExtStatus::Completed);
-    assert_eq!(row.exit, Some(0));
-    assert_eq!(row.lines, 2);
-    assert_eq!(row.duration_ms, Some(2500));
-    assert_eq!(row.output, "ok");
+    let CallState::Completed(result) = row.state else {
+        panic!("a completed call carries its result");
+    };
+    assert_eq!(result.exit, Some(0));
+    assert_eq!(result.lines, 2);
+    assert_eq!(result.duration_ms, Some(2500));
+    assert_eq!(result.output, "ok");
     // A failed call's headline splits at the first ": " into its
     // code and message.
     let failed = with_content(
@@ -2305,39 +2300,38 @@ fn ledger_input_folds_the_call_events() {
     );
     let output = super::first_result_line(failed.content());
     let row = group.ledger_input(&failed, &output, false);
-    assert_eq!(row.status, ExtStatus::Failed);
-    assert_eq!(
-        row.error,
-        Some(crate::ext::RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        })
-    );
-    assert_eq!(row.output, "out");
+    let CallState::Failed { result, error } = row.state else {
+        panic!("a failed call carries its result and error");
+    };
+    assert_eq!((error.code, error.message), ("nonzero_exit", "x: y"));
+    assert_eq!(result.output, "out");
     // A failed call with no headline names no code: the row ends
     // with its output.
     let bare = with_content(with_headline(failed_call(5), ""), "boom\nsecond");
     let output = super::first_result_line(bare.content());
     let row = group.ledger_input(&bare, &output, false);
-    assert_eq!(row.status, ExtStatus::Failed);
-    assert_eq!(
-        row.error,
-        Some(crate::ext::RowError {
-            code: "",
-            message: "",
-        })
-    );
-    assert_eq!(row.output, "boom");
-    // A denied call and a cancelled call carry no error: the built-in
-    // row names the denial and the cancellation itself.
-    for (call, status) in [
-        (denied_call(6), ExtStatus::Denied),
-        (cancelled_call(7), ExtStatus::Cancelled),
-    ] {
+    let CallState::Failed { result, error } = row.state else {
+        panic!("a failed call carries its result and error");
+    };
+    assert_eq!((error.code, error.message), ("", ""));
+    assert_eq!(result.output, "boom");
+    // A denied call and a cancelled call carry their result without an
+    // error: the built-in row names the denial and the cancellation
+    // itself.
+    for (call, denied) in [(denied_call(6), true), (cancelled_call(7), false)] {
         let output = super::first_result_line(call.content());
         let row = group.ledger_input(&call, &output, false);
-        assert_eq!(row.status, status);
-        assert_eq!(row.error, None);
+        match row.state {
+            CallState::Denied { .. } => assert!(denied),
+            CallState::Cancelled(_) => assert!(!denied),
+            CallState::Pending
+            | CallState::Running
+            | CallState::Unknown
+            | CallState::Completed(_)
+            | CallState::Failed { .. } => {
+                panic!("a denied or cancelled call carries its result")
+            }
+        }
     }
     // A started call of a cut turn may have run: its status is
     // unknown.
@@ -2346,7 +2340,7 @@ fn ledger_input_folds_the_call_events() {
         ..Group::default()
     };
     let row = cut.ledger_input(&running, "", false);
-    assert_eq!(row.status, ExtStatus::Unknown);
+    assert!(matches!(row.state, CallState::Unknown));
     // An answered form carries the person's answer.
     let answered = answered_ask_call(8);
     let output = super::first_result_line(answered.content());
@@ -2360,11 +2354,13 @@ fn ledger_input_folds_the_call_events() {
     let edit = edit_call(10, "e.rs", 2, 1);
     let output = super::first_result_line(edit.content());
     let row = group.ledger_input(&edit, &output, true);
-    assert_eq!(row.status, ExtStatus::Completed);
+    let CallState::Completed(result) = row.state else {
+        panic!("a completed edit carries its result");
+    };
     assert!(row.flat);
-    assert_eq!(row.changes.len(), 1);
-    assert_eq!(row.changes[0].added, 2);
-    assert_eq!(row.changes[0].removed, 1);
+    assert_eq!(result.changes.len(), 1);
+    assert_eq!(result.changes[0].added, 2);
+    assert_eq!(result.changes[0].removed, 1);
 }
 
 /// An extension link's range moves right by the six gutter cells, on
@@ -2682,6 +2678,26 @@ fn entry_of(group: &Group, running: bool) -> crate::ext::TurnGroup<'_> {
     group.turn_entry(running)
 }
 
+/// A cut group is cut however the caller names running: `Cut` wins
+/// over the running flag, and only an uncut open group runs.
+#[test]
+fn a_cut_group_wins_over_the_running_flag() {
+    use crate::ext::TurnGroupState;
+    for (cut, running, expected) in [
+        (false, false, TurnGroupState::Finished),
+        (false, true, TurnGroupState::Running),
+        (true, false, TurnGroupState::Cut),
+        (true, true, TurnGroupState::Cut),
+    ] {
+        let group = Group {
+            cut,
+            ..Group::default()
+        };
+        let entry = entry_of(&group, running);
+        assert_eq!(entry.state, expected, "cut {cut} running {running}");
+    }
+}
+
 #[test]
 fn the_card_entry_carries_the_summary_line_fields() {
     let group = Group {
@@ -2703,9 +2719,10 @@ fn the_card_entry_carries_the_summary_line_fields() {
     };
     let entry = entry_of(&group, true);
     assert_eq!((entry.first, entry.last), (1, 2));
-    assert!(entry.running);
+    // A cut group maps to Cut even when the caller still names it
+    // running: the two flags cannot both hold.
+    assert_eq!(entry.state, TurnGroupState::Cut);
     assert!(entry.open);
-    assert!(entry.cut);
     assert_eq!(entry.sections.len(), 1);
     assert_eq!(entry.sections[0].step, 3);
     assert_eq!(entry.streaming.len(), 1);
@@ -2713,17 +2730,28 @@ fn the_card_entry_carries_the_summary_line_fields() {
     assert_eq!(entry.streaming[0].index, 1);
     assert_eq!(entry.streaming[0].name, Some("shell"));
     assert_eq!(entry.streaming[0].text, "arg");
-    assert!(!entry_of(&group, false).running);
+    // The cut stands however the caller names running.
+    assert_eq!(entry_of(&group, false).state, TurnGroupState::Cut);
 }
 
 #[test]
 fn the_card_entry_maps_every_call_status() {
-    use crate::ext::Status as ExtStatus;
+    fn status_of(call: &crate::ext::TurnCall<'_>) -> &'static str {
+        match &call.state {
+            CallState::Pending => "pending",
+            CallState::Running => "running",
+            CallState::Unknown => "unknown",
+            CallState::Completed(_) => "completed",
+            CallState::Failed { .. } => "failed",
+            CallState::Denied { .. } => "denied",
+            CallState::Cancelled(_) => "cancelled",
+        }
+    }
     for (status, expected) in [
-        (Some(CallStatus::Completed), ExtStatus::Completed),
-        (Some(CallStatus::Failed), ExtStatus::Failed),
-        (Some(CallStatus::Denied), ExtStatus::Denied),
-        (Some(CallStatus::Cancelled), ExtStatus::Cancelled),
+        (Some(CallStatus::Completed), "completed"),
+        (Some(CallStatus::Failed), "failed"),
+        (Some(CallStatus::Denied), "denied"),
+        (Some(CallStatus::Cancelled), "cancelled"),
     ] {
         let group = Group {
             sections: vec![Section {
@@ -2737,7 +2765,7 @@ fn the_card_entry_maps_every_call_status() {
             ..Group::default()
         };
         let entry = entry_of(&group, false);
-        assert_eq!(entry.sections[0].calls[0].status, expected);
+        assert_eq!(status_of(&entry.sections[0].calls[0]), expected);
     }
     // A call that never started reads pending.
     let group = Group {
@@ -2755,7 +2783,7 @@ fn the_card_entry_maps_every_call_status() {
         ..Group::default()
     };
     let entry = entry_of(&group, false);
-    assert_eq!(entry.sections[0].calls[0].status, ExtStatus::Pending);
+    assert_eq!(status_of(&entry.sections[0].calls[0]), "pending");
     // A started call of a cut turn has status unknown.
     let group = Group {
         cut: true,
@@ -2767,7 +2795,7 @@ fn the_card_entry_maps_every_call_status() {
         ..Group::default()
     };
     let entry = entry_of(&group, false);
-    assert_eq!(entry.sections[0].calls[0].status, ExtStatus::Unknown);
+    assert_eq!(status_of(&entry.sections[0].calls[0]), "unknown");
     // The same call on a whole turn reads running.
     let group = Group {
         sections: vec![Section {
@@ -2778,7 +2806,7 @@ fn the_card_entry_maps_every_call_status() {
         ..Group::default()
     };
     let entry = entry_of(&group, false);
-    assert_eq!(entry.sections[0].calls[0].status, ExtStatus::Running);
+    assert_eq!(status_of(&entry.sections[0].calls[0]), "running");
 }
 
 #[test]
@@ -2805,13 +2833,15 @@ fn the_card_entry_carries_the_opened_detail() {
     };
     let entry = entry_of(&group, false);
     let call = &entry.sections[0].calls[0];
-    assert_eq!(call.headline, "nonzero_exit: x: y");
-    assert_eq!(call.content, "\nfirst\nsecond");
+    assert_eq!(call.headline(), "nonzero_exit: x: y");
+    let CallState::Failed { result, error } = &call.state else {
+        panic!("a failed call carries its result and error");
+    };
+    assert_eq!(result.content, "\nfirst\nsecond");
     // The output is the first non-empty line, else done.
-    assert_eq!(call.output, "first");
+    assert_eq!(result.output, "first");
     assert!(call.open);
     assert!(call.asking);
-    let error = call.error.expect("a failed call carries its code");
     assert_eq!((error.code, error.message), ("nonzero_exit", "x: y"));
     assert_eq!(entry.sections[0].failed.len(), 1);
     assert_eq!(entry.sections[0].failed[0].code, "rate_limited");

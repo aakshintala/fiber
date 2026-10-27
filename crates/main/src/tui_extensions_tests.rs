@@ -1,6 +1,7 @@
 //! Loader and picker boundary tests (`docs/tui.md`, extension loading).
 use super::*;
 use fakes::clock::FakeClock;
+use tui::ext::{AnswerDisposition, LedgerResult, TurnCardState, TurnGroupState};
 
 fn fixture() -> (fakes::TempDir, Loader) {
     let dir = fakes::TempDir::new("fiber-tui-loader");
@@ -51,13 +52,13 @@ fn render(renderer: &dyn Renderer, ctx: &SessionCtx) -> Decision {
     let row = tui::ext::LedgerRow {
         name: "shell",
         arguments: &args,
-        status: Status::Completed,
-        exit: Some(0),
-        duration_ms: Some(1),
-        lines: 1,
-        changes: &[],
-        error: None,
-        output: "",
+        state: CallState::Completed(LedgerResult {
+            exit: Some(0),
+            duration_ms: Some(1),
+            lines: 1,
+            changes: &[],
+            output: "",
+        }),
         answer: None,
         flat: false,
     };
@@ -283,13 +284,13 @@ fn render_deadline_reports_typed_extension_failure_and_switches_off() {
     let row = tui::ext::LedgerRow {
         name: "shell",
         arguments: &args,
-        status: Status::Completed,
-        exit: Some(0),
-        duration_ms: Some(1),
-        lines: 1,
-        changes: &[],
-        error: None,
-        output: "",
+        state: CallState::Completed(LedgerResult {
+            exit: Some(0),
+            duration_ms: Some(1),
+            lines: 1,
+            changes: &[],
+            output: "",
+        }),
         answer: None,
         flat: false,
     };
@@ -611,14 +612,13 @@ fn card() -> tui::ext::TurnCard<'static> {
             cost: Some(0.5),
             subscription_cost: 1.5,
         },
-        ended: Some(tui::ext::TurnEnded::Failed {
+        state: TurnCardState::Ended(tui::ext::TurnEnded::Failed {
             ended_ts: 7,
             error: Some(tui::ext::TurnError {
                 code: contract::ErrorCode::IoFailed,
                 message: "boom",
             }),
         }),
-        running: false,
         flat: false,
     }
 }
@@ -681,8 +681,7 @@ fn the_turn_card_entries_groups_and_ending_follow_the_doc() {
             cost: None,
             subscription_cost: 0.0,
         },
-        ended: None,
-        running: true,
+        state: TurnCardState::Running,
         flat: true,
     }));
     let entries = table["entries"].as_array().expect("entries");
@@ -707,7 +706,7 @@ fn the_turn_card_entries_groups_and_ending_follow_the_doc() {
     );
     assert_eq!(
         entries[4],
-        json!({"kind": "band", "trigger": "automatic", "ts": 2, "state": {"kind": "unchanged", "cancelled": true}, "sizes": null}),
+        json!({"kind": "band", "trigger": "automatic", "ts": 2, "state": {"kind": "unchanged", "cancelled": true}}),
     );
     assert_eq!(
         entries[5],
@@ -720,16 +719,15 @@ fn the_turn_card_entries_groups_and_ending_follow_the_doc() {
 #[test]
 fn the_turn_card_group_entry_lists_sections_streaming_and_failed() {
     use tui::ext::{
-        Status, TurnEntry, TurnFailed, TurnGroup, TurnSection, TurnStreaming, TurnThought,
+        CallState, TurnEntry, TurnFailed, TurnGroup, TurnSection, TurnStreaming, TurnThought,
     };
     let table = input_value(&Input::TurnCard(tui::ext::TurnCard {
         prompts: vec![],
         entries: vec![TurnEntry::Group(TurnGroup {
             first: 1,
             last: 2,
-            running: true,
+            state: TurnGroupState::Running,
             open: false,
-            cut: false,
             sections: vec![TurnSection {
                 step: 3,
                 thoughts: vec![TurnThought {
@@ -741,17 +739,8 @@ fn the_turn_card_group_entry_lists_sections_streaming_and_failed() {
                 calls: vec![tui::ext::TurnCall {
                     name: "read",
                     arguments: &json!({"path": "a.rs"}),
-                    status: Status::Running,
-                    exit: None,
-                    duration_ms: None,
-                    lines: 1,
-                    changes: &[],
-                    error: None,
-                    output: "first",
-                    headline: "",
-                    content: "first\nsecond",
+                    state: CallState::Running,
                     answer: None,
-                    images: vec![],
                     open: true,
                     asking: false,
                 }],
@@ -779,8 +768,7 @@ fn the_turn_card_group_entry_lists_sections_streaming_and_failed() {
             cost: None,
             subscription_cost: 0.0,
         },
-        ended: None,
-        running: true,
+        state: TurnCardState::Running,
         flat: false,
     }));
     let entries = table["entries"].as_array().expect("entries");
@@ -803,12 +791,12 @@ fn the_turn_card_group_entry_lists_sections_streaming_and_failed() {
                     "status": "running",
                     "exit": null,
                     "duration_ms": null,
-                    "lines": 1,
+                    "lines": 0,
                     "changes": [],
                     "error": null,
-                    "output": "first",
+                    "output": "done",
                     "headline": "",
-                    "content": "first\nsecond",
+                    "content": "",
                     "answer": null,
                     "images": [],
                     "open": true,
@@ -853,8 +841,7 @@ fn the_answers_table_holds_outcome_parts_note_and_ts() {
         answers: tui::ext::TurnAnswers::Given {
             parts: vec![tui::ext::TurnAnswerPart {
                 header: "Base",
-                text: "main",
-                skipped: false,
+                disposition: AnswerDisposition::Answered { text: "main" },
             }],
             note: Some("go"),
             ts: 1,
@@ -873,6 +860,265 @@ fn the_answers_table_holds_outcome_parts_note_and_ts() {
         input_value(&declined),
         json!({"outcome": "declined", "parts": [], "note": null, "ts": null, "flat": false}),
     );
+}
+
+/// A skip projects the literal text the built-in row drew, and an
+/// answered text that happens to read "skipped" stays an answer.
+#[test]
+fn skipped_answers_project_the_literal_text() {
+    let skipped = Input::Answers(tui::ext::Answers {
+        answers: tui::ext::TurnAnswers::Given {
+            parts: vec![tui::ext::TurnAnswerPart {
+                header: "Base",
+                disposition: AnswerDisposition::Skipped,
+            }],
+            note: None,
+            ts: 1,
+        },
+        flat: false,
+    });
+    assert_eq!(
+        input_value(&skipped),
+        json!({"outcome": "given", "parts": [{"header": "Base", "text": "skipped", "skipped": true}], "note": null, "ts": 1, "flat": false}),
+    );
+    let answered = Input::Answers(tui::ext::Answers {
+        answers: tui::ext::TurnAnswers::Given {
+            parts: vec![tui::ext::TurnAnswerPart {
+                header: "Base",
+                disposition: AnswerDisposition::Answered { text: "skipped" },
+            }],
+            note: None,
+            ts: 1,
+        },
+        flat: false,
+    });
+    assert_eq!(
+        input_value(&answered),
+        json!({"outcome": "given", "parts": [{"header": "Base", "text": "skipped", "skipped": false}], "note": null, "ts": 1, "flat": false}),
+    );
+}
+
+/// Every call state projects its documented Lua shape: no-payload
+/// states carry the current defaults, terminal states carry their
+/// result, a failure carries its split code and message, and a denial
+/// carries its reason as the headline.
+#[test]
+fn every_call_state_projects_its_documented_shape() {
+    use tui::ext::{CallState, LedgerResult, RowError, TurnCallResult};
+    fn ledger(state: CallState<'static, LedgerResult<'static>, ()>) -> serde_json::Value {
+        let args = json!({});
+        input_value(&Input::LedgerRow(tui::ext::LedgerRow {
+            name: "shell",
+            arguments: &args,
+            state,
+            answer: None,
+            flat: false,
+        }))
+    }
+    fn terminal() -> LedgerResult<'static> {
+        LedgerResult {
+            exit: None,
+            duration_ms: Some(2),
+            lines: 1,
+            changes: &[],
+            output: "first",
+        }
+    }
+    // Pending, running and unknown carry no result: the projection
+    // keeps the current defaults.
+    for (state, status) in [
+        (CallState::Pending, "pending"),
+        (CallState::Running, "running"),
+        (CallState::Unknown, "unknown"),
+    ] {
+        let table = ledger(state);
+        assert_eq!(table["status"], status);
+        assert_eq!(table["exit"], serde_json::Value::Null);
+        assert_eq!(table["duration_ms"], serde_json::Value::Null);
+        assert_eq!(table["lines"], 0);
+        assert_eq!(table["changes"], json!([]));
+        assert_eq!(table["error"], serde_json::Value::Null);
+        assert_eq!(table["output"], "done");
+    }
+    // A terminal call may lack its exit: the absent data stays null.
+    let table = ledger(CallState::Completed(terminal()));
+    assert_eq!(table["status"], "completed");
+    assert_eq!(table["exit"], serde_json::Value::Null);
+    assert_eq!(table["duration_ms"], 2);
+    assert_eq!(table["output"], "first");
+    let table = ledger(CallState::Cancelled(terminal()));
+    assert_eq!(table["status"], "cancelled");
+    // Both error fields empty gives an empty headline; an empty code
+    // gives the message; otherwise it is "code: message".
+    for (code, message, headline) in [
+        ("", "", ""),
+        ("", "bad key", "bad key"),
+        ("io_failed", "bad key", "io_failed: bad key"),
+    ] {
+        let table = ledger(CallState::Failed {
+            result: terminal(),
+            error: RowError { code, message },
+        });
+        assert_eq!(table["status"], "failed");
+        assert_eq!(
+            table["error"],
+            json!({"code": code, "message": message}),
+            "code {code:?} message {message:?}"
+        );
+        let call = tui::ext::TurnCall {
+            name: "shell",
+            arguments: &json!({}),
+            state: CallState::Failed {
+                result: TurnCallResult {
+                    exit: None,
+                    duration_ms: Some(2),
+                    lines: 1,
+                    changes: &[],
+                    output: "first",
+                    content: "full",
+                    images: Vec::new(),
+                },
+                error: RowError { code, message },
+            },
+            answer: None,
+            open: false,
+            asking: false,
+        };
+        let table = input_value(&Input::TurnCard(tui::ext::TurnCard {
+            prompts: Vec::new(),
+            entries: vec![tui::ext::TurnEntry::Group(tui::ext::TurnGroup {
+                first: 1,
+                last: 2,
+                state: TurnGroupState::Finished,
+                open: false,
+                sections: vec![tui::ext::TurnSection {
+                    step: 1,
+                    thoughts: Vec::new(),
+                    calls: vec![call],
+                    failed: Vec::new(),
+                }],
+                streaming: Vec::new(),
+            })],
+            started: 0,
+            calls: 0,
+            usage: contract::shapes::Usage {
+                tokens: contract::shapes::Tokens {
+                    input: 0,
+                    cache_read: 0,
+                    cache_write: Default::default(),
+                    output: 0,
+                },
+                cost: None,
+                subscription_cost: 0.0,
+            },
+            state: TurnCardState::Running,
+            flat: false,
+        }));
+        let shown = &table["entries"][0]["sections"][0]["calls"][0];
+        assert_eq!(
+            shown["headline"], headline,
+            "code {code:?} message {message:?}"
+        );
+        assert_eq!(shown["content"], "full");
+    }
+    // A denial carries its reason as the headline and no error.
+    let table = ledger(CallState::Denied {
+        result: terminal(),
+        detail: (),
+    });
+    assert_eq!(table["status"], "denied");
+    assert_eq!(table["error"], serde_json::Value::Null);
+    let denied = tui::ext::TurnCall {
+        name: "shell",
+        arguments: &json!({}),
+        state: CallState::Denied {
+            result: TurnCallResult {
+                exit: None,
+                duration_ms: None,
+                lines: 0,
+                changes: &[],
+                output: "done",
+                content: "",
+                images: Vec::new(),
+            },
+            detail: "not allowed",
+        },
+        answer: None,
+        open: false,
+        asking: false,
+    };
+    assert_eq!(denied.headline(), "not allowed");
+}
+
+/// A running card and an ended card project the documented `running`
+/// and `ended` keys, and each group lifecycle projects its own pair.
+#[test]
+fn card_and_group_states_project_their_documented_keys() {
+    use tui::ext::{TurnCardState, TurnEnded};
+    let ended = |state| {
+        input_value(&Input::TurnCard(tui::ext::TurnCard {
+            prompts: Vec::new(),
+            entries: Vec::new(),
+            started: 0,
+            calls: 0,
+            usage: contract::shapes::Usage {
+                tokens: contract::shapes::Tokens {
+                    input: 0,
+                    cache_read: 0,
+                    cache_write: Default::default(),
+                    output: 0,
+                },
+                cost: None,
+                subscription_cost: 0.0,
+            },
+            state,
+            flat: false,
+        }))
+    };
+    let table = ended(TurnCardState::Running);
+    assert_eq!(table["running"], true);
+    assert_eq!(table["ended"], serde_json::Value::Null);
+    let table = ended(TurnCardState::Ended(TurnEnded::Completed { ended_ts: 7 }));
+    assert_eq!(table["running"], false);
+    assert_eq!(
+        table["ended"],
+        json!({"outcome": "completed", "ended_ts": 7, "error": null}),
+    );
+    let card = |state| {
+        input_value(&Input::TurnCard(tui::ext::TurnCard {
+            prompts: Vec::new(),
+            entries: vec![tui::ext::TurnEntry::Group(tui::ext::TurnGroup {
+                first: 1,
+                last: 2,
+                state,
+                open: false,
+                sections: Vec::new(),
+                streaming: Vec::new(),
+            })],
+            started: 0,
+            calls: 0,
+            usage: contract::shapes::Usage {
+                tokens: contract::shapes::Tokens {
+                    input: 0,
+                    cache_read: 0,
+                    cache_write: Default::default(),
+                    output: 0,
+                },
+                cost: None,
+                subscription_cost: 0.0,
+            },
+            state: TurnCardState::Running,
+            flat: false,
+        }))["entries"][0]
+            .take()
+    };
+    let group = |state| card(state);
+    assert_eq!(group(TurnGroupState::Running)["running"], true);
+    assert_eq!(group(TurnGroupState::Running)["cut"], false);
+    assert_eq!(group(TurnGroupState::Finished)["running"], false);
+    assert_eq!(group(TurnGroupState::Finished)["cut"], false);
+    assert_eq!(group(TurnGroupState::Cut)["running"], false);
+    assert_eq!(group(TurnGroupState::Cut)["cut"], true);
 }
 
 #[test]
@@ -907,25 +1153,25 @@ fn the_handoff_band_table_holds_trigger_ts_state_and_sizes() {
     };
     assert_eq!(
         input_value(&band(TurnBandState::Writing)),
-        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "writing", "cancelled": null}, "sizes": null, "flat": false}),
+        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "writing"}, "flat": false}),
     );
     assert_eq!(
         input_value(&band(TurnBandState::Done(TurnSizes {
             before: 1,
             after: Some(2),
         }))),
-        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "done", "cancelled": null}, "sizes": {"before": 1, "after": 2}, "flat": false}),
+        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "done", "before": 1, "after": 2}, "flat": false}),
     );
     assert_eq!(
         input_value(&band(TurnBandState::Unchanged { cancelled: true })),
-        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "unchanged", "cancelled": true}, "sizes": null, "flat": false}),
+        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "unchanged", "cancelled": true}, "flat": false}),
     );
     assert_eq!(
         input_value(&band(TurnBandState::Done(TurnSizes {
             before: 1,
             after: None,
         }))),
-        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "done", "cancelled": null}, "sizes": {"before": 1, "after": null}, "flat": false}),
+        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "done", "before": 1, "after": null}, "flat": false}),
     );
     // The band row reads no note and no open flag.
     let table = input_value(&band(TurnBandState::Writing));

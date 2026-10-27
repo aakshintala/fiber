@@ -965,10 +965,25 @@ fn the_answers_entry_carries_given_or_declined() {
     };
     assert_eq!(parts.len(), 1);
     assert_eq!(parts[0].header, "Base");
-    assert_eq!(parts[0].text, "main");
-    assert!(!parts[0].skipped);
+    assert_eq!(
+        parts[0].disposition,
+        crate::ext::AnswerDisposition::Answered { text: "main" }
+    );
     assert_eq!(note, Some("go"));
     assert_eq!(ts, 7);
+    let skipped = super::Answered::Given {
+        parts: vec![crate::format::AnswerParts {
+            header: "Base".to_owned(),
+            text: "skipped".to_owned(),
+            skipped: true,
+        }],
+        note: None,
+        ts: 7,
+    };
+    let TurnAnswers::Given { parts, .. } = skipped.turn_entry() else {
+        panic!("a skipped entry");
+    };
+    assert_eq!(parts[0].disposition, crate::ext::AnswerDisposition::Skipped);
     let declined = super::Answered::Declined;
     assert!(matches!(declined.turn_entry(), TurnAnswers::Declined));
 }

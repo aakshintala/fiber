@@ -42,8 +42,8 @@ fn decision(call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>) -> Decisi
 }
 
 use crate::ext::{
-    CardPrompt, Failure, Input, LedgerRow, Prompt, PromptImage, RawSpan, ReplyText, Status,
-    ThinkingLine, TurnCard,
+    AnswerDisposition, CallState, CardPrompt, Failure, Input, LedgerResult, LedgerRow, Prompt,
+    PromptImage, RawSpan, ReplyText, ThinkingLine, TurnCard, TurnCardState, TurnEnded,
 };
 
 fn raw(text: &str) -> RawSpan {
@@ -57,13 +57,13 @@ fn input<'a>(name: &'a str, output: &'a str, arguments: &'a serde_json::Value) -
     Input::LedgerRow(LedgerRow {
         name,
         arguments,
-        status: Status::Completed,
-        exit: None,
-        duration_ms: None,
-        lines: 0,
-        changes: &[],
-        error: None,
-        output,
+        state: CallState::Completed(LedgerResult {
+            exit: None,
+            duration_ms: None,
+            lines: 0,
+            changes: &[],
+            output,
+        }),
         answer: None,
         flat: false,
     })
@@ -397,7 +397,9 @@ fn the_counter_matches_the_renderer_calls() {
 mod context_regressions {
 
     use super::{Cache, PageKey};
-    use crate::ext::{Decision, Failure, FailureKind, Input, LedgerRow, RawSpan, Status};
+    use crate::ext::{
+        CallState, Decision, Failure, FailureKind, Input, LedgerResult, LedgerRow, RawSpan,
+    };
     use std::cell::Cell;
 
     fn page(session: &str, index: usize) -> PageKey {
@@ -410,13 +412,13 @@ mod context_regressions {
         Input::LedgerRow(LedgerRow {
             name: "shell",
             arguments,
-            status: Status::Completed,
-            exit: None,
-            duration_ms: None,
-            lines: 0,
-            changes: &[],
-            error: None,
-            output: "done",
+            state: CallState::Completed(LedgerResult {
+                exit: None,
+                duration_ms: None,
+                lines: 0,
+                changes: &[],
+                output: "done",
+            }),
             answer: None,
             flat: false,
         })
@@ -760,8 +762,11 @@ fn card(running: bool) -> TurnCard<'static> {
             cost: None,
             subscription_cost: 0.0,
         },
-        ended: None,
-        running,
+        state: if running {
+            TurnCardState::Running
+        } else {
+            TurnCardState::Ended(TurnEnded::Completed { ended_ts: 0 })
+        },
         flat: false,
     }
 }
@@ -820,8 +825,7 @@ fn answers_input(note: Option<&'static str>) -> Input<'static> {
         answers: crate::ext::TurnAnswers::Given {
             parts: vec![crate::ext::TurnAnswerPart {
                 header: "Base",
-                text: "main",
-                skipped: false,
+                disposition: AnswerDisposition::Answered { text: "main" },
             }],
             note,
             ts: 1,

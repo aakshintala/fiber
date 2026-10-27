@@ -10,7 +10,7 @@ use contract::ErrorCode;
 use contract::events::FileChange;
 use contract::shapes::Usage;
 
-use super::slots::{PromptImage, RowError, Status, hash_images, hash_value};
+use super::slots::{PromptImage, RowError, hash_images, hash_value};
 
 /// One of a card's prompts: its text and its images, in order.
 #[derive(Debug, Clone)]
@@ -56,6 +56,74 @@ pub struct TurnFailed<'a> {
     pub attempt: u32,
 }
 
+/// What a ledger or card call is doing, or how it ended. Only a
+/// terminal state carries its result fields, so a pending, running or
+/// unknown call cannot carry them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallState<'a, R, D> {
+    /// No `tool_call_started` and no completion.
+    Pending,
+    /// Started and not completed.
+    Running,
+    /// Started on a cut turn: its outcome is unknown.
+    Unknown,
+    /// It completed, with its result.
+    Completed(R),
+    /// It failed, with its result and the headline's code and message.
+    Failed {
+        /// The terminal result.
+        result: R,
+        /// The headline's code and message.
+        error: RowError<'a>,
+    },
+    /// It was denied, with its result and the denial's reason.
+    Denied {
+        /// The terminal result.
+        result: R,
+        /// The denial's reason.
+        detail: D,
+    },
+    /// It was cancelled, with its result.
+    Cancelled(R),
+}
+
+/// A ledger row's terminal result: the fields only a finished call
+/// carries. The exit and duration stay optional because a terminal call
+/// may lack either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LedgerResult<'a> {
+    /// The process's exit code, when it ran one.
+    pub exit: Option<i32>,
+    /// The completion's timestamp less the start's, in milliseconds.
+    pub duration_ms: Option<u64>,
+    /// How many lines the result's text parts hold.
+    pub lines: u64,
+    /// The file counts of an edit or write.
+    pub changes: &'a [FileChange],
+    /// The first non-empty line of the result's text, else "done".
+    pub output: &'a str,
+}
+
+/// A card call's terminal result: the ledger result with the opened
+/// detail an open call reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnCallResult<'a> {
+    /// The process's exit code, when it ran one.
+    pub exit: Option<i32>,
+    /// The completion's timestamp less the start's, in milliseconds.
+    pub duration_ms: Option<u64>,
+    /// How many lines the result's text parts hold.
+    pub lines: u64,
+    /// The file counts of an edit or write.
+    pub changes: &'a [FileChange],
+    /// The first non-empty line of the result's text, else "done".
+    pub output: &'a str,
+    /// The result's text parts joined with "\n".
+    pub content: &'a str,
+    /// The image parts of its result, in order.
+    pub images: Vec<PromptImage<'a>>,
+}
+
 /// One tool call inlined in a card's group: everything the ledger row
 /// reads, with the opened detail an open call reads.
 #[derive(Debug, Clone)]
@@ -65,33 +133,38 @@ pub struct TurnCall<'a> {
     /// The call's arguments.
     pub arguments: &'a Value,
     /// What the call is doing, or how it ended.
-    pub status: Status,
-    /// The process's exit code, when it ran one.
-    pub exit: Option<i32>,
-    /// The completion's timestamp less the start's, in milliseconds;
-    /// none while the call runs and none when it never started.
-    pub duration_ms: Option<u64>,
-    /// How many lines the result's text parts hold.
-    pub lines: u64,
-    /// The file counts of an edit or write.
-    pub changes: &'a [FileChange],
-    /// A failed call's code and message, split from its headline.
-    pub error: Option<RowError<'a>>,
-    /// The first non-empty line of the result's text, else "done".
-    pub output: &'a str,
-    /// The call's headline: a failed call's "<code>: <message>" or a
-    /// denial's reason, else empty.
-    pub headline: &'a str,
-    /// The result's text parts joined with "\n".
-    pub content: &'a str,
+    pub state: CallState<'a, TurnCallResult<'a>, &'a str>,
     /// The suffix a form's answer replaces the status with.
     pub answer: Option<&'a str>,
-    /// The image parts of its result, in order.
-    pub images: Vec<PromptImage<'a>>,
     /// Whether the call is open.
     pub open: bool,
     /// Whether a `permission_requested` for it is open.
     pub asking: bool,
+}
+
+impl TurnCall<'_> {
+    /// A failed call's "<code>: <message>" or a denial's reason, else
+    /// empty. Both error fields empty gives an empty headline; an empty
+    /// code gives the message; otherwise it is "code: message".
+    pub fn headline(&self) -> String {
+        match &self.state {
+            CallState::Failed { error, .. } => {
+                if error.message.is_empty() {
+                    String::new()
+                } else if error.code.is_empty() {
+                    error.message.to_owned()
+                } else {
+                    format!("{}: {}", error.code, error.message)
+                }
+            }
+            CallState::Denied { detail, .. } => (*detail).to_owned(),
+            CallState::Pending
+            | CallState::Running
+            | CallState::Unknown
+            | CallState::Completed(_)
+            | CallState::Cancelled(_) => String::new(),
+        }
+    }
 }
 
 /// One step's part of a card's group inlined: its thoughts, calls and
@@ -108,6 +181,19 @@ pub struct TurnSection<'a> {
     pub failed: Vec<TurnFailed<'a>>,
 }
 
+/// What a card's group is doing: only one lifecycle state holds at a
+/// time, so a group cannot run and be cut at once. The ledger's `open`
+/// stays independent because the person controls it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnGroupState {
+    /// The turn runs and this is its open group.
+    Running,
+    /// The group finished.
+    Finished,
+    /// Its turn was cut short.
+    Cut,
+}
+
 /// One tool group inlined in a card: the summary line's fields with the
 /// ledger's sections.
 #[derive(Debug, Clone)]
@@ -116,12 +202,10 @@ pub struct TurnGroup<'a> {
     pub first: u64,
     /// The latest timestamp the group spans.
     pub last: u64,
-    /// Whether the turn runs and this is its open group.
-    pub running: bool,
+    /// What the group is doing: running, finished, or cut.
+    pub state: TurnGroupState,
     /// Whether the group's ledger is open.
     pub open: bool,
-    /// Whether its turn was cut short.
-    pub cut: bool,
     /// Its steps, in order.
     pub sections: Vec<TurnSection<'a>>,
     /// The calls the model is still emitting.
@@ -196,15 +280,26 @@ pub struct TurnSizes {
     pub after: Option<u64>,
 }
 
+/// What one answered row holds: a skip carries no text of its own,
+/// so only an answered question carries one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnswerDisposition<'a> {
+    /// The question was skipped.
+    Skipped,
+    /// The question was answered, with its text.
+    Answered {
+        /// The answer's text.
+        text: &'a str,
+    },
+}
+
 /// One answered row in a card's group entry.
 #[derive(Debug, Clone)]
 pub struct TurnAnswerPart<'a> {
     /// The question's header.
     pub header: &'a str,
-    /// The answer's text, or "skipped".
-    pub text: &'a str,
-    /// Whether the question was skipped.
-    pub skipped: bool,
+    /// Whether the question was skipped, or its answer's text.
+    pub disposition: AnswerDisposition<'a>,
 }
 
 /// What a form left in a card: the answers or the decline.
@@ -289,6 +384,16 @@ pub struct TurnError<'a> {
     pub message: &'a str,
 }
 
+/// What a turn's card is doing: it runs or it ended, never both and
+/// never neither.
+#[derive(Debug, Clone)]
+pub enum TurnCardState<'a> {
+    /// The turn is still running.
+    Running,
+    /// How the turn ended.
+    Ended(TurnEnded<'a>),
+}
+
 /// A turn's card whole: its prompts, every entry, and its ending.
 #[derive(Debug, Clone)]
 pub struct TurnCard<'a> {
@@ -302,10 +407,8 @@ pub struct TurnCard<'a> {
     pub calls: u64,
     /// The turn's totals: tokens, cost and subscription cost.
     pub usage: Usage,
-    /// How the turn ended; none while it runs.
-    pub ended: Option<TurnEnded<'a>>,
-    /// Whether the turn is still running.
-    pub running: bool,
+    /// Whether the turn still runs, or how it ended.
+    pub state: TurnCardState<'a>,
     /// The screen reader drops every style from the returned spans.
     pub flat: bool,
 }
@@ -338,28 +441,85 @@ impl<'a> TurnFailed<'a> {
     }
 }
 
+/// Hashes one file change.
+fn hash_change(change: &FileChange, key: &mut DefaultHasher) {
+    change.path.hash(key);
+    change.added.hash(key);
+    change.removed.hash(key);
+}
+
+/// Hashes a ledger result's every field.
+pub(crate) fn hash_ledger_result(result: &LedgerResult<'_>, key: &mut DefaultHasher) {
+    result.exit.hash(key);
+    result.duration_ms.hash(key);
+    result.lines.hash(key);
+    result.changes.len().hash(key);
+    for change in result.changes {
+        hash_change(change, key);
+    }
+    result.output.hash(key);
+}
+
+/// Hashes a card result's every field.
+fn hash_turn_call_result(result: &TurnCallResult<'_>, key: &mut DefaultHasher) {
+    result.exit.hash(key);
+    result.duration_ms.hash(key);
+    result.lines.hash(key);
+    result.changes.len().hash(key);
+    for change in result.changes {
+        hash_change(change, key);
+    }
+    result.output.hash(key);
+    result.content.hash(key);
+    hash_images(&result.images, key);
+}
+
+/// Hashes a call state with its discriminant, payload and denial
+/// detail.
+pub(crate) fn hash_call_state<'a, R, D>(
+    state: &CallState<'a, R, D>,
+    hash_result: impl Fn(&R, &mut DefaultHasher),
+    hash_detail: impl Fn(&D, &mut DefaultHasher),
+    key: &mut DefaultHasher,
+) {
+    match state {
+        CallState::Pending => 0u8.hash(key),
+        CallState::Running => 1u8.hash(key),
+        CallState::Unknown => 2u8.hash(key),
+        CallState::Completed(result) => {
+            3u8.hash(key);
+            hash_result(result, key);
+        }
+        CallState::Failed { result, error } => {
+            4u8.hash(key);
+            hash_result(result, key);
+            error.code.hash(key);
+            error.message.hash(key);
+        }
+        CallState::Denied { result, detail } => {
+            5u8.hash(key);
+            hash_result(result, key);
+            hash_detail(detail, key);
+        }
+        CallState::Cancelled(result) => {
+            6u8.hash(key);
+            hash_result(result, key);
+        }
+    }
+}
+
 impl<'a> TurnCall<'a> {
     /// Hashes the call's every field, nested fields element-wise.
     pub(crate) fn hash_key(&self, key: &mut DefaultHasher) {
         self.name.hash(key);
         hash_value(self.arguments, key);
-        (self.status as u8).hash(key);
-        self.exit.hash(key);
-        self.duration_ms.hash(key);
-        self.lines.hash(key);
-        self.changes.len().hash(key);
-        for change in self.changes {
-            change.path.hash(key);
-            change.added.hash(key);
-            change.removed.hash(key);
-        }
-        self.error.map(|error| error.code).hash(key);
-        self.error.map(|error| error.message).hash(key);
-        self.output.hash(key);
-        self.headline.hash(key);
-        self.content.hash(key);
+        hash_call_state(
+            &self.state,
+            hash_turn_call_result,
+            |detail: &&str, key| detail.hash(key),
+            key,
+        );
         self.answer.hash(key);
-        hash_images(&self.images, key);
         self.open.hash(key);
         self.asking.hash(key);
     }
@@ -389,9 +549,8 @@ impl<'a> TurnGroup<'a> {
     fn hash_key(&self, key: &mut DefaultHasher) {
         self.first.hash(key);
         self.last.hash(key);
-        self.running.hash(key);
+        (self.state as u8).hash(key);
         self.open.hash(key);
-        self.cut.hash(key);
         self.sections.len().hash(key);
         for section in &self.sections {
             section.hash_key(key);
@@ -487,8 +646,13 @@ impl<'a> TurnEntry<'a> {
                         parts.len().hash(key);
                         for part in parts {
                             part.header.hash(key);
-                            part.text.hash(key);
-                            part.skipped.hash(key);
+                            match &part.disposition {
+                                AnswerDisposition::Skipped => 0u8.hash(key),
+                                AnswerDisposition::Answered { text } => {
+                                    1u8.hash(key);
+                                    text.hash(key);
+                                }
+                            }
                         }
                         note.hash(key);
                         ts.hash(key);
@@ -527,33 +691,35 @@ impl<'a> TurnCard<'a> {
         self.usage.tokens.output.hash(&mut key);
         self.usage.cost.map(f64::to_bits).hash(&mut key);
         self.usage.subscription_cost.to_bits().hash(&mut key);
-        self.ended.is_some().hash(&mut key);
-        if let Some(ended) = &self.ended {
-            match ended {
-                TurnEnded::Completed { ended_ts } => {
-                    0u8.hash(&mut key);
-                    ended_ts.hash(&mut key);
-                }
-                TurnEnded::Interrupted { ended_ts } => {
-                    1u8.hash(&mut key);
-                    ended_ts.hash(&mut key);
-                }
-                TurnEnded::Failed { ended_ts, error } => {
-                    2u8.hash(&mut key);
-                    ended_ts.hash(&mut key);
-                    error.is_some().hash(&mut key);
-                    if let Some(error) = error {
-                        crate::format::code(&error.code).hash(&mut key);
-                        error.message.hash(&mut key);
+        match &self.state {
+            TurnCardState::Running => 0u8.hash(&mut key),
+            TurnCardState::Ended(ended) => {
+                1u8.hash(&mut key);
+                match ended {
+                    TurnEnded::Completed { ended_ts } => {
+                        0u8.hash(&mut key);
+                        ended_ts.hash(&mut key);
                     }
-                }
-                TurnEnded::CutShort { ended_ts } => {
-                    3u8.hash(&mut key);
-                    ended_ts.hash(&mut key);
+                    TurnEnded::Interrupted { ended_ts } => {
+                        1u8.hash(&mut key);
+                        ended_ts.hash(&mut key);
+                    }
+                    TurnEnded::Failed { ended_ts, error } => {
+                        2u8.hash(&mut key);
+                        ended_ts.hash(&mut key);
+                        error.is_some().hash(&mut key);
+                        if let Some(error) = error {
+                            crate::format::code(&error.code).hash(&mut key);
+                            error.message.hash(&mut key);
+                        }
+                    }
+                    TurnEnded::CutShort { ended_ts } => {
+                        3u8.hash(&mut key);
+                        ended_ts.hash(&mut key);
+                    }
                 }
             }
         }
-        self.running.hash(&mut key);
         self.flat.hash(&mut key);
         key.finish()
     }

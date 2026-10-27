@@ -7,16 +7,16 @@ use std::hash::{Hash, Hasher};
 use serde_json::Value;
 
 use contract::ErrorCode;
-use contract::events::FileChange;
 use contract::shapes::ProviderFailure;
 
 use super::turn::{
-    TurnAnswers, TurnBandState, TurnCall, TurnFailed, TurnStreaming, TurnThought, hash_band_state,
+    CallState, LedgerResult, TurnAnswers, TurnBandState, TurnCall, TurnFailed, TurnStreaming,
+    TurnThought, hash_band_state, hash_call_state, hash_ledger_result,
 };
 
 /// One prompt image as its one line reads it: the file's name and its
 /// size in pixels. The log's type never reaches the line.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PromptImage<'a> {
     /// The file's path in the session's `artifacts/`.
     pub path: &'a str,
@@ -150,10 +150,9 @@ pub struct Notice<'a> {
     pub flat: bool,
 }
 
-/// A ledger row's call: the call's name, arguments, status, exit code,
-/// duration, line count, `changes` and error, the first line of the
-/// result's text, a form answer's suffix, and whether the screen reader
-/// drops every style.
+/// A ledger row's call: the call's name, arguments, state, a form
+/// answer's suffix, and whether the screen reader drops every style.
+/// Only a terminal state carries its result fields.
 #[derive(Debug, Clone, Copy)]
 pub struct LedgerRow<'a> {
     /// The tool's name.
@@ -161,20 +160,7 @@ pub struct LedgerRow<'a> {
     /// The call's arguments.
     pub arguments: &'a Value,
     /// What the call is doing, or how it ended.
-    pub status: Status,
-    /// The process's exit code, when it ran one.
-    pub exit: Option<i32>,
-    /// The completion's timestamp less the start's, in milliseconds;
-    /// none while the call runs and none when it never started.
-    pub duration_ms: Option<u64>,
-    /// How many lines the result's text parts hold.
-    pub lines: u64,
-    /// The file counts of an edit or write.
-    pub changes: &'a [FileChange],
-    /// A failed call's code and message, split from its headline.
-    pub error: Option<RowError<'a>>,
-    /// The first non-empty line of the result's text, else "done".
-    pub output: &'a str,
+    pub state: CallState<'a, LedgerResult<'a>, ()>,
     /// The suffix a form's answer replaces the status with.
     pub answer: Option<&'a str>,
     /// The screen reader drops every style from the returned spans.
@@ -190,26 +176,6 @@ pub struct RowError<'a> {
     pub message: &'a str,
 }
 
-/// What a ledger row's call is doing, or how it ended: the built-in row
-/// draws pending and running alike, so only an extension tells them apart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Status {
-    /// No `tool_call_started` and no completion.
-    Pending,
-    /// Started and not completed.
-    Running,
-    /// It completed.
-    Completed,
-    /// It failed.
-    Failed,
-    /// It was denied.
-    Denied,
-    /// It was cancelled.
-    Cancelled,
-    /// Started on a cut turn: its outcome is unknown.
-    Unknown,
-}
-
 impl<'a> LedgerRow<'a> {
     /// The cache key over the slot and every field: the entry key adds
     /// the width, the failure key does not.
@@ -218,19 +184,7 @@ impl<'a> LedgerRow<'a> {
         slot.hash(&mut key);
         self.name.hash(&mut key);
         hash_value(self.arguments, &mut key);
-        (self.status as u8).hash(&mut key);
-        self.exit.hash(&mut key);
-        self.duration_ms.hash(&mut key);
-        self.lines.hash(&mut key);
-        self.changes.len().hash(&mut key);
-        for change in self.changes {
-            change.path.hash(&mut key);
-            change.added.hash(&mut key);
-            change.removed.hash(&mut key);
-        }
-        self.error.map(|error| error.code).hash(&mut key);
-        self.error.map(|error| error.message).hash(&mut key);
-        self.output.hash(&mut key);
+        hash_call_state(&self.state, hash_ledger_result, |_: &(), _key| {}, &mut key);
         self.answer.hash(&mut key);
         self.flat.hash(&mut key);
         key.finish()
@@ -346,8 +300,13 @@ impl Answers<'_> {
                 parts.len().hash(&mut key);
                 for part in parts {
                     part.header.hash(&mut key);
-                    part.text.hash(&mut key);
-                    part.skipped.hash(&mut key);
+                    match &part.disposition {
+                        super::turn::AnswerDisposition::Skipped => 0u8.hash(&mut key),
+                        super::turn::AnswerDisposition::Answered { text } => {
+                            1u8.hash(&mut key);
+                            text.hash(&mut key);
+                        }
+                    }
                 }
                 note.hash(&mut key);
                 ts.hash(&mut key);
