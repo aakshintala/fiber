@@ -401,6 +401,11 @@ impl App {
             let crate::mouse::TargetId::Line(Target::Image(id)) = target.id else {
                 continue;
             };
+            // Viewer-only ids never enter the display path: no fetch
+            // asks for their bytes (`docs/tui.md`, "Images").
+            if !crate::image::placeholder_eligible(id) {
+                continue;
+            }
             let Some(part) = self.screen.pages().image(id) else {
                 continue;
             };

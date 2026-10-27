@@ -269,10 +269,14 @@ pub(crate) fn render(
         return Vec::new();
     }
     // A swapped view takes home's place (`docs/tui.md`, "Swapped
-    // views"): the `/keys` screen, the configuration view or the model
-    // picker. The notice rows draw over its bottom rows, unreserved, and
-    // the overlay over the whole area (`docs/tui.md`, "Notices").
-    if (app.config_view_open() || app.model_picker_open() || app.keys_screen_open())
+    // views"): the `/keys` screen, the configuration view, the model
+    // picker or a session view. The notice rows draw over its bottom rows,
+    // unreserved, and the overlay over the whole area (`docs/tui.md`,
+    // "Notices").
+    if (app.config_view_open()
+        || app.model_picker_open()
+        || app.keys_screen_open()
+        || app.session_view_open())
         && app.on_home()
     {
         let mut targets = Vec::new();
