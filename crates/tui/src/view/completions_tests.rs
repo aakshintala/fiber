@@ -121,7 +121,7 @@ fn slash_eight_of_forty() {
     // Eight entries and the range line, with the first match focused.
     let shown = screen(&app, 160, 48);
     // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
-    assert!(shown.contains("1–8 of 55 · ↓ 47 more"), "{shown}");
+    assert!(shown.contains("1–8 of 56 · ↓ 48 more"), "{shown}");
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
     assert_eq!(bars.len(), 1, "{shown}");
@@ -147,8 +147,8 @@ fn slash_exit_alias() {
 #[test]
 fn slash_keys_aliases_render_and_filter_independently() {
     // Each alias, whole or in part, finds exactly the keys row, which
-    // carries both aliases on it, with no range line (`docs/tui.md:1955`).
-    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1937,1957`).
+    // carries both aliases on it, with no range line (`docs/tui.md:1963`).
+    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1944,1965`).
     for query in ["keymap", "keybindings", "keyma", "keybind"] {
         let mut app = attached(160, 48);
         type_text(&mut app, &format!("/{query}"));
@@ -214,7 +214,7 @@ fn a_scrolled_slash_list_counts_both_directions() {
     // follow the list.
     assert!(
         // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
-        shown.contains("↑ 3 above · 4–11 of 55 · ↓ 44 more"),
+        shown.contains("↑ 3 above · 4–11 of 56 · ↓ 45 more"),
         "{shown}"
     );
     let buf = buffer(&app, 160, 48);
@@ -400,7 +400,7 @@ fn narrow_slash() {
     type_text(&mut app, "/");
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
     // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
-    assert!(screen(&app, 100, 40).contains("1–8 of 55 · ↓ 47 more"));
+    assert!(screen(&app, 100, 40).contains("1–8 of 56 · ↓ 48 more"));
 }
 
 #[test]
@@ -731,7 +731,7 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     // `/mcp` sits after `/tools`: ten downs bar `/quota` now.
     assert!(row_text(&buf, bars[0]).contains("usage"), "{shown}");
     // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
-    assert!(shown.contains("of 55"), "{shown}");
+    assert!(shown.contains("of 56"), "{shown}");
 }
 
 /// A short conversation with an `@` list: the third path stays barred,

@@ -130,7 +130,7 @@ fn rebinding_footer(command: &str, prefix: &str, row: &str, rest: &str) -> Strin
 
 #[test]
 fn keymap_opens_the_rebinding_screen_like_keys() {
-    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1937,1957`).
+    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1944,1965`).
     let keys = rebinding_footer("/keys", "/keys", "keys /keybindings /keymap", "\r");
     let keymap = rebinding_footer("/keymap", "/keymap", "keys /keybindings /keymap", "\r");
     assert_eq!(keymap, keys);
@@ -151,7 +151,7 @@ fn rules_row(command: &str, prefix: &str, row: &str, rest: &str) -> String {
 
 #[test]
 fn permissions_opens_the_standing_rules_like_rules() {
-    // The table and alias rule set this row order (`docs/tui.md:1933,1957`).
+    // The table and alias rule set this row order (`docs/tui.md:1940,1965`).
     let rules = rules_row("/rules", "/rules", "rules /permissions", "\r");
     let permissions = rules_row("/permissions", "/permissions", "rules /permissions", "\r");
     assert_eq!(permissions, rules);
@@ -174,7 +174,7 @@ fn home_notice(command: &str, prefix: &str, row: &str, rest: &str, notice: &str)
 
 #[test]
 fn compact_starts_a_handoff_like_handoff() {
-    // The table and alias rule set this row order (`docs/tui.md:1940,1957`).
+    // The table and alias rule set this row order (`docs/tui.md:1947,1965`).
     let row = "handoff /compact";
     let handoff = home_notice(
         "/handoff",
@@ -195,7 +195,7 @@ fn compact_starts_a_handoff_like_handoff() {
 
 #[test]
 fn stop_asks_to_close_all_like_close() {
-    // The table and alias rule set this row order (`docs/tui.md:1947,1957`).
+    // The table and alias rule set this row order (`docs/tui.md:1954,1965`).
     let row = "close /stop";
     let close = home_notice(
         "/close all",
