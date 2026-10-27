@@ -706,6 +706,174 @@ fn a_command_with_no_session_says_so() {
     }
 }
 
+/// Whether the notices hold `text` under `code`.
+fn notice_with(app: &App, code: &str, text: &str) -> bool {
+    app.notices().iter().any(|notice| {
+        matches!(notice, crate::app::NoticeLine::Notice { code: got, text: message, .. } if got == code && message == text)
+    })
+}
+
+/// A `session_started` recording `workspace` as its root, with no
+/// worktree: the fold `run_pwd` reads.
+fn started_with_workspace(workspace: &str) -> crate::link::Line {
+    session_line(
+        "session_started",
+        json!({
+            "workspace": workspace,
+            "variables": {"path": "", "names": [], "source": "inherited"},
+        }),
+    )
+}
+
+/// `/pwd` shows the attached session's recorded workspace root, and
+/// `/cwd` shows the same: the absolute root from `session_started`,
+/// which differs here from the launch path. The draft clears, the
+/// notice carries the `workspace` code, and nothing is sent
+/// (`docs/tui.md`, "Slash commands").
+#[test]
+fn pwd_shows_the_recorded_session_workspace() {
+    for command in ["/pwd", "/cwd"] {
+        let mut app = attached();
+        app.on_line(started_with_workspace("/worktree"));
+        assert_eq!(enter(&mut app, command), Effect::None, "{command}");
+        assert_eq!(app.draft(), "", "{command}");
+        assert!(notice_with(&app, "workspace", "/worktree"), "{command}");
+        assert!(app.outbox.pending.is_empty(), "{command}");
+    }
+}
+
+/// `/pwd` on home shows the no-session notice, and clears the draft
+/// (`docs/tui.md`, "Slash commands").
+#[test]
+fn pwd_on_home_shows_no_session() {
+    for command in ["/pwd", "/cwd"] {
+        let mut app = connected();
+        assert_eq!(enter(&mut app, command), Effect::None, "{command}");
+        assert_eq!(app.draft(), "", "{command}");
+        assert!(
+            notice_with(&app, "session_not_found", "No session on screen."),
+            "{command}"
+        );
+    }
+}
+
+/// `/pwd` with the link down still shows the recorded workspace: the
+/// root is already folded, so nothing needs sending
+/// (`docs/tui.md`, "Slash commands").
+#[test]
+fn pwd_with_the_link_down_shows_the_recorded_workspace() {
+    for command in ["/pwd", "/cwd"] {
+        let mut app = attached();
+        app.on_line(started_with_workspace("/worktree"));
+        app.disconnected();
+        assert_eq!(enter(&mut app, command), Effect::None, "{command}");
+        assert_eq!(app.draft(), "", "{command}");
+        assert!(notice_with(&app, "workspace", "/worktree"), "{command}");
+        assert!(app.outbox.pending.is_empty(), "{command}");
+    }
+}
+
+/// `/pwd` typed before the attached session's `session_started` folds
+/// waits for that fold: no notice yet, then the recorded root, never
+/// the no-session notice (`docs/tui.md`, "Slash commands").
+#[test]
+fn pwd_before_the_first_fold_shows_on_session_started() {
+    for command in ["/pwd", "/cwd"] {
+        let mut app = attached();
+        assert_eq!(enter(&mut app, command), Effect::None, "{command}");
+        assert_eq!(app.draft(), "", "{command}");
+        assert!(app.notices().is_empty(), "{command}");
+        assert!(app.pwd_pending, "{command}");
+        // A later line of another kind leaves the notice waiting.
+        app.on_line(session_line(
+            "session_status",
+            json!({
+                "name": "work", "workspace": "/worktree", "project": "p",
+                "state": "idle", "started": 0, "calls": 0, "since": 0,
+                "spend": {"tokens": {"input": 0, "cache_read": 0,
+                    "cache_write": {}, "output": 0},
+                    "cost": 0.0, "subscription_cost": 0.0},
+                "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+            }),
+        ));
+        assert!(app.notices().is_empty(), "{command}");
+        assert!(app.pwd_pending, "{command}");
+        app.on_line(started_with_workspace("/worktree"));
+        assert!(!app.pwd_pending, "{command}");
+        assert!(notice_with(&app, "workspace", "/worktree"), "{command}");
+        assert!(
+            !notice_with(&app, "session_not_found", "No session on screen."),
+            "{command}"
+        );
+    }
+}
+
+/// Folding `session_started` with no `/pwd` waiting shows no workspace
+/// notice: the fold alone is silent, and the root is still recorded
+/// (`docs/tui.md`, "Slash commands").
+#[test]
+fn session_started_without_a_waiting_pwd_stays_silent() {
+    let mut app = attached();
+    app.on_line(started_with_workspace("/worktree"));
+    assert!(!app.pwd_pending);
+    assert!(app.notices().is_empty());
+    assert_eq!(app.panel_state().workspace(), Some("/worktree"));
+}
+
+/// Switching sessions drops the old session's recorded root: `/pwd`
+/// waits for the new session's `session_started` instead of showing
+/// the old root, then shows the new one (`docs/tui.md`,
+/// "Slash commands").
+#[test]
+fn pwd_after_a_switch_waits_for_the_new_sessions_root() {
+    for command in ["/pwd", "/cwd"] {
+        let mut app = attached();
+        app.on_line(started_with_workspace("/old"));
+        app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+        assert_eq!(app.panel_state().workspace(), None);
+        assert_eq!(enter(&mut app, command), Effect::None, "{command}");
+        assert_eq!(app.draft(), "", "{command}");
+        assert!(app.notices().is_empty(), "{command}");
+        assert!(app.pwd_pending, "{command}");
+        app.on_line(other_session_line(
+            "session_started",
+            json!({
+                "workspace": "/new",
+                "variables": {"path": "", "names": [], "source": "inherited"},
+            }),
+        ));
+        assert!(!app.pwd_pending, "{command}");
+        assert!(notice_with(&app, "workspace", "/new"), "{command}");
+        assert!(!notice_with(&app, "workspace", "/old"), "{command}");
+    }
+}
+
+/// Detaching or switching the session cancels a waiting `/pwd`: the
+/// old session's later fold shows nothing
+/// (`docs/tui.md`, "Slash commands").
+#[test]
+fn pwd_pending_cancels_on_detach_or_switch() {
+    let mut app = attached();
+    assert_eq!(enter(&mut app, "/pwd"), Effect::None);
+    assert!(app.pwd_pending);
+    app.go_home();
+    assert!(!app.pwd_pending);
+
+    let mut app = attached();
+    assert_eq!(enter(&mut app, "/pwd"), Effect::None);
+    assert!(app.pwd_pending);
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    assert!(!app.pwd_pending);
+    app.on_line(other_session_line(
+        "session_started",
+        json!({
+            "workspace": "/elsewhere",
+            "variables": {"path": "", "names": [], "source": "inherited"},
+        }),
+    ));
+    assert!(app.notices().is_empty());
+}
+
 #[test]
 fn a_command_with_the_link_down_keeps_its_draft() {
     for command in [
