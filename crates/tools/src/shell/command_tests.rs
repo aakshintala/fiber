@@ -1645,6 +1645,7 @@ fn a_successful_empty_listing_finishes_foreground_when_alive_probe_lags() {
             &work,
             always_alive,
             &ps,
+            super::super::sandbox::install,
         )
         .unwrap();
         let _sent = tx.send(ran);
@@ -1866,6 +1867,7 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
                     &work,
                     always_alive,
                     &ps,
+                    super::super::sandbox::install,
                 )
                 .unwrap();
                 let _sent = tx.send(ran);
@@ -1955,8 +1957,12 @@ fn sandbox_enabled_runs_a_confined_echo() {
     assert_eq!(exit_code_of(finished.status), 0);
 }
 
+/// An enabled sandbox whose policy cannot apply fails the call instead of
+/// running it unconfined: the deny sits inside the granted workspace, so
+/// the check reports overlap and spawn never happens.
+#[cfg(target_os = "linux")]
 #[test]
-fn sandbox_unavailable_runs_without_it() {
+fn sandbox_unavailable_fails_closed_without_running() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-unavailable");
     let work = dir.path().to_path_buf();
     let home = std::env::var_os("HOME").map_or_else(
@@ -1973,34 +1979,39 @@ fn sandbox_unavailable_runs_without_it() {
         deny_read: vec![work.join("secret")],
         fiber_home,
     };
-    let ran = fakes::within(
-        "an unavailable sandbox still runs",
-        Deadline::after(JOB_DEADLINE),
-        move || {
-            super::execute(
-                std::path::Path::new("/bin/sh"),
-                "echo hi",
-                &work,
-                Duration::from_secs(60),
-                FakeClock::new().as_ref(),
-                &CancelToken::new(),
-                &Recorder::default(),
-                MovePolicy::Stay,
-                None,
-                None,
-                None,
-                &sandbox,
-                &work,
-            )
-            .unwrap()
-        },
+    let marker = work.join("marker");
+    let command = format!("touch {} && echo hi", marker.display());
+    let result = super::execute(
+        std::path::Path::new("/bin/sh"),
+        &command,
+        &work,
+        Duration::from_secs(60),
+        FakeClock::new().as_ref(),
+        &CancelToken::new(),
+        &Recorder::default(),
+        MovePolicy::Stay,
+        None,
+        None,
+        None,
+        &sandbox,
+        &work,
     );
-    let super::Ran::Finished(finished) = ran else {
-        panic!("an unavailable sandbox still finishes");
+    let Err(error) = result else {
+        panic!("an unavailable sandbox fails the call");
     };
-    assert_eq!(exit_code_of(finished.status), 0);
+    let apply = error
+        .get_ref()
+        .and_then(|error| error.downcast_ref::<super::SandboxApply>())
+        .expect("an apply failure, not a spawn failure");
+    assert!(
+        apply.cause.contains("secret"),
+        "the cause names the deny: {}",
+        apply.cause
+    );
+    assert!(!marker.is_file(), "no command runs after an apply failure");
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn sandbox_setup_failure_aborts_spawn_without_running() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-fail");
@@ -2033,22 +2044,105 @@ fn sandbox_setup_failure_aborts_spawn_without_running() {
         &sandbox,
         &work,
     );
-    assert!(result.is_err(), "a setup failure aborts spawn");
+    let Err(error) = result else {
+        panic!("a setup failure aborts spawn");
+    };
+    let apply = error
+        .get_ref()
+        .and_then(|error| error.downcast_ref::<super::SandboxApply>())
+        .expect("an apply failure, not a spawn failure");
+    assert!(
+        apply.cause.contains("nonexistent-fiber-sandbox-allow"),
+        "the cause names the unresolvable root: {}",
+        apply.cause
+    );
     assert!(!marker.is_file(), "no command runs after an apply failure");
 }
 
+/// An install failure in the child aborts spawn through the sentinel: the
+/// parent reads the raw errno the child wrote and maps it to the sandbox
+/// cause, and the command never runs.
+#[cfg(target_os = "linux")]
+#[test]
+fn sandbox_install_failure_aborts_spawn_without_running() {
+    fn always_alive(_pgid: u32) -> bool {
+        true
+    }
+    let dir = fakes::TempDir::new("fiber-sandbox-cmd-install-fail");
+    let work = dir.path().to_path_buf();
+    let ps = fakes::script(dir.path(), "ps", "exit 0");
+    let marker = work.join("marker");
+    let sandbox = sandbox_settings_for_test(&work, "install-fail");
+    let command = format!("touch {} && echo hi", marker.display());
+    let result = super::execute_inner(
+        std::path::Path::new("/bin/sh"),
+        &command,
+        &work,
+        Duration::from_secs(60),
+        FakeClock::new().as_ref(),
+        &CancelToken::new(),
+        &Recorder::default(),
+        MovePolicy::Stay,
+        None,
+        None,
+        None,
+        &sandbox,
+        &work,
+        always_alive,
+        &ps,
+        |_| Err(libc::EPERM),
+    );
+    let Err(error) = result else {
+        panic!("an install failure aborts spawn");
+    };
+    let apply = error
+        .get_ref()
+        .and_then(|error| error.downcast_ref::<super::SandboxApply>())
+        .expect("an apply failure, not a spawn failure");
+    assert!(
+        apply.cause.contains("Operation not permitted"),
+        "the cause names the errno: {}",
+        apply.cause
+    );
+    assert!(!marker.is_file(), "no command runs after an apply failure");
+}
+
+/// Entry point for the confined socket probe: the sandbox test re-executes
+/// this binary under confinement, where real `AF_INET` and Unix socket
+/// calls must fail with the sandbox's `EPERM`.
+#[test]
+#[ignore = "started only by the confined socket probe"]
+#[allow(clippy::print_stdout, reason = "the probe parent reads these lines")]
+fn confined_socket_probe() {
+    let tcp = std::net::TcpStream::connect("127.0.0.1:9").map(|_| ());
+    println!("tcp={:?}", tcp.map_err(|error| error.kind()));
+    let unix =
+        std::os::unix::net::UnixStream::connect("/nonexistent-fiber-sandbox.sock").map(|_| ());
+    println!("unix={:?}", unix.map_err(|error| error.kind()));
+}
+
+/// Real socket calls under confinement fail with the sandbox's `EPERM`,
+/// not with a refused port or a shell syntax the shell never supports: the
+/// re-executed helper attempts `connect` over TCP and over a Unix socket
+/// through safe standard-library calls, with no `unsafe`.
+#[cfg(target_os = "linux")]
 #[test]
 fn sandbox_denies_sockets_with_abi2_rules_on_this_host() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-socket");
     let work = dir.path().to_path_buf();
     let sandbox = sandbox_settings_for_test(&work, "socket");
+    let executable = std::env::current_exe().expect("the test executable");
+    let quoted = executable.display().to_string().replace('\'', "'\\''");
+    let command = format!(
+        "'{quoted}' --ignored --exact shell::command::tests::confined_socket_probe --nocapture"
+    );
     let ran = fakes::within(
         "a confined socket attempt",
         Deadline::after(JOB_DEADLINE),
         move || {
             super::execute(
                 std::path::Path::new("/bin/sh"),
-                "echo hi > /dev/tcp/127.0.0.1/9",
+                &command,
                 &work,
                 Duration::from_secs(60),
                 FakeClock::new().as_ref(),
@@ -2067,9 +2161,21 @@ fn sandbox_denies_sockets_with_abi2_rules_on_this_host() {
     let super::Ran::Finished(finished) = ran else {
         panic!("a denied socket still finishes the call");
     };
-    assert_ne!(
+    assert_eq!(
         exit_code_of(finished.status),
         0,
-        "a confined socket attempt fails"
+        "the probe itself finishes"
+    );
+    let super::Kept::Whole(bytes) = finished.output else {
+        panic!("a small probe output stays whole");
+    };
+    let text = String::from_utf8(bytes).expect("the probe output is text");
+    assert!(
+        text.contains("tcp=Err(PermissionDenied)"),
+        "the sandbox denies the TCP connect: {text}"
+    );
+    assert!(
+        text.contains("unix=Err(PermissionDenied)"),
+        "the sandbox denies the Unix connect: {text}"
     );
 }

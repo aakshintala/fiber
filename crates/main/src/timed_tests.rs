@@ -340,6 +340,7 @@ fn untimed_builtin_matches_with_no_timing_calls() {
     names.finish(CALL_WITHIN);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn sandbox_unavailable_reports_once_without_wall_clock() {
     let dir = fakes::TempDir::new("fiber-timed-sandbox-unavailable");
@@ -349,15 +350,25 @@ fn sandbox_unavailable_reports_once_without_wall_clock() {
         std::path::PathBuf::from,
     );
     let fiber_home = home_base.join(format!("fiber-timed-sandbox-{}", std::process::id()));
+    let denied = workspace.join("secret");
     let settings = tools::SandboxSettings {
         enabled: true,
         allow_write: Vec::new(),
-        deny_read: vec![workspace.join("secret")],
+        deny_read: vec![denied.clone()],
         fiber_home,
     };
     let first = tools::sandbox_check_available(&settings, &workspace).expect_err("overlap");
     let second = tools::sandbox_check_available(&settings, &workspace).expect_err("overlap");
-    assert_eq!(first.reason, second.reason);
-    assert!(first.reason.contains("secret"));
-    assert!(first.reason.contains(&workspace.display().to_string()));
+    // The same named case twice, not the same reason string: the check
+    // takes no wall-clock time to repeat.
+    for unavailable in [&first, &second] {
+        assert_eq!(
+            *unavailable,
+            tools::SandboxUnavailable::DenyInsideWrite {
+                configured: denied.clone(),
+                overlapping: denied.clone(),
+                root: workspace.clone(),
+            }
+        );
+    }
 }

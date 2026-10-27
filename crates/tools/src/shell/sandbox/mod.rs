@@ -2,9 +2,11 @@
 //! and "How read denies are built"). Prepared before spawn, installed in the
 //! child between fork and exec; a setup error aborts spawn.
 
-use std::os::unix::fs::OpenOptionsExt as _;
+#[cfg(target_os = "linux")]
 use std::os::unix::io::OwnedFd;
-use std::path::{Component, Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::path::Component;
+use std::path::{Path, PathBuf};
 
 /// The settings for one session's Linux sandbox, resolved from the
 /// person-only configuration (`docs/configuration.md`, "Keys").
@@ -21,33 +23,117 @@ pub struct Settings {
 }
 
 /// Why the sandbox is unavailable for a session. The caller shows one notice
-/// naming the path when there is one and falls back to ordinary review.
+/// and falls back to ordinary review. Overlap carries the configured path
+/// and, when a resolved target overlaps instead, that target after the
+/// arrow; every other case names no path.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Unavailable {
-    /// The reason, naming the path when the deny overlaps a write grant.
-    pub reason: String,
+pub enum Unavailable {
+    /// The person turned the sandbox off.
+    Off,
+    /// This platform never applies the Linux policy.
+    UnsupportedPlatform,
+    /// The kernel's Landlock ABI is below the floor of 2.
+    AbiBelow2,
+    /// A deny path, lexical or resolved, sits inside a writable grant.
+    DenyInsideWrite {
+        /// The configured `sandbox.deny_read` path, or Fiber home's
+        /// `credentials/` for the built-in deny.
+        configured: PathBuf,
+        /// The path that overlaps the writable root: the configured path
+        /// itself, or its resolved target when that one overlaps instead.
+        overlapping: PathBuf,
+        /// The writable root it sits inside.
+        root: PathBuf,
+    },
+    /// A deny path could not be resolved: a symlink loop, more than 40
+    /// symlink hops, or a link `readlink` could not read.
+    UnresolvableDeny {
+        /// The configured `sandbox.deny_read` path, or Fiber home's
+        /// `credentials/` for the built-in deny.
+        configured: PathBuf,
+    },
+    /// A writable root could not be resolved through symlinks.
+    UnresolvedWrite {
+        /// The workspace, temp or `allow_write` root that failed.
+        root: PathBuf,
+    },
 }
 
-/// A prepared policy, built before fork and installed in the child.
+impl std::fmt::Display for Unavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Off => write!(f, "the sandbox is off"),
+            Self::UnsupportedPlatform => {
+                write!(f, "the Linux sandbox is unavailable on this platform")
+            }
+            Self::AbiBelow2 => write!(f, "Landlock ABI is below 2"),
+            Self::DenyInsideWrite {
+                configured,
+                overlapping,
+                root,
+            } => {
+                write!(f, "sandbox.deny_read path {}", configured.display())?;
+                if overlapping != configured {
+                    write!(f, " \u{2192} {}", overlapping.display())?;
+                }
+                write!(f, " is inside a writable path {}", root.display())
+            }
+            Self::UnresolvableDeny { configured } => write!(
+                f,
+                "sandbox.deny_read path {} could not be resolved",
+                configured.display()
+            ),
+            Self::UnresolvedWrite { root } => {
+                write!(
+                    f,
+                    "sandbox write grant {} could not be resolved",
+                    root.display()
+                )
+            }
+        }
+    }
+}
+
+impl Unavailable {
+    /// The code from `docs/errors.md`: deny/write overlap is a bad
+    /// configuration, every other unavailable case is a tool error, matching
+    /// the startup notice. One fixed code per case, with no wildcard arm.
+    pub fn code(&self) -> contract::ErrorCode {
+        match self {
+            Self::DenyInsideWrite { .. } => contract::ErrorCode::InvalidArguments,
+            Self::Off => contract::ErrorCode::ToolError,
+            Self::UnsupportedPlatform => contract::ErrorCode::ToolError,
+            Self::AbiBelow2 => contract::ErrorCode::ToolError,
+            Self::UnresolvableDeny { .. } => contract::ErrorCode::ToolError,
+            Self::UnresolvedWrite { .. } => contract::ErrorCode::ToolError,
+        }
+    }
+}
+
+/// A prepared policy, built before fork and installed in the child. The
+/// ruleset rides `Some` until `install` takes it; the seccomp program is
+/// only borrowed, never moved or freed, in the child.
+#[cfg(target_os = "linux")]
 pub(crate) struct Prepared {
     /// The Landlock ruleset with every grant added, ready to restrict.
-    #[cfg(target_os = "linux")]
-    ruleset: landlock::RulesetCreated,
+    /// Taken by `install`, which consumes it through `restrict_self`.
+    ruleset: Option<landlock::RulesetCreated>,
     /// The compiled seccomp program denying sockets and `io_uring_setup`.
-    #[cfg(target_os = "linux")]
     program: seccompiler::BpfProgram,
 }
 
-/// Checks whether the sandbox can be attempted for `workspace`. Unavailable
-/// means run without it with one notice, not a failed call. Only Linux
+/// Checks whether the sandbox can be attempted for `workspace`. An
+/// unavailable case produces the startup notice; a call decided confined
+/// then fails at spawn instead of running without the policy. Only Linux
 /// applies this policy; other builds report unavailable.
 pub fn check_available(settings: &Settings, workspace: &Path) -> Result<(), Unavailable> {
+    if !settings.enabled {
+        return Err(Unavailable::Off);
+    }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (settings, workspace);
-        return Err(Unavailable {
-            reason: "the Linux sandbox is unavailable on this platform".to_owned(),
-        });
+        let _ = workspace;
+        return Err(Unavailable::UnsupportedPlatform);
     }
     #[cfg(target_os = "linux")]
     {
@@ -58,11 +144,6 @@ pub fn check_available(settings: &Settings, workspace: &Path) -> Result<(), Unav
 #[cfg(target_os = "linux")]
 fn check_available_linux(settings: &Settings, workspace: &Path) -> Result<(), Unavailable> {
     use landlock::{Compatible as _, RulesetAttr as _};
-    if !settings.enabled {
-        return Err(Unavailable {
-            reason: "the sandbox is off".to_owned(),
-        });
-    }
     // Floor Landlock ABI 2: require the V2 read access and verify the
     // kernel creates the ruleset. An old kernel or a kernel without
     // Landlock fails here and reports unavailable.
@@ -70,33 +151,42 @@ fn check_available_linux(settings: &Settings, workspace: &Path) -> Result<(), Un
         .set_compatibility(landlock::CompatLevel::HardRequirement)
         .handle_access(landlock::AccessFs::from_read(landlock::ABI::V2));
     let Ok(ruleset) = probe else {
-        return Err(Unavailable {
-            reason: "Landlock ABI is below 2".to_owned(),
-        });
+        return Err(Unavailable::AbiBelow2);
     };
     if ruleset.create().is_err() {
-        return Err(Unavailable {
-            reason: "Landlock ABI is below 2".to_owned(),
-        });
+        return Err(Unavailable::AbiBelow2);
     }
+    // Resolve writable roots through symlinks first, so the overlap check
+    // and the grants below see through aliases. Both the lexical and the
+    // resolved root count: an alias must not smuggle a deny inside.
     let temp = std::env::temp_dir();
     let mut writable = Vec::new();
-    writable.push(normalize_or_canonical(workspace));
-    writable.push(normalize_or_canonical(&temp));
-    for path in &settings.allow_write {
-        writable.push(normalize_or_canonical(path));
-    }
-    for deny in denied_paths(settings) {
-        let candidate = normalize_absolute(&deny);
-        for root in &writable {
-            if candidate == *root || candidate.starts_with(join_slash(root)) {
-                return Err(Unavailable {
-                    reason: format!(
-                        "sandbox.deny_read path {} is inside a writable path {}",
-                        deny.display(),
-                        root.display()
-                    ),
+    let mut roots: Vec<&Path> = vec![workspace, &temp];
+    roots.extend(settings.allow_write.iter().map(PathBuf::as_path));
+    for root in roots {
+        match std::fs::canonicalize(root) {
+            Ok(resolved) => {
+                writable.push(normalize_absolute(root));
+                writable.push(resolved);
+            }
+            Err(_) => {
+                return Err(Unavailable::UnresolvedWrite {
+                    root: root.to_path_buf(),
                 });
+            }
+        }
+    }
+    let resolved = resolve_denies(settings)?;
+    for deny in &resolved {
+        for candidate in std::iter::once(&deny.configured).chain(deny.target.as_ref()) {
+            for root in &writable {
+                if candidate.starts_with(root) {
+                    return Err(Unavailable::DenyInsideWrite {
+                        configured: deny.configured.clone(),
+                        overlapping: candidate.clone(),
+                        root: root.clone(),
+                    });
+                }
             }
         }
     }
@@ -104,7 +194,8 @@ fn check_available_linux(settings: &Settings, workspace: &Path) -> Result<(), Un
 }
 
 /// The denied paths for one spawn: Fiber home's `credentials/` plus the
-/// person's extra denies.
+/// person's extra denies, each at its configured lexical location.
+#[cfg(target_os = "linux")]
 fn denied_paths(settings: &Settings) -> Vec<PathBuf> {
     let mut denied = Vec::new();
     denied.push(settings.fiber_home.join("credentials"));
@@ -112,27 +203,174 @@ fn denied_paths(settings: &Settings) -> Vec<PathBuf> {
     denied
 }
 
+/// One configured deny with its `readlink`-resolved target, when symlinks
+/// lead elsewhere.
+#[cfg(target_os = "linux")]
+struct ResolvedDeny {
+    /// The configured path, at its lexical location.
+    configured: PathBuf,
+    /// The fully resolved target, when a symlink component leads away from
+    /// the configured path.
+    target: Option<PathBuf>,
+}
+
+/// The most symlink hops one deny resolution follows.
+#[cfg(target_os = "linux")]
+const MAX_SYMLINK_HOPS: usize = 40;
+
+/// Resolves every configured deny through `readlink`, dangling links
+/// included. A relative link target resolves against the link's directory.
+/// A loop, more than 40 hops, or an unreadable link makes the sandbox
+/// unavailable: a half-resolved target could leave the true target granted.
+#[cfg(target_os = "linux")]
+fn resolve_denies(settings: &Settings) -> Result<Vec<ResolvedDeny>, Unavailable> {
+    let mut resolved = Vec::new();
+    for configured in denied_paths(settings) {
+        let target = resolve_target(&configured)?;
+        resolved.push(ResolvedDeny { configured, target });
+    }
+    Ok(resolved)
+}
+
+/// Resolves `path` through each symlink component with `readlink`,
+/// following dangling links to their (possibly missing) targets. Returns
+/// `None` when no symlink component leads away. Stops at the first missing
+/// non-symlink component, returning what resolved so far: denying that
+/// prefix only over-denies, never under-denies. A relative link target
+/// resolves against the link's directory.
+#[cfg(target_os = "linux")]
+fn resolve_target(path: &Path) -> Result<Option<PathBuf>, Unavailable> {
+    let configured = || Unavailable::UnresolvableDeny {
+        configured: path.to_path_buf(),
+    };
+    let absolute = normalize_absolute(path);
+    let mut components: Vec<std::ffi::OsString> = Vec::new();
+    for component in absolute.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => components.push(name.to_os_string()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                components.pop();
+            }
+            Component::Prefix(_) => {}
+        }
+    }
+    let mut current = PathBuf::from("/");
+    let mut visited: Vec<PathBuf> = Vec::new();
+    let mut hops = 0;
+    let mut saw_link = false;
+    let mut index = 0;
+    loop {
+        while index < components.len() {
+            let next = current.join(&components[index]);
+            match std::fs::symlink_metadata(&next) {
+                Err(_) => break,
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    if visited.contains(&next) {
+                        return Err(configured());
+                    }
+                    visited.push(next.clone());
+                    hops += 1;
+                    if hops > MAX_SYMLINK_HOPS {
+                        return Err(configured());
+                    }
+                    saw_link = true;
+                    let raw = std::fs::read_link(&next).map_err(|_| configured())?;
+                    // The target is relative to the link's directory, which
+                    // is the ancestor the walk descended to.
+                    let joined = if raw.is_absolute() {
+                        raw
+                    } else {
+                        current.join(raw)
+                    };
+                    current = normalize_absolute(&joined);
+                    index += 1;
+                }
+                Ok(_) => {
+                    current = next;
+                    index += 1;
+                }
+            }
+        }
+        // Every component is consumed or a missing one stopped the walk:
+        // when the resolved endpoint is itself a symlink, one more hop
+        // leads on. A cycle or the hop budget ends the resolution.
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                if visited.contains(&current) {
+                    return Err(configured());
+                }
+                visited.push(current.clone());
+                hops += 1;
+                if hops > MAX_SYMLINK_HOPS {
+                    return Err(configured());
+                }
+                saw_link = true;
+                let raw = std::fs::read_link(&current).map_err(|_| configured())?;
+                let joined = if raw.is_absolute() {
+                    raw
+                } else if let Some(parent) = current.parent() {
+                    parent.join(raw)
+                } else {
+                    return Err(configured());
+                };
+                current = normalize_absolute(&joined);
+            }
+            _ => break,
+        }
+    }
+    Ok(saw_link.then(|| current))
+}
+
 /// Prepares the Landlock grants and the seccomp program. A setup error
 /// aborts spawn; the call fails and never runs unconfined.
 #[cfg(target_os = "linux")]
 pub(crate) fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, String> {
     use landlock::{Access as _, Compatible as _, RulesetAttr as _, RulesetCreatedAttr as _};
-    check_available(settings, workspace).map_err(|unavailable| unavailable.reason)?;
+    check_available(settings, workspace).map_err(|unavailable| unavailable.to_string())?;
     let selected = landlock::ABI::V2;
     let mut rules: Vec<landlock::PathBeneath<OwnedFd>> = Vec::new();
     let temp = std::env::temp_dir();
-    let mut writable = Vec::new();
-    writable.push(workspace.to_path_buf());
-    writable.push(temp);
-    writable.extend(settings.allow_write.iter().cloned());
-    for root in &writable {
-        let rule_fd = open_nofollow(root)
-            .map_err(|cause| format!("sandbox setup failed opening {}: {cause}", root.display()))?;
+    // Grant the resolved writable roots, so an aliased workspace stays
+    // writable through its alias.
+    let mut roots: Vec<&Path> = vec![workspace, &temp];
+    roots.extend(settings.allow_write.iter().map(PathBuf::as_path));
+    for root in roots {
+        let resolved = std::fs::canonicalize(root).map_err(|cause| {
+            format!("sandbox setup failed resolving {}: {cause}", root.display())
+        })?;
+        let rule_fd = open_nofollow(&resolved).map_err(|cause| {
+            format!(
+                "sandbox setup failed opening {}: {cause}",
+                resolved.display()
+            )
+        })?;
         let access = landlock::AccessFs::from_all(selected);
         rules.push(landlock::PathBeneath::new(rule_fd, access));
     }
-    for deny in denied_paths(settings) {
-        add_ancestor_grants(&deny, selected, &mut rules)?;
+    // Deny every configured path and every resolved target, skipping no
+    // entry that leads to any of them.
+    let resolved_denies =
+        resolve_denies(settings).map_err(|unavailable| unavailable.to_string())?;
+    let mut exclusions: Vec<PathBuf> = Vec::new();
+    for deny in &resolved_denies {
+        exclusions.push(normalize_absolute(&deny.configured));
+        if let Some(target) = &deny.target {
+            exclusions.push(normalize_absolute(target));
+        }
+    }
+    for deny in &resolved_denies {
+        add_ancestor_grants(
+            &deny.configured,
+            &exclusions,
+            selected,
+            Path::new("/"),
+            &mut rules,
+        )?;
+        if let Some(target) = &deny.target {
+            add_ancestor_grants(target, &exclusions, selected, Path::new("/"), &mut rules)?;
+        }
     }
     let created = landlock::Ruleset::default()
         .set_compatibility(landlock::CompatLevel::BestEffort)
@@ -148,22 +386,40 @@ pub(crate) fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared,
     }
     let program = compile_seccomp()?;
     Ok(Prepared {
-        ruleset: created,
+        ruleset: Some(created),
         program,
     })
 }
 
-/// Installs a prepared policy in the child between fork and exec. Only
-/// syscalls run here; success performs no allocation.
+/// Installs a prepared policy in the child between fork and exec. Takes the
+/// ruleset out of the borrowed policy and consumes it through
+/// `restrict_self`, whose drop only closes a file descriptor: a syscall,
+/// safe here. The seccomp program is only borrowed, so its vector is never
+/// moved or freed in the child. On failure returns the raw errno with no
+/// formatting or allocation; the caller writes it to the sentinel and
+/// aborts spawn.
 #[cfg(target_os = "linux")]
-pub(crate) fn install(prepared: Prepared) -> Result<(), String> {
-    prepared
-        .ruleset
-        .restrict_self()
-        .map_err(|cause| format!("the sandbox could not be applied: {cause:?}"))?;
-    seccompiler::apply_filter(&prepared.program)
-        .map_err(|cause| format!("the sandbox could not be applied: {cause}"))?;
+pub(crate) fn install(prepared: &mut Prepared) -> Result<(), i32> {
+    let ruleset = prepared.ruleset.take().ok_or(libc::EINVAL)?;
+    ruleset.restrict_self().map_err(|cause| errno_of(&cause))?;
+    seccompiler::apply_filter(&prepared.program).map_err(|cause| errno_of(&cause))?;
     Ok(())
+}
+
+/// The errno behind a Landlock or seccomp failure, walking the error's
+/// sources down to the `io::Error` the failing syscall left. Matching
+/// would name each crate's variants; the walk reads only the standard
+/// source chain, with no allocation and no formatting.
+#[cfg(target_os = "linux")]
+fn errno_of(cause: &(dyn std::error::Error + 'static)) -> i32 {
+    let mut next: Option<&(dyn std::error::Error + 'static)> = Some(cause);
+    while let Some(error) = next {
+        if let Some(io) = error.downcast_ref::<std::io::Error>() {
+            return io.raw_os_error().unwrap_or(libc::EIO);
+        }
+        next = error.source();
+    }
+    libc::EIO
 }
 
 /// A stub for non-Linux builds, which never apply the Linux policy.
@@ -174,8 +430,8 @@ pub(crate) fn prepare(_settings: &Settings, _workspace: &Path) -> Result<Prepare
 
 /// A stub for non-Linux builds.
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn install(_prepared: Prepared) -> Result<(), String> {
-    Err("the Linux sandbox is unavailable on this platform".to_owned())
+pub(crate) fn install(_prepared: &mut Prepared) -> Result<(), i32> {
+    Err(rustix::io::Errno::IO.raw_os_error())
 }
 
 /// A stub `Prepared` for non-Linux builds.
@@ -183,17 +439,29 @@ pub(crate) fn install(_prepared: Prepared) -> Result<(), String> {
 pub(crate) struct Prepared;
 
 /// Adds the ancestor-walk grants for one denied path. For each existing
-/// ancestor directory on the way, grants read on every entry except the one
-/// leading to the denied path. Missing components stop the walk.
+/// ancestor directory on the way, grants read on every entry except those
+/// leading to any denied path in `exclusions`: the union over every
+/// configured deny and every resolved target, so one deny's walk never
+/// re-grants another deny's subtree. The denied path itself, a missing
+/// component and a symlink component get nothing: the walk grants the
+/// parent's readable siblings then stops, without moving a missing deny
+/// point upward and without following links. `root` is `/` in production;
+/// fixtures pass their own root.
 #[cfg(target_os = "linux")]
 fn add_ancestor_grants(
     denied: &Path,
+    exclusions: &[PathBuf],
     abi: landlock::ABI,
+    root: &Path,
     rules: &mut Vec<landlock::PathBeneath<OwnedFd>>,
 ) -> Result<(), String> {
     let absolute = normalize_absolute(denied);
+    let relative = match absolute.strip_prefix(root) {
+        Ok(relative) => relative.to_path_buf(),
+        Err(_) => return Ok(()),
+    };
     let mut components: Vec<std::ffi::OsString> = Vec::new();
-    for component in absolute.components() {
+    for component in relative.components() {
         match component {
             Component::RootDir => {}
             Component::Normal(name) => components.push(name.to_os_string()),
@@ -204,17 +472,10 @@ fn add_ancestor_grants(
             Component::Prefix(_) => {}
         }
     }
-    let mut prefix = PathBuf::from("/");
-    for (index, name) in components.iter().enumerate() {
-        let is_last = index + 1 == components.len();
-        if is_last {
-            break;
-        }
+    let mut prefix = root.to_path_buf();
+    for name in components {
         let ancestor = prefix.clone();
-        let next_path = ancestor.join(name);
-        if std::fs::symlink_metadata(&next_path).is_err() {
-            break;
-        }
+        let next_path = ancestor.join(&name);
         let entries = std::fs::read_dir(&ancestor).map_err(|cause| {
             format!(
                 "sandbox setup failed listing {}: {cause}",
@@ -228,10 +489,12 @@ fn add_ancestor_grants(
                     ancestor.display()
                 )
             })?;
-            if entry.file_name() == *name {
+            // Skip every entry leading to any denied path, not only the
+            // current one: Landlock unions grants across denies.
+            let path = ancestor.join(entry.file_name());
+            if exclusions.iter().any(|denied| denied.starts_with(&path)) {
                 continue;
             }
-            let path = ancestor.join(entry.file_name());
             let Ok(metadata) = std::fs::symlink_metadata(&path) else {
                 continue;
             };
@@ -244,26 +507,29 @@ fn add_ancestor_grants(
             let access = landlock::AccessFs::from_read(abi);
             rules.push(landlock::PathBeneath::new(fd, access));
         }
-        if let Ok(metadata) = std::fs::symlink_metadata(&next_path) {
-            if metadata.file_type().is_symlink() {
-                break;
-            }
-        } else {
-            break;
+        match std::fs::symlink_metadata(&next_path) {
+            Err(_) => break,
+            Ok(metadata) if metadata.file_type().is_symlink() => break,
+            Ok(_) => prefix = next_path,
         }
-        prefix = next_path;
     }
     Ok(())
 }
 
 /// Opens `path` with `O_PATH | O_NOFOLLOW | O_CLOEXEC`, so a symlink never
-/// resolves to its target.
+/// resolves to its target. Linux-only: other platforms have no `O_PATH`,
+/// and the grants it opens are never built there. The flags combine with
+/// `union`, not `|`, so no mutant can swap the operator
+/// (`docs/testing/mutants.md`).
+#[cfg(target_os = "linux")]
 fn open_nofollow(path: &Path) -> Result<OwnedFd, String> {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)
-        .map(OwnedFd::from)
+    use rustix::fs::OFlags;
+    let flags = OFlags::RDONLY
+        .union(OFlags::PATH)
+        .union(OFlags::NOFOLLOW)
+        .union(OFlags::CLOEXEC);
+    rustix::fs::open(path, flags, rustix::fs::Mode::empty())
+        .map(Into::into)
         .map_err(|cause| format!("opening {}: {cause}", path.display()))
 }
 
@@ -301,18 +567,9 @@ fn compile_seccomp() -> Result<seccompiler::BpfProgram, String> {
         .map_err(|cause| format!("sandbox setup failed compiling seccomp: {cause:?}"))
 }
 
-/// Canonicalizes when the path exists, otherwise normalizes lexically.
-fn normalize_or_canonical(path: &Path) -> PathBuf {
-    canonicalize_existing(path).unwrap_or_else(|| normalize_absolute(path))
-}
-
-/// Canonicalizes when the path exists, for the overlap check.
-fn canonicalize_existing(path: &Path) -> Option<PathBuf> {
-    std::fs::canonicalize(path).ok()
-}
-
 /// Makes `path` absolute and normalizes `.` and `..` lexically, without
 /// touching the filesystem.
+#[cfg(target_os = "linux")]
 fn normalize_absolute(path: &Path) -> PathBuf {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -338,39 +595,6 @@ fn normalize_absolute(path: &Path) -> PathBuf {
     } else {
         out
     }
-}
-
-/// Joins a trailing slash for prefix matching, so `/tmp/foo2` does not match
-/// writable root `/tmp/foo`.
-fn join_slash(root: &Path) -> PathBuf {
-    let mut with_slash = root.to_path_buf();
-    with_slash.push("");
-    with_slash
-}
-
-/// The rule count and the ancestor-walk time for the PR body, measured on
-/// Linux for the owner's home directory. Test-only: its one caller keeps
-/// the figures for the record.
-#[cfg(all(target_os = "linux", test))]
-pub(crate) fn measure_home_walk(
-    clock: &dyn contract::clock::Clock,
-) -> (usize, std::time::Duration) {
-    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from);
-    let settings = Settings {
-        enabled: true,
-        allow_write: Vec::new(),
-        deny_read: Vec::new(),
-        fiber_home: home,
-    };
-    let start = clock.now();
-    let mut rules: Vec<landlock::PathBeneath<OwnedFd>> = Vec::new();
-    for deny in denied_paths(&settings) {
-        // A deny point that cannot be walked contributes no grants; the
-        // sandbox still confines everything else, so the measurement
-        // skips the failure instead of aborting the count.
-        let _walked = add_ancestor_grants(&deny, landlock::ABI::V2, &mut rules);
-    }
-    (rules.len(), clock.now().saturating_duration_since(start))
 }
 
 #[cfg(test)]

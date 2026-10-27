@@ -484,14 +484,12 @@ pub(crate) fn parts_in(
     if sandbox_settings.enabled
         && let Err(unavailable) = tools::sandbox_check_available(&sandbox_settings, &workspace)
     {
-        let code = if unavailable.reason.contains("inside a writable path") {
-            ErrorCode::InvalidArguments
-        } else {
-            ErrorCode::ToolError
-        };
+        // One notice names the unavailable case; deny/write overlap is a
+        // bad configuration, every other case a tool error
+        // (`docs/errors.md`, "Sandbox").
         startup_notices.push(contract::events::Notice {
-            code,
-            message: format!("sandbox unavailable: {}", unavailable.reason),
+            code: unavailable.code(),
+            message: format!("sandbox unavailable: {unavailable}"),
             extension: None,
         });
     }

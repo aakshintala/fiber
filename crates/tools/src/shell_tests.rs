@@ -1206,7 +1206,7 @@ fn sandbox_handle_for_test(
 }
 
 #[test]
-fn effects_sets_confined_only_for_an_available_linux_sandbox() {
+fn effects_sets_confined_for_an_enabled_linux_sandbox() {
     let dir = fakes::TempDir::new("fiber-shell-effects-confined");
     let workspace = dir.path().to_path_buf();
     let shell = Shell::new(workspace.clone(), FakeClock::new());
@@ -1219,6 +1219,50 @@ fn effects_sets_confined_only_for_an_available_linux_sandbox() {
     assert!(confined.declared.confined);
     #[cfg(not(target_os = "linux"))]
     assert!(!confined.declared.confined);
+}
+
+#[test]
+fn effects_declares_confined_for_an_enabled_sandbox_that_cannot_apply() {
+    // Fail-closed declaration: an unresolvable write grant is still
+    // declared confined on Linux, so spawn fails instead of running the
+    // command unconfined. A check-based declaration would run it.
+    let dir = fakes::TempDir::new("fiber-shell-effects-unappliable");
+    let workspace = dir.path().to_path_buf();
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(crate::shell::sandbox::Settings {
+        enabled: true,
+        allow_write: vec![std::path::PathBuf::from("/nonexistent-fiber-sandbox-allow")],
+        deny_read: Vec::new(),
+        fiber_home: home.join(format!("fiber-shell-effects-fail-{}", std::process::id())),
+    }));
+    let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
+    let declared = effects(&shell, "echo hi");
+    #[cfg(target_os = "linux")]
+    assert!(declared.declared.confined);
+    #[cfg(not(target_os = "linux"))]
+    assert!(!declared.declared.confined);
+}
+
+#[test]
+fn a_configured_direct_run_shares_the_sandbox_selection() {
+    let dir = fakes::TempDir::new("fiber-shell-run-confined");
+    let workspace = dir.path().to_path_buf();
+    let shell = Shell::new(workspace.clone(), FakeClock::new())
+        .with_sandbox(sandbox_handle_for_test("run"));
+    // A direct `run` derives its decision at spawn, like `effects` does: the
+    // same selection confines this call, and the driver's own shell stays
+    // unconfigured everywhere else.
+    let confined = effects(&shell, "echo hi");
+    #[cfg(target_os = "linux")]
+    assert!(confined.declared.confined);
+    #[cfg(not(target_os = "linux"))]
+    assert!(!confined.declared.confined);
+    let output = shell.run(&args("echo hi"), &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), None);
+    assert!(text(&output).starts_with("hi"), "a direct echo succeeds");
 }
 
 #[test]

@@ -75,6 +75,9 @@ fn a_repository_value_is_ignored_with_a_notice() {
     );
 }
 
+/// A deny inside a writable grant is a bad configuration: the startup
+/// notice carries the configured path with no arrow for a lexical overlap.
+#[cfg(target_os = "linux")]
 #[test]
 fn deny_inside_the_workspace_is_unavailable_naming_the_path() {
     let rig = Rig::new("fiber-sandbox-overlap");
@@ -84,18 +87,31 @@ fn deny_inside_the_workspace_is_unavailable_naming_the_path() {
         std::path::PathBuf::from,
     );
     let fiber_home = home_base.join(format!("fiber-main-sandbox-overlap-{}", std::process::id()));
+    let denied = workspace.join("secret");
     let settings = tools::SandboxSettings {
         enabled: true,
         allow_write: Vec::new(),
-        deny_read: vec![workspace.join("secret")],
+        deny_read: vec![denied.clone()],
         fiber_home,
     };
     let unavailable = tools::sandbox_check_available(&settings, &workspace).expect_err("overlap");
-    assert!(unavailable.reason.contains("secret"));
+    assert_eq!(
+        unavailable,
+        tools::SandboxUnavailable::DenyInsideWrite {
+            configured: denied.clone(),
+            overlapping: denied,
+            root: workspace.clone(),
+        }
+    );
+    assert_eq!(unavailable.code(), contract::ErrorCode::InvalidArguments);
+    let notice = unavailable.to_string();
     assert!(
-        unavailable
-            .reason
-            .contains(&workspace.display().to_string())
+        notice.contains("secret") && notice.contains(&workspace.display().to_string()),
+        "the notice names the configured path: {notice}"
+    );
+    assert!(
+        !notice.contains('\u{2192}'),
+        "a lexical overlap carries no arrow: {notice}"
     );
 }
 

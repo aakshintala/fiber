@@ -13,7 +13,7 @@ use contract::emit::Emit;
 use contract::jobs::Jobs;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure, Process};
-use contract::tool::{Bound, Cancel, Effects, Output, Tool};
+use contract::tool::{Ask, Bound, Cancel, Effects, Output, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -52,7 +52,11 @@ mod wrap;
 mod sed;
 
 use classify::classify;
-use command::{Finished, StopKind};
+use command::{Finished, SandboxApply, StopKind};
+
+#[cfg(test)]
+#[path = "shell/run_effects_tests.rs"]
+mod run_effects_tests;
 
 /// The default when the model gives no `timeout_ms`: 10 minutes.
 const DEFAULT_TIMEOUT_MS: u64 = 600_000;
@@ -215,6 +219,18 @@ impl Shell {
         }
     }
 
+    /// The frozen sandbox settings and whether a call they decide is
+    /// confined, shared by [`Tool::effects`] and direct [`Tool::run`]: both
+    /// decide on the same value. Confinement is the person's intent on a
+    /// platform with the mechanism, not a live check: a setup that cannot
+    /// apply fails closed at spawn instead of silently running unconfined
+    /// (`docs/sandbox.md`, "When the sandbox is unavailable").
+    fn selected(&self) -> (sandbox::Settings, bool) {
+        let settings = support::lock(&self.sandbox).clone();
+        let confined = settings.enabled && cfg!(target_os = "linux");
+        (settings, confined)
+    }
+
     /// Wraps a spill's file in a test's own writer.
     #[cfg(test)]
     pub(crate) fn with_spill_writer(self, wrap: spill::Wrap) -> Self {
@@ -290,14 +306,102 @@ impl Tool for Shell {
         };
         // The `confined` effect holds only for a Linux sandbox attempt the
         // shell will run only inside; calls remain reviewed.
-        let settings = support::lock(&self.sandbox);
-        if sandbox::check_available(&settings, &self.workspace).is_ok() {
+        let (_, confined) = self.selected();
+        if confined {
             effects.declared.confined = true;
         }
         Ok(effects)
     }
 
+    /// Runs the call with the exact prepared `effects`: the decision
+    /// `tool_call_started` declared. A declared-confined call either
+    /// applies the sandbox or fails before its command; a reload in between
+    /// never makes it run unconfined, and there is no unconfined retry. A
+    /// declared-not-confined call never applies a newly enabled policy.
+    fn run_with_effects(
+        &self,
+        arguments: &Map<String, Value>,
+        effects: &Effects,
+        cancel: &dyn Cancel,
+        emit: &dyn Emit,
+        ask: &dyn Ask,
+    ) -> Output {
+        let _ = ask;
+        if !effects.declared.confined {
+            // Declared unconfined: force the policy off, so a reload that
+            // turned the sandbox on after the decision cannot confine it.
+            let off = sandbox::Settings {
+                enabled: false,
+                allow_write: Vec::new(),
+                deny_read: Vec::new(),
+                fiber_home: PathBuf::new(),
+            };
+            return self.run_inner(arguments, &off, cancel, emit);
+        }
+        // Declared confined: the frozen settings either still apply, or the
+        // call fails here, before any spawn.
+        let (settings, _) = self.selected();
+        if let Err(unavailable) = sandbox::check_available(&settings, &self.workspace) {
+            let cause = unavailable.to_string();
+            return match parse(arguments, &self.workspace, self.max_deadline_ms) {
+                Ok(parsed) => {
+                    let mut output = errored(ShellError::SandboxApply { cause });
+                    output.details = Some(details(&parsed.command, None));
+                    output
+                }
+                Err(error) => errored(error),
+            };
+        }
+        self.run_inner(arguments, &settings, cancel, emit)
+    }
+
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
+        // A direct call derives its decision now: there is no earlier
+        // declaration to preserve.
+        let (settings, _) = self.selected();
+        self.run_inner(arguments, &settings, cancel, emit)
+    }
+
+    fn bound(&self) -> Bound {
+        self.bound
+    }
+
+    fn with_cap(&self, cap: usize) -> Option<Arc<dyn Tool>> {
+        Some(Arc::new(Self {
+            bound: Bound {
+                start: cap.saturating_sub(cap / 2),
+                end: cap / 2,
+            },
+            ..self.clone()
+        }))
+    }
+
+    fn guidelines(&self) -> Option<String> {
+        crate::guidelines::of("shell")
+    }
+
+    /// The stages the reviewer was not shown read-only, for the one review
+    /// request (`docs/tools.md`, "Shell", "Effects"). The entries are
+    /// cloned under the lock and the lock released before classifying, so
+    /// no filesystem read runs while it is held.
+    fn review_note(&self, arguments: &Map<String, Value>) -> Option<String> {
+        let parsed = parse(arguments, &self.workspace, self.max_deadline_ms).ok()?;
+        let entries = support::lock(&self.read_only).clone();
+        classify::not_shown_read_only(&parsed.command, &parsed.workdir, &entries)
+    }
+}
+
+impl Shell {
+    /// Runs the call under `settings`, shared by direct and loop calls. The
+    /// settings are a frozen snapshot: `check_available` inside spawn sees
+    /// the same value this call was decided on, never a newer reload.
+    fn run_inner(
+        &self,
+        arguments: &Map<String, Value>,
+        settings: &sandbox::Settings,
+        cancel: &dyn Cancel,
+        emit: &dyn Emit,
+    ) -> Output {
         if cancel.is_cancelled() {
             return cancelled_before();
         }
@@ -356,7 +460,6 @@ impl Tool for Shell {
             None
         };
         let side = matches.as_ref().map(matches::MatchDir::file);
-        let sandbox_settings = support::lock(&self.sandbox).clone();
         let mut output = match command::execute(
             program,
             &command,
@@ -369,7 +472,7 @@ impl Tool for Shell {
             self.jobs.as_deref(),
             spill,
             side.as_deref(),
-            &sandbox_settings,
+            settings,
             &self.workspace,
         ) {
             Ok(command::Ran::Finished(finished)) => {
@@ -404,34 +507,6 @@ impl Tool for Shell {
             details.insert("matches".into(), matches);
         }
         output
-    }
-
-    fn bound(&self) -> Bound {
-        self.bound
-    }
-
-    fn with_cap(&self, cap: usize) -> Option<Arc<dyn Tool>> {
-        Some(Arc::new(Self {
-            bound: Bound {
-                start: cap.saturating_sub(cap / 2),
-                end: cap / 2,
-            },
-            ..self.clone()
-        }))
-    }
-
-    fn guidelines(&self) -> Option<String> {
-        crate::guidelines::of("shell")
-    }
-
-    /// The stages the reviewer was not shown read-only, for the one review
-    /// request (`docs/tools.md`, "Shell", "Effects"). The entries are
-    /// cloned under the lock and the lock released before classifying, so
-    /// no filesystem read runs while it is held.
-    fn review_note(&self, arguments: &Map<String, Value>) -> Option<String> {
-        let parsed = parse(arguments, &self.workspace, self.max_deadline_ms).ok()?;
-        let entries = support::lock(&self.read_only).clone();
-        classify::not_shown_read_only(&parsed.command, &parsed.workdir, &entries)
     }
 }
 
@@ -641,6 +716,19 @@ fn from_spawn(result: Result<Finished, std::io::Error>, limit: Limit, command: &
     match result {
         Ok(finished) => assemble(limit, finished, None, Some(command)),
         Err(source) => {
+            // A sandbox-apply marker fails the call with the sandbox cause;
+            // every other spawn failure reads as a command that never
+            // started.
+            if let Some(apply) = source
+                .get_ref()
+                .and_then(|error| error.downcast_ref::<SandboxApply>())
+            {
+                let mut output = errored(ShellError::SandboxApply {
+                    cause: apply.cause.clone(),
+                });
+                output.details = Some(details(command, None));
+                return output;
+            }
             let mut output = errored(ShellError::NotStarted { source });
             output.details = Some(details(command, None));
             output
