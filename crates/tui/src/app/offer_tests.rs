@@ -2,37 +2,16 @@
 //! edits it takes, and the reply it sends.
 
 use std::path::PathBuf;
-use std::time::Instant;
 
-use contract::clock::Clock;
 use serde_json::{Value, json};
 
+use crate::app::testkit::{SESSION as S_A, now, sent, session_line};
 use crate::app::{App, Effect};
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 
-const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 const S_B: &str = "s_bbbbbbbbbbbbbbbb";
 const BADGE_ONE: &str = "  ⚠ 1 approvals waiting · click to reopen";
-
-/// The injected clock's now.
-fn now() -> Instant {
-    fakes::clock::FakeClock::new().now()
-}
-
-/// A session line of `kind` from `session`.
-fn session_line(session: &str, kind: &str, payload: Value, action: Option<&str>) -> Line {
-    Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
-        session_id: contract::SessionId(session.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: action.map(|id| contract::ActionId(id.to_owned())),
-        seq: None,
-        payload: payload.as_object().cloned().unwrap_or_default(),
-    })
-}
 
 /// An app connected to the hub and attached to [`S_A`].
 fn attached() -> App {
@@ -87,28 +66,6 @@ fn approval(id: &str) -> Line {
 /// Presses `key`.
 fn press(app: &mut App, key: Key) -> Effect {
     app.on_key(key, now())
-}
-
-/// The lines an effect sends, parsed.
-fn sent(effect: Effect) -> Vec<Value> {
-    match effect {
-        Effect::Send(lines) => lines
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_default())
-            .collect(),
-        Effect::None
-        | Effect::Quit
-        | Effect::ListFiles
-        | Effect::ReadImage(_)
-        | Effect::Feedback { .. }
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. }
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_) => Vec::new(),
-    }
 }
 
 /// Chooses approve, skip, never with the keys, then Enter on Send.
