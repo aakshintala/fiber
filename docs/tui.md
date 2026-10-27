@@ -777,6 +777,15 @@ a click on it returns too. The views are:
   "−N" in `removed`; an untracked file's path, then "· untracked, wholly
   added" dim. Under the chosen file, its hunks in the diff format an opened
   edit uses ("Tool groups and the ledger").
+- **The release notes,** `/release-notes`: the running binary's
+  changelog section for its own version (`docs/releasing.md`, "The
+  changelog"), embedded in the binary at build time, so the view asks
+  nothing and opens with no session on screen. The section is the one
+  headed by exactly `## <version>`; a version with no section shows "No
+  notes for this version." with the releases page instead. The top row
+  reads "Release notes" bold, "  /release-notes" dim and "Esc returns"
+  dim, right-aligned. A bullet is "• " in `accent`, its wrapped lines
+  hanging two columns in; other long lines wrap at the width.
 - **A call's view,** from an opened call: the whole call, drawn as it is
   inline ("Tool groups and the ledger") with no 20-line cap. The top row is
   the call's kind capitalised, bold, then its target dim ("Shell  cargo test

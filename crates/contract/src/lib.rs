@@ -29,6 +29,7 @@ pub mod notes;
 pub use mcp_remote::McpRemote;
 mod pre_session;
 pub mod provider;
+pub mod releases;
 pub mod repository;
 pub mod thinking;
 

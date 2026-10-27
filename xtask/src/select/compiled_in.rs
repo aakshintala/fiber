@@ -38,6 +38,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/tui.md", "contract"),
     ("docs/tui.md", "extensions"),
     ("docs/tui.md", "tui"),
+    ("CHANGELOG.md", "main"),
     ("crates/contract/prompt/loaded.md", "contract"),
     ("crates/contract/prompt/no-match.md", "contract"),
     ("crates/provider/prompt/image-left-out.md", "provider"),
