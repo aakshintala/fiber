@@ -271,7 +271,7 @@ fn without_yes_and_without_a_terminal_it_is_usage_and_removes_nothing() {
 }
 
 // `/delete` in the terminal (`docs/tui.md`, "Slash commands"): the
-// sections below drive the built terminal in a pty, type the command,
+// journeys below drive the built terminal in a pty, type the command,
 // and assert on the screen. Every run and every wait carries a
 // deadline.
 
@@ -280,12 +280,14 @@ const COLS: u16 = 160;
 const ROWS: u16 = 48;
 
 /// A config naming the workspace script, with the hub exiting once no
-/// client stays connected.
+/// client stays connected. Sessions idle out only after a minute, so a
+/// journey's driving never races their idle exit.
 fn scripted(setup: &Setup, steps: Value) {
     write_json(&setup.workspace().join("s.json"), &json!({"steps": steps}));
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}}),
+        &json!({"model": "scripted/s.json",
+            "session": {"idle_exit_ms": 60000}, "hub": {"idle_exit_ms": 200}}),
     );
 }
 
@@ -319,118 +321,343 @@ fn wait_stored(setup: &Setup, count: usize) -> Vec<String> {
     stored(setup)
 }
 
-/// Quits the terminal from the home screen with `/quit` and reaps what
-/// remains: home prints no resume line, so the run exits cleanly.
-fn quit_home(run: Run, guard: SessionGuard) {
+/// Whether the session's lock is held: only a running session holds it.
+fn lock_held(setup: &Setup, id: &str) -> bool {
+    File::open(session_dir(setup, id).join("session.lock"))
+        .is_ok_and(|lock| lock.try_lock().is_err())
+}
+
+/// The hub feed on a fresh socket: the watcher keeps its own
+/// subscription, so session lines and feed lines never share a socket.
+fn feed(client: &Socket) {
+    client.send(r#"{"id":"c_feed","command":"feed"}"#);
+    let ack = recv_answer(client, "c_feed", "the feed acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    assert_eq!(ack["payload"]["command_id"], "c_feed");
+}
+
+/// A standing rule allowing the blocked script's shell call, so the
+/// turn runs instead of waiting on an approval.
+fn allow_shell(setup: &Setup, command: &str) {
+    write_json(
+        &setup.home().join("rules"),
+        &json!({"decision": "allow", "tool": "shell", "prefix": command}),
+    );
+}
+
+/// The terminal on a session blocked in a FIFO shell script, then any
+/// trailing scripted steps: types the first driver message, waits for
+/// the running job, and returns the run, its guard, the session id and
+/// the FIFO handles. The caller holds the handles until the session
+/// stops: dropping the release handle would hand the shell end of file
+/// and end the turn.
+fn launch_blocked(
+    setup: &Setup,
+    tail: &[Value],
+) -> (Run, SessionGuard, String, File, fakes::Watchdog) {
+    let held = setup.workspace().join("held");
+    fakes::fifo(&held);
+    // Held read-write, the FIFO always has a writer: opening it never
+    // blocks, and the shell's `read` waits for a line the journey only
+    // writes when the turn may end.
+    let release = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&held)
+        .unwrap();
+    let script = setup.workspace().join("wait.sh");
+    fs::write(
+        &script,
+        format!("read -r _ < {}\necho done\n", held.display()),
+    )
+    .unwrap();
+    let watchdog = fakes::Watchdog::matching(script.to_str().unwrap());
+    let command = format!("sh {}", script.display());
+    let mut steps =
+        vec![json!({"tool_calls": [{"name": "shell", "arguments": {"command": command}}]})];
+    steps.extend(tail.iter().cloned());
+    scripted(setup, Value::Array(steps));
+    allow_shell(setup, &command);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let mut run = Run::spawn(setup, COLS, ROWS, &[], &[]);
+    run.ready();
+    run.write(b"run it\r");
+    run.wait_screen("the running shell job", |grid| {
+        grid.rows
+            .iter()
+            .any(|row| row.contains("Jobs") && row.contains("1 running"))
+    });
+    let a = wait_stored(setup, 1).into_iter().next().unwrap();
+    (run, guard, a, release, watchdog)
+}
+
+/// Quits the terminal from any screen and reaps what remains: Ctrl-C
+/// twice leaves an attached session for the resume line, and quits from
+/// home; either way the run exits cleanly.
+fn quit_pty(run: Run, guard: SessionGuard) {
     let mut run = run;
-    run.write(b"/quit\r");
+    run.write(b"\x03\x03\r");
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
     guard.wait_gone();
 }
 
-/// `/delete` opens the session list's delete question for the session on
-/// screen, naming it, and Enter confirms through the hub: the terminal
-/// stays home with the session removed.
+/// `/delete` with no session on screen shows the shared no-session
+/// notice and changes nothing.
 #[test]
-fn delete_command_confirms_through_the_hub_and_removes_the_session() {
+fn no_session_delete_shows_the_shared_notice() {
     let setup = Setup::new();
-    scripted(&setup, json!([{"text": ["done."]}]));
+    scripted(&setup, json!([]));
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let mut run = Run::spawn(&setup, COLS, ROWS, &[], &[]);
     run.ready();
-    run.write(b"run it\r");
-    run.wait_screen("the session reply", |grid| grid.contents.contains("done."));
-    let a = wait_stored(&setup, 1).into_iter().next().unwrap();
-    // The session dies while the terminal stays attached, so the delete
-    // question opens for it. Killing the process releases its lock at
-    // once, with no exiting window for the delete to race.
-    assert!(
-        !fakes::matching(&a)
-            .expect("pgrep lists the session")
-            .is_empty(),
-        "the session runs before the kill"
-    );
-    support::kill_matching(setup.deadline, &a).expect("the kill lands");
-    fakes::try_matching_exits(&a, setup.deadline).expect("the session process exits");
     run.write(b"/delete\r");
-    run.wait_screen("the delete question", |grid| {
-        grid.contents.contains(a.as_str()) && grid.contents.contains("It cannot be undone")
-    });
-    run.write(b"\r");
-    // The hub answers Enter with the row gone or a refusal notice.
-    let grid = run.wait_screen("the delete answer", |grid| {
-        !grid.contents.contains(a.as_str()) || grid.contents.contains("Session `")
-    });
-    if let Some(note) = grid
-        .contents
-        .lines()
-        .find(|line| line.contains("Session `"))
-    {
-        panic!("the hub refused the delete: {note}");
-    }
-    let gone = session_dir(&setup, &a);
-    fakes::wait_until("the session directory to go", setup.deadline, move || {
-        !gone.exists()
-    });
-    run.wait_screen("home without the session", |grid| {
-        !grid.contents.contains(a.as_str())
-    });
-    quit_home(run, guard);
-}
-
-/// Esc in `/delete`'s question keeps the session: the row and its
-/// directory stay.
-#[test]
-fn delete_esc_keeps_the_session() {
-    let setup = Setup::new();
-    scripted(&setup, json!([{"text": ["done."]}]));
-    let workspace = setup.workspace().to_string_lossy().into_owned();
-    let guard = SessionGuard::arm(setup.deadline, &workspace);
-    let mut run = Run::spawn(&setup, COLS, ROWS, &[], &[]);
-    run.ready();
-    run.write(b"run it\r");
-    run.wait_screen("the session reply", |grid| grid.contents.contains("done."));
-    let a = wait_stored(&setup, 1).into_iter().next().unwrap();
-    // The session dies while the terminal stays attached, so the delete
-    // question opens for it.
-    assert!(
-        !fakes::matching(&a)
-            .expect("pgrep lists the session")
-            .is_empty(),
-        "the session runs before the kill"
-    );
-    support::kill_matching(setup.deadline, &a).expect("the kill lands");
-    fakes::try_matching_exits(&a, setup.deadline).expect("the session process exits");
-    run.write(b"/delete\r");
-    run.wait_screen("the delete question", |grid| {
-        grid.contents.contains(a.as_str()) && grid.contents.contains("It cannot be undone")
-    });
-    run.write(b"\x1b[27u");
-    run.wait_screen("the question closed", |grid| {
-        !grid.contents.contains("It cannot be undone")
-    });
-    assert!(
-        session_dir(&setup, &a).join("events.jsonl").is_file(),
-        "Esc deletes nothing"
-    );
-    assert_eq!(wait_stored(&setup, 1).len(), 1, "Esc starts nothing");
-    quit_home(run, guard);
-}
-
-/// `/delete` on home with no session on screen shows the notice.
-#[test]
-fn delete_on_home_with_no_session_says_so() {
-    let setup = Setup::new();
-    scripted(&setup, json!([{"text": ["done."]}]));
-    let mut run = Run::spawn(&setup, COLS, ROWS, &[], &[]);
-    run.ready();
-    run.write(b"/delete\r");
-    run.wait_screen("the no-session notice", |grid| {
+    let notice = run.wait_screen("the no-session notice", |grid| {
         grid.contents.contains("No session on screen.")
     });
-    run.write(b"/quit\r");
-    let output = run.wait();
-    assert_eq!(output.status.code(), Some(0));
+    assert!(notice.contents.contains("No session on screen."));
+    quit_pty(run, guard);
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
+
+/// Esc cancels `/delete` and the live session answers a distinct second
+/// prompt in the same uninterrupted session: the log holds one
+/// `fiber_started`, both `turn_completed` events, and no `fiber_exited`
+/// between them. The log is the assertion source: durable output equals
+/// the log byte for byte.
+#[test]
+fn esc_keeps_the_live_session_for_a_second_prompt() {
+    let setup = Setup::new();
+    scripted(&setup, json!([{"text": ["first."]}, {"text": ["second."]}]));
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let mut run = Run::spawn(&setup, COLS, ROWS, &[], &[]);
+    run.ready();
+    run.write(b"run it\r");
+    let first = run.wait_screen("the first reply", |grid| grid.contents.contains("first."));
+    assert!(first.contents.contains("run it"));
+    let a = wait_stored(&setup, 1).into_iter().next().unwrap();
+    run.write(b"/delete\r");
+    let question = run.wait_screen("the delete question", |grid| {
+        grid.contents.contains("It cannot be undone")
+    });
+    assert!(question.contents.contains("It cannot be undone"));
+    run.write(b"\x1b[27u");
+    let back = run.wait_screen("the session after Esc", |grid| {
+        grid.contents.contains("first.") && !grid.contents.contains("It cannot be undone")
+    });
+    assert!(back.contents.contains("first."));
+    assert!(
+        lock_held(&setup, &a),
+        "the session is still running after Esc"
+    );
+    run.write(b"again\r");
+    run.wait_screen("the second reply", |grid| grid.contents.contains("second."));
+    let dir = session_dir(&setup, &a);
+    assert!(dir.is_dir(), "the session directory stays");
+    quit_pty(run, guard);
+    let events: Vec<Value> = fs::read_to_string(dir.join("events.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let kinds = support::kinds(&events);
+    assert!(
+        !kinds.contains(&"fiber_exited"),
+        "no exit between the turns: {kinds:?}"
+    );
+    // Each turn opens its one step before the assistant message
+    // (`docs/loop.md`, "One step").
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "the session start and both turns in order"
+    );
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
+
+/// `/delete` on the live parent stops it through the app and deletes the
+/// exact confirmed set: the feed reports the parent leaving exited
+/// before the parent's and both forks' directories are gone, and home is
+/// empty after.
+#[test]
+fn delete_after_stop_completion_removes_the_parent_and_its_forks() {
+    let setup = Setup::new();
+    let (mut run, guard, a, _release, _watchdog) = launch_blocked(&setup, &[]);
+    let b = "s_00000000000000b1";
+    let c = "s_00000000000000c1";
+    session(&setup, b, Some(&a));
+    session(&setup, c, Some(&a));
+    let feed_watch = Socket::connect(setup.deadline, &setup.hub_socket());
+    feed(&feed_watch);
+    assert!(lock_held(&setup, &a), "the parent is live at delete time");
+    run.write(b"/delete\r");
+    let question = run.wait_screen("the delete question", |grid| {
+        grid.contents.contains("It cannot be undone")
+            && grid.contents.contains("delete all")
+            && grid.contents.contains(b)
+            && grid.contents.contains(c)
+    });
+    assert!(question.contents.contains("It cannot be undone"));
+    run.write(b"\r");
+    let leaving = a.clone();
+    until(&feed_watch, "the parent to leave", move |line| {
+        line["kind"] == "session_left"
+            && line["payload"]["session_id"] == leaving.as_str()
+            && line["payload"]["how"] == "exited"
+    });
+    let dir_a = session_dir(&setup, &a);
+    let dir_b = session_dir(&setup, b);
+    let dir_c = session_dir(&setup, c);
+    fakes::wait_until("the deleted sessions to go", setup.deadline, move || {
+        !dir_a.exists() && !dir_b.exists() && !dir_c.exists()
+    });
+    run.wait_screen("home after delete", |grid| {
+        grid.contents.contains("No sessions yet.")
+    });
+    drop(feed_watch);
+    quit_pty(run, guard);
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
+
+/// A fork held at confirm time refuses the whole delete at its stop: the
+/// live parent leaves exited on the feed, then the hub refuses the held
+/// fork's close as `session_held`, so no delete goes out. The refusal
+/// names the running fork, both directories stay, and the attached
+/// screen stays.
+#[test]
+fn held_fork_refusal_keeps_both_sessions() {
+    let setup = Setup::new();
+    let (mut run, guard, a, _release, _watchdog) = launch_blocked(&setup, &[]);
+    let b = "s_00000000000000b1";
+    let b_dir = session(&setup, b, Some(&a));
+    let held = File::open(b_dir.join("session.lock")).unwrap();
+    held.try_lock().unwrap();
+    assert!(lock_held(&setup, b), "the fork reads held");
+    let feed_watch = Socket::connect(setup.deadline, &setup.hub_socket());
+    feed(&feed_watch);
+    assert!(lock_held(&setup, &a), "the parent is live at delete time");
+    run.write(b"/delete\r");
+    let question = run.wait_screen("the delete question", |grid| {
+        grid.contents.contains("It cannot be undone")
+            && grid.contents.contains("delete all")
+            && grid.contents.contains(b)
+    });
+    assert!(question.contents.contains(b));
+    run.write(b"\r");
+    let leaving = a.clone();
+    until(&feed_watch, "the parent to leave", move |line| {
+        line["kind"] == "session_left"
+            && line["payload"]["session_id"] == leaving.as_str()
+            && line["payload"]["how"] == "exited"
+    });
+    // The notice row truncates the long hub message, so the screen pins
+    // its visible prefix; both directories staying proves the outcome
+    // the cut-off sentence states. The exact full notice is `Stop
+    // refused for {b}: session {b} is held by a process whose pid is not
+    // yet recorded; only one Fiber process may write a session. Nothing
+    // was deleted.` (`delete.rs`, "Stop refused"; `log/src/lib.rs`, the
+    // held-lock error).
+    let refused = run.wait_screen("the held refusal", |grid| {
+        grid.contents.contains(&format!("Stop refused for {b}:"))
+            && grid.contents.contains("is held by a pro")
+    });
+    assert!(refused.contents.contains("session_held"));
+    assert!(refused.contents.contains(&format!("Stop refused for {b}:")));
+    assert!(refused.contents.contains("is held by a pro"));
+    assert!(
+        refused.contents.contains("turns"),
+        "the attached screen stays"
+    );
+    assert!(session_dir(&setup, &a).exists(), "the stopped parent stays");
+    assert!(b_dir.exists(), "the held fork stays");
+    drop(feed_watch);
+    drop(held);
+    quit_pty(run, guard);
+    assert!(
+        session_dir(&setup, &a).exists(),
+        "no retry deletes the parent after"
+    );
+    assert!(b_dir.exists(), "no retry deletes the fork after");
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
+
+/// A cascade that changes between the dry run and the confirm refuses as
+/// stale after stopping the live parent: the parent leaves exited on the
+/// feed, home keeps its stopped row, the removed fork stays removed, and
+/// the notice names the set the delete would remove now.
+#[test]
+fn stale_set_refusal_returns_home_with_the_stopped_parent() {
+    let setup = Setup::new();
+    let (mut run, guard, a, _release, _watchdog) = launch_blocked(&setup, &[]);
+    let b = "s_00000000000000b1";
+    let c = "s_00000000000000c1";
+    session(&setup, b, Some(&a));
+    session(&setup, c, Some(&a));
+    let feed_watch = Socket::connect(setup.deadline, &setup.hub_socket());
+    feed(&feed_watch);
+    assert!(lock_held(&setup, &a), "the parent is live at delete time");
+    run.write(b"/delete\r");
+    run.wait_screen("the delete question", |grid| {
+        grid.contents.contains("It cannot be undone")
+            && grid.contents.contains("delete all")
+            && grid.contents.contains(b)
+            && grid.contents.contains(c)
+    });
+    // The cascade changes while the question stands: the CLI removes one
+    // fork, which the confirm must not silently drop from its set.
+    let output = delete(&setup, &["--yes", b]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let gone_b = session_dir(&setup, b);
+    fakes::wait_until("the removed fork to go", setup.deadline, move || {
+        !gone_b.exists()
+    });
+    run.write(b"\r");
+    let leaving = a.clone();
+    until(&feed_watch, "the parent to leave", move |line| {
+        line["kind"] == "session_left"
+            && line["payload"]["session_id"] == leaving.as_str()
+            && line["payload"]["how"] == "exited"
+    });
+    let mut remaining = [a.clone(), c.to_owned()];
+    remaining.sort();
+    let expected = format!(
+        "The sessions this delete would remove are now {}. Nothing was deleted.",
+        remaining
+            .iter()
+            .map(|id| format!("`{id}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let home = run.wait_screen("home with the stopped parent", |grid| {
+        grid.contents.contains(&expected) && grid.contents.contains(c)
+    });
+    assert!(home.contents.contains(&expected));
+    assert!(session_dir(&setup, &a).exists(), "the stopped parent stays");
+    assert!(session_dir(&setup, c).exists(), "the kept fork stays");
+    drop(feed_watch);
+    quit_pty(run, guard);
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
