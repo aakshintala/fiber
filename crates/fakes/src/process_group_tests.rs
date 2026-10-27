@@ -1070,7 +1070,7 @@ fn listed_exit_reports_expiry_with_no_listing_yet() {
     // published, so the error names no holder.
     let (never, unanswered) = mpsc::channel::<()>();
     let err = listed_exit(
-        move || match Deadline::after(MUST_SUCCEED_WITHIN).recv(&unanswered) {
+        move || match unanswered.recv() {
             Ok(()) | Err(_) => Err::<Vec<u32>, _>(io::Error::other("the listing never answered")),
         },
         Duration::from_millis(200),
