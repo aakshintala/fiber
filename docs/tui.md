@@ -1672,7 +1672,7 @@ what it started keeps running.
   that match the query bold; the description dim, cut with … so the tag
   always fits; the `argument-hint` in `attention`; and the tag dim at the
   right end. The first match is focused. When the list does not fit, a last
-  dim row says where the rows shown sit: "1–8 of 40 · ↓ 32 more", with "↑ 3
+  dim row says where the rows shown sit: "1–8 of 41 · ↓ 33 more", with "↑ 3
   above · " in front once it has scrolled. With nothing matching, the panel
   holds one dim row, "no matches". A
   skill the model has loaded shows in the transcript as a skill, not as a file
