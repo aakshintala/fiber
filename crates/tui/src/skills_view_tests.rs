@@ -1382,9 +1382,9 @@ fn initial_frame_selects_the_first_skill() {
     docs.shadowed_by = Some(winner.to_owned());
     let fake = fake_with(off(&[], &["notes"]));
     let skills = opened(&fake, &[win, shadowed, kit, docs, repository("notes")]);
-    // No header row: the first row is the first skill, selected. The
-    // ruling example only fits uncut at pty width, so the frame is 160
-    // columns wide.
+    // No header row: one row per skill (`docs/tui.md:895`), with the first
+    // row selected. The ruling example only fits uncut at pty width, so the
+    // frame is 160 columns wide.
     let frame = skills.frame(160, 22);
     assert_eq!(frame.rows.len(), 5);
     assert_eq!(frame.list.selected(), 0);

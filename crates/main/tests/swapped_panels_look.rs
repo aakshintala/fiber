@@ -525,7 +525,8 @@ fn skills_setup() -> Setup {
     setup
 }
 
-/// The `/skills` row for the winning `review` skill: its text from the name on.
+/// The `/skills` row for the winning `review` skill, with the documented
+/// cells in order (`docs/tui.md:905-908`).
 /// Only the row's own cells are read: the view does not span the full
 /// grid, so a side panel may draw to its right.
 fn skill_row(grid: &Grid) -> Option<(u16, String)> {
@@ -725,10 +726,50 @@ fn narrow_skills_ready(grid: &Grid) -> bool {
     {
         return false;
     }
+    let Some(loser) = find_row(grid, "review · Personal notes.") else {
+        return false;
+    };
+    let Some(loser_row) = grid.rows.get(usize::from(loser)) else {
+        return false;
+    };
+    if loser_row.contains("shadows") {
+        return false;
+    }
     let Some(footer) = find_row(grid, "Enter shows the text · Ctrl+G opens its file") else {
         return false;
     };
     is_dim(grid, footer, "Enter shows the text · Ctrl+G opens its file")
+}
+
+/// Every property read after Enter has drawn: both complete shadow paths in
+/// source-precedence order, the blank separator, and the skill text
+/// (`docs/tui.md:909-910`; `docs/testing/screens.md`, "Screens").
+fn shadow_list_ready(grid: &Grid, personal_path: &str, extension_path: &str) -> bool {
+    let pane: String = grid
+        .rows
+        .iter()
+        .map(|row| row.trim())
+        .collect::<Vec<_>>()
+        .join("");
+    if !pane.contains(personal_path) || !pane.contains(extension_path) {
+        return false;
+    }
+    let extension_label = format!("shadows {LONG_EXTENSION} ·");
+    let (Some(personal), Some(extension), Some(fence), Some(body)) = (
+        find_row(grid, "shadows personal ·"),
+        find_row(grid, &extension_label),
+        find_row(grid, "---"),
+        find_row(grid, "Body."),
+    ) else {
+        return false;
+    };
+    if !(personal < extension && extension < fence && fence < body) {
+        return false;
+    }
+    fence
+        .checked_sub(1)
+        .and_then(|row| grid.rows.get(usize::from(row)))
+        .is_some_and(|row| row.trim().is_empty())
 }
 
 #[test]
@@ -747,84 +788,19 @@ fn the_skills_view_keeps_switches_whole_on_a_narrow_screen() {
         b"\x1b[?2026l",
         "the end of the skills view frame",
     );
-    let grid = run.wait_screen("the narrow skills rows", narrow_skills_ready);
-    // The winner's row: both switches whole, the shadows clause tail-cut
-    // past them.
-    let y = row_with(&grid, "shadows personal…");
-    let x = col_at(&grid, y, "review · Checks a diff.");
-    assert_eq!(grid.cell(x - 2, y).symbol, "›");
-    assert!(!grid.cell(x - 2, y).inverse);
-    let text: String = (x..100)
-        .map(|x| grid.cell(x, y).symbol.clone())
-        .collect::<String>()
-        .trim_end()
-        .to_owned();
-    assert_eq!(
-        text,
-        "review · Checks a diff. · repo · seen · this project›[on] · everywhere [on] · shadows personal…"
-    );
-    // No cell of the row is reversed; `[on]` is bold and not dim on both
-    // switches.
-    assert!(
-        (0..100).all(|x| !grid.cell(x, y).inverse),
-        "{}",
-        grid.contents
-    );
-    let after = |label: &str| col_at(&grid, y, label) + label.chars().count() as u16;
-    assert!(switch_weighs(&grid, y, after("this project") + 1, "[on]"));
-    assert!(switch_weighs(&grid, y, after("everywhere") + 1, "[on]"));
-    // The shadowed personal copy keeps its own row with no clause.
-    let loser = row_with(&grid, "review · Personal notes.");
-    assert!(
-        !grid.rows[loser as usize].contains("shadows"),
-        "{}",
-        grid.contents
-    );
-    // Enter lists every shadow source and path above the text
-    // (`docs/tui.md:892-893`). The long extension line wraps at the view's
-    // width, so the paths are read across the pane's wrapped rows. The rows
-    // above already prove the view ready for Enter
-    // (`docs/testing/screens.md`, "Screens").
+    run.wait_screen("the narrow skills rows", narrow_skills_ready);
+    // The wait predicate checks the full shadow block before the test reads
+    // it (`docs/testing/screens.md`, "Screens").
     run.write(b"\r");
     let personal_path = setup.home().join("skills/review/SKILL.md");
     let extension_path = installed_extension_dir(&setup).join("skills/review/SKILL.md");
-    let personal_label = "shadows personal ·";
-    let extension_label = format!("shadows {LONG_EXTENSION} ·");
-    let grid = run.wait_screen("the shadow list", |grid| {
-        find_row(grid, personal_label).is_some() && find_row(grid, &extension_label).is_some()
+    run.wait_screen("the shadow list", |grid| {
+        shadow_list_ready(
+            grid,
+            personal_path.to_str().unwrap(),
+            extension_path.to_str().unwrap(),
+        )
     });
-    // Every shadowed path reads whole across the wrapped rows: paths hold
-    // no space, and each wrapped row is trimmed, so joining the rows
-    // recovers one broken inside a word.
-    let pane: String = grid
-        .rows
-        .iter()
-        .map(|row| row.trim())
-        .collect::<Vec<_>>()
-        .join("");
-    assert!(
-        pane.contains(personal_path.to_str().unwrap()),
-        "{}",
-        grid.contents
-    );
-    assert!(
-        pane.contains(extension_path.to_str().unwrap()),
-        "{}",
-        grid.contents
-    );
-    // Path order (`docs/invocation.md:474` discovery order), then a blank
-    // line, then the skill's text: the hub returns the whole SKILL.md,
-    // frontmatter included.
-    let shadowed = row_with(&grid, personal_label);
-    let extension_row = row_with(&grid, &extension_label);
-    let fence = row_with(&grid, "---");
-    let body = row_with(&grid, "Body.");
-    assert!(shadowed < extension_row && extension_row < fence && fence < body);
-    assert!(
-        grid.rows[fence as usize - 1].trim().is_empty(),
-        "{}",
-        grid.contents
-    );
     run.write(b"\x03\x03\r");
     assert_eq!(run.wait().status.code(), Some(0));
 }
