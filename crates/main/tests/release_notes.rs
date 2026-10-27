@@ -95,16 +95,19 @@ fn release_notes_show_the_stub_view_with_the_url_and_make_no_request() {
     run.wait_screen("home again", |grid| {
         !grid.contents.contains("Release notes")
     });
+    let from = run.output().len();
     run.write(b"/release-notes\r");
+    run.wait_bytes(from, FRAME_END, "the reopened frame");
     let grid = run.wait_screen("the reopened view", |grid| {
         grid.contents.contains("No notes for this version")
     });
     // The header is the swapped view's fixed top row (`docs/tui.md`,
     // "Swapped views"): row 0 names the view, with "Esc returns" at its
-    // right end. Nothing behind the static stub can move it — the
-    // view reads the embedded stub and asks nothing — so this completed
-    // frame is the click's readiness signal (`docs/testing/screens.md`,
-    // "Screens"). A press and release on it closes through the header.
+    // right end. The `FRAME_END` close marker above is the click's
+    // readiness signal (`docs/testing/screens.md`, "Screens"): it proves
+    // the reopened frame drew after the input, and the grid check then
+    // makes the header row's position final before the pointer input.
+    // A press and release on it closes through the header.
     let header = grid.rows.first().expect("the header row");
     assert!(
         header.contains("Release notes") && header.contains("Esc returns"),
