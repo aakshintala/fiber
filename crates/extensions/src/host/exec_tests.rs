@@ -231,12 +231,13 @@ fn park_diagnostic_names_state() {
     );
     // One tick off a bound names another instant instead of the bound, on
     // both sides of both bounds.
-    for until in [
-        kill_at - tick,
-        kill_at + tick,
-        drain_until - tick,
-        drain_until + tick,
-    ] {
+    let below_kill = kill_at
+        .checked_sub(tick)
+        .expect("the tick below the grace bound stays after the start");
+    let below_drain = drain_until
+        .checked_sub(tick)
+        .expect("the tick below the drain bound stays after the start");
+    for until in [below_kill, kill_at + tick, below_drain, drain_until + tick] {
         let text = describe_park_event(
             &park(Some(until), true, true, true),
             kill_at,
