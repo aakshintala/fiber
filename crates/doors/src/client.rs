@@ -854,17 +854,21 @@ fn deliver_message(
         },
     };
     if prompt {
+        let gate = Arc::clone(&conn.gate);
+        let admission = Arc::clone(&gate.admission);
         let ack = inbox_ack(conn, id.clone());
-        let ack = match conn.gate.history.get().cloned().flatten() {
-            Some(path) => {
-                conn.gate
-                    .prompts
-                    .register(id.clone(), message.content.clone());
-                crate::prompt_history::recorded(ack, path, &conn.gate, id)
-            }
-            None => ack,
-        };
-        conn.gate.deliver(Delivery::Prompt(message, ack));
+        // Dropping this uncalled ack answers `closing`; record history only
+        // after admission succeeds.
+        let _admitted = admission.admit(move || {
+            let ack = match gate.history.get().cloned().flatten() {
+                Some(path) => {
+                    gate.prompts.register(id.clone(), message.content.clone());
+                    crate::prompt_history::recorded(ack, path, &gate, id)
+                }
+                None => ack,
+            };
+            gate.deliver(Delivery::Prompt(message, ack));
+        });
     } else {
         admit_steer(conn, id, message);
     }
