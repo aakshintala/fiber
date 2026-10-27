@@ -40,31 +40,34 @@ pub(crate) struct ExecRequest {
     /// the program is never listed, and only its pid is ever signalled.
     pub own_group: bool,
     /// Test observations: the stdout reader's acknowledgement after it
-    /// retains its first bytes, and the supervisor's state at each park.
+    /// retains its first bytes, and the supervisor's pre-park snapshot
+    /// before each park.
     #[cfg(test)]
-    pub stdout_read: Option<mpsc::Sender<ExecTestEvent>>,
+    pub test_events: Option<mpsc::Sender<ExecTestEvent>>,
 }
 
 /// A test-only observation from a run: the stdout reader's acknowledgement
-/// or a snapshot of the supervisor's state at a park. The supervisor sends
+/// or a pre-park snapshot of the supervisor's state. The supervisor sends
 /// a [`ExecTestEvent::Park`] immediately before parking, so the event
-/// reports the state the decision just read; the reader sends
-/// [`ExecTestEvent::StdoutRead`] once, after retaining its first bytes.
+/// reports the state the decision just read; when that state moved first
+/// the park never follows. The reader sends [`ExecTestEvent::StdoutRead`]
+/// once, after retaining its first bytes.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExecTestEvent {
     /// The stdout reader retained its first bytes.
     StdoutRead,
-    /// The supervisor parked until `until`, having seen `group_empty`,
-    /// `stdout_eof` and `stderr_eof`.
+    /// A pre-park snapshot: the supervisor is about to park until `until`,
+    /// having seen `group_empty`, `stdout_eof` and `stderr_eof`. The park
+    /// may never follow when the shared state moved first.
     Park {
-        /// The instant the supervisor parked until, `None` for an unbounded park.
+        /// The instant the snapshot was taken for, `None` for an unbounded park.
         until: Option<Instant>,
-        /// Whether the group had been seen empty when the park started.
+        /// Whether the group had been seen empty when the snapshot was taken.
         group_empty: bool,
-        /// Whether stdout had reached EOF when the park started.
+        /// Whether stdout had reached EOF when the snapshot was taken.
         stdout_eof: bool,
-        /// Whether stderr had reached EOF when the park started.
+        /// Whether stderr had reached EOF when the snapshot was taken.
         stderr_eof: bool,
     },
 }
@@ -124,8 +127,9 @@ struct Inner {
 struct Shared {
     inner: Mutex<Inner>,
     cv: Condvar,
-    /// The test's observation sink, fed without waiting: each send reports
-    /// state the run already decided on, and a gone receiver just drops it.
+    /// The test's observation sink, fed without waiting: each pre-park send
+    /// reports state the decision just read (the park may never follow),
+    /// and a gone receiver just drops it.
     #[cfg(test)]
     events: Option<mpsc::Sender<ExecTestEvent>>,
 }
@@ -329,7 +333,7 @@ fn run_with(
         }),
         cv: Condvar::new(),
         #[cfg(test)]
-        events: req.stdout_read.clone(),
+        events: req.test_events.clone(),
     });
     clock.subscribe(Arc::downgrade(
         &(Arc::clone(&shared) as Arc<dyn contract::clock::Wake>),
@@ -350,12 +354,12 @@ fn run_with(
     };
     let out_shared = Arc::clone(&shared);
     #[cfg(test)]
-    let stdout_read = req.stdout_read.clone();
+    let test_events = req.test_events.clone();
     if let Err(source) = std::thread::Builder::new()
         .name("exec stdout".into())
         .spawn(move || {
             #[cfg(test)]
-            read_into(out, &out_shared, true, stdout_read);
+            read_into(out, &out_shared, true, test_events);
             #[cfg(not(test))]
             read_into(out, &out_shared, true);
         })
@@ -854,9 +858,10 @@ fn ran_of(shared: &Shared, status: Option<ExitStatus>, timed_out: bool) -> Ran {
     }
 }
 
-/// Reports the supervisor's state at a park to the test's event sink. The
-/// channel is unbounded and the send reports only: a gone receiver drops
-/// the observation, and the run never waits on the test.
+/// Reports a pre-park snapshot of the supervisor's state to the test's
+/// event sink. The channel is unbounded and the send reports only: a gone
+/// receiver drops the observation, and the run never waits on the test.
+/// The park may never follow when the shared state moved first.
 #[cfg(test)]
 fn observe_park(
     shared: &Shared,
@@ -932,7 +937,7 @@ fn read_into(
     mut read: impl Read,
     shared: &Shared,
     stdout: bool,
-    #[cfg(test)] mut stdout_read: Option<mpsc::Sender<ExecTestEvent>>,
+    #[cfg(test)] mut test_events: Option<mpsc::Sender<ExecTestEvent>>,
 ) {
     let mut buf = [0_u8; 8192];
     loop {
@@ -964,7 +969,7 @@ fn read_into(
                 bump(&mut inner, shared);
                 drop(inner);
                 #[cfg(test)]
-                if stdout && let Some(ack) = stdout_read.take() {
+                if stdout && let Some(ack) = test_events.take() {
                     let _sent = ack.send(ExecTestEvent::StdoutRead);
                 }
             }

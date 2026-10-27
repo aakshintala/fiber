@@ -82,7 +82,7 @@ impl NativeHostServices {
                 cap: crate::host::fs::PROCESS_READ_CAP,
                 own_group: true,
                 #[cfg(test)]
-                stdout_read: None,
+                test_events: None,
             },
             self.clock.as_ref(),
             callback.deadline,
