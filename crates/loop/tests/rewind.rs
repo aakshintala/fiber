@@ -23,14 +23,15 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use contract::commands::{Reply, ReplyAnswer, RewindArgs};
 use contract::events::{
-    CommandResult, Parent, SessionStarted, TurnOutcome, Variables, VariablesSource,
+    Clients, CommandResult, Event, NamedBy, Parent, SessionNamed, SessionStarted,
+    ToolCallRequested, TurnOutcome, Variables, VariablesSource,
 };
 use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::provider::Input;
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{ContentPart, Failure, Origin, Point, Sender, Worktree};
 use contract::tool::Tool;
-use contract::{CommandId, Envelope, ErrorCode, JobId, RequestId, Seq, SessionId};
+use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId, RequestId, Seq, SessionId};
 use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider, StubJobs};
 use log::Log;
@@ -465,7 +466,7 @@ fn a_summary_is_one_turn_on_the_old_session_before_rewound() {
     let before = log::read(&session.dir).unwrap();
     let requests = session.provider.requests();
     let last = requests.last().unwrap();
-    let (command, answer) = rewind(args(None, None, true));
+    let (command, answer) = rewind(args(None, None, true, false));
     session.inbox.send(command).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -1176,11 +1177,15 @@ fn a_rewind_before_the_first_request_keeps_the_logged_model_and_thinking() {
 const A_ID: &str = "s_aaaaaaaaaaaaaaaa";
 const B_ID2: &str = "s_bbbbbbbbbbbbbbbb";
 
-fn args(from: Option<&str>, seq: Option<u64>, summarise: bool) -> RewindArgs {
-    RewindArgs {
-        from_session_id: from.map(|id| SessionId(id.into())),
-        seq: seq.map(Seq),
-        summarise,
+fn args(from: Option<&str>, seq: Option<u64>, summarise: bool, at_end: bool) -> RewindArgs {
+    if at_end {
+        RewindArgs::AtEnd
+    } else {
+        RewindArgs::Rewind {
+            from_session_id: from.map(|id| SessionId(id.into())),
+            seq: seq.map(Seq),
+            summarise,
+        }
     }
 }
 
@@ -1435,7 +1440,7 @@ fn an_ancestor_summary_keeps_the_entire_cut_path() {
     );
     drop(run_turn(b, &tx, "B prompt"));
     let (b, tx, provider) = resume_existing(&session, B_ID, vec![Scripted::text("All the work.")]);
-    let (rw, answer) = rewind(args(Some(A_ID), Some(at), true));
+    let (rw, answer) = rewind(args(Some(A_ID), Some(at), true, false));
     drop(drive(b, &tx, rw));
     accepted(answer_of(answer));
     let request = &provider.requests()[0];
@@ -1491,7 +1496,7 @@ fn an_ancestor_summary_starts_its_excerpt_after_the_inherited_last_line() {
     );
     drop(run_turn(b, &tx, "B prompt"));
     let (b, tx, provider) = resume_existing(&session, B_ID, vec![Scripted::text("The path.")]);
-    let (rw, answer) = rewind(args(Some(A_ID), Some(at), true));
+    let (rw, answer) = rewind(args(Some(A_ID), Some(at), true, false));
     drop(drive(b, &tx, rw));
     accepted(answer_of(answer));
     let requests = provider.requests();
@@ -1532,7 +1537,7 @@ fn a_summary_reads_through_a_handoff_without_its_note_request() {
         "s_test",
         vec![Scripted::text("Across the handoff.")],
     );
-    let (rw, answer) = rewind(args(None, Some(at), true));
+    let (rw, answer) = rewind(args(None, Some(at), true, false));
     drop(drive(looped, &tx, rw));
     accepted(answer_of(answer));
     let request = &provider.requests()[0];
@@ -1639,7 +1644,7 @@ fn summary_hooks_see_the_request_once_and_context_stays_inside_the_summary() {
         provider: session.provider.clone(),
     });
     session = session.hooks(hooks.clone());
-    let (rw, answer) = rewind(args(None, None, true));
+    let (rw, answer) = rewind(args(None, None, true, false));
     session.inbox.send(rw).unwrap();
     session.inbox.send(delivery("next")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -1674,7 +1679,7 @@ fn a_budget_or_hook_stop_sends_no_summary_request() {
             }))
         };
         let before = log::read(&session.dir).unwrap().len();
-        let (rw, answer) = rewind(args(None, None, true));
+        let (rw, answer) = rewind(args(None, None, true, false));
         let tx = take_inbox(&mut session);
         drop(drive_closed(looped, tx, vec![rw]));
         let rejection = rejected(answer_of(answer));
@@ -1781,7 +1786,7 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
         let mut session = run_a_with_tail(vec![script, Scripted::text("after")]);
         let before = log::read(&session.dir).unwrap().len();
         let last = session.provider.requests().last().unwrap().clone();
-        let (rw, answer) = rewind(args(None, None, true));
+        let (rw, answer) = rewind(args(None, None, true, false));
         session.inbox.send(rw).unwrap();
         session.inbox.send(delivery("next")).unwrap();
         assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -1835,8 +1840,8 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
 fn a_failed_summary_keeps_the_default_retry_point() {
     let mut session = run_a_with_tail(vec![Scripted::failed(summary_failure("summary failed"))]);
     let at = point(&log::read(&session.dir).unwrap());
-    let (rw, answer) = rewind(args(None, None, true));
-    let (retry, retried) = rewind(args(None, None, false));
+    let (rw, answer) = rewind(args(None, None, true, false));
+    let (retry, retried) = rewind(args(None, None, false, false));
     session.inbox.send(rw).unwrap();
     session.inbox.send(retry).unwrap();
     assert_eq!(session.turn(), None);
@@ -1854,7 +1859,7 @@ fn failed_summary_tool_calls_are_absent_on_resume_too() {
         calls_reply("discard me", &[("write_file", paris())]),
         Scripted::text("after"),
     ]);
-    let (rw, answer) = rewind(args(None, None, true));
+    let (rw, answer) = rewind(args(None, None, true, false));
     session.inbox.send(rw).unwrap();
     session.inbox.send(delivery("next")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -1875,7 +1880,7 @@ fn failed_summary_tool_calls_are_absent_on_resume_too() {
 fn a_failed_summary_does_not_move_the_resumed_cache_boundary() {
     let mut session = run_a_with_tail(vec![calls_reply("discard", &[("write_file", paris())])]);
     let last = session.provider.requests().last().unwrap().clone();
-    let (rw, answer) = rewind(args(None, None, true));
+    let (rw, answer) = rewind(args(None, None, true, false));
     let looped = session.looped.take().unwrap();
     let tx = take_inbox(&mut session);
     drop(drive_closed(looped, tx, vec![rw]));
@@ -1909,7 +1914,7 @@ fn a_failed_summary_reuses_its_new_preamble_at_the_next_prompt() {
             Scripted::text("after"),
         ],
     );
-    let (rw, answer) = rewind(args(None, None, true));
+    let (rw, answer) = rewind(args(None, None, true, false));
     tx.send(rw).unwrap();
     tx.send(delivery("next")).unwrap();
     let (done, finished) = mpsc::channel();
@@ -1951,7 +1956,7 @@ fn the_reviewer_sees_no_failed_summary_live_or_resumed() {
         session.rules.set(StandingRules::default());
         let mut answer = None;
         if mode != "without" {
-            let (rw, rx) = rewind(args(None, None, true));
+            let (rw, rx) = rewind(args(None, None, true, false));
             answer = Some(rx);
             if mode == "resumed" {
                 let looped = session.looped.take().unwrap();
@@ -2102,7 +2107,7 @@ fn a_summary_retry_is_one_turn_with_two_billed_attempts() {
     let clock = session.clock.clone();
     let until = contract::clock::Clock::now(clock.as_ref()) + std::time::Duration::from_secs(2);
     let mut looped = session.looped.take().unwrap();
-    let (rw, answer) = rewind(args(None, None, true));
+    let (rw, answer) = rewind(args(None, None, true, false));
     session.inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
     let worker = thread::spawn(move || {
@@ -2225,7 +2230,7 @@ fn prompts_deferred_by_the_repository_offer_are_answered_after_the_summary() {
         let (looped, tx, provider) =
             resume_existing(&session, "s_test", vec![script, Scripted::text("next")]);
         let mut looped = looped.repository_code(Arc::new(SummaryRepository));
-        let (rw, answer) = rewind(args(None, None, true));
+        let (rw, answer) = rewind(args(None, None, true, false));
         let (prompt_send, prompt_answer) = mpsc::channel();
         let prompt_ack = Ack(Box::new(move |answer| {
             prompt_send.send(answer).unwrap();
@@ -2283,7 +2288,7 @@ fn a_summary_builds_the_preamble_in_a_resumed_process_before_its_turn() {
     let before = log::read(&session.dir).unwrap().len();
     let (looped, tx, provider) =
         resume_existing(&session, "s_test", vec![Scripted::text("Resumed summary.")]);
-    let (rw, answer) = rewind(args(None, None, true));
+    let (rw, answer) = rewind(args(None, None, true, false));
     drop(drive(looped, &tx, rw));
     accepted(answer_of(answer));
     let lines = log::read(&session.dir).unwrap();
@@ -2350,7 +2355,7 @@ fn a_summary_after_an_idle_switch_uses_the_new_model_and_preamble() {
         .inbox
         .send(support::model("fake/switched", None))
         .unwrap();
-    let (rw, answer) = rewind(args(None, None, true));
+    let (rw, answer) = rewind(args(None, None, true, false));
     drop(drive(looped, &session.inbox, rw));
     accepted(answer_of(answer));
     assert_eq!(provider.requests().len(), 1);
@@ -2373,7 +2378,7 @@ fn a_default_rewind_closes_the_session_and_names_the_new_one() {
     let calls = session.provider.requests().len();
     let lines = log::read(&session.dir).unwrap();
     let at = point(&lines);
-    let (rw, answered) = rewind(args(None, None, false));
+    let (rw, answered) = rewind(args(None, None, false, false));
     let looped = session.looped.take().unwrap();
     let (looped, outcome) = drive(looped, &session.inbox, rw);
     session.looped = Some(looped);
@@ -2434,6 +2439,181 @@ fn a_default_rewind_closes_the_session_and_names_the_new_one() {
 }
 
 #[test]
+fn an_at_end_rewind_continues_from_the_admission_time_point() {
+    let mut session = run_a();
+    // The session is named: the name carries to the new session.
+    session
+        .log
+        .append(
+            &Event::SessionNamed(SessionNamed {
+                name: Some("fork-name".into()),
+                by: NamedBy::Person,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let before = log::read(&session.dir).unwrap();
+    let at = before.last().unwrap().seq.unwrap().0;
+    let a_requests = session.provider.requests();
+    let a_second = &a_requests[1];
+    let (rw, answered) = rewind(args(None, None, false, true));
+    let looped = session.looped.take().unwrap();
+    let (looped, outcome) = drive(looped, &session.inbox, rw);
+    session.looped = Some(looped);
+    let new = accepted(answer_of(answered));
+    assert_minted(&new);
+    assert_eq!(outcome, None, "no turn starts after the rewind");
+    // The complete ordered kinds: nothing lands between the
+    // admission-time point and `rewound`.
+    // (`docs/events.md`, "Rewind": "`rewound` is the last line the process
+    // writes to that log".)
+    let lines = log::read(&session.dir).unwrap();
+    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    let mut expected: Vec<&str> = before.iter().map(|line| line.kind.as_str()).collect();
+    expected.push("rewound");
+    assert_eq!(kinds, expected, "{kinds:?}");
+    let last = lines.last().unwrap();
+    assert_eq!(last.payload["new_session_id"], json!(new.0));
+    assert_eq!(last.payload["seq"], json!(at));
+    assert!(last.payload.get("summary").is_none());
+    assert!(
+        last.payload.get("from_session_id").is_none(),
+        "this session's own point names no session"
+    );
+    // The child continues the whole history through the point: its first
+    // request opens with the old session's history, then the note, then
+    // the new prompt. Nothing after the point rides along.
+    let note = rewind_note(&session.dir, Seq(at)).unwrap();
+    assert!(
+        note.contains("No file was written and no command was run after this point."),
+        "{note}"
+    );
+    let (b, tx, provider, dir) = start_b(
+        &session,
+        B_ID,
+        Point {
+            session_id: SessionId("s_test".into()),
+            seq: Seq(at),
+        },
+        note.clone(),
+        None,
+        vec![Scripted::text("three-done")],
+    );
+    let b_lines = log::read(&dir).unwrap();
+    let first = session_started(&b_lines);
+    assert_eq!(
+        first.payload["forked_from"],
+        json!({"session_id": "s_test", "seq": at})
+    );
+    assert!(first.payload.get("parent").is_none());
+    assert_eq!(b_lines[1].kind, "session_named");
+    assert_eq!(b_lines[1].payload["name"], json!("fork-name"));
+    assert!(
+        b_lines.iter().all(|line| line.kind != "rewound"),
+        "the child holds no line from after the point"
+    );
+    let _b = run_turn(b, &tx, "three");
+    let b_requests = provider.requests();
+    assert_eq!(b_requests.len(), 1);
+    let first = &b_requests[0];
+    let kept = a_second.conversation.len();
+    assert_eq!(
+        &first.conversation[..kept],
+        &a_second.conversation[..kept],
+        "the child opens with the old session's history"
+    );
+    let rest = &first.conversation[kept..];
+    assert!(
+        rest.iter().any(
+            |input| matches!(input, Input::User { text, .. } if text.contains("two-done"))
+                || matches!(input, Input::Assistant { text, .. } if text.contains("two-done"))
+        ),
+        "the history runs through the last turn's answer"
+    );
+    assert_eq!(
+        rest[rest.len() - 2],
+        Input::User {
+            text: note,
+            images: Vec::new(),
+        }
+    );
+    assert!(matches!(
+        &rest[rest.len() - 1],
+        Input::User { text, .. } if text == "three"
+    ));
+}
+
+#[test]
+fn an_at_end_rewind_includes_a_line_appended_after_the_send() {
+    let mut session = run_a();
+    let (rw, answered) = rewind(args(None, None, false, true));
+    session.inbox.send(rw).unwrap();
+    // Another client writes between the send and admission: the
+    // admission-time read holds it, so the point moves with it.
+    session
+        .log
+        .append(&Event::Clients(Clients { count: 1 }), None, None)
+        .unwrap();
+    let appended = log::read(&session.dir)
+        .unwrap()
+        .last()
+        .unwrap()
+        .seq
+        .unwrap()
+        .0;
+    assert_eq!(session.turn(), None, "no turn starts");
+    let new = accepted(answer_of(answered));
+    assert_minted(&new);
+    let lines = log::read(&session.dir).unwrap();
+    assert_eq!(lines.last().unwrap().kind, "rewound");
+    assert_eq!(
+        lines.last().unwrap().payload["seq"],
+        json!(appended),
+        "the point is the admission-time last line"
+    );
+}
+
+#[test]
+fn an_at_end_rewind_refuses_a_tool_call_with_no_recorded_result() {
+    let mut session = run_a();
+    // A crash left a call requested with no result on the log.
+    session
+        .log
+        .append(
+            &Event::ToolCallRequested(ToolCallRequested {
+                name: "write_file".into(),
+                arguments: json!({}),
+                provider_id: None,
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            }),
+            None,
+            Some(ActionId("a_orphan".into())),
+        )
+        .unwrap();
+    let before = log_bytes(&session.dir);
+    let looped = session.looped.take().unwrap();
+    let (rw, answered) = rewind(args(None, None, false, true));
+    let tx = take_inbox(&mut session);
+    drop(drive_closed(looped, tx, vec![rw]));
+    let rejection = rejected(answer_of(answered));
+    assert_eq!(rejection.code, ErrorCode::NotStepBoundary);
+    assert_eq!(
+        rejection.message,
+        "The end of the log is not a step boundary: a tool call before it has no recorded result."
+    );
+    assert_eq!(log_bytes(&session.dir), before, "a refusal writes nothing");
+    assert!(
+        log::read(&session.dir)
+            .unwrap()
+            .iter()
+            .all(|line| line.kind != "rewound")
+    );
+}
+
+#[test]
 fn a_malformed_line_after_line_0_refuses_the_rewind_log_corrupt_and_writes_no_rewound() {
     use std::io::Write as _;
     let mut session = run_a();
@@ -2445,7 +2625,7 @@ fn a_malformed_line_after_line_0_refuses_the_rewind_log_corrupt_and_writes_no_re
         .unwrap()
         .write_all(b"not an envelope\n")
         .unwrap();
-    let (rw, answered) = rewind(args(None, None, false));
+    let (rw, answered) = rewind(args(None, None, false, false));
     session.inbox.send(rw).unwrap();
     let mut looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
@@ -2487,7 +2667,11 @@ fn a_message_after_rewound_is_refused() {
         probe_tx.send((done.is_some(), called)).unwrap();
         tx.send(answer).unwrap();
     }));
-    let rw = Delivery::Rewind(CommandId("c_rewind".into()), args(None, None, false), ack);
+    let rw = Delivery::Rewind(
+        CommandId("c_rewind".into()),
+        args(None, None, false, false),
+        ack,
+    );
     let looped = session.looped.take().unwrap();
     let (looped, outcome) = drive(looped, &session.inbox, rw);
     session.looped = Some(looped);
@@ -2521,7 +2705,7 @@ fn a_refused_rewind_leaves_admission_open() {
     session.looped = Some(looped);
     let before = log_bytes(&session.dir);
     let inbox = take_inbox(&mut session);
-    let (rw, answered) = rewind(args(None, None, false));
+    let (rw, answered) = rewind(args(None, None, false, false));
     let looped = session.looped.take().unwrap();
     session.looped = Some(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
@@ -2542,7 +2726,7 @@ fn an_explicit_seq_at_a_boundary_is_accepted() {
         .seq
         .unwrap()
         .0;
-    let (rw, answered) = rewind(args(None, Some(first_turn - 1), false));
+    let (rw, answered) = rewind(args(None, Some(first_turn - 1), false, false));
     let looped = session.looped.take().unwrap();
     let (looped, outcome) = drive(looped, &session.inbox, rw);
     session.looped = Some(looped);
@@ -2560,7 +2744,7 @@ fn a_seq_off_a_boundary_is_refused_and_writes_nothing() {
     let last = lines.last().unwrap().seq.unwrap().0;
     let before = log_bytes(&session.dir);
     let inbox = take_inbox(&mut session);
-    let (rw, answered) = rewind(args(None, Some(last), false));
+    let (rw, answered) = rewind(args(None, Some(last), false, false));
     let looped = session.looped.take().unwrap();
     session.looped = Some(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
@@ -2581,7 +2765,7 @@ fn a_seq_without_a_successor_is_refused_and_writes_nothing() {
     let mut session = Session::new(vec![Scripted::text("unused")], None);
     let before = log_bytes(&session.dir);
     let inbox = take_inbox(&mut session);
-    let (rw, answered) = rewind(args(None, Some(u64::MAX), false));
+    let (rw, answered) = rewind(args(None, Some(u64::MAX), false, false));
     let looped = session.looped.take().unwrap();
     session.looped = Some(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
@@ -2601,7 +2785,7 @@ fn a_rewind_with_no_turn_is_invalid_arguments() {
     let mut session = Session::new(vec![Scripted::text("unused")], None);
     let before = log_bytes(&session.dir);
     let inbox = take_inbox(&mut session);
-    let (rw, answered) = rewind(args(None, None, false));
+    let (rw, answered) = rewind(args(None, None, false, false));
     let looped = session.looped.take().unwrap();
     session.looped = Some(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
@@ -2682,7 +2866,7 @@ impl contract::tool::Tool for SendRewind {
         if self.close_first {
             inbox.send(Delivery::Close(ignore())).unwrap();
         }
-        let (rw, answered) = rewind(args(None, None, false));
+        let (rw, answered) = rewind(args(None, None, false, false));
         inbox.send(rw).unwrap();
         *self.seen.lock().unwrap() = Some(answered);
         contract::tool::Output {
@@ -2803,7 +2987,7 @@ fn a_rewind_while_an_approval_waits_is_busy() {
             .as_str()
             .unwrap()
             .to_owned();
-        let (rw, answered) = rewind(args(None, None, false));
+        let (rw, answered) = rewind(args(None, None, false, false));
         inbox.send(rw).unwrap();
         let answer = Deadline::after(DEADLINE)
             .recv(&answered)
@@ -2831,7 +3015,7 @@ fn a_rewind_after_close_is_closing_and_writes_nothing() {
     let before = log_bytes(&session.dir);
     let inbox = take_inbox(&mut session);
     inbox.send(Delivery::Close(ignore())).unwrap();
-    let (rw, answered) = rewind(args(None, None, false));
+    let (rw, answered) = rewind(args(None, None, false, false));
     let looped = session.looped.take().unwrap();
     session.looped = Some(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
@@ -2846,7 +3030,7 @@ fn a_rewind_after_close_is_closing_and_writes_nothing() {
 #[test]
 fn a_prompt_and_a_rewind_in_one_batch_runs_the_turn_and_refuses_the_rewind() {
     let mut session = Session::new(vec![Scripted::text("done")], None);
-    let (rw, answered) = rewind(args(None, None, false));
+    let (rw, answered) = rewind(args(None, None, false, false));
     session.inbox.send(delivery("hi")).unwrap();
     session.inbox.send(rw).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -2869,7 +3053,7 @@ fn a_rewind_before_a_prompt_and_a_close_refuses_both_closing() {
     let (prompt_tx, prompted) = mpsc::channel();
     let (close_tx, closed) = mpsc::channel();
     let inbox = take_inbox(&mut session);
-    let (rw, answered) = rewind(args(None, None, false));
+    let (rw, answered) = rewind(args(None, None, false, false));
     let prompt = Delivery::Prompt(
         message("hi"),
         contract::inbox::Ack(Box::new(move |answer| {
@@ -2921,7 +3105,7 @@ fn a_rewind_on_a_delegate_is_refused() {
         }),
     );
     let before = log_bytes(&dir);
-    let (rw, answered) = rewind(args(None, None, false));
+    let (rw, answered) = rewind(args(None, None, false, false));
     let looped = drive_closed(looped, tx, vec![rw]);
     drop(looped);
     let rejection = rejected(answer_of(answered));
@@ -2935,7 +3119,7 @@ fn a_rewind_naming_its_own_session_rewinds() {
     let mut session = run_a();
     let lines = log::read(&session.dir).unwrap();
     let at = point(&lines);
-    let (rw, answered) = rewind(args(Some("s_test"), None, false));
+    let (rw, answered) = rewind(args(Some("s_test"), None, false, false));
     let looped = session.looped.take().unwrap();
     let (looped, outcome) = drive(looped, &session.inbox, rw);
     session.looped = Some(looped);
@@ -2967,7 +3151,7 @@ fn malformed_from_session_ids_are_invalid_arguments() {
         listed.sort();
         let before = log_bytes(&session.dir);
         let inbox = take_inbox(&mut session);
-        let (rw, answered) = rewind(args(Some(from), None, false));
+        let (rw, answered) = rewind(args(Some(from), None, false, false));
         let looped = session.looped.take().unwrap();
         session.looped = Some(drive_closed(looped, inbox, vec![rw]));
         let rejection = rejected(answer_of(answered));
@@ -3034,7 +3218,7 @@ fn a_rewind_naming_a_session_off_the_chain_is_refused() {
         }
         let before = log_bytes(&session.dir);
         let inbox = take_inbox(&mut session);
-        let (rw, answered) = rewind(args(Some(from), None, false));
+        let (rw, answered) = rewind(args(Some(from), None, false, false));
         let looped = session.looped.take().unwrap();
         session.looped = Some(drive_closed(looped, inbox, vec![rw]));
         let rejection = rejected(answer_of(answered));
@@ -3071,7 +3255,7 @@ fn a_rewind_to_an_ancestor_point_names_that_session() {
         None,
     );
     let count = log::read(&dir).unwrap().len();
-    let (rw, answered) = rewind(args(Some(A_ID), Some(first - 1), false));
+    let (rw, answered) = rewind(args(Some(A_ID), Some(first - 1), false, false));
     let (looped, outcome) = drive(looped, &tx, rw);
     drop(looped);
     accepted(answer_of(answered));
@@ -3098,7 +3282,7 @@ fn a_seq_past_the_ancestor_bound_is_not_in_this_sessions_history() {
         None,
     );
     let before = log_bytes(&dir);
-    let (rw, answered) = rewind(args(Some(A_ID), Some(second), false));
+    let (rw, answered) = rewind(args(Some(A_ID), Some(second), false, false));
     let looped = drive_closed(looped, tx, vec![rw]);
     drop(looped);
     let rejection = rejected(answer_of(answered));
@@ -3122,7 +3306,7 @@ fn the_default_point_under_a_bound_is_the_ancestor_turn_before_it() {
         }),
         None,
     );
-    let (rw, answered) = rewind(args(Some(A_ID), None, false));
+    let (rw, answered) = rewind(args(Some(A_ID), None, false, false));
     let (looped, outcome) = drive(looped, &tx, rw);
     drop(looped);
     accepted(answer_of(answered));
@@ -3147,7 +3331,7 @@ fn a_summary_checks_jobs_and_the_point_before_starting() {
         None,
     );
     let before = log_bytes(&dir);
-    let (rw, answered) = rewind(args(Some(A_ID), Some(u64::MAX), true));
+    let (rw, answered) = rewind(args(Some(A_ID), Some(u64::MAX), true, false));
     let looped = drive_closed(looped, tx, vec![rw]);
     drop(looped);
     assert_eq!(
@@ -3167,7 +3351,7 @@ fn a_summary_checks_jobs_and_the_point_before_starting() {
     );
     let looped = looped.jobs(Arc::new(StubJobs::new([JobId("j_1".into())])));
     let before = log::read(&dir).unwrap().len();
-    let (rw, answered) = rewind(args(Some(A_ID), None, true));
+    let (rw, answered) = rewind(args(Some(A_ID), None, true, false));
     drop(drive_closed(looped, tx, vec![rw]));
     // The summary runs before the stop, so a summary that cannot be made
     // fails the rewind even while jobs run: no `rewound` follows.
