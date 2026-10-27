@@ -1506,6 +1506,12 @@ fn a_hung_command_is_killed_and_reaped_past_its_wait() {
         clock.await_parked(due, Deadline::after(DEADLINE)),
         "the watchdog parks at its wait"
     );
+    // Late wake past the due park to MANAGER_WAIT + 1 s; the park is
+    // proven just above (ruling 6261259790).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "late wake: one advance past a park proven at its exact instant just before (ruling 6261259790)"
+    )]
     clock.advance(MANAGER_WAIT + Duration::from_secs(1));
     let error = Deadline::after(DEADLINE)
         .recv(&done_rx)
@@ -1593,6 +1599,12 @@ fn an_exited_child_with_a_lingering_descendant_is_reaped_within_its_wait() {
     Deadline::after(DEADLINE)
         .recv(&wait_rx)
         .expect("the runner reaches its drain wait");
+    // Late wake past the drain-wait park to MANAGER_WAIT + 1 s; the drain
+    // wait is proven just above (ruling 6261259790).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "late wake: one advance past a park proven at its exact instant just before (ruling 6261259790)"
+    )]
     clock.advance(MANAGER_WAIT + Duration::from_secs(1));
     let ran = Deadline::after(DEADLINE)
         .recv(&done_rx)

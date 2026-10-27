@@ -297,6 +297,10 @@ fn render_deadline_reports_typed_extension_failure_and_switches_off() {
     // The clock moves only inside the render callback, once the renderer
     // runs: past its declared timeout the render is a typed failure.
     let over = |_: &Input<'_>, _: u16| {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
         clock.advance(std::time::Duration::from_millis(100));
         Vec::new()
     };

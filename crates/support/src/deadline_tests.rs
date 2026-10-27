@@ -27,14 +27,34 @@ fn left_is_zero_from_the_waits_on_and_never_renews() {
     let clock = fake_clock();
     let deadline = Deadline::on(&**clock);
     assert_eq!(deadline.left(), WAITS);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(15));
     assert_eq!(deadline.left(), Duration::from_secs(25));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(24) + Duration::from_millis(999));
     assert_eq!(deadline.left(), Duration::from_millis(1));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(1));
     assert_eq!(deadline.left(), Duration::ZERO);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     assert_eq!(deadline.left(), Duration::ZERO);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(u64::MAX / 4));
     assert_eq!(deadline.left(), Duration::ZERO);
 }
@@ -43,8 +63,16 @@ fn left_is_zero_from_the_waits_on_and_never_renews() {
 fn no_time_left_gives_zero_and_never_renews() {
     let clock = fake_clock();
     let deadline = Deadline::on(&**clock);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(40));
     assert_eq!(deadline.left(), Duration::ZERO);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     assert_eq!(deadline.left(), Duration::ZERO);
     let (tx, rx) = mpsc::channel();
@@ -58,10 +86,22 @@ fn cleanup_keeps_its_reserve_after_the_waits_end() {
     let clock = fake_clock();
     let deadline = Deadline::on(&**clock);
     assert_eq!(deadline.cleanup(), Duration::from_secs(50));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(40));
     assert_eq!(deadline.cleanup(), Duration::from_secs(10));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(10));
     assert_eq!(deadline.cleanup(), Duration::ZERO);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(20));
     assert_eq!(deadline.cleanup(), Duration::ZERO);
 }
@@ -71,9 +111,17 @@ fn cleanup_phase_left_is_cleanup_at_three_instants() {
     let clock = fake_clock();
     let deadline = Deadline::on(&**clock);
     assert_eq!(deadline.cleanup_phase().left(), deadline.cleanup());
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(WAITS);
     assert_eq!(deadline.cleanup_phase().left(), deadline.cleanup());
     assert_eq!(deadline.cleanup(), Duration::from_secs(10));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(10));
     assert_eq!(deadline.cleanup_phase().left(), Duration::ZERO);
     assert_eq!(deadline.cleanup(), Duration::ZERO);

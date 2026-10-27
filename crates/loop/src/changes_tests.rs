@@ -569,6 +569,10 @@ fn date_advances_only_to_a_later_date() {
     // The fake clock reads 2023-11-14T22:13:20Z.
     assert!(state.check(&*fake).date.is_none());
     // No code under test waits on the clock here: check is a pure wall-clock read on the test thread; no loop runs (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     fake.advance(Duration::from_secs(2 * 3_600));
     let out = state.check(&*fake);
     assert_eq!(

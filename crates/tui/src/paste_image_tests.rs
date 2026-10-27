@@ -717,6 +717,10 @@ fn event_wakes_the_worker_before_the_advance(
         Err(_) => panic!("{what}: the worker never left its park"),
     }
     // No code under test waits on the clock here; the worker is held between parks and this move releases it (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     let mark = fake.advance_marked(LIMIT.checked_sub(Duration::from_millis(1)).unwrap());
     parked_again(&rx, &fake, end, &mark, what);
     fake.advance_when_parked(

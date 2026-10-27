@@ -142,11 +142,19 @@ fn expected_accept_expires_without_a_client() {
             clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the accept parks on the clock before it moves"
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
         assert!(
             Deadline::after(QUIET).recv(&done_rx).is_err(),
             "one tick before the bound the accept is still waiting"
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_nanos(1));
         let caught = Deadline::after(OP)
             .recv(&done_rx)
@@ -177,6 +185,10 @@ fn expected_accept_expires_without_a_client() {
             clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the accept parks on the clock before it moves"
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(10) + Duration::from_nanos(1));
         let caught = Deadline::after(OP)
             .recv(&done_rx)
@@ -211,9 +223,17 @@ fn persistent_accept_renews_idle_windows_and_serves_the_next_request() {
     // Two idle windows expire with no request to fail: each advance
     // lands past its window's start, so no window misses its budget.
     assert!(await_windows(&server, 1, OP), "the first window started");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(Duration::from_secs(5));
     assert!(await_idle(&server, 1, OP), "the first idle window renewed");
     assert!(await_windows(&server, 2, OP), "the second window started");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(Duration::from_secs(5));
     assert!(await_idle(&server, 2, OP), "the second idle window renewed");
 
@@ -253,6 +273,10 @@ fn accept_time_is_charged_to_the_request_budget() {
             "the accept parks on the clock before it moves"
         );
         // Three seconds pass with no client: the budget is running already.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(3));
         let mut client = connect(&server);
         client.write_all(b"ab").expect("the bytes write");
@@ -266,6 +290,10 @@ fn accept_time_is_charged_to_the_request_budget() {
         );
         // One tick before the ten-second bound the second byte still reads:
         // progress never renewed the bound.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(7) - Duration::from_nanos(1));
         assert_eq!(
             conn.read_byte("to read the second byte"),
@@ -273,6 +301,10 @@ fn accept_time_is_charged_to_the_request_budget() {
             "one tick before the bound the second byte reads"
         );
         // Past the bound the next read names the request.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_nanos(1));
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             conn.read_byte("to read past the bound");
@@ -318,6 +350,10 @@ fn fake_time_wakes_a_silent_connection() {
             clock.await_thread_parked(read.thread, read.until, Deadline::after(OP)),
             "the read parks on the clock before it moves"
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(10));
         let caught = Deadline::after(OP)
             .recv(&done_rx)
@@ -384,12 +420,20 @@ fn each_clock_move_bumps_the_wake_generation() {
     let clock = fake_clock();
     let server = bind(&clock);
     assert_eq!(server.test_generation(), 0, "the generation starts at zero");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(Duration::from_secs(1));
     assert_eq!(
         server.test_generation(),
         1,
         "one clock move bumps the generation once"
     );
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(Duration::from_secs(1));
     assert_eq!(server.test_generation(), 2, "the next move bumps it again");
 }
@@ -440,6 +484,10 @@ fn advance_between_check_and_park_is_not_lost() {
             gate: Arc::clone(&gate),
             server: server.clone(),
         };
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(3));
         let deadline = Deadline::after(OP);
         let second = next_acknowledgment(&deadline, &acks, "the accept's re-check");
@@ -453,6 +501,10 @@ fn advance_between_check_and_park_is_not_lost() {
         let (advanced_tx, advanced_rx) = mpsc::channel();
         let advancing = clock.clone();
         scope.spawn(move || {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+            )]
             advancing.advance(Duration::from_secs(7));
             advanced_tx.send(()).expect("the test waits");
         });
@@ -606,6 +658,10 @@ fn reply_drain_bound_expires_at_the_exact_edge() {
     let before = bound
         .checked_sub(Duration::from_nanos(1))
         .expect("the bound is at least one nanosecond");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     let mark = clock.advance_marked(before);
     assert!(
         clock.await_parked_since(&mark, ack.until, Deadline::after(OP)),
@@ -615,6 +671,10 @@ fn reply_drain_bound_expires_at_the_exact_edge() {
         drained.try_recv().is_err(),
         "one tick below the bound the reply drain has not ended"
     );
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(Duration::from_nanos(1));
     Deadline::after(OP).recv_or_fail(&drained, "the drain at its bound");
     let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
@@ -622,6 +682,10 @@ fn reply_drain_bound_expires_at_the_exact_edge() {
     assert!(server.shutdown(), "shutdown reaps the serving threads");
 
     let (clock, server, _client, requests, drained, _ack) = start_reply_drain(bound);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(bound);
     Deadline::after(OP).recv_or_fail(&drained, "the drain at its bound");
     let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
@@ -629,6 +693,10 @@ fn reply_drain_bound_expires_at_the_exact_edge() {
     assert!(server.shutdown(), "shutdown reaps the serving threads");
 
     let (clock, server, _client, requests, drained, _ack) = start_reply_drain(bound);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(bound + Duration::from_nanos(1));
     Deadline::after(OP).recv_or_fail(&drained, "the drain past its bound");
     let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
@@ -642,6 +710,10 @@ fn reply_drain_progress_does_not_restart_its_bound() {
     const SHORT: Duration = Duration::from_millis(50);
     let (clock, server, mut client, requests, drained, ack) = start_reply_drain(SHORT);
     client.write_all(b"x").expect("the pipelined byte writes");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     assert!(
         clock.await_parked_since(&mark, ack.until, Deadline::after(OP)),
@@ -650,6 +722,10 @@ fn reply_drain_progress_does_not_restart_its_bound() {
     let rest = SHORT
         .checked_sub(Duration::from_millis(1))
         .expect("the short bound exceeds one millisecond");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(rest);
     Deadline::after(OP).recv_or_fail(&drained, "the unchanged drain bound");
     let request = Deadline::after(OP).recv_or_fail(&requests, "the recorded request");
@@ -1240,7 +1316,15 @@ fn blocked_write_expires_on_the_injected_clock() {
             clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the write parks on the clock before it moves"
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_nanos(1));
         let caught: thread::Result<bool> = Deadline::after(OP).recv_or_fail(&rx, "the held write");
         let message = match caught {
@@ -1831,7 +1915,15 @@ fn a_would_block_flush_waits_out_its_bound() {
             clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the flush parks on the clock before it moves"
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_nanos(1));
         // A spinner never waited out its bound, so no verdict arrives:
         // release its writer and take its verdict instead.
@@ -2564,6 +2656,10 @@ fn an_expired_budget_with_a_fully_buffered_request_still_fails_naming_it() {
     let mut conn = buffer_whole_request(&server, "the buffered request", request);
     // The whole request is held; the bound expires with no further
     // client bytes, so only the consume gate decides the read.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(Duration::from_secs(10));
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         request::read_request(&mut conn)
@@ -2670,6 +2766,10 @@ fn a_handshake_the_peer_never_reads_fails_within_its_bound() {
             clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the handshake parks on the clock before it moves"
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(10));
         let caught: thread::Result<bool> =
             Deadline::after(OP).recv_or_fail(&done_rx, "the stalled handshake");
@@ -2721,6 +2821,10 @@ fn a_stalled_tunnel_direction_fails_within_its_bound() {
             clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the copy parks on the clock before it moves"
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(10));
         let caught: thread::Result<TunnelEnd> =
             Deadline::after(OP).recv_or_fail(&done_rx, "the stalled copy");
@@ -2796,6 +2900,10 @@ fn a_stalled_origin_read_fails_within_its_bound() {
             clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the origin copy parks on the clock before it moves"
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(10));
         let caught: thread::Result<()> =
             Deadline::after(OP).recv_or_fail(&done_rx, "the stalled origin read");
@@ -2856,6 +2964,10 @@ fn a_stalled_origin_write_fails_within_its_bound() {
             clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the origin write parks on the clock before it moves"
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(10));
         let caught: thread::Result<()> =
             Deadline::after(OP).recv_or_fail(&done_rx, "the stalled origin write");

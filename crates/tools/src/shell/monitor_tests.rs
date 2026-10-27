@@ -293,6 +293,10 @@ fn flood(fed: &mut Fed, running: bool) {
             fed.feed.pass(&fed.shared, fed.clock.as_ref(), running);
         }
         // No code under test waits on the clock here; Feed::pass is a direct call that only reads the clock (ruling 6179406086).
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
         fed.clock.advance(ms(1_000));
     }
 }

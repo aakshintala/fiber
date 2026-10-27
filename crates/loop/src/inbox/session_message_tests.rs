@@ -1731,6 +1731,10 @@ fn a_hook_parked_past_its_registered_timeout_answers_hook_failed() {
     );
     // Only after the parked signal does the clock move past the timeout.
     // No code under test waits on the clock here: the timeout is the scripted answer and admit_idle reads no clock while the hook runs (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     world.clock.advance(TIMEOUT + Duration::from_secs(1));
     release_tx.send(()).unwrap();
     let rejection = rejected(answered(&answers, "the timeout failure"));

@@ -533,6 +533,10 @@ fn through_launch(
     let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     deadline.recv_or_fail(reached, "the spawn inside its start work");
     // No code under test waits on the clock here: the launch closure is held on a channel and the runner thread does not exist yet; the advance stamps the elapsed milliseconds the record reports (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(step);
     release.send(()).unwrap();
 }

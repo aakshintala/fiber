@@ -685,6 +685,10 @@ fn wake_until_draining(
                 // below never overlap.
                 if reached.try_recv().is_ok() {
                     // Held runner parks nowhere; testing.md "Waits and timeouts" binds helper advances to a named park, so this raw advance is the one move made while the runner holds at the pause point.
+                    #[allow(
+                        clippy::disallowed_methods,
+                        reason = "no code under test waits on the clock (ruling 6179406086)"
+                    )]
                     driver_clock.advance(Duration::from_secs(1));
                     let _sent = release.send(());
                     continue;
@@ -2860,6 +2864,10 @@ fn the_watch_stats_the_log_once_per_poll_interval() {
     assert_eq!(shared.reason(), None, "an unseen crossing halts nothing");
 
     // No code under test waits on the clock here; it moves the interval the stat check reads (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(POLL);
     run_watch(&clock, &shared, &last_check, Arc::clone(&stat), cap, 7..8);
     assert_eq!(*stats.lock().unwrap(), 2, "past the interval it stats");

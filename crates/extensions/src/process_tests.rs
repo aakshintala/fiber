@@ -3343,6 +3343,10 @@ fn refresh_times_out_when_its_function_never_answers() {
     // The nested line reached the child, so the refresh waits on its
     // function: advancing ends that wait, not the lock wait.
     read_json_file(&nested_path, "the nested request");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the test wakes past the refresh wait's deadline (ruling 6261259790)"
+    )]
     owner.clock.advance(Duration::from_secs(61));
     let seen = read_json_file(&out_path, "the refresh rejection");
     assert_eq!(seen["code"], json!("credential_failed"));
@@ -3714,6 +3718,10 @@ fn file_credential_resolve_times_out_on_a_held_lock() {
             }
         }
     });
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the test wakes past the lock wait's deadline (ruling 6261259790)"
+    )]
     fake.advance(Duration::from_secs(6));
     // The lock wait ends at the deadline; the ten-second bound only
     // fails a broken wait instead of hanging the test.
@@ -3844,6 +3852,10 @@ fn hook_state_writes_discard_on_timeout() {
     owner.pump();
     // The set joined transaction 7, and no reply ever comes: the
     // deadline fails the hook, and the failure discards its writes.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the test wakes past the hook deadline (ruling 6261259790)"
+    )]
     owner.clock.advance(Duration::from_secs(11));
     let outcome = delivered.join().expect("the hook thread ends");
     assert!(outcome.is_err(), "a timed-out hook answers: {outcome:?}");
@@ -4241,6 +4253,10 @@ fn startup_missed_ready_kills_and_retires() {
     let cancel = support::cancel::Token::new();
     let deadline = Some(owner.clock.now() + Duration::from_secs(60));
     // No pump: the child's ready, if any, stays unread.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock until await_ready (ruling 6179406086)"
+    )]
     owner.clock.advance(Duration::from_secs(61));
     assert_eq!(
         owner.extension.await_ready(deadline, &cancel),
@@ -4308,6 +4324,10 @@ fn startup_registrations_without_ready_do_not_meet_the_deadline() {
     }
     let cancel = support::cancel::Token::new();
     let deadline = Some(owner.clock.now() + Duration::from_secs(60));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock until await_ready (ruling 6179406086)"
+    )]
     owner.clock.advance(Duration::from_secs(61));
     assert!(owner.extension.await_ready(deadline, &cancel).is_err());
     assert_eq!(
@@ -4415,6 +4435,10 @@ fn hook_timeout_leaves_the_child_death_counter_alone() {
     // The in-flight request must land before the clock jumps past it.
     let seen = read_json_file(&marker_path, "the hook delivery");
     assert_eq!(seen, json!({"delivered": true}));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the test wakes past the hook deadline (ruling 6261259790)"
+    )]
     owner.clock.advance(Duration::from_secs(11));
     let outcome = delivered.join().expect("the hook thread ends");
     assert!(outcome.is_err(), "a timed-out hook answers: {outcome:?}");
@@ -4917,6 +4941,10 @@ fn finish_acknowledges_the_final_delivery_before_the_exit_allowance() {
     );
     // Past the allowance with no answer, the child lives on: the
     // allowance never started.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the exit allowance until the reply (ruling 6179406086)"
+    )]
     owner.clock.advance(Duration::from_secs(120));
     assert!(
         !owner.extension.transport().exited(),
@@ -4935,6 +4963,10 @@ fn finish_acknowledges_the_final_delivery_before_the_exit_allowance() {
             .await_parked(term_at, fakes::Deadline::after(WITHIN)),
         "shutdown parks at the deadline after the final acknowledgement"
     );
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the test jumps over the parked run before its deadline (ruling 6260728504)"
+    )]
     owner.clock.advance(Duration::from_secs(59));
     assert!(
         !owner.extension.transport().exited(),
@@ -5138,6 +5170,10 @@ fn finish_cancelled_during_the_exit_allowance_leaves_the_child() {
             .await_parked(allowance_at, fakes::Deadline::after(WITHIN)),
         "shutdown parks at the exit-allowance deadline before cancellation"
     );
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the test wakes past the parked deadline (ruling 6261259790)"
+    )]
     owner.clock.advance(Duration::from_secs(1));
     cancel.cancel();
     let outcome = finishing.join().expect("the shutdown ends");

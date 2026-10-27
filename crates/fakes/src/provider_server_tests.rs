@@ -157,6 +157,10 @@ fn a_held_reply_nobody_releases_becomes_a_500_at_its_deadline() {
         clock.await_thread_parked(ack.thread, ack.until, Deadline::after(READ_WITHIN)),
         "the hold parks on the clock before it moves"
     );
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(Duration::from_secs(5));
     let (_, body) = Deadline::after(READ_WITHIN)
         .recv(&rx)
@@ -538,6 +542,10 @@ fn idle_windows_do_not_expire_the_provider() {
         ProviderServer::start_on(clock.clone(), vec![Response::status(200, "ok")]).unwrap();
     // Longer than a request bound with no client: idle windows renew,
     // and no missing request fails.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(Duration::from_secs(31));
     assert_eq!(get_status(&server), "200");
     assert_eq!(server.requests().len(), 1);
@@ -1432,6 +1440,10 @@ fn a_fixed_body_buffered_with_its_head_keeps_only_its_length() {
     });
     // Wakes the parked read deterministically: the test advances the
     // fake clock only past the wait the announcement pinned.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(Duration::from_secs(1));
     // Anything past the body sees the close: an over-read loses the
     // reply instead of hanging on it. One wall-clock deadline spans the
