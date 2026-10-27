@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use crate::app::testkit::{hello, now};
 use crate::app::{App, Effect, Kind, NoticeLine, Phase, Surface};
 use crate::configure::{Configure, ConfigureError};
 use crate::configure_fake::Fake;
@@ -21,7 +22,6 @@ use crate::keys::{Button, Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::{Pointer, TargetId};
 use contract::ErrorCode;
-use contract::clock::Clock;
 
 /// The hub's missing-hooks refusal: the only one that opens the offer.
 const MISSING: &str =
@@ -54,20 +54,6 @@ fn home(seam: Option<Arc<Fake>>) -> App {
     app.set_size(80, 24);
     app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
     app
-}
-
-fn now() -> std::time::Instant {
-    fakes::clock::FakeClock::new().now()
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
 }
 
 /// A hub `command_rejected` for `id`, with `code` and `message`.
