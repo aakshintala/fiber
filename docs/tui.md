@@ -2407,7 +2407,7 @@ shell, elapsed 12s", "done: completed, 2 tool calls".
 
 Where the terminal speaks kitty's graphics protocol (Ghostty, kitty, WezTerm),
 images show inline: an image a tool returned, in its ledger row, and a pasted
-image, in the prompt bubble.
+image, with or without text, in the prompt bubble.
 
 - An image is at most 40% of the conversation's width and 12 rows tall,
   keeping its proportions. A click opens it in the system viewer, from a
