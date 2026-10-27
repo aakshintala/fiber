@@ -2324,3 +2324,33 @@ fn a_workspace_change_clears_grants_and_offers_only_without_a_parent() {
         (1, 0),
     );
 }
+
+/// A parent start cannot make an own segment without `session_started`
+/// look valid: the workspace must come from the own segment.
+#[test]
+fn a_parent_session_started_does_not_supply_the_own_workspace() {
+    let (_home, sessions) = sessions("fold-missing-own-start");
+    write_log(
+        &sessions,
+        A,
+        &[envelope(A, 0, None, None, &started("/a", None))],
+    );
+    write_log(&sessions, B, &[]);
+
+    let segments = [
+        log::Segment {
+            session_id: SessionId(A.to_owned()),
+            dir: sessions.join(A),
+            to: Some(Seq(0)),
+        },
+        log::Segment {
+            session_id: SessionId(B.to_owned()),
+            dir: sessions.join(B),
+            to: None,
+        },
+    ];
+    assert!(matches!(
+        fold(&segments),
+        Err(crate::Error::NoSessionStarted)
+    ));
+}
