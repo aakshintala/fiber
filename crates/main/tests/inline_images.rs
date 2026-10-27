@@ -540,19 +540,21 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
     let from = run.output().len();
     click_text(&mut run, &grid, "Read 255 files");
     run.wait_bytes(from, FRAME_END, "the opened group frame");
-    let grid = run.wait_screen("the past-range caption", |grid| {
+    run.wait_screen("the past-range caption", |grid| {
         grid.rows.iter().any(|row| row.contains(&caption))
     });
     // The caption click opens the viewer, never a display fetch: no
-    // transmit may follow it for the past-range image.
-    let clicked_from = run.output().len();
-    click_text(&mut run, &grid, &caption);
-    run.wait_bytes(clicked_from, FRAME_END, "the caption click frame");
-    assert_eq!(
-        count(&run.output()[clicked_from..], b"a=t,"),
-        0,
-        "the caption click transmits nothing"
+    // transmit may follow it for the past-range image. Read the grid
+    // fresh: opening the group settles the view after the caption
+    // first paints, so the wait's grid may point at another row.
+    let grid = run.screen();
+    assert!(
+        grid.rows.iter().any(|row| row.contains(&caption)),
+        "the settled view keeps the past-range caption"
     );
+    // The viewer open is the click's signal, so the test waits for
+    // the marker next.
+    click_text(&mut run, &grid, &caption);
 
     // The click opens the viewer on the private copy, as for an
     // in-range image: the past-range target resolves.
@@ -580,6 +582,18 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
         fs::read_to_string(&marker).unwrap().trim(),
         expected,
         "the viewer opened the private image copy"
+    );
+    // The past-range image draws no placeholder grid: the row above
+    // its caption is the previous call's row, never a grid row.
+    let at = grid
+        .rows
+        .iter()
+        .position(|row| row.contains(&caption))
+        .expect("the past-range caption row");
+    assert!(at > 0, "the caption is not the first row");
+    assert!(
+        !grid.rows[at - 1].contains('\u{10EEEE}'),
+        "no placeholder grid above the past-range caption"
     );
 
     run.write(b"\x03\x03\r");

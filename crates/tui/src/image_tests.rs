@@ -445,37 +445,56 @@ fn ids_stop_at_255_and_later_images_keep_their_one_line() {
                 .expect("the image is kept");
         ids.push(layout.note(&part));
     }
-    // 255 colours minus the probe's: every handed-out id stays unique
-    // and paintable, and past exhaustion a part stays unnoted.
-    let mut handed: Vec<u32> = ids.iter().copied().filter(|id| *id != 0).collect();
-    handed.sort_unstable();
-    handed.dedup();
-    assert_eq!(handed.len(), 254, "one id per image but the probe's");
-    assert_eq!(handed.first(), Some(&1));
-    assert_eq!(handed.last(), Some(&255));
-    assert!(!handed.contains(&31), "the probe's id is never an image");
-    assert!(
-        ids.iter().skip(254).all(|id| *id == 0),
-        "past exhaustion nothing is noted"
-    );
-    // An unnoted part draws its one clickable line, never a shared grid.
+    // Every image keeps its own nonzero id: the first 254 name
+    // placeholder colours, the rest stay unique for viewer targets.
+    // The probe's id is never handed out.
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), 300, "no id repeats");
+    assert!(!sorted.contains(&0), "every image is noted");
+    assert!(!sorted.contains(&31), "the probe's id is never an image");
+    let eligible: Vec<u32> = sorted.iter().copied().filter(|id| *id <= 255).collect();
+    assert_eq!(eligible.len(), 254, "one colour per image but the probe's");
+    assert_eq!(eligible.first(), Some(&1));
+    assert_eq!(eligible.last(), Some(&255));
+    let viewer: Vec<u32> = sorted.iter().copied().filter(|id| *id > 255).collect();
+    assert_eq!(viewer.len(), 46, "past the range every id stays unique");
+    assert_eq!(viewer.first(), Some(&256));
+    // A past-range part draws its one line with its own target, never
+    // a placeholder grid.
     let last = super::Part::from_content(&session(), &image("artifacts/i_299.png", 10, 20))
         .expect("the image is kept");
-    assert_eq!(layout.id(&session(), "artifacts/i_299.png"), None);
+    let last_id = layout.id(&session(), "artifacts/i_299.png");
+    assert!(matches!(last_id, Some(id) if id > 255));
     layout.sizing = super::Sizing::Inline { cell: (10, 20) };
     let mut out = Rows::default();
     super::ledger_rows(&last, &layout, 80, Align::Left { indent: 4 }, &mut out);
     let (rows, _) = out.into_parts();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0.to_string(), "    ▣ i_299.png · 10×20");
+    assert_eq!(rows[0].1, last_id.map(Target::Image));
+    assert!(
+        rows[0]
+            .0
+            .spans
+            .iter()
+            .all(|span| !span.content.as_ref().starts_with('\u{10EEEE}')),
+        "no placeholders past the range"
+    );
 
-    // Exhaustion is shared with new page layouts: a later image cannot
-    // receive a previous image's placeholder colour after a refold.
+    // New page layouts share the allocator: a later image cannot
+    // receive a previous image's id after a refold.
     let later = super::Part::from_content(&other(), &image("artifacts/after.png", 10, 20))
         .expect("the later image is kept");
     let mut next_layout = Layout::default();
     next_layout.set_allocator(allocator);
-    assert_eq!(next_layout.note(&later), 0);
+    let later_id = next_layout.note(&later);
+    assert_ne!(later_id, 0, "a later image is noted");
+    assert!(
+        !sorted.contains(&later_id),
+        "a later image never reuses an id"
+    );
     next_layout.sizing = super::Sizing::Inline { cell: (10, 20) };
     let mut out = Rows::default();
     super::ledger_rows(
@@ -488,6 +507,45 @@ fn ids_stop_at_255_and_later_images_keep_their_one_line() {
     let (rows, _) = out.into_parts();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0.to_string(), "    ▣ after.png · 10×20");
+    assert_eq!(rows[0].1, Some(Target::Image(later_id)));
+}
+
+#[test]
+fn only_ids_1_through_255_but_not_31_style_placeholders() {
+    // At, just below and just above each edge: 0 names no image, 31 is
+    // the graphics probe's, and past 255 ids stay viewer-only.
+    for id in [1, 2, 30, 32, 254, 255] {
+        assert!(super::placeholder_eligible(id), "{id} styles placeholders");
+    }
+    for id in [0, 31, 256, 257, u32::MAX] {
+        assert!(!super::placeholder_eligible(id), "{id} never styles cells");
+    }
+}
+
+#[test]
+fn u32_max_is_handed_out_once_then_exhaustion_returns_zero() {
+    let allocator = IdAllocator::default();
+    allocator.lock().next = u32::MAX - 1;
+    let mut layout = Layout::default();
+    layout.set_allocator(allocator);
+    let max = super::Part::from_content(&session(), &image("artifacts/max.png", 10, 20))
+        .expect("the image is kept");
+    assert_eq!(layout.note(&max), u32::MAX);
+    assert_eq!(layout.id(&session(), "artifacts/max.png"), Some(u32::MAX));
+    // After `u32::MAX` allocation notes nothing, returning the no-id
+    // sentinel without repeating an id.
+    for path in ["artifacts/after.png", "artifacts/again.png"] {
+        let part =
+            super::Part::from_content(&session(), &image(path, 10, 20)).expect("the image is kept");
+        assert_eq!(layout.note(&part), 0, "{path} is past exhaustion");
+        assert_eq!(layout.id(&session(), path), None, "{path} stays unnoted");
+    }
+    let handed: Vec<u32> = layout.ids.values().copied().collect();
+    assert_eq!(
+        handed.iter().filter(|id| **id == u32::MAX).count(),
+        1,
+        "`u32::MAX` is returned at most once"
+    );
 }
 
 #[test]

@@ -138,8 +138,9 @@ pub(crate) fn grid(part: &Part, columns: u16, cell: (u16, u16)) -> (u16, u16) {
 
 /// Image ids shared by every page layout during the TUI's lifetime.
 /// One `(generation, session, path)` keeps its id across refolds, while
-/// a new generation or image gets a never-reused id. The terminal's
-/// placeholder colour carries one byte, so ids stop at 255.
+/// a new generation or image gets a never-reused id. Only
+/// placeholder-eligible ids style placeholder cells; larger ids stay
+/// unique for viewer targets past the placeholder range.
 #[derive(Clone, Debug)]
 pub(crate) struct IdAllocator(Arc<Mutex<IdState>>);
 
@@ -181,19 +182,27 @@ impl IdAllocator {
     }
 
     /// Returns the id for this image in the current scope, allocating
-    /// the next unused placeholder colour or 0 after exhaustion.
+    /// the next unused id, or 0 after exhaustion. Allocation is
+    /// checked: each nonzero id, including `u32::MAX`, is returned at
+    /// most once, and after `u32::MAX` allocation returns the existing
+    /// no-id sentinel 0 forever without repeating an id. Ids past the
+    /// placeholder range stay unique for viewer targets; drawing code
+    /// gates placeholder use on eligibility.
     fn id(&self, part: &Part) -> u32 {
         let mut state = self.lock();
         let key = (state.generation, part.session.clone(), part.path.clone());
         if let Some(id) = state.ids.get(&key) {
             return *id;
         }
-        let mut id = state.next.saturating_add(1);
+        let mut id = match state.next.checked_add(1) {
+            Some(id) => id,
+            None => return 0,
+        };
         if id == crate::term::PROBE_ID {
-            id = id.saturating_add(1);
-        }
-        if id > u32::from(u8::MAX) {
-            return 0;
+            id = match id.checked_add(1) {
+                Some(id) => id,
+                None => return 0,
+            };
         }
         state.next = id;
         state.ids.insert(key, id);
@@ -252,10 +261,11 @@ impl Layout {
     /// Notes `part`, handing its `(session, path)` the next id when
     /// unseen; a pair already seen keeps its id, so a page dropped and
     /// folded again draws the same id. Id 31 is never handed out: it is
-    /// the graphics probe's (`docs/tui.md`, "Images"). Ids stop at 255:
-    /// the placeholder colour carries only one byte, so past 255 images
-    /// a part stays unnoted and draws its one line, and 0 names no
-    /// image.
+    /// the graphics probe's (`docs/tui.md`, "Images"). Ids past 255 keep
+    /// unique viewer targets past the placeholder range; only
+    /// placeholder-eligible ids ever style placeholder cells. Only
+    /// exhaustion notes nothing: then the part draws its one line, and
+    /// 0 names no image.
     pub(crate) fn note(&mut self, part: &Part) -> u32 {
         self.sync_generation();
         let key = (part.session.clone(), part.path.clone());
@@ -283,6 +293,15 @@ impl Layout {
     pub(crate) fn failed(&self, session: &SessionId, path: &str) -> bool {
         self.failed.contains(&(session.clone(), path.to_owned()))
     }
+}
+
+/// Whether `id` may style placeholder cells: the terminal's
+/// placeholder colour carries one byte, so only ids 1 through 255 name
+/// a colour, and id 31 is the graphics probe's (`docs/tui.md`,
+/// "Images"). Larger ids stay unique for viewer targets but never
+/// reach placeholder rendering, transmit or place.
+pub(crate) fn placeholder_eligible(id: u32) -> bool {
+    matches!(id, 1..=255) && id != crate::term::PROBE_ID
 }
 
 /// Where an image's line sits.
@@ -326,9 +345,13 @@ pub(crate) fn ledger_rows(
         return;
     }
     match align {
-        // Only a noted PNG under a call's ledger row draws inline.
+        // Only a noted PNG on a placeholder-eligible id under a call's
+        // ledger row draws inline; past the range the image keeps its
+        // one clickable line with its unique viewer target.
         Align::Left { indent } if indent > 0 && part.mime_type == "image/png" => {
-            if let Some(id) = layout.id(&part.session, &part.path) {
+            if let Some(id) = layout.id(&part.session, &part.path)
+                && placeholder_eligible(id)
+            {
                 inline_rows(part, layout, id, columns, indent, cell, out);
             } else {
                 text_rows(part, layout, columns, align, out);
