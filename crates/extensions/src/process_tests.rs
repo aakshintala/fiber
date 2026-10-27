@@ -3521,6 +3521,8 @@ fn refresh_retired_mid_wait_answers_nothing() {
         serde_json::Map::new(),
         None,
     );
+    let (at_completion_pause, resume_refresh) =
+        owner.extension.shared().pause_next_refresh_completion();
     write_pair(owner.workspace(), "testprov", "test", &expired_pair());
     let deadline = Some(owner.clock.now() + Duration::from_secs(60));
     dispatch_provider(
@@ -3534,6 +3536,19 @@ fn refresh_retired_mid_wait_answers_nothing() {
     // the peer parked until the test releases it, so no clock moves.
     read_json_file(&nested_path, "the nested request");
     owner.extension.shared().table.retire();
+    fakes::Deadline::after(WITHIN).recv_or_fail(
+        &at_completion_pause,
+        "the retired refresh to drop its credential holder",
+    );
+    // `run_refresh` returned before this pause, so its holder is dropped.
+    let file = config::CredentialFile::new(owner.workspace(), "testprov", "test").unwrap();
+    assert!(
+        file.try_lock().unwrap().is_some(),
+        "the completion pause follows credential-lock release"
+    );
+    resume_refresh
+        .send(())
+        .expect("resume the refresh after checking its lock");
     owner
         .extension
         .transport()
@@ -3541,9 +3556,6 @@ fn refresh_retired_mid_wait_answers_nothing() {
         .expect("release the peer after retiring");
     let seen = read_json_file(&out_path, "the retired refresh");
     assert_eq!(seen, json!({"saw": "silent"}));
-    // The worker released the lock on its way out.
-    let file = config::CredentialFile::new(owner.workspace(), "testprov", "test").unwrap();
-    assert!(file.try_lock().unwrap().is_some(), "the lock leaked");
     assert_eq!(owner.drain(), CloseReason::Eof);
 }
 
@@ -4090,17 +4102,16 @@ fn ready_between_restart_check_and_park_wakes_the_waiter() {
     assert_eq!(owner.drain(), CloseReason::Stopped);
 }
 
-/// Kills the peer and reaps it: stop its pipes, KILL its group, pump
+/// Kills the peer and reaps it: KILL its group, stop its pipes, pump
 /// the close and reap the child.
 fn kill_peer(owner: &Harness) {
-    owner.extension.transport().stop();
-    match owner
-        .extension
-        .transport()
-        .signal(rustix::process::Signal::KILL)
-    {
+    let transport = owner.extension.transport();
+    match transport.signal(rustix::process::Signal::KILL) {
         Ok(()) | Err(_) => {}
     }
+    // EOF lets a waiting fixture exit normally; signal before closing its
+    // pipes when the test needs the signal itself to cause its death.
+    transport.stop();
 }
 
 /// Pumps the one close a kill leaves behind, naming what it proves: a

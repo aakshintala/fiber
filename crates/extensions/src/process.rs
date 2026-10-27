@@ -97,6 +97,42 @@ pub(crate) struct Shared {
     pub(crate) lifecycle_park: support::clock::Parker,
     /// What respawns the child, as `Transport::spawn_with` takes it.
     pub(crate) spawn: lifecycle::Spawn,
+    #[cfg(test)]
+    refresh_completion_pause: Mutex<Option<RefreshCompletionPause>>,
+}
+
+#[cfg(test)]
+struct RefreshCompletionPause {
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+impl Shared {
+    /// Pauses the next refresh after its holder is dropped and before it answers.
+    pub(crate) fn pause_next_refresh_completion(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (entered, reached) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        *support::lock(&self.refresh_completion_pause) = Some(RefreshCompletionPause {
+            entered,
+            release: released,
+        });
+        (reached, release)
+    }
+
+    /// Reaches and waits at the registered refresh completion pause.
+    pub(crate) fn pause_refresh_completion(&self) {
+        let pause = support::lock(&self.refresh_completion_pause).take();
+        if let Some(pause) = pause
+            && pause.entered.send(()).is_ok()
+        {
+            let Ok(()) = pause.release.recv() else {
+                return;
+            };
+        }
+    }
 }
 
 /// What one `pump_once` did.
@@ -155,6 +191,8 @@ impl ProcessExtension {
                     args,
                     limits,
                 },
+                #[cfg(test)]
+                refresh_completion_pause: Mutex::new(None),
             }),
         };
         let hello = extension.hello_line().map_err(std::io::Error::other)?;

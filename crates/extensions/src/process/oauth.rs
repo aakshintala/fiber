@@ -163,6 +163,8 @@ pub(crate) fn refresh_continue(
     let generation = shared.table.generation();
     let live = || shared.table.generation() == generation;
     let end = run_refresh(shared, id, &callback, scope, credential, &live);
+    #[cfg(test)]
+    shared.pause_refresh_completion();
     if !live() {
         // Death or restart retired the call: its answer belongs to a dead
         // generation, and must not leak into the new one.
