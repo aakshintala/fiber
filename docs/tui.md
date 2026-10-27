@@ -1307,7 +1307,8 @@ pins it (`docs/tools.md`, "Naming the session"). A name is drawn with each contr
 `/rewind` swaps a view into the conversation area (`docs/events.md`,
 "Rewind").
 
-- Each turn is one row, "before: <prompt>". The chosen turn opens into every
+- Each turn is one row, "before: <prompt>", or "before: rewind summary" for
+  the turn a rewind's summary ran in. The chosen turn opens into every
   step boundary: after the person's message and after each step, with the
   step's summary. The default is the start of the latest turn that is not a rewind's summary.
 - For the chosen point it shows the files Fiber's tools wrote since, the calls
