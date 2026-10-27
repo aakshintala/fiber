@@ -703,6 +703,7 @@ fn hooks_answers_the_installed_seam_rows() {
             send(&client, r#"{"id":"list","command":"hooks"}"#);
             let line = response(&client, "list");
             assert_eq!(support::kind(&line), "command_accepted");
+            // The `hooks` result shape follows (`docs/events.md`, "`command_accepted`").
             assert_eq!(
                 line["payload"]["result"]["hooks"],
                 serde_json::json!([

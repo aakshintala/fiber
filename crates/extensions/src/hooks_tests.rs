@@ -4340,7 +4340,31 @@ fn registrations_list_hooks_in_point_and_run_order_then_watchers() {
     let session = load_with_hooks(&home, entries);
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     let rows = session.registrations();
-    let hooks_name = config::full_name("hooks");
+    let qualified = config::full_name("hooks");
+    for row in &rows {
+        match row {
+            HookInfo::Hook {
+                extension,
+                entry: Some(_),
+                ..
+            }
+            | HookInfo::Watcher {
+                extension,
+                entry: Some(_),
+                ..
+            } => {
+                assert_eq!(
+                    extension, "hooks",
+                    "a declared row uses `hooks`, not its qualified name: {row:?}"
+                );
+                assert_ne!(
+                    extension, &qualified,
+                    "a declared row exposes its qualified name: {row:?}"
+                );
+            }
+            HookInfo::Hook { .. } | HookInfo::Watcher { .. } => {}
+        }
+    }
     let first_watcher = rows
         .iter()
         .position(|row| matches!(row, HookInfo::Watcher { .. }))
@@ -4381,7 +4405,7 @@ fn registrations_list_hooks_in_point_and_run_order_then_watchers() {
                 point,
                 on_failure,
                 phase,
-            } if extension == &hooks_name && point == "after_tool" => {
+            } if extension == "hooks" && point == "after_tool" => {
                 Some((entry, point, on_failure, phase))
             }
             HookInfo::Hook { .. } | HookInfo::Watcher { .. } => None,
@@ -4395,12 +4419,12 @@ fn registrations_list_hooks_in_point_and_run_order_then_watchers() {
         match row {
             HookInfo::Hook {
                 extension, entry, ..
-            } if extension != &hooks_name => {
+            } if extension != "hooks" => {
                 assert_eq!(entry, &None, "ordinary hook carries no entry: {row:?}");
             }
             HookInfo::Watcher {
                 extension, entry, ..
-            } if extension != &hooks_name => {
+            } if extension != "hooks" => {
                 assert_eq!(entry, &None, "ordinary watcher carries no entry: {row:?}");
             }
             HookInfo::Hook { .. } | HookInfo::Watcher { .. } => {}

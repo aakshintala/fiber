@@ -581,8 +581,9 @@ fn a_long_slash_list_windows_around_the_selection() {
         Rows::Slash(rows) => {
             assert_eq!(rows.len(), crate::slash::SHOWN);
             assert_eq!(rows.first().map(|row| row.name.as_str()), Some("model"));
-            // `/hooks` sits after `/tools`: the window's last row moves
-            // with the list, its start and selection unchanged.
+            // `/hooks` sits after `/tools` (`docs/tui.md`, "Slash commands"):
+            // the window's last row moves with the list, its start and
+            // selection unchanged.
             assert_eq!(rows.last().map(|row| row.name.as_str()), Some("context"));
         }
         Rows::Files(_) | Rows::Search(_) | Rows::Message(_) => {

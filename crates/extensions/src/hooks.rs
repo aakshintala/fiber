@@ -1481,6 +1481,16 @@ impl SessionExtensions {
         let entry_of = |extension: &str, entry: &Option<String>| {
             (extension == hooks_name).then(|| entry.clone()).flatten()
         };
+        // A declared entry's protocol extension is `hooks`
+        // (`docs/events.md`, "`command_accepted`"): the qualified
+        // internal name never leaves the session.
+        let extension_of = |extension: &str, entry: &Option<String>| {
+            if entry_of(extension, entry).is_some() {
+                "hooks".to_owned()
+            } else {
+                extension.to_owned()
+            }
+        };
         let phase_of = |phase: crate::lua::HookPhase, explicit: bool| {
             explicit.then(|| {
                 match phase {
@@ -1504,7 +1514,7 @@ impl SessionExtensions {
         ] {
             for entry in chain {
                 out.push(HookInfo::Hook {
-                    extension: entry.extension.clone(),
+                    extension: extension_of(&entry.extension, &entry.entry),
                     entry: entry_of(&entry.extension, &entry.entry),
                     point: entry.point.to_owned(),
                     on_failure: if entry.blocking {
@@ -1518,7 +1528,7 @@ impl SessionExtensions {
         }
         for watcher in &self.watchers {
             out.push(HookInfo::Watcher {
-                extension: watcher.name.clone(),
+                extension: extension_of(&watcher.name, &watcher.entry),
                 entry: entry_of(&watcher.name, &watcher.entry),
                 kinds: watcher.kinds.clone(),
             });
