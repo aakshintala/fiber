@@ -818,14 +818,31 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
         stream(&[spawn_call("fiber:pb/m")])
     })
     .unwrap();
-    // Hold the parent's provider responses so its first turn stays open on
-    // its first model call: `await_requests(1)` proves the turn is running,
-    // so the prompt below is sent while the turn runs and the loop must
-    // refuse it as busy. The release before the answer lets the loop drain
-    // and answer it.
-    server_parent.hold();
-    let server_child =
-        fakes::ProviderServer::start([text_reply("d-one"), text_reply("d-two")]).unwrap();
+    // The delegate's first turn runs a shell held on a fifo, so its run
+    // stays open and live while the steer goes out: the shell signals
+    // start by writing to the fifo, then blocks reading the release the
+    // test writes after the steer is accepted. The steered message joins
+    // the open turn, and the next model call carries it. A real `sleep`
+    // would hold the run on the wall clock instead (`docs/testing.md`,
+    // "Waits and timeouts").
+    let hold = setup.workspace().join("delegate.hold.fifo");
+    fakes::fifo(&hold);
+    let hold_arg = hold.to_string_lossy().into_owned();
+    let marked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen_mark = Arc::clone(&marked);
+    let server_child = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if text.contains(MARK) {
+            seen_mark.store(true, std::sync::atomic::Ordering::SeqCst);
+            return text_reply("d-two-done");
+        }
+        stream(&[function_call(
+            "call_hold",
+            "shell",
+            &json!({"command": format!("echo started > '{hold_arg}'; read line < '{hold_arg}'")}),
+        )])
+    })
+    .unwrap();
     install_model(&setup, "pa", &server_parent);
     install_model(&setup, "pb", &server_child);
     configure_delegates(&setup);
@@ -835,9 +852,33 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let parent = start_session(&client, &workspace, "run it");
     subscribe(&client, &parent);
+    let started = until(&client, "the delegate started", |line| {
+        line["kind"] == "delegate_started"
+    });
+    let delegate = started.last().expect("the event arrived")["payload"]["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(delegate, parent, "the delegate is its own session");
+    // The prompt goes out only once the parent's first turn has ended: the
+    // turn's end proves the parent is idle, so the loop must accept it.
+    let first_turn = until(&client, "the parent's first turn to end", |line| {
+        line["kind"] == "turn_completed" && line["session_id"] == parent
+    });
+    first_turn.last().expect("the turn ended");
     assert!(
-        server_parent.await_requests(1, setup.deadline),
-        "the parent turn is held on its first model call"
+        server_child.await_requests(1, setup.deadline),
+        "the delegate is running"
+    );
+    // The held shell signals start itself: the first model call only proves
+    // the provider was hit, not that the hold runs.
+    let hold_start = hold.clone();
+    let held = support::bounded(setup.deadline, "the delegate shell to hold", move || {
+        fs::read_to_string(&hold_start).unwrap_or_default()
+    });
+    assert!(
+        held.contains("started"),
+        "the delegate shell holds before the prompt goes out"
     );
     client.send(
         &json!({
@@ -848,13 +889,8 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
         })
         .to_string(),
     );
-    server_parent.release();
     let prompted = recv_answer(&client, "c_prompt_msg", "the prompt acknowledgement");
     assert_eq!(prompted["kind"], "command_accepted", "{prompted}");
-    assert!(
-        server_child.await_requests(2, setup.deadline),
-        "the delegate_message steers the delegate"
-    );
     let requested = until(&client, "the delegate_message call", |line| {
         line["kind"] == "tool_call_requested" && line["payload"]["name"] == "delegate_message"
     });
@@ -869,6 +905,28 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
         done.last().expect("the completion arrived")["payload"]["status"],
         "completed",
         "{done:?}"
+    );
+    // The delegate's second model call has not happened yet: its first
+    // turn is still blocked on the held shell, so the steer was accepted
+    // while the delegate was live.
+    assert_eq!(
+        server_child.requests().len(),
+        1,
+        "the delegate stays live on its held shell through the steer"
+    );
+    // The test releases the hold after the steer is accepted: the open
+    // turn continues, and its next model call carries the steered message.
+    let hold_release = hold.clone();
+    support::bounded(setup.deadline, "the delegate shell to release", move || {
+        fs::write(&hold_release, "go\n").unwrap();
+    });
+    assert!(
+        server_child.await_requests(2, setup.deadline),
+        "the delegate_message steers the delegate"
+    );
+    assert!(
+        marked.load(std::sync::atomic::Ordering::SeqCst),
+        "the steered message reaches the delegate's next model call"
     );
     // `now` stops the delegate as a stop does; a graceful close waits out
     // the delegate's far idle exit. The guard reaps the delegate, which
