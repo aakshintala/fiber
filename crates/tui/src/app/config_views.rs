@@ -609,6 +609,17 @@ impl App {
             let pick = picker.click(spot, height);
             return self.credential_pick(pick);
         }
+        // `/doctor` shows a local snapshot through no seam: a report
+        // row takes no action without reaching the configure seam or a
+        // workspace. The top-row close below stays shared.
+        if matches!(self.config_views.open, Some(Open::Doctor(..))) {
+            if matches!(
+                spot,
+                Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)
+            ) {
+                return self.config_act(Act::Stay);
+            }
+        }
         let act = match (self.config_views.seam.clone(), spot) {
             // The picker's `x` cancels like Esc: with the theme choices
             // open the capture is queued first, then the view closes.
@@ -636,7 +647,8 @@ impl App {
                     Some(Open::Rules(rules)) => rules.click(spot, &ctx),
                     Some(Open::Login(login)) => login.click(spot, &ctx),
                     Some(Open::Logout(logout)) => logout.click(spot, &ctx),
-                    // `/doctor` rows take no action: a click stays.
+                    // The early route above keeps `/doctor` out of the
+                    // seam match: named here for exhaustiveness.
                     Some(Open::Doctor(..)) => Act::Stay,
                     Some(Open::Credential(_) | Open::Unavailable(..)) | None => Act::Stay,
                 }

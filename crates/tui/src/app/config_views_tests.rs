@@ -1920,6 +1920,9 @@ fn remote_home(remote: Arc<Remote>, report: &str) -> App {
         ..Default::default()
     });
     app.set_remote(remote);
+    // A seam is present so the test would reach the hub-global read
+    // without the early route; every Doctor input must skip it.
+    app.set_configure(Some(fake() as Arc<dyn Configure>));
     app.set_doctor(Some(doctor_reader(report)));
     app.set_size(80, 24);
     app
@@ -1952,6 +1955,13 @@ fn slash_doctor_on_a_remote_home_needs_no_workspace() {
     );
     assert!(hub.lines.try_recv().is_err());
     assert!(app.input().is_empty());
+    assert!(app.config_view_open());
+    // A report-row click stays inert through the same route: no hub
+    // traffic, no notice, and the view still open, though the skipped
+    // hub-global read would fail.
+    assert_eq!(app.config_view_click(Spot::Row(0)), Effect::None);
+    assert!(hub.lines.try_recv().is_err());
+    assert!(app.notices().is_empty());
     assert!(app.config_view_open());
     assert_eq!(app.config_view_key(&Key::Esc), Some(Effect::None));
     assert!(!app.config_view_open());
