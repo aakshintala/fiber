@@ -107,11 +107,12 @@ fn marker_state(marker: &std::path::Path) -> String {
     }
 }
 
-/// The tail of this test's sole session `events.jsonl`: the isolated
-/// `FIBER_HOME` holds one project and one session, so the sessions
-/// directory lists it. A watcher timeout notice lands in this log, which
-/// tells a timed-out parked run apart from a queued delivery that never
-/// arrived; a missing directory or log is itself the state found.
+/// The tail of this test's sole session `events.jsonl`
+/// (`docs/extensions.md:1651-1657`, "When a session ends"): the isolated
+/// `FIBER_HOME` holds one project and one session. A watcher timeout notice
+/// lands in this log, which tells a timed-out parked run apart from a queued
+/// delivery that never arrived; a missing directory or log is itself the
+/// state found.
 fn events_tail(setup: &Setup) -> String {
     const TAIL_LINES: usize = 20;
     let dir = sessions_dir(setup);
@@ -124,33 +125,33 @@ fn events_tail(setup: &Setup) -> String {
             return format!("sessions dir {} unreadable ({error})", dir.display());
         }
     };
-    let mut tails = Vec::new();
-    for id in &ids {
-        let path = dir.join(id).join("events.jsonl");
-        match fs::read_to_string(&path) {
-            Ok(text) => {
-                let lines: Vec<&str> = text.lines().collect();
-                let start = lines.len().saturating_sub(TAIL_LINES);
-                tails.push(format!(
-                    "session {id}: last {} of {} lines:\n{}",
-                    lines.len() - start,
-                    lines.len(),
-                    lines[start..].join("\n")
-                ));
-            }
-            Err(error) => tails.push(format!(
-                "session {id}: {} unreadable ({error})",
-                path.display()
-            )),
-        }
+    if ids.len() != 1 {
+        return format!(
+            "sessions dir {} holds {} session(s) [{}]",
+            dir.display(),
+            ids.len(),
+            ids.join(", ")
+        );
     }
-    format!(
-        "sessions dir {} holds {} session(s) [{}]; {}",
-        dir.display(),
-        ids.len(),
-        ids.join(", "),
-        tails.join("\n")
-    )
+    let path = dir.join(&ids[0]).join("events.jsonl");
+    match fs::read_to_string(&path) {
+        Ok(text) => {
+            let lines: Vec<&str> = text.lines().collect();
+            let start = lines.len().saturating_sub(TAIL_LINES);
+            format!(
+                "session {}: last {} of {} lines:\n{}",
+                ids[0],
+                lines.len() - start,
+                lines.len(),
+                lines[start..].join("\n")
+            )
+        }
+        Err(error) => format!(
+            "session {}: {} unreadable ({error})",
+            ids[0],
+            path.display()
+        ),
+    }
 }
 
 /// Held and model request counts, marker bytes and the session event-log
@@ -243,6 +244,9 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
             diagnose(&setup, &marker, held.requests().len(), &model)
         );
     }
+    // `docs/extensions.md:1651-1657` ("When a session ends"): the drain replays
+    // each watcher's `(cursor, end]` range, one run per line, so one parked
+    // run means one marker line.
     assert_eq!(
         fs::read_to_string(&marker).unwrap(),
         "run\n",
@@ -272,7 +276,10 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
         !stderr.contains("failed at session end"),
         "the drain printed nothing: {stderr:?}"
     );
-    // Every live run executed; the drain replayed none.
+    // Every live run executed; the drain replayed none
+    // (`docs/extensions.md:1651-1657`, "When a session ends": one run per
+    // watcher per line in `(cursor, end]`, so the two queued offers plus the
+    // parked run mean three marker lines and no drain replay).
     assert_eq!(
         fs::read_to_string(&marker).unwrap(),
         "run\nrun\nrun\n",
