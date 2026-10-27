@@ -60,7 +60,8 @@ pub struct SessionStarted {
     /// For a delegate, its parent (`docs/delegates.md`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<Parent>,
-    /// For a fork or a rewind, the point it continues from.
+    /// For a fork, a rewind, or a workspace move, the point it continues
+    /// from (`docs/events.md`, "Change workspace").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<Point>,
     /// For a rewind, what rides after the history.
@@ -158,6 +159,21 @@ pub struct Rewound {
     /// The old session's summary of the path after the point, when requested.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+}
+
+/// `moved`: the last line of a session that moved workspace
+/// (`docs/events.md`, "Change workspace"). It carries no `summary` and no
+/// `from_session_id`: the child continues from the latest point as a rewind
+/// does, with no summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Moved {
+    /// The session that continues this one.
+    pub new_session_id: SessionId,
+    /// The last durable line before `moved`; the child's `forked_from.seq`
+    /// is this value.
+    pub seq: Seq,
+    /// The resolved absolute workspace of the new session.
+    pub workspace: String,
 }
 
 /// `turn_started`. Its envelope carries the new `turn_id`.

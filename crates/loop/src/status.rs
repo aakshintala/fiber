@@ -442,6 +442,7 @@ impl Fold {
             }
             Event::FiberExited(_)
             | Event::Rewound(_)
+            | Event::Moved(_)
             | Event::SteeringApplied(_)
             | Event::SteeringQueue(_)
             | Event::ShellCommand(_)

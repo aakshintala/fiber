@@ -113,6 +113,7 @@ impl Loop {
             | Delivery::McpReconnect(..)
             | Delivery::Name(..)
             | Delivery::Rewind(..)
+            | Delivery::ChangeWorkspace(..)
             | Delivery::Handoff(..)
             | Delivery::Close(_)
             | Delivery::Cancelled
@@ -230,9 +231,9 @@ impl Loop {
 
     /// One delivery taken while the jobs settle.
     fn settle_one(&mut self, delivery: Delivery) -> Result<(), Error> {
-        // After `rewound` nothing is written: every acknowledgement still
-        // waiting is refused `closing`, the rest is dropped
-        // (`docs/events.md`, "Rewind").
+        // After `rewound` or `moved` nothing is written: every
+        // acknowledgement still waiting is refused `closing`, the rest is
+        // dropped (`docs/events.md`, "Rewind", "Change workspace").
         if self.rewound {
             crate::rewind::command::refuse_after_rewound(delivery);
             return Ok(());
@@ -265,6 +266,7 @@ impl Loop {
             | Delivery::Steer(_, ack)
             | Delivery::Handoff(_, _, ack)
             | Delivery::Rewind(_, _, ack)
+            | Delivery::ChangeWorkspace(_, _, ack)
             | Delivery::Model(_, ack)
             | Delivery::Reload(ack)
             | Delivery::McpReconnect(_, ack)

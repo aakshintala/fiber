@@ -1517,6 +1517,7 @@ fn forked_history_replays_across_the_ancestor_point() {
                 forked_from: Some(Point {
                     session_id: SessionId("s_parent".into()),
                     seq: Seq(1),
+                    project: None,
                 }),
                 rewind: None,
                 worktree: None,

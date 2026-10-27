@@ -1702,6 +1702,25 @@ pub(crate) fn spawn(
 
 pub(crate) use support::lock;
 
+/// Locks an opener gate in tests, signaling only after `try_lock` proves
+/// another opener still holds it.
+#[cfg(test)]
+pub(crate) fn lock_gate<'a>(
+    gate: &'a Mutex<()>,
+    blocked: Option<Box<dyn FnOnce() + Send>>,
+) -> std::sync::MutexGuard<'a, ()> {
+    match gate.try_lock() {
+        Ok(held) => held,
+        Err(std::sync::TryLockError::WouldBlock) => {
+            if let Some(blocked) = blocked {
+                blocked();
+            }
+            lock(gate)
+        }
+        Err(std::sync::TryLockError::Poisoned(_)) => lock(gate),
+    }
+}
+
 #[cfg(test)]
 #[path = "connection_tests.rs"]
 mod tests;
