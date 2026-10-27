@@ -2631,7 +2631,7 @@ I/O failure. A ledger row, for example, receives the call's name,
 arguments, status, exit code, duration, line count, `changes` and error, folded
 from its `tool_call_*` events. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
 
-Each slot's input holds exactly what its built-in renderer reads:
+Each slot's input holds exactly what its built-in renderer reads. Every input listed here also carries `flat`, which is true in screen-reader mode when the terminal drops every style.
 
 **`turn_card`** draws a turn's card whole: its prompts, every entry, and its
 ending. A replaced card is drawn whole by the extension, so no nested slot
@@ -2639,32 +2639,24 @@ runs inside it; `prompt` draws only when the card itself is built in.
 
 | Field | What it holds |
 |---|---|
-| `prompts` | The turn's prompts in order, each its `text` and `images` (`path`, `width`, `height` in pixels) |
-| `entries` | The card's items in order, each tagged with `kind` (below) |
+| `prompts` | The turn's prompts in order, each with the `prompt` slot's `text` and `images` (`path`, `width`, `height` in pixels) |
+| `entries` | The card's items in order, each tagged with a `kind` and carrying the slot input shown below |
 | `started` | When the turn started |
 | `calls` | How many model calls the turn made |
 | `usage` | The turn's totals: `tokens` (`input`, `cache_read`, `cache_write`, `output`), `cost`, `subscription_cost` |
 | `ended` | How the turn ended: `outcome`, `ended_ts`, and on a failure its `error` (`code`, `message`); absent while the turn runs |
 | `running` | Whether the turn is still running |
-| `flat` | Whether the screen reader drops every style |
 
-An entry is one of `{kind = "reply", text}` (one text part of a reply,
-Markdown included); `{kind = "steer", text, images, ts}` (a steering message
-and when it landed); `{kind = "group", first, last, running, open, cut,
-sections, streaming, failed}` (the tool group inlined: `sections` carry the
-`step`, its `thoughts` with `text`, `started`, `ended` and `open`, and its
-`calls` with `name`, `arguments`, `status`, `exit`, `duration_ms`, `lines`,
-`changes`, `error`, `output`, `headline`, `content`, `answer`, `images`,
-`open` and `asking`; `streaming` the calls still emitting; `failed` the
-retried model calls with `code` and `attempt`); `{kind = "aside", aside}` (a
-line from outside the turn: `{kind = "line", text}`, `{kind = "warning",
-message}`, or `{kind = "orphans", jobs, open}` with each job its `name` and
-`message`); `{kind = "band", trigger, ts, state, sizes?}` (a handoff's band
-without its note: `state` is `writing`, `done`, or `unchanged` with
-`cancelled`, and `sizes` with `before` (and `after`, once the first request
-after it returns) rides a done band); `{kind = "answers", outcome,
-parts, note?, ts?}` (`outcome` is `given` or `declined`; each part its
-`header`, `text`, and whether `skipped`).
+The entries carry these slot inputs and extra fields:
+
+| Kind | Fields |
+|---|---|
+| `reply` | The `reply` input: `text` (Markdown included) |
+| `steer` | The `steer` input: `text`, `images`, `ts` |
+| `group` | The `group_line` input, plus `cut` and `sections` |
+| `aside` | No slot: `{kind = "line", text}`, `{kind = "warning", message}`, or `{kind = "orphans", jobs, open}`; each job has `name` and `message` |
+| `band` | The `handoff_band` input: `trigger`, `ts`, `state`; a `done` state carries `before` and optional `after` context sizes |
+| `answers` | The `answers` input: `outcome`, `parts`, `note?`, `ts?`; each part has `header`, `text`, `skipped` |
 
 **`prompt`** draws a person's prompt bubble.
 
@@ -2672,14 +2664,12 @@ parts, note?, ts?}` (`outcome` is `given` or `declined`; each part its
 |---|---|
 | `text` | The prompt's text |
 | `images` | Its images in order, each `path`, `width` and `height` in pixels |
-| `flat` | Whether the screen reader drops every style |
 
 **`reply`** draws an assistant reply.
 
 | Field | What it holds |
 |---|---|
 | `text` | The reply's text, Markdown included |
-| `flat` | Whether the screen reader drops every style |
 
 **`thinking_line`** draws a thinking line.
 
@@ -2689,7 +2679,6 @@ parts, note?, ts?}` (`outcome` is `given` or `declined`; each part its
 | `started` | When the thought started |
 | `ended` | When it ended; absent while it streams |
 | `open` | Whether the thought is open |
-| `flat` | Whether the screen reader drops every style |
 
 An empty `thinking_line` result draws no row and no opened body.
 
@@ -2699,22 +2688,20 @@ An empty `thinking_line` result draws no row and no opened body.
 |---|---|
 | `running` | Whether the turn runs and this is its open group |
 | `calls` | The group's calls in order, each with the call fields a card's group entry carries |
-| `streaming` | The calls the model is still emitting, each with its message, position, name and raw text |
-| `thoughts` | The group's thinking blocks, each with its text, when it ran and whether it is open |
+| `streaming` | The calls the model is still emitting, each with `message`, `index`, `name` and `text` |
+| `thoughts` | The group's thinking blocks, each with `text`, `started`, `ended` and `open` |
 | `failed` | The retried model calls, each with its code and attempt |
 | `first` | The earliest timestamp the group spans |
 | `last` | The latest timestamp the group spans |
 | `open` | Whether the group's ledger is open |
-| `flat` | Whether the screen reader drops every style |
 
 **`steer`** draws a steering message.
 
 | Field | What it holds |
 |---|---|
 | `text` | The message's text |
-| `images` | Its images in order, each `path`, `width` and `height` in pixels, never the log's type |
+| `images` | Its images in order, each `path`, `width` and `height` in pixels |
 | `ts` | When it landed |
-| `flat` | Whether the screen reader drops every style |
 
 **`answers`** draws what a form left: the answers or the decline.
 
@@ -2724,7 +2711,6 @@ An empty `thinking_line` result draws no row and no opened body.
 | `parts` | Each question's part, in field order: its `header`, `text`, and whether `skipped` |
 | `note` | The note on the whole form, when one was left |
 | `ts` | When the form was resolved; absent when declined |
-| `flat` | Whether the screen reader drops every style |
 
 **`handoff_band`** draws a handoff's band, without its note.
 
@@ -2732,9 +2718,7 @@ An empty `thinking_line` result draws no row and no opened body.
 |---|---|
 | `trigger` | What the handoff runs at |
 | `ts` | The band's timestamp |
-| `state` | `writing`, `done`, or `unchanged` with `cancelled` |
-| `sizes` | The context sizes, `before` (and `after`, once the first request after it returns); only once the handoff is done |
-| `flat` | Whether the screen reader drops every style |
+| `state` | `writing`, `done`, or `unchanged` with `cancelled`; a `done` state carries `before` and optional `after` context sizes |
 
 **`error_line`** draws a turn's failure line.
 
@@ -2742,10 +2726,9 @@ An empty `thinking_line` result draws no row and no opened body.
 |---|---|
 | `code` | The failure's code |
 | `message` | Fiber's own sentence |
-| `provider` | The provider's name, HTTP status and message, when a provider failed |
-| `flat` | Whether the screen reader drops every style |
+| `provider` | When present, the provider's `name`, optional HTTP `status`, and `message` |
 
-The failed-login row keeps its login target on every replacement line.
+For a failed login, clicking any line an extension returns for this row opens the login view.
 
 **`notice`** draws a notice, in the conversation and on home. The
 terminal's own notices carry the same fields: a configuration or I/O
@@ -2755,7 +2738,6 @@ failure raises the same input an extension draws.
 |---|---|
 | `code` | The notice's registry code |
 | `text` | The notice's message |
-| `flat` | Whether the screen reader drops every style |
 
 The `extension_failed` switched-off notice always draws built-in: a
 notice extension cannot hide its own switch-off failure.
