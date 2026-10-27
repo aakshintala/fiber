@@ -712,6 +712,45 @@ fn ci_fails_when_an_unselected_job_ran() {
 }
 
 #[test]
+fn ci_passes_when_stress_was_not_selected_and_was_skipped() {
+    let needs = results(&[
+        ("select", "success"),
+        ("docs", "success"),
+        ("test", "success"),
+        ("mutants", "skipped"),
+        ("stress", "skipped"),
+    ]);
+    let jobs = BTreeMap::from([
+        ("docs".to_owned(), true),
+        ("test".to_owned(), true),
+        ("mutants".to_owned(), false),
+        ("stress".to_owned(), false),
+    ]);
+    assert_eq!(verdict(&needs, &jobs), Vec::<String>::new());
+}
+
+#[test]
+fn ci_fails_when_selected_stress_failed() {
+    let needs = results(&[
+        ("select", "success"),
+        ("docs", "success"),
+        ("test", "success"),
+        ("mutants", "skipped"),
+        ("stress", "failure"),
+    ]);
+    let jobs = BTreeMap::from([
+        ("docs".to_owned(), true),
+        ("test".to_owned(), true),
+        ("mutants".to_owned(), false),
+        ("stress".to_owned(), true),
+    ]);
+    assert!(
+        !verdict(&needs, &jobs).is_empty(),
+        "a selected stress failure must fail the verdict"
+    );
+}
+
+#[test]
 fn ci_fails_when_the_selection_fails() {
     let needs = results(&[
         ("select", "failure"),
