@@ -6158,16 +6158,19 @@ fn spawn_scan(name: &str) -> Value {
 
 #[test]
 fn delegates_view_lists_every_delegate_and_opens_from_enter() {
-    use std::sync::Condvar;
-    use std::time::Duration;
     let setup = support::Setup::new();
     let _guard = arm(&setup);
     // The gate holds every child's first model answer until the test
     // releases it: nothing can finish before the running assertions run,
     // and every wait below still ends on a grid predicate with its own
     // deadline, never on this gate.
-    let gate = Arc::new((Mutex::new(false), Condvar::new()));
-    let child_gate = Arc::clone(&gate);
+    // The test owns the release sender: dropping it releases every held
+    // child at once, and a failure before the release drops it too, so
+    // the server can always shut down instead of hanging a responder
+    // (docs/testing.md, "Waits and timeouts").
+    let (release, release_rx) = mpsc::channel::<()>();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let child_gate = Arc::clone(&release_rx);
     // The parent spawns four delegates from one reply, exactly once: a
     // later request echoing the calls answers over, never respawns.
     let spawned = Arc::new(AtomicBool::new(false));
@@ -6191,17 +6194,11 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     })
     .unwrap();
     let child = ProviderServer::start_responding(move |_: &Request| {
-        let (lock, cvar) = &*child_gate;
-        let mut open = lock.lock().unwrap();
-        while !*open {
-            let (guard, waited) = cvar.wait_timeout(open, Duration::from_secs(60)).unwrap();
-            open = guard;
-            // A 60-second deadline, so a test bug fails instead of hanging
-            // the run: release always arrives long before it.
-            if waited.timed_out() {
-                return text_reply("stalled");
-            }
-        }
+        // Held until the test drops the release sender: no deadline of
+        // its own. The grid waits below bound the test, and the dropped
+        // sender releases every holder at once.
+        let gate = child_gate.lock().unwrap();
+        let _released = gate.recv();
         text_reply(CHILD_TEXT)
     })
     .unwrap();
@@ -6246,8 +6243,9 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
         "{}",
         grid.contents
     );
-    // Two rows per delegate: six Downs reach the fourth delegate's first
-    // row, scrolling the first delegate's first row out.
+    // Two rows per delegate (docs/tui.md, "The panel"): six Downs reach
+    // the fourth delegate's first row, scrolling the first delegate's
+    // first row out (docs/tui.md, "Swapped views").
     run.write(b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B");
     let grid = run.wait_screen("the fourth delegate scrolled in", |grid| {
         grid.contents.contains("scan four") && !grid.contents.contains("scan one")
@@ -6263,10 +6261,9 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     run.wait_screen("the conversation back", |grid| {
         !grid.contents.contains("› ◆ scan four")
     });
-    // Release the gate: every child answers and finishes.
-    let (lock, cvar) = &*gate;
-    *lock.lock().unwrap() = true;
-    cvar.notify_all();
+    // Release the gate: dropping the sender answers every held child
+    // at once, and each finishes.
+    drop(release);
     // The reopened view morphs to finished rows: done words, no heading,
     // no count.
     run.write(b"/delegates\r");
