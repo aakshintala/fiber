@@ -553,6 +553,34 @@ fn a_repeated_draw_queues_the_display_request() {
 }
 
 #[test]
+fn a_draw_past_the_placeholder_range_queues_no_display_fetch() {
+    // 255 distinct images fill the placeholder colours, so the last
+    // keeps a unique viewer-only id past the range.
+    let mut app = inline_app();
+    for n in 0..255 {
+        started_with_image(&mut app, &format!("artifacts/pic-{n:03}.png"));
+    }
+    let id = (1..=300)
+        .find(|id| {
+            app.screen
+                .pages()
+                .image(*id)
+                .is_some_and(|part| part.path == "artifacts/pic-254.png")
+        })
+        .expect("the past-range image is noted");
+    assert!(id > 255, "the past-range image keeps a viewer-only id");
+    // Its draw queues no display fetch, while an in-range id still
+    // fetches (`docs/tui.md`, "Images").
+    app.images_drawn(&drawn(id));
+    assert!(
+        app.take_image_out().display.is_empty(),
+        "viewer-only ids never enter the display path"
+    );
+    app.images_drawn(&drawn(1));
+    assert!(!app.take_image_out().display.is_empty());
+}
+
+#[test]
 fn a_draw_with_the_link_down_asks_nothing() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(60, 24);

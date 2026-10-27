@@ -66,6 +66,7 @@ mod paste_image;
 mod pty_watch;
 mod quota_view;
 mod rebind;
+mod release_notes;
 mod remote;
 #[cfg(test)]
 mod results_support;
