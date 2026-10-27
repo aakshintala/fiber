@@ -268,7 +268,7 @@ fn prompt(id: &str, session: &str, text: &str) -> String {
 }
 
 fn close(session: &str) -> String {
-    json!({"id": "c_close", "session_id": session, "command": "close"}).to_string()
+    close_as("c_close", session)
 }
 
 /// A close with the test's own id: the session saw `c_close` from an
@@ -790,9 +790,11 @@ fn a_command_held_past_the_close_grace_is_rejected_indeterminate_once_and_not_re
 fn a_finish_without_a_close_leaves_no_session_running() {
     // The session runs idle with the ask run's exit already in its log: a
     // fresh subscribe replays that exit while the session lives, so an exit
-    // on the stream does not mean the session is gone. Finishing must still
-    // close the session before the hub goes away: an idle session never
-    // hears a close the dead hub never relayed, and `wait_gone` times out.
+    // on the stream does not mean the session is gone. The old
+    // subscribe/close/wait-any-exit sequence ends its wait on that replay
+    // before the close is answered, so finishing must still close the
+    // session before the hub goes away: an idle session never hears a
+    // close the dead hub never relayed, and `wait_gone` times out.
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
@@ -802,16 +804,22 @@ fn a_finish_without_a_close_leaves_no_session_running() {
     until(&first, "c_after's acknowledgement", |line| {
         is_answer(line, "c_after")
     });
-    // A fresh subscribe replays the ask run's exit at once, while the
-    // session still runs.
+    // The old sequence: a fresh subscribe replays the ask run's exit at
+    // once, the close is sent, and any exit ends the wait. The replay was
+    // queued at subscribe time, before the close reached the session, so
+    // the wait ends on the replay with the close still unanswered: the
+    // precise failing ordering. The session then hears the close and exits
+    // on its own; on the base, `finish` killed the hub in this window with
+    // the close still in flight, stranding the idle session.
     let probe = world.client();
     subscribe(&probe, "c_probe_sub", &id);
+    probe.send(&close(&id));
     let replayed = until(&probe, "the replayed exit", |line| {
         line["kind"] == "fiber_exited"
     });
     assert!(
-        !world.session_pids().is_empty(),
-        "the session still runs past the replayed exit: {replayed:?}"
+        answers(&replayed, "c_close").is_empty(),
+        "the replayed exit precedes the close acknowledgement: {replayed:?}"
     );
     drop(probe);
     drop(first);
