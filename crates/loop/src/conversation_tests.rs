@@ -4432,3 +4432,27 @@ fn completed_actions_skips_a_completion_with_no_action() {
     let completed = super::completed_actions(&[anonymous]).unwrap();
     assert!(completed.is_empty());
 }
+
+#[test]
+fn directory_added_renders_the_add_message_and_rebuilds_it_from_the_log() {
+    let event = Event::DirectoryAdded(contract::events::DirectoryAdded {
+        path: "/shared".into(),
+    });
+    let mut conversation = Vec::new();
+    render(
+        &mut conversation,
+        &event,
+        None,
+        "fake/model-1",
+        &mut BTreeMap::new(),
+        &mut crate::handoff::Carry::default(),
+        Some(Seq(3)),
+    );
+    assert_eq!(conversation.len(), 1);
+    let text = user_text(&conversation[0]);
+    assert!(text.contains("/shared"), "{text}");
+    // A resume replays the message from the event alone, so a crash
+    // before the acknowledgement loses nothing.
+    let rebuilt = super::rebuild(&[line("directory_added", &event, None)], "fake/model-1").unwrap();
+    assert_eq!(rebuilt, conversation);
+}

@@ -23,6 +23,7 @@ use crate::reviewer::render_reviewed;
 /// exit's seed reads from the raw payload.
 const FOLDED: &[&str] = &[
     "session_started",
+    "directory_added",
     "instruction_file",
     "tool_call_completed",
     "usage_recorded",
@@ -79,6 +80,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         seed: Carry::default(),
         ledger: crate::usage::Ledger::default(),
         grants: Vec::new(),
+        added: Vec::new(),
         known_hosts: crate::known_hosts::KnownHosts::default(),
         session_blocks: 0,
         // The reviewer's input follows the session's handoffs
@@ -314,6 +316,14 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         resumed.credential.clone_from(&changed.after.credential);
         resumed.thinking = changed.after.thinking.clone();
         resumed.settings = Some(changed.after.clone());
+    } else if let Event::DirectoryAdded(added) = &event {
+        // The ordered, deduplicated fold the live loop holds: later
+        // duplicates are already impossible there, and a point's fold
+        // reads each line once.
+        let path = std::path::PathBuf::from(&added.path);
+        if !resumed.added.contains(&path) {
+            resumed.added.push(path);
+        }
     } else if let Event::PermissionResolved(resolved) = &event {
         if let Some(grant) = &resolved.grant {
             resumed.grants.push(grant.clone());

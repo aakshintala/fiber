@@ -92,6 +92,11 @@ pub struct Resumed {
     pub(crate) ledger: crate::usage::Ledger,
     /// Every grant a `permission_resolved` recorded.
     pub(crate) grants: Vec<Grant>,
+    /// Every `directory_added` path, resolved, in log order: the
+    /// session's added folders beside the workspace (`docs/events.md`,
+    /// "`directory_added`"). A resume, fork or rewind restores them
+    /// from the fold through the point it continues from.
+    pub(crate) added: Vec<PathBuf>,
     /// Known hosts folded over the complete history chain.
     pub(crate) known_hosts: crate::known_hosts::KnownHosts,
     /// The reviewer's blocks this session.
@@ -335,6 +340,7 @@ impl Loop {
             thinking,
             offers,
             naming,
+            added,
             fired,
             settings,
             model: recorded_model,
@@ -424,7 +430,7 @@ impl Loop {
                 session_blocks,
                 repository: crate::offer::State::resumed(offers),
                 naming,
-                added: Vec::new(),
+                added,
                 fired,
                 context,
                 ledger,

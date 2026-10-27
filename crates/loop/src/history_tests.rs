@@ -1984,3 +1984,52 @@ fn a_reviewer_kept_after_the_cut_inserts_nothing() {
     assert!(matches!(&after[0], Input::User { text, .. } if text.contains("2023-11-14")));
     assert_eq!(after[1..], [user("B"), user("")]);
 }
+
+fn added_dir(path: &str) -> Event {
+    Event::DirectoryAdded(contract::events::DirectoryAdded {
+        path: path.to_owned(),
+    })
+}
+
+#[test]
+fn directory_added_folds_into_the_added_folders_in_order() {
+    let (_home, sessions) = sessions("added");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &added_dir("/shared")),
+            envelope(A, 2, None, None, &added_dir("/other")),
+        ],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert_eq!(
+        folded.added,
+        [PathBuf::from("/shared"), PathBuf::from("/other")]
+    );
+}
+
+#[test]
+fn a_fold_at_a_point_holds_only_the_dirs_added_at_or_before_it() {
+    let (_home, sessions) = sessions("added-point");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &added_dir("/shared")),
+            envelope(A, 2, Some("t_1"), None, &turn()),
+            envelope(A, 3, None, None, &added_dir("/later")),
+        ],
+    );
+    let before = forked(&sessions.join(A), Seq(1)).unwrap();
+    assert_eq!(before.added, [PathBuf::from("/shared")]);
+    let at_start = forked(&sessions.join(A), Seq(0)).unwrap();
+    assert!(at_start.added.is_empty());
+    let past = forked(&sessions.join(A), Seq(3)).unwrap();
+    assert_eq!(
+        past.added,
+        [PathBuf::from("/shared"), PathBuf::from("/later")]
+    );
+}
