@@ -190,6 +190,7 @@ fn enter_on_a_typed_alias_runs_its_commands_row() {
 fn an_extension_named_like_an_alias_takes_that_name() {
     let rows = slash::rows(&[extension("config")]);
     let settings = rows.iter().find(|row| row.name == "settings").unwrap();
+    // The extension takes this alias from the built-in row (`docs/tui.md:1963`).
     assert!(settings.aliases.is_empty());
     assert_eq!(
         settings.line(),

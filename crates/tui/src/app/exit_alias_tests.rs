@@ -113,6 +113,7 @@ fn exit_matches_exact_case_only() {
 
 #[test]
 fn the_list_carries_one_quit_row_with_the_alias() {
+    // The alias rides on its command row, never as a row of its own (`docs/tui.md:1954`).
     let all = slash::rows(&[]);
     let quits: Vec<&slash::Row> = all.iter().filter(|row| row.name == "quit").collect();
     assert_eq!(quits.len(), 1);
@@ -157,6 +158,7 @@ fn extension_info(name: &str) -> contract::events::CommandInfo {
 
 #[test]
 fn an_extension_exit_sheds_the_quit_alias_and_keeps_one_exit_row() {
+    // An extension named like an alias takes that name's row (`docs/tui.md:1963`).
     let plain = slash::rows(&[]);
     let quit = plain.iter().find(|row| row.name == "quit").unwrap();
     assert_eq!(quit.aliases, ["exit"]);
@@ -178,8 +180,8 @@ fn an_extension_exit_sheds_the_quit_alias_and_keeps_one_exit_row() {
 
 #[test]
 fn an_unrelated_extension_keeps_the_quit_alias() {
-    // Only an `exit` extension sheds the alias: any other extension
-    // row leaves `/exit` on the quit row.
+    // Only an `exit` extension takes the alias; any other extension
+    // leaves it on the quit row (`docs/tui.md:1963`).
     let with = slash::rows(&[extension_info("model")]);
     let quit = with.iter().find(|row| row.name == "quit").unwrap();
     assert_eq!(quit.aliases, ["exit"]);
