@@ -2565,7 +2565,9 @@ impl ratatui::backend::Backend for RecordBackend {
 }
 
 /// The open's `full` raise is written after the first frame draws, never
-/// before it. The recording backend's armed flush parks the frame's
+/// before it (`docs/tui.md`, "History and paging": the first frame draws
+/// the preview, then the terminal raises the subscription to `full`).
+/// The recording backend's armed flush parks the frame's
 /// worker mid-`draw`: a raise on the socket before the test's release
 /// fails, and the raise after it passes. Moving the raise before `draw`
 /// in a scratch copy fails this test at the parked read.
