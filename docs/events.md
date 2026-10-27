@@ -619,6 +619,7 @@ the provider reports as in progress.
 | `reversible` | boolean | yes | as in "Declared effects" |
 | `paths` | array of strings | no | as in "Declared effects" |
 | `always_reviewed` | boolean | no | as in "Declared effects" |
+| `confined` | boolean | no | as in "Declared effects" |
 | `arguments` | object | no | the arguments that ran, when a `before_tool` hook rewrote them |
 | `changed_by` | `changed_by` | no | with `arguments` |
 
@@ -689,6 +690,7 @@ Durable. The envelope's `action_id` is the tool call.
 | `reversible` | boolean | yes | as in "Declared effects" |
 | `paths` | array of strings | no | as in "Declared effects" |
 | `always_reviewed` | boolean | no | as in "Declared effects" |
+| `confined` | boolean | no | as in "Declared effects" |
 | `step` | string | yes | which step of `docs/permissions.md`, "The order a call is judged in", raised it: `standing_ask` (3) or `review` (7); a closed set |
 | `standing_rule` | object | no | on `standing_ask`, the rule that asked: `scope` (`global` or `project`) and `prefix` (string) |
 | `escalation` | object | no | on `review`, why the reviewer handed the call to a person: `cause`, which is `consecutive_blocks`, `session_blocks` or `reviewer_failed`, a closed set; `reason` (string), the reviewer's reason for blocking this call, on the two block causes; `error` (`error`), on `reviewer_failed` |
@@ -713,6 +715,7 @@ Durable. The envelope's `action_id` is the tool call.
 | `paths` | array of strings | no | as in "Declared effects", with the keys above |
 | `hosts` | array of strings | no | on an `allow` decided by `person` or `reviewer`, the hosts the allowed call declared, which become known in the session (`docs/tools.md`, "Web fetch and web search", "Effects") |
 | `always_reviewed` | boolean | no | as in "Declared effects", with the keys above |
+| `confined` | boolean | no | as in "Declared effects", with the keys above |
 | `arguments` | object | no | the arguments the reviewer judged, when a `before_tool` hook rewrote them, with the keys above |
 | `changed_by` | `changed_by` | no | with `arguments`, with the keys above |
 
