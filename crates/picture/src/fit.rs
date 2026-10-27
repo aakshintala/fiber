@@ -47,8 +47,10 @@ fn length(bytes: &[u8]) -> u64 {
     u64::try_from(bytes.len()).unwrap_or(u64::MAX)
 }
 
-/// Processes one image file's bytes, or says why it is refused.
-pub(crate) fn process(input: &[u8]) -> Result<Stored, String> {
+/// The format and header dimensions of `input`: PNG, JPEG, GIF or WebP,
+/// refused from the header alone over 50 megapixels, before any pixel
+/// is decoded (`docs/model-routing.md`, "Image limits").
+fn header(input: &[u8]) -> Result<(ImageFormat, u32, u32), String> {
     let format = image::guess_format(input).map_err(|error| error.to_string())?;
     let supported = [
         ImageFormat::Jpeg,
@@ -59,11 +61,6 @@ pub(crate) fn process(input: &[u8]) -> Result<Stored, String> {
     if !supported.contains(&format) {
         return Err(format!("{format:?} is not a supported image format"));
     }
-    let primary = if format == ImageFormat::Jpeg {
-        Primary::Jpeg
-    } else {
-        Primary::Png
-    };
     let (width, height) = ImageReader::with_format(Cursor::new(input), format)
         .into_dimensions()
         .map_err(|error| error.to_string())?;
@@ -73,6 +70,27 @@ pub(crate) fn process(input: &[u8]) -> Result<Stored, String> {
             "{width}x{height} is {pixels} pixels; the limit is {MAX_PIXELS}"
         ));
     }
+    Ok((format, width, height))
+}
+
+/// Converts one image file's bytes to PNG for the terminal: PNG, JPEG,
+/// GIF or WebP, refused from the header alone over 50 megapixels, then
+/// decoded and re-encoded as PNG (`docs/tui.md`, "Images").
+pub(crate) fn png(input: &[u8]) -> Result<Vec<u8>, String> {
+    let (format, _, _) = header(input)?;
+    let decoded =
+        image::load_from_memory_with_format(input, format).map_err(|error| error.to_string())?;
+    encode_png(&normalised(&decoded))
+}
+
+/// Processes one image file's bytes, or says why it is refused.
+pub(crate) fn process(input: &[u8]) -> Result<Stored, String> {
+    let (format, width, height) = header(input)?;
+    let primary = if format == ImageFormat::Jpeg {
+        Primary::Jpeg
+    } else {
+        Primary::Png
+    };
     if format != ImageFormat::Gif && within_caps(width, height, input) {
         return Ok(Stored {
             bytes: input.to_vec(),
