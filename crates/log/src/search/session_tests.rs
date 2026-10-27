@@ -64,6 +64,10 @@ impl Fixture {
     /// Writes one event a second after the last, returning its seq.
     fn add(&self, log: &Log, kind: &str, payload: Value) -> u64 {
         // No code under test waits on the clock here; it stamps data (ruling 6179406086).
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
         self.clock.advance(Duration::from_secs(1));
         let line = log.append(&event(kind, payload), None, None).unwrap();
         line.seq.unwrap().0
@@ -72,6 +76,10 @@ impl Fixture {
     /// Writes one event for the tool call `action`, returning its seq.
     fn add_action(&self, log: &Log, kind: &str, payload: Value, action: &str) -> u64 {
         // No code under test waits on the clock here; it stamps data (ruling 6179406086).
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
         self.clock.advance(Duration::from_secs(1));
         let line = log
             .append(&event(kind, payload), None, Some(ActionId(action.into())))

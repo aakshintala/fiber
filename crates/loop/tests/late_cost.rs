@@ -456,6 +456,10 @@ fn a_session_that_ends_before_30_seconds_writes_no_second_record() {
         .recv(&seen.dropped)
         .expect("the worker let go of the lookup");
     // No code under test waits on the clock here: the worker has exited (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     session.clock.advance(AFTER);
     assert!(seen.calls().is_empty());
     let all = log::read(&session.dir).unwrap();

@@ -492,6 +492,12 @@ impl Manual {
     /// Moves `now()` and `wall()` forward by `d`, then wakes every live
     /// subscriber. The clock's lock is released before any [`Wake::wake`].
     pub fn advance(&self, d: Duration) {
+        // The clock implementation itself moves time and wakes parked
+        // waiters; exempt (docs/testing.md, "Waits and timeouts").
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "support::clock implementation moves time and wakes parked waiters; exempt (docs/testing.md, \"Waits and timeouts\")"
+        )]
         self.advance_marked(d);
     }
 
@@ -1146,6 +1152,12 @@ impl Clock for Manual {
 
     fn sleep(&self, d: Duration) {
         match self.sleep {
+            // The clock implementation itself moves time for a sleeping
+            // thread; exempt (docs/testing.md, "Waits and timeouts").
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "support::clock implementation moves time for a sleeping thread; exempt (docs/testing.md, \"Waits and timeouts\")"
+            )]
             Sleep::Advances => self.advance(d),
             Sleep::Waits => {
                 let now = self.now();

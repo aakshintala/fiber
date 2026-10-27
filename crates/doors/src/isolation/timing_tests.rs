@@ -226,6 +226,10 @@ fn create_opens_one_stamped_line_and_a_second_open_writes_nothing() {
             let add = move |command: &mut Command| -> io::Result<Output> {
                 let out = command.output()?;
                 // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "no code under test waits on the clock (ruling 6179406086)"
+                )]
                 clock_add.advance(Duration::from_millis(7));
                 Ok(out)
             };
@@ -283,6 +287,10 @@ fn recreation_stamp_excludes_the_lock_claim_and_the_downgrade() {
             let add = move |command: &mut Command| -> io::Result<Output> {
                 let out = command.output()?;
                 // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "no code under test waits on the clock (ruling 6179406086)"
+                )]
                 clock_add.advance(Duration::from_millis(4));
                 Ok(out)
             };
@@ -300,6 +308,10 @@ fn recreation_stamp_excludes_the_lock_claim_and_the_downgrade() {
                     // The downgrade stays outside the stamp: advancing
                     // here must not change the recorded duration.
                     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+                    #[allow(
+                        clippy::disallowed_methods,
+                        reason = "no code under test waits on the clock (ruling 6179406086)"
+                    )]
                     clock_downgrade.advance(Duration::from_millis(9));
                     super::shared::Creating::downgrade(creating)
                 },

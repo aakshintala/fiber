@@ -220,6 +220,10 @@ fn a_stop_before_the_due_means_the_lookup_is_never_called() {
     drop(late);
     seen.await_dropped();
     // No code under test waits on the clock here; the worker has exited (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(LOOKUP_AFTER);
     assert!(seen.calls().is_empty());
 }
@@ -434,6 +438,10 @@ fn dropping_the_queue_stops_the_worker_before_the_due() {
     drop(late);
     seen.await_dropped();
     // No code under test waits on the clock here; the worker has exited (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(LOOKUP_AFTER);
     assert!(seen.calls().is_empty());
 }

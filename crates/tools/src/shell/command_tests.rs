@@ -1813,7 +1813,12 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
         if cancelled {
             cancel.cancel();
         } else {
-            clock.advance(Duration::from_millis(1500));
+            clock.advance_when_parked(
+                Some(bound),
+                None,
+                Duration::from_millis(1500),
+                &fakes::Deadline::after(JOB_DEADLINE),
+            );
         }
         std::io::Write::write_all(&mut release, b"go\n").unwrap();
         let ran = Deadline::after(JOB_DEADLINE)

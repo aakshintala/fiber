@@ -185,10 +185,18 @@ fn both_fake_clock_paths_drive_the_shared_manual_clock() {
     // expected, and the default mode is Advances: `sleep` moves time at once.
     assert_eq!(offset_of(&via_root), Duration::ZERO);
     via_module.sleep(Duration::from_millis(5));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     via_root.advance(Duration::from_millis(7));
     assert_eq!(offset_of(&via_module), Duration::from_millis(5));
     assert_eq!(offset_of(&via_root), Duration::from_millis(7));
     // The re-exported companions resolve on the same type.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     let _mark = via_root.advance_marked(Duration::from_millis(1));
     let _miss = crate::clock::Miss::NoPark;
     let _system = crate::clock::SystemClock;

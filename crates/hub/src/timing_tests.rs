@@ -543,6 +543,10 @@ fn a_held_summary_handshake_ends_the_timer_at_bind() {
     // The bind the timer stamps is done, and the acknowledgement it must
     // exclude is still ahead: moving the clock now must change nothing.
     // No code under test waits on the clock here; start::run is past await_bind and blocks on a socket read for the acknowledgement (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     temp.clock.advance(Duration::from_secs(5));
     release.send(()).unwrap_or(());
     let outcome = Deadline::after(DEADLINE)
@@ -1189,6 +1193,10 @@ fn a_failed_transfer_is_stamped_for_the_next_drain() {
     // Deferred cleanup past the failure adds no duration: the stamp was
     // taken at the write, not at the drain.
     // No code under test waits on the clock here; no thread waits: take_completed_replays is a synchronous call on the test's thread (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     temp.clock.advance(Duration::from_secs(5));
     let failed = lock(&relays).take_completed_replays();
     drop(failed);

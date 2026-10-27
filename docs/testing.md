@@ -247,8 +247,18 @@ waiting on that clock (past its own clock check); a parked caller alone is not
 that signal. A test advances a fake clock to a named park only through
 `fakes::clock::FakeClock::advance_when_parked`, naming the expected instant;
 a poll driver that is the clock's only mover uses
-`fakes::clock::FakeClock::try_advance_when_parked` instead;
-the ban on raw advances lands with their migration in a later pull request.
+`fakes::clock::FakeClock::try_advance_when_parked` instead. Raw
+`FakeClock::advance` and `advance_marked` calls are banned outside
+`crates/fakes` by `clippy.toml` `disallowed-methods`; the clock's own
+`support::clock` implementation and self-tests are exempt, as are
+`CaseClock` calls in `crates/main/src/case`. Each kept raw site carries
+its own
+allowance with its reason, never a file-wide one: no code under test waits on
+the clock (comment 6179406086), a panic-handler release that re-raises the
+original payload (comment 6203478697), a poll-pause jump over a run proven
+parked at its poll (comment 6260728504), a late wake past a park proven at its
+exact instant just before (comment 6261259790), or a shared test-support stall
+driver whose callers own the bounds (comment 6263191610).
 A park count names every thread that can park on that clock at that point. A
 test whose code under test starts other threads on the same clock, such as an
 extension host's Lua threads, waits for the named park, not for a count.

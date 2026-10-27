@@ -1346,6 +1346,10 @@ mod tests {
         assert!(reader.stop(), "expected the reader to stop");
         while run.wakes.try_recv().is_ok() {}
         // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
         clock.advance(fakes::deadline::WAITS);
         assert!(
             deadline.left().is_zero(),
@@ -1420,6 +1424,10 @@ mod tests {
         let main = fs::File::from(terminal.main);
         let mut run = Run::attach(main, 80, 24, deadline);
         // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
         clock.advance(fakes::deadline::WAITS);
         let panic_text = |result: std::thread::Result<Grid>| {
             result
@@ -1495,6 +1503,10 @@ mod tests {
         let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
         let deadline = Deadline::on(&**clock);
         // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
         clock.advance(fakes::deadline::WAITS);
         assert!(deadline.left().is_zero(), "the shared wait budget is spent");
         let cleanup = deadline.cleanup_phase();
