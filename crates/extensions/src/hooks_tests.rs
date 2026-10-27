@@ -3899,6 +3899,10 @@ fn register_every_family(package: &ProcessPackage) {
 fn process_watcher_uses_the_session_clock() {
     let home = Home::new();
     let clock = Arc::new(FakeClock::new());
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(7));
     let expected = clock.now();
     let session = home.load_with_clock(&[], Arc::clone(&clock));

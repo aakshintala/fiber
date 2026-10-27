@@ -2299,10 +2299,18 @@ fn the_idle_timer_starts_when_the_open_count_reaches_zero() {
     assert_eq!(hub.zero_since(), None, "an open client clears the timer");
     let second = hub.register(&b).expect("the clone succeeds");
     // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(5));
     disconnect(&hub, first);
     assert_eq!(hub.zero_since(), None, "one client is still open");
     // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(5));
     disconnect(&hub, second);
     assert_eq!(hub.zero_since(), Some(clock.now()), "0 at the departure");
@@ -2336,11 +2344,19 @@ fn rollback_removes_the_count_and_restarts_the_timer_at_zero() {
     let second = hub.register(&b).expect("the clone succeeds");
     assert_eq!(hub.clients(), 2);
     // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(5));
     hub.rollback(first);
     assert_eq!(hub.clients(), 1);
     assert_eq!(hub.zero_since(), None, "one client is still open");
     // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(5));
     hub.rollback(second);
     assert_eq!(hub.clients(), 0);

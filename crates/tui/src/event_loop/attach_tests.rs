@@ -4790,6 +4790,10 @@ fn an_answer_at_the_deadline_is_stashed_and_lost() {
     }
     // No code under test waits on the clock here: the ticker stays idle
     // and hub::answer blocks on rx.recv (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(super::super::hub::HISTORY_WAIT);
     // The channel is empty, so the receive below unblocks only after
     // this send, which is after the clock moves.
