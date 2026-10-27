@@ -22,7 +22,7 @@ use std::thread;
 
 use serde_json::{Value, json};
 use support::{
-    HubProc, SessionGuard, Setup, Socket, WAITS, connect_hub, function_call, hello, recv_answer,
+    HubProc, SessionGuard, Setup, Socket, connect_hub, function_call, hello, recv_answer,
     start_session, stream, subscribe, text_reply, until,
 };
 
@@ -771,8 +771,9 @@ fn session_message_to_itself_is_delivered() {
     let setup = Setup::new();
     // The first turn asks a question and parks on its answer, so the
     // self-message below lands mid-turn on every run instead of racing
-    // the first turn's end: an approval wait reads the inbox, and the
-    // queued message joins the turn at its next step boundary.
+    // the first turn's end: an interaction wait reads the inbox, and the
+    // queued message joins the turn at its next step boundary
+    // (`docs/architecture.md`, "One inbox").
     let asked = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let seen_self = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let server = fakes::ProviderServer::start_responding({
@@ -800,10 +801,6 @@ fn session_message_to_itself_is_delivered() {
     let probe = write_probe(&setup);
     let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
     let (hub, client, guard, session) = start_hub_and_session(&setup, &server, "hello");
-    assert!(
-        server.await_requests(1, setup.deadline),
-        "the first turn started"
-    );
     let asked_lines = until(&client, "the question was asked", |line| {
         line["kind"] == "interaction_requested" && line["session_id"] == session
     });
@@ -847,12 +844,14 @@ fn session_message_to_itself_is_delivered() {
         request_id.as_str(),
         "{resolved:?}"
     );
-    // The message's turn is awaited on its own deadline, made after the
-    // message's acknowledgement: the waits above share the test's deadline
-    // and may leave it nearly spent, so judging the new turn on the
-    // leftover would fail a turn that only starts late.
+    // Both requests are promised (`docs/loop.md`, "Starting a turn" and "One
+    // step"): the opening message starts a turn whose first step sends one
+    // request — the asked question proves that — and answering it lets the
+    // turn continue, so its next step carries the queued message and sends
+    // the second. Like every success-path wait, this one shares the test's
+    // deadline.
     assert!(
-        server.await_requests(2, fakes::Deadline::after(WAITS)),
+        server.await_requests(2, setup.deadline),
         "the message starts a turn"
     );
     assert!(
