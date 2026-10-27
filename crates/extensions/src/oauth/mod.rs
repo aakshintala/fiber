@@ -28,7 +28,7 @@ use mlua::{Lua, LuaSerdeExt, Table, Value as LuaValue};
 use ring::digest;
 use ring::rand::{SecureRandom, SystemRandom};
 
-mod held;
+pub(crate) mod held;
 
 pub(crate) use held::{Held, Holder, LoginSlot};
 
@@ -442,13 +442,12 @@ pub(crate) fn install(
                 .map_err(|e| crate::host::failure::Raise::Arg(e.to_string()))?;
             return Ok(mlua::MultiValue::from_vec(vec![value]));
         }
-        let verifier = verifier().map_err(|message| {
-            crate::host::failure::Raise::Failed(contract::ErrorCode::IoFailed, message)
-        })?;
+        let (challenge, verifier) = pkce_pair()
+            .map_err(|(code, message)| crate::host::failure::Raise::Failed(code, message))?;
         let pair = lua
             .create_table()
             .map_err(|e| crate::host::failure::Raise::Arg(e.to_string()))?;
-        pair.set("challenge", challenge(&verifier))
+        pair.set("challenge", challenge)
             .map_err(|e| crate::host::failure::Raise::Arg(e.to_string()))?;
         pair.set("verifier", verifier)
             .map_err(|e| crate::host::failure::Raise::Arg(e.to_string()))?;
@@ -469,6 +468,15 @@ pub(crate) fn install(
 
 /// 32 random bytes as base64url without padding, 43 characters (RFC 7636,
 /// section 4.1).
+/// A fresh PKCE pair: the S256 challenge with its verifier, as
+/// `host.oauth.pkce` answers. Shared by the Lua closure and the process
+/// adapter.
+pub(crate) fn pkce_pair() -> Result<(String, String), (contract::ErrorCode, String)> {
+    let verifier = verifier().map_err(|message| (contract::ErrorCode::IoFailed, message))?;
+    let challenge = challenge(&verifier);
+    Ok((challenge, verifier))
+}
+
 fn verifier() -> Result<String, String> {
     let mut bytes = [0_u8; 32];
     SystemRandom::new()

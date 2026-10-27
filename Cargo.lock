@@ -916,8 +916,10 @@ version = "0.0.0"
 dependencies = [
  "contract",
  "flate2",
+ "libc",
  "rustix",
  "serde_json",
+ "signal-hook",
  "support",
 ]
 
