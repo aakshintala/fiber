@@ -4,7 +4,7 @@
 use contract::events::HookInfo;
 
 use super::frame;
-use crate::swapped::List;
+use crate::swapped::{Ink, List};
 
 fn hook(extension: &str, point: &str, on_failure: &str) -> HookInfo {
     HookInfo::Hook {
@@ -60,6 +60,24 @@ fn the_policy_column_stays_whole_at_forty_columns() {
     // Flipping the policy to a truncated prefix would still end with a
     // policy word part; the whole word pins it.
     assert!(!lines[0].ends_with("non-blockin"), "{lines:?}");
+    // Each row keeps its exact cells at 40 columns: the room the fixed
+    // gutter, separators and policy leave decides both cut points, so
+    // shrinking the fixed part would move them.
+    assert_eq!(
+        lines,
+        [
+            "  a-very-lo… · before_to… · non-blocking",
+            "  ext · turn_complet… · watcher",
+            "  audit · after_tool · blocking",
+        ]
+    );
+    // The ink follows the policy, not the bar: dropping either policy arm
+    // would dim its row.
+    let inks: Vec<Ink> = frame.rows.iter().map(|cells| cells[0].2).collect();
+    assert_eq!(
+        inks,
+        [Ink::Plain, Ink::Muted, Ink::Role(crate::theme::Role::Error),]
+    );
     // A short row at 40 columns keeps its source and point whole while
     // the policy stays whole.
     let short = super::frame(

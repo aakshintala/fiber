@@ -4419,6 +4419,11 @@ fn registrations_list_hooks_in_point_and_run_order_then_watchers() {
     assert_eq!(watchers[0].0, "fiber.test/a");
     assert_eq!(watchers[0].1, ["turn_completed"]);
     assert_eq!(watchers[1].0, "fiber.test/b");
+    // The door answers through the trait forward, so it serves the same
+    // rows: replacing the forward with an empty list would empty the
+    // `hooks` command.
+    let seam: std::sync::Arc<dyn contract::hook::Hooks> = session.clone();
+    assert_eq!(seam.registrations(), rows, "{rows:?}");
 }
 
 /// Starting a process extension's provider fails without starting a VM:

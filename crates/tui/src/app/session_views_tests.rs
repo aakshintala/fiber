@@ -1693,3 +1693,35 @@ fn a_stale_or_replaced_hooks_answer_folds_nowhere() {
     assert!(!shown.contains("late"), "{shown}");
     assert!(shown.contains("Usage"), "{shown}");
 }
+
+/// A matching hooks rejection drops the pending query while a mismatched
+/// one keeps it: the next answer folds only for the live query. Dropping
+/// the clear would fill a refused view with a late answer; flipping the id
+/// check would fill it for the wrong query and drop the live one.
+#[test]
+fn a_matching_hooks_rejection_drops_the_query_and_a_mismatched_one_keeps_it() {
+    let mut app = files_attached(80, 24);
+    let first = open_hooks(&mut app);
+    let first_id = first["id"].as_str().unwrap().to_owned();
+    // The matching rejection drops the wait: the late answer folds nowhere.
+    app.on_line(rejected_diff(SESSION, &first_id, "gone"));
+    app.on_line(accepted_hooks(
+        &first_id,
+        json!([{"kind": "hook", "extension": "late", "point": "before_tool", "on_failure": "blocking"}]),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(!shown.contains("late"), "{shown}");
+    assert!(shown.contains("No hooks"), "{shown}");
+    // A newer query waits again; a mismatched rejection keeps it, so its
+    // answer fills the view.
+    let second = open_hooks(&mut app);
+    let second_id = second["id"].as_str().unwrap().to_owned();
+    app.on_line(rejected_diff(SESSION, "c_other", "wrong query"));
+    app.on_line(accepted_hooks(
+        &second_id,
+        json!([{"kind": "hook", "extension": "ext", "point": "before_tool", "on_failure": "blocking"}]),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("ext"), "{shown}");
+    assert!(shown.contains("before_tool"), "{shown}");
+}
