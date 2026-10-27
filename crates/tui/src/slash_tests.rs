@@ -64,6 +64,7 @@ const DRAWN_ORDER: &[&str] = &[
     "status",
     "diff",
     "copy",
+    "pwd",
     "panel",
     "rail",
     "rules",
@@ -145,12 +146,13 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         .filter(|name| !table_names().contains(name))
         .collect();
     // Membership only: no doc promises this registry order; the page
-    // promises the `/` list's display order (`docs/tui.md:1952`). This
+    // promises the `/` list's display order (`docs/tui.md:1953`). This
     // terminal draws `rewind` among the built-in rows.
     extra.sort();
     let mut wanted = [
         &"effort",
         &"cost",
+        &"cwd",
         &"permissions",
         &"config",
         &"keybindings",
@@ -319,7 +321,7 @@ fn prefix_matches_come_before_contains_matches() {
 
 #[test]
 fn a_row_draws_name_hint_description_and_tag() {
-    // Each alias follows the row's name (`docs/tui.md:1954`).
+    // The table orders `/compact` after `/handoff` (`docs/tui.md:1940,1957`).
     let all = rows(&[]);
     let handoff = all.iter().find(|row| row.name == "handoff");
     assert_eq!(

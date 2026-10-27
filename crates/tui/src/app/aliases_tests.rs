@@ -12,6 +12,7 @@ use serde_json::json;
 const ALIASES: &[(&str, &[&str])] = &[
     ("thinking", &["effort"]),
     ("usage", &["cost"]),
+    ("pwd", &["cwd"]),
     ("rules", &["permissions"]),
     ("settings", &["config"]),
     ("keys", &["keybindings", "keymap"]),
@@ -66,19 +67,20 @@ fn each_alias_rides_on_its_commands_row_and_has_no_row_of_its_own() {
         .map(|(name, aliases)| (*name, aliases.to_vec()))
         .collect();
     // The `/` list draws built-ins in this order with each alias
-    // after its row's name, never as a row (`docs/tui.md:1952,1954`).
+    // after its row's name, never as a row (`docs/tui.md:1953,1957`).
     assert_eq!(carried, wanted);
     for (_, alias) in pairs() {
-        // Aliases never draw as rows of their own (`docs/tui.md:1954`).
+        // Aliases never draw as rows of their own (`docs/tui.md:1957`).
         assert!(all.iter().all(|row| row.name != alias), "/{alias}");
     }
-    // Aliases draw after the name, in order (`docs/tui.md:1954`).
+    // Aliases draw after their name (`docs/tui.md:1957`).
     let name = all.iter().find(|row| row.name == "name").unwrap();
     assert_eq!(
         name.line(),
         "/name /rename <text>  Names the session.  command"
     );
     let keys = all.iter().find(|row| row.name == "keys").unwrap();
+    // The table lists `/keybindings` before `/keymap` (`docs/tui.md:1937,1957`).
     assert_eq!(
         keys.line(),
         "/keys /keybindings /keymap  Opens the rebinding screen.  command"
@@ -93,7 +95,7 @@ fn typing_an_alias_finds_only_its_commands_row() {
             .iter()
             .map(|row| row.name.as_str())
             .collect();
-        // Typing an alias runs its row's command (`docs/tui.md:1954`).
+        // Typing an alias runs its row's command (`docs/tui.md:1957`).
         assert_eq!(found, [name], "/{alias}");
     }
 }
@@ -190,7 +192,7 @@ fn enter_on_a_typed_alias_runs_its_commands_row() {
 fn an_extension_named_like_an_alias_takes_that_name() {
     let rows = slash::rows(&[extension("config")]);
     let settings = rows.iter().find(|row| row.name == "settings").unwrap();
-    // The extension takes this alias from the built-in row (`docs/tui.md:1963`).
+    // The extension takes this alias from the built-in row (`docs/tui.md:1966`).
     assert!(settings.aliases.is_empty());
     assert_eq!(
         settings.line(),
@@ -233,7 +235,7 @@ fn compact_starts_a_handoff_with_instructions_as_handoff_does() {
     for command in ["/handoff take over", "/compact take over"] {
         let mut app = attached();
         let lines = sent(run(&mut app, command));
-        // Typing the alias runs the same one command (`docs/tui.md:1954`).
+        // Typing the alias runs the same one command (`docs/tui.md:1957`).
         assert_eq!(lines.len(), 1, "{command}");
         assert_eq!(lines[0]["command"], "handoff", "{command}");
         assert_eq!(
@@ -246,6 +248,7 @@ fn compact_starts_a_handoff_with_instructions_as_handoff_does() {
 
 #[test]
 fn keymap_opens_the_rebinding_screen_as_keys_does() {
+    // Typing an alias runs its row's command (`docs/tui.md:1957`).
     for command in ["/keys", "/keymap"] {
         let mut app = attached();
         run(&mut app, command);
@@ -255,6 +258,7 @@ fn keymap_opens_the_rebinding_screen_as_keys_does() {
 
 #[test]
 fn permissions_opens_the_standing_rules_as_rules_does() {
+    // Typing an alias runs its row's command (`docs/tui.md:1957`).
     for command in ["/rules", "/permissions"] {
         let mut app = attached();
         assert_eq!(run(&mut app, command), Effect::None, "{command}");
@@ -269,7 +273,7 @@ fn stop_stops_the_session_as_close_does() {
     for command in ["/close", "/stop"] {
         let mut app = attached();
         let lines = sent(run(&mut app, command));
-        // Typing the alias runs the same one command (`docs/tui.md:1954`).
+        // Typing the alias runs the same one command (`docs/tui.md:1957`).
         assert_eq!(lines.len(), 1, "{command}");
         assert_eq!(lines[0]["command"], "close", "{command}");
         assert_eq!(lines[0]["args"], json!({"now": true}), "{command}");
@@ -306,7 +310,7 @@ fn an_extension_named_like_one_keys_alias_keeps_the_other() {
             .filter(|row| row.name == taken || row.aliases.iter().any(|alias| alias == taken))
             .collect();
         // Only the extension's row shows the taken alias: the
-        // built-in row drops it (`docs/tui.md:1963`).
+        // built-in row drops it (`docs/tui.md:1966`).
         assert_eq!(claimed.len(), 1, "{taken}");
         assert_eq!(claimed[0].tag, "acme", "{taken}");
         let mut app = attached();
@@ -316,7 +320,7 @@ fn an_extension_named_like_one_keys_alias_keeps_the_other() {
                 "tag": "acme", "extension": true}]),
         );
         let lines = sent(run(&mut app, &format!("/{taken}")));
-        // The taken name runs the extension's command (`docs/tui.md:1963`).
+        // The taken name runs the extension's command (`docs/tui.md:1966`).
         assert_eq!(lines.len(), 1, "{taken}");
         assert_eq!(lines[0]["command"], "command", "{taken}");
         assert_eq!(lines[0]["args"], json!({"name": taken}), "{taken}");
