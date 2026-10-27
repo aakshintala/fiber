@@ -1012,6 +1012,30 @@ fn a_flat_handoff_band_replacement_drops_every_style() {
 }
 
 #[test]
+fn a_writing_handoff_replacement_keeps_its_link_pad_and_spinner() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let band = super::Band::new(1, "automatic".to_owned(), TEA);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["handoff_band"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "go".to_owned(),
+            link: Some("https://example.com".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let (rows, texts) = seamed(&band, 40, &fake, false);
+
+    // (`docs/tui.md`, "What a renderer returns": linked cells and pad; "The working line": a writing band spins.)
+    assert!(rows[0].0.to_string().starts_with("go"));
+    assert_eq!(texts[0].tail, 38);
+    assert_eq!(
+        texts[0].links,
+        vec![(0..2, "https://example.com".to_owned())]
+    );
+    assert_eq!(texts[0].spin, Some(0));
+}
+
+#[test]
 fn a_writing_handoff_band_replacement_spins_but_a_done_one_does_not() {
     let writing = super::Band::new(1, "automatic".to_owned(), TEA);
     let fake = replaced();

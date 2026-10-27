@@ -1575,6 +1575,39 @@ fn rich() -> Cards {
 }
 
 #[test]
+fn a_running_card_marks_its_open_group_running() {
+    use crate::ext::TurnEntry;
+    use crate::turn::Entry;
+    let mut cards = rich();
+    let turn = &mut cards.turns[0];
+    let group_at = turn
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            Entry::Group(at) => Some(*at),
+            Entry::Reply { .. }
+            | Entry::Steer(_)
+            | Entry::Aside(_)
+            | Entry::Band(_)
+            | Entry::Answers(_) => None,
+        })
+        .expect("a card group");
+    let entry_at = turn
+        .entries
+        .iter()
+        .position(|entry| matches!(entry, Entry::Group(at) if *at == group_at))
+        .expect("the selected group entry");
+    turn.open_group = Some(group_at);
+    let card = turn.card_input(None, false);
+    let TurnEntry::Group(group) = &card.entries[entry_at] else {
+        panic!("the selected card entry is a group");
+    };
+
+    // (`docs/tui.md`, "The slots": card entries stay in order; `group_line` exposes whether this is the running open group.)
+    assert!(matches!(group.state, crate::ext::TurnGroupState::Running));
+}
+
+#[test]
 fn a_turn_card_replacement_draws_whole_and_skips_nested_slots() {
     use crate::ext::tests::SlotScript;
     let cards = rich();
@@ -1597,6 +1630,35 @@ fn a_turn_card_replacement_draws_whole_and_skips_nested_slots() {
             "{shown:?} keeps {built}"
         );
     }
+}
+
+#[test]
+fn a_turn_card_replacement_marks_its_drawn_card_edges() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let cards = rich();
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["turn_card"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    ));
+    let mut out = Rows::default().with_seam(crate::ext::tests::seam(&fake, "s", 0, false));
+    let pieces = cards.turns[0].rows_with_summary(
+        60,
+        &jiff::tz::TimeZone::UTC,
+        Edges::BOTH,
+        &crate::image::Layout::default(),
+        None,
+        &mut out,
+    );
+
+    // (`docs/tui.md`, "The slots": `turn_card` replaces the whole card with its returned lines.)
+    assert!(pieces.first);
+    assert!(pieces.last);
+    assert!(
+        out.into_parts()
+            .0
+            .iter()
+            .any(|(line, _)| line.to_string().starts_with("custom"))
+    );
 }
 
 #[test]

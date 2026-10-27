@@ -179,6 +179,32 @@ fn a_reply_replacement_draws_instead_of_the_text() {
 }
 
 #[test]
+fn a_reply_replacement_keeps_link_cells_and_non_text_padding() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let reply = Reply::new("original".to_owned(), 8);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["reply"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "abc".to_owned(),
+            link: Some("https://example.com".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let mut out =
+        crate::rows::Rows::default().with_seam(crate::ext::tests::seam(&fake, "s", 0, false));
+    reply.rows(10, &mut out);
+    let (rows, texts) = out.into_parts();
+
+    // (`docs/tui.md`, "What a renderer returns": linked cells stay selectable, and the fit's pad is not text.)
+    assert_eq!(rows[0].0.to_string(), "abc       ");
+    assert_eq!(texts[0].tail, 7);
+    assert_eq!(
+        texts[0].links,
+        vec![(0..3, "https://example.com".to_owned())]
+    );
+}
+
+#[test]
 fn a_reply_decorator_draws_the_built_in_text_under_its_badge() {
     use crate::ext::tests::{SlotRenderer, SlotScript, raw};
     let reply = Reply::new("Hello.".to_owned(), 7);

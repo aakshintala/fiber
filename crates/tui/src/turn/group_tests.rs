@@ -2468,6 +2468,33 @@ fn thinking_replaced() -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
 }
 
 #[test]
+fn a_running_group_line_replacement_keeps_its_link_pad_and_spinner() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let group = identity_group();
+    let fake = Rc::new(SlotRenderer::filling(
+        &["group_line"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "go".to_owned(),
+            link: Some("https://example.com".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let seam = crate::ext::tests::seam(&fake, "s", 0, false);
+    let mut out = crate::rows::Rows::default().with_seam(seam);
+    group.rows(true, 60, &crate::image::Layout::default(), &mut out);
+    let (rows, texts) = out.into_parts();
+
+    // (`docs/tui.md`, "What a renderer returns": linked cells and pad; "The working line": a running group spins.)
+    assert!(rows[0].0.to_string().starts_with("go"));
+    assert_eq!(texts[0].tail, 58);
+    assert_eq!(
+        texts[0].links,
+        vec![(0..2, "https://example.com".to_owned())]
+    );
+    assert_eq!(texts[0].spin, Some(0));
+}
+
+#[test]
 fn a_group_line_replacement_draws_instead_of_the_summary() {
     use crate::ext::tests::{SlotRenderer, SlotScript, raw};
     let group = identity_group();

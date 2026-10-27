@@ -669,6 +669,53 @@ fn a_notice_replacement_draws_instead_of_the_row() {
 }
 
 #[test]
+fn session_half_lookup_returns_only_the_recorded_map() {
+    use std::collections::BTreeMap;
+
+    let session = contract::SessionId("session-a".to_owned());
+    let mut pages = crate::window::Pages::new(80);
+    // (`docs/tui.md`, "How a TUI extension runs": range-bound halves stay inert until `extensions_loaded`.)
+    assert_eq!(pages.halves_for(&session), None);
+    let expected = BTreeMap::from([
+        ("ledger".to_owned(), "2.1.0".to_owned()),
+        ("shell".to_owned(), "1.0.0".to_owned()),
+    ]);
+    pages.record_halves(&session, expected.clone());
+    assert_eq!(pages.halves_for(&session), Some(expected));
+}
+
+#[test]
+fn a_notice_replacement_fills_the_last_available_rows() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    use std::rc::Rc;
+
+    let app = app_with_notice("io_failed", "a read failed");
+    let fake = Rc::new(SlotRenderer::filling(
+        &["notice"],
+        SlotScript::Replace(vec![vec![raw("first")], vec![raw("last")]]),
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    let area = Rect::new(0, 22, 30, 2);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    super::draw(&app, area, &mut buf, &mut bottom, &mut targets, &bound);
+
+    // (`docs/tui.md`, "What a renderer returns" and "The slots": a notice replacement draws its returned lines and keeps its notice and dismiss targets.)
+    assert!(row_text(&buf, 22).starts_with("first"));
+    assert!(row_text(&buf, 23).starts_with("last"));
+    assert!(targets.iter().any(|target| {
+        target.id == TargetId::Notice(0) && target.rect.y == 22 && target.rect.height == 1
+    }));
+    assert!(targets.iter().any(|target| {
+        target.id == TargetId::Notice(0) && target.rect.y == 23 && target.rect.height == 1
+    }));
+    assert!(targets.iter().any(|target| {
+        target.id == TargetId::DismissNotice(0) && target.rect.y == 22 && target.rect.height == 2
+    }));
+}
+
+#[test]
 fn a_notice_decorator_draws_the_built_in_row_under_its_badge() {
     use crate::ext::tests::{SlotScript, raw};
     let (buf, targets, fake, moved) = seamed(
