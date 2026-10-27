@@ -296,7 +296,7 @@ pub(crate) fn run_with(
     {
         terminal.trace_hub_connect = log::diag::timed(
             &terminal.trace_diag,
-            contract::diag::Op::TuiLogRead,
+            contract::diag::Op::NetConnect,
             Some("attach.hub_connect_proxy"),
             Some(terminal.clock.now()),
         );
@@ -877,7 +877,7 @@ impl<B: Backend> Loop<B> {
         let tail_frame = self.trace_tail_frame.take().map(|started| {
             log::diag::timed(
                 &self.trace_diag,
-                contract::diag::Op::TuiFirstRender,
+                contract::diag::Op::NetConnect,
                 Some("attach.first_tail_frame"),
                 Some(started),
             )
@@ -1102,14 +1102,14 @@ impl<B: Backend> Loop<B> {
         {
             let tail_to_install = log::diag::timed(
                 &self.trace_diag,
-                contract::diag::Op::TuiTranscript,
+                contract::diag::Op::NetConnect,
                 Some("attach.tail_lines_to_install"),
                 Some(tail_lines_finished),
             );
             drop(tail_to_install);
             let install = log::diag::timed(
                 &self.trace_diag,
-                contract::diag::Op::TuiTranscript,
+                contract::diag::Op::NetConnect,
                 Some("attach.install_tail"),
                 Some(self.clock.now()),
             );

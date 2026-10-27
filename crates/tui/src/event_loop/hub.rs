@@ -323,7 +323,7 @@ impl Connection {
                 diag.and_then(|diag| {
                     log::diag::timed(
                         diag,
-                        contract::diag::Op::TuiLogRead,
+                        contract::diag::Op::NetConnect,
                         Some("attach.history_request_receipt"),
                         Some(clock.now()),
                     )
@@ -348,7 +348,7 @@ impl Connection {
                         let fold = diag.and_then(|diag| {
                             log::diag::timed(
                                 diag,
-                                contract::diag::Op::TuiTranscript,
+                                contract::diag::Op::NetConnect,
                                 Some("attach.tail_lines"),
                                 Some(clock.now()),
                             )
