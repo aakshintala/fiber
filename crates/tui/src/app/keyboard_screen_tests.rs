@@ -344,7 +344,7 @@ fn ctrl_c_twice_within_the_window_quits_with_the_screen_open() {
 fn with_the_quit_question_open_a_key_goes_to_the_question() {
     let fake = Arc::new(Fake::new(Vec::new()));
     let mut app = homed(Some(Arc::clone(&fake)));
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     slash_keys(&mut app);
     down(&mut app, 5);
     assert_eq!(tap(&mut app, "enter"), Effect::None);

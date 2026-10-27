@@ -49,10 +49,10 @@ pub(crate) fn attached(width: u16, height: u16) -> App {
 }
 
 /// A live `session_status` for `session`, streaming.
-pub(crate) fn live(session: &str) -> Line {
+pub(crate) fn live(session: contract::SessionId) -> Line {
     Line::Session(contract::Envelope {
         kind: "session_status".to_owned(),
-        session_id: contract::SessionId(session.to_owned()),
+        session_id: session,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         turn_id: None,

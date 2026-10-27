@@ -243,7 +243,7 @@ fn delete_question() -> App {
 #[test]
 fn the_quit_question_is_an_overlay_on_its_own() {
     let mut app = homed(80, 24);
-    app.on_line(live("s_bbbbbbbbbbbbbbbb"));
+    app.on_line(live(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned())));
     app.quit();
     assert!(app.quit_open());
     assert!(app.keymap_top().is_none());
@@ -388,8 +388,8 @@ fn alt_0_goes_home() {
 #[test]
 fn alt_0_goes_home_on_the_on_screen_sessions_row() {
     let mut app = homed(80, 24);
-    app.on_line(live(SESSION));
-    app.on_line(live("s_bbbbbbbbbbbbbbbb"));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
+    app.on_line(live(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned())));
     type_text(&mut app, "hi");
     assert_eq!(press(&mut app, "alt+0"), Effect::None);
     assert!(app.session().is_none());
@@ -424,7 +424,7 @@ fn left(session: &str) -> Line {
 fn backed() -> App {
     let mut app = homed(80, 24);
     app.on_line(hello());
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     assert_eq!(press(&mut app, "alt+0"), Effect::None);
     assert!(app.session().is_none());
     assert!(app.on_home());
@@ -604,7 +604,7 @@ fn an_open_workspace_picker_keeps_right_and_esc_from_going_back() {
 fn an_open_delete_question_keeps_right_and_esc_from_going_back() {
     let mut app = homed(80, 24);
     let (_, recent) = linked(&mut app);
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     app.on_line(accepted(
         &recent,
         json!({"sessions": [{
@@ -672,7 +672,7 @@ fn an_open_workspace_picker_keeps_go_back_empty() {
 #[test]
 fn a_selected_steering_row_keeps_right_and_esc_from_going_back() {
     let mut app = homed(80, 24);
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     app.on_line(steering_queue());
     app.select_steering(0);
     assert_eq!(press(&mut app, "alt+0"), Effect::None);
@@ -704,7 +704,7 @@ fn back_keys_with_an_exited_came_from_do_nothing() {
 fn back_keys_with_no_came_from_row_do_nothing() {
     let mut app = homed(80, 24);
     app.on_line(hello());
-    app.on_line(live("s_bbbbbbbbbbbbbbbb"));
+    app.on_line(live(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned())));
     assert_eq!(press(&mut app, "alt+0"), Effect::None);
     assert!(app.session().is_none());
     assert!(app.on_home());
@@ -785,7 +785,7 @@ fn an_unbound_back_key_still_answers_right() {
 fn ctrl_n_then_right_returns_to_the_session() {
     let mut app = homed(80, 24);
     app.on_line(hello());
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     app.on_line(steering_queue());
     app.select_steering(0);
     assert_eq!(press(&mut app, "ctrl+n"), Effect::None);
@@ -805,7 +805,7 @@ fn ctrl_n_then_right_returns_to_the_session() {
 fn ctrl_n_then_esc_returns_to_the_session() {
     let mut app = homed(80, 24);
     app.on_line(hello());
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     app.on_line(steering_queue());
     app.select_steering(0);
     assert_eq!(press(&mut app, "ctrl+n"), Effect::None);
@@ -826,7 +826,7 @@ fn ctrl_n_from_a_focused_item_then_right_returns_to_the_session() {
     let mut app = groups(1, 80, 24);
     app.set_home(launch());
     app.on_line(hello());
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     frame(&mut app);
     assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
     assert!(app.focused().is_some());
@@ -907,7 +907,7 @@ fn ctrl_n_from_a_steering_row_lands_on_the_entry_bar() {
 #[test]
 fn ctrl_n_with_the_rail_focused_leaves_nothing_focused() {
     let mut app = homed(80, 24);
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     let key = app
         .home
         .as_ref()
