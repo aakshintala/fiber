@@ -2746,16 +2746,19 @@ fn the_raise_is_written_after_the_frame_draws() {
         .get_mut()
         .set_nonblocking(false)
         .unwrap_or_else(|err| panic!("blocking: {err}"));
+    // Arm the raise read's deadline while the worker still parks: its
+    // join drops the loop and closes the peer, and macOS refuses the
+    // timeout on a closed peer with `EINVAL` (#3436).
+    reader
+        .get_mut()
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
     // One release, then disarmed: later flushes in this step run
     // through, so the frame always finishes after exactly one park.
     block.store(false, Ordering::SeqCst);
     release_tx
         .send(())
         .unwrap_or_else(|err| panic!("release: {err}"));
-    reader
-        .get_mut()
-        .set_read_timeout(Some(DEADLINE))
-        .unwrap_or_else(|err| panic!("timeout: {err}"));
     let raise = socket_line(&mut reader).unwrap_or_else(|| panic!("the raise"));
     let raise: serde_json::Value = serde_json::from_str(&raise).unwrap_or_default();
     assert_eq!(raise["command"], "subscribe");
