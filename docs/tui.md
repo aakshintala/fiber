@@ -784,6 +784,15 @@ a click on it returns too. The views are:
   "−N" in `removed`; an untracked file's path, then "· untracked, wholly
   added" dim. Under the chosen file, its hunks in the diff format an opened
   edit uses ("Tool groups and the ledger").
+- **The release notes,** `/release-notes`: the running binary's
+  changelog section for its own version (`docs/releasing.md`, "The
+  changelog"), embedded in the binary at build time, so the view asks
+  nothing and opens with no session on screen. The section is the one
+  headed by exactly `## <version>`; a version with no section shows "No
+  notes for this version." with the releases page instead. The top row
+  reads "Release notes" bold, "  /release-notes" dim and "Esc returns"
+  dim, right-aligned. A bullet is "• " in `accent`, its wrapped lines
+  hanging two columns in; other long lines wrap at the width.
 - **A call's view,** from an opened call: the whole call, drawn as it is
   inline ("Tool groups and the ledger") with no 20-line cap. The top row is
   the call's kind capitalised, bold, then its target dim ("Shell  cargo test
@@ -1940,6 +1949,7 @@ later release still applies.
 | `/quota` | Opens the quota view and fetches every label's quota. |
 | `/status` | Opens the status view ("Swapped views"). |
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
+| `/release-notes` | Opens the running version's release notes, or says none are available. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
 | `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
 | `/panel` | Shows or hides the panel ("The panel"). |
@@ -2414,7 +2424,7 @@ shell, elapsed 12s", "done: completed, 2 tool calls".
 
 Where the terminal speaks kitty's graphics protocol (Ghostty, kitty, WezTerm),
 images show inline: an image a tool returned, in its ledger row, and a pasted
-image, in the prompt bubble.
+image, with or without text, in the prompt bubble.
 
 - An image is at most 40% of the conversation's width and 12 rows tall,
   keeping its proportions. A click opens it in the system viewer, from a
@@ -2446,16 +2456,22 @@ as the person scrolls, with the `history` command, which reads by `seq` over
 the session's offset table (`docs/invocation.md`, "Driver commands";
 `docs/events.md`, "Resume").
 
-- **Opening reads the last page, then makes one streaming pass.** The
+- **Opening reads the tail before the first frame, then counts history and
+  makes one streaming pass.** The
   terminal subscribes at `summary` and asks `history`, with no `from_seq`,
-  for the session's last lines. It cuts them into pages and asks for the
-  lines before them until it holds the pages that fill the screen up from
-  its last row, and begin at a turn's start. When the held run reaches the
-  session's `seq 0`, the read continues past it into each ancestor named
-  by `forked_from`, to the chain root: on its own segment the read stops
-  once the display fills, while past a segment start it keeps going for
-  the joint total. The first frame draws those
-  pages. The terminal then raises the subscription to `full`.
+  for the session's last lines. The terminal checks each answer for
+  ascending, contiguous sequence numbers. It folds each eligible whole-turn
+  run into fresh pages. If an older answer enlarges the run before install,
+  the terminal rebuilds from fresh pages and discards the prior candidate.
+  It installs the newest candidate without another fold. The terminal asks
+  for older own-segment windows until the preview fills the screen up from
+  its last row, beginning at a turn's start. The first frame draws the
+  preview. After it, the terminal reads older windows down to the session's
+  `seq 0` and each ancestor named by `forked_from` to the chain root, carrying
+  ancestor runs above the preview for the joint total. These count reads
+  never rebuild the displayed preview. A run that reaches `seq 0` short of
+  the display crosses into its ancestors before the first frame instead. The
+  terminal then raises the subscription to `full`.
   The pass goes over the session's lines as the `full` subscription sends
   them. It builds the panel's cards and counts every row, keeping each
   row's `seq`. No event is kept: each is applied to the panel's folds and
@@ -2472,10 +2488,12 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   The one exception: rows that depend on turns before the held pages (an
   orphaned job's completion, an automatic handoff's trigger, a ledger
   toggled earlier: only rows of these kinds) may change in the frame where
-  the pass ends. At an open across the chain the preview already holds
-  the whole run to the chain root, so the landing rewrites nothing
-  across the seam. On one segment the preview holds the filled run and
-  the pass counts the rest, so the landing adds the rows above it.
+  the pass ends. An opening that fills only after crossing `seq 0` draws
+  through the chain root, so the landing rewrites nothing across the seam.
+  If the own segment fills first, the count phase adds ancestors above the
+  preview without refolding its visible pages. On one segment the preview
+  holds the filled run and the pass counts the rest, so the landing adds the
+  rows above it.
   EOF, `stream_closed`, a failed read, a disconnect and lowering
   to `summary` end the pass too. The feed's `session_left` for a session
   ends that session's pass. Waiting work then runs against what is held,

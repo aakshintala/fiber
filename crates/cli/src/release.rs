@@ -7,12 +7,10 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use contract::clock::Clock;
+use contract::releases::RELEASES;
 use extensions::Release;
 
 use crate::{CliError, finish};
-
-/// Where releases are published.
-pub(crate) const RELEASES: &str = "https://github.com/aakshintala/fiber/releases";
 
 /// `fiber release-install <version> [--base-url <url>]`: installs the docs
 /// and first-party extensions of `version`, which must be this binary's own
