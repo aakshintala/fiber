@@ -67,6 +67,7 @@ pub(crate) fn aliases_of(name: &str) -> &'static [&'static str] {
         "feedback" => &["bug"],
         "quit" => &["exit"],
         "delegates" => &["agents"],
+        "jobs" => &["tasks", "ps"],
         _ => &[],
     }
 }
@@ -308,6 +309,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         hint: None,
         run: run_delegates,
     },
+    CommandEntry {
+        name: "jobs",
+        description: "Opens the running jobs view: every running job of the session on screen, in the order they started.",
+        hint: None,
+        run: run_jobs,
+    },
 ];
 
 fn run_home(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -463,6 +470,20 @@ fn run_rewind(app: &mut App, _rest: &str) -> Option<Effect> {
 fn run_delegates(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::AllDelegates))
+}
+
+/// `/jobs` (`/tasks` and `/ps` run the same command): the running jobs
+/// list, the same list the panel's Jobs card opens. An attached session
+/// with no running job gets the `No jobs running` notice and no view;
+/// with no session the shared no-session notice answers instead. Words
+/// after the command are ignored, as `/delegates` ignores them.
+fn run_jobs(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    if app.session().is_some() && app.panel_state().running_jobs().is_empty() {
+        app.push_notice("no_jobs_running", "No jobs running".to_owned());
+        return Some(Effect::None);
+    }
+    Some(app.open_session_view(super::SessionView::Jobs))
 }
 
 fn run_context(app: &mut App, _rest: &str) -> Option<Effect> {

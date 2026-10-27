@@ -88,6 +88,7 @@ const DRAWN_ORDER: &[&str] = &[
     "?",
     "help",
     "delegates",
+    "jobs",
 ];
 
 #[test]
@@ -151,6 +152,8 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         &"effort",
         &"cost",
         &"agents",
+        &"tasks",
+        &"ps",
         &"cwd",
         &"permissions",
         &"config",
@@ -162,10 +165,10 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         &"exit",
         &"bug",
     ];
-    // The table enumerates the complete alias set (`docs/tui.md:1920–1959,1965`).
+    // The table enumerates the complete alias set (`docs/tui.md:1921–1961,1967`).
     assert_eq!(extra, wanted);
     // An extension or skill named like an alias cannot take it silently
-    // (`docs/tui.md:1974`).
+    // (`docs/tui.md:1976`).
     for alias in TABLE
         .iter()
         .flat_map(|entry| aliases_of(entry.name).iter().copied())
@@ -179,6 +182,9 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
     assert!(is_built_in("rewind"));
     assert!(is_built_in("delegates"));
     assert!(is_built_in("agents"));
+    assert!(is_built_in("jobs"));
+    assert!(is_built_in("tasks"));
+    assert!(is_built_in("ps"));
     assert!(!is_built_in("tdd"));
 }
 
@@ -322,7 +328,7 @@ fn prefix_matches_come_before_contains_matches() {
 
 #[test]
 fn a_row_draws_name_hint_description_and_tag() {
-    // The table orders `/compact` after `/handoff` (`docs/tui.md:1947,1965`).
+    // The table orders `/compact` after `/handoff` (`docs/tui.md:1948,1967`).
     let all = rows(&[]);
     let handoff = all.iter().find(|row| row.name == "handoff");
     assert_eq!(
