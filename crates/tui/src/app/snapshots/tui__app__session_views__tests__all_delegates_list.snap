@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/app/session_views_tests.rs
+expression: shown
+---
+ Delegates  /delegates                                               Esc returns
+◆ task j_1 · 0s
+  test/model · s_dddddddddddddddd
+◆ task j_2 · 0s
+  test/model · s_eeeeeeeeeeeeeeee
+
+a row opens that item's view
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ ›
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
