@@ -1034,13 +1034,14 @@ impl<B: Backend> Loop<B> {
         }
         if self
             .hub
-            .fetch_tail(
+            .fetch_history(
                 rx,
                 &session,
                 &mut self.app,
                 &self.tick,
                 self.clock.as_ref(),
                 self.tick.armed(),
+                hub::Phase::Tail,
             )
             .is_err()
         {
@@ -1066,13 +1067,14 @@ impl<B: Backend> Loop<B> {
         };
         if self
             .hub
-            .fetch_count(
+            .fetch_history(
                 rx,
                 &session,
                 &mut self.app,
                 &self.tick,
                 self.clock.as_ref(),
                 self.tick.armed(),
+                hub::Phase::Count,
             )
             .is_err()
         {

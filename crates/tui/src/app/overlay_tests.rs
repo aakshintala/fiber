@@ -2180,7 +2180,7 @@ fn a_filled_display_stops_pre_frame_reads_and_counts_after() {
     app.install_tail();
     assert!(
         matches!(app.overlay, Overlay::Shown { .. }),
-        // docs/tui.md:2431-2432 ("History and paging"): the first frame draws the preview.
+        // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
         "the preview shows"
     );
     // Older own windows and the ancestor request belong to the
@@ -2192,7 +2192,7 @@ fn a_filled_display_stops_pre_frame_reads_and_counts_after() {
     assert_eq!(
         args,
         json!({"session_id": ANCESTOR, "to_seq": 9}),
-        // docs/tui.md:2470-2480 ("History and paging"): ancestor windows under their session.
+        // docs/tui.md:2492-2493 ("History and paging"): ancestor windows under their session.
         "the ancestor under its session"
     );
     app.tail_count_lines(doors(&ancestor, &args));
@@ -2231,7 +2231,7 @@ fn an_unfilled_display_still_walks_the_seam_to_the_root() {
     assert_eq!(
         args,
         json!({"session_id": ANCESTOR, "to_seq": point}),
-        // docs/tui.md:2470-2480 ("History and paging"): ancestor windows under their session.
+        // docs/tui.md:2492-2493 ("History and paging"): ancestor windows under their session.
         "the ancestor under its session"
     );
     app.tail_lines(doors(&ancestor, &args));
@@ -2240,18 +2240,18 @@ fn an_unfilled_display_still_walks_the_seam_to_the_root() {
     app.install_tail();
     assert!(
         matches!(app.overlay, Overlay::Shown { .. }),
-        // docs/tui.md:2431-2432 ("History and paging"): the first frame draws the preview.
+        // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
         "the preview shows"
     );
     let shown = row_texts(&app);
     assert!(
         shown.iter().any(|row| row.contains("root reply 0")),
-        // docs/tui.md:2431-2432 ("History and paging"): the first frame draws the preview.
+        // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
         "the preview draws the root"
     );
     assert!(
         shown.iter().any(|row| row.contains("child reply 0")),
-        // docs/tui.md:2431-2432 ("History and paging"): the first frame draws the preview.
+        // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
         "the preview draws the child"
     );
 }
@@ -2284,7 +2284,7 @@ fn a_fill_past_a_crossed_seam_keeps_going_to_the_chain_root() {
     assert_eq!(
         args,
         json!({"session_id": MID, "to_seq": mpoint}),
-        // docs/tui.md:2470-2480 ("History and paging"): the chain reads as one history across the seam.
+        // docs/tui.md:2484-2489 ("History and paging"): the chain reads as one history across the seam.
         "the middle segment under its session"
     );
     // The middle window fills the display at its own segment start,
@@ -2298,7 +2298,7 @@ fn a_fill_past_a_crossed_seam_keeps_going_to_the_chain_root() {
     assert_eq!(
         args,
         json!({"session_id": ANCESTOR, "to_seq": rpoint}),
-        // docs/tui.md:2470-2480 ("History and paging"): ancestor windows under their session.
+        // docs/tui.md:2492-2493 ("History and paging"): ancestor windows under their session.
         "the root under its session"
     );
     app.tail_lines(doors(&root, &args));
@@ -2308,12 +2308,12 @@ fn a_fill_past_a_crossed_seam_keeps_going_to_the_chain_root() {
     let shown = row_texts(&app);
     assert!(
         shown.iter().any(|row| row.contains("root reply 0")),
-        // docs/tui.md:2431-2432 ("History and paging"): the first frame draws the preview.
+        // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
         "the preview draws the root"
     );
     assert!(
         shown.iter().any(|row| row.contains("leaf reply 0")),
-        // docs/tui.md:2431-2432 ("History and paging"): the first frame draws the preview.
+        // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
         "the preview draws the leaf"
     );
 }
@@ -2548,7 +2548,7 @@ fn install_without_a_cached_fold_installs_the_held_run() {
     assert_eq!(
         app.attached_screen().pages().index().total(),
         0,
-        // docs/tui.md:2442-2445 ("History and paging"): an empty log means the first frame draws no history.
+        // docs/tui.md:2458-2459 ("History and paging"): an empty log means the first frame draws no history.
         "an empty conversation"
     );
 }
@@ -3271,14 +3271,14 @@ fn the_landed_screen_matches_the_preview_across_the_seam() {
     app.install_tail();
     assert!(
         matches!(app.overlay, Overlay::Shown { .. }),
-        // docs/tui.md:2431-2432 ("History and paging"): the first frame draws the preview.
+        // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
         "the preview shows"
     );
     let preview_rows = row_texts(&app);
     let drawn = crate::view::text(&rendered(&app));
     assert!(
         drawn.contains("child reply 59"),
-        // docs/tui.md:2431-2432 ("History and paging"): the first frame draws the preview.
+        // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
         "the draw shows the child's last page"
     );
     assert!(
@@ -3312,7 +3312,7 @@ fn the_landed_screen_matches_the_preview_across_the_seam() {
     assert_eq!(
         counted[counted.len() - height..],
         preview_rows[preview_rows.len() - height..],
-        // docs/tui.md:2454-2457 ("History and paging"): the preview holds the filled run and the count adds above it.
+        // docs/tui.md:2470-2473 ("History and paging"): the preview holds the filled run and the count adds above it.
         "the count keeps the last screenful"
     );
     // Raise, then replay the own run through the pass to its end.
@@ -3338,14 +3338,14 @@ fn the_landed_screen_matches_the_preview_across_the_seam() {
     let landed_total = app.attached_screen().pages().index().total();
     assert!(
         landed_total > counted_total,
-        // docs/tui.md:2454-2457 ("History and paging"): on one segment the pass counts the rest above the preview.
+        // docs/tui.md:2470-2473 ("History and paging"): on one segment the pass counts the rest above the preview.
         "the landing adds the rows above the preview"
     );
     let after = row_texts(&app);
     assert_eq!(
         after[after.len() - height..],
         counted[counted.len() - height..],
-        // docs/tui.md:2454-2457 ("History and paging"): the landing keeps the preview’s last screenful.
+        // docs/tui.md:2470-2473 ("History and paging"): the landing keeps the preview’s last screenful.
         "the landing keeps the last screenful"
     );
     let held: Vec<String> = app
@@ -3358,12 +3358,12 @@ fn the_landed_screen_matches_the_preview_across_the_seam() {
         .collect();
     assert!(
         held.iter().any(|session| session == ANCESTOR),
-        // docs/tui.md:2470-2480 ("History and paging"): the chain stays paged under its sessions.
+        // docs/tui.md:2484-2493 ("History and paging"): the chain stays paged under its sessions.
         "the landing keeps the root under its session: {held:?}"
     );
     assert!(
         after.iter().any(|row| row.contains("child reply 59")),
-        // docs/tui.md:2454-2457 ("History and paging"): the landing keeps the preview’s child rows.
+        // docs/tui.md:2470-2473 ("History and paging"): the landing keeps the preview’s child rows.
         "the landing keeps the child"
     );
 }
