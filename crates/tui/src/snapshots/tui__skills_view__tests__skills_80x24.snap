@@ -1,14 +1,14 @@
 ---
 source: crates/tui/src/skills_view_tests.rs
-assertion_line: 915
+assertion_line: 1060
 expression: "text.join(\"\\n\")"
 ---
  Skills  /skills                                                     Esc returns
-skill               this project  everywhere  visibility     source          des
-  tdd                   [x]          [x]      seen           repo            Tes
-  tdd                   ›[x]         [x]      hidden         personal        Min
-  recall                [x]          [x]      hidden         extension memory  R
-  built                 [x]          [ ]      hidden         built in        Bui
+  tdd … · repo · seen · shadows personal · this project [on] · everywhere [on]
+› tdd · Mine. · personal · hidden · this project›[on] · everywhere [on]
+  recall · … · extension memory · hidden · this project [on] · everywhere [on]
+  built · Built in. · built in · hidden · this project [on] · everywhere [off]
+
 
 
 
@@ -26,4 +26,4 @@ skill               this project  everywhere  visibility     source          des
 
 Mine.
 shadowed by /w/.fiber/skills/tdd/SKILL.md
-↑↓ move · ←→ choose a switch · Space switch · Enter text · Ctrl+G open the file
+Enter shows the text · Ctrl+G opens its file

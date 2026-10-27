@@ -10,27 +10,15 @@ use std::path::{Path, PathBuf};
 use contract::events::{SkillInfo, SkillSource};
 
 use crate::configure::{SkillsDisabled, SwitchScope};
-use crate::format::{cut, width, wrap};
+use crate::format::{cut, wrap};
 use crate::keys::{Edit, Key};
 use crate::settings_view::{Act, Ctx, applies_text};
-use crate::swapped::{Frame, Ink, List, Spot, rows_height};
-use crate::text::fit;
-use crate::tools_view::mark;
+use crate::swapped::{Frame, GUTTER, Ink, List, Spot, rows_height};
+use crate::text;
 
-/// A skill name's column.
-const NAME: usize = 18;
-
-/// The `this project` switch's column.
-const PROJECT: usize = 12;
-
-/// The `everywhere` switch's column.
-const EVERYWHERE: usize = 10;
-
-/// The visibility word's column.
-const VISIBILITY: usize = 13;
-
-/// A source's column.
-const SOURCE: usize = 14;
+/// A switch at its widest, as the room the row leaves for the switches
+/// counts it, as on `/tools`.
+const WIDEST_SWITCH: &str = "[off]";
 
 /// The details lines below the rows at most.
 const DETAILS: usize = 2;
@@ -92,14 +80,6 @@ fn source_word(info: &SkillInfo) -> String {
     }
 }
 
-/// A source in at least `SOURCE` columns: padded, never cut, so an
-/// extension's name stays visible.
-fn source_cell(info: &SkillInfo) -> String {
-    let mut out = source_word(info);
-    out.push_str(&" ".repeat(SOURCE.saturating_sub(width(&out))));
-    out
-}
-
 /// The shadowed sources a row names, in precedence order: repo, personal,
 /// extensions by extension name, then built in (`docs/tui.md`, "Swapped
 /// views"). Each source appears once, however many shadow paths map to it.
@@ -139,11 +119,8 @@ struct Text {
     /// Its `SKILL.md`.
     path: PathBuf,
     /// The shadow block, a blank line, and the skill's text, unwrapped.
+    /// The frame wraps it at the width it draws at on each redraw.
     raw: String,
-    /// `raw` wrapped at `width`.
-    lines: Vec<String>,
-    /// The width `lines` wrap at.
-    width: usize,
     /// The scrolled line.
     list: List,
 }
@@ -158,12 +135,12 @@ pub(crate) struct Skills {
     /// Each person file's own `skills.disabled`, re-read after each
     /// switch.
     off: SkillsDisabled,
-    /// The header's row plus one per skill.
+    /// One per skill: the first skill is selected at open, and the
+    /// focused row's mark never sits on a non-skill row, since there is
+    /// no header row.
     list: List,
     /// The switch Space flips: this project at open.
     focus: SwitchScope,
-    /// The width the details cut and the pane wraps at.
-    width: usize,
     /// The text pane while open.
     text: Option<Text>,
     /// What the last action said, shown below the rows.
@@ -182,39 +159,37 @@ impl Skills {
             awaiting: Some(id),
             infos: Vec::new(),
             off,
-            list: List::default(),
+            list: List::gutter(),
             focus: SwitchScope::Project,
-            width: ctx.width,
             text: None,
             said,
         };
-        skills.clamp(ctx.height);
+        skills.clamp(ctx);
         skills
     }
 
-    /// The pane's lines while open, else one past the header plus one
-    /// row per skill.
-    fn rows_len(&self) -> usize {
+    /// The pane's lines while open, else one row per skill: no header
+    /// row, so the count is the skills'.
+    fn rows_len(&self, width: usize) -> usize {
         match &self.text {
-            Some(text) => text.lines.len(),
-            None => self.infos.len().saturating_add(1),
+            Some(text) => wrap(&text.raw, width).len(),
+            None => self.infos.len(),
         }
     }
 
-    /// The rows the view shows at `height`.
-    fn shown(&self, height: usize) -> usize {
-        rows_height(&self.frame(height), height)
+    /// The rows the view shows at `height` and `width`.
+    fn shown(&self, ctx: &Ctx<'_>) -> usize {
+        rows_height(&self.frame(ctx.width, ctx.height), ctx.height)
     }
 
-    /// The selected skill: none on the header row or with no answer.
+    /// The selected skill: none with no answer.
     fn selected_info(&self) -> Option<&SkillInfo> {
-        self.infos.get(self.list.selected().checked_sub(1)?)
+        self.infos.get(self.list.selected())
     }
 
     /// Handles one key: in the text pane Esc returns to the rows, every
     /// other key scrolls it, and Ctrl+G opens the skill's file.
     pub(crate) fn key(&mut self, key: &Key, ctx: &Ctx<'_>) -> Act {
-        self.width = ctx.width;
         if self.text.is_some() {
             return self.text_key(key, ctx);
         }
@@ -230,13 +205,13 @@ impl Skills {
         if *key == Key::Char(' ') {
             return self.switch(ctx);
         }
-        let shown = self.shown(ctx.height);
-        if self.list.key(key, self.rows_len(), shown) {
+        let shown = self.shown(ctx);
+        if self.list.key(key, self.rows_len(ctx.width), shown) {
             self.said.clear();
             // The new selection can add two details lines, and
             // clearing the message frees one, so the frame's available
             // rows change: clamp to the final frame.
-            self.clamp(ctx.height);
+            self.clamp(ctx);
         }
         Act::Stay
     }
@@ -250,22 +225,11 @@ impl Skills {
         if *key == Key::CtrlG {
             return self.open_file();
         }
-        // The view draws at the width it is given, so the pane wraps
-        // again when a key arrives at a new width.
-        if self
-            .text
-            .as_ref()
-            .is_some_and(|text| ctx.width != text.width)
-        {
-            let width = ctx.width;
-            if let Some(text) = &mut self.text {
-                text.width = width;
-                text.lines = wrap(&text.raw, width);
-            }
-        }
-        let shown = self.shown(ctx.height);
+        // The frame wraps at the width it draws at on each redraw, so
+        // scrolling counts the lines at this key's width.
+        let shown = self.shown(ctx);
         if let Some(text) = &mut self.text {
-            text.list.key(key, text.lines.len(), shown);
+            text.list.key(key, wrap(&text.raw, ctx.width).len(), shown);
         }
         Act::Stay
     }
@@ -291,28 +255,28 @@ impl Skills {
     /// A click: the ✕ closes, a row is selected, and a switch is selected
     /// and flipped. In the text pane a row scrolls to the line.
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
-        self.width = ctx.width;
         match spot {
             Spot::Close => Act::Close,
             Spot::Revoke(_) | Spot::Cell(_, _) | Spot::Item(_) => Act::Stay,
             Spot::Row(at) => {
-                let shown = self.shown(ctx.height);
+                let shown = self.shown(ctx);
                 if let Some(text) = &mut self.text {
-                    text.list.select(at, text.lines.len(), shown);
+                    text.list
+                        .select(at, wrap(&text.raw, ctx.width).len(), shown);
                 } else {
-                    self.list.select(at, self.rows_len(), shown);
+                    self.list.select(at, self.rows_len(ctx.width), shown);
                 }
                 // The new selection's details lines change the frame's
                 // available rows: clamp to the final frame.
-                self.clamp(ctx.height);
+                self.clamp(ctx);
                 Act::Stay
             }
             Spot::Switch { row, at } => {
                 if self.text.is_some() {
                     return Act::Stay;
                 }
-                let shown = self.shown(ctx.height);
-                self.list.select(row, self.rows_len(), shown);
+                let shown = self.shown(ctx);
+                self.list.select(row, self.rows_len(ctx.width), shown);
                 self.focus = if at == 0 {
                     SwitchScope::Project
                 } else {
@@ -327,20 +291,17 @@ impl Skills {
     /// shadow path first so each stays reachable. A read error stays on
     /// the rows and shows the message.
     fn enter(&mut self, ctx: &Ctx<'_>) -> Act {
-        self.width = ctx.width;
         let Some(info) = self.selected_info().cloned() else {
             return Act::Stay;
         };
         match ctx.seam.skill_text(Path::new(&info.path)) {
             Ok(raw) => {
-                let body = pane_text(&info, &raw);
-                let lines = wrap(&body, ctx.width);
+                // The frame wraps the text at the width it draws at, so
+                // the pane needs only the unwrapped body here.
                 self.text = Some(Text {
                     name: info.name.clone(),
                     path: PathBuf::from(&info.path),
-                    raw: body,
-                    lines,
-                    width: ctx.width,
+                    raw: pane_text(&info, &raw),
                     list: List::default(),
                 });
                 self.said.clear();
@@ -363,8 +324,7 @@ impl Skills {
     }
 
     /// Flips the focused switch of the selected row. The switch is by
-    /// name, so a winner and the rows it shadows flip together. The
-    /// header row has nothing to flip.
+    /// name, so a winner and the rows it shadows flip together.
     fn switch(&mut self, ctx: &Ctx<'_>) -> Act {
         let Some(info) = self.selected_info().cloned() else {
             return Act::Stay;
@@ -403,7 +363,6 @@ impl Skills {
     /// keeping the selection where it was; a failed re-read keeps the
     /// last lists and text.
     pub(crate) fn reread(&mut self, ctx: &Ctx<'_>) {
-        self.width = ctx.width;
         if let Ok(off) = ctx.seam.skills_disabled(ctx.workspace) {
             self.off = off;
         }
@@ -413,31 +372,30 @@ impl Skills {
                 Ok(raw) => {
                     if let Some(info) = self.infos.iter().find(|info| Path::new(&info.path) == path)
                     {
-                        let body = pane_text(info, &raw);
-                        let lines = wrap(&body, ctx.width);
+                        // The frame wraps at the width it draws at, so
+                        // the re-read keeps only the unwrapped body.
                         if let Some(text) = &mut self.text {
-                            text.raw = body;
-                            text.lines = lines;
-                            text.width = ctx.width;
+                            text.raw = pane_text(info, &raw);
                         }
                     }
                 }
                 Err(error) => self.said = vec![error.message],
             }
         }
-        self.clamp(ctx.height);
+        self.clamp(ctx);
     }
 
-    /// Keeps the selection on a row at `height`: the pane's while open,
-    /// else the skill rows'.
-    fn clamp(&mut self, height: usize) {
-        let shown = rows_height(&self.frame(height), height);
+    /// Keeps the selection on a row at `ctx`'s width and height: the
+    /// pane's lines while open, else the skill rows'.
+    fn clamp(&mut self, ctx: &Ctx<'_>) {
+        let shown = rows_height(&self.frame(ctx.width, ctx.height), ctx.height);
         if let Some(text) = &mut self.text {
             let selected = text.list.selected();
-            text.list.select(selected, text.lines.len(), shown);
+            text.list
+                .select(selected, wrap(&text.raw, ctx.width).len(), shown);
         } else {
             let selected = self.list.selected();
-            self.list.select(selected, self.rows_len(), shown);
+            self.list.select(selected, self.rows_len(ctx.width), shown);
         }
     }
 
@@ -447,10 +405,9 @@ impl Skills {
         if self.awaiting.as_deref() != Some(id) {
             return;
         }
-        self.width = ctx.width;
         self.infos = skills.to_vec();
         self.awaiting = None;
-        self.clamp(ctx.height);
+        self.clamp(ctx);
     }
 
     /// The sent command's rejection: only for its id.
@@ -462,16 +419,18 @@ impl Skills {
         self.said = vec![message.to_owned()];
     }
 
-    /// The frame to draw at `height`: the text pane while open, else the
-    /// rows, then at most two details lines for the selected skill and
-    /// the last action's line, budgeted so one row always stays.
-    pub(crate) fn frame(&self, height: usize) -> Frame {
+    /// The frame to draw at `width` columns and `height` rows: the text
+    /// pane while open, else the rows, then at most two details lines
+    /// for the selected skill and the last action's line, budgeted so
+    /// one row always stays. Rows, details and pane lines all render at
+    /// the passed width on each redraw, including a resize with no
+    /// intervening key.
+    pub(crate) fn frame(&self, width: usize, height: usize) -> Frame {
         if let Some(text) = &self.text {
             return Frame {
                 title: format!("Skill {}", text.name),
                 command: "/skills".to_owned(),
-                rows: text
-                    .lines
+                rows: wrap(&text.raw, width)
                     .iter()
                     .map(|line| vec![(line.clone(), None, Ink::Plain)])
                     .collect(),
@@ -481,17 +440,16 @@ impl Skills {
                 footer: "↑↓ scroll · Ctrl+G open the file · Esc back".to_owned(),
             };
         }
-        let mut rows = vec![heading_cells()];
-        rows.extend(
-            self.infos
-                .iter()
-                .enumerate()
-                .map(|(index, info)| self.skill_cells(index.saturating_add(1), info)),
-        );
+        let rows = self
+            .infos
+            .iter()
+            .enumerate()
+            .map(|(index, info)| self.skill_cells(index, info, width))
+            .collect();
         let room = height.saturating_sub(3);
         let message = usize::from(!self.said.is_empty()).min(room);
         let budget = DETAILS.min(room.saturating_sub(message));
-        let mut below: Vec<String> = self.details().into_iter().take(budget).collect();
+        let mut below: Vec<String> = self.details(width).into_iter().take(budget).collect();
         below.extend(self.said.iter().take(message).cloned());
         if self.awaiting.is_some() {
             below.insert(0, "Reading the skills…".to_owned());
@@ -503,20 +461,19 @@ impl Skills {
             list: self.list,
             below,
             field: None,
-            footer: "↑↓ move · ←→ choose a switch · Space switch · Enter text · Ctrl+G open the file · Esc close"
-                .to_owned(),
+            footer: "Enter shows the text · Ctrl+G opens its file".to_owned(),
         }
     }
 
     /// The selected skill's details: its description, then one shadow
     /// summary line, whatever the number of shadows.
-    fn details(&self) -> Vec<String> {
+    fn details(&self, width: usize) -> Vec<String> {
         let Some(info) = self.selected_info() else {
             return Vec::new();
         };
         // The description is cut to the width the view draws at; the
         // pane's lines wrap instead, staying readable at 80 columns.
-        let mut details = vec![cut(&info.description, self.width)];
+        let mut details = vec![cut(&info.description, width)];
         match info.shadows.as_slice() {
             [path] => details.push(format!("shadows {path}")),
             [] => {
@@ -529,49 +486,57 @@ impl Skills {
         details
     }
 
-    /// One skill's cells: its name, its two switches, its visibility,
-    /// its source and its description.
-    fn skill_cells(&self, index: usize, info: &SkillInfo) -> Vec<(String, Option<Spot>, Ink)> {
+    /// One skill's cells: `<name> · <description> · <source> ·
+    /// <visibility>[ · shadows <sources>] · this project ` and its
+    /// switch, then ` · everywhere ` and its switch. The name and the
+    /// description are cut to the room the rest of the row leaves, so
+    /// both switches stay reachable at narrow widths, as on `/tools`.
+    fn skill_cells(
+        &self,
+        index: usize,
+        info: &SkillInfo,
+        width: usize,
+    ) -> Vec<(String, Option<Spot>, Ink)> {
         let selected = index == self.list.selected();
-        let project = (
-            format!(
-                "{:^PROJECT$}",
-                mark(
-                    self.on_in_scope(&info.name, SwitchScope::Project),
-                    selected && self.focus == SwitchScope::Project
-                )
-            ),
-            Some(Spot::Switch { row: index, at: 0 }),
-            Ink::Plain,
-        );
-        let everywhere = (
-            format!(
-                "{:^EVERYWHERE$}",
-                mark(
-                    self.on_in_scope(&info.name, SwitchScope::Everywhere),
-                    selected && self.focus == SwitchScope::Everywhere
-                )
-            ),
-            Some(Spot::Switch { row: index, at: 1 }),
-            Ink::Plain,
-        );
-        debug_assert_eq!(width(&project.0), PROJECT);
-        debug_assert_eq!(width(&everywhere.0), EVERYWHERE);
+        let visibility = visibility_word(visibility(info, &self.off));
+        let shadows = match shadow_sources(&info.shadows, &self.infos) {
+            Some(sources) => format!(" · shadows {}", sources.join(", ")),
+            None => String::new(),
+        };
+        let project = " · this project";
+        let everywhere = " · everywhere";
+        // Each switch follows a column holding the focus mark, in the
+        // place of the space before it, as on `/tools`.
+        let widest = format!("{project} {WIDEST_SWITCH}{everywhere} {WIDEST_SWITCH}");
+        let fixed = format!(" · {} · {visibility}{shadows}", source_word(info));
+        let room = width.saturating_sub(GUTTER + text::width(&fixed) + text::width(&widest));
+        let head = format!("{} · {}", info.name, info.description);
+        let head = format!("{}{fixed}", text::cut(&head, room, "…"));
+        let switch = |scope: SwitchScope, at: usize| {
+            let mark = if selected && self.focus == scope {
+                ("›".to_owned(), None, Ink::Heading)
+            } else {
+                (" ".to_owned(), None, Ink::Plain)
+            };
+            let (word, ink) = if self.on_in_scope(&info.name, scope) {
+                ("[on]", Ink::Heading)
+            } else {
+                ("[off]", Ink::Muted)
+            };
+            [
+                mark,
+                (word.to_owned(), Some(Spot::Switch { row: index, at }), ink),
+            ]
+        };
+        let [project_mark, project_switch] = switch(SwitchScope::Project, 0);
+        let [everywhere_mark, everywhere_switch] = switch(SwitchScope::Everywhere, 1);
         vec![
-            (format!("  {}", fit(&info.name, NAME)), None, Ink::Plain),
-            project,
-            ("  ".to_owned(), None, Ink::Plain),
-            everywhere,
-            (
-                format!(
-                    "  {:<VISIBILITY$}  {}  {}",
-                    visibility_word(visibility(info, &self.off)),
-                    source_cell(info),
-                    info.description
-                ),
-                None,
-                Ink::Plain,
-            ),
+            (format!("{head}{project}"), None, Ink::Plain),
+            project_mark,
+            project_switch,
+            (everywhere.to_owned(), None, Ink::Plain),
+            everywhere_mark,
+            everywhere_switch,
         ]
     }
 }
@@ -593,22 +558,6 @@ fn pane_text(info: &SkillInfo, text: &str) -> String {
     } else {
         block.join("\n") + "\n\n" + text
     }
-}
-
-/// The header row: each column's name over its column.
-fn heading_cells() -> Vec<(String, Option<Spot>, Ink)> {
-    vec![(
-        format!(
-            "{}{:^PROJECT$}  {:^EVERYWHERE$}  {:<VISIBILITY$}  {:<SOURCE$}  description",
-            fit("skill", NAME.saturating_add(2)),
-            "this project",
-            "everywhere",
-            "visibility",
-            "source",
-        ),
-        None,
-        Ink::Heading,
-    )]
 }
 
 #[cfg(test)]
