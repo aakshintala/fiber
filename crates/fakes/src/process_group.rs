@@ -547,16 +547,11 @@ fn listed_exit(
     list: impl FnMut() -> io::Result<Vec<u32>> + Send + 'static,
     deadline: Duration,
 ) -> io::Result<()> {
-    // The first listing runs on the caller's thread with its own budget:
+    // The first listing runs on a spawned thread with its own budget:
     // a spent exit budget still leaves the holder-listing budget, so the
-    // expiry names the holders; otherwise the listing shares what remains
-    // of the exit budget, capped at the holder-listing budget, so a
-    // listing that never answers expires with the exit wait.
-    let budget = if deadline.is_zero() {
-        MUST_SUCCEED_WITHIN
-    } else {
-        std::cmp::min(deadline, MUST_SUCCEED_WITHIN)
-    };
+    // expiry names the holders; a listing that never answers expires with
+    // the listing budget.
+    let caller = Deadline::after(deadline);
     let (listed, listing) = mpsc::channel();
     thread::spawn(move || {
         let mut list = list;
@@ -570,7 +565,7 @@ fn listed_exit(
     // The latest listing, published after each one: the deadline's read
     // names the holders even while the wait still runs.
     let outstanding = Arc::new(Mutex::new(Vec::<u32>::new()));
-    let (mut list, mut pids) = match Deadline::after(budget).recv(&listing) {
+    let (mut list, mut pids) = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&listing) {
         Ok((list, result)) => match result {
             Ok(pids) => {
                 // Published before the wait starts, so a spent exit
@@ -582,10 +577,7 @@ fn listed_exit(
                 return Err(io::Error::other(format!("first pgrep failed: {err}")));
             }
         },
-        Err(_) => {
-            let pids = lock(&outstanding).clone();
-            return Err(expiry_error(&pids));
-        }
+        Err(_) => return Err(expiry_error(&[])),
     };
     let published = Arc::clone(&outstanding);
     thread::spawn(move || {
@@ -617,7 +609,7 @@ fn listed_exit(
             }
         }
     });
-    let result = match Deadline::after(deadline).recv(&finished) {
+    let result = match caller.recv(&finished) {
         Ok(result) => result,
         Err(_) => {
             let pids = lock(&outstanding).clone();
@@ -631,9 +623,10 @@ fn listed_exit(
 /// Waits up to what remains of `deadline` on the wall clock for every process whose command
 /// line contains `text` to exit: one `pgrep` lists the matches, the probes
 /// wait for each listed pid, and `pgrep` lists again after every wait until
-/// nothing matches. The first listing runs on the caller's thread with its
-/// own budget; one thread then waits under the deadline. A process that
-/// starts after an earlier listing is waited on like every earlier match.
+/// nothing matches. The first listing runs on a spawned thread with its
+/// own budget; one thread then waits under what remains of the deadline.
+/// A process that starts after an earlier listing is waited on like every
+/// earlier match.
 ///
 /// # Errors
 ///
