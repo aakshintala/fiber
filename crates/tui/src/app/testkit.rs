@@ -168,10 +168,11 @@ impl Drop for FailingHub {
     }
 }
 
-/// One session envelope.
-pub(crate) fn session_line(
+/// One session envelope, in `turn` when one is given.
+fn envelope(
     session: &str,
     kind: &str,
+    turn: Option<&str>,
     payload: serde_json::Value,
     action: Option<&str>,
 ) -> Line {
@@ -180,11 +181,32 @@ pub(crate) fn session_line(
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
+        turn_id: turn.map(|id| contract::TurnId(id.to_owned())),
         action_id: action.map(|id| contract::ActionId(id.to_owned())),
         seq: None,
         payload: payload.as_object().cloned().unwrap_or_default(),
     })
+}
+
+/// One session envelope.
+pub(crate) fn session_line(
+    session: &str,
+    kind: &str,
+    payload: serde_json::Value,
+    action: Option<&str>,
+) -> Line {
+    envelope(session, kind, None, payload, action)
+}
+
+/// One session envelope in `turn`, such as a usage or turn-started line.
+pub(crate) fn session_line_in_turn(
+    session: &str,
+    kind: &str,
+    turn: &str,
+    payload: serde_json::Value,
+    action: Option<&str>,
+) -> Line {
+    envelope(session, kind, Some(turn), payload, action)
 }
 
 /// Every line an effect sends, parsed.
