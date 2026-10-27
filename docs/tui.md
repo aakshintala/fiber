@@ -1928,6 +1928,7 @@ later release still applies.
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
 | `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
+| `/add-dir <path>` | Adds a folder to the session's boundary: sends `add_directory` with the path (`docs/invocation.md`, "Driver commands"). With no path, it shows the command's usage. There is no removal: an added folder lasts for the session. |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |

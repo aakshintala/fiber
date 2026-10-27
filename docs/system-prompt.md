@@ -229,7 +229,7 @@ never cut. The person cannot change the budget.
 
 ### Subdirectory files
 
-A directory below the workspace may have its own `AGENTS.md` or `CLAUDE.md`, as
+A directory below the workspace or an added folder may have its own `AGENTS.md` or `CLAUDE.md`, as
 in a monorepo. Fiber sends one the first time a tool call's declared paths
 (`docs/tools.md`) fall under its directory. It is appended as its own message,
 once per context. After a handoff it is sent again only when a call touches
@@ -237,6 +237,18 @@ that directory again.
 
 A call that declares no paths, such as a shell command Fiber cannot read,
 never triggers a subdirectory file.
+
+### Added folders
+
+A folder added with `add_directory` (`docs/invocation.md`, "Driver commands")
+joins the permission boundary and the subdirectory rules above, and loads
+nothing else. No configuration layer, hook, MCP server, extension or skill is
+loaded from it, and the folders below it are read only through "Subdirectory
+files" above.
+
+When a folder is added, Fiber appends a message naming it. The opening message
+rebuilt at a handoff lists the folded added folders, so a handoff does not
+lose them. The system prompt does not change.
 
 ### Skills listing
 

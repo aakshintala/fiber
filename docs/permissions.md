@@ -109,8 +109,9 @@ no block budget.
 Four classes of call never reach a reviewer or a person:
 
 - every call whose only effect is `reads`, or that declares no effect,
-- a `writes` call whose paths all sit inside the **workspace**, none of them
-  under `.git/` or `.fiber/`,
+- a `writes` call whose paths all sit inside the workspace or an added folder
+  (`docs/events.md`, "`directory_added`"), none of them under a `.git/` or
+  `.fiber/` directory of the one they sit inside,
 - a `writes` call whose paths are all Markdown files (`.md`) inside extension
   data directories, `data/<name>/` or `projects/<key>/data/<name>/` in Fiber
   home (`docs/state.md`, "What each part holds"), whichever tool makes it. Paths are
@@ -129,7 +130,7 @@ this path off files an extension may load as code or trust as settings, such
 as a Lua file or a JSON index; a write to one is reviewed.
 
 Everything else — shell execution, other network calls, and any other write
-outside the workspace — is reviewed. A write under `.git/` or `.fiber/` is reviewed too: a hook or
+outside the workspace and the added folders — is reviewed. A write under a `.git/` or `.fiber/` directory is reviewed too: a hook or
 `.git/config` runs code on the next `git` command, which the reviewer judges
 as `git commit` without seeing the hook, and `.fiber/` holds the repository's
 configuration, including the extensions, hooks and MCP servers it declares.
@@ -217,6 +218,11 @@ runs; nothing limits what it does once it runs.
 - A container protects the host from Fiber, not Fiber home from the agent.
   Fiber home inside the container is as reachable as it is outside one.
 
+An added folder changes nothing here. Were confinement implemented, its roots
+would be the workspace and the added folders, the same folded list the fast
+path above turns on; it is not implemented, so the boundary an added folder
+joins stays the permission boundary above, never an operating-system one.
+
 The evidence is [research/sandbox/](../research/sandbox/).
 
 ## The reviewer
@@ -234,7 +240,7 @@ The model's other prose and every tool result are stripped before the prompt
 is built. The
 reviewer also gets the call under review, its declared effects, for a shell
 call the commands in it that were not shown read-only (`docs/tools.md`,
-"Shell", "Effects"), the workspace root, and the person's own notes about their environment ("What the
+"Shell", "Effects"), the workspace root and the added folders, and the person's own notes about their environment ("What the
 person tells it").
 
 This is the load-bearing decision on this page. The reviewer's prompt contains

@@ -429,6 +429,16 @@ session").
 | `name` | string or null | yes | the name; `null` when the person cleared theirs |
 | `by` | string | yes | `person`, from the `name` command, which pins the name, or `model`, from `name_session`; a closed set |
 
+#### `directory_added`
+
+Durable. Written when the session accepts an `add_directory` driver command (`docs/invocation.md`, "Driver commands") for a folder outside the current boundary. A folder already inside the workspace or an added folder is accepted with no event written.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `path` | string | yes | the added folder's resolved path |
+
+The fold of every `directory_added` line is the session's added folders, alongside the workspace from `session_started`. A resume rebuilds them from the log, and the opening message rebuilt at a handoff lists them (`docs/system-prompt.md`, "After a handoff"). A fork or a rewind from a point after the event keeps it, and one from a point before it does not.
+
 #### `clients`
 
 Ephemeral. Written whenever a `full` connection attaches or leaves
