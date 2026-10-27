@@ -2340,7 +2340,14 @@ fn a_reset_in_the_drain_breaks_the_drain() {
         answerer.join().unwrap();
         // No code under test waits on the clock here; the answering thread is joined, so this zero-length move only snapshots the parks (ruling 6179406086).
         assert_eq!(
-            clock.advance_marked(Duration::ZERO),
+            {
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "no code under test waits on the clock (ruling 6179406086)"
+                )]
+                let actual = clock.advance_marked(Duration::ZERO);
+                actual
+            },
             mark,
             "the drain parked after the reset instead of breaking"
         );
