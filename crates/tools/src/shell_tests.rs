@@ -1222,10 +1222,8 @@ fn effects_sets_confined_for_an_enabled_linux_sandbox() {
 }
 
 #[test]
-fn effects_declares_confined_for_an_enabled_sandbox_that_cannot_apply() {
-    // Fail-closed declaration: an unresolvable write grant is still
-    // declared confined on Linux, so spawn fails instead of running the
-    // command unconfined. A check-based declaration would run it.
+fn effects_does_not_declare_confined_when_sandbox_setup_is_unavailable() {
+    // An unresolvable write grant leaves the call on the reviewed path.
     let dir = fakes::TempDir::new("fiber-shell-effects-unappliable");
     let workspace = dir.path().to_path_buf();
     let home = std::env::var_os("HOME").map_or_else(
@@ -1234,15 +1232,12 @@ fn effects_declares_confined_for_an_enabled_sandbox_that_cannot_apply() {
     );
     let sandbox = std::sync::Arc::new(std::sync::Mutex::new(crate::shell::sandbox::Settings {
         enabled: true,
-        allow_write: vec![std::path::PathBuf::from("/nonexistent-fiber-sandbox-allow")],
+        allow_write: vec![dir.path().join("missing-write")],
         deny_read: Vec::new(),
         fiber_home: home.join(format!("fiber-shell-effects-fail-{}", std::process::id())),
     }));
     let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
     let declared = effects(&shell, "echo hi");
-    #[cfg(target_os = "linux")]
-    assert!(declared.declared.confined);
-    #[cfg(not(target_os = "linux"))]
     assert!(!declared.declared.confined);
 }
 

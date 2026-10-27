@@ -3196,17 +3196,16 @@ fn a_confined_shell_runs_and_marks_its_effects() {
 }
 
 #[test]
-fn a_failed_confined_setup_reports_tool_error_without_running() {
+fn an_unavailable_sandbox_does_not_declare_the_shell_confined() {
     let dir = fakes::TempDir::new("fiber-tools-shell-sandbox-fail");
     let workspace = dir.path().to_path_buf();
-    let marker = workspace.join("marker");
     let home = std::env::var_os("HOME").map_or_else(
         || std::path::PathBuf::from("/tmp"),
         std::path::PathBuf::from,
     );
     let sandbox = std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
         enabled: true,
-        allow_write: vec![std::path::PathBuf::from("/nonexistent-fiber-sandbox-allow")],
+        allow_write: vec![workspace.join("missing-write")],
         deny_read: Vec::new(),
         fiber_home: home.join(format!(
             "fiber-tools-shell-sandbox-fail-{}",
@@ -3214,13 +3213,12 @@ fn a_failed_confined_setup_reports_tool_error_without_running() {
         )),
     }));
     let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
-    let mut args = Map::new();
-    let command = format!("touch {} && echo hi", marker.display());
-    args.insert("command".into(), Value::String(command));
-    let output = run_prepared(&shell, &args, &CancelToken::new(), &Recorder::default());
-    assert_eq!(
-        output.error.as_ref().map(|error| error.code.clone()),
-        Some(ErrorCode::ToolError)
+    let effects = shell
+        .effects(&args("echo hi"))
+        .expect("the shell command classifies");
+
+    assert!(
+        !effects.declared.confined,
+        "an unavailable sandbox leaves the call on the reviewed path"
     );
-    assert!(!marker.is_file(), "no command runs after an apply failure");
 }
