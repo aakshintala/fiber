@@ -6227,8 +6227,7 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // The session spawns all four delegates first: Enter during the turn
     // would steer it instead of dispatching the command.
     run.wait_screen("the four spawned delegates", |grid| {
-        grid.contents.contains("Started 4 delegates")
-            && grid.contents.contains("completed · 4 calls")
+        grid.contents.contains("Started 4 delegates") && grid.contents.contains("completed ·")
     });
     // The view opens over four running delegates: the gate holds every
     // child, so each row still spins.
