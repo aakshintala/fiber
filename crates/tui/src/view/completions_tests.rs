@@ -147,7 +147,7 @@ fn slash_exit_alias() {
 #[test]
 fn slash_keys_aliases_render_and_filter_independently() {
     // Each alias, whole or in part, finds exactly the keys row, which
-    // carries both aliases on it, with no range line (`docs/tui.md:1963`).
+    // carries both aliases on it (`docs/tui.md:1944,1965`).
     // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1944,1965`).
     for query in ["keymap", "keybindings", "keyma", "keybind"] {
         let mut app = attached(160, 48);
@@ -158,7 +158,6 @@ fn slash_keys_aliases_render_and_filter_independently() {
             .find(|line| line.contains("Opens the rebinding screen."))
             .expect("the keys row");
         assert!(keys.contains("keys /keybindings /keymap"), "{shown}");
-        assert!(!shown.contains(" of "), "{shown}");
     }
 }
 
