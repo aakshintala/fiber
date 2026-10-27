@@ -1154,14 +1154,14 @@ fn the_command_door_refuses_the_handoffs_completion_line() {
     };
     // The line after the completion is the opening message, so the
     // completion names no step boundary.
-    let refused = super::command::point_for(&lines, &target, Some(Seq(6))).unwrap_err();
+    let refused = super::command::point_for(&lines, &target, Some(Seq(6)), false).unwrap_err();
     assert_eq!(refused.code, ErrorCode::NotStepBoundary);
     // Neither does the note's own line: a handoff's lines are next.
-    let refused = super::command::point_for(&lines, &target, Some(Seq(5))).unwrap_err();
+    let refused = super::command::point_for(&lines, &target, Some(Seq(5)), false).unwrap_err();
     assert_eq!(refused.code, ErrorCode::NotStepBoundary);
     // A real boundary still opens: the step the handoff turn started.
     assert_eq!(
-        super::command::point_for(&lines, &target, Some(Seq(2))).unwrap(),
+        super::command::point_for(&lines, &target, Some(Seq(2)), false).unwrap(),
         2
     );
 }
