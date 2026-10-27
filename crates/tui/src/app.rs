@@ -111,6 +111,18 @@ macro_rules! read {
 }
 pub(crate) use read;
 
+/// A line's payload as `T`, borrowed from the envelope's map: no clone
+/// and no `Value` tree. It returns `Some` exactly when the `read!` body
+/// above returns `Some`.
+#[cfg(test)]
+pub(crate) fn read_ref<'de, T>(payload: &'de Map<String, Value>) -> Option<T>
+where
+    T: serde::Deserialize<'de>,
+{
+    let _ = payload;
+    None
+}
+
 /// How long the second Ctrl+C waits for the first.
 pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
 

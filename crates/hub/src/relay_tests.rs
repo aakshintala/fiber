@@ -3006,3 +3006,112 @@ fn an_indeterminate_answer_from_the_session_is_forwarded_and_never_routed() {
     assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
 }
+
+/// The typed `parse_typed` seam reads `line` exactly as the full-parse
+/// `acknowledgement` does: the setup asserts the line acknowledges
+/// through the old path, then the parity assert compares the two.
+fn typed_parity(line: &[u8]) {
+    let old = acknowledgement(line);
+    assert!(old.is_some(), "setup: the line acknowledges");
+    assert_eq!(super::ack::parse_typed(line), old);
+}
+
+/// Both paths read `line` as `None`: the line acknowledges nothing.
+fn typed_none(line: &[u8]) {
+    assert_eq!(acknowledgement(line), None, "setup: the line stays unread");
+    assert_eq!(super::ack::parse_typed(line), None);
+}
+
+#[test]
+fn parse_typed_matches_acknowledgement_for_verdicts() {
+    let line = |kind: &str, payload: Value| {
+        serde_json::to_vec(&json!({"kind": kind, "ts": 1, "payload": payload})).unwrap()
+    };
+    // An accepted acknowledgement carries a numeric `last_seq`.
+    let accepted = line(
+        "command_accepted",
+        json!({"command_id": "c", "result": {"last_seq": 41}}),
+    );
+    assert_eq!(
+        acknowledgement(&accepted)
+            .as_ref()
+            .and_then(|ack| ack.last_seq),
+        Some(41)
+    );
+    typed_parity(&accepted);
+    typed_parity(&line("command_accepted", json!({"command_id": "c"})));
+    typed_parity(&line(
+        "command_rejected",
+        json!({"command_id": "c_1", "code": "closing", "message": "m"}),
+    ));
+    typed_parity(&line(
+        "command_rejected",
+        json!({"command_id": "c_1", "code": "busy", "message": "m"}),
+    ));
+    // A rewind carries the session it starts.
+    typed_parity(&line(
+        "command_accepted",
+        json!({"command_id": "c_rw", "result": {"new_session_id": "s_bbbbbbbbbbbbbbbb"}}),
+    ));
+    // Missing and non-object `payload` acknowledge nothing.
+    typed_none(&line("command_rejected", Value::Null));
+    typed_none(&serde_json::to_vec(&json!({"kind": "command_accepted", "ts": 1})).unwrap());
+    typed_none(b"not json\n");
+}
+
+#[test]
+fn parse_typed_takes_the_last_duplicate_key() {
+    // A top-level array is no acknowledgement: there is no map to read.
+    typed_none(b"[{\"kind\": \"command_accepted\"}]\n");
+    // Duplicate keys resolve last-wins, at the top level and inside the
+    // nested `payload` and `result`: the replayed kind loses.
+    typed_parity(b"{\"kind\": \"session_status\", \"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\"}}\n");
+    typed_parity(b"{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c_old\", \"command_id\": \"c\"}}\n");
+    typed_parity(b"{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\", \"result\": {\"last_seq\": 7, \"last_seq\": 41}}}\n");
+    typed_none(b"{\"kind\": \"command_accepted\", \"kind\": \"session_status\", \"payload\": {\"command_id\": \"c\"}}\n");
+}
+
+#[test]
+fn parse_typed_keeps_the_ack_on_wrong_typed_optionals() {
+    let line = |payload: Value| {
+        serde_json::to_vec(&json!({"kind": "command_accepted", "payload": payload})).unwrap()
+    };
+    // A wrong-typed `last_seq` reads no sequence, but the ack still
+    // names its command.
+    for last_seq in [
+        json!("41"),
+        json!(-1),
+        json!(4.5),
+        serde_json::from_str::<Value>("18446744073709551616").unwrap(),
+    ] {
+        let bytes = line(json!({"command_id": "c", "result": {"last_seq": last_seq}}));
+        assert_eq!(
+            acknowledgement(&bytes)
+                .as_ref()
+                .and_then(|ack| ack.last_seq),
+            None,
+            "setup: {last_seq} reads no sequence"
+        );
+        typed_parity(&bytes);
+    }
+    // A string or null `result` reads no sequence and starts nothing.
+    for result in [json!("x"), Value::Null] {
+        typed_parity(&line(json!({"command_id": "c", "result": result})));
+    }
+    // Wrong-typed `new_session_id` and `code` read no session and no
+    // closing verdict, but the ack still names its command.
+    typed_parity(&line(
+        json!({"command_id": "c_rw", "result": {"new_session_id": 7}}),
+    ));
+    typed_parity(
+        &serde_json::to_vec(&json!({"kind": "command_rejected", "payload": {"command_id": "c_1", "code": 7, "message": "m"}})).unwrap(),
+    );
+    // A malformed unknown value rejects the line exactly where the full
+    // parse rejects it: an invalid escaped surrogate and an out-of-range
+    // number acknowledge nothing.
+    typed_none("{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\"}, \"x\": \"\\ud800\"}\n".as_bytes());
+    typed_none(
+        "{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\"}, \"x\": 1e999}\n"
+            .as_bytes(),
+    );
+}

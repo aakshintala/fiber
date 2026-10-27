@@ -128,6 +128,15 @@ pub(crate) fn acknowledgement(line: &[u8]) -> Option<Ack> {
     })
 }
 
+/// One map-only typed pass over the relayed line's bytes into `Ack`, with
+/// no `Value` tree. It returns `Some` exactly when `acknowledgement`
+/// returns `Some`, with equal fields.
+#[cfg(test)]
+pub(crate) fn parse_typed(line: &[u8]) -> Option<Ack> {
+    let _ = line;
+    None
+}
+
 /// The one full parse of a relayed session line: every full parse in the
 /// relay module and `retire.rs` goes through it, so the counted-work test
 /// counts through it.
