@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view_tests.rs
-assertion_line: 1264
 expression: "sized(&mut app, 80, 24)"
 ---
 

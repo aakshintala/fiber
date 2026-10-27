@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/input_box_tests.rs
-assertion_line: 47
 expression: "screen(&typed(80, 12, \"/h\"), 80, 12)"
 ---
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

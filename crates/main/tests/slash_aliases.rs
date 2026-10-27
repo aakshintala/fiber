@@ -20,8 +20,8 @@ use support::pty::Run;
 use support::{Setup, write_json};
 
 /// The terminal on home: an offline model keeps boot free of the
-/// network, and an idle hub exits at once after its last client
-/// leaves, so `wait` never outlasts the test's deadline.
+/// network, and the hub exits at once after its last client leaves, so
+/// `wait` never outlasts the test's deadline.
 fn terminal(setup: &Setup) -> Run {
     write_json(
         &setup.home().join("config.json"),
@@ -54,9 +54,11 @@ fn rules_setup() -> Setup {
     setup
 }
 
-/// Quits from home: Ctrl+C, then `/quit`, then the restored terminal
-/// and a clean exit.
+/// Quits from home after Ctrl+C clears any remaining input, then checks
+/// the restored terminal and a clean exit.
 fn quit(mut run: Run, command: &str) {
+    // The caller's complete post-command frame is the input-ready signal.
+    // Ctrl+C then `/quit` is one ordered cleanup sequence.
     run.write(b"\x03");
     run.write(b"/quit\r");
     run.wait_screen("the restored terminal", |grid| {
@@ -81,6 +83,8 @@ fn run_slash(run: &mut Run, prefix: &str, row: &str, rest: &str, command: &str) 
     run.write(prefix.as_bytes());
     let what = format!("the slash-list row for {command}");
     run.wait_screen(&what, |grid| grid.contents.contains(row));
+    // This whole frame shows the prefix was handled and the input loop
+    // is ready for `rest`.
     run.write(rest.as_bytes());
 }
 
@@ -96,9 +100,9 @@ fn rebinding_footer(command: &str, prefix: &str, row: &str, rest: &str) -> Strin
         grid.contents.contains("Enter rebind")
     });
     let footer = row_with(&grid, "Enter rebind", command);
+    // This whole frame shows the rebinding screen is ready for Esc.
     run.write(b"\x1b[27u"); // Kitty-protocol Esc
-    // Wait for the close before quitting: an Esc queued beside the
-    // quit's Ctrl+C reads as one modified key, never as Esc.
+    // Confirm Esc closed the view before sending the cleanup command.
     run.wait_screen("the closed rebinding screen", |grid| {
         !grid.contents.contains("Enter rebind")
     });
@@ -126,9 +130,9 @@ fn rules_row(command: &str, prefix: &str, row: &str, rest: &str) -> String {
         grid.contents.contains("allow shell:git status")
     });
     let found = row_with(&grid, "allow shell:git status", command);
+    // This whole frame shows the rules screen is ready for Esc.
     run.write(b"\x1b[27u"); // Kitty-protocol Esc
-    // Wait for the close before quitting: an Esc queued beside the
-    // quit's Ctrl+C reads as one modified key, never as Esc.
+    // Confirm Esc closed the view before sending the cleanup command.
     run.wait_screen("the closed rules view", |grid| {
         !grid.contents.contains("allow shell:git status")
     });

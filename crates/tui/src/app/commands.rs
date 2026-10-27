@@ -53,7 +53,7 @@ pub(crate) struct CommandEntry {
 /// `/keymap` on the keys row. Empty elsewhere, so an alias never
 /// doubles the row. The `/` list and dispatch both read it beside
 /// the table.
-pub(crate) fn alias_of(name: &str) -> &'static [&'static str] {
+pub(crate) fn aliases_of(name: &str) -> &'static [&'static str] {
     match name {
         "thinking" => &["effort"],
         "usage" => &["cost"],
@@ -695,7 +695,7 @@ impl App {
         // draw goes out as typed. An alias runs its row's command.
         let entry = TABLE
             .iter()
-            .find(|entry| entry.name == name || alias_of(entry.name).contains(&name))?;
+            .find(|entry| entry.name == name || aliases_of(entry.name).contains(&name))?;
         (entry.run)(self, &rest)
     }
 

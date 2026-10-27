@@ -1,7 +1,7 @@
 //! The `/` list: built-in commands and the session's `commands` answer in
 //! one filtered list (`docs/tui.md`, "Keys" › "Rules", "Slash commands").
 
-use crate::app::commands::{TABLE, alias_of};
+use crate::app::commands::{TABLE, aliases_of};
 use contract::events::CommandInfo;
 
 /// How many rows a completion panel shows at most.
@@ -83,7 +83,7 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
                 // An extension row named like an alias takes that
                 // alias only, so only one entry of it shows; the row
                 // keeps its other aliases.
-                aliases: alias_of(entry.name)
+                aliases: aliases_of(entry.name)
                     .iter()
                     .filter(|alias| replacement(alias).is_none())
                     .map(|alias| (*alias).to_owned())

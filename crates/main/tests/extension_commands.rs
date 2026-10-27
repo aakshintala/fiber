@@ -15,6 +15,7 @@
 mod extension_harness;
 mod support;
 
+use std::collections::BTreeSet;
 use std::fs;
 
 use extension_harness::*;
@@ -548,30 +549,25 @@ fn registering_a_slash_alias_without_replaces_unloads_with_extension_failed() {
     // read stdout until `extensions_loaded` and every alias is named by
     // an `extension_failed` notice. The load notices are written after
     // `extensions_loaded`; wait for both.
-    let mut started = Vec::new();
+    let aliases = ["compact", "keymap", "permissions", "stop"];
+    let mut loaded = false;
+    let mut noticed = BTreeSet::new();
     loop {
         let line = match setup.deadline.recv(&running.lines) {
             Ok(line) => line,
             Err(_) => panic!("waited for extensions_loaded and the alias notices on stdout"),
         };
         let value: Value = serde_json::from_str(&line).unwrap();
-        started.push(value);
-        let loaded = started
-            .iter()
-            .any(|v: &Value| v["kind"] == "extensions_loaded");
-        let noticed = ["compact", "keymap", "permissions", "stop"]
-            .iter()
-            .all(|alias| {
-                started.iter().any(|line| {
-                    line["kind"] == "notice"
-                        && line["payload"]["code"] == "extension_failed"
-                        && line["payload"]["message"]
-                            .as_str()
-                            .unwrap()
-                            .contains(&format!("`{alias}`"))
-                })
-            });
-        if loaded && noticed {
+        loaded |= value["kind"] == "extensions_loaded";
+        if value["kind"] == "notice" && value["payload"]["code"] == "extension_failed" {
+            let message = value["payload"]["message"].as_str().unwrap();
+            for alias in aliases {
+                if message.contains(&format!("`{alias}`")) {
+                    noticed.insert(alias);
+                }
+            }
+        }
+        if loaded && aliases.iter().all(|alias| noticed.contains(alias)) {
             break;
         }
     }

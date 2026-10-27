@@ -1,7 +1,7 @@
 //! Tests for the `/` list.
 
 use super::{Row, SHOWN, extensions, filter, is_built_in, rows, window_start};
-use crate::app::commands::{TABLE, alias_of};
+use crate::app::commands::{TABLE, aliases_of};
 use contract::commands::BUILT_IN_COMMANDS;
 use contract::events::CommandInfo;
 
@@ -169,7 +169,7 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
     // (`docs/tui.md:1966`).
     for alias in TABLE
         .iter()
-        .flat_map(|entry| alias_of(entry.name).iter().copied())
+        .flat_map(|entry| aliases_of(entry.name).iter().copied())
     {
         assert!(is_built_in(alias), "{alias}");
     }
