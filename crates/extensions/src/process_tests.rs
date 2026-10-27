@@ -2274,9 +2274,9 @@ fn a_timed_out_hook_drops_its_late_reply() {
         {"read": {"as": "first"}},
         {"hold": {"release_on": "line", "release_line": {"test_release": true}}},
         {"send": {"id": "p-late", "command": "reply", "args": {"request_id": {"$ref": "first.payload.request_id"}, "result": "late"}}},
-        {"read": {"as": "second"}},
+        {"read_until": {"as": "second", "path": "kind", "equals": "extension_request", "append_to": "answers"}},
         {"send": {"id": "p-fresh", "command": "reply", "args": {"request_id": {"$ref": "second.payload.request_id"}, "result": "fresh"}}},
-        {"repeat": {"count": 2, "actions": [{"read": {"append_to": "answers"}}]}},
+        {"read_until": {"path": "kind", "equals": "command_accepted", "append_to": "answers"}},
         {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "answers"}}},
     ])
     .to_string();
@@ -2361,9 +2361,28 @@ fn a_timed_out_hook_drops_its_late_reply() {
         Ok(Some(json!("fresh")))
     );
     let answers = read_json_file(&out_path, "the reply answers");
-    assert_eq!(answers[0]["kind"], json!("command_rejected"));
-    assert_eq!(answers[0]["payload"]["code"], json!("stale_request"));
-    assert_eq!(answers[1]["kind"], json!("command_accepted"));
+    let answers = answers
+        .as_array()
+        .expect("the peer records its received lines as an array");
+    assert!(
+        answers.iter().any(|answer| {
+            answer["kind"] == json!("command_rejected")
+                && answer["payload"]["code"] == json!("stale_request")
+        }),
+        "the late reply is rejected as stale: {answers:?}"
+    );
+    assert!(
+        answers
+            .iter()
+            .any(|answer| answer["kind"] == json!("extension_request")),
+        "the next hook is delivered: {answers:?}"
+    );
+    assert!(
+        answers
+            .iter()
+            .any(|answer| answer["kind"] == json!("command_accepted")),
+        "the fresh reply is acknowledged: {answers:?}"
+    );
 }
 
 /// Cancelling the dispatch ends the pending request: the late reply is
