@@ -637,10 +637,11 @@ impl Diag {
     }
 
     /// The closed-socket message for `what` with the lines `got` so far:
-    /// the old first line, then the stderr snapshot, then the session-log
-    /// tail. The stderr lock is released before the log file is read, and
-    /// a poisoned lock yields what was captured, so the dump never
-    /// replaces the closed panic with its own.
+    /// the old first line, then the stderr snapshot and the session-log
+    /// tail, with the received-lines dump last so a long dump cannot push
+    /// the diagnostics past the CI output cap. The stderr lock is released
+    /// before the log file is read, and a poisoned lock yields what was
+    /// captured, so the dump never replaces the closed panic with its own.
     pub(crate) fn report_closed(&self, what: &str, got: &[Value]) -> String {
         let stderr = self
             .stderr
@@ -696,10 +697,12 @@ pub(crate) fn timeout_message(what: &str, got: &[Value], stderr: &str, log_tail:
     )
 }
 
-/// The closed-socket message: the old first line naming `what` and `got`,
-/// then the stderr snapshot (or the captured-nothing marker when it is
-/// empty), then the session-log tail. The empty marker never says the
-/// session is still running: the socket already closed.
+/// The closed-socket message: the old first line naming `what`, then the
+/// stderr snapshot (or the captured-nothing marker when it is empty),
+/// then the session-log tail, with the received-lines dump last so a long
+/// dump cannot push the diagnostics past the CI output cap. The empty
+/// marker never says the session is still running: the socket already
+/// closed.
 pub(crate) fn closed_message(what: &str, got: &[Value], stderr: &str, log_tail: &str) -> String {
     let stderr = if stderr.is_empty() {
         "(no stderr captured)"
@@ -707,11 +710,12 @@ pub(crate) fn closed_message(what: &str, got: &[Value], stderr: &str, log_tail: 
         stderr
     };
     format!(
-        "the socket closed while waiting for {what}; got {got:?}\n\
+        "the socket closed while waiting for {what}\n\
          fiber stderr:\n\
          {stderr}\n\
          session log tail (events.jsonl, last 20 lines):\n\
-         {log_tail}"
+         {log_tail}\n\
+         got {got:?}"
     )
 }
 
@@ -1742,8 +1746,8 @@ fn closed_socket_dump_with_diag_shows_lines_stderr_and_log_tail() {
     .unwrap_err();
     let message = failed.downcast_ref::<String>().cloned().unwrap_or_default();
     let first = message.lines().next().unwrap_or_default();
-    assert!(
-        first.starts_with("the socket closed while waiting for the stopped child exits; got "),
+    assert_eq!(
+        first, "the socket closed while waiting for the stopped child exits",
         "{message}"
     );
     assert!(message.contains("command_accepted"), "{message}");
@@ -1762,6 +1766,43 @@ fn closed_socket_dump_with_diag_shows_lines_stderr_and_log_tail() {
     let empty = closed_message("the stopped child exits", &[], "", "{\"kind\":\"x\"}\n");
     assert!(empty.contains("(no stderr captured)"), "{empty}");
     assert!(!empty.contains("still running"), "{empty}");
+}
+
+#[test]
+fn closed_socket_dump_keeps_stderr_and_log_tail_within_the_output_cap() {
+    // The CI output cap keeps the first 6000 characters: with a long
+    // received-lines dump, the stderr and log-tail sections still fit
+    // because the dump comes last.
+    const OUTPUT_CAP: usize = 6000;
+    let stderr_sentinel = "stderr-sentinel-9f3a1c";
+    let log_sentinel = "\"kind\":\"log-tail-sentinel-7e2b\"";
+    let got: Vec<Value> = (0..2000)
+        .map(|n| json!({"kind": "filler", "n": n, "pad": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}))
+        .collect();
+    let message = closed_message(
+        "the stopped child exits",
+        &got,
+        stderr_sentinel,
+        log_sentinel,
+    );
+    assert!(
+        message.len() > OUTPUT_CAP,
+        "dump fits the cap: {}",
+        message.len()
+    );
+    let visible = &message[..OUTPUT_CAP];
+    assert!(visible.contains("fiber stderr:"), "{visible}");
+    assert!(visible.contains(stderr_sentinel), "{visible}");
+    let tail_header = "session log tail (events.jsonl, last 20 lines):";
+    assert!(visible.contains(tail_header), "{visible}");
+    assert!(visible.contains(log_sentinel), "{visible}");
+    // The diagnostics precede the dump: flipping the order back would
+    // push both sentinels past the cap.
+    let stderr_at = message.find(stderr_sentinel).unwrap_or(usize::MAX);
+    let log_at = message.find(log_sentinel).unwrap_or(usize::MAX);
+    let dump_at = message.find("got [").unwrap_or(usize::MAX);
+    assert!(stderr_at < dump_at, "{message}");
+    assert!(log_at < dump_at, "{message}");
 }
 
 #[test]
