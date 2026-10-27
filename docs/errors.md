@@ -404,6 +404,7 @@ the lines that carry it.
 | `unsupported_file` | extension call, tool call | a file tool was given a directory, device or file it cannot handle | — |
 | `usage` | exit, driver command (`rewind`), hub command | the invocation or its environment is wrong, including an unknown `--hub` name; exits 2; or a hub configuration operation is refused by the configuration or credential writer | — |
 | `version_conflict` | exit, driver command (`rewind`) | an install needs two majors of one dependency, no tag meets a minimum, or the versions cannot be settled; pick compatible versions. Not retried automatically (`docs/extensions.md`, "Versions") | — |
+| `workspace` | notice | `/pwd` shows the attached session's recorded workspace root (`docs/tui.md`, "Slash commands") | event |
 
 Notices, for a failure outside any action or a login a person must finish:
 

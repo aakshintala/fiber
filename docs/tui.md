@@ -1927,6 +1927,7 @@ later release still applies.
 | `/status` | Opens the status view ("Swapped views"). |
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
+| `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
@@ -1950,6 +1951,8 @@ later release still applies.
 | `/?`, `/help` | Opens the key map. |
 
 The `/` list shows built-in commands in this order.
+
+The range line's total counts every entry the query matches: the matching built-in rows plus the matching session commands.
 
 A row's second name, such as `/exit`, is an alias: typing it runs the same
 command, and the `/` list shows it after the name on that command's row,

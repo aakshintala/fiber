@@ -66,6 +66,7 @@ const KINDS: &[(&str, Kind)] = &[
     ("switch_pending", Kind::Condition),
     ("tool_definitions_large", Kind::Event),
     ("web_search_unavailable", Kind::Event),
+    ("workspace", Kind::Event),
 ];
 
 /// The code's class from [`KINDS`]: unlisted codes are events.

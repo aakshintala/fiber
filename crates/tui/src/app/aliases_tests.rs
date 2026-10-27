@@ -12,6 +12,7 @@ use serde_json::json;
 const ALIASES: &[(&str, &str)] = &[
     ("thinking", "effort"),
     ("usage", "cost"),
+    ("pwd", "cwd"),
     ("settings", "config"),
     ("keys", "keybindings"),
     ("name", "rename"),
