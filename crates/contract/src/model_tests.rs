@@ -60,6 +60,7 @@ fn extension_usage_carries_its_line() {
         | crate::inbox::Delivery::Reload(_)
         | crate::inbox::Delivery::McpReconnect(..)
         | crate::inbox::Delivery::Name(..)
+        | crate::inbox::Delivery::AddDirectory(..)
         | crate::inbox::Delivery::Rewind(..)
         | crate::inbox::Delivery::Handoff(..)
         | crate::inbox::Delivery::Reply(..)

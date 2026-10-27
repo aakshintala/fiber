@@ -424,6 +424,7 @@ impl Loop {
                 session_blocks,
                 repository: crate::offer::State::resumed(offers),
                 naming,
+                added: Vec::new(),
                 fired,
                 context,
                 ledger,

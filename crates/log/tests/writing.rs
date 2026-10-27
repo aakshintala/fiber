@@ -136,6 +136,23 @@ fn a_quiet_text_turn_costs_two_fsyncs_bracketing_the_model_request() {
 }
 
 #[test]
+fn directory_added_is_fsynced_when_appended() {
+    let tmp = TestDir::new("fsync-added");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    log.append(&session_started(), None, None).unwrap();
+    let before = log.fsyncs();
+    log.append(
+        &Event::DirectoryAdded(contract::events::DirectoryAdded {
+            path: "/shared".into(),
+        }),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(log.fsyncs(), before + 1);
+}
+
+#[test]
 fn text_completed_under_an_action_adds_no_fsync() {
     let tmp = TestDir::new("fsync-part");
     let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();

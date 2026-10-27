@@ -266,6 +266,14 @@ pub struct QueuedMessage {
     pub sender: Sender,
 }
 
+/// `directory_added`: a folder the session accepted onto its boundary
+/// (`docs/events.md`, "`directory_added`").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectoryAdded {
+    /// The added folder's resolved path.
+    pub path: String,
+}
+
 /// `shell_command`: a command the person ran with `send` true.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShellCommand {

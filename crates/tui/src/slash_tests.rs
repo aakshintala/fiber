@@ -65,6 +65,7 @@ const DRAWN_ORDER: &[&str] = &[
     "diff",
     "copy",
     "pwd",
+    "add-dir",
     "panel",
     "rail",
     "rules",

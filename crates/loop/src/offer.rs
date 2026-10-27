@@ -370,6 +370,7 @@ impl Loop {
                 | Delivery::InnerCall(_)) => self.deferred.push_back(held),
                 now @ (Delivery::Reply(..)
                 | Delivery::Name(..)
+                | Delivery::AddDirectory(..)
                 | Delivery::Shell(..)
                 | Delivery::ExtensionExec(_)
                 | Delivery::ExtensionLog(_)

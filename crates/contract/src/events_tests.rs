@@ -309,6 +309,25 @@ fn durable_and_ephemeral_events_say_so() {
     assert_eq!(Event::StepStarted(Empty {}).class(), Class::Durable);
 }
 
+#[test]
+fn directory_added_round_trips_with_its_resolved_path() {
+    let event = read("directory_added", json!({"path": "/shared"}))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        event,
+        Event::DirectoryAdded(DirectoryAdded {
+            path: "/shared".into()
+        })
+    );
+    assert_eq!(event.kind(), "directory_added");
+    assert_eq!(event.class(), Class::Durable);
+    assert_eq!(
+        serde_json::to_value(event.payload().unwrap()).unwrap(),
+        json!({"path": "/shared"})
+    );
+}
+
 /// One payload per kind, or more where the doc makes keys exclusive, with
 /// every key the doc lists for it.
 fn samples() -> Vec<(&'static str, Value)> {
@@ -393,6 +412,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             "process": process}),
         ),
         ("session_named", json!({"name": null, "by": "person"})),
+        ("directory_added", json!({"path": "/shared"})),
         ("clients", json!({"count": 1})),
         (
             "session_status",

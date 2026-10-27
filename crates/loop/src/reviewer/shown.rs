@@ -199,6 +199,8 @@ pub fn render_reviewed(
         Event::FiberStarted(_) | Event::FiberExited(_) | Event::SessionStarted(_) => {}
         Event::Rewound(_) | Event::StepStarted(_) => {}
         Event::SteeringQueue(_) | Event::ShellCommand(_) | Event::SessionNamed(_) => {}
+        // A folder addition shows no call for the reviewer to judge.
+        Event::DirectoryAdded(_) => {}
         Event::Clients(_) | Event::SessionStatus(_) | Event::ContextAdded(_) => {}
         Event::AssistantMessageStarted(_) | Event::AssistantMessageDelta(_) => {}
         Event::ToolCallArgumentsDelta(_) | Event::ReasoningStarted(_) => {}

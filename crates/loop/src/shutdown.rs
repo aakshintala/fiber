@@ -112,6 +112,7 @@ impl Loop {
             | Delivery::Reload(_)
             | Delivery::McpReconnect(..)
             | Delivery::Name(..)
+            | Delivery::AddDirectory(..)
             | Delivery::Rewind(..)
             | Delivery::Handoff(..)
             | Delivery::Close(_)
@@ -260,6 +261,9 @@ impl Loop {
             // Written and accepted at the settle, as at any drain: it
             // starts no turn.
             Delivery::Shell(line, ack) => self.take_shell(line, ack)?,
+            // An added folder settles as at any drain: resolved, written
+            // unless covered and accepted, starting no turn.
+            Delivery::AddDirectory(args, ack) => self.take_add_directory(args, ack)?,
             Delivery::Prompt(_, ack)
             | Delivery::ProposeNotes(_, ack)
             | Delivery::Steer(_, ack)

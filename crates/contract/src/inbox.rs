@@ -133,6 +133,11 @@ pub enum Delivery {
     /// reading a set shutdown signal, writes and accepts it as at any
     /// drain.
     Name(crate::commands::Name, Ack),
+    /// The person's `add_directory` command: resolved against the
+    /// workspace, written as `directory_added` unless the boundary
+    /// already covers it, then acknowledged. A drain that takes it
+    /// before settling writes and accepts it as at any drain.
+    AddDirectory(crate::commands::AddDirectoryArgs, Ack),
     /// Starts a new session that continues this one from an earlier point
     /// (`docs/events.md`, "Rewind").
     Rewind(crate::CommandId, crate::commands::RewindArgs, Ack),

@@ -209,6 +209,10 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             format!("name {:?}", args.text)
         }
+        Delivery::AddDirectory(args, ack) => {
+            ack.0(Ok(None));
+            format!("add_directory {:?}", args.path)
+        }
         Delivery::Close(ack) => {
             ack.0(Ok(None));
             "close".to_owned()
@@ -1663,6 +1667,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Name(..)
+                | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
                 | Delivery::Reload(..)
@@ -1707,6 +1712,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Name(..)
+                | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
                 | Delivery::Reload(..)
@@ -1803,6 +1809,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Name(..)
+                | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
                 | Delivery::Reload(..)
@@ -1875,6 +1882,30 @@ fn name_is_delivered_with_its_text_exactly() {
 }
 
 #[test]
+fn add_directory_is_delivered_with_its_path() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_a1","command":"add_directory","args":{"path":"shared"}}"#,
+            );
+            let wait = Deadline::after(DEADLINE);
+            assert_eq!(take(&inbox, &wait), "add_directory \"shared\"");
+            let accepted = response(&client, "c_a1");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert_eq!(command_id(&accepted), Some("c_a1"));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
 fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
     let opened = Opened::open(vec![]);
     let socket = opened.socket.clone();
@@ -1904,6 +1935,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Name(..)
+                | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
                 | Delivery::Reload(..)
@@ -1952,6 +1984,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Name(..)
+                | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
                 | Delivery::Reload(..)
@@ -6228,6 +6261,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Name(..)
+                | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
                 | Delivery::Reload(..)

@@ -163,6 +163,8 @@ pub enum Command {
     ProposeNotes(crate::notes::ProposeNotesArgs),
     /// Runs an extension's command by name.
     Command(RunCommand),
+    /// Adds a folder to the session's boundary.
+    AddDirectory(AddDirectoryArgs),
     /// Accepts no more prompts, finishes what is running, and exits; with `now`, shuts down.
     Close(CloseArgs),
     /// Reads one file listed by a pending repository offer.
@@ -548,6 +550,14 @@ pub struct RunCommand {
     pub text: Option<String>,
 }
 
+/// The `args` of `add_directory`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AddDirectoryArgs {
+    /// The folder to add, resolved against the workspace.
+    pub path: String,
+}
+
 /// The `args` of `close`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -579,6 +589,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "copy",
     "pwd",
     "cwd",
+    "add-dir",
     "tools",
     "mcp",
     "panel",

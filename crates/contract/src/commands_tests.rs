@@ -128,6 +128,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "propose_notes", "args": {"topic": "routine_actions",
             "answer": "I merge my own PRs", "earlier": ["github.com/acme/* are ours"]}}),
         json!({"id": "c", "command": "command", "args": {"name": "review", "text": "all"}}),
+        json!({"id": "c", "command": "add_directory", "args": {"path": "shared"}}),
         json!({"id": "c", "command": "close", "args": {"now": true}}),
         json!({"id": "c", "command": "close", "args": {"now": false}}),
         json!({"id": "c", "command": "import", "args": {}}),
