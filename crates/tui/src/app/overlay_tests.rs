@@ -2546,6 +2546,61 @@ fn an_older_window_replaces_the_candidate_from_fresh_pages() {
     );
 }
 
+/// Folding one tail batch counts the open page once: the batch holds
+/// the fresh page's recount while its lines apply and counts it once
+/// at the flush, instead of recounting after every changed line. The
+/// candidate keeps the same rows and busy state as the open applies.
+#[test]
+fn folding_one_tail_batch_counts_the_open_page_once() {
+    let mut seq = 0;
+    let lines = turn(&mut seq, "a_m", "a reply");
+    let all = envelopes(&lines);
+    assert!(
+        all.len() < crate::pages::PAGE_LINES,
+        "the batch stays on one page: {} envelopes",
+        all.len()
+    );
+    let mut app = reading();
+    // The same envelopes folded at the attached screen's own width.
+    let mut expect_pages = app.attached_screen().pages().fresh();
+    for envelope in &all {
+        expect_pages.apply(envelope);
+    }
+    let expect: Vec<String> = expect_pages
+        .rows()
+        .iter()
+        .map(|(line, _)| line.to_string())
+        .collect();
+    app.tail_lines(all);
+    let preview = app
+        .preview
+        .as_ref()
+        .unwrap_or_else(|| panic!("a candidate after the tail answer"));
+    assert_eq!(
+        preview.pages.recounts, 1,
+        "one open-page recount for the batch, not one per changed line"
+    );
+    let rows: Vec<String> = preview
+        .pages
+        .rows()
+        .iter()
+        .map(|(line, _)| line.to_string())
+        .collect();
+    assert_eq!(
+        rows, expect,
+        "the held batch folds the same rows as the open applies"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("a reply")),
+        "the candidate keeps its reply"
+    );
+    assert_eq!(
+        preview.busy,
+        Some(false),
+        "the completed turn leaves no running turn"
+    );
+}
+
 /// A fresh read drops the old candidate and cursor: installing one run
 /// and starting the next never installs or counts the old run's lines.
 #[test]

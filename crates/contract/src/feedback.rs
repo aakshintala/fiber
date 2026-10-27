@@ -15,6 +15,12 @@ use crate::SessionId;
 pub type WriteFeedback =
     Arc<dyn Fn(&str, Option<&SessionId>) -> Result<FeedbackDone, String> + Send + Sync>;
 
+/// Reads the `doctor` report the headless door prints and the `/doctor`
+/// view shows: the injected reader `main` supplies, so the TUI names
+/// this seam and never `cli`. The failure carries the capture's text, as
+/// the headless door prints it.
+pub type ReadDoctor = Arc<dyn Fn() -> Result<String, String> + Send + Sync>;
+
 /// What a feedback write returns: the report's path and its issue link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedbackDone {
