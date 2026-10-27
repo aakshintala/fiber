@@ -593,7 +593,8 @@ a click on it returns too. The views are:
   columns wide, and the input box's hint reads "type into the job", dim.
 - **The running delegates or jobs,** from "N delegates running" or "N jobs
   running" in the narrow layout: two rows for each delegate, or one row for
-  each job, in the order they started. A row opens that item's view.
+  each job, in the order they started. `/jobs` (`/tasks` and `/ps` run the
+  same command) opens the jobs list. A row opens that item's view.
   "Delegates · N running" bold heads the delegates. A delegate's first row is
   "◆ <description> · <elapsed>"; its second, indented two columns, is dim:
   the model, the thinking level, the calls and the session, then its spend,
@@ -1297,6 +1298,7 @@ and an expiry wakes the loop even with no input.
 | `model_invalid` | event | Fades 10 s after it shows. |
 | `model_unconfigured` | event | Fades 10 s after it shows. |
 | `models_loading` | condition | The model list arrives. |
+| `no_jobs_running` | event | Fades 10 s after it shows. |
 | `no_model` | event | Fades 10 s after it shows. |
 | `notes_unchanged` | event | Fades 10 s after it shows. |
 | `repository_code_skipped` | event | Fades 10 s after it shows. |
@@ -1688,7 +1690,7 @@ what it started keeps running.
   that match the query bold; the description dim, cut with … so the tag
   always fits; the `argument-hint` in `attention`; and the tag dim at the
   right end. The first match is focused. When the list does not fit, a last
-  dim row says where the rows shown sit: "1–8 of 40 · ↓ 32 more", with "↑ 3
+  dim row says where the rows shown sit: "1–8 of 43 · ↓ 35 more", with "↑ 3
   above · " in front once it has scrolled. With nothing matching, the panel
   holds one dim row, "no matches". A
   skill the model has loaded shows in the transcript as a skill, not as a file
@@ -1963,7 +1965,7 @@ later release still applies.
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
 | `/release-notes` | Opens the running version's release notes, or says none are available. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
-| `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
+| `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice `No session on screen.` |
 | `/add-dir <path>` | Adds an existing folder to the session's boundary. Relative paths resolve from the workspace. A folder already inside the boundary is accepted without a change. The folder lasts for the session; `/cd` or a new session drops it. With no path, the terminal shows the command's usage. |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
@@ -1988,6 +1990,7 @@ later release still applies.
 | `/approvals` | Reopens the waiting approvals and questions. |
 | `/?`, `/help` | Opens the key map. |
 | `/delegates`, `/agents` | Opens the delegates view: every delegate of the session on screen, running and finished. |
+| `/jobs`, `/tasks`, `/ps` | Opens the running jobs view: every running job of the session on screen, in the order they started. With no session on screen it shows the notice `No session on screen.`; with no jobs running it shows the notice `No jobs running` and opens nothing. Words after the command are ignored. |
 
 The `/` list shows built-in commands in this order.
 
@@ -2008,7 +2011,7 @@ and extension commands, each with the tag the answer gives. The terminal sends
 each `extensions_loaded`, which an offer's approval writes with no `reloaded`
 (`docs/events.md`, "`extensions_loaded`"), and each `turn_started`, and
 fills the list from the answer to the latest one it sent; until that answer
-arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's command named like an alias takes that name the same way: its own row shows, and the built-in row drops the alias. An extension's commands run
+arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's command named like an alias takes that name the same way: its own row shows, and the built-in row drops the alias. An extension's command named like a built-in's name takes that row's aliases with it: they run the extension's command and show on its row. An extension's commands run
 with the `command` driver command (`docs/extensions.md`, "Commands and
 screens").
 

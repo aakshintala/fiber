@@ -104,8 +104,8 @@ fn row_text(buf: &Buffer, y: u16) -> String {
         .collect()
 }
 
-/// The fixture session skills behind `forty()`: one row each after the
-/// built-ins.
+/// The fixture session skills behind `slash_list_with_skills()`: one row
+/// each after the built-ins.
 const FIXTURE_SKILLS: usize = 17;
 
 /// The `/`-query filtered total: every built-in command row plus the
@@ -116,8 +116,8 @@ fn slash_total() -> usize {
     crate::app::commands::TABLE.len() + FIXTURE_SKILLS
 }
 
-/// An app with a `/` list of the built-ins and the fixture session skills.
-fn forty() -> App {
+/// An app with a long `/` list: the built-ins and the fixture session skills.
+fn slash_list_with_skills() -> App {
     let mut app = attached(160, 48);
     let skills: Vec<String> = (0..FIXTURE_SKILLS)
         .map(|n| format!("skill{n:02}"))
@@ -128,14 +128,16 @@ fn forty() -> App {
 }
 
 #[test]
-fn slash_eight_of_forty() {
-    let mut app = forty();
+fn slash_eight_of_long_list() {
+    let mut app = slash_list_with_skills();
     type_text(&mut app, "/");
     insta::assert_snapshot!("slash", screen(&app, 160, 48));
     // Eight entries and the range line, with the first match focused.
     let shown = screen(&app, 160, 48);
+    // The range counts matching entries, not just visible rows
+    // (`docs/tui.md:1682-1685,1995`); the total is the command table's
+    // rows plus the fixture skill rows.
     let total = slash_total();
-    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
     assert!(
         shown.contains(&format!(
             "1–8 of {total} · ↓ {} more",
@@ -145,6 +147,7 @@ fn slash_eight_of_forty() {
     );
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
+    // The first match is focused (`docs/tui.md:1682`).
     assert_eq!(bars.len(), 1, "{shown}");
     assert!(row_text(&buf, bars[0]).contains("home"), "{shown}");
 }
@@ -168,8 +171,8 @@ fn slash_exit_alias() {
 #[test]
 fn slash_keys_aliases_render_and_filter_independently() {
     // Each alias, whole or in part, finds exactly the keys row, which
-    // carries both aliases on it (`docs/tui.md:1944,1965`).
-    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1944,1965`).
+    // carries both aliases on it (`docs/tui.md:1974,1997`).
+    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1974,1997`).
     for query in ["keymap", "keybindings", "keyma", "keybind"] {
         let mut app = attached(160, 48);
         type_text(&mut app, &format!("/{query}"));
@@ -223,7 +226,7 @@ fn slash_keys_alias_spans_match_only_the_queried_alias() {
 
 #[test]
 fn a_scrolled_slash_list_counts_both_directions() {
-    let mut app = forty();
+    let mut app = slash_list_with_skills();
     type_text(&mut app, "/");
     let now = fakes::clock::FakeClock::new().now();
     for _ in 0..10 {
@@ -234,7 +237,9 @@ fn a_scrolled_slash_list_counts_both_directions() {
     // follow the list.
     let total = slash_total();
     assert!(
-        // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+        // The range counts matching entries, not just visible rows
+        // (`docs/tui.md:1682-1685,1995`); the total is the command
+        // table's rows plus the fixture skill rows.
         shown.contains(&format!(
             "↑ 3 above · 4–11 of {total} · ↓ {} more",
             total - 11
@@ -419,12 +424,16 @@ fn a_file_error_is_one_dim_row_with_no_bar() {
 
 #[test]
 fn narrow_slash() {
-    let mut app = forty();
+    let mut app = slash_list_with_skills();
     app.set_size(100, 40);
     type_text(&mut app, "/");
+    // The focused match and range line follow the slash-panel rules
+    // (`docs/tui.md:1682-1685,1995`).
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
+    // The range counts matching entries, not just visible rows
+    // (`docs/tui.md:1682-1685,1995`); the total is the command table's
+    // rows plus the fixture skill rows.
     let total = slash_total();
-    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
     assert!(screen(&app, 100, 40).contains(&format!(
         "1–8 of {total} · ↓ {} more",
         total - crate::slash::SHOWN
@@ -745,7 +754,7 @@ fn fit_windows_around_the_selection_with_exactly_one_bar() {
 /// barred, counted of the whole list.
 #[test]
 fn short_conversation_slash_keeps_its_selection_barred() {
-    let mut app = forty();
+    let mut app = slash_list_with_skills();
     app.set_size(80, 12);
     type_text(&mut app, "/");
     let now = fakes::clock::FakeClock::new().now();
@@ -755,11 +764,14 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     let buf = buffer(&app, 80, 12);
     let shown = screen(&app, 80, 12);
     let bars = barred(&buf);
+    // The selected match stays focused (`docs/tui.md:1682`).
     assert_eq!(bars.len(), 1, "{shown}");
-    // `/hooks` sits after `/tools`: ten downs bar `/context` now.
+    // `/hooks` follows `/tools` (`docs/tui.md:1956-1957,1993`): ten downs bar `/context`.
     assert!(row_text(&buf, bars[0]).contains("context"), "{shown}");
+    // The range counts matching entries, not just visible rows
+    // (`docs/tui.md:1682-1685,1995`); the total is the command table's
+    // rows plus the fixture skill rows.
     let total = slash_total();
-    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
     assert!(shown.contains(&format!("of {total}")), "{shown}");
 }
 
