@@ -819,10 +819,10 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
     })
     .unwrap();
     // The delegate's first turn runs a shell held on a fifo, so its run
-    // stays open and live while the steer goes out: the shell signals
-    // start by writing to the fifo, then blocks reading the release the
-    // test writes after the steer is accepted. The steered message joins
-    // the open turn, and the next model call carries it. A real `sleep`
+    // stays open and live while the steer goes out: the shell blocks
+    // reading the fifo, and the test holds the write end open with no
+    // data until the steer is accepted. The steered message joins the
+    // open turn, and the next model call carries it. A real `sleep`
     // would hold the run on the wall clock instead (`docs/testing.md`,
     // "Waits and timeouts").
     let hold = setup.workspace().join("delegate.hold.fifo");
@@ -839,7 +839,7 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
         stream(&[function_call(
             "call_hold",
             "shell",
-            &json!({"command": format!("echo started > '{hold_arg}'; read line < '{hold_arg}'")}),
+            &json!({"command": format!("read line < '{hold_arg}'")}),
         )])
     })
     .unwrap();
@@ -866,20 +866,28 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
         line["kind"] == "turn_completed" && line["session_id"] == parent
     });
     first_turn.last().expect("the turn ended");
+    // The delegate's first step sends one model call: a step is one
+    // round-trip to the model (`docs/loop.md`, "One step", steps 3-4), so
+    // the first recorded request proves the delegate's turn started.
     assert!(
         server_child.await_requests(1, setup.deadline),
         "the delegate is running"
     );
-    // The held shell signals start itself: the first model call only proves
-    // the provider was hit, not that the hold runs.
-    let hold_start = hold.clone();
+    // The writer open is the hold signal: opening for writing blocks until
+    // the shell opens the fifo for reading, and the shell's command does
+    // that only in its blocking `read` — so the open returning proves the
+    // shell is held. The first model call alone only proves the provider
+    // was hit, not that the hold runs. The writer stays open with no data
+    // until the release below; the blocking open runs on a thread bounded
+    // by the deadline, as a blocking wait must (`docs/testing.md`, "Waits
+    // and timeouts").
+    let hold_open = hold.clone();
     let held = support::bounded(setup.deadline, "the delegate shell to hold", move || {
-        fs::read_to_string(&hold_start).unwrap_or_default()
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&hold_open)
+            .expect("the delegate shell opened the fifo")
     });
-    assert!(
-        held.contains("started"),
-        "the delegate shell holds before the prompt goes out"
-    );
     client.send(
         &json!({
             "id": "c_prompt_msg",
@@ -908,17 +916,25 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
     );
     // The delegate's second model call has not happened yet: its first
     // turn is still blocked on the held shell, so the steer was accepted
-    // while the delegate was live.
+    // while the delegate was live. Results return and the next step — with
+    // its request — runs only after every call returns (`docs/loop.md`,
+    // "One step", steps 6-7), and the steered message joins at that next
+    // step boundary (`docs/delegates.md`, "Talking to a delegate"), so the
+    // count is still 1.
     assert_eq!(
         server_child.requests().len(),
         1,
         "the delegate stays live on its held shell through the steer"
     );
     // The test releases the hold after the steer is accepted: the open
-    // turn continues, and its next model call carries the steered message.
-    let hold_release = hold.clone();
+    // turn continues, and its next model call carries the steered message
+    // (`docs/loop.md`, "One step", step 7; `docs/delegates.md`, "Talking
+    // to a delegate"). The writer stayed open with no data until now, so
+    // the shell was still blocked in its `read`; the test keeps its end
+    // open until the child reads the release (`docs/testing.md`, "Waits
+    // and timeouts").
     support::bounded(setup.deadline, "the delegate shell to release", move || {
-        fs::write(&hold_release, "go\n").unwrap();
+        std::io::Write::write_all(&mut &held, b"go\n").unwrap();
     });
     assert!(
         server_child.await_requests(2, setup.deadline),
