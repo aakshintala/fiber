@@ -1,9 +1,11 @@
 # The OS sandbox
 
-What the opt-in operating-system sandbox contains, on each platform, and what
-it costs a session. This is what is true now, not a plan. It is settled by
-[permissions: an opt-in OS sandbox, and whether its commands skip the reviewer](https://github.com/aakshintala/fiber/issues/3027);
-that ticket's resolution holds the rationale and the rejected alternatives.
+This page defines the policy for #3027's opt-in operating-system sandbox,
+on each platform, and what it costs a session. The issue delivers the policy
+in implementation parts; this page records it ahead of that work. The policy
+is settled by [permissions: an opt-in OS sandbox, and whether its commands
+skip the reviewer](https://github.com/aakshintala/fiber/issues/3027); that
+ticket's resolution holds the rationale and the rejected alternatives.
 
 Vocabulary is `GLOSSARY.md`: sandbox names the feature, confined names a
 call that ran inside it, and nothing else. The rule that judges calls is
@@ -128,24 +130,15 @@ sandbox fails at spawn, the call fails.
 
 ## Toggling it
 
-`/sandbox` turns the sandbox on or off for the running session only. A
-delegate inherits its parent's setting. Toggling changes the shell tool's
-description, a person-initiated prompt-cache miss, which is acceptable.
+Part 9 of #3027 implements `/sandbox` as a session-only toggle and defines
+its syntax. A delegate inherits its parent's setting. Toggling changes the
+shell tool's description, a person-initiated prompt-cache miss, which is
+acceptable.
 
-## Keys
+## Configuration
 
-Person-only, set in global config or with `-c`; a repository's project
-config cannot turn the sandbox on (`docs/configuration.md`, "Keys"):
-
-- `sandbox.enabled` (default false).
-- `sandbox.allow_write` (default empty): extra writable paths, as string
-  path lists.
-- `sandbox.deny_read` (default empty): extra read denies, as string path
-  lists.
-- `sandbox.allow_unix_sockets` (default empty): a person-only list of Unix
-  socket paths. No listed path may resolve into `run/`, including through
-  `..` or a symlink. Fiber does not apply a non-empty list on either platform;
-  it treats the sandbox as unavailable and reviews the call.
+The person-only keys, defaults, and repository-config restrictions are listed
+in [`docs/configuration.md`](configuration.md), "Keys".
 
 The evidence is [research/sandbox/](../research/sandbox/), including the
 opt-in probe matrices in `research/sandbox/opt-in/`.

@@ -197,8 +197,8 @@ pub(crate) static TABLE: &[CommandEntry] = &[
     },
     CommandEntry {
         name: "sandbox",
-        description: "Turns the OS sandbox on or off for the running session only. With no argument, says whether it is on.",
-        hint: Some("[on|off]"),
+        description: "Reserved for the session sandbox toggle; behavior and syntax land in Part 9 of #3027.",
+        hint: None,
         run: run_sandbox,
     },
     CommandEntry {
