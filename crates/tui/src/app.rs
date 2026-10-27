@@ -723,12 +723,16 @@ impl App {
         fresh.set_image_ids(self.images.id_allocator.clone());
         let mut busy = None;
         if let Some(lines) = lines {
+            // The candidate is not drawn until installation, so its
+            // open-page recount waits for the batch's end and counts once.
+            fresh.hold();
             for line in lines {
                 let applied = fresh.apply(line);
                 if applied.busy.is_some() {
                     busy = applied.busy;
                 }
             }
+            fresh.flush();
         }
         self.preview = Some(overlay::Preview { pages: fresh, busy });
     }
