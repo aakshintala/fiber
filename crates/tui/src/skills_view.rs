@@ -68,13 +68,13 @@ pub(crate) fn visibility(info: &SkillInfo, off: &SkillsDisabled) -> Visibility {
     }
 }
 
-/// A visibility as the rows show it.
+/// A visibility as the rows show it: only `seen` and `hidden`. Switches
+/// communicate disabled state and the `shadows` clause communicates
+/// shadowing, so no third word is needed.
 fn visibility_word(visibility: Visibility) -> &'static str {
     match visibility {
-        Visibility::Model => "model sees it",
-        Visibility::PersonOnly => "person only",
-        Visibility::Off => "off",
-        Visibility::Shadowed => "shadowed",
+        Visibility::Model => "seen",
+        Visibility::PersonOnly | Visibility::Off | Visibility::Shadowed => "hidden",
     }
 }
 
@@ -82,7 +82,7 @@ fn visibility_word(visibility: Visibility) -> &'static str {
 /// (`docs/tui.md`, "Swapped views").
 fn source_word(info: &SkillInfo) -> String {
     match info.source {
-        SkillSource::Repository => "repository".to_owned(),
+        SkillSource::Repository => "repo".to_owned(),
         SkillSource::Personal => "personal".to_owned(),
         SkillSource::Extension => match &info.extension {
             Some(name) => format!("extension {name}"),

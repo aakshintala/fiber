@@ -151,11 +151,14 @@ fn rows_keep_the_answers_order_with_source_and_visibility() {
     assert_eq!(shown.len(), 5);
     assert!(shown[0].contains("skill"), "{shown:?}");
     assert!(shown[1].contains("tdd"), "{shown:?}");
-    assert!(shown[1].contains("repository"), "{shown:?}");
-    assert!(shown[1].contains("model sees it"), "{shown:?}");
+    assert!(shown[1].contains("repo"), "{shown:?}");
+    assert!(!shown[1].contains("repository"), "{shown:?}");
+    assert!(shown[1].contains("seen"), "{shown:?}");
+    assert!(!shown[1].contains("model sees it"), "{shown:?}");
     assert!(shown[2].contains("personal"), "{shown:?}");
     assert!(shown[3].contains("extension memory"), "{shown:?}");
-    assert!(shown[3].contains("person only"), "{shown:?}");
+    assert!(shown[3].contains("hidden"), "{shown:?}");
+    assert!(!shown[3].contains("person only"), "{shown:?}");
     assert!(shown[4].contains("built in"), "{shown:?}");
 }
 
@@ -196,7 +199,24 @@ fn the_answers_disabled_is_ignored() {
     skill.disabled = true;
     let skills = opened(&fake, &[skill]);
     let shown = rows(&skills, 22);
-    assert!(shown[1].contains("model sees it"), "{shown:?}");
+    assert!(shown[1].contains("seen"), "{shown:?}");
+    assert!(!shown[1].contains("model sees it"), "{shown:?}");
+}
+
+#[test]
+fn off_and_shadowed_rows_read_hidden() {
+    let fake = fake_with(off(&["tdd"], &[]));
+    let skills = opened(&fake, &[repository("tdd")]);
+    let shown = rows(&skills, 22);
+    assert!(shown[1].contains("hidden"), "{shown:?}");
+    assert!(!shown[1].contains("off"), "{shown:?}");
+    let fake = fake_with(off(&[], &[]));
+    let mut shadowed = personal("tdd");
+    shadowed.shadowed_by = Some("/w/.fiber/skills/tdd/SKILL.md".to_owned());
+    let skills = opened(&fake, &[shadowed]);
+    let shown = rows(&skills, 22);
+    assert!(shown[1].contains("hidden"), "{shown:?}");
+    assert!(!shown[1].contains("shadowed"), "{shown:?}");
 }
 
 #[test]
