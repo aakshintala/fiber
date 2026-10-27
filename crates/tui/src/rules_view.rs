@@ -161,7 +161,7 @@ impl Rules {
                 Act::Stay
             }
             // Only the model picker draws cells with targets of their own.
-            // Only the running list draws item rows.
+            // Only the running lists and the all-delegates view draw item rows.
             Spot::Cell(_, _) | Spot::Item(_) => Act::Stay,
         }
     }

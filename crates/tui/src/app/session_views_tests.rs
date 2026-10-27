@@ -1185,6 +1185,15 @@ fn open_jobs(app: &mut App) {
     assert!(app.session_view_open());
 }
 
+/// Opens the all-delegates list.
+fn open_all_delegates(app: &mut App) {
+    assert_eq!(
+        app.open_session_view(SessionView::AllDelegates),
+        Effect::None
+    );
+    assert!(app.session_view_open());
+}
+
 /// The open list's selected row.
 fn selected(app: &App) -> usize {
     app.session_view_screen(0)
@@ -1341,6 +1350,134 @@ fn jobs_list_draws_one_row_per_job_and_opens_on_click() {
         app.item_view().map(|view| view.description),
         Some("task j_2".to_owned())
     );
+}
+
+#[test]
+fn all_delegates_list_draws_every_delegate_with_no_heading() {
+    let mut app = attached(80, 24);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
+    open_all_delegates(&mut app);
+    let (shown, _) = screen(&app, 80, 24);
+    assert!(shown.contains("Delegates"));
+    assert!(shown.contains("task j_1"));
+    assert!(shown.contains("task j_2"));
+    assert!(!shown.contains("Running delegates"));
+    assert!(!shown.contains("Nothing running."));
+    // Row data starts at once: the first frame row holds the first
+    // delegate (docs/tui.md, "Swapped views").
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.title, "Delegates");
+    assert_eq!(frame.command, "/delegates");
+    assert!(text_of(&frame.rows[0]).contains("task j_1"));
+    insta::assert_snapshot!("all_delegates_list", shown);
+}
+
+/// One frame row's text.
+fn text_of(cells: &[(String, Option<ViewSpot>, crate::swapped::Ink)]) -> String {
+    cells.iter().map(|cell| cell.0.as_str()).collect()
+}
+
+#[test]
+fn down_twice_then_enter_opens_the_next_delegate_and_closes_the_list() {
+    let mut app = attached(80, 24);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
+    open_all_delegates(&mut app);
+    // Two rows per delegate (docs/tui.md, "The panel"): rows 0-1 hold
+    // the first delegate, so two Downs reach the second.
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app), 2);
+    // The link is down, so opening sends nothing; the view still swaps
+    // in and the list closes.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.item_open());
+    assert!(!app.session_view_open());
+    assert_eq!(
+        app.item_view().map(|view| view.description),
+        Some("task j_2".to_owned())
+    );
+}
+
+#[test]
+fn four_delegates_scroll_to_a_later_one_and_open_it() {
+    let mut app = attached(80, 12);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
+    start_delegate(&mut app, "j_3", "s_ffffffffffffffff");
+    start_delegate(&mut app, "j_4", "s_0000000000000000");
+    open_all_delegates(&mut app);
+    // Two rows per delegate (docs/tui.md, "The panel"): seven Downs
+    // reach the fourth delegate's second row.
+    for _ in 0..7 {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    }
+    assert_eq!(selected(&app), 7);
+    // The fourth delegate's rows start below the first window: the list
+    // scrolled to keep them shown (docs/tui.md, "Swapped views").
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert!(frame.list.top() > 0);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.item_open());
+    assert!(!app.session_view_open());
+    assert_eq!(
+        app.item_view().map(|view| view.description),
+        Some("task j_4".to_owned())
+    );
+}
+
+#[test]
+fn clicking_a_finished_row_opens_its_replay() {
+    let mut app = attached(80, 24);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    app.on_line(session_line(
+        SESSION,
+        "job_completed",
+        None,
+        json!({"job_id": "j_1", "status": "completed"}),
+    ));
+    open_all_delegates(&mut app);
+    let (shown, _) = screen(&app, 80, 24);
+    assert!(shown.contains("✓ task j_1"));
+    let serial = app
+        .serial_of_job(&contract::JobId("j_1".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    // The link is down, so opening sends nothing; the finished
+    // delegate still opens its replay view.
+    assert_eq!(
+        app.on_click(TargetId::View(ViewSpot::Item(serial))),
+        Effect::None
+    );
+    assert!(app.item_open());
+    assert!(!app.session_view_open());
+    assert_eq!(
+        app.item_view().map(|view| view.description),
+        Some("task j_1".to_owned())
+    );
+}
+
+#[test]
+fn esc_and_the_cross_close_the_all_delegates_list() {
+    let mut app = attached(80, 24);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    open_all_delegates(&mut app);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.session_view_open());
+    open_all_delegates(&mut app);
+    assert_eq!(app.on_click(TargetId::View(ViewSpot::Close)), Effect::None);
+    assert!(!app.session_view_open());
+}
+
+#[test]
+fn an_empty_all_delegates_view_says_no_delegates_and_enter_does_nothing() {
+    let mut app = attached(80, 24);
+    open_all_delegates(&mut app);
+    let (shown, _) = screen(&app, 80, 24);
+    assert!(shown.contains("No delegates"));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.session_view_open());
+    assert!(!app.item_open());
 }
 
 #[test]
