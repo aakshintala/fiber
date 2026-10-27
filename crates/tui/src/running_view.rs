@@ -2,7 +2,7 @@
 //! Every cell of an item's rows carries its serial; heading and hint rows
 //! open nothing.
 
-use contract::events::DelegateStarted;
+use contract::events::{DelegateStarted, Outcome};
 
 use crate::app::App;
 use crate::swapped::{Frame, Ink, List, Spot};
@@ -14,18 +14,95 @@ type Row = Vec<(String, Option<Spot>, Ink)>;
 pub(crate) fn delegates_frame(app: &App, list: List) -> Frame {
     let delegates = app.panel_state().running_delegates();
     let count = delegates.len();
-    let mut rows = Vec::new();
+    let mut rows: Vec<Row> = Vec::new();
     for (started, description) in delegates {
-        let spot = app.serial_of_job(&started.job_id).map(Spot::Item);
-        let elapsed = elapsed(app, &started.job_id);
-        rows.push(vec![(
-            format!("◆ {description}{elapsed}"),
-            spot,
-            Ink::Plain,
-        )]);
-        rows.push(delegate_detail(app, started, spot));
+        rows.extend(running_delegate_rows(app, started, description));
     }
-    frame("Running delegates", "Delegates", count, rows, list)
+    frame(
+        "Running delegates",
+        "Delegates",
+        count,
+        rows,
+        list,
+        "Nothing running.",
+    )
+}
+
+/// Every delegate of the session on screen, running then finished, two
+/// rows each in the Delegates card's format (`docs/tui.md`, "The panel"):
+/// running delegates in job start order first, then finished ones in job
+/// start order. No heading row and no count: the swapped top row names
+/// the view (`docs/tui.md`, "Swapped views").
+pub(crate) fn all_delegates_frame(app: &App, list: List) -> Frame {
+    let mut rows: Vec<Row> = Vec::new();
+    for (started, description) in app.panel_state().running_delegates() {
+        rows.extend(running_delegate_rows(app, started, description));
+    }
+    for (started, description, outcome) in app.panel_state().finished_delegates() {
+        rows.extend(finished_delegate_rows(app, started, description, outcome));
+    }
+    let empty = rows.is_empty();
+    if !empty {
+        rows.push(Vec::new());
+        rows.push(vec![(
+            "a row opens that item's view".to_owned(),
+            None,
+            Ink::Muted,
+        )]);
+    }
+    Frame {
+        title: "Delegates".to_owned(),
+        command: "/delegates".to_owned(),
+        rows,
+        list,
+        below: empty
+            .then(|| "No delegates".to_owned())
+            .into_iter()
+            .collect(),
+        field: None,
+        footer: String::new(),
+    }
+}
+
+/// One running delegate's two rows, as the card draws them.
+fn running_delegate_rows(app: &App, started: &DelegateStarted, description: &str) -> [Row; 2] {
+    let spot = app.serial_of_job(&started.job_id).map(Spot::Item);
+    let elapsed = elapsed(app, &started.job_id);
+    [
+        vec![(format!("◆ {description}{elapsed}"), spot, Ink::Plain)],
+        delegate_detail(app, started, spot),
+    ]
+}
+
+/// One finished delegate's two rows from its outcome, as the card draws
+/// them: the outcome's glyph and the description, then the delegate's
+/// calls, elapsed time and outcome word, or the bare word when its
+/// figures are gone. Never attention: a finished delegate no longer
+/// works.
+fn finished_delegate_rows(
+    app: &App,
+    started: &DelegateStarted,
+    description: &str,
+    outcome: Outcome,
+) -> [Row; 2] {
+    let (glyph, word) = match outcome {
+        Outcome::Completed => ("✓", "done"),
+        Outcome::Failed => ("✗", "failed"),
+        Outcome::Cancelled => ("⊘", "cancelled"),
+    };
+    let spot = app.serial_of_job(&started.job_id).map(Spot::Item);
+    let second = match app.panel_state().finished_figures(&started.job_id) {
+        Some((calls, elapsed)) => format!(
+            "  {} · {} · {word}",
+            crate::format::count(calls, "call", "calls"),
+            crate::format::duration(elapsed)
+        ),
+        None => format!("  {word}"),
+    };
+    [
+        vec![(format!("{glyph} {description}"), spot, Ink::Plain)],
+        vec![(second, spot, Ink::Muted)],
+    ]
 }
 
 /// The running jobs' one row each, in start order.
@@ -42,7 +119,14 @@ pub(crate) fn jobs_frame(app: &App, list: List) -> Frame {
             )]
         })
         .collect();
-    frame("Running jobs", "Jobs", count, rows, list)
+    frame(
+        "Running jobs",
+        "Jobs",
+        count,
+        rows,
+        list,
+        "Nothing running.",
+    )
 }
 
 fn elapsed(app: &App, job: &contract::JobId) -> String {
@@ -97,9 +181,16 @@ fn bar(tokens: u64, window: u64) -> (usize, Role, u64) {
     (filled, role, pct)
 }
 
-fn frame(title: &str, heading: &str, count: usize, mut rows: Vec<Row>, list: List) -> Frame {
-    let empty = rows.is_empty();
-    if !empty {
+fn frame(
+    title: &str,
+    heading: &str,
+    count: usize,
+    mut rows: Vec<Row>,
+    list: List,
+    empty: &str,
+) -> Frame {
+    let none = rows.is_empty();
+    if !none {
         rows.insert(
             0,
             vec![(format!("{heading} · {count} running"), None, Ink::Heading)],
@@ -116,10 +207,7 @@ fn frame(title: &str, heading: &str, count: usize, mut rows: Vec<Row>, list: Lis
         command: "delegates · jobs".to_owned(),
         rows,
         list,
-        below: empty
-            .then(|| "Nothing running.".to_owned())
-            .into_iter()
-            .collect(),
+        below: none.then(|| empty.to_owned()).into_iter().collect(),
         field: None,
         footer: String::new(),
     }

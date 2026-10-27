@@ -446,3 +446,213 @@ fn empty_frames_draw_no_rows_and_say_nothing_running() {
         assert_eq!(frame.below, ["Nothing running."]);
     }
 }
+
+/// A `job_completed` for `job` with `status` at `ts`, so the finished
+/// figures read a known elapsed time.
+fn complete(app: &mut App, job: &str, status: &str, ts: u64) {
+    let mut line = session_line("job_completed", json!({"job_id": job, "status": status}));
+    if let Line::Session(envelope) = &mut line {
+        envelope.ts = ts;
+    }
+    app.on_line(line);
+}
+
+#[test]
+fn all_delegates_frame_lists_running_then_finished_with_two_rows_each() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
+    start_delegate(&mut app, "j_3", "s_ffffffffffffffff");
+    start_delegate(&mut app, "j_4", "s_0000000000000000");
+    start_job(&mut app, "j_9");
+    complete(&mut app, "j_2", "completed", 8_000);
+    complete(&mut app, "j_3", "failed", 8_000);
+    complete(&mut app, "j_4", "cancelled", 8_000);
+    let frame = all_delegates_frame(&app, List::default());
+    assert_eq!(frame.title, "Delegates");
+    assert_eq!(frame.command, "/delegates");
+    // Two rows per delegate (docs/tui.md, "The panel"): four delegates
+    // draw eight data rows, then the blank and hint footer rows.
+    assert_eq!(frame.rows.len(), 10);
+    assert!(frame.rows[8].is_empty());
+    assert_eq!(
+        frame.rows[9],
+        [("a row opens that item's view".to_owned(), None, Ink::Muted)]
+    );
+    // Row data starts at once: no heading and no count (docs/tui.md,
+    // "Swapped views"), and the empty text never draws as a row.
+    assert!(frame.rows[0][0].0.contains("task j_1"));
+    assert!(frame.below.is_empty());
+    for cells in &frame.rows {
+        for (cell, _, _) in cells {
+            assert!(!cell.contains("running"), "{cell}");
+            assert!(!cell.contains("No delegates"), "{cell}");
+        }
+    }
+    assert!(
+        frame
+            .rows
+            .iter()
+            .flatten()
+            .all(|(_, _, ink)| *ink != Ink::Heading)
+    );
+    // Running first, then finished, each in start order (docs/tui.md,
+    // "Swapped views"): the plain job never lists. The running row
+    // carries its elapsed suffix; the finished rows are exact.
+    let firsts: Vec<&str> = frame
+        .rows
+        .iter()
+        .step_by(2)
+        .take(4)
+        .map(|cells| cells[0].0.as_str())
+        .collect();
+    for (got, want) in firsts
+        .iter()
+        .zip(["◆ task j_1", "✓ task j_2", "✗ task j_3", "⊘ task j_4"])
+    {
+        assert!(got.starts_with(want), "{got}");
+    }
+    assert!(
+        frame
+            .rows
+            .iter()
+            .flatten()
+            .all(|(cell, _, _)| !cell.contains("task j_9"))
+    );
+    // Every delegate fills two rows with one serial (docs/tui.md, "The
+    // panel").
+    let running = app
+        .serial_of_job(&contract::JobId("j_1".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    let done = app
+        .serial_of_job(&contract::JobId("j_2".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    let failed = app
+        .serial_of_job(&contract::JobId("j_3".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    let cancelled = app
+        .serial_of_job(&contract::JobId("j_4".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    assert_eq!(
+        serials(&frame),
+        [
+            running, running, done, done, failed, failed, cancelled, cancelled
+        ]
+    );
+    // Each outcome keeps its word: done, failed, cancelled. Finished
+    // rows never take attention: the delegate no longer works.
+    assert_eq!(text(&frame.rows[3]), "  done");
+    assert_eq!(text(&frame.rows[5]), "  failed");
+    assert_eq!(text(&frame.rows[7]), "  cancelled");
+    assert!(
+        frame
+            .rows
+            .iter()
+            .flatten()
+            .all(|(_, _, ink)| *ink != Ink::Role(Role::Attention))
+    );
+    assert!(frame.footer.is_empty());
+}
+
+#[test]
+fn the_all_delegates_frame_matches_the_card_under_the_fake_clock() {
+    // Figures run under the injected clock (docs/testing.md, "Values
+    // that change every run").
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    let wall = contract::clock::wall_ms(clock.wall());
+    app.set_now(clock.now(), wall);
+    let mut started = session_line(
+        "job_started",
+        json!({
+            "job_id": "j_1", "description": "task j_1", "output_path": "/tmp/out"
+        }),
+    );
+    if let Line::Session(envelope) = &mut started {
+        envelope.ts = wall.saturating_sub(61_000);
+    }
+    app.on_line(started);
+    app.on_line(session_line(
+        "delegate_started",
+        json!({
+            "job_id": "j_1", "delegate_session_id": "s_dddddddddddddddd",
+            "harness": "fiber", "model": "test/model", "workspace": "/w"
+        }),
+    ));
+    app.on_line(live(
+        "s_dddddddddddddddd",
+        json!({
+            "state": "streaming", "parent": SESSION, "thinking": "high", "calls": 3,
+            "spend": {"tokens": {"input": 650, "cache_read": 0, "cache_write": {}, "output": 0},
+                "cost": 0.42, "subscription_cost": 0.0},
+            "context": {"tokens": 650, "window": 1000}
+        }),
+    ));
+    start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
+    app.on_line(live(
+        "s_eeeeeeeeeeeeeeee",
+        json!({"state": "streaming", "parent": SESSION, "calls": 6, "started": 2_000}),
+    ));
+    complete(&mut app, "j_2", "completed", 8_000);
+    let frame = all_delegates_frame(&app, List::default());
+    let running = app
+        .serial_of_job(&contract::JobId("j_1".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    assert_eq!(
+        frame.rows[0],
+        [(
+            "◆ task j_1 · 1m".to_owned(),
+            Some(Spot::Item(running)),
+            Ink::Plain
+        )]
+    );
+    assert_eq!(
+        frame.rows[1],
+        [
+            (
+                "  test/model · high · 3 calls · s_dddddddddddddddd · $0.42 ".to_owned(),
+                Some(Spot::Item(running)),
+                Ink::Muted
+            ),
+            (
+                "▆".repeat(6),
+                Some(Spot::Item(running)),
+                Ink::Role(Role::Warning)
+            ),
+            (
+                "░".repeat(4),
+                Some(Spot::Item(running)),
+                Ink::Role(Role::Rule)
+            ),
+            (" 65%".to_owned(), Some(Spot::Item(running)), Ink::Muted),
+        ]
+    );
+    let done = app
+        .serial_of_job(&contract::JobId("j_2".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    assert_eq!(
+        frame.rows[2],
+        [("✓ task j_2".to_owned(), Some(Spot::Item(done)), Ink::Plain)]
+    );
+    assert_eq!(
+        frame.rows[3],
+        [(
+            "  6 calls · 6s · done".to_owned(),
+            Some(Spot::Item(done)),
+            Ink::Muted
+        )]
+    );
+}
+
+#[test]
+fn the_all_delegates_frame_with_no_delegates_says_no_delegates() {
+    let mut app = home();
+    opened(&mut app);
+    let frame = all_delegates_frame(&app, List::default());
+    assert_eq!(frame.title, "Delegates");
+    assert_eq!(frame.command, "/delegates");
+    assert!(frame.rows.is_empty());
+    assert_eq!(frame.below, ["No delegates"]);
+}
