@@ -232,6 +232,27 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             "a string or a list of strings",
             false,
         ),
+        (
+            &["sandbox", "enabled"],
+            json!(true),
+            json!("yes"),
+            BOOL,
+            false,
+        ),
+        (
+            &["sandbox", "allow_write"],
+            json!(["~/.pi/agent"]),
+            json!("~/.pi/agent"),
+            LIST,
+            false,
+        ),
+        (
+            &["sandbox", "deny_read"],
+            json!(["~/extra-secret"]),
+            json!("~/extra-secret"),
+            LIST,
+            false,
+        ),
     ]
 }
 
@@ -308,6 +329,15 @@ fn a_repository_sets_only_the_keys_the_table_allows() {
             );
         }
     }
+}
+
+#[test]
+fn sandbox_keys_default_off_with_empty_lists() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(config.flag("sandbox.enabled", None), Some(false));
+    assert!(config.list("sandbox.allow_write", None).is_empty());
+    assert!(config.list("sandbox.deny_read", None).is_empty());
 }
 
 #[test]
@@ -531,6 +561,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
             "retry": {"attempts": 3, "initial_delay_ms": 2000, "max_delay_ms": 60000},
             "reviewer": {"block_limits": {"consecutive": 3, "session": 20}},
             "hub": {"allowed_origins": [], "idle_exit_ms": 1800000},
+            "sandbox": {"enabled": false, "allow_write": [], "deny_read": []},
             "session": {"idle_exit_ms": 1800000},
             "skills": {"disabled": []},
             "tui": {

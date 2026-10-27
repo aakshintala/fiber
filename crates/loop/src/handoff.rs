@@ -492,6 +492,7 @@ impl Loop {
                 effects: vec![Effect::Reads],
                 reversible: true,
                 paths: Some(vec![target.display().to_string()]),
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,

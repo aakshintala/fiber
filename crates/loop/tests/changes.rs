@@ -61,6 +61,7 @@ impl Tool for WriteAgents {
                 effects: vec![Effect::Writes],
                 reversible: true,
                 paths: Some(vec!["AGENTS.md".into()]),
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,
@@ -128,6 +129,7 @@ impl Tool for WriteHome {
                 effects: vec![Effect::Writes],
                 reversible: true,
                 paths: Some(vec![self.target().display().to_string()]),
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,
@@ -1006,6 +1008,7 @@ fn a_failed_write_over_budget_has_no_prune_line() {
         effects: vec![Effect::Writes],
         reversible: true,
         paths: Some(vec![path.display().to_string()]),
+        confined: false,
     });
     let mut session = Session::with_tools_sectioned(
         vec![

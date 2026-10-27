@@ -60,8 +60,14 @@ pub(crate) fn builtin(
     delegates: &crate::delegates::Delegates,
     skills: Arc<dyn contract::skills::Skills>,
 ) -> Result<SessionTools, Failure> {
-    // The unit tests' entry: no image-child timing. Production forwards
-    // its timing through `builtin_timed`.
+    // The unit tests' entry: no image-child timing and no sandbox.
+    // Production forwards its timing and sandbox through `builtin_timed`.
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
+        enabled: false,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: home.to_path_buf(),
+    }));
     builtin_timed(
         fiber,
         home,
@@ -75,6 +81,7 @@ pub(crate) fn builtin(
         skills,
         None,
         Default::default(),
+        sandbox,
     )
 }
 
@@ -101,6 +108,7 @@ pub(crate) fn builtin_timed(
     skills: Arc<dyn contract::skills::Skills>,
     timing: Option<Timing>,
     shell_read_only: crate::settings::ShellReadOnly,
+    sandbox: crate::settings::SandboxHandle,
 ) -> Result<SessionTools, Failure> {
     let mut files = tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks));
     let mut images = tools::ImageChild::new(fiber.clone(), artifacts.to_path_buf());
@@ -126,6 +134,7 @@ pub(crate) fn builtin_timed(
         .with_jobs(moves)
         .with_artifacts(artifacts.to_path_buf())
         .with_read_only(shell_read_only)
+        .with_sandbox(sandbox)
         .non_interactive();
     // The model's shell moves commands into jobs, so it times a
     // background start as `jobs.start`. The driver shell never moves,

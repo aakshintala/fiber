@@ -3093,3 +3093,77 @@ fn a_shell_guards_git_reads_by_repository() {
         vec![contract::shapes::Effect::Reads]
     );
 }
+
+fn sandbox_settings_for_integration(name: &str) -> tools::SandboxSettings {
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    tools::SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: home.join(format!(
+            "fiber-tools-shell-sandbox-{name}-{}",
+            std::process::id()
+        )),
+    }
+}
+
+#[test]
+fn a_confined_shell_runs_and_marks_its_effects() {
+    let dir = fakes::TempDir::new("fiber-tools-shell-sandbox-run");
+    let workspace = dir.path().to_path_buf();
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(sandbox_settings_for_integration(
+        "run",
+    )));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox);
+    let mut args = Map::new();
+    args.insert("command".into(), Value::String("echo hi".into()));
+    let effects = shell.effects(&args).unwrap();
+    #[cfg(target_os = "linux")]
+    assert!(effects.declared.confined);
+    #[cfg(not(target_os = "linux"))]
+    assert!(!effects.declared.confined);
+    let output = shell.run(&args, &CancelToken::new(), &Recorder::default());
+    assert!(output.error.is_none());
+    let text: String = output
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            ContentPart::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(text.contains("hi"));
+}
+
+#[test]
+fn a_failed_confined_setup_reports_tool_error_without_running() {
+    let dir = fakes::TempDir::new("fiber-tools-shell-sandbox-fail");
+    let workspace = dir.path().to_path_buf();
+    let marker = workspace.join("marker");
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
+        enabled: true,
+        allow_write: vec![std::path::PathBuf::from("/nonexistent-fiber-sandbox-allow")],
+        deny_read: Vec::new(),
+        fiber_home: home.join(format!(
+            "fiber-tools-shell-sandbox-fail-{}",
+            std::process::id()
+        )),
+    }));
+    let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
+    let mut args = Map::new();
+    let command = format!("touch {} && echo hi", marker.display());
+    args.insert("command".into(), Value::String(command));
+    let output = shell.run(&args, &CancelToken::new(), &Recorder::default());
+    assert_eq!(
+        output.error.as_ref().map(|error| error.code.clone()),
+        Some(ErrorCode::ToolError)
+    );
+    assert!(!marker.is_file(), "no command runs after an apply failure");
+}

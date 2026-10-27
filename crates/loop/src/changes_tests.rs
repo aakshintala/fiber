@@ -120,6 +120,7 @@ fn declared(paths: Option<&[&str]>) -> DeclaredEffects {
         effects: vec![Effect::Writes],
         reversible: true,
         paths: paths.map(|paths| paths.iter().map(|path| (*path).to_owned()).collect()),
+        confined: false,
     }
 }
 

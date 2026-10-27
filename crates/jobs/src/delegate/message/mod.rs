@@ -151,6 +151,7 @@ impl Tool for DelegateMessage {
                 effects: vec![Effect::Executes],
                 reversible: false,
                 paths: None,
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,

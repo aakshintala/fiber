@@ -407,6 +407,7 @@ fn before_call(session: &SessionExtensions) -> contract::hook::BeforeToolAnswer 
             effects: vec![contract::shapes::Effect::Reads],
             reversible: true,
             paths: None,
+            confined: false,
         },
     })
 }
@@ -617,6 +618,7 @@ fn own_tool_hooks_fail_when_reached_and_run_normally_after_the_answer() {
                         effects: vec![contract::shapes::Effect::Reads],
                         reversible: true,
                         paths: None,
+                        confined: false,
                     },
                 });
                 assert!(answer.notices.is_empty());
@@ -670,6 +672,7 @@ fn own_tool_hooks_fail_when_reached_and_run_normally_after_the_answer() {
                                 effects: vec![contract::shapes::Effect::Reads],
                                 reversible: true,
                                 paths: None
+                                confined: false,
                             }
                         })
                         .outcome,

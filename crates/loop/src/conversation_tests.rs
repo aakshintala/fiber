@@ -472,6 +472,7 @@ fn a_job_notice_after_a_crash_follows_the_fixed_result() {
             effects: Vec::new(),
             reversible: true,
             paths: None,
+            confined: false,
         },
         arguments: None,
         changed_by: None,
@@ -1491,6 +1492,7 @@ mod window {
                 effects: vec![Effect::Executes],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             step: AskStep::StandingAsk {
                 standing_rule: StandingRule {
@@ -3561,6 +3563,7 @@ fn inner_lines(crash: bool) -> Vec<Envelope> {
             effects: vec![],
             reversible: true,
             paths: None,
+            confined: false,
         },
         arguments: None,
         changed_by: None,
@@ -3636,6 +3639,7 @@ fn the_suspended_batch_excludes_inner_requests() {
             effects: vec![],
             reversible: true,
             paths: None,
+            confined: false,
         },
         step: contract::events::AskStep::StandingAsk {
             standing_rule: contract::events::StandingRule {

@@ -250,6 +250,7 @@ fn started() -> Event {
             effects: Vec::new(),
             reversible: true,
             paths: None,
+            confined: false,
         },
         arguments: None,
         changed_by: None,
@@ -1548,6 +1549,7 @@ fn ask_request(request_id: &str) -> Event {
             effects: vec![contract::shapes::Effect::Executes],
             reversible: true,
             paths: None,
+            confined: false,
         },
         step: contract::events::AskStep::StandingAsk {
             standing_rule: contract::events::StandingRule {
@@ -1567,6 +1569,7 @@ fn review_request(request_id: &str) -> Event {
             effects: vec![contract::shapes::Effect::Executes],
             reversible: true,
             paths: None,
+            confined: false,
         },
         step: contract::events::AskStep::Review {
             escalation: Some(contract::events::Escalation::ConsecutiveBlocks {

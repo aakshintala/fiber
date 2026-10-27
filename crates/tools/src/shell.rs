@@ -26,6 +26,7 @@ mod command;
 mod drive;
 mod moved;
 mod process_group;
+pub(crate) mod sandbox;
 mod spawn;
 
 mod monitor;
@@ -100,6 +101,11 @@ pub struct Shell {
         reason = "the shared handle spells its contents; main's settings::ShellReadOnly names the same type"
     )]
     read_only: Arc<Mutex<Vec<(String, Vec<String>)>>>,
+    /// The person's Linux sandbox settings, shared with every clone:
+    /// replacing the contents changes the next [`Tool::effects`] answer and
+    /// the next spawn's confinement. The lock is taken in `effects` and
+    /// before spawn only; a poisoned lock keeps its contents.
+    sandbox: Arc<Mutex<sandbox::Settings>>,
     /// The held ends of a result: the first `start` and the last `end` bytes.
     bound: Bound,
     /// A test's writer around a spill's file, if any.
@@ -110,7 +116,7 @@ impl Shell {
     /// Runs commands in `workspace`, with deadlines read from `clock`.
     pub fn new(workspace: PathBuf, clock: Arc<dyn Clock>) -> Self {
         Self {
-            workspace,
+            workspace: workspace.clone(),
             clock,
             search: None,
             jobs: None,
@@ -118,6 +124,12 @@ impl Shell {
             artifacts: None,
             timing: None,
             read_only: Arc::new(Mutex::new(Vec::new())),
+            sandbox: Arc::new(Mutex::new(sandbox::Settings {
+                enabled: false,
+                allow_write: Vec::new(),
+                deny_read: Vec::new(),
+                fiber_home: PathBuf::new(),
+            })),
             bound: Bound {
                 start: 8192,
                 end: 8192,
@@ -192,6 +204,17 @@ impl Shell {
         }
     }
 
+    /// Answers sandbox confinement from the person's `sandbox.*` settings
+    /// (`docs/sandbox.md`). The handle is shared: a reload that replaces
+    /// its contents reaches this shell and every clone of it.
+    #[must_use]
+    pub fn with_sandbox(self, settings: Arc<Mutex<sandbox::Settings>>) -> Self {
+        Self {
+            sandbox: settings,
+            ..self
+        }
+    }
+
     /// Wraps a spill's file in a test's own writer.
     #[cfg(test)]
     pub(crate) fn with_spill_writer(self, wrap: spill::Wrap) -> Self {
@@ -258,13 +281,20 @@ impl Tool for Shell {
     ) -> Result<Effects, contract::tool::EffectsError> {
         // A call `parse` rejects never runs. The closed default keeps a bad
         // `timeout_ms` or `workdir` off the read-only fast path.
-        match parse(arguments, &self.workspace, self.max_deadline_ms) {
+        let mut effects = match parse(arguments, &self.workspace, self.max_deadline_ms) {
             Ok(parsed) => {
                 let entries = support::lock(&self.read_only);
-                Ok(classify(&parsed.command, &parsed.workdir, &entries))
+                classify(&parsed.command, &parsed.workdir, &entries)
             }
-            Err(_) => Ok(classify::executes(None, None)),
+            Err(_) => classify::executes(None, None),
+        };
+        // The `confined` effect holds only for a Linux sandbox attempt the
+        // shell will run only inside; calls remain reviewed.
+        let settings = support::lock(&self.sandbox);
+        if sandbox::check_available(&settings, &self.workspace).is_ok() {
+            effects.declared.confined = true;
         }
+        Ok(effects)
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
@@ -326,6 +356,7 @@ impl Tool for Shell {
             None
         };
         let side = matches.as_ref().map(matches::MatchDir::file);
+        let sandbox_settings = support::lock(&self.sandbox).clone();
         let mut output = match command::execute(
             program,
             &command,
@@ -338,6 +369,8 @@ impl Tool for Shell {
             self.jobs.as_deref(),
             spill,
             side.as_deref(),
+            &sandbox_settings,
+            &self.workspace,
         ) {
             Ok(command::Ran::Finished(finished)) => {
                 from_spawn(Ok(finished), limit, &parsed.command)

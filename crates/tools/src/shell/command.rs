@@ -126,6 +126,8 @@ pub(crate) fn execute(
     jobs: Option<&dyn Jobs>,
     spill: Option<SpillConfig>,
     matches: Option<&Path>,
+    sandbox_settings: &super::sandbox::Settings,
+    sandbox_workspace: &Path,
 ) -> Result<Ran, std::io::Error> {
     execute_inner(
         program,
@@ -139,6 +141,8 @@ pub(crate) fn execute(
         jobs,
         spill,
         matches,
+        sandbox_settings,
+        sandbox_workspace,
         support::group::alive,
         Path::new("ps"),
     )
@@ -149,7 +153,7 @@ pub(crate) fn execute(
 /// listing at a fixture. Production passes the real probe and bare `ps`.
 #[allow(
     clippy::too_many_arguments,
-    reason = "spawn, the deadline, the move policy, the spill and the injected probe are one call"
+    reason = "spawn, the deadline, the move policy, the spill, the sandbox and the injected probe are one call"
 )]
 fn execute_inner(
     program: &Path,
@@ -163,6 +167,8 @@ fn execute_inner(
     jobs: Option<&dyn Jobs>,
     spill: Option<SpillConfig>,
     matches: Option<&Path>,
+    sandbox_settings: &super::sandbox::Settings,
+    sandbox_workspace: &Path,
     alive: fn(u32) -> bool,
     ps: &Path,
 ) -> Result<Ran, std::io::Error> {
@@ -197,7 +203,42 @@ fn execute_inner(
     if let Some(path) = matches {
         cmd.env(crate::search::matches::MATCHES_ENV, path);
     }
+    let prepared = match super::sandbox::check_available(sandbox_settings, sandbox_workspace) {
+        Err(_) => None,
+        Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace) {
+            Ok(prepared) => Some(prepared),
+            Err(cause) => {
+                return Err(std::io::Error::new(std::io::ErrorKind::Other, cause));
+            }
+        },
+    };
     support::group::detach(&mut cmd, tty);
+    #[cfg(target_os = "linux")]
+    if let Some(prepared) = prepared {
+        // SAFETY: The closure runs between fork and exec, so it only runs
+        // syscalls: Landlock `restrict_self` and seccomp `apply_filter` on a
+        // policy prepared before fork. Success performs no allocation; an
+        // error builds an `io::Error` from the errno and aborts spawn, so the
+        // command never runs unconfined. See docs/code-quality.md, "Unsafe".
+        #[allow(
+            unsafe_code,
+            reason = "installs the prepared Linux policy between fork and exec"
+        )]
+        unsafe {
+            use std::os::unix::process::CommandExt as _;
+            let mut slot = Some(prepared);
+            cmd.pre_exec(move || {
+                let Some(prepared) = slot.take() else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "the sandbox policy was already installed",
+                    ));
+                };
+                super::sandbox::install(prepared)
+                    .map_err(|cause| std::io::Error::new(std::io::ErrorKind::Other, cause))
+            });
+        }
+    }
     let (child, listing) = support::group::spawn(&mut cmd)?;
     // The parent drops every write end, or every secondary, so EOF arrives
     // when the last holder exits.

@@ -85,6 +85,7 @@ fn started(effects: Vec<Effect>, paths: Option<Vec<&str>>, arguments: Option<Val
             effects,
             reversible: true,
             paths: paths.map(|paths| paths.into_iter().map(str::to_owned).collect()),
+            confined: false,
         },
         arguments: arguments.and_then(|arguments| match arguments {
             Value::Object(map) => Some(map),

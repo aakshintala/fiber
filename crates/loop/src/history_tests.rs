@@ -360,6 +360,7 @@ fn requested_permission(id: &str) -> Event {
             effects: vec![contract::shapes::Effect::Executes],
             reversible: false,
             paths: None,
+            confined: false,
         },
         step: contract::events::AskStep::StandingAsk {
             standing_rule: contract::events::StandingRule {

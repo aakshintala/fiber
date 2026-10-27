@@ -331,6 +331,12 @@ fn run(dir: &std::path::Path, command: String) -> mpsc::Receiver<super::Finished
     thread::spawn(move || {
         let clock = FakeClock::new();
         let cancel = CancelToken::new();
+        let sandbox = crate::shell::sandbox::Settings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: std::path::PathBuf::new(),
+        };
         let ran = super::execute(
             std::path::Path::new("/bin/sh"),
             &command,
@@ -343,6 +349,8 @@ fn run(dir: &std::path::Path, command: String) -> mpsc::Receiver<super::Finished
             None,
             None,
             None,
+            &sandbox,
+            &dir,
         )
         .unwrap();
         let super::Ran::Finished(finished) = ran else {
@@ -1110,6 +1118,13 @@ impl Job {
         );
         let clock = FakeClock::new();
         let cancel = CancelToken::new();
+        let sandbox = crate::shell::sandbox::Settings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: std::path::PathBuf::new(),
+        };
+        let workspace = dir.path().to_path_buf();
         let ran = super::execute(
             std::path::Path::new("/bin/sh"),
             &command,
@@ -1122,6 +1137,8 @@ impl Job {
             None,
             None,
             None,
+            &sandbox,
+            &workspace,
         )
         .unwrap();
         let super::Ran::Moved(mut moved) = ran else {
@@ -1331,6 +1348,13 @@ fn a_foreground_command_past_a_mebibyte_spills() {
         "a foreground command past a mebibyte",
         Deadline::after(JOB_DEADLINE),
         move || {
+            let sandbox = crate::shell::sandbox::Settings {
+                enabled: false,
+                allow_write: Vec::new(),
+                deny_read: Vec::new(),
+                fiber_home: std::path::PathBuf::new(),
+            };
+            let workspace = work.clone();
             super::execute(
                 std::path::Path::new("/bin/sh"),
                 "head -c 1048577 /dev/zero | tr '\\0' a",
@@ -1343,6 +1367,8 @@ fn a_foreground_command_past_a_mebibyte_spills() {
                 None,
                 Some(spill_config(&artifacts)),
                 None,
+                &sandbox,
+                &workspace,
             )
             .unwrap()
         },
@@ -1384,6 +1410,13 @@ fn a_command_moved_at_once_never_spills() {
             let cancel = cancel.clone();
             let artifacts = artifacts.clone();
             move || {
+                let sandbox = crate::shell::sandbox::Settings {
+                    enabled: false,
+                    allow_write: Vec::new(),
+                    deny_read: Vec::new(),
+                    fiber_home: std::path::PathBuf::new(),
+                };
+                let workspace = work.clone();
                 let ran = super::execute(
                     std::path::Path::new("/bin/sh"),
                     &held,
@@ -1396,6 +1429,8 @@ fn a_command_moved_at_once_never_spills() {
                     None,
                     Some(spill_config(&artifacts)),
                     None,
+                    &sandbox,
+                    &workspace,
                 )
                 .unwrap();
                 let super::Ran::Moved(moved) = ran else {
@@ -1447,6 +1482,13 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
             let clock = Arc::clone(&clock);
             let cancel = cancel.clone();
             move || {
+                let sandbox = crate::shell::sandbox::Settings {
+                    enabled: false,
+                    allow_write: Vec::new(),
+                    deny_read: Vec::new(),
+                    fiber_home: std::path::PathBuf::new(),
+                };
+                let workspace = work.clone();
                 let ran = super::execute(
                     std::path::Path::new("/bin/sh"),
                     &held,
@@ -1459,6 +1501,8 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
                     None,
                     Some(spill_config(&artifacts)),
                     None,
+                    &sandbox,
+                    &workspace,
                 )
                 .unwrap();
                 let super::Ran::Moved(moved) = ran else {
@@ -1514,6 +1558,13 @@ fn a_resumed_command_arms_the_spill() {
             let clock = Arc::clone(&clock);
             let cancel = cancel.clone();
             move || {
+                let sandbox = crate::shell::sandbox::Settings {
+                    enabled: false,
+                    allow_write: Vec::new(),
+                    deny_read: Vec::new(),
+                    fiber_home: std::path::PathBuf::new(),
+                };
+                let workspace = work.clone();
                 let ran = super::execute(
                     std::path::Path::new("/bin/sh"),
                     &held,
@@ -1526,6 +1577,8 @@ fn a_resumed_command_arms_the_spill() {
                     None,
                     Some(spill_config(&artifacts)),
                     None,
+                    &sandbox,
+                    &workspace,
                 )
                 .unwrap();
                 let super::Ran::Moved(moved) = ran else {
@@ -1570,6 +1623,12 @@ fn a_successful_empty_listing_finishes_foreground_when_alive_probe_lags() {
     thread::spawn(move || {
         let clock = FakeClock::new();
         let cancel = CancelToken::new();
+        let sandbox = crate::shell::sandbox::Settings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: std::path::PathBuf::new(),
+        };
         let ran = super::execute_inner(
             std::path::Path::new("/bin/sh"),
             "true",
@@ -1582,6 +1641,8 @@ fn a_successful_empty_listing_finishes_foreground_when_alive_probe_lags() {
             None,
             None,
             None,
+            &sandbox,
+            &work,
             always_alive,
             &ps,
         )
@@ -1783,6 +1844,12 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
                 false => Duration::from_secs(1),
             };
             move || {
+                let sandbox = crate::shell::sandbox::Settings {
+                    enabled: false,
+                    allow_write: Vec::new(),
+                    deny_read: Vec::new(),
+                    fiber_home: std::path::PathBuf::new(),
+                };
                 let ran = super::execute_inner(
                     std::path::Path::new("/bin/sh"),
                     "true",
@@ -1795,6 +1862,8 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
                     None,
                     None,
                     None,
+                    &sandbox,
+                    &work,
                     always_alive,
                     &ps,
                 )
@@ -1834,4 +1903,173 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
             "the stop wins over the listing (cancelled={cancelled})"
         );
     }
+}
+
+fn sandbox_settings_for_test(
+    _workspace: &std::path::Path,
+    name: &str,
+) -> crate::shell::sandbox::Settings {
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let fiber_home = home.join(format!("fiber-sandbox-cmd-{name}-{}", std::process::id()));
+    crate::shell::sandbox::Settings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home,
+    }
+}
+
+#[test]
+fn sandbox_enabled_runs_a_confined_echo() {
+    let dir = fakes::TempDir::new("fiber-sandbox-cmd-echo");
+    let work = dir.path().to_path_buf();
+    let sandbox = sandbox_settings_for_test(&work, "echo");
+    let ran = fakes::within(
+        "a confined echo",
+        Deadline::after(JOB_DEADLINE),
+        move || {
+            super::execute(
+                std::path::Path::new("/bin/sh"),
+                "echo hi",
+                &work,
+                Duration::from_secs(60),
+                FakeClock::new().as_ref(),
+                &CancelToken::new(),
+                &Recorder::default(),
+                MovePolicy::Stay,
+                None,
+                None,
+                None,
+                &sandbox,
+                &work,
+            )
+            .unwrap()
+        },
+    );
+    let super::Ran::Finished(finished) = ran else {
+        panic!("a confined echo finishes");
+    };
+    assert_eq!(exit_code_of(finished.status), 0);
+}
+
+#[test]
+fn sandbox_unavailable_runs_without_it() {
+    let dir = fakes::TempDir::new("fiber-sandbox-cmd-unavailable");
+    let work = dir.path().to_path_buf();
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let fiber_home = home.join(format!(
+        "fiber-sandbox-cmd-unavailable-{}",
+        std::process::id()
+    ));
+    let sandbox = crate::shell::sandbox::Settings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: vec![work.join("secret")],
+        fiber_home,
+    };
+    let ran = fakes::within(
+        "an unavailable sandbox still runs",
+        Deadline::after(JOB_DEADLINE),
+        move || {
+            super::execute(
+                std::path::Path::new("/bin/sh"),
+                "echo hi",
+                &work,
+                Duration::from_secs(60),
+                FakeClock::new().as_ref(),
+                &CancelToken::new(),
+                &Recorder::default(),
+                MovePolicy::Stay,
+                None,
+                None,
+                None,
+                &sandbox,
+                &work,
+            )
+            .unwrap()
+        },
+    );
+    let super::Ran::Finished(finished) = ran else {
+        panic!("an unavailable sandbox still finishes");
+    };
+    assert_eq!(exit_code_of(finished.status), 0);
+}
+
+#[test]
+fn sandbox_setup_failure_aborts_spawn_without_running() {
+    let dir = fakes::TempDir::new("fiber-sandbox-cmd-fail");
+    let work = dir.path().to_path_buf();
+    let marker = work.join("marker");
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let fiber_home = home.join(format!("fiber-sandbox-cmd-fail-{}", std::process::id()));
+    let sandbox = crate::shell::sandbox::Settings {
+        enabled: true,
+        allow_write: vec![std::path::PathBuf::from("/nonexistent-fiber-sandbox-allow")],
+        deny_read: Vec::new(),
+        fiber_home,
+    };
+    let command = format!("touch {} && echo hi", marker.display());
+    let result = super::execute(
+        std::path::Path::new("/bin/sh"),
+        &command,
+        &work,
+        Duration::from_secs(60),
+        FakeClock::new().as_ref(),
+        &CancelToken::new(),
+        &Recorder::default(),
+        MovePolicy::Stay,
+        None,
+        None,
+        None,
+        &sandbox,
+        &work,
+    );
+    assert!(result.is_err(), "a setup failure aborts spawn");
+    assert!(!marker.is_file(), "no command runs after an apply failure");
+}
+
+#[test]
+fn sandbox_denies_sockets_with_abi2_rules_on_this_host() {
+    let dir = fakes::TempDir::new("fiber-sandbox-cmd-socket");
+    let work = dir.path().to_path_buf();
+    let sandbox = sandbox_settings_for_test(&work, "socket");
+    let ran = fakes::within(
+        "a confined socket attempt",
+        Deadline::after(JOB_DEADLINE),
+        move || {
+            super::execute(
+                std::path::Path::new("/bin/sh"),
+                "echo hi > /dev/tcp/127.0.0.1/9",
+                &work,
+                Duration::from_secs(60),
+                FakeClock::new().as_ref(),
+                &CancelToken::new(),
+                &Recorder::default(),
+                MovePolicy::Stay,
+                None,
+                None,
+                None,
+                &sandbox,
+                &work,
+            )
+            .unwrap()
+        },
+    );
+    let super::Ran::Finished(finished) = ran else {
+        panic!("a denied socket still finishes the call");
+    };
+    assert_ne!(
+        exit_code_of(finished.status),
+        0,
+        "a confined socket attempt fails"
+    );
 }

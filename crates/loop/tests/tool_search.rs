@@ -130,6 +130,7 @@ impl Tool for SearchTool {
             declared: DeclaredEffects {
                 effects: vec![if self.executes {
                     Effect::Executes
+                confined: false,
                 } else {
                     Effect::Reads
                 }],
@@ -227,6 +228,7 @@ impl Tool for CatalogTool {
                 effects: vec![Effect::Reads],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,

@@ -251,6 +251,7 @@ fn ask_tool(session: &Arc<SessionExtensions>) -> mpsc::Receiver<BeforeToolAnswer
             effects: Vec::new(),
             reversible: false,
             paths: None,
+            confined: false,
         };
         let answer = session.before_tool(&BeforeToolCall {
             tool: "read",
