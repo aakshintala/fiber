@@ -784,6 +784,15 @@ a click on it returns too. The views are:
   "−N" in `removed`; an untracked file's path, then "· untracked, wholly
   added" dim. Under the chosen file, its hunks in the diff format an opened
   edit uses ("Tool groups and the ledger").
+- **The release notes,** `/release-notes`: the running binary's
+  changelog section for its own version (`docs/releasing.md`, "The
+  changelog"), embedded in the binary at build time, so the view asks
+  nothing and opens with no session on screen. The section is the one
+  headed by exactly `## <version>`; a version with no section shows "No
+  notes for this version." with the releases page instead. The top row
+  reads "Release notes" bold, "  /release-notes" dim and "Esc returns"
+  dim, right-aligned. A bullet is "• " in `accent`, its wrapped lines
+  hanging two columns in; other long lines wrap at the width.
 - **A call's view,** from an opened call: the whole call, drawn as it is
   inline ("Tool groups and the ledger") with no 20-line cap. The top row is
   the call's kind capitalised, bold, then its target dim ("Shell  cargo test
@@ -823,6 +832,12 @@ a click on it returns too. The views are:
   takes the place of the space before the switch, so columns do not move. It
   shows on the focused row only. The last row is "a change rebuilds the
   cache (~84k tokens · $0.31) on reload", dim.
+- **The hooks view,** `/hooks`: one row per hook and watcher the session
+  registered, hooks first in hook-point table order and run order, then
+  watchers in registration order. One row per hook: its source (the declared
+  entry's name, else the extension's name), its point, and `blocking` or
+  `non-blocking`; one row per watcher: its source, its kinds joined with
+  `", "`, and `watcher`. With none registered, it says `No hooks`.
 - **The MCP view,** `/mcp`: one row per configured server: its name, where it
   is declared (`global`, `project` or this repository), its state and its
   tool count. The state is `connecting` for a server never started this
@@ -879,6 +894,7 @@ a click on it returns too. The views are:
   its switch, as on `/tools`; a shadowing skill adds "shadows <name>". The
   last row is "Enter shows the text · Ctrl+G opens its file", dim.
 - **`/rewind`** ("Rewind").
+- **`/fork`:** rewinds to the end of the conversation ("Rewind").
 - **A repository's offer**, before a new session's first request ("Approving
   what a repository ships").
 
@@ -1312,7 +1328,8 @@ pins it (`docs/tools.md`, "Naming the session"). A name is drawn with each contr
 ### Rewind
 
 `/rewind` swaps a view into the conversation area (`docs/events.md`,
-"Rewind").
+"Rewind"). `/fork` is a rewind to the latest point: it sends `rewind` with
+`at_end`, opens no view and offers no summary.
 
 - Each turn is one row, "before: <prompt>", or "before: rewind summary" for
   the turn a rewind's summary ran in. The chosen turn opens into every
@@ -1927,12 +1944,14 @@ later release still applies.
 | `/credential [<label>]` | With no label, opens the credential picker ("Swapped views"): Enter switches to the chosen label and saves it as the provider's `credential`, Ctrl+S switches for this session only and saves nothing. With a label, switches to it and saves it. The label is saved under the provider the session accepted the switch on. The terminal first says the switch rebuilds the cache, with its size (`docs/model-routing.md`, "Which credential a session uses"). |
 | `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`. Typing filters the list as it does in the picker, Space included in the query. Enter or a click on the mark toggles the focused row's mark, and Ctrl+S, `session_only`'s key, saves the marked list as `scoped_models` instead. Esc clears the query first and closes on the next press, saving nothing. Marks survive a query change. Each row carries its mark between the gutter and the id: `[x]` marked, `[ ]` not, bold on the focused row and dim when unmarked. The count row reads ` {m} of {n} marked ` unfiltered and ` {v} of {n} models · {m} marked ` filtered, with no show-all toggle and no refresh button. The row below each model is its thinking row, dim with nothing to choose. Ctrl+S saves and closes. The footer is "↑↓ move · Enter toggle · Ctrl+S save · Esc close", keys bold. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
 | `/tools` | Opens the tools view. |
+| `/hooks` | Opens the hooks view. |
 | `/mcp` | Opens the MCP servers view. |
 | `/context` | Opens the context breakdown. |
 | `/usage`, `/cost` | Opens the usage view. |
 | `/quota` | Opens the quota view and fetches every label's quota. |
 | `/status` | Opens the status view ("Swapped views"). |
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
+| `/release-notes` | Opens the running version's release notes, or says none are available. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
 | `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
 | `/panel` | Shows or hides the panel ("The panel"). |
@@ -1944,6 +1963,7 @@ later release still applies.
 | `/keys`, `/keybindings`, `/keymap` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |
 | `/rewind` | Opens the rewind view. |
+| `/fork` | Rewinds to the end of the conversation: sends `rewind` with `at_end`, and the terminal switches to the new session. |
 | `/handoff [instructions]`, `/compact [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
 | `/name <text>`, `/rename <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |
@@ -2407,7 +2427,7 @@ shell, elapsed 12s", "done: completed, 2 tool calls".
 
 Where the terminal speaks kitty's graphics protocol (Ghostty, kitty, WezTerm),
 images show inline: an image a tool returned, in its ledger row, and a pasted
-image, in the prompt bubble.
+image, with or without text, in the prompt bubble.
 
 - An image is at most 40% of the conversation's width and 12 rows tall,
   keeping its proportions. A click opens it in the system viewer, from a

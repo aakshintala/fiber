@@ -29,6 +29,8 @@ pub(crate) enum SessionView {
     Status,
     /// The Changed files list.
     ChangedFiles,
+    /// `/release-notes`.
+    ReleaseNotes,
     /// The running delegates, from "N delegates running".
     Delegates,
     /// The running jobs, from "N jobs running".
@@ -39,6 +41,8 @@ pub(crate) enum SessionView {
     Call(usize),
     /// `/rewind`.
     Rewind,
+    /// `/hooks`.
+    Hooks,
 }
 
 /// The selected row in an open session view.
@@ -54,6 +58,8 @@ pub(in crate::app) enum Open {
     Status(List),
     /// Changed files' paths.
     Files(List),
+    /// `/release-notes`.
+    ReleaseNotes(List),
     /// The running delegates.
     Delegates(List),
     /// The running jobs.
@@ -64,6 +70,8 @@ pub(in crate::app) enum Open {
     Call(Box<CallView>),
     /// `/rewind`.
     Rewind(List),
+    /// `/hooks`.
+    Hooks(List),
 }
 
 /// The session views' state, reset for each attachment.
@@ -76,6 +84,8 @@ pub(in crate::app) struct SessionViews {
     request: Option<(String, String)>,
     diff: Option<(String, Diff)>,
     diff_list: List,
+    hooks_request: Option<String>,
+    hooks_rows: Option<Vec<contract::events::HookInfo>>,
 }
 
 impl App {
@@ -104,6 +114,18 @@ impl App {
     /// pushed and nothing opens. The draft is left for panel and status-line
     /// clicks; a slash command clears it before calling this method.
     pub(crate) fn open_session_view(&mut self, view: SessionView) -> Effect {
+        if matches!(view, SessionView::ReleaseNotes) {
+            // The notes read the client's launch, never the session:
+            // they open on home too, sending no driver command.
+            self.model_picker.close();
+            self.close_config_view();
+            self.close_keymap();
+            self.session_views.open = Some(Open::ReleaseNotes(List::default()));
+            // Opening another view drops the rewind's wait: its late
+            // answer folds nowhere.
+            self.rewind = super::rewind::Rewind::default();
+            return Effect::None;
+        }
         if self.session().is_none() {
             self.notices
                 .push("session_not_found", "No session on screen.".to_owned());
@@ -121,6 +143,7 @@ impl App {
             SessionView::Context => Open::Context(List::default()),
             SessionView::Status => Open::Status(List::default()),
             SessionView::ChangedFiles => Open::Files(List::default()),
+            SessionView::ReleaseNotes => Open::ReleaseNotes(List::default()),
             SessionView::Delegates => Open::Delegates(List::default()),
             SessionView::Jobs => Open::Jobs(List::default()),
             SessionView::AllDelegates => Open::AllDelegates(List::default()),
@@ -129,10 +152,15 @@ impl App {
                 self.session_views.open = Some(Open::Rewind(List::default()));
                 return self.open_rewind();
             }
+            SessionView::Hooks => {
+                self.session_views.open = Some(Open::Hooks(List::default()));
+                return self.open_hooks();
+            }
         });
-        // Opening another view drops the rewind's wait: its late answer
-        // folds nowhere.
+        // Opening another view drops the rewind's wait and the hooks query:
+        // a late answer folds nowhere.
         self.rewind = super::rewind::Rewind::default();
+        self.session_views.hooks_request = None;
         Effect::None
     }
 
@@ -195,7 +223,12 @@ impl App {
             return Some(Effect::None);
         }
         if let Some(
-            Open::Usage(list) | Open::Quota(list) | Open::Context(list) | Open::Status(list),
+            Open::Usage(list)
+            | Open::Quota(list)
+            | Open::Context(list)
+            | Open::Status(list)
+            | Open::ReleaseNotes(list)
+            | Open::Hooks(list),
         ) = self.session_views.open.as_mut()
         {
             list.key(key, rows, height);
@@ -284,7 +317,12 @@ impl App {
         }
         if let Spot::Row(at) = spot
             && let Some(
-                Open::Usage(list) | Open::Quota(list) | Open::Context(list) | Open::Status(list),
+                Open::Usage(list)
+                | Open::Quota(list)
+                | Open::Context(list)
+                | Open::Status(list)
+                | Open::ReleaseNotes(list)
+                | Open::Hooks(list),
             ) = self.session_views.open.as_mut()
         {
             list.select(at, rows, height);
@@ -305,8 +343,10 @@ impl App {
             | Some(Open::Context(_))
             | Some(Open::Status(_))
             | Some(Open::Files(_))
+            | Some(Open::ReleaseNotes(_))
             | Some(Open::Call(_))
             | Some(Open::Rewind(_))
+            | Some(Open::Hooks(_))
             | None => {
                 return Effect::None;
             }
@@ -343,14 +383,18 @@ impl App {
             | Some(Open::Context(_))
             | Some(Open::Status(_))
             | Some(Open::Files(_))
+            | Some(Open::ReleaseNotes(_))
             | Some(Open::Call(_))
             | Some(Open::Rewind(_))
+            | Some(Open::Hooks(_))
             | None => Vec::new(),
         }
     }
 
-    /// The open session view's frame. Its row count does not depend on
-    /// `width`, which lets key handling count rows at width zero.
+    /// The open session view's frame. Every view's row count except the
+    /// release notes' is independent of `width`, which lets key handling
+    /// count rows at width zero; the notes wrap at the width, so width
+    /// zero resolves to the width the draw uses.
     pub(crate) fn session_view_screen(&self, width: u16) -> Option<Frame> {
         match self.session_views.open.as_ref()? {
             Open::Usage(list) => Some(crate::usage_view::frame(
@@ -416,6 +460,23 @@ impl App {
                     list,
                 ))
             }
+            Open::ReleaseNotes(list) => {
+                let home = self.home.as_ref()?;
+                // Width zero means a metrics call, not a draw: wrap at
+                // the width the draw uses.
+                let width = if width == 0 {
+                    self.notes_width()
+                } else {
+                    width
+                };
+                Some(crate::release_notes::frame(
+                    home.launch.release_notes,
+                    home.launch.version.as_str(),
+                    *list,
+                    width,
+                    self.notes_height(),
+                ))
+            }
             Open::Delegates(list) => Some(crate::running_view::delegates_frame(self, *list)),
             Open::Jobs(list) => Some(crate::running_view::jobs_frame(self, *list)),
             Open::AllDelegates(list) => Some(crate::running_view::all_delegates_frame(self, *list)),
@@ -424,15 +485,47 @@ impl App {
                 let jobs = self.rewind_stopping();
                 Some(super::rewind::frame(&self.rewind, &jobs, *list))
             }
+            Open::Hooks(list) => {
+                let rows = self.session_views.hooks_rows.as_deref().unwrap_or(&[]);
+                Some(super::hooks_view::frame(rows, *list, width))
+            }
         }
     }
 
     fn session_view_list_metrics(&self) -> Option<(usize, usize)> {
         let frame = self.session_view_screen(0)?;
+        // The notes page the drawn height: the conversation's attached,
+        // the whole screen's on home.
+        let height = if matches!(self.session_views.open, Some(Open::ReleaseNotes(_))) {
+            self.notes_height()
+        } else {
+            self.conversation_height()
+        };
         Some((
             frame.rows.len(),
-            crate::swapped::rows_height(&frame, self.conversation_height()),
+            crate::swapped::rows_height(&frame, height),
         ))
+    }
+
+    /// The width the release-notes frame wraps at when no draw width is
+    /// given: the conversation column attached, the whole screen on
+    /// home, matching the draw.
+    fn notes_width(&self) -> u16 {
+        if self.session().is_some() {
+            self.column_width()
+        } else {
+            self.screen_size().0
+        }
+    }
+
+    /// The height the release-notes frame pages at: the conversation's
+    /// attached, the whole screen's on home, matching the draw.
+    fn notes_height(&self) -> usize {
+        if self.session().is_some() {
+            self.conversation_height()
+        } else {
+            usize::from(self.screen_size().1)
+        }
     }
 
     /// Starts the selected file's diff request, or leaves an empty list when
@@ -499,6 +592,14 @@ impl App {
             }
             "command_accepted" => {
                 if let Some(accepted) = super::read!(envelope, CommandAccepted) {
+                    // A pending fork attaches before any open view
+                    // handles the answer: opening another view resets
+                    // the rewind view, not the fork.
+                    if self.fork_pending.as_ref() == Some(&accepted.command_id)
+                        && let Some(lines) = self.rewind_send_accepted(&accepted)
+                    {
+                        return lines;
+                    }
                     if matches!(self.session_views.open, Some(Open::Call(_))) {
                         return self.call_view_answered(&accepted);
                     }
@@ -508,15 +609,27 @@ impl App {
                         }
                         return self.rewind_answered(envelope, &accepted);
                     }
+                    if matches!(self.session_views.open, Some(Open::Hooks(_))) {
+                        self.hooks_answered(&accepted);
+                        return Vec::new();
+                    }
                     self.session_views_answered(&accepted);
                 }
             }
             "command_rejected" => {
                 if let Some(rejected) = super::read!(envelope, CommandRejected) {
+                    // A pending fork's refusal shows as a notice before
+                    // any open view folds it: opening another view resets
+                    // the rewind view, not the fork.
+                    if self.rewind_fork_refused(&rejected) {
+                        return Vec::new();
+                    }
                     if matches!(self.session_views.open, Some(Open::Call(_))) {
                         self.call_view_refused(&rejected);
                     } else if matches!(self.session_views.open, Some(Open::Rewind(_))) {
                         self.rewind_refused(&rejected);
+                    } else if matches!(self.session_views.open, Some(Open::Hooks(_))) {
+                        self.hooks_refused(&rejected);
                     } else {
                         self.session_views_rejected(&rejected);
                     }
@@ -578,6 +691,54 @@ impl App {
         self.rewind = super::rewind::Rewind::default();
     }
 
+    /// Opens the hooks view on the attached session and sends its `hooks`
+    /// query. A late answer after another view replaces it folds nowhere,
+    /// as does an answer to an older query after a newer one.
+    pub(in crate::app) fn open_hooks(&mut self) -> Effect {
+        self.session_views.hooks_request = None;
+        self.session_views.hooks_rows = None;
+        let Some(session) = self.session().cloned() else {
+            return Effect::None;
+        };
+        if !self.connected() {
+            return Effect::None;
+        }
+        let id = super::mint();
+        let line = super::session_command(&id, "hooks", &session, None).to_string();
+        self.session_views.hooks_request = Some(id);
+        Effect::Send(vec![line])
+    }
+
+    /// Folds a `command_accepted` into the open hooks view when it answers
+    /// the pending `hooks` query: a late answer, another view's answer, or
+    /// another command's shape folds nowhere.
+    pub(in crate::app) fn hooks_answered(&mut self, accepted: &CommandAccepted) {
+        let Some(request) = self.session_views.hooks_request.as_ref() else {
+            return;
+        };
+        if request != &accepted.command_id.0 {
+            return;
+        }
+        let Some(contract::events::CommandResult::Hooks { hooks }) = accepted.result.as_ref()
+        else {
+            return;
+        };
+        self.session_views.hooks_request = None;
+        self.session_views.hooks_rows = Some(hooks.clone());
+    }
+
+    /// A `command_rejected` for the pending `hooks` query drops the wait:
+    /// the view keeps showing what it holds, if anything.
+    pub(in crate::app) fn hooks_refused(&mut self, rejected: &CommandRejected) {
+        let Some(id) = rejected.command_id.as_ref() else {
+            return;
+        };
+        if self.session_views.hooks_request.as_deref() != Some(&id.0) {
+            return;
+        }
+        self.session_views.hooks_request = None;
+    }
+
     /// Moves the open rewind view's list to `at`: the fold's selection.
     /// A closed or missing view moves nothing.
     pub(in crate::app) fn rewind_list_to(&mut self, at: usize, rows: usize) {
@@ -600,6 +761,8 @@ impl App {
         self.session_views.request = None;
         self.session_views.diff = None;
         self.session_views.diff_list = List::default();
+        self.session_views.hooks_request = None;
+        self.session_views.hooks_rows = None;
         self.rewind = super::rewind::Rewind::default();
     }
 }

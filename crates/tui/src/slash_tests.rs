@@ -57,12 +57,14 @@ const DRAWN_ORDER: &[&str] = &[
     "credential",
     "scoped-models",
     "tools",
+    "hooks",
     "mcp",
     "context",
     "usage",
     "quota",
     "status",
     "diff",
+    "release-notes",
     "copy",
     "pwd",
     "panel",
@@ -74,6 +76,7 @@ const DRAWN_ORDER: &[&str] = &[
     "keys",
     "skills",
     "rewind",
+    "fork",
     "handoff",
     "name",
     "login",
@@ -298,13 +301,16 @@ fn an_empty_query_shows_every_row() {
 #[test]
 fn prefix_matches_come_before_contains_matches() {
     let all = rows(&[skill("prereview"), skill("Review")]);
-    // `re`: resume starts with it, then reviewer-setup, then name by its alias `rename`,
-    // reload, and the skill `Review` (case ignored); `prereview`
-    // contains it later on.
+    // `re`: prefix matches first, each group in the `/` list's drawn
+    // order (`docs/tui.md:1971`): resume, release-notes, reviewer-setup,
+    // rewind, name by its alias `rename`, reload, and the skill `Review`
+    // (case ignored); then the contains matches, credential and
+    // `prereview`.
     assert_eq!(
         names(&filter(&all, "re")),
         [
             "resume",
+            "release-notes",
             "reviewer-setup",
             "rewind",
             "name",

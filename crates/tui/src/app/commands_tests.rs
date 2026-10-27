@@ -113,6 +113,19 @@ fn reload_rebuilds_renderer_and_installs_an_empty_replacement() {
     );
 }
 
+/// `/hooks` sends the no-argument session command and opens its swapped
+/// view (`docs/invocation.md`, "What each command does").
+#[test]
+fn hooks_opens_its_view_and_queries_with_no_args() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/hooks"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "hooks");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(lines[0].get("args"), None);
+    assert!(app.session_view_open(), "/hooks opens its swapped view");
+}
+
 #[test]
 fn reload_sends_reload_without_args() {
     let mut app = attached();
@@ -1361,6 +1374,193 @@ fn rewind_opens_the_rewind_view_and_asks_history() {
     let frame = app.session_view_screen(80).expect("the view is open");
     assert_eq!(frame.title, "Rewind");
     assert_eq!(frame.command, "/rewind");
+}
+
+/// `/fork` sends `rewind` with `at_end`, opening no view: the terminal
+/// switches to the new session on its answer (`docs/tui.md`, "Rewind").
+#[test]
+fn fork_sends_rewind_with_at_end_and_opens_no_view() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/fork"));
+    assert_eq!(app.draft(), "");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "rewind");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(lines[0]["args"], json!({"at_end": true}));
+    assert!(app.session_view_screen(80).is_none());
+}
+
+#[test]
+fn fork_ignores_trailing_text_and_clears_the_draft() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/fork later words"));
+    assert_eq!(app.draft(), "");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "rewind");
+    assert_eq!(lines[0]["args"], json!({"at_end": true}));
+}
+
+#[test]
+fn fork_on_home_sends_nothing_with_the_no_session_notice() {
+    let mut app = connected();
+    assert_eq!(enter(&mut app, "/fork"), Effect::None);
+    assert_eq!(app.draft(), "");
+    assert_eq!(app.notice(), Some("No session on screen."));
+}
+
+#[test]
+fn fork_accept_attaches_to_the_new_session() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/fork"));
+    let answered = app.on_line(session_line(
+        "command_accepted",
+        json!({"command_id": lines[0]["id"], "result": {"new_session_id": NEW}}),
+    ));
+    let answered: Vec<Value> = answered
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    // The new session is subscribed full and asked its commands: each
+    // required line is present, with no pinned total.
+    // (`docs/invocation.md`, "Driver commands": `subscribe` is the first
+    // command on every connection to a session; `docs/tui.md`, "Slash
+    // commands": the terminal sends `commands` when it attaches to a
+    // session.)
+    assert!(answered.iter().any(|line| line["command"] == "subscribe"
+        && line["session_id"] == NEW
+        && line["args"] == json!({"level": "full"})));
+    assert!(
+        answered
+            .iter()
+            .any(|line| line["command"] == "commands" && line["session_id"] == NEW)
+    );
+    // The terminal attaches to the new session; no view opens.
+    assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
+    assert!(app.session_view_screen(80).is_none());
+}
+
+/// The exact `/fork` refusal for an end-of-log point that is not a step
+/// boundary: the session ends in a tool call with no recorded result.
+const FORK_NOT_STEP_BOUNDARY: &str = "The session ends in a tool call with no recorded result, so it cannot be forked. Rewind to an earlier point instead.";
+
+#[test]
+fn fork_refused_not_step_boundary_shows_the_ruled_notice() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/fork"));
+    let answered = app.on_line(session_line(
+        "command_rejected",
+        json!({"command_id": lines[0]["id"], "code": "not_step_boundary", "message": "Line 4 is not a step boundary."}),
+    ));
+    assert!(answered.is_empty());
+    assert_eq!(app.notice(), Some(FORK_NOT_STEP_BOUNDARY));
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    // The refusal clears the fork: retrying sends again.
+    let retry = sent(enter(&mut app, "/fork"));
+    assert_eq!(retry.len(), 1);
+    assert_eq!(retry[0]["args"], json!({"at_end": true}));
+    assert_ne!(retry[0]["id"], lines[0]["id"]);
+}
+
+#[test]
+fn fork_refused_otherwise_shows_the_rejection_message() {
+    for (code, message) in [
+        ("busy", "busy happened"),
+        ("session_held", "session_held happened"),
+        ("delegate_session", "delegate_session happened"),
+    ] {
+        let mut app = attached();
+        let lines = sent(enter(&mut app, "/fork"));
+        let answered = app.on_line(session_line(
+            "command_rejected",
+            json!({"command_id": lines[0]["id"], "code": code, "message": message}),
+        ));
+        assert!(answered.is_empty(), "{code}");
+        assert_eq!(app.notice(), Some(message), "{code}");
+        assert_eq!(
+            app.session().map(|session| session.0.as_str()),
+            Some(SESSION),
+            "{code}"
+        );
+    }
+}
+
+#[test]
+fn fork_accept_and_refusal_survive_opening_another_view() {
+    // Acceptance attaches after another view opened and reset the
+    // rewind view.
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/fork"));
+    let history = sent(enter(&mut app, "/rewind"));
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["command"], "history");
+    let answered = app.on_line(session_line(
+        "command_accepted",
+        json!({"command_id": lines[0]["id"], "result": {"new_session_id": NEW}}),
+    ));
+    // Acceptance still attaches after another view opened: the required
+    // attach lines are present, with no pinned total.
+    // (`docs/invocation.md`, "Driver commands": `subscribe` is the first
+    // command on every connection; `docs/tui.md`, "Slash commands": the
+    // terminal sends `commands` when it attaches.)
+    let answered: Vec<Value> = answered
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert!(
+        answered
+            .iter()
+            .any(|line| line["command"] == "subscribe" && line["session_id"] == NEW)
+    );
+    assert!(
+        answered
+            .iter()
+            .any(|line| line["command"] == "commands" && line["session_id"] == NEW)
+    );
+    assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
+    // Refusal shows its notice after another view opened: the rewind
+    // view's button never stands in for the fork.
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/fork"));
+    let history = sent(enter(&mut app, "/rewind"));
+    assert_eq!(history.len(), 1);
+    let answered = app.on_line(session_line(
+        "command_rejected",
+        json!({"command_id": lines[0]["id"], "code": "not_step_boundary", "message": "Line 4 is not a step boundary."}),
+    ));
+    assert!(answered.is_empty());
+    assert_eq!(app.notice(), Some(FORK_NOT_STEP_BOUNDARY));
+    // The fork cleared: closing the view and retrying sends again.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.session_view_screen(80).is_none());
+    let retry = sent(enter(&mut app, "/fork"));
+    assert_eq!(retry.len(), 1);
+}
+
+#[test]
+fn fork_hub_refusal_shows_the_ruled_notice_or_the_start_code() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/fork"));
+    let answered = app.on_line(hub_line(
+        "command_rejected",
+        json!({"command_id": lines[0]["id"], "code": "not_step_boundary", "message": "Line 4 is not a step boundary."}),
+    ));
+    assert!(answered.is_empty());
+    assert_eq!(app.notice(), Some(FORK_NOT_STEP_BOUNDARY));
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/fork"));
+    let answered = app.on_line(hub_line(
+        "command_rejected",
+        json!({"command_id": lines[0]["id"], "code": "busy", "message": "start failed"}),
+    ));
+    assert!(answered.is_empty());
+    assert_eq!(app.notice(), Some("start failed"));
 }
 
 #[test]

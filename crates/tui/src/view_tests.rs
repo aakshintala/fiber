@@ -1094,6 +1094,95 @@ fn clicking_a_placeholder_opens_the_image_in_the_viewer() {
 }
 
 #[test]
+fn prompt_bubble_with_inline_image() {
+    use serde_json::json;
+    // A pasted PNG in a non-empty prompt bubble draws the shared
+    // conversation-width grid under its text, right-aligned with the
+    // bubble, then its caption (`docs/tui.md`, "Images").
+    let mut app = empty();
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        inline_images: true,
+        ..Default::default()
+    });
+    app.set_graphics();
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "turn_started",
+        json!({"input": [{
+            "type": "message",
+            "source": "driver",
+            "content": [
+                {"type": "text", "text": "look at this"},
+                {"type": "image", "path": "artifacts/shot.png",
+                    "mime_type": "image/png", "width": 1280, "height": 800},
+            ],
+        }]}),
+        None,
+    ));
+    insta::assert_snapshot!("prompt_bubble_with_inline_image", sized(&mut app, 80, 24));
+    // Clicking the bubble image opens the viewer, like the ledger grid
+    // does: the grid carries the image target.
+    let (buf, targets) = pointed(&mut app, 80, 24, None);
+    let mut cell = None;
+    for y in 0..24 {
+        for x in 0..80 {
+            if buf[(x, y)].symbol().starts_with('\u{10EEEE}') {
+                cell = Some((x, y));
+                break;
+            }
+        }
+        if cell.is_some() {
+            break;
+        }
+    }
+    let (x, y) = cell.expect("the grid draws placeholder cells");
+    let target = crate::mouse::hit(&targets, x, y).expect("the cell is a target");
+    assert!(
+        matches!(
+            target,
+            crate::mouse::TargetId::Line(crate::app::Target::Image(_))
+        ),
+        "the placeholder carries the image target: {target:?}"
+    );
+    let effect = app.on_click(target);
+    if let crate::app::Effect::Send(lines) = effect {
+        assert_eq!(lines.len(), 1);
+        let line: serde_json::Value = serde_json::from_str(&lines[0]).expect("a command line");
+        assert_eq!(
+            line.get("command").and_then(serde_json::Value::as_str),
+            Some("read_file")
+        );
+        assert_eq!(
+            line.get("args")
+                .and_then(|args| args.get("path"))
+                .and_then(serde_json::Value::as_str),
+            Some("artifacts/shot.png")
+        );
+        assert_eq!(
+            line.get("args")
+                .and_then(|args| args.get("session"))
+                .and_then(serde_json::Value::as_str),
+            Some("s_aaaaaaaaaaaaaaaa"),
+            "the viewer fetch runs under the prompt's session"
+        );
+    } else {
+        panic!("the click opens the viewer: {effect:?}");
+    }
+}
+
+#[test]
 fn tool_group_running_with_raw_arguments() {
     use serde_json::json;
     let mut app = empty();
@@ -1315,9 +1404,9 @@ fn the_focused_completion_sits_on_the_bar_and_the_others_do_not() {
         app.on_key(Key::Char(ch), now);
     }
     let (shown, buf) = wide(&mut app);
-    // `/h` matches home, handoff and help first, then thinking: four
-    // rows in the overlay above the input line, the first focused. Its
-    // cells sit on the bar in `accent`; the rest keep the surface tint.
+    // `/h` matches home, hooks, handoff and help in the four-row overlay
+    // above the input line, the first focused. Its cells sit on the bar in
+    // `accent`; the rest keep the surface tint.
     let row = |y: u16| {
         (0..80)
             .map(|x| buf[(x, y)].symbol().to_owned())
@@ -1327,9 +1416,9 @@ fn the_focused_completion_sits_on_the_bar_and_the_others_do_not() {
     let surface = crate::theme::Role::Surface.color();
     for (name, barred) in [
         ("home", true),
+        ("hooks", false),
         ("handoff", false),
         ("help", false),
-        ("thinking", false),
     ] {
         let y = u16::try_from(
             shown
