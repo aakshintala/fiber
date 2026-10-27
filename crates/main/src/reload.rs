@@ -91,6 +91,82 @@ enum Preparation {
     Late,
 }
 
+/// Test-only `prepare_inner` stage boundaries, in the order the
+/// preparation reaches them. The late preparation skips the `mcp_*`
+/// middle, so its record jumps from `inputs_built` to `tools_rebuilt`.
+/// No outside seam reaches these steps: the fake servers log a request
+/// on arrival, before handling or answering it, and `fakes::within`
+/// never joins its work thread, so only an in-process append can say
+/// which boundary the prepare passed last.
+#[cfg(test)]
+pub(crate) const PREPARE_CHECKPOINTS: &[&str] = &[
+    "config_loaded",
+    "repository_ready",
+    "model_resolved",
+    "inputs_built",
+    "mcp_specs_loaded",
+    "mcp_repository_prepared",
+    "mcp_classified",
+    "mcp_staged",
+    "mcp_planned",
+    "tools_rebuilt",
+    "prepared",
+];
+
+/// Test-only rendering of a prepare progress record: the last reached
+/// checkpoint, or the first expected one when nothing was reached.
+/// The record is read in the failure path: when the prepare wait
+/// expired instead, the wait leaves its work thread running, so the
+/// read may include later checkpoints.
+#[cfg(test)]
+pub(crate) fn describe_prepare_progress(checkpoints: &[&str]) -> String {
+    match checkpoints.last() {
+        None => format!(
+            "prepare progress: no checkpoint reached as read in the failure path \
+             (when the prepare wait expired, the wait leaves its work thread running, so this may include later checkpoints); \
+             the next expected step is {}",
+            PREPARE_CHECKPOINTS[0]
+        ),
+        Some(last) => match PREPARE_CHECKPOINTS
+            .iter()
+            .position(|known| known == last)
+            .and_then(|at| PREPARE_CHECKPOINTS.get(at + 1))
+        {
+            Some(next) => format!(
+                "prepare progress: last reached checkpoint {last} as read in the failure path \
+                 (when the prepare wait expired, the wait leaves its work thread running, so this may include later checkpoints); \
+                 the next expected step is {next}"
+            ),
+            None => format!(
+                "prepare progress: last reached checkpoint {last} as read in the failure path \
+                 (when the prepare wait expired, the wait leaves its work thread running, so this may include later checkpoints); \
+                 the prepare reached the final checkpoint"
+            ),
+        },
+    }
+}
+
+#[cfg(test)]
+impl State {
+    /// Records one `prepare_inner` stage boundary: an append only, no
+    /// pause and no branch, so production timing is unchanged.
+    fn record_prepare_checkpoint(&self, checkpoint: &'static str) {
+        support::lock(&self.prepare_progress).push(checkpoint);
+    }
+
+    pub(crate) fn prepare_progress(&self) -> Vec<&'static str> {
+        support::lock(&self.prepare_progress).clone()
+    }
+
+    pub(crate) fn clear_prepare_progress(&self) {
+        support::lock(&self.prepare_progress).clear();
+    }
+
+    pub(crate) fn prepare_progress_line(&self) -> String {
+        describe_prepare_progress(&self.prepare_progress())
+    }
+}
+
 pub(crate) struct State {
     pub(crate) sources: config::Sources,
     pub(crate) template: r#loop::PromptInputs,
@@ -123,6 +199,13 @@ pub(crate) struct State {
     /// restart (`docs/mcp.md`, "Servers, their state and the
     /// per-server commands").
     pub(crate) servers: Arc<mcp::Servers>,
+    /// Test-only record of the `prepare_inner` stage boundaries the
+    /// current preparation reached, in order. Production builds have
+    /// no such field: the hook below only appends, never pauses or
+    /// branches, so a timed-out `fakes::within` worker keeps appending
+    /// after the wait expires and the failure read names that.
+    #[cfg(test)]
+    pub(crate) prepare_progress: std::sync::Mutex<Vec<&'static str>>,
     /// Where restarted servers write binary content and processed
     /// images, as at startup.
     pub(crate) artifacts: std::path::PathBuf,
@@ -219,6 +302,8 @@ impl State {
             servers: servers_handle,
             artifacts,
             images,
+            #[cfg(test)]
+            prepare_progress: std::sync::Mutex::new(Vec::new()),
         };
         (
             state,
@@ -284,6 +369,10 @@ impl State {
                 message: error.to_string(),
             })?,
         );
+        #[cfg(test)]
+        {
+            self.record_prepare_checkpoint("config_loaded");
+        }
         let now = self.switching.reloadable();
         // The repository set is read again, from the scope's workspace
         // minus the offer's skips: a changed declaration or a skipped
@@ -318,6 +407,10 @@ impl State {
                 message: error.message,
             }
         })?;
+        #[cfg(test)]
+        {
+            self.record_prepare_checkpoint("repository_ready");
+        }
         if self.diag.debugging() {
             extensions = extensions.with_diagnostics(
                 self.diag.timings(),
@@ -332,6 +425,10 @@ impl State {
         extensions.retain_lua_providers(&[]);
         let extensions = Arc::new(extensions);
         let model = self.switching.resolved(&route.model).map_err(failure)?;
+        #[cfg(test)]
+        {
+            self.record_prepare_checkpoint("model_resolved");
+        }
         let mut notices = config.notices().to_vec();
         notices.extend(extensions.notices().iter().cloned());
         let (patch, settings) = crate::parts::reload_inputs(
@@ -353,6 +450,10 @@ impl State {
         inputs.deferrals = patch.deferrals.clone();
         inputs.cache_lifetime = patch.cache_lifetime;
         let skills = r#loop::skills(&inputs, &self.sources.workspace);
+        #[cfg(test)]
+        {
+            self.record_prepare_checkpoint("inputs_built");
+        }
         // The MCP sync: classify the new person specs against the live
         // slots, stage (re-list keeps, shadow-start replacements and
         // starts), and commit only after every required shadow start
@@ -381,6 +482,10 @@ impl State {
             (None, None, Vec::new(), Vec::new())
         } else {
             let specs = crate::mcp_servers::specs(&config).map_err(failure)?;
+            #[cfg(test)]
+            {
+                self.record_prepare_checkpoint("mcp_specs_loaded");
+            }
             notices.extend(specs.notices);
             // Repository servers stay with the offer flow that owns
             // them: never removed while still declared.
@@ -420,21 +525,37 @@ impl State {
                 .iter()
                 .map(|spec| spec.name.clone())
                 .collect();
+            #[cfg(test)]
+            {
+                self.record_prepare_checkpoint("mcp_repository_prepared");
+            }
             let mut sync_specs = specs.specs;
             sync_specs.extend(prepared.ready);
             let mut rows = mcp::classify_sync(sync_specs, &self.servers);
             rows.retain(
                 |row| !matches!(row, mcp::SyncRow::Remove { name } if protected.contains(name)),
             );
+            #[cfg(test)]
+            {
+                self.record_prepare_checkpoint("mcp_classified");
+            }
             let staged =
                 mcp::stage_sync(rows, &self.servers, &sync_inputs).map_err(|error| Rejection {
                     code: error.code,
                     message: error.message,
                 })?;
+            #[cfg(test)]
+            {
+                self.record_prepare_checkpoint("mcp_staged");
+            }
             // The plan is pure: slots swap and caches write only in
             // the installed hook below, so no fallible step after
             // the plan can leave a half-applied reload.
             let planned = mcp::plan_sync(&staged, &self.servers, &sync_inputs);
+            #[cfg(test)]
+            {
+                self.record_prepare_checkpoint("mcp_planned");
+            }
             (Some(planned), Some(staged), protected, ready)
         };
         // Every shadow source joins the carried rows: a started
@@ -545,6 +666,10 @@ impl State {
                 }
             }
         }
+        #[cfg(test)]
+        {
+            self.record_prepare_checkpoint("tools_rebuilt");
+        }
         let here = crate::Here {
             workspace: self.sources.workspace.clone(),
             clock: now.loader.clock.clone(),
@@ -649,6 +774,10 @@ impl State {
             shared.switching.reloaded(next);
             shared.current.swap(extensions);
         });
+        #[cfg(test)]
+        {
+            self.record_prepare_checkpoint("prepared");
+        }
         Ok(r#loop::ReloadPrepared {
             prompt: patch,
             tools,

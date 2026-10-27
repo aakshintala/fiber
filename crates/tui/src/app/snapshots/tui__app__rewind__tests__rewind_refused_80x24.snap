@@ -1,0 +1,29 @@
+---
+source: crates/tui/src/app/rewind_tests.rs
+assertion_line: 1071
+expression: shot(&app)
+---
+ Rewind  /rewind                                                     Esc returns
+before: first
+before: second
+[ ] Summarise the path after the point
+session_held happened
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Files written since the point: none
+Calls that may have changed files: none
+None of it is undone.
+Jobs that stop: none
+↑↓ move · Enter open/send · Space summarise · Esc close
