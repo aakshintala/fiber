@@ -4381,7 +4381,7 @@ fn registrations_list_hooks_in_point_and_run_order_then_watchers() {
             } if extension == &hooks_name && point == "after_tool" => {
                 Some((entry, point, on_failure, phase))
             }
-            _ => None,
+            HookInfo::Hook { .. } | HookInfo::Watcher { .. } => None,
         })
         .expect("a declared hook registers");
     assert_eq!(declared.0.as_deref(), Some("audit"));
@@ -4400,7 +4400,7 @@ fn registrations_list_hooks_in_point_and_run_order_then_watchers() {
             } if extension != &hooks_name => {
                 assert_eq!(entry, &None, "ordinary watcher carries no entry: {row:?}");
             }
-            _ => {}
+            HookInfo::Hook { .. } | HookInfo::Watcher { .. } => {}
         }
     }
     let watchers: Vec<(&str, Vec<String>)> = rows
@@ -4409,7 +4409,7 @@ fn registrations_list_hooks_in_point_and_run_order_then_watchers() {
             HookInfo::Watcher {
                 extension, kinds, ..
             } => Some((extension.as_str(), kinds.clone())),
-            _ => None,
+            HookInfo::Hook { .. } => None,
         })
         .collect();
     assert_eq!(watchers.len(), 2, "{rows:?}");

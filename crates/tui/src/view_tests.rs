@@ -1315,9 +1315,9 @@ fn the_focused_completion_sits_on_the_bar_and_the_others_do_not() {
         app.on_key(Key::Char(ch), now);
     }
     let (shown, buf) = wide(&mut app);
-    // `/h` matches home, handoff and help first, then thinking: four
-    // rows in the overlay above the input line, the first focused. Its
-    // cells sit on the bar in `accent`; the rest keep the surface tint.
+    // `/h` matches home, hooks, handoff and help in the four-row overlay
+    // above the input line, the first focused. Its cells sit on the bar in
+    // `accent`; the rest keep the surface tint.
     let row = |y: u16| {
         (0..80)
             .map(|x| buf[(x, y)].symbol().to_owned())
@@ -1327,9 +1327,9 @@ fn the_focused_completion_sits_on_the_bar_and_the_others_do_not() {
     let surface = crate::theme::Role::Surface.color();
     for (name, barred) in [
         ("home", true),
+        ("hooks", false),
         ("handoff", false),
         ("help", false),
-        ("thinking", false),
     ] {
         let y = u16::try_from(
             shown

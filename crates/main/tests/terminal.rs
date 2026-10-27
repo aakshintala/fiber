@@ -3370,8 +3370,9 @@ fn unknown_slash_is_refused_while_paths_and_fresh_skills_are_sent() {
     quit_live(run);
 }
 
-/// `/hooks` lists one declared hook, one extension hook and one watcher in
-/// its three columns, and names its empty state with none registered.
+/// `/hooks` lists one hook from the first-party configuration registrar,
+/// one ordinary extension hook and one watcher, and names its empty state
+/// with none registered.
 /// The terminal types the command and asserts on the screen, so the
 /// driver's answer reaches the swapped view it opens.
 #[test]
@@ -3379,6 +3380,27 @@ fn hooks_lists_registered_rows_and_names_its_empty_state() {
     let setup = support::Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     provider(&setup, &server);
+    let hooks = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/hooks");
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(hooks),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    write_json(
+        &setup.home().join("config/hooks.json"),
+        &json!({"hooks": {"audit": {
+            "point": "before_tool",
+            "command": "/bin/true",
+            "args": [],
+            "timeout": 5000,
+            "on_failure": "blocking"
+        }}}),
+    );
     let source = setup.root.path().join("hookbox");
     std::fs::create_dir_all(&source).unwrap();
     write_json(
@@ -3434,6 +3456,7 @@ fn hooks_lists_registered_rows_and_names_its_empty_state() {
     run.write(b"/hooks\r");
     run.wait_screen("the hooks rows", |grid| {
         grid.contents.contains("Hooks")
+            && grid.contents.contains("audit")
             && grid.contents.contains("hookbox")
             && grid.contents.contains("second")
             && grid.contents.contains("before_tool")
