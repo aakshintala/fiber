@@ -48,6 +48,7 @@ mod attention;
 mod call_view;
 mod call_view_pages;
 mod call_view_rows;
+mod change_workspace;
 mod chrome;
 pub(crate) mod commands;
 mod completion;
@@ -336,6 +337,9 @@ pub(crate) struct App {
     session_views: session_views::SessionViews,
     /// The `/rewind` view's state (`docs/tui.md`, "Rewind").
     rewind: rewind::Rewind,
+    /// The `/cd` move's pending correlation (`docs/tui.md`, "Moving
+    /// workspace").
+    change_workspace: change_workspace::ChangeWorkspace,
     /// The open delegate or job view and the per-job fold (`docs/tui.md`,
     /// "Swapped views").
     items: items::Items,
@@ -434,6 +438,7 @@ impl App {
             config_views: config_views::ConfigViews::default(),
             session_views: session_views::SessionViews::default(),
             rewind: rewind::Rewind::default(),
+            change_workspace: change_workspace::ChangeWorkspace::default(),
             items: items::Items::default(),
             reconnect: reconnect::Reconnect::default(),
             launch_overrides: Vec::new(),
@@ -1370,6 +1375,7 @@ impl App {
                 if self.outbox.is_kept(&id) {
                     continue;
                 }
+                self.change_workspace_dropped(&id);
                 self.fail(&id);
             }
         }
@@ -1908,6 +1914,10 @@ impl App {
                     if self.rewind_hub_refused(&id, &code, &message) {
                         return Vec::new();
                     }
+                    // A hub-relayed `change_workspace` refusal drops the
+                    // move's claim but keeps its generic settlement, so
+                    // the refusal still shows its notice.
+                    self.change_workspace_hub_refused(&id, &code);
                     self.offer.file_refused(
                         &id,
                         &serde_json::from_value(Value::String(code.clone()))
@@ -2183,11 +2193,18 @@ impl App {
                 "command_accepted" => {
                     let accepted = read!(envelope, CommandAccepted);
                     self.accepted_settled(envelope, accepted.as_ref());
+                    if let Some(accepted) = accepted {
+                        send.extend(
+                            self.change_workspace_accepted(&envelope.session_id, &accepted)
+                                .unwrap_or_default(),
+                        );
+                    }
                 }
                 "command_rejected" => {
                     if let Some(rejected) = read!(envelope, CommandRejected)
                         && let Some(id) = rejected.command_id
                     {
+                        self.change_workspace_refused(&id.0, &rejected.code);
                         self.refused(&id.0, &rejected.code, rejected.message);
                     }
                 }
@@ -2210,11 +2227,18 @@ impl App {
                     // needs only its pending entry closed.
                     let accepted = read!(envelope, CommandAccepted);
                     self.accepted_settled(envelope, accepted.as_ref());
+                    if let Some(accepted) = accepted {
+                        send.extend(
+                            self.change_workspace_accepted(&envelope.session_id, &accepted)
+                                .unwrap_or_default(),
+                        );
+                    }
                 }
                 "command_rejected" => {
                     if let Some(rejected) = read!(envelope, CommandRejected)
                         && let Some(id) = rejected.command_id
                     {
+                        self.change_workspace_refused(&id.0, &rejected.code);
                         self.refused(&id.0, &rejected.code, rejected.message);
                     }
                 }
@@ -2256,6 +2280,11 @@ impl App {
                 let accepted = read!(envelope, CommandAccepted);
                 let sent = self.accepted_settled(envelope, accepted.as_ref());
                 if let Some(accepted) = accepted {
+                    if let Some(lines) =
+                        self.change_workspace_accepted(&envelope.session_id, &accepted)
+                    {
+                        send.extend(lines);
+                    }
                     self.commands_answered(&accepted);
                     changed |= self.offer.file_answered(&accepted);
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
@@ -2276,6 +2305,7 @@ impl App {
                 if let Some(rejected) = read!(envelope, CommandRejected)
                     && let Some(id) = rejected.command_id
                 {
+                    self.change_workspace_refused(&id.0, &rejected.code);
                     self.offer
                         .file_refused(&id.0, &rejected.code, &rejected.message);
                     self.refused(&id.0, &rejected.code, rejected.message);

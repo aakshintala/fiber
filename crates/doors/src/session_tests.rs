@@ -4132,6 +4132,86 @@ fn close_keeps_a_started_rewound_session_with_no_prompt() {
 }
 
 #[test]
+fn close_keeps_a_started_moved_session_with_no_prompt() {
+    use contract::events::{FiberStarted, SessionStarted, Variables, VariablesSource};
+    use contract::shapes::Point;
+
+    let started = || {
+        Event::SessionStarted(SessionStarted {
+            workspace: "/w".into(),
+            variables: Variables {
+                path: "/usr/bin".into(),
+                names: Vec::new(),
+                source: VariablesSource::Inherited,
+            },
+            parent: None,
+            forked_from: Some(Point {
+                session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".into()),
+                seq: contract::Seq(3),
+                project: None,
+            }),
+            rewind: None,
+            worktree: None,
+            supervised: false,
+        })
+    };
+    let fiber = || {
+        Event::FiberStarted(FiberStarted {
+            version: "0.0.0".into(),
+            resumed: false,
+        })
+    };
+    assert!(
+        kept_after_close(vec![started(), fiber()]),
+        "a started moved session is kept"
+    );
+    assert!(
+        !kept_after_close(vec![started()]),
+        "a move that never started leaves nothing behind"
+    );
+}
+
+#[test]
+fn close_keeps_an_unprompted_session_ending_moved() {
+    use contract::events::{FiberStarted, Moved, SessionStarted, Variables, VariablesSource};
+
+    let plain = || {
+        Event::SessionStarted(SessionStarted {
+            workspace: "/w".into(),
+            variables: Variables {
+                path: "/usr/bin".into(),
+                names: Vec::new(),
+                source: VariablesSource::Inherited,
+            },
+            parent: None,
+            forked_from: None,
+            rewind: None,
+            worktree: None,
+            supervised: false,
+        })
+    };
+    let fiber = || {
+        Event::FiberStarted(FiberStarted {
+            version: "0.0.0".into(),
+            resumed: false,
+        })
+    };
+    let moved = Event::Moved(Moved {
+        new_session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".into()),
+        seq: contract::Seq(5),
+        workspace: "/target".into(),
+    });
+    assert!(
+        kept_after_close(vec![plain(), fiber(), moved]),
+        "an ended move keeps its record with no prompt and no fork"
+    );
+    assert!(
+        !kept_after_close(vec![plain(), fiber()]),
+        "an unprompted session with no continuation is deleted"
+    );
+}
+
+#[test]
 fn print_ends_at_rewound_while_the_log_is_held() {
     use contract::events::{Rewound, SessionStarted, Variables, VariablesSource};
     use contract::shapes::Point;
@@ -4208,6 +4288,81 @@ fn print_ends_at_rewound_while_the_log_is_held() {
         out.contains("\"rewound\""),
         "the last line copied is `rewound`"
     );
+}
+
+#[test]
+fn print_ends_at_moved_while_the_log_is_held() {
+    use contract::events::{Moved, SessionStarted, Variables, VariablesSource};
+    use contract::shapes::Point;
+
+    struct SharedOut(Arc<Mutex<Vec<u8>>>);
+    impl Write for SharedOut {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            lock(&self.0).extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let temp = fakes::TempDir::new("fd-moved");
+    let sessions = temp.path().join("h").join("projects/p/sessions");
+    let id = contract::SessionId(crate::mint("s_"));
+    let clock = FakeClock::new();
+    let timed: Arc<dyn Clock> = clock;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let watcher = log.watch();
+    // Seeded after the watch starts, as the printer sees them live.
+    for event in [
+        Event::SessionStarted(SessionStarted {
+            workspace: "/w".into(),
+            variables: Variables {
+                path: "/usr/bin".into(),
+                names: Vec::new(),
+                source: VariablesSource::Inherited,
+            },
+            parent: None,
+            forked_from: Some(Point {
+                session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".into()),
+                seq: contract::Seq(3),
+                project: None,
+            }),
+            rewind: None,
+            worktree: None,
+            supervised: false,
+        }),
+        Event::Moved(Moved {
+            new_session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".into()),
+            seq: contract::Seq(5),
+            workspace: "/target".into(),
+        }),
+    ] {
+        log.append(&event, None, None).unwrap();
+    }
+    let out = Arc::new(Mutex::new(Vec::new()));
+    let (done, finished) = mpsc::channel();
+    thread::Builder::new()
+        .name("print-moved".to_owned())
+        .spawn({
+            let out = Arc::clone(&out);
+            move || {
+                super::print(watcher, Box::new(SharedOut(out)));
+                done.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    // The log stays held: without `moved` closing the copy, the print
+    // would wait for a `fiber_exited` that never comes.
+    let _held = log;
+    assert!(
+        Deadline::after(DEADLINE).recv(&finished).is_ok(),
+        "the copy ends at `moved`"
+    );
+    let out = String::from_utf8_lossy(&lock(&out).clone()).into_owned();
+    assert_eq!(out.lines().count(), 2, "both lines are copied");
+    assert!(out.contains("\"moved\""), "the last line copied is `moved`");
 }
 
 #[test]

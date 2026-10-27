@@ -531,8 +531,9 @@ impl Isolation {
                 Ok(log::Hold::Busy) | Err(_) => return,
             }
         }
-        // A process whose log ends `rewound` never removes its worktree:
-        // the session that continues it runs there
+        // A process whose log ends `rewound` or `moved` never removes its
+        // worktree: the session that continues it runs there after a
+        // rewind, and the old tree stays for a later prune after a move
         // (`docs/invocation.md`, "Isolation"). The creator's lock above
         // holds its log still, so its last line is read under it, before
         // any git command runs.
@@ -540,7 +541,7 @@ impl Isolation {
             .iter()
             .find(|user| user.id == self.session)
             .and_then(|creator| log::last_line(&creator.dir))
-            .is_some_and(|line| line.kind == "rewound")
+            .is_some_and(|line| line.kind == "rewound" || line.kind == "moved")
         {
             return;
         }

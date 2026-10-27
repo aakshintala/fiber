@@ -3180,10 +3180,25 @@ fn segment_lines(
     count: usize,
     parent: Option<(&str, u64)>,
 ) -> Vec<contract::Envelope> {
+    segment_lines_in(session, count, parent, None)
+}
+
+/// `segment_lines` with `project` on the `forked_from` pointer when given:
+/// the cross-project pointer a move child records.
+fn segment_lines_in(
+    session: &str,
+    count: usize,
+    parent: Option<(&str, u64)>,
+    project: Option<&str>,
+) -> Vec<contract::Envelope> {
     let mut lines = Vec::with_capacity(count);
     let mut started = json!({});
     if let Some((parent_session, point)) = parent {
-        started = json!({"forked_from": {"session_id": parent_session, "seq": point}});
+        let mut forked = json!({"session_id": parent_session, "seq": point});
+        if let Some(project) = project {
+            forked["project"] = Value::String(project.to_owned());
+        }
+        started = json!({"forked_from": forked});
     }
     lines.push(contract::Envelope {
         kind: "session_started".to_owned(),
@@ -3274,6 +3289,76 @@ fn the_tail_walks_the_chain_past_the_seam() {
     assert!(
         held.iter().skip(300).all(|(session, _)| session == SESSION),
         "then the own run"
+    );
+}
+
+/// The tail walks a cross-project chain by session: the project rides
+/// the pointer, never the request, so the serving child keeps the
+/// walk's authority.
+#[test]
+fn the_tail_walks_a_cross_project_chain_by_session() {
+    let root = segment_lines(ANCESTOR, 300, None);
+    let child = segment_lines_in(SESSION, 300, Some((ANCESTOR, 299)), Some("-work-old"));
+    let (asked, tail) = read_chain(&child, &root);
+    assert_eq!(
+        asked,
+        vec![
+            json!({}),
+            json!({"to_seq": 43}),
+            json!({"session_id": ANCESTOR, "to_seq": 299}),
+            json!({"session_id": ANCESTOR, "to_seq": 43}),
+        ],
+        "the own windows, then the ancestor's under its session"
+    );
+    assert!(tail.chain_done(), "the root's first line ends the walk");
+    let held: Vec<(String, u64)> = tail
+        .turn_lines()
+        .unwrap_or_else(|| panic!("the held run"))
+        .iter()
+        .map(|line| {
+            (
+                line.session_id.0.clone(),
+                line.seq.map(|seq| seq.0).unwrap_or(u64::MAX),
+            )
+        })
+        .collect();
+    assert_eq!(held.len(), 600, "the joint run is held");
+    assert!(
+        held.iter()
+            .take(300)
+            .all(|(session, _)| session == ANCESTOR),
+        "ancestors first"
+    );
+    assert!(
+        held.iter().skip(300).all(|(session, _)| session == SESSION),
+        "then the own run"
+    );
+}
+
+/// A pointer whose project does not read ends the tail walk at the held
+/// segment: the seam never crosses.
+#[test]
+fn a_malformed_project_pointer_ends_the_tail_walk() {
+    let root = segment_lines(ANCESTOR, 3, None);
+    let mut child = segment_lines(SESSION, 5, Some((ANCESTOR, 4)));
+    child[0].payload["forked_from"]["project"] = json!(5);
+    let (asked, tail) = read_chain(&child, &root);
+    assert_eq!(asked, vec![json!({})], "no parent page goes out");
+    assert!(tail.chain_done(), "the held segment ends the walk");
+    let held: Vec<(String, u64)> = tail
+        .turn_lines()
+        .unwrap_or_else(|| panic!("the held run"))
+        .iter()
+        .map(|line| {
+            (
+                line.session_id.0.clone(),
+                line.seq.map(|seq| seq.0).unwrap_or(u64::MAX),
+            )
+        })
+        .collect();
+    assert!(
+        held.iter().all(|(session, _)| session == SESSION),
+        "only the own run is held"
     );
 }
 

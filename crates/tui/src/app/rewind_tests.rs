@@ -2457,6 +2457,103 @@ fn keying_through_the_refusal_choices_moves_the_cursor() {
     }
 }
 
+/// A `session_started` payload forked from `parent` at `seq`, in `project`
+/// when given: the cross-project pointer a move child records.
+fn started_in(parent: Option<(&str, u64)>, project: Option<&str>) -> Value {
+    match parent {
+        Some((session, seq)) => {
+            let mut forked = json!({"session_id": session, "seq": seq});
+            if let Some(project) = project {
+                forked["project"] = Value::String(project.to_owned());
+            }
+            json!({"forked_from": forked})
+        }
+        None => json!({}),
+    }
+}
+
+/// A moved child's first page: the attached session's own turns, forked
+/// from the old session's project.
+fn segment_a_moved() -> Vec<Envelope> {
+    let mut held = segment_a();
+    held[0] = history_line(
+        SESSION,
+        "session_started",
+        0,
+        None,
+        None,
+        started_in(Some((OTHER, 3)), Some("-work-old")),
+    );
+    held
+}
+
+/// A cross-project parent still pages by session and point: the project
+/// rides the pointer, never the request, so the serving child keeps the
+/// walk's authority (`docs/tui.md`, "History and paging").
+#[test]
+fn a_cross_project_parent_still_pages_by_session_and_seq() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    let next = accept(&mut app, &lines[0]["id"], segment_a_moved());
+    assert_eq!(next.len(), 1);
+    let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
+    assert_eq!(asked["command"], "history");
+    assert_eq!(asked["args"], json!({"session_id": OTHER, "to_seq": 3}));
+    // The ancestor's turns fold after the page lands, bounded at the
+    // named point.
+    let done = accept(&mut app, &asked["id"], segment_b());
+    assert!(done.is_empty());
+    assert_eq!(
+        rows(&app),
+        [
+            "before: older",
+            "before: first",
+            "before: second",
+            CHECK,
+            ACTION
+        ]
+    );
+}
+
+/// A pointer whose project does not read, or that names no session,
+/// ends the walk at the held segment: no parent page goes out.
+#[test]
+fn a_malformed_project_pointer_ends_the_chain() {
+    for payload in [
+        json!({"forked_from": {"session_id": OTHER, "seq": 3, "project": 5}}),
+        json!({"forked_from": {"seq": 3, "project": "-work-old"}}),
+    ] {
+        let clock = fakes::clock::FakeClock::new();
+        let mut app = attached();
+        let lines = open(&mut app, &clock);
+        let mut held = segment_a();
+        held[0] = history_line(SESSION, "session_started", 0, None, None, payload.clone());
+        // The chain stops at the held segment: no parent page goes out.
+        // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
+        let done = accept(&mut app, &lines[0]["id"], held);
+        assert!(done.is_empty(), "{payload}");
+        // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+        assert_eq!(
+            rows(&app),
+            ["before: first", "before: second", CHECK, ACTION],
+            "{payload}"
+        );
+    }
+}
+
+/// The `history` wait holds through 9999 ms and ends at 10000 ms on the
+/// frame clock, never on a wall sleep (`docs/tui.md`, "History and paging").
+#[test]
+fn the_history_wait_holds_through_9999_ms_and_ends_at_10000_ms() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    open(&mut app, &clock);
+    let sent_at = clock.now();
+    assert!(!app.rewind_due(sent_at + Duration::from_millis(9999)));
+    assert!(app.rewind_due(sent_at + Duration::from_millis(10000)));
+}
+
 /// The whole open view as text at 80x24.
 fn shot(app: &crate::app::App) -> String {
     use ratatui::buffer::Buffer;

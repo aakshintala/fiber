@@ -608,6 +608,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "keymap",
     "skills",
     "rewind",
+    "cd",
     "handoff",
     "compact",
     "name",

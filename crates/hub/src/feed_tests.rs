@@ -1755,6 +1755,15 @@ fn a_log_ending_in_moved_is_exited() {
 }
 
 #[test]
+fn a_moved_session_that_exits_waiting_stays_in_the_feed() {
+    let temp = Temp::new();
+    let (feed, _, _sub, how) = leave(&temp, "moved", "waiting", false);
+    assert_eq!(how, "exited");
+    assert_eq!(entry_of(&feed, &id(1)), Some("exited"));
+    stop_within(&feed);
+}
+
+#[test]
 fn on_rewound_fires_once_for_a_moved_last_line() {
     let temp = Temp::new();
     let (feed, _clock) = new_feed(&temp.dir);

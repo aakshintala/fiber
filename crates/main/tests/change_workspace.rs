@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
@@ -586,6 +587,14 @@ fn delete(setup: &Setup, workspace: &Path, id: &str) -> std::process::Output {
     run_to_exit(setup.deadline, "fiber sessions delete", command)
 }
 
+/// Runs `fiber sessions prune --yes`: stdin null, in `workspace`. With no
+/// `--older-than` no session is selected: only worktrees go.
+fn prune(setup: &Setup, workspace: &Path) -> std::process::Output {
+    let mut command = setup.fiber(&["sessions", "prune", "--yes"]);
+    command.current_dir(workspace);
+    run_to_exit(setup.deadline, "fiber sessions prune", command)
+}
+
 #[test]
 fn a_missing_required_extension_fails_the_start_and_a_fixed_target_retries() {
     let setup = Setup::new();
@@ -833,5 +842,203 @@ fn known_hosts_carry_over_the_move() {
     );
     assert_eq!(site.requests().len(), 3);
     hubbed.close("c_close", &child);
+    hubbed.finish();
+}
+
+/// Polls under the deadline until some session log ends in `moved`,
+/// returning the old and child ids: the gate between typing `/cd` and
+/// observing the switched terminal, so no later key races the attach.
+#[track_caller]
+#[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+fn until_moved(setup: &Setup) -> (String, String) {
+    let projects = setup.home().join("projects");
+    let deadline = setup.deadline;
+    loop {
+        let mut found = None;
+        if let Ok(keys) = fs::read_dir(&projects) {
+            for key in keys.flatten() {
+                let sessions = key.path().join("sessions");
+                let Ok(ids) = fs::read_dir(&sessions) else {
+                    continue;
+                };
+                for id in ids.flatten() {
+                    let log = id.path().join("events.jsonl");
+                    let Ok(text) = fs::read_to_string(&log) else {
+                        continue;
+                    };
+                    let Some(last) = text.lines().last() else {
+                        continue;
+                    };
+                    let Ok(line): Result<Value, _> = serde_json::from_str(last) else {
+                        continue;
+                    };
+                    if line["kind"] == "moved" {
+                        found = Some((
+                            id.file_name().to_string_lossy().into_owned(),
+                            line["payload"]["new_session_id"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_owned(),
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some(found) = found {
+            return found;
+        }
+        assert!(
+            !deadline.left().is_zero(),
+            "waited until the deadline for a session log ending in moved"
+        );
+        thread::yield_now();
+    }
+}
+
+/// Writes `/pwd` until the screen names `target`, proving the terminal
+/// attached to the moved child: the move's accept may land after an
+/// early probe goes out, answering it with the old workspace, so the
+/// probe repeats on a bounded tick, never on a wall sleep for the move
+/// itself.
+#[track_caller]
+#[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+fn until_pwd_shows(run: &mut pty::Run, target: &str, deadline: Deadline) {
+    let (_, tick) = mpsc::channel::<()>();
+    loop {
+        let contents = run.screen().contents.clone();
+        if contents.contains(target) {
+            return;
+        }
+        assert!(
+            !deadline.left().is_zero(),
+            "waited until the deadline for the target workspace {target} in a notice; screen:\n{contents}"
+        );
+        run.write(b"/pwd\r");
+        let _ = tick.recv_timeout(deadline.left().min(Duration::from_secs(1)));
+    }
+}
+
+/// Through the real terminal: `/cd` switches to the moved child, whose
+/// workspace answers `/pwd`, and the rewind view pages the parent's
+/// turn through the moved link.
+#[test]
+fn pty_cd_switches_to_the_moved_session_and_pages_its_parent() {
+    let setup = Setup::new();
+    // A short target outside the temp root: the `/pwd` notice cuts a
+    // long path with an ellipsis, so the whole target must fit on one
+    // notice row for the screen to name it.
+    let target = std::env::temp_dir().join(format!("fiber-cd-{}", std::process::id()));
+    if target.exists() {
+        fs::remove_dir_all(&target).unwrap();
+    }
+    fs::create_dir_all(&target).unwrap();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    // The hub a client starts exits on idle: without the short idle the
+    // PTY's hub would outlive the test's deadline after the terminal
+    // quits, with the moved sessions still running.
+    let path = setup.home().join("config.json");
+    let mut config: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    config["hub"] = json!({"idle_exit_ms": 200});
+    write_json(&path, &config);
+    let mut run = pty::Run::spawn(&setup, 120, 32, &[], &[("FIBER_TEST_FAKE_KEY", "sk-test")]);
+    // The first frame draws the input line; its title proves the input
+    // reader runs before the prompt goes out.
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_bytes(0, pty::KITTY_PUSH, "kitty keyboard flags pushed");
+    // The prompt starts the old session in the launch workspace.
+    let from = run.output().len();
+    run.write(b"say hi\r");
+    run.turn_finished(from);
+    // The move names the target; the log gate proves the old session
+    // ended `moved` before the next key goes out.
+    run.write(format!("/cd {}\r", target.to_string_lossy()).as_bytes());
+    let (old, child) = until_moved(&setup);
+    assert_ne!(old, child, "the move names a new session");
+    // The switched terminal answers `/pwd` with the target workspace, as
+    // the loop records it: canonicalized, so `/var` reads `/private/var`.
+    let recorded = fs::canonicalize(&target)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    until_pwd_shows(&mut run, &recorded, setup.deadline);
+    // The rewind view pages the parent's turn through the moved link.
+    run.write(b"/rewind\r");
+    run.wait_screen("the parent turn in the rewind view", |grid| {
+        grid.contents.contains("say hi")
+    });
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    fs::remove_dir_all(&target).unwrap();
+}
+
+#[test]
+fn the_old_worktree_survives_the_move_and_a_later_prune_removes_it() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    // The old session needs a commit to start in a worktree of it.
+    fs::write(layout.repo_a.join("file.txt"), "x").unwrap();
+    fakes::git::git(&layout.repo_a, &["add", "."]);
+    fakes::git::git(&layout.repo_a, &["commit", "--quiet", "-m", "first"]);
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    // Start the old session in a Fiber-managed worktree of repo_a.
+    let client = hubbed.client();
+    client.send(&command(
+        "c_start",
+        None,
+        "start",
+        json!({"workspace": layout.repo_a.to_string_lossy(), "worktree": true,
+            "content": [{"type": "text", "text": "one"}]}),
+    ));
+    let ack = until_ack(client, "the start acknowledgement", "c_start");
+    let old = ack.last().unwrap()["payload"]["result"]["session_id"]
+        .as_str()
+        .expect("the start answers with a session id")
+        .to_owned();
+    client.send(&subscribe("c_sub", &old));
+    until_ack(client, "the subscribe acknowledgement", "c_sub");
+    until(client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed" && line["session_id"] == old
+    });
+    let old_log = session_log(&setup, &old);
+    let old_worktree = PathBuf::from(
+        old_log[0]["payload"]["worktree"]["path"]
+            .as_str()
+            .expect("the old session runs in a worktree"),
+    );
+    assert!(old_worktree.is_dir(), "the old worktree exists");
+    let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
+    until_child_started(hubbed.client(), &child);
+    // The move ends the old session but removes nothing of its tree.
+    assert!(old_worktree.is_dir(), "the old worktree survives the move");
+    // With the leaf deleted, a later normal prune removes the clean old
+    // worktree under the unchanged shared-lock and dirty rules, while the
+    // plain target workspace and the young old log stay.
+    hubbed.close("c_close", &child);
+    let output = delete(&setup, &layout.repo_b, &child);
+    assert!(output.status.success(), "delete the leaf: {output:?}");
+    // Prune scopes to its working directory's project: the old worktree
+    // lives in repo_a's project, so prune runs there.
+    let output = prune(&setup, &layout.repo_a);
+    assert!(
+        output.status.success(),
+        "prune the old worktree: {output:?}"
+    );
+    assert!(
+        !old_worktree.exists(),
+        "a later normal prune removes the old worktree"
+    );
+    assert!(layout.repo_b.is_dir(), "the target workspace stays");
+    assert!(
+        session_log_path(&setup, &old).is_file(),
+        "the young old log stays without --older-than"
+    );
     hubbed.finish();
 }
