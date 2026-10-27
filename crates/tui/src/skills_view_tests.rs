@@ -1,12 +1,14 @@
-//! Tests for `/skills`: the rows in discovery order with source and
+//! Tests for `/skills`: one row per skill with its source and
 //! visibility, the two switches writing `skills.disabled`, and the answer
 //! matching its command (`docs/tui.md`, "Swapped views";
-//! `docs/system-prompt.md`, "Skills").
+//! `docs/system-prompt.md`, "Skills"). Row order is not a contract, so
+//! row checks find each row by its skill.
 
 use std::path::{Path, PathBuf};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 
 use super::{Skills, Visibility, visibility};
 use crate::configure::{SkillsDisabled, SwitchScope};
@@ -16,6 +18,8 @@ use crate::mouse::{Target, TargetId};
 use crate::settings_view::{Act, Ctx};
 use crate::swapped::{Spot, render, rows_height};
 use contract::events::{SkillInfo, SkillSource};
+
+use crate::text;
 
 const ID: &str = "c_1";
 
@@ -41,6 +45,19 @@ fn repository(name: &str) -> SkillInfo {
         &format!("/w/.fiber/skills/{name}/SKILL.md"),
         SkillSource::Repository,
     )
+}
+
+/// A skill of `source` at `path`, with `extension` exactly when the
+/// source is an extension.
+fn sourced(name: &str, path: &str, source: SkillSource, extension: Option<&str>) -> SkillInfo {
+    let mut info = skill(name, "Desc.", path, source);
+    info.extension = extension.map(str::to_owned);
+    info
+}
+
+/// The shadowed-source words for a winner shadowing `paths`.
+fn shadowed_by(paths: &[String], infos: &[SkillInfo]) -> Option<Vec<String>> {
+    super::shadow_sources(paths, infos)
 }
 
 fn personal(name: &str) -> SkillInfo {
@@ -110,9 +127,9 @@ fn opened(fake: &Fake, infos: &[SkillInfo]) -> Skills {
 }
 
 /// Every row's cells joined.
-fn rows(skills: &Skills, height: usize) -> Vec<String> {
+fn rows(skills: &Skills, width: usize, height: usize) -> Vec<String> {
     skills
-        .frame(height)
+        .frame(width, height)
         .rows
         .into_iter()
         .map(|cells| {
@@ -126,17 +143,21 @@ fn rows(skills: &Skills, height: usize) -> Vec<String> {
 }
 
 #[test]
-fn before_the_answer_it_says_reading_and_has_only_the_header() {
+fn before_the_answer_it_says_reading_and_has_no_rows() {
     let fake = Fake::new(Vec::new());
     let skills = Skills::open(ID.to_owned(), &ctx(&fake));
-    let frame = skills.frame(22);
-    assert_eq!(frame.rows.len(), 1);
+    let frame = skills.frame(80, 22);
+    assert_eq!(frame.rows.len(), 0);
     assert_eq!(frame.below, vec!["Reading the skills…".to_owned()]);
     assert_eq!(frame.title, "Skills");
 }
 
 #[test]
-fn rows_keep_the_answers_order_with_source_and_visibility() {
+fn rows_show_source_and_visibility() {
+    // One row per skill (`docs/tui.md:895`); each row carries where its
+    // skill comes from and whether the model can see it. Row order is not
+    // a contract — the answer's discovery order is `docs/invocation.md:474`
+    // — so each check finds its row by skill name.
     let fake = fake_with(off(&[], &[]));
     let skills = opened(
         &fake,
@@ -147,22 +168,33 @@ fn rows_keep_the_answers_order_with_source_and_visibility() {
             builtin("built"),
         ],
     );
-    let shown = rows(&skills, 22);
-    assert_eq!(shown.len(), 5);
-    assert!(shown[0].contains("skill"), "{shown:?}");
-    assert!(shown[1].contains("tdd"), "{shown:?}");
-    assert!(shown[1].contains("repository"), "{shown:?}");
-    assert!(shown[1].contains("model sees it"), "{shown:?}");
-    assert!(shown[2].contains("personal"), "{shown:?}");
-    assert!(shown[3].contains("extension memory"), "{shown:?}");
-    assert!(shown[3].contains("person only"), "{shown:?}");
-    assert!(shown[4].contains("built in"), "{shown:?}");
+    let shown = rows(&skills, 80, 22);
+    assert_eq!(shown.len(), 4, "no header row: {shown:?}");
+    let find = |name: &str| {
+        shown
+            .iter()
+            .find(|row| row.contains(name))
+            .cloned()
+            .unwrap_or_else(|| panic!("missing {name}: {shown:?}"))
+    };
+    let tdd = find("tdd");
+    assert!(tdd.contains("repo"), "{shown:?}");
+    assert!(!tdd.contains("repository"), "{shown:?}");
+    assert!(tdd.contains("seen"), "{shown:?}");
+    assert!(!tdd.contains("model sees it"), "{shown:?}");
+    assert!(find("mine").contains("personal"), "{shown:?}");
+    let recall = find("recall");
+    assert!(recall.contains("memory"), "{shown:?}");
+    assert!(!recall.contains("extension memory"), "{shown:?}");
+    assert!(recall.contains("hidden"), "{shown:?}");
+    assert!(!recall.contains("person only"), "{shown:?}");
+    assert!(find("built").contains("built in"), "{shown:?}");
 }
 
 #[test]
-fn visibility_by_lists_shadowing_and_header() {
-    // `off` wins over shadowing, shadowing over the header: off lists,
-    // then shadowed, then invocable.
+fn visibility_by_lists_shadowing_and_invocable() {
+    // `off` wins over shadowing, shadowing over the header flag: off
+    // lists, then shadowed, then invocable.
     for (invocable, listed, shadowed_by, want) in [
         (true, &[][..], false, Visibility::Model),
         (true, &["tdd"][..], false, Visibility::Off),
@@ -185,8 +217,8 @@ fn visibility_by_lists_shadowing_and_header() {
     }
     let fake = fake_with(off(&[], &[]));
     let skills = opened(&fake, &[repository("tdd")]);
-    let shown = rows(&skills, 22);
-    assert!(shown[0].contains("visibility"), "{shown:?}");
+    let shown = rows(&skills, 80, 22);
+    assert!(shown[0].contains(" · seen · "), "{shown:?}");
 }
 
 #[test]
@@ -195,8 +227,358 @@ fn the_answers_disabled_is_ignored() {
     let mut skill = repository("tdd");
     skill.disabled = true;
     let skills = opened(&fake, &[skill]);
-    let shown = rows(&skills, 22);
-    assert!(shown[1].contains("model sees it"), "{shown:?}");
+    let shown = rows(&skills, 80, 22);
+    assert!(shown[0].contains("seen"), "{shown:?}");
+    assert!(!shown[0].contains("model sees it"), "{shown:?}");
+}
+
+#[test]
+fn off_and_shadowed_rows_read_hidden() {
+    let fake = fake_with(off(&["tdd"], &[]));
+    let skills = opened(&fake, &[repository("tdd")]);
+    let shown = rows(&skills, 80, 22);
+    assert!(shown[0].contains(" · hidden · "), "{shown:?}");
+    assert!(shown[0].contains("[off]"), "{shown:?}");
+    let fake = fake_with(off(&[], &[]));
+    let mut shadowed = personal("tdd");
+    shadowed.shadowed_by = Some("/w/.fiber/skills/tdd/SKILL.md".to_owned());
+    let skills = opened(&fake, &[shadowed]);
+    let shown = rows(&skills, 80, 22);
+    assert!(shown[0].contains(" · hidden · "), "{shown:?}");
+    assert!(!shown[0].contains("shadowed"), "{shown:?}");
+}
+
+/// Discovery fixtures for the shadow-source resolver: one skill per
+/// source, all named `review`.
+fn shadow_infos() -> Vec<SkillInfo> {
+    vec![
+        sourced(
+            "review",
+            "/fiber/docs/skills/review/SKILL.md",
+            SkillSource::Builtin,
+            None,
+        ),
+        sourced(
+            "review",
+            "/ext/review-kit/skills/review/SKILL.md",
+            SkillSource::Extension,
+            Some("review-kit"),
+        ),
+        sourced(
+            "review",
+            "/home/skills/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+        sourced(
+            "review",
+            "/w/.fiber/skills/review/SKILL.md",
+            SkillSource::Repository,
+            None,
+        ),
+    ]
+}
+
+#[test]
+fn shadow_sources_names_one_source() {
+    let infos = shadow_infos();
+    let paths = vec!["/home/skills/review/SKILL.md".to_owned()];
+    assert_eq!(
+        shadowed_by(&paths, &infos),
+        Some(vec!["personal".to_owned()])
+    );
+}
+
+#[test]
+fn shadow_sources_orders_repo_personal_extensions_then_builtin() {
+    // Shuffled discovery order must not move the words: repo, personal,
+    // extensions by extension name, then built in (`docs/tui.md:899-901`).
+    // Enter lists the same sources with their paths (`docs/tui.md:892-901`).
+    let infos = shadow_infos();
+    let paths = vec![
+        "/fiber/docs/skills/review/SKILL.md".to_owned(),
+        "/ext/review-kit/skills/review/SKILL.md".to_owned(),
+        "/home/skills/review/SKILL.md".to_owned(),
+        "/w/.fiber/skills/review/SKILL.md".to_owned(),
+    ];
+    assert_eq!(
+        shadowed_by(&paths, &infos),
+        Some(vec![
+            "repo".to_owned(),
+            "personal".to_owned(),
+            "review-kit".to_owned(),
+            "built in".to_owned(),
+        ])
+    );
+}
+
+#[test]
+fn shadow_sources_orders_extensions_by_name() {
+    // Extensions list by extension name (`docs/tui.md:899-901`).
+    let infos = vec![
+        sourced(
+            "review",
+            "/ext/zeta/skills/review/SKILL.md",
+            SkillSource::Extension,
+            Some("zeta"),
+        ),
+        sourced(
+            "review",
+            "/ext/alpha/skills/review/SKILL.md",
+            SkillSource::Extension,
+            Some("alpha"),
+        ),
+    ];
+    let paths = vec![
+        "/ext/zeta/skills/review/SKILL.md".to_owned(),
+        "/ext/alpha/skills/review/SKILL.md".to_owned(),
+    ];
+    assert_eq!(
+        shadowed_by(&paths, &infos),
+        Some(vec!["alpha".to_owned(), "zeta".to_owned()])
+    );
+}
+
+#[test]
+fn shadow_sources_lists_two_paths_from_one_source_once() {
+    // Each source lists once, however many paths map to it
+    // (`docs/tui.md:899-901`).
+    let infos = vec![
+        sourced(
+            "review",
+            "/home/skills/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+        sourced(
+            "review",
+            "/home/.agents/skills/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+    ];
+    let paths = vec![
+        "/home/skills/review/SKILL.md".to_owned(),
+        "/home/.agents/skills/review/SKILL.md".to_owned(),
+    ];
+    assert_eq!(
+        shadowed_by(&paths, &infos),
+        Some(vec!["personal".to_owned()])
+    );
+}
+
+#[test]
+fn shadow_sources_omits_the_clause_unless_every_path_resolves() {
+    // An unresolved path leaves out the whole clause (`docs/tui.md:901-902`).
+    let infos = shadow_infos();
+    assert_eq!(
+        shadowed_by(&["/nowhere/review/SKILL.md".to_owned()], &infos),
+        None,
+        "an unresolvable path leaves out the whole clause"
+    );
+    assert_eq!(
+        shadowed_by(
+            &[
+                "/home/skills/review/SKILL.md".to_owned(),
+                "/nowhere/review/SKILL.md".to_owned(),
+            ],
+            &infos,
+        ),
+        None,
+        "one unresolvable path drops even a resolvable list"
+    );
+    assert_eq!(shadowed_by(&[], &infos), None, "no shadows, no clause");
+}
+
+#[test]
+fn shadow_sources_treats_a_nameless_extension_as_unresolved() {
+    // A nameless extension entry is unresolved, so the row leaves out the
+    // whole clause (`docs/tui.md:901-902`).
+    let infos = vec![sourced(
+        "review",
+        "/ext/nameless/skills/review/SKILL.md",
+        SkillSource::Extension,
+        None,
+    )];
+    assert_eq!(
+        shadowed_by(&["/ext/nameless/skills/review/SKILL.md".to_owned()], &infos),
+        None,
+        "a malformed extension entry drops the whole clause"
+    );
+}
+
+#[test]
+fn colliding_extension_names_keep_their_kind() {
+    // An extension named after another source keeps its kind, so the two
+    // never read the same; any other extension reads as its bare name
+    // (`docs/tui.md:885-888`).
+    for name in ["repo", "personal", "built in"] {
+        let info = sourced(
+            "a",
+            &format!("/ext/{name}/skills/a/SKILL.md"),
+            SkillSource::Extension,
+            Some(name),
+        );
+        assert_eq!(super::source_word(&info), format!("extension {name}"));
+    }
+    let plain = sourced(
+        "a",
+        "/ext/memory/skills/a/SKILL.md",
+        SkillSource::Extension,
+        Some("memory"),
+    );
+    assert_eq!(super::source_word(&plain), "memory");
+    assert_eq!(super::source_word(&repository("a")), "repo");
+    assert_eq!(super::source_word(&personal("a")), "personal");
+    assert_eq!(super::source_word(&builtin("a")), "built in");
+}
+
+#[test]
+fn shadow_sources_lists_a_personal_source_and_a_personal_named_extension() {
+    // Deduplication is by source identity, not by display word: a personal
+    // skill and an extension named `personal` are two sources. The
+    // `extension <name>` collision prefix is `docs/tui.md:886-888`; each
+    // source lists once in precedence order (`docs/tui.md:899-901`).
+    let infos = vec![
+        sourced(
+            "review",
+            "/home/skills/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+        sourced(
+            "review",
+            "/ext/personal/skills/review/SKILL.md",
+            SkillSource::Extension,
+            Some("personal"),
+        ),
+    ];
+    let paths = vec![
+        "/home/skills/review/SKILL.md".to_owned(),
+        "/ext/personal/skills/review/SKILL.md".to_owned(),
+    ];
+    assert_eq!(
+        shadowed_by(&paths, &infos),
+        Some(vec!["personal".to_owned(), "extension personal".to_owned()])
+    );
+}
+
+/// A repository winner shadowing a personal, a long-named extension and a
+/// built-in skill, all named `review`.
+fn long_shadowed_view(fake: &Fake) -> Skills {
+    let mut win = repository("review");
+    win.description = "Checks a diff.".to_owned();
+    win.shadows = vec![
+        "/home/skills/review/SKILL.md".to_owned(),
+        "/ext/review-kit/skills/review/SKILL.md".to_owned(),
+        "/fiber/docs/skills/review/SKILL.md".to_owned(),
+    ];
+    let infos = vec![
+        win,
+        sourced(
+            "review",
+            "/home/skills/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+        sourced(
+            "review",
+            "/ext/review-kit/skills/review/SKILL.md",
+            SkillSource::Extension,
+            Some("review-kit"),
+        ),
+        sourced(
+            "review",
+            "/fiber/docs/skills/review/SKILL.md",
+            SkillSource::Builtin,
+            None,
+        ),
+    ];
+    opened(fake, &infos)
+}
+
+#[test]
+fn narrow_rows_cut_the_description_then_the_name_then_the_source() {
+    // `repository("review")` is `review · Test first. · repo · seen`.
+    let fake = fake_with(off(&[], &[]));
+    let skills = opened(&fake, &[repository("review")]);
+    // Only the description gives: the name and the source stay whole
+    // while the description ends in `…`.
+    let row = &rows(&skills, 75, 22)[0];
+    assert!(row.contains("review · Test firs… · repo · seen"), "{row:?}");
+    assert_eq!(row.matches("[on]").count(), 2, "{row:?}");
+    assert!(text::width(row) <= 75, "{row:?}");
+    // With the description gone, the name is cut while the source stays
+    // whole.
+    let row = &rows(&skills, 63, 22)[0];
+    assert!(row.contains("rev… ·  · repo · seen"), "{row:?}");
+    assert_eq!(row.matches("[on]").count(), 2, "{row:?}");
+    assert!(text::width(row) <= 63, "{row:?}");
+    // Last the source itself ends in `…`; both switches are still whole.
+    let row = &rows(&skills, 58, 22)[0];
+    assert!(row.contains("re… · seen"), "{row:?}");
+    assert!(!row.contains("repo"), "{row:?}");
+    assert_eq!(row.matches("[on]").count(), 2, "{row:?}");
+    assert!(text::width(row) <= 58, "{row:?}");
+}
+
+#[test]
+fn a_long_shadow_list_is_cut_after_the_switches() {
+    let fake = fake_with(off(&[], &[]));
+    let skills = long_shadowed_view(&fake);
+    let row = &rows(&skills, 100, 22)[0];
+    // The clause moved past both switches, tail-cut with `…`.
+    let everywhere = row.find("everywhere").expect("switches first");
+    let shadows = row.find("shadows").expect("the clause");
+    assert!(shadows > everywhere, "{row:?}");
+    assert!(row.contains("shadows personal,"), "{row:?}");
+    assert!(row.ends_with("…"), "{row:?}");
+    assert_eq!(row.matches("[on]").count(), 2, "{row:?}");
+    assert!(text::width(row) <= 100, "{row:?}");
+}
+
+#[test]
+fn the_shadows_clause_drops_out_below_its_minimum() {
+    let fake = fake_with(off(&[], &[]));
+    let skills = long_shadowed_view(&fake);
+    // At 67 columns the fixed fields and both switches leave exactly the
+    // ` · shadows …` minimum, so the clause stays as that minimum.
+    let kept = &rows(&skills, 67, 22)[0];
+    assert!(kept.contains("shadows"), "{kept:?}");
+    assert!(kept.ends_with("…"), "{kept:?}");
+    assert_eq!(kept.matches("[on]").count(), 2, "{kept:?}");
+    assert!(text::width(kept) <= 67, "{kept:?}");
+    // One column narrower leaves less than the minimum, so the clause is
+    // left out and the switches stay whole.
+    let dropped = &rows(&skills, 66, 22)[0];
+    assert!(!dropped.contains("shadows"), "{dropped:?}");
+    assert_eq!(dropped.matches("[on]").count(), 2, "{dropped:?}");
+    assert!(text::width(dropped) <= 66, "{dropped:?}");
+}
+
+#[test]
+fn a_long_own_source_is_cut_last_with_switches_whole() {
+    let fake = fake_with(off(&[], &[]));
+    let mut info = sourced(
+        "review",
+        "/ext/a-very-long-extension-name/skills/review/SKILL.md",
+        SkillSource::Extension,
+        Some("a-very-long-extension-name"),
+    );
+    info.description = "Checks a diff.".to_owned();
+    let skills = opened(&fake, &[info]);
+    // The description and the name are gone before the long source is
+    // touched.
+    let row = &rows(&skills, 81, 22)[0];
+    assert!(row.contains("a-very-long-extension-name · seen"), "{row:?}");
+    assert!(!row.contains("Checks a"), "{row:?}");
+    assert_eq!(row.matches("[on]").count(), 2, "{row:?}");
+    assert!(text::width(row) <= 81, "{row:?}");
+    // Narrower still, the source itself ends in `…`.
+    let row = &rows(&skills, 70, 22)[0];
+    assert!(row.contains("a-very-long-ex… · seen"), "{row:?}");
+    assert_eq!(row.matches("[on]").count(), 2, "{row:?}");
+    assert!(text::width(row) <= 70, "{row:?}");
 }
 
 #[test]
@@ -206,10 +588,9 @@ fn the_selected_rows_description_and_shadows_show_below() {
     let fake = fake_with(off(&[], &[]));
     let mut one = repository("tdd");
     one.shadows = vec![shadowed.to_owned()];
-    let mut skills = opened(&fake, &[one]);
-    skills.key(&Key::Down, &ctx(&fake));
+    let skills = opened(&fake, &[one]);
     assert_eq!(
-        skills.frame(22).below,
+        skills.frame(80, 22).below,
         vec!["Test first.".to_owned(), format!("shadows {shadowed}")]
     );
     let many: Vec<String> = (0..3)
@@ -217,10 +598,9 @@ fn the_selected_rows_description_and_shadows_show_below() {
         .collect();
     let mut three = repository("tdd");
     three.shadows = many.clone();
-    let mut skills = opened(&fake, &[three]);
-    skills.key(&Key::Down, &ctx(&fake));
+    let skills = opened(&fake, &[three]);
     assert_eq!(
-        skills.frame(22).below,
+        skills.frame(80, 22).below,
         vec![
             "Test first.".to_owned(),
             "shadows 3 skills; Enter lists them".to_owned()
@@ -228,16 +608,15 @@ fn the_selected_rows_description_and_shadows_show_below() {
     );
     let mut loser = personal("tdd");
     loser.shadowed_by = Some(winner.to_owned());
-    let mut skills = opened(&fake, &[loser]);
-    skills.key(&Key::Down, &ctx(&fake));
+    let skills = opened(&fake, &[loser]);
     assert_eq!(
-        skills.frame(22).below,
+        skills.frame(80, 22).below,
         vec!["Mine.".to_owned(), format!("shadowed by {winner}")]
     );
-    let skills = opened(&fake, &[repository("tdd")]);
+    let skills = opened(&fake, &[]);
     assert!(
-        skills.frame(22).below.is_empty(),
-        "the header has no details"
+        skills.frame(80, 22).below.is_empty(),
+        "an empty view has no details"
     );
 }
 
@@ -261,9 +640,8 @@ fn shadowed_view(fake: &Fake, n: usize) -> Skills {
         shadowed.shadowed_by = Some(winner.to_owned());
         infos.push(shadowed);
     }
-    let mut skills = opened(fake, &infos);
-    skills.key(&Key::Down, &ctx(fake));
-    assert_eq!(skills.frame(24).below[0], "Test first.");
+    let skills = opened(fake, &infos);
+    assert_eq!(skills.frame(80, 24).below[0], "Test first.");
     skills
 }
 
@@ -277,7 +655,7 @@ fn many_shadows_keep_rows_shown_and_navigable() {
         let mut skills = shadowed_view(&fake, 30);
         skills.said = said.clone();
         for height in [24, 6, 5, 4, 3] {
-            let frame = skills.frame(height);
+            let frame = skills.frame(80, height);
             assert!(rows_height(&frame, height) >= 1, "height {height}");
             let area = Rect::new(0, 0, 80, u16::try_from(height).unwrap_or(u16::MAX));
             let mut buf = Buffer::empty(area);
@@ -290,7 +668,7 @@ fn many_shadows_keep_rows_shown_and_navigable() {
                 "height {height}"
             );
         }
-        let frame = skills.frame(5);
+        let frame = skills.frame(80, 5);
         assert_eq!(frame.below.len(), 2, "{frame:?}");
         assert_eq!(frame.below[1], said[0], "{frame:?}");
     }
@@ -312,15 +690,15 @@ fn many_shadows_keep_rows_shown_and_navigable() {
     };
     skills.reread(&narrow);
     let winner = skills.list.selected();
-    let frame = skills.frame(6);
+    let frame = skills.frame(80, 6);
     assert!(frame_has_row(&frame, 6, winner), "{frame:?}");
     skills.key(&Key::Down, &narrow);
     assert_eq!(skills.list.selected(), winner + 1);
-    let frame = skills.frame(6);
+    let frame = skills.frame(80, 6);
     assert!(frame_has_row(&frame, 6, winner + 1), "{frame:?}");
     skills.key(&Key::Up, &narrow);
     assert_eq!(skills.list.selected(), winner);
-    let frame = skills.frame(6);
+    let frame = skills.frame(80, 6);
     assert!(frame_has_row(&frame, 6, winner), "{frame:?}");
 }
 
@@ -342,9 +720,9 @@ fn only_the_answer_to_its_id_fills_the_view() {
     let context = ctx(&fake);
     let mut skills = Skills::open(ID.to_owned(), &context);
     skills.answered("c_2", &[repository("tdd")], &context);
-    assert_eq!(skills.frame(22).rows.len(), 1);
+    assert_eq!(skills.frame(80, 22).rows.len(), 0);
     skills.answered(ID, &[repository("tdd")], &context);
-    assert_eq!(skills.frame(22).rows.len(), 2);
+    assert_eq!(skills.frame(80, 22).rows.len(), 1);
 }
 
 #[test]
@@ -354,11 +732,11 @@ fn a_rejection_shows_its_message_only_for_its_id() {
     let mut skills = Skills::open(ID.to_owned(), &context);
     skills.rejected("c_2", "busy");
     assert_eq!(
-        skills.frame(22).below,
+        skills.frame(80, 22).below,
         vec!["Reading the skills…".to_owned()]
     );
     skills.rejected(ID, "busy");
-    assert_eq!(skills.frame(22).below, vec!["busy".to_owned()]);
+    assert_eq!(skills.frame(80, 22).below, vec!["busy".to_owned()]);
 }
 
 #[test]
@@ -373,8 +751,8 @@ fn a_failed_lists_read_says_why_and_the_rows_still_show() {
     let context = ctx(&fake);
     let mut skills = Skills::open(ID.to_owned(), &context);
     skills.answered(ID, &[repository("tdd")], &context);
-    let frame = skills.frame(22);
-    assert_eq!(frame.rows.len(), 2);
+    let frame = skills.frame(80, 22);
+    assert_eq!(frame.rows.len(), 1);
     assert!(frame.below.contains(&"config.json: not JSON".to_owned()));
 }
 
@@ -397,8 +775,8 @@ fn selection_clamps_two_past_the_end() {
             repository("d"),
         ],
     );
-    skills.click(Spot::Row(7), &ctx(&fake));
-    assert_eq!(skills.list.selected(), 4);
+    skills.click(Spot::Row(6), &ctx(&fake));
+    assert_eq!(skills.list.selected(), 3);
     let context = Ctx {
         height: 4,
         ..ctx(&fake)
@@ -409,14 +787,13 @@ fn selection_clamps_two_past_the_end() {
     }
     assert_eq!(skills.list.selected(), 3);
     skills.key(&Key::PageDown, &context);
-    assert_eq!(skills.list.selected(), 4);
+    assert_eq!(skills.list.selected(), 3);
 }
 
 #[test]
 fn space_toggles_project_then_everywhere_independently() {
     let fake = fake_with(off(&[], &[]));
     let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.key(&Key::Down, &ctx(&fake));
     skills.key(&Key::Char(' '), &ctx(&fake));
     skills.edit_key(&Edit::Right);
     skills.key(&Key::Char(' '), &ctx(&fake));
@@ -462,8 +839,8 @@ fn switched(fake: &Fake) -> Vec<(std::path::PathBuf, String, SwitchScope, bool)>
 #[test]
 fn a_switch_click_selects_focuses_and_flips() {
     for (edit, row, at, scope) in [
-        (Edit::Left, 1, 1, SwitchScope::Everywhere),
-        (Edit::Right, 2, 0, SwitchScope::Project),
+        (Edit::Left, 0, 1, SwitchScope::Everywhere),
+        (Edit::Right, 1, 0, SwitchScope::Project),
     ] {
         let fake = fake_with(off(&[], &[]));
         let mut skills = opened(&fake, &[repository("a"), repository("b")]);
@@ -473,8 +850,8 @@ fn a_switch_click_selects_focuses_and_flips() {
         assert_eq!(asked.len(), 1, "{edit:?}");
         assert_eq!(asked[0].2, scope, "{edit:?}");
         assert_eq!(skills.list.selected(), row, "{edit:?}");
-        let frame = skills.frame(22);
-        let focused = if at == 0 { 1 } else { 3 };
+        let frame = skills.frame(80, 22);
+        let focused = if at == 0 { 1 } else { 4 };
         assert!(
             frame.rows[row][focused].0.contains('›'),
             "{edit:?} {frame:?}"
@@ -486,7 +863,6 @@ fn a_switch_click_selects_focuses_and_flips() {
 fn right_then_left_then_space_writes_this_project() {
     let fake = fake_with(off(&[], &[]));
     let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.key(&Key::Down, &ctx(&fake));
     skills.edit_key(&Edit::Right);
     skills.edit_key(&Edit::Left);
     skills.key(&Key::Char(' '), &ctx(&fake));
@@ -514,9 +890,8 @@ fn right_then_left_then_space_writes_this_project() {
 fn a_switch_rereads_and_says_next_turn_start() {
     let fake = fake_with(off(&[], &[]));
     let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.key(&Key::Down, &ctx(&fake));
     skills.key(&Key::Char(' '), &ctx(&fake));
-    let frame = skills.frame(22);
+    let frame = skills.frame(80, 22);
     assert_eq!(
         frame.below,
         vec![
@@ -524,8 +899,8 @@ fn a_switch_rereads_and_says_next_turn_start() {
             "Reaches the model at the next turn start.".to_owned()
         ]
     );
-    assert!(frame.rows[1][1].0.contains("[ ]"), "{frame:?}");
-    assert!(frame.rows[1][3].0.contains("[x]"), "{frame:?}");
+    assert!(frame.rows[0][2].0.contains("[off]"), "{frame:?}");
+    assert!(frame.rows[0][5].0.contains("[on]"), "{frame:?}");
 }
 
 #[test]
@@ -535,9 +910,8 @@ fn a_failed_switch_rereads_and_shows_the_message() {
         *fail = true;
     }
     let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.key(&Key::Down, &ctx(&fake));
     skills.key(&Key::Char(' '), &ctx(&fake));
-    let frame = skills.frame(22);
+    let frame = skills.frame(80, 22);
     assert_eq!(
         frame.below,
         vec![
@@ -546,15 +920,12 @@ fn a_failed_switch_rereads_and_shows_the_message() {
         ]
     );
     // The write landed before the error, so the row shows it.
-    assert!(frame.rows[1][1].0.contains("[ ]"), "{frame:?}");
+    assert!(frame.rows[0][2].0.contains("[off]"), "{frame:?}");
 }
 
 #[test]
-fn space_on_the_header_or_an_empty_view_writes_nothing() {
+fn space_on_an_empty_view_writes_nothing() {
     let fake = fake_with(off(&[], &[]));
-    let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.key(&Key::Char(' '), &ctx(&fake));
-    assert!(switched(&fake).is_empty());
     let mut skills = opened(&fake, &[]);
     skills.key(&Key::Char(' '), &ctx(&fake));
     assert!(switched(&fake).is_empty());
@@ -569,8 +940,8 @@ fn a_shadowed_rows_switch_writes_its_name() {
     let mut win = repository("tdd");
     win.shadows = vec!["/home/skills/tdd/SKILL.md".to_owned()];
     let mut skills = opened(&fake, &[win, shadowed]);
-    // The shadowed row is index 2, past the header and the winner.
-    skills.click(Spot::Row(2), &ctx(&fake));
+    // The shadowed row is index 1, past the winner.
+    skills.click(Spot::Row(1), &ctx(&fake));
     skills.key(&Key::Char(' '), &ctx(&fake));
     assert_eq!(
         switched(&fake),
@@ -581,9 +952,9 @@ fn a_shadowed_rows_switch_writes_its_name() {
             false
         )]
     );
-    let frame = skills.frame(22);
-    assert!(frame.rows[1][1].0.contains("[ ]"), "{frame:?}");
-    assert!(frame.rows[2][1].0.contains("[ ]"), "{frame:?}");
+    let frame = skills.frame(80, 22);
+    assert!(frame.rows[0][2].0.contains("[off]"), "{frame:?}");
+    assert!(frame.rows[1][2].0.contains("[off]"), "{frame:?}");
 }
 
 #[test]
@@ -603,7 +974,6 @@ fn other_edits_do_nothing() {
     ] {
         skills.edit_key(&edit);
     }
-    skills.key(&Key::Down, &ctx(&fake));
     skills.key(&Key::Char(' '), &ctx(&fake));
     assert_eq!(switched(&fake).len(), 1);
     assert_eq!(switched(&fake)[0].2, SwitchScope::Project);
@@ -622,7 +992,6 @@ fn text_fake(body: &str) -> Fake {
 /// text open.
 fn entered(fake: &Fake, infos: &[SkillInfo]) -> Skills {
     let mut skills = opened(fake, infos);
-    skills.key(&Key::Down, &ctx(fake));
     skills.key(&Key::Enter, &ctx(fake));
     skills
 }
@@ -631,17 +1000,16 @@ fn entered(fake: &Fake, infos: &[SkillInfo]) -> Skills {
 fn enter_shows_the_text_and_esc_returns_then_closes() {
     let fake = text_fake("Test first.\nSecond line.");
     let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.key(&Key::Down, &ctx(&fake));
     assert!(matches!(skills.key(&Key::Enter, &ctx(&fake)), Act::Stay));
-    let frame = skills.frame(22);
+    let frame = skills.frame(80, 22);
     assert_eq!(frame.title, "Skill tdd");
     assert!(
         frame.rows.iter().any(|row| row[0].0 == "Test first."),
         "{frame:?}"
     );
     assert!(matches!(skills.key(&Key::Esc, &ctx(&fake)), Act::Stay));
-    assert_eq!(skills.frame(22).title, "Skills");
-    assert_eq!(skills.list.selected(), 1);
+    assert_eq!(skills.frame(80, 22).title, "Skills");
+    assert_eq!(skills.list.selected(), 0);
     assert!(matches!(skills.key(&Key::Esc, &ctx(&fake)), Act::Close));
 }
 
@@ -655,11 +1023,10 @@ fn enter_on_a_read_error_stays_on_the_rows_with_the_message() {
         });
     }
     let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.key(&Key::Down, &ctx(&fake));
     assert!(matches!(skills.key(&Key::Enter, &ctx(&fake)), Act::Stay));
-    let frame = skills.frame(22);
+    let frame = skills.frame(80, 22);
     assert_eq!(frame.title, "Skills");
-    assert_eq!(frame.rows.len(), 2);
+    assert_eq!(frame.rows.len(), 1);
     assert!(
         frame
             .below
@@ -670,9 +1037,12 @@ fn enter_on_a_read_error_stays_on_the_rows_with_the_message() {
 
 #[test]
 fn enter_lists_every_shadow_path_before_the_text() {
+    // Enter shows the text after every shadowed skill with its source and
+    // path (`docs/tui.md:892-901`); unresolved paths keep the path-only
+    // line.
     let fake = text_fake("The text.");
     let skills = entered(&fake, shadowed_infos(30).as_slice());
-    let frame = skills.frame(22);
+    let frame = skills.frame(80, 22);
     assert_eq!(frame.rows.len(), 32);
     for (index, row) in frame.rows.iter().take(30).enumerate() {
         assert_eq!(
@@ -683,6 +1053,94 @@ fn enter_lists_every_shadow_path_before_the_text() {
     // No shadow path dropped: the block, a blank line, then the text.
     assert_eq!(frame.rows[30][0].0, "");
     assert_eq!(frame.rows[31][0].0, "The text.");
+}
+
+#[test]
+fn enter_lists_each_shadow_source_and_path_above_the_text() {
+    // Shadow order is the winner's path order, not precedence order, and
+    // every path gets its own line, including a repeated source. Enter
+    // shows each shadowed skill's source and path (`docs/tui.md:892-901`).
+    // Precedence order, for contrast, is `docs/tui.md:899-901`.
+    let fake = text_fake("The text.");
+    let mut win = repository("review");
+    win.shadows = vec![
+        "/fiber/docs/skills/review/SKILL.md".to_owned(),
+        "/ext/review-kit/skills/review/SKILL.md".to_owned(),
+        "/home/skills/review/SKILL.md".to_owned(),
+        "/home/other/review/SKILL.md".to_owned(),
+    ];
+    let infos = vec![
+        win,
+        sourced(
+            "review",
+            "/fiber/docs/skills/review/SKILL.md",
+            SkillSource::Builtin,
+            None,
+        ),
+        sourced(
+            "review",
+            "/ext/review-kit/skills/review/SKILL.md",
+            SkillSource::Extension,
+            Some("review-kit"),
+        ),
+        sourced(
+            "review",
+            "/home/skills/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+        sourced(
+            "review",
+            "/home/other/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+    ];
+    let skills = entered(&fake, &infos);
+    let frame = skills.frame(80, 22);
+    assert_eq!(frame.rows.len(), 6);
+    let lines: Vec<String> = frame.rows.iter().map(|row| row[0].0.clone()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "shadows built in · /fiber/docs/skills/review/SKILL.md".to_owned(),
+            "shadows review-kit · /ext/review-kit/skills/review/SKILL.md".to_owned(),
+            "shadows personal · /home/skills/review/SKILL.md".to_owned(),
+            "shadows personal · /home/other/review/SKILL.md".to_owned(),
+            String::new(),
+            "The text.".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn enter_renders_a_nameless_extension_shadow_path_only() {
+    // A nameless extension entry is unresolved, as the row's whole-clause
+    // omission treats it (`docs/tui.md`, "Swapped views"): the pane keeps
+    // the path-only line rather than `shadows extension · <path>`.
+    let fake = text_fake("The text.");
+    let mut win = repository("review");
+    win.shadows = vec!["/ext/nameless/skills/review/SKILL.md".to_owned()];
+    let infos = vec![
+        win,
+        sourced(
+            "review",
+            "/ext/nameless/skills/review/SKILL.md",
+            SkillSource::Extension,
+            None,
+        ),
+    ];
+    let skills = entered(&fake, &infos);
+    let frame = skills.frame(80, 22);
+    let lines: Vec<String> = frame.rows.iter().map(|row| row[0].0.clone()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "shadows /ext/nameless/skills/review/SKILL.md".to_owned(),
+            String::new(),
+            "The text.".to_owned(),
+        ]
+    );
 }
 
 /// A winner shadowing `n` skills, without opening the view.
@@ -704,9 +1162,8 @@ fn the_text_wraps_to_the_width() {
         ..ctx(&fake)
     };
     let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.key(&Key::Down, &narrow);
     skills.key(&Key::Enter, &narrow);
-    assert_eq!(skills.frame(22).rows.len(), 3);
+    assert_eq!(skills.frame(20, 22).rows.len(), 3);
 }
 
 #[test]
@@ -717,15 +1174,14 @@ fn a_new_width_rewraps_on_the_next_key() {
         ..ctx(&fake)
     };
     let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.key(&Key::Down, &narrow);
     skills.key(&Key::Enter, &narrow);
-    assert_eq!(skills.frame(22).rows.len(), 3);
+    assert_eq!(skills.frame(20, 22).rows.len(), 3);
     let wide = Ctx {
         width: 40,
         ..ctx(&fake)
     };
     skills.key(&Key::Down, &wide);
-    assert_eq!(skills.frame(22).rows.len(), 2);
+    assert_eq!(skills.frame(40, 22).rows.len(), 2);
 }
 
 #[test]
@@ -733,7 +1189,7 @@ fn text_scrolls_and_clamps_two_past_the_end() {
     let body: Vec<String> = (0..10).map(|n| format!("line {n}")).collect();
     let fake = text_fake(&body.join("\n"));
     let mut skills = entered(&fake, &[repository("tdd")]);
-    assert_eq!(skills.frame(22).rows.len(), 10);
+    assert_eq!(skills.frame(80, 22).rows.len(), 10);
     skills.click(Spot::Row(11), &ctx(&fake));
     assert_eq!(selected_line(&skills), 9);
     skills.key(&Key::PageDown, &ctx(&fake));
@@ -744,14 +1200,13 @@ fn text_scrolls_and_clamps_two_past_the_end() {
 
 /// The text pane's selected line.
 fn selected_line(skills: &Skills) -> usize {
-    skills.frame(22).list.selected()
+    skills.frame(80, 22).list.selected()
 }
 
 #[test]
 fn ctrl_g_opens_the_selected_skill_md() {
     let fake = text_fake("Test first.");
     let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.key(&Key::Down, &ctx(&fake));
     let file = PathBuf::from("/w/.fiber/skills/tdd/SKILL.md");
     assert!(matches!(
         skills.key(&Key::CtrlG, &ctx(&fake)),
@@ -783,15 +1238,15 @@ fn shortening_the_open_text_clamps_the_pane_and_keeps_the_row() {
     // Two past the last line scrolls to it.
     skills.click(Spot::Row(11), &narrow);
     assert_eq!(selected_line(&skills), 9);
-    assert_eq!(skills.list.selected(), 1);
+    assert_eq!(skills.list.selected(), 0);
     // Ctrl+G shortens the file to one line; the return re-reads it.
     if let Ok(mut texts) = fake.texts.lock() {
         *texts = Ok("only".to_owned());
     }
     skills.reread(&narrow);
-    assert_eq!(skills.list.selected(), 1, "the skill row is unchanged");
+    assert_eq!(skills.list.selected(), 0, "the skill row is unchanged");
     assert_eq!(selected_line(&skills), 0);
-    let frame = skills.frame(6);
+    let frame = skills.frame(80, 6);
     assert_eq!(frame.rows.len(), 1);
     assert_eq!(frame.rows[0][0].0, "only");
     assert!(frame_has_row(&frame, 6, 0), "{frame:?}");
@@ -824,17 +1279,17 @@ fn navigation_keeps_the_selected_row_visible_at_small_heights() {
             skills.key(&key, &context);
             let selected = skills.list.selected();
             assert!(selected > 0, "height {height} key {key:?}");
-            let frame = skills.frame(height);
+            let frame = skills.frame(80, height);
             assert!(
                 frame_has_row(&frame, height, selected),
                 "height {height} key {key:?} selected {selected} {frame:?}"
             );
             // Two past the last row clamps to it and stays visible.
-            let rows = skills.frame(height).rows.len();
+            let rows = skills.frame(80, height).rows.len();
             skills.click(Spot::Row(rows + 1), &context);
             let selected = skills.list.selected();
             assert_eq!(selected, rows - 1, "height {height} key {key:?}");
-            let frame = skills.frame(height);
+            let frame = skills.frame(80, height);
             assert!(
                 frame_has_row(&frame, height, selected),
                 "height {height} key {key:?} selected {selected} {frame:?}"
@@ -849,11 +1304,10 @@ fn skills_text_80x24() {
     let mut win = repository("tdd");
     win.shadows = vec!["/home/skills/tdd/SKILL.md".to_owned()];
     let mut skills = opened(&fake, &[win]);
-    skills.key(&Key::Down, &ctx(&fake));
     skills.key(&Key::Enter, &ctx(&fake));
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
-    render(&skills.frame(24), area, &mut buf, &mut Vec::new());
+    render(&skills.frame(80, 24), area, &mut buf, &mut Vec::new());
     let text: Vec<String> = (0..24)
         .map(|y| {
             (0..80)
@@ -879,10 +1333,9 @@ fn skills_80x24() {
         &[win, lost, extension("recall", "memory"), builtin("built")],
     );
     skills.key(&Key::Down, &ctx(&fake));
-    skills.key(&Key::Down, &ctx(&fake));
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
-    render(&skills.frame(24), area, &mut buf, &mut Vec::new());
+    render(&skills.frame(80, 24), area, &mut buf, &mut Vec::new());
     let text: Vec<String> = (0..24)
         .map(|y| {
             (0..80)
@@ -893,4 +1346,169 @@ fn skills_80x24() {
         })
         .collect();
     insta::assert_snapshot!("skills_80x24", text.join("\n"));
+}
+
+/// Row `y` of `buf` as text, `width` columns wide.
+fn buf_row(buf: &Buffer, y: u16, width: u16) -> String {
+    (0..width)
+        .map(|x| buf[(x, y)].symbol().to_owned())
+        .collect::<String>()
+}
+
+/// The column where `needle` starts on row `y` of `buf`, or a panic.
+fn buf_col(buf: &Buffer, y: u16, width: u16, needle: &str) -> u16 {
+    let row = buf_row(buf, y, width);
+    let byte = row
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} on row {y}: {row:?}"));
+    u16::try_from(row[..byte].chars().count()).expect("the column fits")
+}
+
+#[test]
+fn initial_frame_selects_the_first_skill() {
+    let winner = "/w/.fiber/skills/review/SKILL.md";
+    let mut win = repository("review");
+    win.description = "Checks a diff.".to_owned();
+    win.shadows = vec![
+        "/home/skills/review/SKILL.md".to_owned(),
+        "/ext/review-kit/skills/review/SKILL.md".to_owned(),
+        "/fiber/docs/skills/review/SKILL.md".to_owned(),
+    ];
+    let mut shadowed = personal("review");
+    shadowed.shadowed_by = Some(winner.to_owned());
+    let mut kit = extension("review", "review-kit");
+    kit.shadowed_by = Some(winner.to_owned());
+    let mut docs = builtin("review");
+    docs.shadowed_by = Some(winner.to_owned());
+    let fake = fake_with(off(&[], &["notes"]));
+    let skills = opened(&fake, &[win, shadowed, kit, docs, repository("notes")]);
+    // No header row: the first row is the first skill, selected. The
+    // ruling example only fits uncut at pty width, so the frame is 160
+    // columns wide.
+    let frame = skills.frame(160, 22);
+    assert_eq!(frame.rows.len(), 5);
+    assert_eq!(frame.list.selected(), 0);
+    let head: String = frame.rows[0]
+        .iter()
+        .map(|(text, _, _)| text.clone())
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(
+        head.contains("review · Checks a diff. · repo · seen · this project"),
+        "{head:?}"
+    );
+    // The shadows clause follows both switches, whole at this width.
+    assert!(
+        head.ends_with(" · shadows personal, review-kit, built in"),
+        "{head:?}"
+    );
+    assert!(head.contains("[on]"), "{head:?}");
+    assert_eq!(frame.footer, "Enter shows the text · Ctrl+G opens its file");
+    assert_eq!(frame.below[0], "Checks a diff.");
+    // A row with no shadows names none.
+    assert!(
+        !frame.rows[4]
+            .iter()
+            .any(|(text, _, _)| text.contains("shadows")),
+        "{frame:?}"
+    );
+    // Only the selected row marks its focused switch.
+    assert_eq!(frame.rows[0][1].0, "›");
+    assert_eq!(frame.rows[1][1].0, " ", "{frame:?}");
+    assert_eq!(frame.rows[1][4].0, " ", "{frame:?}");
+    // The drawn grid: the `› ` gutter on the focused row only, `[on]`
+    // bold, `[off]` dim, the footer dim, and no reverse video.
+    let area = Rect::new(0, 0, 160, 22);
+    let mut buf = Buffer::empty(area);
+    render(&frame, area, &mut buf, &mut Vec::new());
+    assert_eq!(buf[(0, 1)].symbol(), "›");
+    assert_eq!(buf[(1, 1)].symbol(), " ");
+    assert_eq!(buf[(0, 2)].symbol(), " ");
+    for x in 0..160 {
+        assert!(
+            !buf[(x, 1)].modifier.contains(Modifier::REVERSED),
+            "no bar on the focused row"
+        );
+    }
+    let on = buf_col(&buf, 1, 160, "[on]");
+    for dx in 0..4 {
+        let cell = &buf[(on + dx, 1)];
+        assert!(cell.modifier.contains(Modifier::BOLD), "[on] is bold");
+        assert!(!cell.modifier.contains(Modifier::DIM), "[on] is not dim");
+    }
+    let off = buf_col(&buf, 5, 160, "[off]");
+    for dx in 0..5 {
+        let cell = &buf[(off + dx, 5)];
+        assert!(cell.modifier.contains(Modifier::DIM), "[off] is dim");
+        assert!(!cell.modifier.contains(Modifier::BOLD), "[off] is not bold");
+    }
+    let footer = buf_row(&buf, 21, 160);
+    assert!(
+        footer.contains("Enter shows the text · Ctrl+G opens its file"),
+        "{footer:?}"
+    );
+    for x in 0..160 {
+        if buf[(x, 21)].symbol() != " " {
+            assert!(
+                buf[(x, 21)].modifier.contains(Modifier::DIM),
+                "the footer is dim"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_unresolvable_shadow_path_leaves_the_row_without_a_clause() {
+    let mut win = repository("review");
+    win.shadows = vec!["/nowhere/review/SKILL.md".to_owned()];
+    let fake = fake_with(off(&[], &[]));
+    let skills = opened(&fake, &[win]);
+    let frame = skills.frame(160, 22);
+    assert!(
+        !frame.rows[0]
+            .iter()
+            .any(|(text, _, _)| text.contains("shadows")),
+        "{frame:?}"
+    );
+}
+
+#[test]
+fn resize_redraws_rows_details_and_text_at_the_new_width() {
+    let description = "A description long enough to cut when the view narrows to sixty-four.";
+    let fake = fake_with(off(&["b"], &[]));
+    let mut a = repository("a");
+    a.description = description.to_owned();
+    let skills = opened(&fake, &[a, repository("b")]);
+    // At full width the details read whole.
+    let full = skills.frame(80, 22);
+    assert_eq!(full.below[0], description);
+    // At a narrower width with no intervening key, the head cuts with
+    // `…` while both switches stay reachable, and the details cut.
+    let narrow = skills.frame(64, 22);
+    let head: String = narrow.rows[0]
+        .iter()
+        .map(|(text, _, _)| text.clone())
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(head.contains("…"), "{head:?}");
+    assert!(head.contains("[on]"), "{head:?}");
+    assert!(
+        narrow.rows[1]
+            .iter()
+            .any(|(text, _, _)| text.contains("[off]")),
+        "{narrow:?}"
+    );
+    assert!(narrow.below[0].len() < description.len(), "{narrow:?}");
+    // The narrowed row fits its buffer, switches drawn, not clipped.
+    let area = Rect::new(0, 0, 64, 22);
+    let mut buf = Buffer::empty(area);
+    render(&narrow, area, &mut buf, &mut Vec::new());
+    let off = buf_col(&buf, 2, 64, "[off]");
+    assert!(off + 5 <= 64, "the [off] switch is drawn whole");
+    // The text pane rewraps at the redraw's width too.
+    let text_fake = text_fake(&"e".repeat(100));
+    let mut entered = opened(&text_fake, &[repository("tdd")]);
+    entered.key(&Key::Enter, &ctx(&text_fake));
+    assert_eq!(entered.frame(80, 22).rows.len(), 2);
+    assert_eq!(entered.frame(48, 22).rows.len(), 3);
 }

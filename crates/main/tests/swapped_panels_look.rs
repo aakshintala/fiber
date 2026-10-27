@@ -1,6 +1,6 @@
-//! Binary-level tests of the `/tools`, `/rules` and `/settings` views
-//! (`docs/tui.md`, "Swapped views"): the real binary on a 160x48 pty in
-//! truecolour, with the scripted provider answering, draws the doc's
+//! Binary-level tests of the `/tools`, `/rules`, `/settings` and `/skills`
+//! views (`docs/tui.md`, "Swapped views"): the real binary on a 160x48 pty
+//! in truecolour, with the scripted provider answering, draws the doc's
 //! rows. Source headings are bold, a switch reads `[on]` bold or `[off]`
 //! dim, a rule's ✕ is in `error`, the settings table has a dim header and
 //! aligned columns, and each view's last rows are dim. The focused row
@@ -20,6 +20,7 @@ mod extension_harness;
 mod support;
 
 use std::fs;
+use std::path::PathBuf;
 
 use serde_json::json;
 use support::pty::{Colour, Grid, Run};
@@ -493,6 +494,337 @@ fn the_changed_files_hunk_row_is_dim() {
     });
     let hunk = row_with(&grid, "@@ -1 +1 @@");
     assert!(is_dim(&grid, hunk, "@@ -1 +1 @@"), "{}", grid.contents);
+    run.write(b"\x03\x03\r");
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+/// A setup with same-name repo and personal `review` skills: the repo
+/// copy wins and shadows the personal one. The scripted provider only
+/// needs to keep the session alive, as for `/rules`.
+fn skills_setup() -> Setup {
+    let setup = Setup::new();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [{"text": ["Done."]}]}),
+    );
+    config(&setup, json!({}));
+    for (dir, description) in [
+        (
+            setup.workspace().join(".agents/skills/review"),
+            "Checks a diff.",
+        ),
+        (setup.home().join("skills/review"), "Personal notes."),
+    ] {
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: review\ndescription: {description}\n---\nBody.\n"),
+        )
+        .unwrap();
+    }
+    setup
+}
+
+/// The `/skills` row for the winning `review` skill: its text from the name on.
+/// Only the row's own cells are read: the view does not span the full
+/// grid, so a side panel may draw to its right.
+fn skill_row(grid: &Grid) -> Option<(u16, String)> {
+    let want = "review · Checks a diff. · repo · seen · this project›[on] · everywhere [on] · shadows personal";
+    let y = find_row(grid, "shadows personal")?;
+    let x = col_at_or(grid, y, "review · Checks a diff.")?;
+    let end = x.checked_add(want.chars().count() as u16)?;
+    if end > 160 {
+        return None;
+    }
+    let text: String = (x..end).map(|x| grid.cell(x, y).symbol.clone()).collect();
+    Some((y, text))
+}
+
+/// Whether `text` reads the doc's row: `review · Checks a diff. · repo ·
+/// seen · this project›[on] · everywhere [on] · shadows personal`, the
+/// mark "›" on the focused this-project switch's side and a space on the
+/// other, the shadows clause past both switches.
+fn reads_as_skill_row(text: &str) -> bool {
+    text == "review · Checks a diff. · repo · seen · this project›[on] · everywhere [on] · shadows personal"
+}
+
+/// The `/skills` screen once every property the test reads has drawn:
+/// the winner's row with its two `[on]` switches, the "› " gutter on it
+/// and the dim last row.
+fn skills_ready(grid: &Grid) -> bool {
+    let Some((y, text)) = skill_row(grid) else {
+        return false;
+    };
+    if !reads_as_skill_row(&text) {
+        return false;
+    }
+    let Some(x) = col_at_or(grid, y, "review · Checks a diff.") else {
+        return false;
+    };
+    if x < 2 || grid.cell(x - 2, y).symbol != "›" || grid.cell(x - 1, y).symbol != " " {
+        return false;
+    }
+    let after = |label: &str| col_at_or(grid, y, label).map(|x| x + label.chars().count() as u16);
+    let (Some(at_project), Some(at_everywhere)) = (after("this project"), after("everywhere"))
+    else {
+        return false;
+    };
+    // The mark is bold on the focused side and a plain space on the
+    // other; the switch follows it.
+    let project = grid.cell(at_project, y);
+    let everywhere = grid.cell(at_everywhere, y);
+    if project.symbol != "›" || !project.bold || everywhere.symbol != " " || everywhere.bold {
+        return false;
+    }
+    if !(switch_weighs(grid, y, at_project + 1, "[on]")
+        && switch_weighs(grid, y, at_everywhere + 1, "[on]"))
+    {
+        return false;
+    }
+    let Some(footer) = find_row(grid, "Enter shows the text · Ctrl+G opens its file") else {
+        return false;
+    };
+    is_dim(grid, footer, "Enter shows the text · Ctrl+G opens its file")
+}
+
+#[test]
+fn the_skills_view_matches_the_doc() {
+    let setup = skills_setup();
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    // `/skills` reads the session on screen, so start one first.
+    let from = run.output().len();
+    run.write(b"go\r");
+    run.turn_finished(from);
+    run.write(b"/skills\r");
+    let grid = run.wait_screen("the skills rows", skills_ready);
+    // The winner's row reads exactly as the doc says it does.
+    let (y, text) = skill_row(&grid).expect("the skill row");
+    assert!(reads_as_skill_row(&text), "{text}");
+    let x = col_at(&grid, y, "review · Checks a diff.");
+    assert_eq!(grid.cell(x - 2, y).symbol, "›");
+    assert!(!grid.cell(x - 2, y).inverse);
+    assert!(is_plain_of_reverse(&grid, y, "review · Checks a diff. · "));
+    assert!(is_plain_of_reverse(&grid, y, "›[on] · everywhere [on]"));
+    // `[on]` is bold and not dim on both switches.
+    assert!(is_bold(&grid, y, "[on]"));
+    let after = |label: &str| col_at(&grid, y, label) + label.chars().count() as u16;
+    assert!(switch_weighs(&grid, y, after("this project") + 1, "[on]"));
+    assert!(switch_weighs(&grid, y, after("everywhere") + 1, "[on]"));
+    // The shadowed personal copy keeps its own row with no clause. Only
+    // the row's own cells are read, as above.
+    let loser = row_with(&grid, "personal · hidden");
+    let loser_x = col_at(&grid, loser, "review · Personal notes.");
+    let loser_text: String = (loser_x..loser_x + 100)
+        .map(|x| grid.cell(x, loser).symbol.clone())
+        .collect::<String>()
+        .to_owned();
+    assert!(
+        loser_text.contains("review · Personal notes."),
+        "{loser_text}"
+    );
+    assert!(!loser_text.contains("shadows"), "{loser_text}");
+    // The last row is the doc's hint line, dim.
+    assert!(!grid.contents.contains("↑↓ move"), "{}", grid.contents);
+    assert!(!grid.contents.contains("choose a switch"));
+    let footer = row_with(&grid, "Enter shows the text · Ctrl+G opens its file");
+    assert!(is_dim(
+        &grid,
+        footer,
+        "Enter shows the text · Ctrl+G opens its file"
+    ));
+    run.write(b"\x03\x03\r");
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+/// The installed extension's name in the narrow `/skills` fixtures.
+const LONG_EXTENSION: &str = "fiber.test/very-long-extension-name";
+
+/// The narrow fixture's installed extension directory: the expected
+/// shadow path is built from it, never from a hard-coded mapping of the
+/// name.
+fn installed_extension_dir(setup: &Setup) -> PathBuf {
+    let root = setup.home().join("extensions");
+    let installed: Vec<PathBuf> = fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().contains("very-long-extension-name"))
+        })
+        .collect();
+    assert_eq!(
+        installed.len(),
+        1,
+        "the narrow fixture's extension in {root:?}"
+    );
+    installed.into_iter().next().unwrap()
+}
+
+/// A setup with same-name repository, personal and long-named extension
+/// `review` skills: the repository copy wins and shadows the other two.
+fn narrow_skills_setup() -> Setup {
+    let setup = skills_setup();
+    // A long-named extension with its own same-name skill, shadowed by
+    // the repository copy.
+    setup.lua("very-long-extension-name", "-- no tools\n");
+    let dir = installed_extension_dir(&setup).join("skills/review");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: review\ndescription: Extension notes.\n---\nBody.\n",
+    )
+    .unwrap();
+    setup
+}
+
+/// The narrow `/skills` screen once the winner's row has drawn with its
+/// shadows clause tail-cut past both whole switches. The conversation
+/// column leaves its last cell to the scroll bar, so the 100-wide pty
+/// draws the view 99 wide. The predicate checks every cell property the
+/// test reads — the exact row, the gutter, the switch weights and the dim
+/// footer — so a partial redraw can't satisfy it (`docs/testing/screens.md`,
+/// "Screens"). Only then is the view ready for Enter.
+fn narrow_skills_ready(grid: &Grid) -> bool {
+    let want = "review · Checks a diff. · repo · seen · this project›[on] · everywhere [on] · shadows personal…";
+    let Some(y) = find_row(grid, "shadows personal…") else {
+        return false;
+    };
+    let Some(x) = col_at_or(grid, y, "review · Checks a diff.") else {
+        return false;
+    };
+    let text: String = (x..100)
+        .map(|x| grid.cell(x, y).symbol.clone())
+        .collect::<String>()
+        .trim_end()
+        .to_owned();
+    if text != want {
+        return false;
+    }
+    if x < 2 || grid.cell(x - 2, y).symbol != "›" || grid.cell(x - 1, y).symbol != " " {
+        return false;
+    }
+    if grid.cell(x - 2, y).inverse {
+        return false;
+    }
+    if !(0..100).all(|x| !grid.cell(x, y).inverse) {
+        return false;
+    }
+    let after = |label: &str| col_at_or(grid, y, label).map(|x| x + label.chars().count() as u16);
+    let (Some(at_project), Some(at_everywhere)) = (after("this project"), after("everywhere"))
+    else {
+        return false;
+    };
+    let project = grid.cell(at_project, y);
+    let everywhere = grid.cell(at_everywhere, y);
+    if project.symbol != "›" || !project.bold || everywhere.symbol != " " || everywhere.bold {
+        return false;
+    }
+    if !(switch_weighs(grid, y, at_project + 1, "[on]")
+        && switch_weighs(grid, y, at_everywhere + 1, "[on]"))
+    {
+        return false;
+    }
+    let Some(footer) = find_row(grid, "Enter shows the text · Ctrl+G opens its file") else {
+        return false;
+    };
+    is_dim(grid, footer, "Enter shows the text · Ctrl+G opens its file")
+}
+
+#[test]
+fn the_skills_view_keeps_switches_whole_on_a_narrow_screen() {
+    let setup = narrow_skills_setup();
+    let mut run = Run::spawn(&setup, 100, 24, &[], &TRUECOLOUR);
+    run.ready();
+    // `/skills` reads the session on screen, so start one first.
+    let from = run.output().len();
+    run.write(b"go\r");
+    run.turn_finished(from);
+    let view_from = run.output().len();
+    run.write(b"/skills\r");
+    run.wait_bytes(
+        view_from,
+        b"\x1b[?2026l",
+        "the end of the skills view frame",
+    );
+    let grid = run.wait_screen("the narrow skills rows", narrow_skills_ready);
+    // The winner's row: both switches whole, the shadows clause tail-cut
+    // past them.
+    let y = row_with(&grid, "shadows personal…");
+    let x = col_at(&grid, y, "review · Checks a diff.");
+    assert_eq!(grid.cell(x - 2, y).symbol, "›");
+    assert!(!grid.cell(x - 2, y).inverse);
+    let text: String = (x..100)
+        .map(|x| grid.cell(x, y).symbol.clone())
+        .collect::<String>()
+        .trim_end()
+        .to_owned();
+    assert_eq!(
+        text,
+        "review · Checks a diff. · repo · seen · this project›[on] · everywhere [on] · shadows personal…"
+    );
+    // No cell of the row is reversed; `[on]` is bold and not dim on both
+    // switches.
+    assert!(
+        (0..100).all(|x| !grid.cell(x, y).inverse),
+        "{}",
+        grid.contents
+    );
+    let after = |label: &str| col_at(&grid, y, label) + label.chars().count() as u16;
+    assert!(switch_weighs(&grid, y, after("this project") + 1, "[on]"));
+    assert!(switch_weighs(&grid, y, after("everywhere") + 1, "[on]"));
+    // The shadowed personal copy keeps its own row with no clause.
+    let loser = row_with(&grid, "review · Personal notes.");
+    assert!(
+        !grid.rows[loser as usize].contains("shadows"),
+        "{}",
+        grid.contents
+    );
+    // Enter lists every shadow source and path above the text
+    // (`docs/tui.md:892-893`). The long extension line wraps at the view's
+    // width, so the paths are read across the pane's wrapped rows. The rows
+    // above already prove the view ready for Enter
+    // (`docs/testing/screens.md`, "Screens").
+    run.write(b"\r");
+    let personal_path = setup.home().join("skills/review/SKILL.md");
+    let extension_path = installed_extension_dir(&setup).join("skills/review/SKILL.md");
+    let personal_label = "shadows personal ·";
+    let extension_label = format!("shadows {LONG_EXTENSION} ·");
+    let grid = run.wait_screen("the shadow list", |grid| {
+        find_row(grid, personal_label).is_some() && find_row(grid, &extension_label).is_some()
+    });
+    // Every shadowed path reads whole across the wrapped rows: paths hold
+    // no space, and each wrapped row is trimmed, so joining the rows
+    // recovers one broken inside a word.
+    let pane: String = grid
+        .rows
+        .iter()
+        .map(|row| row.trim())
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(
+        pane.contains(personal_path.to_str().unwrap()),
+        "{}",
+        grid.contents
+    );
+    assert!(
+        pane.contains(extension_path.to_str().unwrap()),
+        "{}",
+        grid.contents
+    );
+    // Path order (`docs/invocation.md:474` discovery order), then a blank
+    // line, then the skill's text: the hub returns the whole SKILL.md,
+    // frontmatter included.
+    let shadowed = row_with(&grid, personal_label);
+    let extension_row = row_with(&grid, &extension_label);
+    let fence = row_with(&grid, "---");
+    let body = row_with(&grid, "Body.");
+    assert!(shadowed < extension_row && extension_row < fence && fence < body);
+    assert!(
+        grid.rows[fence as usize - 1].trim().is_empty(),
+        "{}",
+        grid.contents
+    );
     run.write(b"\x03\x03\r");
     assert_eq!(run.wait().status.code(), Some(0));
 }

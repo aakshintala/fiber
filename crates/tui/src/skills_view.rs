@@ -172,7 +172,7 @@ impl Skills {
 
     /// The rows the view shows at `height`.
     fn shown(&self, height: usize) -> usize {
-        rows_height(&self.frame(height), height)
+        rows_height(&self.frame(0, height), height)
     }
 
     /// The selected skill: none on the header row or with no answer.
@@ -400,7 +400,7 @@ impl Skills {
     /// Keeps the selection on a row at `height`: the pane's while open,
     /// else the skill rows'.
     fn clamp(&mut self, height: usize) {
-        let shown = rows_height(&self.frame(height), height);
+        let shown = rows_height(&self.frame(0, height), height);
         if let Some(text) = &mut self.text {
             let selected = text.list.selected();
             text.list.select(selected, text.lines.len(), shown);
@@ -432,9 +432,9 @@ impl Skills {
     }
 
     /// The frame to draw at `height`: the text pane while open, else the
-    /// rows, then at most two details lines for the selected skill and
-    /// the last action's line, budgeted so one row always stays.
-    pub(crate) fn frame(&self, height: usize) -> Frame {
+    /// rows, then at most two details lines for the selected skill and the
+    /// last action's line, budgeted so one row always stays.
+    pub(crate) fn frame(&self, _width: usize, height: usize) -> Frame {
         if let Some(text) = &self.text {
             return Frame {
                 title: format!("Skill {}", text.name),
@@ -543,6 +543,11 @@ impl Skills {
             ),
         ]
     }
+}
+
+#[cfg(test)]
+fn shadow_sources(_shadows: &[String], _infos: &[SkillInfo]) -> Option<Vec<String>> {
+    None
 }
 
 /// The skill's text with its shadow block first: each `shadows <path>`
