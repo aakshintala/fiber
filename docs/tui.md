@@ -1928,6 +1928,7 @@ later release still applies.
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
 | `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
+| `/add-dir <path>` | Adds an existing folder to the session's boundary. Relative paths resolve from the workspace. A folder already inside the boundary is accepted without a change. The folder lasts for the session; `/cd` or a new session drops it. With no path, the terminal shows the command's usage. |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
@@ -1951,6 +1952,12 @@ later release still applies.
 | `/?`, `/help` | Opens the key map. |
 
 The `/` list shows built-in commands in this order.
+
+`/add-dir path/to/shared` sends this driver command:
+
+```json
+{"id":"c_7f3a","command":"add_directory","args":{"path":"path/to/shared"}}
+```
 
 The range line's total counts every entry the query matches: the matching built-in rows plus the matching session commands.
 
