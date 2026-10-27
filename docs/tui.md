@@ -1967,6 +1967,12 @@ arrives, the list holds the commands above only. A skill, prompt template or MCP
 with the `command` driver command (`docs/extensions.md`, "Commands and
 screens").
 
+An unrecognised `/name` is refused: the terminal keeps the text in the
+input box and shows the notice `Unknown command /<name>. Type / for the
+list.` A first word with another `/` in it, such as `/usr/bin/env`, is a
+path and is sent as a message. On home, the same rule applies against
+the built-in commands only.
+
 ### Clearing
 
 `/clear` asks the hub to start a fresh session in the workspace of the session
