@@ -1,6 +1,8 @@
 //! Run-level tests for opening an image: the click reads the file
-//! over the hub, and the worker opens the copy.
+//! over the hub, and the worker opens the copy. A stored JPEG converts
+//! through the image child before it reaches Kitty.
 
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -18,6 +20,15 @@ use crate::screen::Screen;
 use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
+
+/// A 1 by 1 red PNG: the scripted converter's fixed output.
+const CONVERTED_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0,
+    0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
 
 /// A loop on a `TestBackend` with a paired hub, the viewer's script
 /// writing the copy's path to the marker file, and the worker answers
@@ -163,6 +174,7 @@ fn completion(rx: &Receiver<Input>, wait: &Deadline) -> Input {
             | Input::FindDue(_)
             | Input::Image { .. }
             | Input::Feedback(_)
+            | Input::Converted { .. }
             | Input::Models(_)
             | Input::Install { .. }
             | Input::HooksOfferNames { .. }
@@ -199,6 +211,7 @@ fn a_click_on_an_image_line_reads_the_file_and_opens_it() {
         | Input::FindDue(_)
         | Input::Image { .. }
         | Input::Feedback(_)
+        | Input::Converted { .. }
         | Input::Models(_)
         | Input::Install { .. }
         | Input::HooksOfferNames { .. }
@@ -239,4 +252,254 @@ fn a_failed_viewer_draws_the_notice() {
             .notice()
             .is_some_and(|notice| notice.starts_with("Could not open shot.png: "))
     );
+}
+
+/// A turn whose prompt pasted a JPEG image: drawn inline while the
+/// converter is available.
+fn turn_started_jpeg() -> contract::Envelope {
+    contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"input": [{
+            "type": "message", "source": "driver",
+            "content": [
+                {"type": "text", "text": "look"},
+                {"type": "image", "path": "artifacts/shot.jpg",
+                    "mime_type": "image/jpeg",
+                    "width": 1280, "height": 800},
+            ],
+        }]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }
+}
+
+/// A loop with inline images, the converter's executable path and a
+/// piped tty: the scripted converter prints [`CONVERTED_PNG`] for every
+/// start, and the test reads what reaches the terminal.
+fn converting_loop() -> (
+    Loop<TestBackend>,
+    UnixStream,
+    Receiver<Input>,
+    std::io::PipeReader,
+    fakes::TempDir,
+) {
+    let dir = fakes::TempDir::new("fiber-loop-convert");
+    let png = dir.path().join("out.png");
+    std::fs::write(&png, CONVERTED_PNG).unwrap_or_else(|err| panic!("png: {err}"));
+    let script = fakes::script(dir.path(), "convert", "cat \"$1\"\n");
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        inline_images: true,
+        fiber: Some(PathBuf::from("/fiber")),
+        ..Default::default()
+    });
+    app.set_graphics();
+    app.set_cell((10, 20));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.on_line(Line::Session(turn_started_jpeg()));
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let (tty_out, tty_in) = std::io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    let (mut lp, _) = super::tests::new_loop(
+        TestBackend::new(60, 12),
+        Some(std::fs::File::from(std::os::fd::OwnedFd::from(tty_in))),
+    );
+    lp.app = app;
+    lp.hub.store(ours);
+    let (out, rx) = mpsc::channel();
+    lp.files_out = out;
+    lp.programs.converter = Some(vec![
+        OsString::from("/bin/sh"),
+        script.as_os_str().to_owned(),
+        png.as_os_str().to_owned(),
+    ]);
+    (lp, theirs, rx, tty_out, dir)
+}
+
+/// Steps the loop once, on a thread: a frame that waits on the hub
+/// would hang the test, so the join carries the deadline.
+#[track_caller]
+fn stepped(
+    mut lp: Loop<TestBackend>,
+    rx: Receiver<Input>,
+    input: Input,
+) -> (Loop<TestBackend>, Receiver<Input>) {
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("loop-step".to_owned())
+        .spawn(move || {
+            let code = lp.step(input, &rx);
+            done.send((code, lp, rx)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (code, lp, rx) = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&finished) {
+        Ok(ended) => ended,
+        Err(err) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the frame: {err}"),
+    };
+    assert_eq!(code, None);
+    (lp, rx)
+}
+
+/// Reads hub commands until the display `read_file`, returning its id.
+#[track_caller]
+fn read_display_id(theirs: &UnixStream) -> String {
+    theirs
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    let reader = theirs
+        .try_clone()
+        .unwrap_or_else(|err| panic!("clone: {err}"));
+    let mut reader = BufReader::new(reader);
+    for _ in 0..10 {
+        let mut text = String::new();
+        if reader
+            .read_line(&mut text)
+            .unwrap_or_else(|err| panic!("hub command: {err}"))
+            == 0
+        {
+            break;
+        }
+        let command: Value = serde_json::from_str(&text).unwrap_or_default();
+        if command.get("command").and_then(Value::as_str) == Some("read_file") {
+            return command
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("read_file has no id: {command}"))
+                .to_owned();
+        }
+    }
+    panic!("no display fetch reached the hub");
+}
+
+/// The hub's accepted answer to the display `read_file` carrying `id`:
+/// JPEG bytes, as production relays them.
+fn jpeg_answer(id: &str) -> Input {
+    use base64::Engine as _;
+    let data = base64::engine::general_purpose::STANDARD.encode(b"jpeg-bytes");
+    Input::Hub(Line::Hub(contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({"command_id": id,
+            "result": {"data": data, "mime_type": "image/jpeg"}})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }))
+}
+
+/// The worker's conversion completion within the deadline.
+#[track_caller]
+fn converted(rx: &Receiver<Input>, wait: &Deadline) -> Input {
+    match wait.recv(rx) {
+        Ok(done @ Input::Converted { .. }) => done,
+        Ok(_) => panic!("the worker answered something else"),
+        Err(err) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the worker: {err}"),
+    }
+}
+
+/// The screen the loop drew last.
+fn shown(lp: &Loop<TestBackend>) -> String {
+    crate::view::text(lp.screen.backend().buffer())
+}
+
+/// All bytes the loop has written to its tty so far: the pipe reads
+/// nonblocking, so the drain ends where the writes do.
+#[track_caller]
+fn drain_tty(reader: &mut std::io::PipeReader) -> Vec<u8> {
+    rustix::fs::fcntl_setfl(&mut *reader, rustix::fs::OFlags::NONBLOCK)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match std::io::Read::read(reader, &mut chunk) {
+            Ok(0) => break,
+            Ok(n) => out.extend_from_slice(chunk.split_at(n).0),
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(err) => panic!("tty: {err}"),
+        }
+    }
+    out
+}
+
+#[test]
+fn a_jpeg_converts_then_transmits() {
+    let (lp, theirs, rx, mut tty, _dir) = converting_loop();
+    // The first frame draws at once: the caption counts its row from
+    // the logged size, with no conversion and no fetch wait.
+    let (lp, rx) = stepped(lp, rx, Input::Tick);
+    assert!(
+        shown(&lp).contains("▣ shot"),
+        "the first frame draws the caption: {}",
+        shown(&lp)
+    );
+    let before = drain_tty(&mut tty);
+    assert!(
+        !String::from_utf8_lossy(&before).contains("Ga=t"),
+        "nothing transmits before the conversion"
+    );
+    let id = read_display_id(&theirs);
+    // The JPEG answer queues a conversion, not a transmit.
+    let (lp, rx) = stepped(lp, rx, jpeg_answer(&id));
+    let done = converted(&rx, &Deadline::after(MUST_SUCCEED_WITHIN));
+    // The completion waits in the loop's inputs: still nothing on the
+    // terminal, even though the child already finished.
+    let waiting = drain_tty(&mut tty);
+    assert!(
+        !String::from_utf8_lossy(&waiting).contains("Ga=t"),
+        "nothing transmits while the completion waits"
+    );
+    // Stepping the completion transmits under the placeholders.
+    let (lp, _rx) = stepped(lp, rx, done);
+    let sent = drain_tty(&mut tty);
+    let sent = String::from_utf8_lossy(&sent);
+    assert!(
+        sent.contains("Ga=t,f=100,i=1,"),
+        "the converted PNG transmits: {sent:?}"
+    );
+    assert!(shown(&lp).contains('\u{10EEEE}'));
+    assert!(shown(&lp).contains("▣ shot"));
+    assert_eq!(lp.app.notice(), None);
+}
+
+#[test]
+fn a_queued_conversion_without_an_executable_fails_without_a_child() {
+    let (mut lp, theirs, rx, mut tty, _dir) = converting_loop();
+    lp.programs.converter = None;
+    let (lp, rx) = stepped(lp, rx, Input::Tick);
+    let id = read_display_id(&theirs);
+    // Without an executable path the queued conversion fails at once:
+    // no child runs, and the image keeps its one line with a notice.
+    let (lp, _rx) = stepped(lp, rx, jpeg_answer(&id));
+    assert_eq!(
+        lp.app.notice(),
+        Some("Could not show shot.jpg: image conversion failed.")
+    );
+    let sent = drain_tty(&mut tty);
+    assert!(
+        !String::from_utf8_lossy(&sent).contains("Ga=t"),
+        "no child ran, so nothing transmits"
+    );
+    assert!(lp.app.pages().image_failed(
+        &contract::SessionId(SESSION.to_owned()),
+        "artifacts/shot.jpg"
+    ));
 }

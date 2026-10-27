@@ -1,7 +1,7 @@
 //! The chain's image viewer state: fetches and the out-queue, keyed by
 //! each part's segment session (`docs/tui.md`, "Images").
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde_json::{Value, json};
 
@@ -20,12 +20,13 @@ struct Fetch {
     path: String,
 }
 
-/// Whether an inline image's bytes are asked for, shown, or failed:
-/// a shown or failed image is not asked for again while its session's
-/// layout lives (`docs/tui.md`, "Images").
+/// Whether an inline image's bytes are asked for, converting, shown,
+/// or failed: a converting, shown or failed image is not asked for
+/// again while its session's layout lives (`docs/tui.md`, "Images").
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DisplayState {
     Asked,
+    Converting,
     Shown,
     Failed,
 }
@@ -74,6 +75,14 @@ pub(crate) struct Images {
     deletes: Vec<u8>,
     out: image::Out,
     generation: u64,
+    /// The queued conversions in asking order, holding their base64
+    /// until the one worker starts: dropped on a session change
+    /// (`docs/tui.md`, "Images").
+    convert_queue: VecDeque<image::Convert>,
+    /// Whether the one conversion child runs, across sessions: only an
+    /// `Input::Converted` completion clears it, so a session change
+    /// never starts a second child (`docs/tui.md`, "Images").
+    convert_busy: bool,
 }
 
 impl App {
@@ -127,10 +136,10 @@ impl App {
     }
 
     /// Answers our `read_file` for a viewer open: queues the view for
-    /// the loop's worker. A display fetch answers here too: its bytes
-    /// transmit under the placeholders, and anything but PNG bytes
-    /// fails its image with a notice (`docs/tui.md`, "Images"). True
-    /// when `id` was ours.
+    /// the loop's worker. A display fetch answers here too: PNG bytes
+    /// transmit under the placeholders, JPEG or WebP bytes queue a
+    /// conversion, and anything else fails its image with a notice
+    /// (`docs/tui.md`, "Images"). True when `id` was ours.
     pub(in crate::app) fn image_answered(&mut self, id: &str, result: Option<&Value>) -> bool {
         let display = self
             .images
@@ -173,8 +182,9 @@ impl App {
     /// was ours.
     /// Answers our `read_file` for a display fetch: a PNG answer queues
     /// its transmit and its place over the placeholders, and marks the
-    /// image shown. Missing or empty bytes or a non-PNG answer fail the
-    /// image with one notice; a stale generation or a second answer
+    /// image shown; a JPEG or WebP answer queues a conversion of its
+    /// bytes instead. Missing or empty bytes or any other answer fail
+    /// the image with one notice; a stale generation or a second answer
     /// drops with none (`docs/tui.md`, "Images").
     fn display_answered(&mut self, key: (String, String), result: Option<&Value>) -> bool {
         let Some(fetch) = self.images.display.remove(&key) else {
@@ -187,24 +197,51 @@ impl App {
             self.images.display.insert(key, fetch);
             return true;
         }
-        let png = result
+        let data = result
             .and_then(|result| result.get("data"))
             .and_then(Value::as_str)
             .filter(|data| !data.is_empty());
         let mime = result
             .and_then(|result| result.get("mime_type"))
             .and_then(Value::as_str);
-        let (Some(data), Some("image/png")) = (png, mime) else {
-            let reason = match (png, mime) {
-                (None, _) => "the answer carried no file",
-                (_, _) => "the answer was not a PNG image",
-            };
-            self.fail_display(&key, reason, fetch);
+        let (Some(data), Some(mime)) = (data, mime) else {
+            self.fail_display(&key, "the answer carried no file", fetch);
             return true;
         };
-        // The ask no longer applies: a later draw asks again.
-        let crate::image::Sizing::Inline { cell } = self.screen.pages().image_sizing() else {
+        if mime == "image/png" {
+            self.transmit(key, fetch, data);
             return true;
+        }
+        let converts = matches!(
+            self.screen.pages().image_sizing(),
+            crate::image::Sizing::Inline { converts: true, .. }
+        );
+        if converts && matches!(mime, "image/jpeg" | "image/webp") {
+            self.images.display.insert(
+                key,
+                Display {
+                    state: DisplayState::Converting,
+                    ..fetch
+                },
+            );
+            self.images.convert_queue.push_back(image::Convert {
+                generation: fetch.generation,
+                id: fetch.id,
+                data: data.to_owned(),
+            });
+            return true;
+        }
+        self.fail_display(&key, "the answer was not a PNG image", fetch);
+        true
+    }
+
+    /// Queues the transmit and place of `data` over the placeholders, and
+    /// marks `key` shown. False when the sizing is text: the ask no
+    /// longer applies and a later draw asks again (`docs/tui.md`,
+    /// "Images").
+    fn transmit(&mut self, key: (String, String), fetch: Display, data: &str) -> bool {
+        let crate::image::Sizing::Inline { cell, .. } = self.screen.pages().image_sizing() else {
+            return false;
         };
         let part = crate::image::Part {
             session: contract::SessionId(key.0.clone()),
@@ -284,6 +321,55 @@ impl App {
         }
     }
 
+    /// Answers a conversion worker's completion for `id`: frees the one
+    /// worker first, then transmits a converted PNG under the matching
+    /// converting image or fails it with the worker's reason. A
+    /// completion from an earlier session frees the worker but draws
+    /// nowhere, even for the same id (`docs/tui.md`, "Images").
+    pub(crate) fn image_converted(
+        &mut self,
+        generation: u64,
+        id: u32,
+        result: Result<String, String>,
+    ) {
+        // The one worker is free whatever session the completion belongs
+        // to: a session change never clears it, so only this frees it.
+        self.images.convert_busy = false;
+        if generation != self.images.generation {
+            return;
+        }
+        let found = self
+            .images
+            .display
+            .iter()
+            .find(|(_, fetch)| fetch.id == id && fetch.state == DisplayState::Converting)
+            .map(|(key, _)| key.clone());
+        let Some(key) = found else {
+            return;
+        };
+        let Some(fetch) = self.images.display.remove(&key) else {
+            return;
+        };
+        match result {
+            Err(reason) => self.fail_display(&key, &reason, fetch),
+            Ok(data) => {
+                self.transmit(key, fetch, &data);
+            }
+        }
+    }
+
+    /// The next queued conversion when the one worker is free: marks the
+    /// worker busy first, so the loop never starts a second child
+    /// (`docs/tui.md`, "Images").
+    pub(crate) fn take_next_convert(&mut self) -> Option<image::Convert> {
+        if self.images.convert_busy {
+            return None;
+        }
+        let convert = self.images.convert_queue.pop_front()?;
+        self.images.convert_busy = true;
+        Some(convert)
+    }
+
     pub(in crate::app) fn image_rejected(&mut self, id: &str, message: &str) -> bool {
         let failed = self
             .images
@@ -293,7 +379,13 @@ impl App {
             .map(|(key, fetch)| (key.clone(), (*fetch).clone()));
         if let Some((key, fetch)) = failed {
             self.images.display.remove(&key);
-            self.fail_display(&key, message, fetch);
+            // Only an asked image fails: a converting image's worker
+            // decides, so a duplicate or late rejection changes nothing.
+            if fetch.state == DisplayState::Asked {
+                self.fail_display(&key, message, fetch);
+            } else {
+                self.images.display.insert(key, fetch);
+            }
             return true;
         }
         let Some(fetch) = self.images.fetches.remove(id) else {
@@ -370,6 +462,9 @@ impl App {
         self.images.fetches.clear();
         self.images.refused.clear();
         self.images.display.clear();
+        // The queued conversions go with the registry, while the running
+        // child keeps the one-worker slot until its completion frees it.
+        self.images.convert_queue.clear();
         self.images.out = image::Out::default();
         self.images.deletes.clear();
         for id in shown {
@@ -388,7 +483,8 @@ impl App {
     /// "Images"). The one-line form needs no bytes and asks nothing, as
     /// does a failed image while its session's layout lives.
     pub(crate) fn images_drawn(&mut self, targets: &[crate::mouse::Target]) {
-        let crate::image::Sizing::Inline { .. } = self.screen.pages().image_sizing() else {
+        let crate::image::Sizing::Inline { converts, .. } = self.screen.pages().image_sizing()
+        else {
             return;
         };
         // With no session, or the link down, the loop sends nothing:
@@ -409,7 +505,9 @@ impl App {
             let Some(part) = self.screen.pages().image(id) else {
                 continue;
             };
-            if part.mime_type != "image/png" {
+            // JPEG and WebP fetch only while the converter is
+            // available; PNG always fetches (`docs/tui.md`, "Images").
+            if !crate::image::inline_type(&part.mime_type, converts) {
                 continue;
             }
             let key = (part.session.0.clone(), part.path.clone());

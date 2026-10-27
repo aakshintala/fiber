@@ -301,7 +301,10 @@ fn one_path_in_two_segments_draws_two_ids() {
 fn inline_layout(part: &super::Part, cell: (u16, u16)) -> Layout {
     let mut layout = Layout::default();
     layout.note(part);
-    layout.sizing = super::Sizing::Inline { cell };
+    layout.sizing = super::Sizing::Inline {
+        cell,
+        converts: false,
+    };
     layout
 }
 
@@ -606,7 +609,10 @@ fn a_viewer_only_bubble_image_keeps_its_one_line() {
         .expect("the image is kept");
     let id = layout.id(&session(), "artifacts/b_254.png");
     assert!(matches!(id, Some(id) if id > 255));
-    layout.sizing = super::Sizing::Inline { cell: (10, 20) };
+    layout.sizing = super::Sizing::Inline {
+        cell: (10, 20),
+        converts: false,
+    };
     let mut out = Rows::default();
     super::rows(&part, &layout, 80, Align::Right, Some(20), &mut out);
     let (rows, _) = out.into_parts();
@@ -712,7 +718,10 @@ fn an_unnoted_bubble_stays_its_one_line_without_a_target() {
     // No id, no target: the line still draws, cut to the block width.
     let part = sized(1280, 800);
     let layout = Layout {
-        sizing: super::Sizing::Inline { cell: (10, 20) },
+        sizing: super::Sizing::Inline {
+            cell: (10, 20),
+            converts: false,
+        },
         ..Default::default()
     };
     let mut out = Rows::default();
@@ -727,7 +736,10 @@ fn an_unnoted_bubble_stays_its_one_line_without_a_target() {
 fn an_unnoted_part_falls_back_to_its_one_line() {
     let part = sized(1280, 800);
     let layout = Layout {
-        sizing: super::Sizing::Inline { cell: (10, 20) },
+        sizing: super::Sizing::Inline {
+            cell: (10, 20),
+            converts: false,
+        },
         ..Default::default()
     };
     let mut out = Rows::default();
@@ -843,7 +855,10 @@ fn ids_past_the_placeholder_range_keep_unique_viewer_targets() {
         .expect("the image is kept");
     let last_id = layout.id(&session(), "artifacts/i_299.png");
     assert!(matches!(last_id, Some(id) if !super::placeholder_eligible(id)));
-    layout.sizing = super::Sizing::Inline { cell: (10, 20) };
+    layout.sizing = super::Sizing::Inline {
+        cell: (10, 20),
+        converts: false,
+    };
     let mut out = Rows::default();
     super::ledger_rows(&last, &layout, 80, Align::Left { indent: 4 }, &mut out);
     let (rows, _) = out.into_parts();
@@ -871,7 +886,10 @@ fn ids_past_the_placeholder_range_keep_unique_viewer_targets() {
         !sorted.contains(&later_id),
         "a later image never reuses an id"
     );
-    next_layout.sizing = super::Sizing::Inline { cell: (10, 20) };
+    next_layout.sizing = super::Sizing::Inline {
+        cell: (10, 20),
+        converts: false,
+    };
     let mut out = Rows::default();
     super::ledger_rows(
         &later,
@@ -1099,6 +1117,134 @@ fn a_flat_seam_draws_the_one_line() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0.to_string(), "    ▣ a.png · 1280×800");
     assert!(matches!(rows[0].1, Some(Target::Image(1))));
+}
+
+/// A noted part of `mime` at 1280 by 800.
+fn typed(path: &str, mime: &str) -> super::Part {
+    super::Part::from_content(
+        &session(),
+        &ContentPart::Image {
+            path: path.to_owned(),
+            mime_type: mime.to_owned(),
+            width: 1280,
+            height: 800,
+        },
+    )
+    .expect("the image is kept")
+}
+
+/// A layout sizing its images inline with `cell` and the converter
+/// available, having noted `part`.
+fn converting_layout(part: &super::Part, cell: (u16, u16)) -> Layout {
+    let mut layout = Layout::default();
+    layout.note(part);
+    layout.sizing = super::Sizing::Inline {
+        cell,
+        converts: true,
+    };
+    layout
+}
+
+#[test]
+fn inline_type_admits_png_and_convertible_jpeg_and_webp() {
+    for (mime, converts, inline) in [
+        ("image/png", false, true),
+        ("image/png", true, true),
+        ("image/jpeg", false, false),
+        ("image/jpeg", true, true),
+        ("image/webp", false, false),
+        ("image/webp", true, true),
+        ("image/gif", false, false),
+        ("image/gif", true, false),
+    ] {
+        assert_eq!(
+            super::inline_type(mime, converts),
+            inline,
+            "{mime} {converts}"
+        );
+    }
+}
+
+#[test]
+fn a_converting_jpeg_draws_the_grid_in_a_ledger_row() {
+    // 1280 by 800 at 80 columns with a 10 by 20 cell and the converter:
+    // 32 by 10 placeholders, then the caption line.
+    let part = typed("artifacts/a.jpg", "image/jpeg");
+    let mut out = Rows::default();
+    super::ledger_rows(
+        &part,
+        &converting_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 11);
+    assert!(
+        rows[0]
+            .0
+            .spans
+            .iter()
+            .skip(1)
+            .all(|span| span.content.as_ref().starts_with('\u{10EEEE}')),
+        "the grid draws first"
+    );
+    assert_eq!(rows[10].0.to_string(), "    ▣ a.jpg · 1280×800");
+    assert!(matches!(rows[10].1, Some(Target::Image(1))));
+}
+
+#[test]
+fn a_converting_jpeg_draws_the_grid_in_a_bubble() {
+    let part = typed("artifacts/a.jpg", "image/jpeg");
+    let mut out = Rows::default();
+    super::rows(
+        &part,
+        &converting_layout(&part, (10, 20)),
+        80,
+        Align::Right,
+        Some(20),
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    let grid: Vec<_> = rows
+        .iter()
+        .filter(|(line, _)| {
+            line.spans
+                .iter()
+                .any(|span| span.content.as_ref().starts_with('\u{10EEEE}'))
+        })
+        .collect();
+    // The bubble grid matches the ledger grid at the same conversation
+    // width: the shared 40%/12/proportion sizing (`docs/tui.md`,
+    // "Images").
+    assert_eq!(grid.len(), 10, "the inline grid is visible");
+    for (line, target) in &grid {
+        assert_eq!(line.alignment, Some(Alignment::Right));
+        assert!(matches!(target, Some(Target::Image(1))));
+    }
+    let (caption, target) = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("1280×800"))
+        .unwrap_or_else(|| panic!("the caption keeps the image dimensions"));
+    assert_eq!(caption.alignment, Some(Alignment::Right));
+    assert_eq!(caption.to_string(), "▣ a.jpg · 1280×800");
+    assert!(matches!(target, Some(Target::Image(1))));
+}
+
+#[test]
+fn a_webp_without_a_converter_stays_its_one_line() {
+    let part = typed("artifacts/a.webp", "image/webp");
+    let mut out = Rows::default();
+    super::ledger_rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.webp · 1280×800");
 }
 
 #[test]

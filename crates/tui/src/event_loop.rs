@@ -11,6 +11,7 @@ mod pause;
 use batch::batchable;
 use hub::Connection;
 
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -179,6 +180,18 @@ pub(crate) fn run_with(
     // The viewer's copies live under Fiber home, taken before home
     // keeps the launch description.
     let images_dir = launch.images.clone();
+    // The image converter runs the launch's executable again: taken
+    // before home keeps the launch description, so a stored JPEG or
+    // WebP converts to PNG before Kitty transmission (`docs/tui.md`,
+    // "Images").
+    let converter = launch.fiber.clone().map(|fiber| {
+        vec![
+            fiber.into_os_string(),
+            OsString::from("image"),
+            OsString::from("--png"),
+            OsString::from("/dev/stdin"),
+        ]
+    });
     // Bare `fiber`'s `--model` and `-c`, normalized into the per-run
     // layer: taken out before home keeps the launch description, so
     // each `start` carries them in `overrides`.
@@ -218,6 +231,7 @@ pub(crate) fn run_with(
             clipboard::on_path,
         ),
         images_dir,
+        converter,
     };
     app.set_opener(programs.open.is_some());
     let var: Var = Box::new(|name| std::env::var(name).ok());
@@ -363,6 +377,10 @@ struct Programs {
     /// The program a viewer worker runs with the copy appended, or none
     /// where nothing opens (`docs/tui.md`, "Images").
     viewer: Vec<String>,
+    /// The image converter's argv, from the launch's executable path:
+    /// `None` leaves JPEG and WebP their one line (`docs/tui.md`,
+    /// "Images").
+    converter: Option<Vec<OsString>>,
     /// The clipboard image command for this machine, or none where no
     /// clipboard reads.
     paste: Option<crate::paste_image::Reader>,
@@ -743,6 +761,14 @@ impl<B: Backend> Loop<B> {
                 generation,
                 result,
             } => self.app.image_viewed(id, &name, generation, result),
+            Input::Converted {
+                generation,
+                id,
+                result,
+            } => {
+                self.app.image_converted(generation, id, result);
+                self.start_next_convert();
+            }
             Input::FindDue(generation) => {
                 let lines = self.app.find_due(generation);
                 self.hub.send(&lines, &mut self.app);
@@ -914,13 +940,35 @@ impl<B: Backend> Loop<B> {
     /// Sends the display `read_file` commands the frame drew, and writes
     /// the kitty transmit and place bytes their answers queued, after the
     /// screen draw: each posting reaches the terminal through one write
-    /// (`docs/tui.md`, "Images").
+    /// (`docs/tui.md`, "Images"). Then starts the next queued converter
+    /// while the one worker is free, without waiting on the child.
     fn drain_display(&mut self) {
         let out = self.app.take_image_out();
         self.hub.send(&out.display, &mut self.app);
         if !out.kitty.is_empty() {
             let mut tty = &self.tty;
             tty.write_all(&out.kitty).unwrap_or(());
+        }
+        self.start_next_convert();
+    }
+
+    /// Starts the next queued conversion when the one worker is free:
+    /// the worker answers with `Input::Converted`, which frees the slot
+    /// and starts the next. Without an executable path the queued
+    /// conversion fails at once, freeing the slot for the rest of the
+    /// queue (`docs/tui.md`, "Images").
+    fn start_next_convert(&mut self) {
+        while let Some(convert) = self.app.take_next_convert() {
+            let Some(argv) = self.programs.converter.clone() else {
+                self.app.image_converted(
+                    convert.generation,
+                    convert.id,
+                    Err("image conversion failed".to_owned()),
+                );
+                continue;
+            };
+            crate::convert::spawn(&argv, convert, &self.files_out, crate::convert::OUTPUT_CAP);
+            return;
         }
     }
 

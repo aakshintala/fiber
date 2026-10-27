@@ -122,6 +122,9 @@ pub(crate) fn launch(
         // `tui.inline_images`, defaulting to on in the config schema
         // (`docs/configuration.md`, "Keys").
         inline_images: on(config, "tui.inline_images"),
+        // The converter's executable path: `terminal` fills it from the
+        // running binary once it holds it (`docs/tui.md`, "Images").
+        fiber: None,
         // `terminal` supplies the report writer once it holds Fiber home.
         feedback: None,
         // `main` gives the seam once it holds Fiber home.

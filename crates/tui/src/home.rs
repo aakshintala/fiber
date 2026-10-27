@@ -230,6 +230,10 @@ pub struct Launch {
     /// speaks kitty's graphics protocol (`docs/tui.md`, "Images").
     /// False in the default, so tests opt in per case.
     pub inline_images: bool,
+    /// The running executable's path, for the image converter child:
+    /// `None` leaves JPEG and WebP their one clickable line
+    /// (`docs/tui.md`, "Images").
+    pub fiber: Option<PathBuf>,
     /// `tui.rail.width`: the rail's share of the screen's width, in
     /// percent (`docs/tui.md`, "Layout").
     pub rail_share: f64,

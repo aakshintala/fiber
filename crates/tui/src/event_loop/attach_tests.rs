@@ -265,6 +265,7 @@ fn kinds(inputs: &[Input]) -> Vec<String> {
             Input::Hub(Line::Hub(line)) => line.kind.clone(),
             Input::Bytes(_) => "bytes".to_owned(),
             Input::Tick => "tick".to_owned(),
+            Input::Converted { .. } => "other".to_owned(),
             Input::Connected(..)
             | Input::ConnectFailed(_)
             | Input::Disconnected
