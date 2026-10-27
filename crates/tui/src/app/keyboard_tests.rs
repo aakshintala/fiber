@@ -2,28 +2,19 @@
 //! person's bindings reaching every handler.
 
 use std::path::PathBuf;
-use std::time::Instant;
 
 use serde_json::{Value, json};
-
-use contract::clock::Clock;
 
 use super::super::commands::commands_testkit::{
     attached as hub_attached, connected, enter, key, turn_starts, type_any,
 };
 use super::super::{App, Effect, Surface};
+use crate::app::testkit::{SESSION, hello, live, now};
 use crate::home::{Launch, Spot};
 use crate::keys::{Edit, Key};
 use crate::keyset::Context;
 use crate::link::Line;
 use crate::stroke::{Code, Mods, Stroke};
-
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
-
-/// The injected clock's now.
-fn now() -> Instant {
-    fakes::clock::FakeClock::new().now()
-}
 
 /// The launch description: `/w`, outside git, default shares.
 fn launch() -> Launch {
@@ -69,16 +60,6 @@ fn homed(width: u16, height: u16) -> App {
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.set_size(width, height);
     app
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
 }
 
 /// One session envelope.
@@ -172,36 +153,6 @@ fn type_text(app: &mut App, text: &str) {
     for ch in text.chars() {
         assert_eq!(app.on_key(Key::Char(ch), now()), Effect::None);
     }
-}
-
-/// A live `session_status` for `session`, streaming.
-fn live(session: &str) -> Line {
-    Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
-        session_id: contract::SessionId(session.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: json!({
-            "name": "fix the parser",
-            "workspace": "/w",
-            "project": "-w",
-            "started": 0, "calls": 0, "since": 0,
-            "spend": {"tokens": {"input": 1, "cache_read": 0,
-                "cache_write": {}, "output": 2},
-                "cost": 0.0, "subscription_cost": 0.0},
-            "model": "test/model",
-            "delegates": 0,
-            "jobs": 0,
-            "clients": 0,
-            "state": "streaming",
-        })
-        .as_object()
-        .cloned()
-        .unwrap_or_default(),
-    })
 }
 
 /// An approval request, which opens the approval panel.

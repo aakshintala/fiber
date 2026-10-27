@@ -12,19 +12,13 @@ use contract::clock::Clock;
 
 use super::super::{App, Effect, QUIT_WINDOW};
 use crate::Configure;
+use crate::app::testkit::{SESSION, hello, live, now};
 use crate::configure::KeyEdit;
 use crate::configure_fake::Fake;
 use crate::home::Launch;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::stroke::Stroke;
-
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
-
-/// The injected clock's now.
-fn now() -> Instant {
-    fakes::clock::FakeClock::new().now()
-}
 
 /// The stroke `name` names.
 fn stroke(name: &str) -> Stroke {
@@ -91,16 +85,6 @@ fn keyed(app: &mut App, entries: &[(&str, Value)]) {
     app.set_keys(crate::KeysSetup { user });
 }
 
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
-}
-
 /// One session envelope on [`SESSION`].
 fn envelope(kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
@@ -113,27 +97,6 @@ fn envelope(kind: &str, payload: Value) -> Line {
         seq: None,
         payload: payload.as_object().cloned().unwrap_or_default(),
     })
-}
-
-/// A live `session_status` for [`SESSION`], streaming.
-fn live() -> Line {
-    envelope(
-        "session_status",
-        json!({
-            "name": "fix the parser",
-            "workspace": "/w",
-            "project": "-w",
-            "started": 0, "calls": 0, "since": 0,
-            "spend": {"tokens": {"input": 1, "cache_read": 0,
-                "cache_write": {}, "output": 2},
-                "cost": 0.0, "subscription_cost": 0.0},
-            "model": "test/model",
-            "delegates": 0,
-            "jobs": 0,
-            "clients": 0,
-            "state": "streaming",
-        }),
-    )
 }
 
 /// A turn starting on [`SESSION`]: the session is busy.
@@ -381,7 +344,7 @@ fn ctrl_c_twice_within_the_window_quits_with_the_screen_open() {
 fn with_the_quit_question_open_a_key_goes_to_the_question() {
     let fake = Arc::new(Fake::new(Vec::new()));
     let mut app = homed(Some(Arc::clone(&fake)));
-    app.on_line(live());
+    app.on_line(live(SESSION));
     slash_keys(&mut app);
     down(&mut app, 5);
     assert_eq!(tap(&mut app, "enter"), Effect::None);
