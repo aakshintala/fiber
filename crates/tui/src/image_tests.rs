@@ -394,6 +394,32 @@ fn steering_stays_one_line_when_sized_inline() {
 }
 
 #[test]
+fn ledger_indent_zero_stays_one_line_when_sized_inline() {
+    // Kills `replace > with >= in ledger_rows`: a noted,
+    // placeholder-eligible PNG at `Align::Left { indent: 0 }` is no
+    // ledger row, so even sized inline it stays its one clickable
+    // viewer-target line instead of drawing the inline grid
+    // (`docs/tui.md`, "Images").
+    let part = sized(1280, 800);
+    let layout = inline_layout(&part, (10, 20));
+    assert!(super::placeholder_eligible(1), "id 1 names a colour");
+    let mut out = Rows::default();
+    super::ledger_rows(&part, &layout, 80, Align::Left { indent: 0 }, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "▣ a.png · 1280×800");
+    assert!(matches!(rows[0].1, Some(Target::Image(1))));
+    assert!(
+        rows[0]
+            .0
+            .spans
+            .iter()
+            .all(|span| !span.content.as_ref().starts_with('\u{10EEEE}')),
+        "no placeholders without a ledger indent"
+    );
+}
+
+#[test]
 fn a_bubble_without_a_text_width_stays_one_line_when_sized_inline() {
     // No text bubble means no block width: even sized inline, a noted
     // PNG stays its one clickable line, right-aligned.
@@ -420,7 +446,10 @@ fn a_bubble_without_a_text_width_stays_one_line_when_sized_inline() {
 fn a_bubble_png_draws_the_shared_grid_right_aligned() {
     use ratatui::style::Color;
     // 1280 by 800 at 80 columns with a 10 by 20 cell: 32 by 10
-    // placeholders, then the caption cut to the bubble block width.
+    // placeholders, then the caption cut to the bubble block width
+    // (`docs/tui.md`, "Images": at most 40% of the conversation's
+    // width and 12 rows, keeping proportions; a click opens the
+    // viewer, so every grid row and the caption carry its target).
     let part = sized(1280, 800);
     let mut out = Rows::default();
     super::rows(
@@ -451,7 +480,8 @@ fn a_bubble_png_draws_the_shared_grid_right_aligned() {
     assert_eq!(format::width(&caption.to_string()), 15);
     assert!(matches!(target, Some(Target::Image(1))));
     // The bubble grid matches the ledger grid at the same conversation
-    // width: the shared 40%/12/proportion sizing.
+    // width: the shared 40%/12/proportion sizing (`docs/tui.md`,
+    // "Images").
     let mut ledger_out = Rows::default();
     super::ledger_rows(
         &part,
@@ -754,21 +784,40 @@ fn ids_stop_at_255_and_later_images_keep_their_one_line() {
                 .expect("the image is kept");
         ids.push(layout.note(&part));
     }
-    // Every image keeps its own nonzero id: the first 254 name
-    // placeholder colours, the rest stay unique for viewer targets.
-    // The probe's id is never handed out.
+    // Every image keeps its own nonzero id. Which ids may style
+    // placeholder cells is `placeholder_eligible`: ids 1 through 255
+    // but never the graphics probe's 31 (`docs/tui.md`, "Images"). A
+    // past-range id keeps its unique viewer target without drawing
+    // placeholders or entering the display-fetch path: the caption
+    // click opens it (`docs/tui.md`, "Images").
     let mut sorted = ids.clone();
     sorted.sort_unstable();
     sorted.dedup();
     assert_eq!(sorted.len(), 300, "no id repeats");
     assert!(!sorted.contains(&0), "every image is noted");
     assert!(!sorted.contains(&31), "the probe's id is never an image");
-    let eligible: Vec<u32> = sorted.iter().copied().filter(|id| *id <= 255).collect();
-    assert_eq!(eligible.len(), 254, "one colour per image but the probe's");
+    let eligible: Vec<u32> = sorted
+        .iter()
+        .copied()
+        .filter(|id| super::placeholder_eligible(*id))
+        .collect();
+    assert!(!eligible.is_empty(), "some ids name placeholder colours");
+    assert!(
+        eligible.iter().all(|id| *id <= 255),
+        "eligible ids stay in the placeholder range"
+    );
     assert_eq!(eligible.first(), Some(&1));
     assert_eq!(eligible.last(), Some(&255));
-    let viewer: Vec<u32> = sorted.iter().copied().filter(|id| *id > 255).collect();
-    assert_eq!(viewer.len(), 46, "past the range every id stays unique");
+    let viewer: Vec<u32> = sorted
+        .iter()
+        .copied()
+        .filter(|id| !super::placeholder_eligible(*id))
+        .collect();
+    assert!(!viewer.is_empty(), "past the range ids stay unique");
+    assert!(
+        viewer.iter().all(|id| *id > 255),
+        "viewer-only ids never style placeholder cells"
+    );
     assert_eq!(viewer.first(), Some(&256));
     // A past-range part draws its one line with its own target, never
     // a placeholder grid.

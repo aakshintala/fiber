@@ -534,24 +534,26 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
     // draws without scrolling. Opening it reveals one row per call
     // with its image's caption, the last carrying the past-range
     // image, so its caption is clickable without opening its call.
-    let grid = run.wait_screen("the reads group", |grid| {
-        grid.rows.iter().any(|row| row.contains("Read 255 files"))
+    // The turn already finished in `started`, so a grid showing the
+    // group row together with the completed paint has nothing left to
+    // render: the group row's position in that grid is final
+    // (`docs/testing/screens.md`, "Screens").
+    let grid = run.wait_screen("the settled reads group", |grid| {
+        grid.contents.contains("completed")
+            && grid.rows.iter().any(|row| row.contains("Read 255 files"))
     });
     let from = run.output().len();
     click_text(&mut run, &grid, "Read 255 files");
     run.wait_bytes(from, FRAME_END, "the opened group frame");
-    run.wait_screen("the past-range caption", |grid| {
-        grid.rows.iter().any(|row| row.contains(&caption))
+    // The opened group settles the same way: the past-range caption
+    // together with the completed paint proves every call row drew and
+    // the caption row's position is final. The click uses this wait's
+    // grid, never a fresh read.
+    let grid = run.wait_screen("the settled past-range caption", |grid| {
+        grid.contents.contains("completed") && grid.rows.iter().any(|row| row.contains(&caption))
     });
     // The caption click opens the viewer, never a display fetch: no
-    // transmit may follow it for the past-range image. Read the grid
-    // fresh: opening the group settles the view after the caption
-    // first paints, so the wait's grid may point at another row.
-    let grid = run.screen();
-    assert!(
-        grid.rows.iter().any(|row| row.contains(&caption)),
-        "the settled view keeps the past-range caption"
-    );
+    // transmit may follow it for the past-range image.
     // The viewer open is the click's signal, so the test waits for
     // the marker next.
     click_text(&mut run, &grid, &caption);

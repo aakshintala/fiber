@@ -178,7 +178,10 @@ fn bubble_rows_draw_the_shared_grid_right_aligned() {
     use ratatui::layout::Alignment;
     // "look" at 60 columns wraps to a block 7 wide. The PNG draws the
     // shared conversation-width grid under the bubble's three rows,
-    // right-aligned, then its caption cut to the block width.
+    // right-aligned, then its caption cut to the block width
+    // (`docs/tui.md`, "Images": at most 40% of the conversation's
+    // width and 12 rows, keeping proportions; a click opens the
+    // viewer, so every grid row and the caption carry its target).
     let prompt = prompt_of(&session(), &[text("look"), image("artifacts/b.png")]);
     let layout = inline_layout(&["artifacts/b.png"], (10, 20));
     let mut out = Rows::default();
@@ -202,7 +205,8 @@ fn bubble_rows_draw_the_shared_grid_right_aligned() {
     assert!(crate::format::width(&caption.to_string()) <= 7);
     assert!(matches!(target, Some(Target::Image(_))));
     // The bubble grid matches the call grid at the same conversation
-    // width: the shared 40%/12/proportion sizing.
+    // width: the shared 40%/12/proportion sizing (`docs/tui.md`,
+    // "Images").
     let mut calls = Rows::default();
     call_rows(
         &[crate::image::Part {
@@ -264,6 +268,16 @@ fn bubble_block_width_follows_the_bubble_rows_formula() {
     assert_eq!(super::bubble_block_width(&"x".repeat(41), 60), Some(43));
     assert_eq!(super::bubble_block_width(&"x".repeat(100), 60), Some(43));
     assert_eq!(super::bubble_block_width("look", 4), Some(4));
+}
+
+#[test]
+fn bubble_block_width_at_four_columns_measures_a_narrow_bubble() {
+    // Kills `replace < with <= in bubble_block_width`: at exactly
+    // four columns the width still runs the wrap, it does not take
+    // the narrow shortcut. A combining mark is non-empty but takes
+    // no cell, so the wrapped block is narrower than the columns.
+    assert_eq!(crate::format::width("\u{301}"), 0);
+    assert_eq!(super::bubble_block_width("\u{301}", 4), Some(3));
 }
 
 #[test]
