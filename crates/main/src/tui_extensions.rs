@@ -362,24 +362,28 @@ fn input_value(input: &Input<'_>) -> Value {
         Input::Steer(steer) => {
             json!({"text": steer.text, "images": images_value(&steer.images), "ts": steer.ts, "flat": steer.flat})
         }
-        Input::Answers(answers) => json!({
-            "outcome": answers.outcome,
-            "parts": answers.parts.iter().map(|part| json!({"header": part.header, "text": part.text, "skipped": part.skipped})).collect::<Vec<_>>(),
-            "note": answers.note,
-            "ts": answers.ts,
-            "flat": answers.flat,
-        }),
+        Input::Answers(answers) => match &answers.answers {
+            tui::ext::TurnAnswers::Given { parts, note, ts } => json!({
+                "outcome": "given",
+                "parts": parts.iter().map(|part| json!({"header": part.header, "text": part.text, "skipped": part.skipped})).collect::<Vec<_>>(),
+                "note": note,
+                "ts": ts,
+                "flat": answers.flat,
+            }),
+            tui::ext::TurnAnswers::Declined => json!({
+                "outcome": "declined",
+                "parts": Vec::<Value>::new(),
+                "note": Value::Null,
+                "ts": Value::Null,
+                "flat": answers.flat,
+            }),
+        },
         Input::HandoffBand(band) => {
-            let (kind, cancelled) = match band.state {
-                tui::ext::TurnBandState::Writing => ("writing", Value::Null),
-                tui::ext::TurnBandState::Done => ("done", Value::Null),
-                tui::ext::TurnBandState::Unchanged { cancelled } => ("unchanged", json!(cancelled)),
-            };
             json!({
                 "trigger": band.trigger,
                 "ts": band.ts,
-                "state": {"kind": kind, "cancelled": cancelled},
-                "sizes": band.sizes.map(|sizes| json!({"before": sizes.before, "after": sizes.after})).unwrap_or(Value::Null),
+                "state": band_state_value(&band.state),
+                "sizes": band_sizes_value(&band.state),
                 "flat": band.flat,
             })
         }
@@ -431,6 +435,52 @@ fn images_value(images: &[tui::ext::PromptImage<'_>]) -> Value {
         .collect()
 }
 
+/// A band's state as Lua reads it: `writing`, `done` or `unchanged`
+/// with `cancelled` (`docs/tui.md`, "The slots", `handoff_band`).
+fn band_state_value(state: &tui::ext::TurnBandState) -> Value {
+    let (kind, cancelled) = match state {
+        tui::ext::TurnBandState::Writing => ("writing", Value::Null),
+        tui::ext::TurnBandState::Done(_) => ("done", Value::Null),
+        tui::ext::TurnBandState::Unchanged { cancelled } => ("unchanged", json!(cancelled)),
+    };
+    json!({"kind": kind, "cancelled": cancelled})
+}
+
+/// A done band's context sizes, else null: sizes ride a done band only
+/// (`docs/tui.md`, "The slots", `handoff_band`).
+fn band_sizes_value(state: &tui::ext::TurnBandState) -> Value {
+    match state {
+        tui::ext::TurnBandState::Done(sizes) => {
+            json!({"before": sizes.before, "after": sizes.after})
+        }
+        tui::ext::TurnBandState::Writing | tui::ext::TurnBandState::Unchanged { .. } => Value::Null,
+    }
+}
+
+/// How a turn ended as Lua reads it: the outcome with its timestamp,
+/// and on a failure the error (`docs/tui.md`, "The slots", `turn_card`).
+fn ended_value(ended: &tui::ext::TurnEnded<'_>) -> Value {
+    let (outcome, ts, error) = match ended {
+        tui::ext::TurnEnded::Completed { ended_ts } => ("completed", ended_ts, Value::Null),
+        tui::ext::TurnEnded::Interrupted { ended_ts } => ("interrupted", ended_ts, Value::Null),
+        tui::ext::TurnEnded::Failed { ended_ts, error } => (
+            "failed",
+            ended_ts,
+            error
+                .as_ref()
+                .map(|error| {
+                    json!({
+                        "code": code_value(&error.code),
+                        "message": error.message,
+                    })
+                })
+                .unwrap_or(Value::Null),
+        ),
+        tui::ext::TurnEnded::CutShort { ended_ts } => ("cut short", ended_ts, Value::Null),
+    };
+    json!({"outcome": outcome, "ended_ts": ts, "error": error})
+}
+
 fn turn_card_value(card: &tui::ext::TurnCard<'_>) -> Value {
     json!({
         "prompts": card.prompts.iter().map(|prompt| json!({"text": prompt.text, "images": images_value(&prompt.images)})).collect::<Vec<_>>(),
@@ -438,14 +488,7 @@ fn turn_card_value(card: &tui::ext::TurnCard<'_>) -> Value {
         "started": card.started,
         "calls": card.calls,
         "usage": &card.usage,
-        "ended": card.ended.as_ref().map(|ended| json!({
-            "outcome": ended.outcome,
-            "ended_ts": ended.ended_ts,
-            "error": ended.error.as_ref().map(|error| json!({
-                "code": code_value(&error.code),
-                "message": error.message,
-            })).unwrap_or(Value::Null),
-        })).unwrap_or(Value::Null),
+        "ended": card.ended.as_ref().map(ended_value).unwrap_or(Value::Null),
         "running": card.running,
         "flat": card.flat,
     })
@@ -474,17 +517,12 @@ fn entry_value(entry: &tui::ext::TurnEntry<'_>) -> Value {
         }),
         tui::ext::TurnEntry::Aside(aside) => aside_value(aside),
         tui::ext::TurnEntry::Band(band) => {
-            let (kind, cancelled) = match band.state {
-                tui::ext::TurnBandState::Writing => ("writing", Value::Null),
-                tui::ext::TurnBandState::Done => ("done", Value::Null),
-                tui::ext::TurnBandState::Unchanged { cancelled } => ("unchanged", json!(cancelled)),
-            };
             json!({
                 "kind": "band",
                 "trigger": band.trigger,
                 "ts": band.ts,
-                "state": {"kind": kind, "cancelled": cancelled},
-                "sizes": band.sizes.map(|sizes| json!({"before": sizes.before, "after": sizes.after})).unwrap_or(Value::Null),
+                "state": band_state_value(&band.state),
+                "sizes": band_sizes_value(&band.state),
             })
         }
         tui::ext::TurnEntry::Answers(answers) => match answers {

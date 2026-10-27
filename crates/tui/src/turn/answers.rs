@@ -127,29 +127,7 @@ impl Answered {
     pub(crate) fn rows(&self, width: u16, zone: &TimeZone, out: &mut Rows) {
         let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
         let input = crate::ext::Answers {
-            outcome: match self {
-                Self::Given { .. } => "given",
-                Self::Declined => "declined",
-            },
-            parts: match self {
-                Self::Given { parts, .. } => parts
-                    .iter()
-                    .map(|part| crate::ext::TurnAnswerPart {
-                        header: &part.header,
-                        text: &part.text,
-                        skipped: part.skipped,
-                    })
-                    .collect(),
-                Self::Declined => Vec::new(),
-            },
-            note: match self {
-                Self::Given { note, .. } => note.as_deref(),
-                Self::Declined => None,
-            },
-            ts: match self {
-                Self::Given { ts, .. } => Some(*ts),
-                Self::Declined => None,
-            },
+            answers: self.turn_entry(),
             flat,
         };
         let wrapped = Input::Answers(input);

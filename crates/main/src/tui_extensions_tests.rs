@@ -611,8 +611,7 @@ fn card() -> tui::ext::TurnCard<'static> {
             cost: Some(0.5),
             subscription_cost: 1.5,
         },
-        ended: Some(tui::ext::TurnEnded {
-            outcome: "failed",
+        ended: Some(tui::ext::TurnEnded::Failed {
             ended_ts: 7,
             error: Some(tui::ext::TurnError {
                 code: contract::ErrorCode::IoFailed,
@@ -664,7 +663,6 @@ fn the_turn_card_entries_groups_and_ending_follow_the_doc() {
             trigger: "automatic",
             ts: 2,
             state: TurnBandState::Unchanged { cancelled: true },
-            sizes: None,
         }),
         TurnEntry::Answers(TurnAnswers::Declined),
     ];
@@ -852,14 +850,15 @@ fn the_steer_table_holds_text_images_ts_and_flat() {
 #[test]
 fn the_answers_table_holds_outcome_parts_note_and_ts() {
     let given = Input::Answers(tui::ext::Answers {
-        outcome: "given",
-        parts: vec![tui::ext::TurnAnswerPart {
-            header: "Base",
-            text: "main",
-            skipped: false,
-        }],
-        note: Some("go"),
-        ts: Some(1),
+        answers: tui::ext::TurnAnswers::Given {
+            parts: vec![tui::ext::TurnAnswerPart {
+                header: "Base",
+                text: "main",
+                skipped: false,
+            }],
+            note: Some("go"),
+            ts: 1,
+        },
         flat: false,
     });
     assert_eq!(
@@ -867,10 +866,7 @@ fn the_answers_table_holds_outcome_parts_note_and_ts() {
         json!({"outcome": "given", "parts": [{"header": "Base", "text": "main", "skipped": false}], "note": "go", "ts": 1, "flat": false}),
     );
     let declined = Input::Answers(tui::ext::Answers {
-        outcome: "declined",
-        parts: Vec::new(),
-        note: None,
-        ts: None,
+        answers: tui::ext::TurnAnswers::Declined,
         flat: false,
     });
     assert_eq!(
@@ -901,35 +897,38 @@ fn the_group_line_table_holds_running_and_aggregates() {
 #[test]
 fn the_handoff_band_table_holds_trigger_ts_state_and_sizes() {
     use tui::ext::{HandoffBand, TurnBandState, TurnSizes};
-    let band = |state: TurnBandState, sizes: Option<TurnSizes>| {
+    let band = |state: TurnBandState| {
         Input::HandoffBand(HandoffBand {
             trigger: "the model handed off",
             ts: 1,
             state,
-            sizes,
             flat: false,
         })
     };
     assert_eq!(
-        input_value(&band(TurnBandState::Writing, None)),
+        input_value(&band(TurnBandState::Writing)),
         json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "writing", "cancelled": null}, "sizes": null, "flat": false}),
     );
     assert_eq!(
-        input_value(&band(
-            TurnBandState::Done,
-            Some(TurnSizes {
-                before: 1,
-                after: Some(2),
-            })
-        )),
+        input_value(&band(TurnBandState::Done(TurnSizes {
+            before: 1,
+            after: Some(2),
+        }))),
         json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "done", "cancelled": null}, "sizes": {"before": 1, "after": 2}, "flat": false}),
     );
     assert_eq!(
-        input_value(&band(TurnBandState::Unchanged { cancelled: true }, None)),
+        input_value(&band(TurnBandState::Unchanged { cancelled: true })),
         json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "unchanged", "cancelled": true}, "sizes": null, "flat": false}),
     );
+    assert_eq!(
+        input_value(&band(TurnBandState::Done(TurnSizes {
+            before: 1,
+            after: None,
+        }))),
+        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "done", "cancelled": null}, "sizes": {"before": 1, "after": null}, "flat": false}),
+    );
     // The band row reads no note and no open flag.
-    let table = input_value(&band(TurnBandState::Done, None));
+    let table = input_value(&band(TurnBandState::Writing));
     assert!(table.get("open").is_none());
     assert!(table.get("note").is_none());
 }

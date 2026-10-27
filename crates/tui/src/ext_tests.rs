@@ -941,8 +941,7 @@ fn card() -> TurnCard<'static> {
             TurnEntry::Band(TurnBand {
                 trigger: "automatic",
                 ts: 6,
-                state: TurnBandState::Done,
-                sizes: Some(TurnSizes {
+                state: TurnBandState::Done(TurnSizes {
                     before: 7,
                     after: None,
                 }),
@@ -1152,7 +1151,6 @@ fn each_entry_kind_changes_the_key() {
             trigger: "other",
             ts: 6,
             state: TurnBandState::Writing,
-            sizes: None,
         }),
         TurnEntry::Answers(TurnAnswers::Declined),
     ];
@@ -1320,6 +1318,14 @@ fn the_band_state_is_in_the_key() {
     assert_ne!(one, card_key(&varied));
     for (index, state) in [
         TurnBandState::Writing,
+        TurnBandState::Done(TurnSizes {
+            before: 7,
+            after: Some(9),
+        }),
+        TurnBandState::Done(TurnSizes {
+            before: 8,
+            after: None,
+        }),
         TurnBandState::Unchanged { cancelled: false },
         TurnBandState::Unchanged { cancelled: true },
     ]
@@ -1330,15 +1336,6 @@ fn the_band_state_is_in_the_key() {
         card_band(&mut varied).state = state;
         assert_ne!(one, card_key(&varied), "state {index}");
     }
-    let mut varied = card();
-    card_band(&mut varied).sizes = None;
-    assert_ne!(one, card_key(&varied));
-    let mut varied = card();
-    card_band(&mut varied).sizes = Some(TurnSizes {
-        before: 7,
-        after: Some(9),
-    });
-    assert_ne!(one, card_key(&varied));
 }
 
 #[test]
@@ -1398,28 +1395,26 @@ fn the_ending_and_usage_are_in_the_key() {
     use super::{TurnEnded, TurnError};
     let one = card_key(&card());
     let mut varied = card();
-    varied.ended = Some(TurnEnded {
-        outcome: "completed",
-        ended_ts: 2,
-        error: None,
-    });
+    varied.ended = Some(TurnEnded::Completed { ended_ts: 2 });
     let ended = card_key(&varied);
     assert_ne!(one, ended);
-    for (index, outcome) in ["interrupted", "failed", "cut short"]
-        .into_iter()
-        .enumerate()
-    {
-        let mut varied = card();
-        varied.ended = Some(TurnEnded {
-            outcome,
+    for (index, ending) in [
+        TurnEnded::Interrupted { ended_ts: 2 },
+        TurnEnded::Failed {
             ended_ts: 2,
             error: None,
-        });
+        },
+        TurnEnded::CutShort { ended_ts: 2 },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut varied = card();
+        varied.ended = Some(ending);
         assert_ne!(ended, card_key(&varied), "outcome {index}");
     }
     let mut varied = card();
-    varied.ended = Some(TurnEnded {
-        outcome: "failed",
+    varied.ended = Some(TurnEnded::Failed {
         ended_ts: 3,
         error: Some(TurnError {
             code: contract::ErrorCode::IoFailed,
@@ -1429,8 +1424,7 @@ fn the_ending_and_usage_are_in_the_key() {
     let failed = card_key(&varied);
     assert_ne!(ended, failed);
     let mut varied = card();
-    varied.ended = Some(TurnEnded {
-        outcome: "failed",
+    varied.ended = Some(TurnEnded::Failed {
         ended_ts: 3,
         error: Some(TurnError {
             code: contract::ErrorCode::ConnectionFailed,
@@ -1439,8 +1433,7 @@ fn the_ending_and_usage_are_in_the_key() {
     });
     assert_ne!(failed, card_key(&varied));
     let mut varied = card();
-    varied.ended = Some(TurnEnded {
-        outcome: "failed",
+    varied.ended = Some(TurnEnded::Failed {
         ended_ts: 3,
         error: Some(TurnError {
             code: contract::ErrorCode::IoFailed,
@@ -1649,83 +1642,117 @@ fn every_steer_field_is_in_the_key() {
 
 #[test]
 fn every_answers_field_is_in_the_key() {
-    use super::{Answers, TurnAnswerPart};
+    use super::{Answers, TurnAnswerPart, TurnAnswers};
     let given = || Answers {
-        outcome: "given",
-        parts: vec![TurnAnswerPart {
-            header: "Base",
-            text: "main",
-            skipped: false,
-        }],
-        note: Some("go"),
-        ts: Some(1),
+        answers: TurnAnswers::Given {
+            parts: vec![TurnAnswerPart {
+                header: "Base",
+                text: "main",
+                skipped: false,
+            }],
+            note: Some("go"),
+            ts: 1,
+        },
         flat: false,
     };
     let one = given().key("answers");
     assert_ne!(one, given().key("reply"));
     let declined = Answers {
-        outcome: "declined",
-        parts: Vec::new(),
-        note: None,
-        ts: None,
+        answers: TurnAnswers::Declined,
         flat: false,
     };
     assert_ne!(one, declined.key("answers"));
     for (index, varied) in [
         Answers {
-            outcome: "other",
-            ..given()
+            answers: TurnAnswers::Given {
+                parts: vec![
+                    TurnAnswerPart {
+                        header: "Base",
+                        text: "main",
+                        skipped: false,
+                    },
+                    TurnAnswerPart {
+                        header: "Name",
+                        text: "skipped",
+                        skipped: true,
+                    },
+                ],
+                note: Some("go"),
+                ts: 1,
+            },
+            flat: false,
         },
         Answers {
-            parts: vec![
-                TurnAnswerPart {
+            answers: TurnAnswers::Given {
+                parts: vec![TurnAnswerPart {
+                    header: "Changed",
+                    text: "main",
+                    skipped: false,
+                }],
+                note: Some("go"),
+                ts: 1,
+            },
+            flat: false,
+        },
+        Answers {
+            answers: TurnAnswers::Given {
+                parts: vec![TurnAnswerPart {
+                    header: "Base",
+                    text: "changed",
+                    skipped: false,
+                }],
+                note: Some("go"),
+                ts: 1,
+            },
+            flat: false,
+        },
+        Answers {
+            answers: TurnAnswers::Given {
+                parts: vec![TurnAnswerPart {
+                    header: "Base",
+                    text: "main",
+                    skipped: true,
+                }],
+                note: Some("go"),
+                ts: 1,
+            },
+            flat: false,
+        },
+        Answers {
+            answers: TurnAnswers::Given {
+                parts: vec![TurnAnswerPart {
                     header: "Base",
                     text: "main",
                     skipped: false,
-                },
-                TurnAnswerPart {
-                    header: "Name",
-                    text: "skipped",
-                    skipped: true,
-                },
-            ],
-            ..given()
+                }],
+                note: None,
+                ts: 1,
+            },
+            flat: false,
         },
         Answers {
-            parts: vec![TurnAnswerPart {
-                header: "Changed",
-                text: "main",
-                skipped: false,
-            }],
-            ..given()
+            answers: TurnAnswers::Given {
+                parts: vec![TurnAnswerPart {
+                    header: "Base",
+                    text: "main",
+                    skipped: false,
+                }],
+                note: Some("go"),
+                ts: 2,
+            },
+            flat: false,
         },
         Answers {
-            parts: vec![TurnAnswerPart {
-                header: "Base",
-                text: "changed",
-                skipped: false,
-            }],
-            ..given()
-        },
-        Answers {
-            parts: vec![TurnAnswerPart {
-                header: "Base",
-                text: "main",
-                skipped: true,
-            }],
-            ..given()
-        },
-        Answers {
-            note: None,
-            ..given()
-        },
-        Answers {
-            ts: None,
-            ..given()
-        },
-        Answers {
+            answers: TurnAnswers::Given {
+                parts: vec![TurnAnswerPart {
+                    header: "Base",
+                    text: "main",
+                    skipped: false,
+                }],
+                note: Some("go"),
+                ts: 1,
+            },
             flat: true,
-            ..given()
         },
     ]
     .into_iter()
@@ -1741,8 +1768,7 @@ fn every_handoff_band_field_is_in_the_key() {
     let band = || HandoffBand {
         trigger: "the model handed off",
         ts: 1,
-        state: TurnBandState::Done,
-        sizes: Some(TurnSizes {
+        state: TurnBandState::Done(TurnSizes {
             before: 1,
             after: Some(2),
         }),
@@ -1758,32 +1784,25 @@ fn every_handoff_band_field_is_in_the_key() {
         HandoffBand { ts: 2, ..band() },
         HandoffBand {
             state: TurnBandState::Writing,
-            sizes: None,
             ..band()
         },
         HandoffBand {
             state: TurnBandState::Unchanged { cancelled: false },
-            sizes: None,
             ..band()
         },
         HandoffBand {
             state: TurnBandState::Unchanged { cancelled: true },
-            sizes: None,
             ..band()
         },
         HandoffBand {
-            sizes: None,
-            ..band()
-        },
-        HandoffBand {
-            sizes: Some(TurnSizes {
+            state: TurnBandState::Done(TurnSizes {
                 before: 2,
                 after: Some(2),
             }),
             ..band()
         },
         HandoffBand {
-            sizes: Some(TurnSizes {
+            state: TurnBandState::Done(TurnSizes {
                 before: 1,
                 after: None,
             }),

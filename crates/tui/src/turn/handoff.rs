@@ -135,23 +135,20 @@ impl Band {
     }
 
     /// Its card entry: the band row without the note, whose toggle and
-    /// body stay the terminal's.
+    /// body stay the terminal's. The context sizes ride the done
+    /// state, so only a done band carries them.
     pub(crate) fn turn_entry(&self) -> crate::ext::TurnBand<'_> {
-        let (state, sizes) = match self.state {
-            State::Writing => (crate::ext::TurnBandState::Writing, None),
-            State::Done { before, after } => (
-                crate::ext::TurnBandState::Done,
-                Some(crate::ext::TurnSizes { before, after }),
-            ),
-            State::Unchanged { cancelled } => {
-                (crate::ext::TurnBandState::Unchanged { cancelled }, None)
+        let state = match self.state {
+            State::Writing => crate::ext::TurnBandState::Writing,
+            State::Done { before, after } => {
+                crate::ext::TurnBandState::Done(crate::ext::TurnSizes { before, after })
             }
+            State::Unchanged { cancelled } => crate::ext::TurnBandState::Unchanged { cancelled },
         };
         crate::ext::TurnBand {
             trigger: &self.trigger,
             ts: self.ts,
             state,
-            sizes,
         }
     }
 
@@ -190,7 +187,6 @@ impl Band {
             trigger: entry.trigger,
             ts: entry.ts,
             state: entry.state,
-            sizes: entry.sizes,
             flat,
         };
         let wrapped = Input::HandoffBand(input);

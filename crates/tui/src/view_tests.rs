@@ -482,7 +482,11 @@ fn conversation_slots_replace_through_the_seam() {
     ));
     let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake.clone();
     app.install_renderer(renderer);
-    let shown = sized(&mut app, WIDTH, 40);
+    app.set_size(WIDTH, 40);
+    let area = Rect::new(0, 0, WIDTH, 40);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let shown = text(&buf);
     // One hook per seam: the renderer saw every 4b slot.
     {
         let mut slots: Vec<String> = fake
@@ -515,6 +519,15 @@ fn conversation_slots_replace_through_the_seam() {
     assert!(!shown.contains('✗'), "{shown}");
     assert!(!shown.contains("a read failed"), "{shown}");
     assert!(shown.contains("custom"), "{shown}");
+    // The note toggle stays the terminal's beside the replaced band:
+    // its target rides the returned target list.
+    assert!(
+        targets.iter().any(|target| matches!(
+            target.id,
+            crate::mouse::TargetId::Line(crate::app::Target::Note(_))
+        )),
+        "the note toggle keeps its target: {targets:?}"
+    );
     // The completed group stays collapsed: its built-in summary sentence is
     // gone and its context line survives, with no call ledger leaking out.
     assert!(!shown.contains("asked 2 questions"), "{shown}");

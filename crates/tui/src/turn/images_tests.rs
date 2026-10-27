@@ -535,6 +535,8 @@ fn a_multi_image_prompt_drops_image_targets() {
     bubble_rows(&prompt, 40, &layout, &mut out);
     let (rows, _) = out.into_parts();
     let targets: Vec<_> = rows.iter().filter_map(|(_, target)| *target).collect();
+    // Each image is one clickable line (`docs/tui.md`, "Images"), so
+    // two image lines carry two targets.
     assert_eq!(targets.len(), 2);
 }
 

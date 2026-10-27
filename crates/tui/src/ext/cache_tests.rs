@@ -817,14 +817,15 @@ fn steer_input(text: &'static str) -> Input<'static> {
 
 fn answers_input(note: Option<&'static str>) -> Input<'static> {
     Input::Answers(crate::ext::Answers {
-        outcome: "given",
-        parts: vec![crate::ext::TurnAnswerPart {
-            header: "Base",
-            text: "main",
-            skipped: false,
-        }],
-        note,
-        ts: Some(1),
+        answers: crate::ext::TurnAnswers::Given {
+            parts: vec![crate::ext::TurnAnswerPart {
+                header: "Base",
+                text: "main",
+                skipped: false,
+            }],
+            note,
+            ts: 1,
+        },
         flat: false,
     })
 }
@@ -833,8 +834,7 @@ fn handoff_input(trigger: &'static str) -> Input<'static> {
     Input::HandoffBand(crate::ext::HandoffBand {
         trigger,
         ts: 1,
-        state: crate::ext::TurnBandState::Done,
-        sizes: Some(crate::ext::TurnSizes {
+        state: crate::ext::TurnBandState::Done(crate::ext::TurnSizes {
             before: 1,
             after: Some(2),
         }),
@@ -921,16 +921,22 @@ fn each_new_slot_caches_by_input_and_width() {
             draw_counted(&cache, slot, first, 20, &calls, drawn("hi")).is_some(),
             "{slot} hits"
         );
+        // A renderer runs again only when its input or the width
+        // changes (`docs/tui.md`, "How a TUI extension runs").
         assert_eq!(calls.get(), before + 1, "{slot} hits the cache");
         assert!(
             draw_counted(&cache, slot, first, 24, &calls, drawn("hi")).is_some(),
             "{slot} draws at a new width"
         );
+        // The width rides the entry key beside the input
+        // (`docs/tui.md`, "How a TUI extension runs").
         assert_eq!(calls.get(), before + 2, "{slot} keys the width");
         assert!(
             draw_counted(&cache, slot, second, 20, &calls, drawn("hi")).is_some(),
             "{slot} draws a new input"
         );
+        // The key covers the slot and every field
+        // (`docs/tui.md`, "How a TUI extension runs").
         assert_eq!(calls.get(), before + 3, "{slot} keys the input");
     }
 }
@@ -961,6 +967,8 @@ fn each_new_slot_failure_holds_without_width() {
             draw_counted(&cache, slot, row, 24, &calls, Err(failed("test", "boom"))).is_none(),
             "{slot} holds across widths"
         );
+        // The failure key holds without the width
+        // (`docs/tui.md`, "How a TUI extension runs").
         assert_eq!(calls.get(), before + 1, "{slot} calls once");
         let listed = cache.take_failures();
         assert_eq!(listed.len(), 1, "{slot} lists its failure once");
@@ -1003,6 +1011,8 @@ fn scroll_and_search_redraws_hit() {
             "a redraw hits"
         );
     }
+    // Scrolling or searching costs what it costs for built-in rows:
+    // no new renderer call (`docs/tui.md`, "How a TUI extension runs").
     assert_eq!(calls.get(), 1, "scrolling and searching call Lua once");
     assert_eq!(crate::work::take().renderer_calls, 1);
 }

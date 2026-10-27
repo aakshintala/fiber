@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use super::overlay::{self, Place, Row};
 use crate::app::App;
 use crate::app::NoticeLine;
-use crate::ext::{Bound, Input, SlotSelection};
+use crate::ext::Bound;
 use crate::format;
 use crate::mouse::{Target, TargetId};
 use crate::text::to_u16;
@@ -142,10 +142,10 @@ pub(super) fn draw(
 /// Paints the bound renderer's `notice` lines for one notice, keeping
 /// its notice target on every painted row and its dismiss target on the
 /// rows' last column: true when the renderer drew. The replacement owns
-/// its rows whole, ✕ cell included. `extension_failed` always draws
-/// built-in. A renderer returning no lines hides the notice instead;
-/// the frame already dropped those before the split, so an empty
-/// result here falls back to the built-in row.
+/// its rows whole, ✕ cell included. A renderer returning no lines hides
+/// the notice instead; the frame already dropped those before the
+/// split, so an empty result here falls back to the built-in row
+/// ([`Bound::notice_lines`]).
 #[allow(clippy::too_many_arguments, reason = "one row's paint inputs")]
 fn paint_replacement(
     bound: &Bound,
@@ -158,44 +158,9 @@ fn paint_replacement(
     noted: &mut Vec<crate::app::SpanRow>,
     bottom: &mut u16,
 ) -> bool {
-    if code == "extension_failed" {
-        return false;
-    }
-    let Some(renderer) = bound.handle.get() else {
+    let Some(fitted) = bound.notice_lines(code, text, area.width) else {
         return false;
     };
-    let selected = renderer.fills_for(&bound.ctx, "notice");
-    for queued in renderer.take_pending() {
-        bound.cache.queue_notice(queued);
-    }
-    let SlotSelection::Draw { extension } = selected else {
-        return false;
-    };
-    let input = Input::Notice(crate::ext::Notice {
-        code,
-        text,
-        flat: bound.flat,
-    });
-    let fitted = bound.cache.lines(
-        bound.page.clone(),
-        "notice",
-        &extension,
-        renderer.half(&bound.ctx, &extension),
-        &input,
-        area.width,
-        || {
-            renderer.render(&bound.ctx, "notice", &input, area.width, &|input, at| {
-                let Input::Notice(notice) = input else {
-                    return Vec::new();
-                };
-                builtin_spans(notice.code, notice.text, at as usize)
-            })
-        },
-    );
-    for queued in renderer.take_pending() {
-        bound.cache.queue_notice(queued);
-    }
-    let Some(fitted) = fitted else { return false };
     if fitted.is_empty() {
         return false;
     }

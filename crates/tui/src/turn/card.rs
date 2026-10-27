@@ -98,10 +98,19 @@ impl Turn {
     }
 
     /// The card's renderer input: its prompts, every entry inlined, and
-    /// its ending. `running` is the event-derived turn still running,
-    /// not click-set row state. A group entry's `running` is the turn
-    /// running with that group as its open one.
-    pub(crate) fn card_input(&self, flat: bool) -> TurnCard<'_> {
+    /// its ending. `summary` names the whole-turn totals the closing
+    /// turn draws in place of the card's own, as [`card_rows`] does, so
+    /// a bound `turn_card` renderer sees the same rows it decorates.
+    /// `running` is the event-derived turn still running, not click-set
+    /// row state. A group entry's `running` is the turn running with
+    /// that group as its open one.
+    pub(crate) fn card_input<'a>(
+        &'a self,
+        summary: Option<DrawSummary<'a>>,
+        flat: bool,
+    ) -> TurnCard<'a> {
+        let ended = summary.as_ref().and_then(|view| view.ended);
+        let running = ended.is_none() && self.ended.is_none();
         TurnCard {
             prompts: self
                 .prompts
@@ -125,42 +134,27 @@ impl Turn {
                 .filter_map(|entry| match entry {
                     Entry::Reply { reply, .. } => Some(TurnEntry::Reply { text: reply.text() }),
                     Entry::Steer(steered) => Some(steered.turn_entry()),
-                    Entry::Group(at) => {
-                        let running = self.ended.is_none() && self.open_group == Some(*at);
-                        self.groups
-                            .get(*at)
-                            .map(|group| TurnEntry::Group(group.turn_entry(running)))
-                    }
+                    Entry::Group(at) => self.groups.get(*at).map(|group| {
+                        TurnEntry::Group(group.turn_entry(running && self.open_group == Some(*at)))
+                    }),
                     Entry::Aside(aside) => Some(TurnEntry::Aside(aside.turn_input())),
                     Entry::Band(band) => Some(TurnEntry::Band(band.turn_entry())),
                     Entry::Answers(answered) => Some(TurnEntry::Answers(answered.turn_entry())),
                 })
                 .collect(),
-            started: self.started,
-            calls: self.calls,
-            usage: self.spend.usage(),
-            ended: self.ended.as_ref().map(|(ending, ts)| {
-                let (outcome, error) = match ending {
-                    Ending::Done(done) => (
-                        match done.outcome {
-                            TurnOutcome::Completed => "completed",
-                            TurnOutcome::Interrupted => "interrupted",
-                            TurnOutcome::Failed => "failed",
-                        },
-                        done.error.as_ref().map(|error| TurnError {
-                            code: error.code.clone(),
-                            message: &error.message,
-                        }),
-                    ),
-                    Ending::CutShort => ("cut short", None),
-                };
-                TurnEnded {
-                    outcome,
-                    ended_ts: *ts,
-                    error,
-                }
-            }),
-            running: self.ended.is_none(),
+            started: summary.as_ref().map_or(self.started, |view| view.started),
+            calls: summary.as_ref().map_or(self.calls, |view| view.calls),
+            usage: summary
+                .as_ref()
+                .map_or_else(|| self.spend.usage(), |view| view.spend.usage()),
+            ended: match ended {
+                Some((done, ts)) => Some(ended_of(done, *ts)),
+                None => self.ended.as_ref().map(|(ending, ts)| match ending {
+                    Ending::Done(done) => ended_of(done, *ts),
+                    Ending::CutShort => TurnEnded::CutShort { ended_ts: *ts },
+                }),
+            },
+            running,
             flat,
         }
     }
@@ -184,7 +178,7 @@ impl Turn {
         match out.fills_for("turn_card") {
             crate::ext::SlotSelection::Draw { extension } => {
                 let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
-                let input = self.card_input(flat);
+                let input = self.card_input(summary, flat);
                 let wrapped = Input::TurnCard(input);
                 let builtin = |input: &Input<'_>, w: u16| {
                     if !matches!(input, Input::TurnCard(_)) {
@@ -358,6 +352,22 @@ impl Turn {
         }
         out.set_source(None);
         Pieces { first, last }
+    }
+}
+
+/// The card's ending input for one `turn_completed`: the outcome with
+/// its timestamp, and on a failure the error the ✗ lines draw.
+fn ended_of(done: &TurnCompleted, ts: u64) -> TurnEnded<'_> {
+    match done.outcome {
+        TurnOutcome::Completed => TurnEnded::Completed { ended_ts: ts },
+        TurnOutcome::Interrupted => TurnEnded::Interrupted { ended_ts: ts },
+        TurnOutcome::Failed => TurnEnded::Failed {
+            ended_ts: ts,
+            error: done.error.as_ref().map(|error| TurnError {
+                code: error.code.clone(),
+                message: &error.message,
+            }),
+        },
     }
 }
 

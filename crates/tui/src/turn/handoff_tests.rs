@@ -1039,7 +1039,6 @@ fn the_band_entry_carries_trigger_ts_and_state() {
     assert_eq!(band.trigger, "automatic");
     assert_eq!(band.ts, 6);
     assert!(matches!(band.state, TurnBandState::Writing));
-    assert_eq!(band.sizes, None);
     for (state, cancelled) in [
         (
             super::State::Done {
@@ -1053,16 +1052,15 @@ fn the_band_entry_carries_trigger_ts_and_state() {
     ] {
         writing.state = state;
         band = writing.turn_entry();
-        match (band.state, cancelled) {
-            (TurnBandState::Done, None) => {
-                let sizes = band.sizes.expect("a done band carries sizes");
+        match band.state {
+            TurnBandState::Writing => panic!("writing advanced"),
+            TurnBandState::Done(sizes) => {
                 assert_eq!((sizes.before, sizes.after), (7, Some(9)));
+                assert_eq!(cancelled, None);
             }
-            (TurnBandState::Unchanged { cancelled: got }, Some(want)) => {
-                assert_eq!(got, want);
-                assert_eq!(band.sizes, None);
+            TurnBandState::Unchanged { cancelled: got } => {
+                assert_eq!(Some(got), cancelled);
             }
-            (state, cancelled) => panic!("wrong state {state:?} {cancelled:?}"),
         }
     }
 }

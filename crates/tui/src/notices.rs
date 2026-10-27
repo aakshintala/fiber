@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use super::App;
-use crate::ext::{Bound, Input, SlotSelection};
+use crate::ext::Bound;
 
 /// How many notices show before "+N more".
 const SHOWN: usize = 3;
@@ -350,51 +350,28 @@ impl Notices {
     }
 
     /// Whether the bound renderer hides the notice: a bound `notice`
-    /// renderer returning no lines hides it everywhere — rows, More
-    /// counts and the overlay share the one cached lookup.
-    /// `extension_failed` always draws built-in: a notice extension
-    /// cannot hide its own switch-off failure.
+    /// renderer returning no lines hides it everywhere. Only an empty
+    /// replacement hides: a failure or a miss falls back to the
+    /// built-in row.
     fn hidden(&self, bound: &Bound, width: u16, notice: &Notice) -> bool {
-        if notice.code == "extension_failed" {
-            return false;
-        }
-        let Some(renderer) = bound.handle.get() else {
-            return false;
-        };
-        let selected = renderer.fills_for(&bound.ctx, "notice");
-        for queued in renderer.take_pending() {
-            bound.cache.queue_notice(queued);
-        }
-        let SlotSelection::Draw { extension } = selected else {
-            return false;
-        };
-        let input = Input::Notice(crate::ext::Notice {
-            code: &notice.code,
-            text: &notice.text,
-            flat: bound.flat,
-        });
-        let fitted = bound.cache.lines(
-            bound.page.clone(),
-            "notice",
-            &extension,
-            renderer.half(&bound.ctx, &extension),
-            &input,
-            width,
-            || {
-                renderer.render(&bound.ctx, "notice", &input, width, &|input, at| {
-                    let Input::Notice(notice) = input else {
-                        return Vec::new();
-                    };
-                    crate::view::notice_rows::builtin_spans(notice.code, notice.text, at as usize)
-                })
-            },
-        );
-        for queued in renderer.take_pending() {
-            bound.cache.queue_notice(queued);
-        }
-        // Only an empty replacement hides: a failure or a miss falls
-        // back to the built-in row.
-        matches!(fitted, Some(lines) if lines.is_empty())
+        matches!(
+            bound.notice_lines(&notice.code, &notice.text, width),
+            Some(lines) if lines.is_empty()
+        )
+    }
+
+    /// The shown notices `keep` accepts that the bound renderer does
+    /// not hide, oldest first: hidden notices drop out before the cap,
+    /// so the rows, the drawn count and the overlay share the one
+    /// filtered view.
+    fn visible(
+        &self,
+        bound: &Bound,
+        width: u16,
+        keep: impl Fn(&Notice) -> bool,
+    ) -> impl DoubleEndedIterator<Item = &Notice> {
+        self.shown()
+            .filter(move |notice| keep(notice) && !self.hidden(bound, width, notice))
     }
 
     /// The rows the view draws through `bound`, oldest first: the
@@ -402,10 +379,7 @@ impl Notices {
     /// visible rest. A notice the bound renderer hides with no lines
     /// drops out before the cap, so it takes no row and no count.
     pub(crate) fn visible_lines(&self, bound: &Bound, width: u16) -> Vec<NoticeLine> {
-        let shown: Vec<&Notice> = self
-            .shown()
-            .filter(|notice| !self.hidden(bound, width, notice))
-            .collect();
+        let shown: Vec<&Notice> = self.visible(bound, width, |_| true).collect();
         let mut lines: Vec<NoticeLine> = shown
             .iter()
             .take(SHOWN)
@@ -425,10 +399,7 @@ impl Notices {
     /// How many rows [`Notices::visible_lines`] draws through `bound`,
     /// without building them.
     pub(crate) fn visible_drawn(&self, bound: &Bound, width: u16) -> usize {
-        let shown = self
-            .shown()
-            .filter(|notice| !self.hidden(bound, width, notice))
-            .count();
+        let shown = self.visible(bound, width, |_| true).count();
         shown.min(SHOWN) + usize::from(shown > SHOWN)
     }
 
@@ -443,10 +414,10 @@ impl Notices {
         Some(NoticeOverlay {
             all: overlay == Overlay::All,
             entries: self
-                .shown()
+                .visible(bound, width, |notice| {
+                    overlay == Overlay::All || overlay == Overlay::One(notice.id)
+                })
                 .rev()
-                .filter(|notice| overlay == Overlay::All || overlay == Overlay::One(notice.id))
-                .filter(|notice| !self.hidden(bound, width, notice))
                 .map(|notice| (notice.code.clone(), notice.text.clone()))
                 .collect(),
         })

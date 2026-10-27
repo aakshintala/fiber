@@ -1689,16 +1689,90 @@ fn a_turn_card_timeout_lists_one_extension_failed() {
 fn the_card_running_follows_the_open_turn() {
     let mut cards = fresh();
     start(&mut cards, "go");
-    assert!(cards.turns[0].card_input(false).running);
+    assert!(cards.turns[0].card_input(None, false).running);
     done(&mut cards);
-    assert!(!cards.turns[0].card_input(false).running);
+    assert!(!cards.turns[0].card_input(None, false).running);
+}
+
+#[test]
+fn the_card_input_uses_the_summary_totals_and_ending() {
+    use contract::events::{TurnCompleted, TurnOutcome};
+
+    use crate::turn::DrawSummary;
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    step(&mut cards);
+    requested(&mut cards, "a_1", "read", json!({"path": "a.rs"}));
+    feed(
+        &mut cards,
+        "usage_recorded",
+        None,
+        json!({"generation_id": "g1", "model": "fake/m",
+            "tokens": {"input": 10, "cache_read": 0, "cache_write": {}, "output": 5},
+            "input_bytes": 0, "cost": null}),
+    );
+    // The card's own totals differ from the summary's, so the input
+    // names its source: the card's 10 input tokens against the
+    // summary's empty spend.
+    let turn = &cards.turns[0];
+    assert_eq!(turn.spend.usage().tokens.input, 10);
+    assert!(turn.card_input(None, false).running);
+    let empty = crate::format::Spend::default();
+    let done = (
+        TurnCompleted {
+            outcome: TurnOutcome::Completed,
+            error: None,
+            questions: None,
+        },
+        5_000u64,
+    );
+    let summary = DrawSummary {
+        started: 9,
+        calls: 4,
+        spend: &empty,
+        ended: Some(&done),
+    };
+    let input = turn.card_input(Some(summary), false);
+    assert_eq!(input.started, 9);
+    assert_eq!(input.calls, 4);
+    assert_eq!(input.usage.tokens.input, 0);
+    assert!(
+        matches!(
+            input.ended,
+            Some(crate::ext::TurnEnded::Completed { ended_ts: 5_000 })
+        ),
+        "the summary's ending names the close: {:?}",
+        input.ended
+    );
+    assert!(!input.running);
+    let group_running = input.entries.iter().find_map(|entry| match entry {
+        crate::ext::TurnEntry::Group(group) => Some(group.running),
+        crate::ext::TurnEntry::Reply { .. }
+        | crate::ext::TurnEntry::Steer { .. }
+        | crate::ext::TurnEntry::Aside(_)
+        | crate::ext::TurnEntry::Band(_)
+        | crate::ext::TurnEntry::Answers(_) => None,
+    });
+    assert_eq!(group_running, Some(false));
+    // An open summary keeps the card's own ending and running: the
+    // turn the summary does not close still runs.
+    let open = DrawSummary {
+        started: 9,
+        calls: 4,
+        spend: &empty,
+        ended: None,
+    };
+    let input = turn.card_input(Some(open), false);
+    assert_eq!(input.started, 9);
+    assert!(input.ended.is_none());
+    assert!(input.running);
 }
 
 #[test]
 fn the_card_input_holds_every_entry_variant() {
     use crate::ext::{TurnAnswers, TurnAside, TurnBandState, TurnEntry};
     let cards = rich();
-    let card = cards.turns[0].card_input(false);
+    let card = cards.turns[0].card_input(None, false);
     assert_eq!(card.prompts.len(), 1);
     assert_eq!(card.prompts[0].text, "go");
     assert!(card.prompts[0].images.is_empty());
@@ -1753,9 +1827,11 @@ fn the_card_input_holds_every_entry_variant() {
             TurnEntry::Aside(TurnAside::Line { .. }) => "line",
             TurnEntry::Band(band) => {
                 assert_eq!(band.trigger, "automatic");
-                assert!(matches!(band.state, TurnBandState::Done));
-                assert_eq!(band.sizes.map(|sizes| sizes.before), Some(1_000));
-                assert_eq!(band.sizes.and_then(|sizes| sizes.after), None);
+                let TurnBandState::Done(sizes) = band.state else {
+                    panic!("a done band carries its sizes: {:?}", band.state);
+                };
+                assert_eq!(sizes.before, 1_000);
+                assert_eq!(sizes.after, None);
                 "band"
             }
             TurnEntry::Answers(TurnAnswers::Given { parts, note, .. }) => {
