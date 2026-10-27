@@ -579,18 +579,21 @@ impl Skills {
 /// The skill's text with its shadow block first: one `shadows <source> ·
 /// <path>` line per shadow path, in path order, then any `shadowed by
 /// <path>` line, a blank line, and the text, so every shadow path stays
-/// reachable. A path with no matching skill entry keeps its path-only
-/// line: no source word can be derived from inconsistent data.
+/// reachable. A path with no matching skill entry, or an extension entry
+/// with no extension name, keeps its path-only line: no source word can
+/// be derived from inconsistent data.
 fn pane_text(info: &SkillInfo, infos: &[SkillInfo], text: &str) -> String {
     let mut block: Vec<String> = info
         .shadows
         .iter()
-        .map(
-            |path| match infos.iter().find(|entry| entry.path == *path) {
-                Some(entry) => format!("shadows {} · {path}", source_word(entry)),
-                None => format!("shadows {path}"),
-            },
-        )
+        .map(|path| match infos.iter().find(|entry| entry.path == *path) {
+            Some(entry)
+                if !matches!(entry.source, SkillSource::Extension if entry.extension.is_none()) =>
+            {
+                format!("shadows {} · {path}", source_word(entry))
+            }
+            _ => format!("shadows {path}"),
+        })
         .collect();
     if let Some(path) = &info.shadowed_by {
         block.push(format!("shadowed by {path}"));

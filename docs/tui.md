@@ -898,8 +898,9 @@ a click on it returns too. The views are:
   …" after the switches, cut with "…" so both switches stay whole.
   Several shadowed sources list after one "shadows", separated by ", ",
   most specific first (repo, personal, extensions by extension name, then
-  built in), each source once. A shadow path with no matching skill entry
-  leaves out the whole "shadows …" clause. When the row runs out of width
+  built in), each source once. An unresolved shadow path — no matching
+  skill entry, or an extension entry with no extension name — leaves out
+  the whole "shadows …" clause. When the row runs out of width
   the description is cut first, then the name, then the skill's own source,
   keeping room for " · shadows …"; the clause is left out only when the
   fixed fields and both switches leave less than that minimum. The last row

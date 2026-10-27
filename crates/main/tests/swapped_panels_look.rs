@@ -664,26 +664,7 @@ fn installed_extension_dir(setup: &Setup) -> PathBuf {
 /// A setup with same-name repository, personal and long-named extension
 /// `review` skills: the repository copy wins and shadows the other two.
 fn narrow_skills_setup() -> Setup {
-    let setup = Setup::new();
-    write_json(
-        &setup.workspace().join("s.json"),
-        &json!({"steps": [{"text": ["Done."]}]}),
-    );
-    config(&setup, json!({}));
-    for (dir, description) in [
-        (
-            setup.workspace().join(".agents/skills/review"),
-            "Checks a diff.",
-        ),
-        (setup.home().join("skills/review"), "Personal notes."),
-    ] {
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("SKILL.md"),
-            format!("---\nname: review\ndescription: {description}\n---\nBody.\n"),
-        )
-        .unwrap();
-    }
+    let setup = skills_setup();
     // A long-named extension with its own same-name skill, shadowed by
     // the repository copy.
     setup.lua("very-long-extension-name", "-- no tools\n");
@@ -700,13 +681,54 @@ fn narrow_skills_setup() -> Setup {
 /// The narrow `/skills` screen once the winner's row has drawn with its
 /// shadows clause tail-cut past both whole switches. The conversation
 /// column leaves its last cell to the scroll bar, so the 100-wide pty
-/// draws the view 99 wide.
+/// draws the view 99 wide. The predicate checks every cell property the
+/// test reads — the exact row, the gutter, the switch weights and the dim
+/// footer — so a partial redraw can't satisfy it (`docs/testing/screens.md`,
+/// "Screens"). Only then is the view ready for Enter.
 fn narrow_skills_ready(grid: &Grid) -> bool {
+    let want = "review · Checks a diff. · repo · seen · this project›[on] · everywhere [on] · shadows personal…";
     let Some(y) = find_row(grid, "shadows personal…") else {
         return false;
     };
-    let row = grid.rows[y as usize].trim_end();
-    row.ends_with('…') && row.contains("[on]")
+    let Some(x) = col_at_or(grid, y, "review · Checks a diff.") else {
+        return false;
+    };
+    let text: String = (x..100)
+        .map(|x| grid.cell(x, y).symbol.clone())
+        .collect::<String>()
+        .trim_end()
+        .to_owned();
+    if text != want {
+        return false;
+    }
+    if x < 2 || grid.cell(x - 2, y).symbol != "›" || grid.cell(x - 1, y).symbol != " " {
+        return false;
+    }
+    if grid.cell(x - 2, y).inverse {
+        return false;
+    }
+    if !(0..100).all(|x| !grid.cell(x, y).inverse) {
+        return false;
+    }
+    let after = |label: &str| col_at_or(grid, y, label).map(|x| x + label.chars().count() as u16);
+    let (Some(at_project), Some(at_everywhere)) = (after("this project"), after("everywhere"))
+    else {
+        return false;
+    };
+    let project = grid.cell(at_project, y);
+    let everywhere = grid.cell(at_everywhere, y);
+    if project.symbol != "›" || !project.bold || everywhere.symbol != " " || everywhere.bold {
+        return false;
+    }
+    if !(switch_weighs(grid, y, at_project + 1, "[on]")
+        && switch_weighs(grid, y, at_everywhere + 1, "[on]"))
+    {
+        return false;
+    }
+    let Some(footer) = find_row(grid, "Enter shows the text · Ctrl+G opens its file") else {
+        return false;
+    };
+    is_dim(grid, footer, "Enter shows the text · Ctrl+G opens its file")
 }
 
 #[test]
@@ -752,9 +774,11 @@ fn the_skills_view_keeps_switches_whole_on_a_narrow_screen() {
         "{}",
         grid.contents
     );
-    // Enter lists every shadow source and path above the text. The long
-    // extension line wraps at the view's width, so the paths are read
-    // across the pane's wrapped rows.
+    // Enter lists every shadow source and path above the text
+    // (`docs/tui.md:892-893`). The long extension line wraps at the view's
+    // width, so the paths are read across the pane's wrapped rows. The rows
+    // above already prove the view ready for Enter
+    // (`docs/testing/screens.md`, "Screens").
     run.write(b"\r");
     let personal_path = setup.home().join("skills/review/SKILL.md");
     let extension_path = installed_extension_dir(&setup).join("skills/review/SKILL.md");
@@ -782,8 +806,9 @@ fn the_skills_view_keeps_switches_whole_on_a_narrow_screen() {
         "{}",
         grid.contents
     );
-    // Discovery order, then a blank line, then the skill's text: the hub
-    // returns the whole SKILL.md, frontmatter included.
+    // Path order (`docs/invocation.md:474` discovery order), then a blank
+    // line, then the skill's text: the hub returns the whole SKILL.md,
+    // frontmatter included.
     let shadowed = row_with(&grid, personal_label);
     let extension_row = row_with(&grid, &extension_label);
     let fence = row_with(&grid, "---");
