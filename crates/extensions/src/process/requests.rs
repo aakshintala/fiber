@@ -224,9 +224,7 @@ impl Table {
     ) -> Minted {
         let mut inner = support::lock(&self.inner);
         let sequence = inner.next_request_id;
-        inner.next_request_id = sequence
-            .checked_add(1)
-            .expect("process request ID space exhausted");
+        inner.next_request_id = sequence.wrapping_add(1);
         #[cfg(test)]
         let nonce = support::lock(&self.fixed_request_nonce)
             .clone()
