@@ -166,6 +166,11 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   fi
   export FIBER_CHECK_RUN
   scan_leaks=1
+  # nextest builds the fakes library as a dev dependency but not its
+  # example; ProcessFixture::example_path starts that example, so build
+  # it for every selection, since any crate's tests may use ProcessFixture.
+  echo "== build the process-extension example"
+  cargo build -q -p fakes --example process-extension
   echo "== cargo nextest run"
   # One timing flake must not hide the other tests' results: a failed run
   # reports every failure, so a rerun is not needed to see them.

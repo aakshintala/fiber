@@ -145,6 +145,8 @@ codes! {
     ModelsLoading,
     /// `name_session` was called while the person's name pins the session.
     NamePinned,
+    /// `/jobs` ran in an attached session with no running jobs.
+    NoJobsRunning,
     /// An edit block's text was not found in the file.
     NoMatch,
     /// Nothing chose a model.
