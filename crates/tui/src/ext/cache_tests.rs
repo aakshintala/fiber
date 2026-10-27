@@ -971,6 +971,7 @@ fn each_new_slot_failure_holds_without_width() {
         // (`docs/tui.md`, "How a TUI extension runs").
         assert_eq!(calls.get(), before + 1, "{slot} calls once");
         let listed = cache.take_failures();
+        // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
         assert_eq!(listed.len(), 1, "{slot} lists its failure once");
         assert_eq!(listed[0].0, *slot);
     }
@@ -995,6 +996,7 @@ fn a_new_slot_wrong_shape_is_listed_once() {
     assert!(wrong().is_none());
     assert!(wrong().is_none());
     let listed = cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].0, "prompt");
 }

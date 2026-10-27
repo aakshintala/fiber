@@ -399,8 +399,16 @@ impl Notices {
     /// How many rows [`Notices::visible_lines`] draws through `bound`,
     /// without building them.
     pub(crate) fn visible_drawn(&self, bound: &Bound, width: u16) -> usize {
-        let shown = self.visible(bound, width, |_| true).count();
-        shown.min(SHOWN) + usize::from(shown > SHOWN)
+        let shown: Vec<&Notice> = self.visible(bound, width, |_| true).collect();
+        shown
+            .iter()
+            .take(SHOWN)
+            .fold(usize::from(shown.len() > SHOWN), |rows, notice| {
+                let lines = bound
+                    .notice_lines(&notice.code, &notice.text, width)
+                    .map_or(1, |lines| lines.len());
+                rows.saturating_add(lines)
+            })
     }
 
     /// The overlay's entries through `bound`, newest first, while it is

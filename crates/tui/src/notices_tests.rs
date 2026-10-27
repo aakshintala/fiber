@@ -1187,6 +1187,7 @@ fn hidden_notices_leave_no_rows_counts_or_overlays() {
     );
     // One cached visibility result serves rows, counts and overlays:
     // each distinct notice calls the renderer once.
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
     assert_eq!(fake.calls.borrow().len(), 4);
 }
 

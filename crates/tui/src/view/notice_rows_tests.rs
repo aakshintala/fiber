@@ -645,6 +645,7 @@ fn a_notice_replacement_draws_instead_of_the_row() {
         false,
     );
     assert_eq!(moved, 1);
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
     assert_eq!(fake.calls.borrow().len(), 1);
     assert_eq!(fake.calls.borrow()[0].1, "notice");
     assert_eq!(fake.calls.borrow()[0].2, 30);
@@ -733,12 +734,14 @@ fn a_notice_error_falls_back_with_one_failure() {
         let row = row_text(&buf, 23);
         assert!(row.contains('⚠'), "{row:?}");
     }
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(
         fake.calls.borrow().len(),
         1,
         "the failure calls nothing again"
     );
     let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].0, "notice");
     assert_eq!(listed[0].1.kind, FailureKind::HookFailed);

@@ -370,9 +370,8 @@ fn sized(app: &mut App, width: u16, height: u16) -> String {
     text(&buf)
 }
 
-/// A conversation exercising every 4b seam plus a notice, each replaced
-/// through one test renderer: one fixed-shape assertion per seam pins
-/// the replacement, and the snapshot pins the whole frame.
+/// A whole-screen snapshot pins one `prompt` replacement alongside the
+/// built-in notice, working line, input box, status rows and a surviving target.
 #[test]
 fn conversation_slots_replace_through_the_seam() {
     use crate::ext::tests::{SlotRenderer, SlotScript, raw};
@@ -468,16 +467,10 @@ fn conversation_slots_replace_through_the_seam() {
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
     // A notice above the working line.
     app.push_notice("io_failed", "a read failed".to_owned());
-    // One hook per seam: every 4b slot draws the same replacement.
+    // Per-slot tests cover the other replacements; this test pins the
+    // whole-screen effect of replacing one prompt.
     let fake = std::rc::Rc::new(SlotRenderer::filling(
-        &[
-            "group_line",
-            "steer",
-            "answers",
-            "handoff_band",
-            "error_line",
-            "notice",
-        ],
+        &["prompt"],
         SlotScript::Replace(vec![vec![raw("custom")]]),
     ));
     let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake.clone();
@@ -487,38 +480,21 @@ fn conversation_slots_replace_through_the_seam() {
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     let shown = text(&buf);
-    // One hook per seam: the renderer saw every 4b slot.
-    {
-        let mut slots: Vec<String> = fake
-            .calls
-            .borrow()
-            .iter()
-            .map(|call| call.1.clone())
-            .collect();
-        slots.sort();
-        slots.dedup();
-        assert_eq!(
-            slots,
-            [
-                "answers",
-                "error_line",
-                "group_line",
-                "handoff_band",
-                "notice",
-                "steer"
-            ],
-            "{shown}"
-        );
-    }
-    // One fixed-shape assertion per seam: the built-in marker is gone,
-    // the replacement stands, and the terminal keeps its own rows.
-    assert!(!shown.contains("use x"), "{shown}");
-    assert!(!shown.contains("you answered"), "{shown}");
-    assert!(!shown.contains('⇄'), "{shown}");
-    assert!(shown.contains("▸ note"), "{shown}");
-    assert!(!shown.contains('✗'), "{shown}");
-    assert!(!shown.contains("a read failed"), "{shown}");
     assert!(shown.contains("custom"), "{shown}");
+    assert!(
+        shown.contains("a read failed"),
+        "the built-in notice remains: {shown}"
+    );
+    assert!(
+        shown.contains("▸ note"),
+        "the built-in note remains: {shown}"
+    );
+    assert!(
+        shown.contains("completed · 2 calls"),
+        "the group remains built in: {shown}"
+    );
+    assert!(shown.contains("›"), "the input box remains: {shown}");
+    assert!(shown.contains("▌"), "the working line remains: {shown}");
     // The note toggle stays the terminal's beside the replaced band:
     // its target rides the returned target list.
     assert!(
@@ -528,12 +504,49 @@ fn conversation_slots_replace_through_the_seam() {
         )),
         "the note toggle keeps its target: {targets:?}"
     );
-    // The completed group stays collapsed: its built-in summary sentence is
-    // gone and its context line survives, with no call ledger leaking out.
-    assert!(!shown.contains("asked 2 questions"), "{shown}");
-    assert!(!shown.contains("⠋ read"), "{shown}");
-    assert!(shown.contains("completed · 2 calls"), "{shown}");
     insta::assert_snapshot!("extension_slot_replaces_row", shown);
+}
+
+#[test]
+fn notice_replacement_reserves_each_painted_row() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    use crate::mouse::TargetId;
+    use std::rc::Rc;
+
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.push_notice("io_failed", "a read failed".to_owned());
+    let fake = Rc::new(SlotRenderer::filling(
+        &["notice"],
+        SlotScript::Replace(vec![vec![raw("first")], vec![raw("second")]]),
+    ));
+    let renderer: Rc<dyn crate::ext::Renderer> = fake;
+    app.install_renderer(renderer);
+    app.set_size(80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    assert!(
+        shown.contains("first") && shown.contains("second"),
+        "{shown}"
+    );
+    let painted_rows = targets
+        .iter()
+        .find(|target| matches!(target.id, TargetId::DismissNotice(_)))
+        .expect("the replacement's dismiss target")
+        .rect
+        .height as usize;
+
+    // (`docs/tui.md`, "What a renderer returns": a renderer returns lines.)
+    assert_eq!(painted_rows, 2);
+    let input_rows = crate::surface::edged(app.input_height(), 24);
+    let non_notice_rows = input_rows
+        + app.steering_below()
+        + usize::from(app.working_row_shown())
+        + usize::from(app.badge().is_some())
+        + usize::from(app.hint());
+    assert_eq!(app.below_rows(), non_notice_rows + painted_rows);
 }
 
 #[test]

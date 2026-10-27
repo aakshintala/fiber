@@ -1584,6 +1584,7 @@ fn a_turn_card_replacement_draws_whole_and_skips_nested_slots() {
     ));
     let (rows, _) = draw_seamed(&cards.turns[0], 60, &fake, false);
     let shown = shown_rows(&rows);
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
     assert_eq!(fake.calls.borrow().len(), 1, "{:?}", fake.calls.borrow());
     assert_eq!(fake.calls.borrow()[0].1, "turn_card");
     assert!(
@@ -1645,12 +1646,14 @@ fn a_turn_card_error_falls_back_with_one_failure() {
         let shown = shown_rows(&out.into_parts().0);
         assert!(shown.iter().any(|row| row.contains("Hello.")), "{shown:?}");
     }
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(
         fake.calls.borrow().len(),
         1,
         "the failure calls nothing again"
     );
     let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].0, "turn_card");
     assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
@@ -1679,6 +1682,7 @@ fn a_turn_card_timeout_lists_one_extension_failed() {
         &mut out,
     );
     let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].1.kind, FailureKind::ExtensionFailed);
     let shown = shown_rows(&out.into_parts().0);

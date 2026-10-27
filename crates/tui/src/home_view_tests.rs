@@ -3964,6 +3964,7 @@ fn a_home_notice_replacement_draws_sessionless() {
     assert!(!shown.contains('⚠'), "{shown}");
     // Home binds no session: Lua reads nil, never a reused, empty or
     // synthetic id.
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
     assert_eq!(fake.calls.borrow().len(), 1);
     assert_eq!(fake.calls.borrow()[0].0, None);
     assert_eq!(fake.calls.borrow()[0].1, "notice");

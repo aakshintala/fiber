@@ -2469,6 +2469,31 @@ fn thinking_replaced() -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
 }
 
 #[test]
+fn a_group_line_replacement_draws_instead_of_the_summary() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let group = identity_group();
+    let fake = Rc::new(SlotRenderer::filling(
+        &["group_line"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    ));
+    let seam = crate::ext::tests::seam(&fake, "s", 0, false);
+    let mut out = crate::rows::Rows::default().with_seam(seam);
+    group.rows(false, 60, &crate::image::Layout::default(), &mut out);
+    let (rows, _) = out.into_parts();
+
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow()[0].1, "group_line");
+    let summary = rows[0].0.to_string();
+    assert!(summary.starts_with("custom"), "{summary:?}");
+    assert!(
+        !summary.contains('▾'),
+        "the built-in summary was replaced: {summary:?}"
+    );
+    assert!(matches!(rows[0].1.as_ref(), Some(Target::Group(_))));
+}
+
+#[test]
 fn a_thinking_replacement_draws_with_the_thoughts_target() {
     let group = thinking_group(Thought {
         id: 3,
@@ -2480,6 +2505,7 @@ fn a_thinking_replacement_draws_with_the_thoughts_target() {
     });
     let fake = thinking_replaced();
     let (rows, _) = draw_thinking(&group, 40, &fake, false);
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
     assert_eq!(fake.calls.borrow().len(), 1);
     assert_eq!(fake.calls.borrow()[0].1, "thinking_line");
     let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
@@ -2582,12 +2608,14 @@ fn a_thinking_error_falls_back_with_one_failure() {
             .collect();
         assert!(shown.iter().any(|row| row.contains("Plan")), "{shown:?}");
     }
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(
         fake.calls.borrow().len(),
         1,
         "the failure calls nothing again"
     );
     let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].0, "thinking_line");
     assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
@@ -2616,6 +2644,7 @@ fn a_thinking_timeout_lists_one_extension_failed() {
     let mut out = crate::rows::Rows::default().with_seam(bound.clone());
     group.rows(false, 40, &crate::image::Layout::default(), &mut out);
     let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].1.kind, FailureKind::ExtensionFailed);
 }

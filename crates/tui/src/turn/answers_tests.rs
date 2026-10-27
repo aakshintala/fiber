@@ -999,6 +999,7 @@ fn an_answers_replacement_draws_instead_of_the_form() {
     let fake = replaced();
     let rows = seamed(&answered_at(1_000), 40, &fake, false);
     let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
     assert_eq!(fake.calls.borrow().len(), 1);
     assert_eq!(fake.calls.borrow()[0].1, "answers");
     assert!(
@@ -1016,6 +1017,7 @@ fn a_declined_replacement_draws_instead_of_the_dim_row() {
     let fake = replaced();
     let rows = seamed(&super::Answered::Declined, 40, &fake, false);
     let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
     assert_eq!(fake.calls.borrow().len(), 1);
     assert!(
         shown.iter().any(|row| row.starts_with("custom")),
@@ -1076,12 +1078,14 @@ fn an_answers_error_falls_back_with_one_failure() {
             "{shown:?}"
         );
     }
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(
         fake.calls.borrow().len(),
         1,
         "the failure calls nothing again"
     );
     let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].0, "answers");
     assert_eq!(listed[0].1.kind, FailureKind::HookFailed);

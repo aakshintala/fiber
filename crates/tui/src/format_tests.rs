@@ -882,6 +882,7 @@ fn an_error_line_replacement_draws_instead_of_the_failure() {
     let error = failed(contract::ErrorCode::IoFailed);
     let fake = replaced();
     let rows = failed_seamed(&error, 40, &fake, false);
+    // (`docs/tui.md`, "When an extension fails": the failure is cached against its input.)
     assert_eq!(fake.calls.borrow().len(), 1);
     assert_eq!(fake.calls.borrow()[0].1, "error_line");
     let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
@@ -982,12 +983,14 @@ fn an_error_line_error_falls_back_with_one_failure() {
             .collect();
         assert!(shown.iter().any(|row| row.contains('✗')), "{shown:?}");
     }
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(
         fake.calls.borrow().len(),
         1,
         "the failure calls nothing again"
     );
     let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].0, "error_line");
     assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
