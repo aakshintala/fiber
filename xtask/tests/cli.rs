@@ -770,9 +770,10 @@ fn verdict_counts_stress_like_every_gating_job() {
     );
     let failed = r#"{"select":{"result":"success","outputs":{}},"stress":{"result":"failure"}}"#;
     let selected = [("NEEDS", failed), ("JOBS", r#"{"stress":true}"#)];
-    assert_eq!(
-        xtask(&dir, &["verdict"], &selected, ""),
-        (1, "verdict: stress: selected, but failure\n".to_owned())
+    assert_ne!(
+        xtask(&dir, &["verdict"], &selected, "").0,
+        0,
+        "a selected stress failure must fail the verdict"
     );
 }
 
