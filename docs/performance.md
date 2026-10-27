@@ -125,9 +125,9 @@ Basis says where a number came from:
   benchmark replaces a "from components" or "picked" number with its measured
   one only where the measurement exceeds that number. Every other ceiling stays
   as it is, and a ceiling the measurement does not exceed keeps its basis. A
-  ceiling given as a formula, such as attaching's, stays picked: its benchmark
-  reports each measurement against the formula, and the timing gate for the
-  10 MiB fixture judges against the class ceiling instead.
+  ceiling given as a formula stays picked. Attaching's first-frame ceiling
+  stays at the approved flat 50 ms for both own-log fixtures, independent
+  of base measurements.
 
 The class columns hold the timing gates per runner speed class, keyed by CPU
 model strings matched case-insensitively. A model's class is the slowest
@@ -142,8 +142,8 @@ only with at least 5 stored files; turning another model on later is a pull
 request that adds its rows. Rows that are not absolute timings carry `—` in these
 columns, and the ordinary Ceiling cell stays as advisory reference data. A new timing row's class cells carry `—` until a model has at least 5 stored files carrying its metric. A row whose ceiling the owner ruled as a flat number carries that number in every class cell from the start, and its tolerance cells carry `—` until the same 5 files exist.
 
-Each class ceiling is the maximum individual stored sample for that metric
-across every model in the class, rounded upward to the next whole
+Except for owner-ruled flat ceilings, each class ceiling is the maximum stored
+sample for that metric across every model in the class, rounded up to the next whole
 millisecond, so it covers every stored sample as well as every per-file
 median. Each tolerance is `100 * (maximum per-file median / minimum per-file
 median - 1)` for the gated model and row, rounded upward to a whole percent:
@@ -295,13 +295,24 @@ max/min median spreads range from 3.22% to 55.83%: session start spans 8.47%
 on 7763 and 54.37% on 9V45, listing spans 12.43% and 20.71% respectively, so
 each row carries its own tolerance in the table. Budgeted numeric memory-row
 medians across these files vary by about 1.0% to 7.0% depending on workload:
-busy peak RSS spans 1.31% and web_fetch peak RSS 6.98%. A timing gate fails
+busy peak RSS spans 1.31% and web_fetch peak RSS 6.98%. An ordinary timing gate fails
 only when the median is over its class's ceiling and over the base commit's
 median from the same job by more than that tolerance, measured in the same
 job on the same runner, and its author may raise the ceiling as
 above. A model with fewer than 5 stored runs, an unknown CPU model and any row without a comparable same-job base timing stay
-advisory, and the comment says why. A benchmark's
-own self-check failing is a failed run, not a slow sample.
+advisory, and the comment says why. Attaching's warm first-frame row is
+an exception: on eligible fast and slow models, each 1 MiB and 10 MiB
+own-log fixture fails if its median exceeds 50 ms. This hard ceiling holds
+with no base, a failed base, a missing or malformed base metric, a different
+base CPU, and any faster or slower base median or numeric tolerance.
+Middle, unknown and few-run models stay advisory. The opening-pass-end row
+stays advisory reference data, with no timing gate. Each over-ceiling fixture
+produces one named failure; malformed attach data fails without duplicating errors.
+A numeric first-frame tolerance also fails a fixture whose median exceeds its
+comparable base median by that tolerance, even below 50 ms. Either breach
+fails the fixture once; `—` disables only this relative comparison. Without
+a usable comparable base, only the absolute bound can fail the fixture.
+A benchmark's own self-check failing is a failed run, not a slow sample.
 
 At each release, every ceiling more than twice its measured value drops to
 measured times two. Ceilings never rise at release; only a pull request

@@ -11,7 +11,7 @@ const ATTACH_FIXTURES: [&str; 2] = ["1 MiB", "10 MiB"];
 /// `fixture (bytes): median ms` part per fixture. The flat first-frame
 /// bound and the pass-end ordinary ceiling live in the table's cells, so
 /// no formula renders here. A malformed metric is one failure naming `id`.
-pub(super) fn per_mib(id: &str, results: Option<&Results>) -> (Vec<String>, String) {
+pub(super) fn fixture_medians(id: &str, results: Option<&Results>) -> (Vec<String>, String) {
     let entries = match metric(results, id).and_then(|value| {
         value
             .as_array()

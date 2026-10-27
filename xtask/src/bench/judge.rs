@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::attach::per_mib;
+use super::attach::fixture_medians;
 use super::results::{Results, field, median, metric, run_median, runs};
 
 /// The threads every idle headless session runs with no client.
@@ -171,14 +171,19 @@ fn parse_pct_cell(cell: &str, what: &str) -> Result<f64, String> {
     }
 }
 
+/// The table row that holds a budget's class gates.
+fn budget_row<'a>(budget: &str, rows: &'a [Vec<String>]) -> Result<&'a [String], String> {
+    rows.iter()
+        .find(|cells| cells.first().map(String::as_str) == Some(budget))
+        .map(Vec::as_slice)
+        .ok_or_else(|| format!("{budget}: no budget row holds its class gates"))
+}
+
 /// The class gates for `budget` from its row in `rows`: every gate number
 /// comes from the doc, so there is no code mirror to drift. A malformed
 /// calibration cell is a configuration failure, never implicit advisory.
 fn class_gates(budget: &str, rows: &[Vec<String>]) -> Result<ClassGates, String> {
-    let row = rows
-        .iter()
-        .find(|cells| cells.first().map(String::as_str) == Some(budget))
-        .ok_or_else(|| format!("{budget}: no budget row holds its class gates"))?;
+    let row = budget_row(budget, rows)?;
     let cell = |index: usize, what: &str| {
         row.get(index).ok_or_else(|| {
             format!("{budget}: missing class cell {what}; the row needs five class columns")
@@ -218,10 +223,7 @@ struct AttachGates {
 /// The attach row's class gates from its budget row: like [`class_gates`]
 /// but keeping `—` cells as unavailable instead of failing on them.
 fn attach_gates(budget: &str, rows: &[Vec<String>]) -> Result<AttachGates, String> {
-    let row = rows
-        .iter()
-        .find(|cells| cells.first().map(String::as_str) == Some(budget))
-        .ok_or_else(|| format!("{budget}: no budget row holds its class gates"))?;
+    let row = budget_row(budget, rows)?;
     let cell = |index: usize, what: &str| {
         row.get(index).ok_or_else(|| {
             format!("{budget}: missing class cell {what}; the row needs five class columns")
@@ -250,20 +252,6 @@ fn attach_gates(budget: &str, rows: &[Vec<String>]) -> Result<AttachGates, Strin
         fast_tolerance: pct(7, "fast tolerance")?,
         slow_tolerance: pct(8, "slow tolerance")?,
     })
-}
-
-/// Whether every class cell of attach `gates` reads `—`: the pass-end
-/// row's advisory shape until the follow-up gates qualifying classes.
-fn all_dash(gates: &AttachGates) -> bool {
-    [
-        gates.fast_ceiling,
-        gates.middle_ceiling,
-        gates.slow_ceiling,
-        gates.fast_tolerance,
-        gates.slow_tolerance,
-    ]
-    .iter()
-    .all(Option::is_none)
 }
 
 /// The class ceiling and tolerance for `class` from attach `gates`: the
@@ -336,7 +324,7 @@ fn class_name(class: SpeedClass) -> &'static str {
 
 /// Each attach fixture's median ms from strictly validated entries: known
 /// fixtures only, `log_bytes` and `ms` present, exactly the declared run
-/// count per fixture, each `ms` finite and at or above zero. `per_mib`
+/// count per fixture, each `ms` finite and at or above zero. `fixture_medians`
 /// itself does not reject negatives, so this runs before any advisory
 /// handling: a negative or non-finite `ms` is a named configuration
 /// failure even on an advisory model.
@@ -855,7 +843,9 @@ fn table_failures(budget: &str, cell: &str, check: Check, rows: &[Vec<String>]) 
                 Err(e) => failures.push(e),
             }
             match attach_gates(budget, rows) {
-                Ok(gates) if all_dash(&gates) => {}
+                Ok(gates)
+                    if [gates.fast_ceiling, gates.middle_ceiling, gates.slow_ceiling, gates.fast_tolerance, gates.slow_tolerance]
+                        .iter().all(Option::is_none) => {}
                 Ok(_) => failures.push(format!(
                     "{budget}: a class cell holds a number; the pass-end row stays advisory with `—` in every class cell until the follow-up gates them"
                 )),
@@ -1232,7 +1222,7 @@ pub(super) fn judge(
                     "the ceiling reads {cell:?}; it must read {pin:?} for budget {budget:?}: change xtask/src/bench/judge.rs with it"
                 ));
             }
-            let (broken, shown) = per_mib(id, head);
+            let (broken, shown) = fixture_medians(id, head);
             failures.extend(broken);
             line.head = shown;
             line.base = match base {
@@ -1240,7 +1230,7 @@ pub(super) fn judge(
                 Base::Failed(why) => format!("base failed: {why}"),
                 Base::Ok(results) if !results.metrics.contains_key(id) => "unavailable".to_owned(),
                 Base::Ok(results) => {
-                    let (broken, shown) = per_mib(id, Some(results));
+                    let (broken, shown) = fixture_medians(id, Some(results));
                     match broken.first() {
                         None => shown,
                         Some(first) => format!("base failed: {first}"),
@@ -1255,7 +1245,7 @@ pub(super) fn judge(
             let info = model_info(head_cpu);
             match (head_medians, gates) {
                 (Err(e), _) | (_, Err(e)) => {
-                    // `per_mib` already reported the same shape; naming it
+                    // `fixture_medians` already reported the same shape; naming it
                     // twice would double-count, so only add what it missed.
                     if !failures.iter().any(|f| f.contains(&e)) {
                         failures.push(e);
@@ -1273,75 +1263,51 @@ pub(super) fn judge(
                             class_name(class)
                         )),
                         (Some(ceiling), tolerance) => {
-                            let suffix = match tolerance {
-                                Some(tolerance) => format!("+{tolerance}% over base"),
-                                None => "absolute bound".to_owned(),
-                            };
-                            let mut notes = format!(
-                                "; 1 MiB: {:.1} ms ({} ceiling {:.1} ms, {suffix}); 10 MiB: {:.1} ms ({} ceiling {:.1} ms, {suffix})",
-                                medians.one_mib,
-                                class_name(class),
-                                ceiling,
-                                medians.ten_mib,
-                                class_name(class),
-                                ceiling
-                            );
-                            // No missing-metric arm: `attach_medians` errors
-                            // on a missing metric, so `.ok()` is `None`
-                            // exactly then and this arm covers it.
                             let usable_base = match base {
-                                Base::Ok(results)
-                                    if results.metrics.contains_key(id)
-                                        && base_cpu_comparable(head_cpu, base) =>
-                                {
+                                Base::Ok(results) if base_cpu_comparable(head_cpu, base) => {
                                     attach_medians(Some(results), id).ok()
                                 }
                                 Base::None | Base::Failed(_) | Base::Ok(_) => None,
                             };
-                            match (base, usable_base) {
-                                // Every unavailable base shares one reason.
-                                (Base::None, _) | (Base::Ok(_), None) => {
-                                    line.result = "advisory";
-                                    notes.push_str(&format!("; {NO_BASE_REASON}"));
-                                    line.head.push_str(&notes);
+                            for (fixture, median, base_median) in [
+                                ("1 MiB", medians.one_mib, usable_base.as_ref().map(|b| b.one_mib)),
+                                ("10 MiB", medians.ten_mib, usable_base.as_ref().map(|b| b.ten_mib)),
+                            ] {
+                                line.head.push_str(&format!(
+                                    "; {fixture}: {median:.1} ms ({} ceiling {ceiling:.1} ms, absolute bound)",
+                                    class_name(class)
+                                ));
+                                if let (Some(base_median), Some(tolerance)) = (base_median, tolerance) {
+                                    line.head.push_str(&format!("; {fixture}: +{tolerance}% over base {base_median:.1} ms"));
                                 }
-                                (Base::Failed(_), _) => {
-                                    line.result = "advisory";
-                                    notes.push_str(&format!("; {}", line.base));
-                                    line.head.push_str(&notes);
-                                }
-                                (Base::Ok(_), Some(base_medians)) => {
-                                    line.head.push_str(&notes);
-                                    for (fixture, median, base_median) in [
-                                        ("1 MiB", medians.one_mib, base_medians.one_mib),
-                                        ("10 MiB", medians.ten_mib, base_medians.ten_mib),
-                                    ] {
-                                        match tolerance {
-                                            None => {
-                                                if median > ceiling {
-                                                    failures.push(format!(
-                                                        "{OVER}median {median:.1} ms of {id} {fixture} is over {ceiling:.1} ms {} ceiling (absolute bound)",
-                                                        class_name(class)
-                                                    ));
-                                                }
-                                            }
-                                            Some(tolerance) => {
-                                                match timing_fails(
-                                                    median, base_median, ceiling, tolerance,
-                                                ) {
-                                                    Err(e) => {
-                                                        failures.push(format!("{id}: {e}"));
-                                                    }
-                                                    Ok(true) => failures.push(format!(
-                                                        "{OVER}median {median:.1} ms of {id} {fixture} is over {ceiling:.1} ms {} ceiling and over base {base_median:.1} ms by more than {tolerance}%",
-                                                        class_name(class)
-                                                    )),
-                                                    Ok(false) => {}
-                                                }
-                                            }
-                                        }
+                                // Either leg fails; an absolute breach takes precedence
+                                // so one fixture never produces duplicate failures.
+                                if median > ceiling {
+                                    failures.push(format!(
+                                        "{OVER}median {median:.1} ms of {id} {fixture} is over {ceiling:.1} ms {} ceiling (absolute bound)",
+                                        class_name(class)
+                                    ));
+                                } else if let (Some(base_median), Some(tolerance)) = (base_median, tolerance) {
+                                    // Samples are nonnegative: a zero floor checks only
+                                    // the relative leg, independently of the flat ceiling.
+                                    match timing_fails(median, base_median, 0.0, tolerance) {
+                                        Ok(true) => failures.push(format!(
+                                            "{OVER}median {median:.1} ms of {id} {fixture} is over base {base_median:.1} ms by more than {tolerance}% (relative bound)"
+                                        )),
+                                        Ok(false) => {},
+                                        Err(e) => failures.push(format!("{id} {fixture}: {e}")),
                                     }
                                 }
+                            }
+                            // Missing comparisons remain advisory only when the
+                            // absolute check above has not failed the row.
+                            if usable_base.is_none() {
+                                line.result = "advisory";
+                                let why = match base {
+                                    Base::Failed(_) => line.base.as_str(),
+                                    Base::None | Base::Ok(_) => NO_BASE_REASON,
+                                };
+                                line.head.push_str(&format!("; {why}"));
                             }
                         }
                     },
@@ -1368,7 +1334,7 @@ pub(super) fn judge(
             }
         }
         Check::PassEnd { id } => {
-            let (broken, shown) = per_mib(id, head);
+            let (broken, shown) = fixture_medians(id, head);
             failures.extend(broken);
             line.head = shown;
             line.base = match base {
@@ -1376,7 +1342,7 @@ pub(super) fn judge(
                 Base::Failed(why) => format!("base failed: {why}"),
                 Base::Ok(results) if !results.metrics.contains_key(id) => "unavailable".to_owned(),
                 Base::Ok(results) => {
-                    let (broken, shown) = per_mib(id, Some(results));
+                    let (broken, shown) = fixture_medians(id, Some(results));
                     match broken.first() {
                         None => shown,
                         Some(first) => format!("base failed: {first}"),
