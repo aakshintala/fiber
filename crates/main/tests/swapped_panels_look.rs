@@ -740,7 +740,13 @@ fn the_skills_view_keeps_switches_whole_on_a_narrow_screen() {
     let from = run.output().len();
     run.write(b"go\r");
     run.turn_finished(from);
+    let view_from = run.output().len();
     run.write(b"/skills\r");
+    run.wait_bytes(
+        view_from,
+        b"\x1b[?2026l",
+        "the end of the skills view frame",
+    );
     let grid = run.wait_screen("the narrow skills rows", narrow_skills_ready);
     // The winner's row: both switches whole, the shadows clause tail-cut
     // past them.
