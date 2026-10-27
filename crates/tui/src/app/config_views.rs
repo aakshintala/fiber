@@ -612,13 +612,13 @@ impl App {
         // `/doctor` shows a local snapshot through no seam: a report
         // row takes no action without reaching the configure seam or a
         // workspace. The top-row close below stays shared.
-        if matches!(self.config_views.open, Some(Open::Doctor(..))) {
-            if matches!(
+        if matches!(self.config_views.open, Some(Open::Doctor(..)))
+            && matches!(
                 spot,
                 Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)
-            ) {
-                return self.config_act(Act::Stay);
-            }
+            )
+        {
+            return self.config_act(Act::Stay);
         }
         let act = match (self.config_views.seam.clone(), spot) {
             // The picker's `x` cancels like Esc: with the theme choices
