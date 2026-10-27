@@ -1966,7 +1966,6 @@ later release still applies.
 | `/release-notes` | Opens the running version's release notes, or says none are available. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
 | `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice `No session on screen.` |
-| `/jobs`, `/tasks`, `/ps` | Opens the running-jobs list; with no running jobs, shows the notice `No jobs running`. With no session on screen, shows `No session on screen.` instead. |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules`, `/permissions` | Opens the standing rules. |
@@ -1990,7 +1989,7 @@ later release still applies.
 | `/approvals` | Reopens the waiting approvals and questions. |
 | `/?`, `/help` | Opens the key map. |
 | `/delegates`, `/agents` | Opens the delegates view: every delegate of the session on screen, running and finished. |
-| `/jobs`, `/tasks`, `/ps` | Opens the running jobs view: every running job of the session on screen, in the order they started. With no session on screen it shows the notice "No session on screen"; with no jobs running it shows the notice "No jobs running" and opens nothing. Words after the command are ignored. |
+| `/jobs`, `/tasks`, `/ps` | Opens the running jobs view: every running job of the session on screen, in the order they started. With no session on screen it shows the notice `No session on screen.`; with no jobs running it shows the notice `No jobs running` and opens nothing. Words after the command are ignored. |
 
 The `/` list shows built-in commands in this order.
 
