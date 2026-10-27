@@ -3239,3 +3239,133 @@ fn credential_after_a_queued_model_switch_saves_to_the_queued_provider() {
     }
     quit_live(run);
 }
+
+/// The `user` input texts of an `openai-responses` request body, in
+/// order: the prompts the turn carries, oldest first.
+fn user_texts(body: &[u8]) -> Vec<String> {
+    let body: Value = serde_json::from_slice(body).unwrap();
+    body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["role"] == "user")
+        .filter_map(|item| item["content"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Refusing an unknown slash command keeps the draft, shows the exact
+/// notice and sends nothing; a path first word is sent, and a skill the
+/// turn-start `commands` answer discovers runs by name on the next
+/// submit. The provider's recorded requests prove the refused text
+/// never went out: none carries the refused name.
+#[test]
+fn unknown_slash_is_refused_while_paths_and_fresh_skills_are_sent() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([
+        reply("First reply."),
+        reply("Path reply."),
+        reply("Second reply."),
+        reply("Skill reply."),
+    ])
+    .unwrap();
+    provider(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
+    // A first prompt attaches the session.
+    let first = run.output().len();
+    run.write(b"first marker\r");
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the first turn's request"
+    );
+    run.wait_screen("the first reply", |grid| {
+        grid.contents.contains("First reply.")
+    });
+    run.turn_finished(first);
+    // The unknown command is refused: the exact notice shows, keeping
+    // the draft, and no prompt goes out for it.
+    run.write(b"/nosuch\r");
+    run.wait_screen("the unknown-command notice", |grid| {
+        grid.contents
+            .contains("Unknown command /nosuch. Type / for the list.")
+    });
+    // Clearing the kept draft, then sending a path: the path goes out
+    // as a prompt and answers.
+    run.write(b"\x03");
+    let second = run.output().len();
+    run.write(b"/usr/bin/env\r");
+    assert!(
+        server.await_requests(2, setup.deadline),
+        "the path turn's request"
+    );
+    run.wait_screen("the path reply", |grid| {
+        grid.contents.contains("Path reply.")
+    });
+    run.turn_finished(second);
+    // A skill created after the path turn completes is discovered at
+    // the next turn start: its name runs on the submit after that.
+    fs::create_dir_all(setup.root.path().join(".agents/skills/tdd")).unwrap();
+    fs::write(
+        setup.root.path().join(".agents/skills/tdd/SKILL.md"),
+        "---\nname: tdd\ndescription: Tests first.\n---\nWrite the failing test first.\n",
+    )
+    .unwrap();
+    let third = run.output().len();
+    run.write(b"second marker\r");
+    assert!(
+        server.await_requests(3, setup.deadline),
+        "the second turn's request"
+    );
+    run.wait_screen("the second reply", |grid| {
+        grid.contents.contains("Second reply.")
+    });
+    run.turn_finished(third);
+    let fourth = run.output().len();
+    run.write(b"/tdd\r");
+    assert!(
+        server.await_requests(4, setup.deadline),
+        "the skill turn's request"
+    );
+    run.wait_screen("the skill reply", |grid| {
+        grid.contents.contains("Skill reply.")
+    });
+    run.turn_finished(fourth);
+    // The refused text never went out: no recorded request carries
+    // it. Each submitted prompt reached the provider: the path went
+    // out as written, and the skill turn carries the discovered
+    // skill's body.
+    let requests = server.requests();
+    assert!(
+        !requests.is_empty(),
+        "at least one request reached the provider"
+    );
+    for (at, request) in requests.iter().enumerate() {
+        for text in user_texts(&request.body) {
+            assert!(
+                !text.contains("nosuch"),
+                "request {at} carries the refused text: {text}"
+            );
+        }
+    }
+    let lasts: Vec<Vec<String>> = requests
+        .iter()
+        .map(|request| user_texts(&request.body))
+        .collect();
+    for want in ["first marker", "/usr/bin/env", "second marker"] {
+        assert!(
+            lasts
+                .iter()
+                .any(|texts| texts.last().is_some_and(|text| text == want)),
+            "no request carries {want:?}: {lasts:?}"
+        );
+    }
+    assert!(
+        lasts.iter().any(|texts| texts
+            .last()
+            .is_some_and(|text| text.contains("Write the failing test first."))),
+        "{lasts:?}"
+    );
+    quit_live(run);
+}

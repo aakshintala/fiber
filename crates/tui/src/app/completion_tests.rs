@@ -675,9 +675,14 @@ fn a_stale_commands_answer_sets_neither_rows_nor_extensions() {
         json!({"command_id": second["id"], "result": {"commands": []}}),
     );
     assert!(app.on_line(answer).is_empty());
-    let lines = sent(enter(&mut app, "/deploy"));
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "prompt");
+    // A stale name is refused: the latest answer holds neither rows
+    // nor extensions for it.
+    assert_eq!(enter(&mut app, "/deploy"), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Unknown command /deploy. Type / for the list.")
+    );
+    assert_eq!(app.draft(), "/deploy");
 }
 
 #[test]
@@ -692,13 +697,18 @@ fn home_clears_the_extension_names() {
     // a new answer arrives.
     app.go_home();
     app.attach(contract::SessionId(SESSION.to_owned()));
-    let lines = sent(enter(&mut app, "/deploy"));
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "prompt");
+    // Going home clears the rows and names: a re-attached name is
+    // refused until a new answer arrives.
+    assert_eq!(enter(&mut app, "/deploy"), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Unknown command /deploy. Type / for the list.")
+    );
+    assert_eq!(app.draft(), "/deploy");
 }
 
 #[test]
-fn the_unanswered_interval_shows_built_ins_only_and_sends_prompt() {
+fn the_unanswered_interval_shows_built_ins_only_and_refuses_stale_names() {
     let mut app = attached();
     answer_rows(
         &mut app,
@@ -715,9 +725,13 @@ fn the_unanswered_interval_shows_built_ins_only_and_sends_prompt() {
     type_text(&mut app, "/td");
     assert_eq!(shown(&app), ["no matches"]);
     app.on_key(Key::CtrlC, now());
-    let lines = sent(enter(&mut app, "/deploy now"));
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "prompt");
+    // A stale extension name is refused until its answer arrives.
+    assert_eq!(enter(&mut app, "/deploy now"), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Unknown command /deploy. Type / for the list.")
+    );
+    assert_eq!(app.draft(), "/deploy now");
     let answer = session_line(
         "command_accepted",
         json!({"command_id": asked["id"],
@@ -725,6 +739,7 @@ fn the_unanswered_interval_shows_built_ins_only_and_sends_prompt() {
                 "tag": "acme", "extension": true}]}}),
     );
     assert!(app.on_line(answer).is_empty());
+    app.on_key(Key::CtrlC, now());
     let lines = sent(enter(&mut app, "/deploy now"));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "command");

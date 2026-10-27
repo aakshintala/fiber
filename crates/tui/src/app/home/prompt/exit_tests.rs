@@ -2,6 +2,7 @@
 //! on the foot, and closing all.
 
 use super::super::super::{App, Effect};
+use crate::app::testkit::{hello, home_with};
 use crate::home::Launch;
 use crate::keys::Key;
 use crate::link::Line;
@@ -11,10 +12,9 @@ use contract::events::ImportedNames;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-/// An app on home at 80x24.
-pub(super) fn home() -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(Launch {
+/// The launch home opens: local /w with no model chip.
+pub(super) fn launch() -> Launch {
+    Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),
             project: "-w".to_owned(),
@@ -30,19 +30,7 @@ pub(super) fn home() -> App {
         panel_share: 21.0,
         panel_cards: Vec::new(),
         ..Default::default()
-    });
-    app.set_size(80, 24);
-    app
-}
-
-/// A `hub_hello` this terminal reads.
-pub(super) fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
+    }
 }
 
 /// Links the app: the feed and recent ids, both waiting for their
@@ -160,7 +148,7 @@ fn working_now(app: &App) -> Vec<String> {
 
 #[test]
 fn quit_with_nothing_working_quits() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -191,7 +179,7 @@ fn each_working_state_counts() {
         json!({"state": "jobs"}),
     ];
     for state in states {
-        let mut app = home();
+        let mut app = home_with(80, 24, launch());
         linked(&mut app);
         app.on_line(live("s_aaaaaaaaaaaaaaaa", state, 0, 0, 0));
         assert_eq!(ctrl_c(&mut app), Effect::None);
@@ -202,7 +190,7 @@ fn each_working_state_counts() {
 #[test]
 fn an_idle_row_with_a_job_or_a_delegate_counts() {
     for (jobs, delegates) in [(1, 0), (0, 2)] {
-        let mut app = home();
+        let mut app = home_with(80, 24, launch());
         linked(&mut app);
         app.on_line(live(
             "s_aaaaaaaaaaaaaaaa",
@@ -218,7 +206,7 @@ fn an_idle_row_with_a_job_or_a_delegate_counts() {
 
 #[test]
 fn an_idle_row_with_neither_does_not() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -232,7 +220,7 @@ fn an_idle_row_with_neither_does_not() {
 
 #[test]
 fn left_and_unreadable_rows_never_count() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     // A row that left while streaming keeps its waiting text, but never
     // counts as working.
@@ -255,7 +243,7 @@ fn left_and_unreadable_rows_never_count() {
 
 #[test]
 fn the_attached_busy_session_counts_once() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
@@ -272,7 +260,7 @@ fn the_attached_busy_session_counts_once() {
 
 #[test]
 fn the_attached_busy_session_counts_without_the_feed() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app.phase = crate::app::Phase::Attached {
@@ -287,7 +275,7 @@ fn the_attached_busy_session_counts_without_the_feed() {
 
 #[test]
 fn the_prompt_names_sessions_working() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
@@ -297,7 +285,7 @@ fn the_prompt_names_sessions_working() {
 
 #[test]
 fn clients_two_held_full_is_open_elsewhere() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -319,7 +307,7 @@ fn clients_two_held_full_is_open_elsewhere() {
 
 #[test]
 fn clients_one_held_full_is_not() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -340,7 +328,7 @@ fn clients_one_held_full_is_not() {
 
 #[test]
 fn clients_one_not_held_full_is() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -355,7 +343,7 @@ fn clients_one_not_held_full_is() {
 
 #[test]
 fn enter_leaves_them_running() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(ctrl_c(&mut app), Effect::None);
@@ -365,7 +353,7 @@ fn enter_leaves_them_running() {
 
 #[test]
 fn c_subscribes_where_needed_and_closes_each_now() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
@@ -399,7 +387,7 @@ fn c_subscribes_where_needed_and_closes_each_now() {
 
 #[test]
 fn esc_stays_and_shows_no_hint() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(ctrl_c(&mut app), Effect::None);
@@ -414,7 +402,7 @@ fn esc_stays_and_shows_no_hint() {
 
 #[test]
 fn other_keys_and_ctrl_c_do_nothing_while_it_is_open() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(ctrl_c(&mut app), Effect::None);
@@ -428,7 +416,7 @@ fn other_keys_and_ctrl_c_do_nothing_while_it_is_open() {
 
 #[test]
 fn slash_quit_goes_through_the_same_prompt() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     let clock = fakes::clock::FakeClock::new();
@@ -441,7 +429,7 @@ fn slash_quit_goes_through_the_same_prompt() {
 
 #[test]
 fn hint_text_is_the_quit_hint_and_the_question_is_an_overlay() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(app.hint_text(), crate::app::QUIT_HINT);
@@ -461,7 +449,7 @@ fn hint_text_is_the_quit_hint_and_the_question_is_an_overlay() {
 
 #[test]
 fn a_session_that_leaves_while_the_question_shows_gets_no_close() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
@@ -482,7 +470,7 @@ fn a_session_that_leaves_while_the_question_shows_gets_no_close() {
 
 #[test]
 fn a_session_that_goes_idle_gets_no_close() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
@@ -505,7 +493,7 @@ fn a_session_that_goes_idle_gets_no_close() {
 
 #[test]
 fn a_newly_working_session_shows_in_the_question_and_gets_a_close() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
@@ -536,7 +524,7 @@ fn a_newly_working_session_shows_in_the_question_and_gets_a_close() {
 
 #[test]
 fn c_with_nothing_working_left_quits() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(ctrl_c(&mut app), Effect::None);
@@ -547,7 +535,7 @@ fn c_with_nothing_working_left_quits() {
 
 #[test]
 fn c_with_the_link_down_quits_and_closes_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(ctrl_c(&mut app), Effect::None);
@@ -558,7 +546,7 @@ fn c_with_the_link_down_quits_and_closes_nothing() {
 
 #[test]
 fn an_unsent_close_keeps_its_session_out_of_closing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
@@ -591,7 +579,7 @@ fn an_unsent_close_keeps_its_session_out_of_closing() {
 
 #[test]
 fn remote_exit_lines_keep_the_hub_for_live_and_attached_sessions() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.home.as_mut().unwrap().launch.location = crate::LaunchLocation::Remote {
         hub: "box".to_owned(),
     };
@@ -613,7 +601,7 @@ fn remote_exit_lines_keep_the_hub_for_live_and_attached_sessions() {
 
 #[test]
 fn exit_lines_name_each_live_session() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
@@ -628,7 +616,7 @@ fn exit_lines_name_each_live_session() {
 
 #[test]
 fn closing_sessions_get_no_line() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
@@ -642,7 +630,7 @@ fn closing_sessions_get_no_line() {
 
 #[test]
 fn left_rows_get_no_line() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
@@ -655,7 +643,7 @@ fn left_rows_get_no_line() {
 
 #[test]
 fn the_attached_session_gets_a_line_without_the_feed() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     assert_eq!(
@@ -672,7 +660,7 @@ fn no_home_no_lines() {
 
 #[test]
 fn the_attached_idle_session_without_a_row_does_not_count() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     let clock = fakes::clock::FakeClock::new();
@@ -682,7 +670,7 @@ fn the_attached_idle_session_without_a_row_does_not_count() {
 
 #[test]
 fn the_attached_session_with_a_row_gets_one_line() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
@@ -694,7 +682,7 @@ fn the_attached_session_with_a_row_gets_one_line() {
 
 #[test]
 fn the_attached_session_with_an_exited_row_gets_its_line() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     // A resumed session's row still reads exited until the feed update
@@ -710,7 +698,7 @@ fn the_attached_session_with_an_exited_row_gets_its_line() {
 
 #[test]
 fn an_attached_session_that_exits_gets_no_line() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
@@ -722,7 +710,7 @@ fn an_attached_session_that_exits_gets_no_line() {
 
 #[test]
 fn a_live_status_for_another_session_restores_no_line() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
@@ -739,7 +727,7 @@ fn a_live_status_for_another_session_restores_no_line() {
 
 #[test]
 fn reattaching_after_the_exit_restores_the_line() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
@@ -756,7 +744,7 @@ fn reattaching_after_the_exit_restores_the_line() {
 
 #[test]
 fn a_closing_attached_session_with_an_exited_row_gets_no_line() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
@@ -775,7 +763,7 @@ fn a_closing_attached_session_with_an_exited_row_gets_no_line() {
 
 #[test]
 fn a_closing_attached_session_gets_no_line() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app.phase = crate::app::Phase::Attached {
@@ -792,7 +780,7 @@ fn a_closing_attached_session_gets_no_line() {
 
 #[test]
 fn an_attached_busy_session_with_an_idle_row_counts_once() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     // The attached session's feed row still reads idle, with no jobs:
     // its turn still runs, so quitting asks.
@@ -819,7 +807,7 @@ fn an_attached_busy_session_with_an_idle_row_counts_once() {
 /// still open and no notices, and Enter answers it per its keys.
 #[test]
 fn the_quit_question_takes_every_key_over_the_open_report() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.open_import_report(None, ImportedNames::default(), Vec::new());
@@ -871,7 +859,7 @@ pub(super) fn accepted(id: &str, result: Value) -> Line {
 
 #[test]
 fn slash_close_all_on_home_opens_the_question_and_sends_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
@@ -889,7 +877,7 @@ fn slash_close_all_on_home_opens_the_question_and_sends_nothing() {
 
 #[test]
 fn close_all_with_nothing_live_opens_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     assert!(!app.quit_open());
@@ -899,7 +887,7 @@ fn close_all_with_nothing_live_opens_nothing() {
 
 #[test]
 fn close_all_with_the_link_down_opens_nothing_and_keeps_the_draft() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.disconnected();
@@ -911,7 +899,7 @@ fn close_all_with_the_link_down_opens_nothing_and_keeps_the_draft() {
 
 #[test]
 fn quit_question_is_none_while_close_all_is_open() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
@@ -920,7 +908,7 @@ fn quit_question_is_none_while_close_all_is_open() {
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((1, 1, 0)));
     // Under the quit prompt the close-all question is none.
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(ctrl_c(&mut app), Effect::None);
@@ -930,7 +918,7 @@ fn quit_question_is_none_while_close_all_is_open() {
 
 #[test]
 fn close_all_replaces_an_open_delete_question_and_its_ask_still_answers() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
     app.on_line(live(
@@ -1034,7 +1022,7 @@ fn assert_closes(lines: &[Value], sessions: &[&str]) {
 
 #[test]
 fn enter_closes_every_live_session_now_and_stays_home() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
@@ -1071,7 +1059,7 @@ fn enter_closes_every_live_session_now_and_stays_home() {
 
 #[test]
 fn esc_cancels_and_sends_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
@@ -1084,7 +1072,7 @@ fn esc_cancels_and_sends_nothing() {
 
 #[test]
 fn other_keys_and_ctrl_c_do_nothing_while_close_all_is_open() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
@@ -1106,7 +1094,7 @@ fn other_keys_and_ctrl_c_do_nothing_while_close_all_is_open() {
 
 #[test]
 fn a_refused_close_becomes_the_rows_note() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
@@ -1129,7 +1117,7 @@ fn a_refused_close_becomes_the_rows_note() {
 
 #[test]
 fn a_session_that_leaves_while_close_all_shows_gets_no_close() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
@@ -1148,7 +1136,7 @@ fn a_session_that_leaves_while_close_all_shows_gets_no_close() {
 
 #[test]
 fn a_session_that_goes_live_while_close_all_shows_gets_no_close() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
@@ -1166,7 +1154,7 @@ fn a_session_that_goes_live_while_close_all_shows_gets_no_close() {
 
 #[test]
 fn a_session_attached_then_left_after_attach_gets_no_close() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
@@ -1184,7 +1172,7 @@ fn a_session_attached_then_left_after_attach_gets_no_close() {
 
 #[test]
 fn enter_clears_the_draft_and_builds_the_lines_before_going_home() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_bbbbbbbbbbbbbbbb",
@@ -1208,7 +1196,7 @@ fn enter_clears_the_draft_and_builds_the_lines_before_going_home() {
 
 #[test]
 fn a_session_that_is_idle_still_gets_a_close() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
@@ -1231,7 +1219,7 @@ fn a_session_that_is_idle_still_gets_a_close() {
 
 #[test]
 fn an_unreadable_row_is_counted_and_closed() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     let mut envelope = live("s_bbbbbbbbbbbbbbbb", json!({"state": "streaming"}), 0, 0, 0);
@@ -1253,7 +1241,7 @@ fn an_unreadable_row_is_counted_and_closed() {
 
 #[test]
 fn the_attached_session_with_no_row_counts_and_gets_a_close_and_the_terminal_goes_home() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app.phase = crate::app::Phase::Attached {
@@ -1275,7 +1263,7 @@ fn the_attached_session_with_no_row_counts_and_gets_a_close_and_the_terminal_goe
 
 #[test]
 fn link_down_at_enter_closes_the_question_and_sends_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
@@ -1288,7 +1276,7 @@ fn link_down_at_enter_closes_the_question_and_sends_nothing() {
 
 #[test]
 fn slash_quit_after_close_all_exits_without_asking_once_the_sessions_left() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
@@ -1311,7 +1299,7 @@ fn slash_quit_after_close_all_exits_without_asking_once_the_sessions_left() {
 
 #[test]
 fn the_close_all_count_reads_sessions_working_and_elsewhere() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -1371,7 +1359,7 @@ fn the_close_all_count_holds_singular_below_and_plural_above_one() {
 
 #[test]
 fn the_close_all_elsewhere_boundary_holds_both_sides() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     // Two clients past this connection's own `full` hold: elsewhere.
     app.on_line(live(
