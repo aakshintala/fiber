@@ -27,6 +27,29 @@ use support::*;
 const ROOT: &str = "s_00000000000000a1";
 const FORK: &str = "s_00000000000000b2";
 const NEW: &str = "s_00000000000000c3";
+const MOVED: &str = "s_00000000000000d4";
+
+/// Session `id` on the hub machine whose log ends `moved` naming `next`:
+/// the moved parent, as a hub delete meets it. Built directly, since a
+/// real moved log never carries `fiber_exited` after the move.
+fn hub_moved(home: &Path, project: &str, id: &str, next: &str) -> PathBuf {
+    let dir = home
+        .join("projects")
+        .join(project)
+        .join("sessions")
+        .join(id);
+    fs::create_dir_all(dir.join("artifacts")).unwrap();
+    let first = json!({"kind": "session_started", "session_id": id, "ts": 0,
+        "schema_version": 1, "seq": 0,
+        "payload": {"workspace": "/w",
+        "variables": {"path": "/usr/bin", "names": [], "source": "inherited"}}});
+    let last = json!({"kind": "moved", "session_id": id, "ts": 0,
+        "schema_version": 1, "payload": {"new_session_id": next, "seq": 1,
+        "workspace": "/w2"}});
+    fs::write(dir.join("events.jsonl"), format!("{first}\n{last}\n")).unwrap();
+    fs::write(dir.join("artifacts/a.txt"), b"0123456789").unwrap();
+    dir
+}
 
 fn run(setup: &Setup, args: &[&str]) -> Output {
     run_to_exit(setup.deadline, "the hub client command", setup.fiber(args))
@@ -200,6 +223,38 @@ fn delete_on_a_hub_removes_only_hub_side_state() {
     );
     assert!(!root.exists(), "the hub session is gone");
     assert!(!fork.exists(), "its dependent is gone");
+    assert!(
+        !world.b.hub_socket().exists(),
+        "the client started no hub of its own"
+    );
+    assert!(
+        !world.b.home().join("projects").exists(),
+        "the client kept no session state"
+    );
+    reap(world);
+}
+
+#[test]
+fn delete_on_a_hub_removes_a_moved_parent_and_its_cross_project_child() {
+    let world = world(true);
+    let root = hub_moved(&world.a.home(), "p", ROOT, MOVED);
+    let moved = hub_session(&world.a.home(), "q", MOVED, Some(ROOT));
+    fs::write(
+        world.a.home().join("recent.jsonl"),
+        format!("{}\n{}\n", recent_row(ROOT), recent_row(MOVED)),
+    )
+    .unwrap();
+    // No `--hub`: `hub.default=box` selects the listed hub.
+    let deleted = client(&world, &["sessions", "delete", ROOT, "--cascade", "--yes"]);
+    succeeds(&deleted);
+    // `--yes` sends one `delete` with no `expect`: the printed id is the one
+    // it sent.
+    assert_eq!(
+        String::from_utf8_lossy(&deleted.stdout).into_owned(),
+        format!("{ROOT}\n")
+    );
+    assert!(!root.exists(), "the moved parent is gone");
+    assert!(!moved.exists(), "its cross-project child is gone");
     assert!(
         !world.b.hub_socket().exists(),
         "the client started no hub of its own"

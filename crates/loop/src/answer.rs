@@ -179,6 +179,7 @@ impl Loop {
             | Delivery::Name(..)
             | Delivery::Credential(..)
             | Delivery::Rewind(..)
+            | Delivery::ChangeWorkspace(..)
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)
             | Delivery::Job(_)

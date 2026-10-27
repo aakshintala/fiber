@@ -25,6 +25,38 @@ use serde_json::json;
 use support::*;
 
 const FORK: &str = "s_00000000000000d2";
+const MOVED: &str = "s_00000000000000d3";
+
+/// Session `id` in the workspace's project with a `moved` last line
+/// naming `next` at `ts`: the moved parent, as prune meets it. Rewrites
+/// the log's marker last line, since a real moved log ends at the move.
+fn moved_parent(setup: &Setup, id: &str, next: &str, ts: u64) -> PathBuf {
+    let dir = session(setup, id, None, ts);
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    let first = json!({"kind": "session_started", "seq": 0,
+        "payload": {"workspace": workspace}});
+    let last = json!({"kind": "moved", "ts": ts,
+        "payload": {"new_session_id": next, "seq": 1, "workspace": "/w2"}});
+    fs::write(dir.join("events.jsonl"), format!("{first}\n{last}\n")).unwrap();
+    dir
+}
+
+/// Session `id` continuing `from` at `ts` in another project's sessions:
+/// the cross-project moved child, as prune meets it.
+fn moved_child(setup: &Setup, id: &str, from: &str, ts: u64) -> PathBuf {
+    let workspace = setup.root.path().join("elsewhere");
+    fs::create_dir_all(&workspace).unwrap();
+    let dir = log::sessions_dir(&setup.home(), &doors::project(&workspace)).join(id);
+    fs::create_dir_all(dir.join("artifacts")).unwrap();
+    let first = json!({"kind": "session_started", "seq": 0,
+        "payload": {"workspace": workspace,
+        "forked_from": {"session_id": from, "seq": 1}}});
+    let last = json!({"kind": "x", "ts": ts});
+    fs::write(dir.join("events.jsonl"), format!("{first}\n{last}\n")).unwrap();
+    fs::write(dir.join("artifacts/a_1.txt"), b"0123456789").unwrap();
+    fs::write(dir.join("session.lock"), b"").unwrap();
+    dir
+}
 const YOUNG: &str = "s_00000000000000d3";
 
 /// The hub idles out soon after the run's connection closes, so none
@@ -233,6 +265,33 @@ fn a_young_fork_blocks_then_cascade_removes_both() {
     let output = prune(&setup, &["--cascade", "--yes", "--older-than", "30d"]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert!(!root.exists() && !fork.exists());
+    drop(client);
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
+
+#[test]
+fn a_young_moved_child_blocks_then_cascade_removes_both() {
+    let setup = setup();
+    let (_probe, _probe_at, probe_ms) = probe(&setup);
+    let root = moved_parent(&setup, ROOT, MOVED, 0);
+    let moved = moved_child(&setup, MOVED, ROOT, probe_ms);
+    let output = prune(&setup, &["--yes", "--older-than", "30d"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = text(&output.stdout);
+    assert!(out.contains(ROOT), "{out}");
+    assert!(out.contains(MOVED), "{out}");
+    assert!(
+        root.is_dir() && moved.is_dir(),
+        "the moved child blocks the root"
+    );
+    // The cascade prune needs a ready hub, not a fast cold start: starting
+    // the hub here waits for its hello under the test deadline, and the
+    // held connection keeps it from idling out before the prune connects.
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let output = prune(&setup, &["--cascade", "--yes", "--older-than", "30d"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert!(!root.exists() && !moved.exists());
     drop(client);
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }

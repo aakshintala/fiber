@@ -34,6 +34,11 @@ pub enum Error {
         /// The session that would continue it.
         new: SessionId,
     },
+    /// The inbox closed while a move still listed running jobs, so their
+    /// ends can never arrive: the move fails without `moved` instead of
+    /// hiding the unfinished jobs (`docs/events.md`, "Change workspace").
+    #[error("the inbox closed with jobs still running")]
+    InboxClosed,
 }
 
 impl Error {
@@ -45,6 +50,7 @@ impl Error {
             Self::RepositoryCode(failure) => failure.code.clone(),
             Self::HookFailed(failure) => failure.code.clone(),
             Self::NotRewound { .. } => ErrorCode::InvalidArguments,
+            Self::InboxClosed => ErrorCode::IoFailed,
         }
     }
 }

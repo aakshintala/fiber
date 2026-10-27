@@ -411,6 +411,10 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             conn.gate.deliver(Delivery::Handoff(id, args, ack));
         }
         Command::Rewind(args) => crate::rewind::run(conn, id, args),
+        Command::ChangeWorkspace(args) => {
+            let ack = inbox_ack(conn, id.clone());
+            conn.gate.deliver(Delivery::ChangeWorkspace(id, args, ack));
+        }
         Command::JobStop(args) => {
             let stopped = conn.gate.jobs().is_some_and(|jobs| jobs.stop(&args.job_id));
             answer(conn, id, stopped, NO_JOB);
@@ -1221,6 +1225,7 @@ pub(crate) fn session_command_refusal(
         | Command::Name(_)
         | Command::Handoff(_)
         | Command::Rewind(_)
+        | Command::ChangeWorkspace(_)
         | Command::Shell(_)
         | Command::ProposeNotes(_)
         | Command::Command(_)

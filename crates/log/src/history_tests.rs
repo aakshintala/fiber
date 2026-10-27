@@ -11,7 +11,7 @@
 use std::fs;
 
 use contract::Seq;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
 use crate::fixtures::{corrupt, line as fixture_line, session_log};
@@ -31,6 +31,29 @@ fn started(session: &str, seq: u64, from: Option<(&str, u64)>) -> String {
         seq,
         &payload,
     )
+}
+
+fn started_in(session: &str, seq: u64, parent: &str, at: u64, project: Option<&str>) -> String {
+    let mut payload = json!({
+        "workspace": "/w",
+        "variables": {"path": "/usr/bin", "names": [], "source": "inherited"},
+    });
+    let mut from = json!({"session_id": parent, "seq": at});
+    if let Some(project) = project {
+        from["project"] = Value::String(project.to_owned());
+    }
+    payload["forked_from"] = from;
+    fixture_line(
+        "session_started",
+        session,
+        1_759_150_000_000_u64 + seq,
+        seq,
+        &payload,
+    )
+}
+
+fn project_dir(home: &fakes::TempDir, key: &str, id: &str) -> std::path::PathBuf {
+    crate::session_dir(home.path(), key, &SessionId(id.into()))
 }
 
 fn plain(session: &str, seq: u64, kind: &str) -> String {
@@ -797,6 +820,348 @@ fn history_on_a_missing_log_is_not_found() {
         panic!("a missing log has a history");
     };
     assert_eq!(path, dir);
+}
+
+#[test]
+fn a_moved_history_resolves_each_ancestor_in_its_recorded_project() {
+    // Root R in `-work-old`; child C in `-work-new` names R with its
+    // project; grandchild G in `-work-new` names C without one, beside
+    // itself.
+    let home = fakes::TempDir::new("log-history-projects");
+    let root = project_dir(&home, "-work-old", "s_rrrrrrrrrrrrrrrr");
+    let root_first = started("s_rrrrrrrrrrrrrrrr", 0, None);
+    session_log(&root, root_first.as_bytes());
+    let child = project_dir(&home, "-work-new", "s_cccccccccccccccc");
+    let child_first = started_in(
+        "s_cccccccccccccccc",
+        0,
+        "s_rrrrrrrrrrrrrrrr",
+        0,
+        Some("-work-old"),
+    );
+    session_log(&child, child_first.as_bytes());
+    let grandchild = project_dir(&home, "-work-new", "s_gggggggggggggggg");
+    let grandchild_first = started_in("s_gggggggggggggggg", 0, "s_cccccccccccccccc", 0, None);
+    session_log(&grandchild, grandchild_first.as_bytes());
+    assert_eq!(
+        history(&grandchild).unwrap(),
+        vec![
+            Segment {
+                session_id: SessionId("s_rrrrrrrrrrrrrrrr".into()),
+                dir: root,
+                to: Some(Seq(0)),
+            },
+            Segment {
+                session_id: SessionId("s_cccccccccccccccc".into()),
+                dir: child,
+                to: Some(Seq(0)),
+            },
+            Segment {
+                session_id: SessionId("s_gggggggggggggggg".into()),
+                dir: grandchild,
+                to: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_moved_parent_in_an_unknown_project_fails_closed() {
+    let home = fakes::TempDir::new("log-history-unknown-project");
+    let child = project_dir(&home, "-work-new", "s_cccccccccccccccc");
+    let child_first = started_in(
+        "s_cccccccccccccccc",
+        0,
+        "s_rrrrrrrrrrrrrrrr",
+        0,
+        Some("-work-gone"),
+    );
+    session_log(&child, child_first.as_bytes());
+    let error = history(&child).unwrap_err();
+    // The parent log is missing where recorded: not found, never scanned.
+    let Error::NotFound(path) = error else {
+        panic!("an unknown project has a history");
+    };
+    assert_eq!(
+        path,
+        crate::session_dir(
+            home.path(),
+            "-work-gone",
+            &SessionId("s_rrrrrrrrrrrrrrrr".into())
+        )
+    );
+}
+
+#[test]
+fn an_empty_parent_log_reads_as_missing() {
+    let home = fakes::TempDir::new("log-history-empty-parent");
+    let sessions = home.path().join("sessions");
+    write_lines(
+        &sessions,
+        "s_cccccccccccccccc",
+        &[started(
+            "s_cccccccccccccccc",
+            0,
+            Some(("s_rrrrrrrrrrrrrrrr", 0)),
+        )],
+    );
+    session_log(&sessions.join("s_rrrrrrrrrrrrrrrr"), b"");
+    let error = history(&sessions.join("s_cccccccccccccccc")).unwrap_err();
+    let Error::NotFound(path) = error else {
+        panic!("an empty parent has a history");
+    };
+    assert_eq!(path, sessions.join("s_rrrrrrrrrrrrrrrr"));
+}
+
+#[test]
+fn an_invalid_moved_parent_stays_a_pointer() {
+    // A `project` that is not a string is corrupt, not absent: the walk
+    // fails closed exactly as a bad session or seq does.
+    let home = fakes::TempDir::new("log-history-bad-project");
+    let sessions = home.path().join("sessions");
+    let mut line = started("s_cccccccccccccccc", 0, Some(("s_rrrrrrrrrrrrrrrr", 0)));
+    let mut parsed: Value = serde_json::from_str(&line).unwrap();
+    parsed["payload"]["forked_from"]["project"] = json!(7);
+    line = parsed.to_string() + "\n";
+    write_lines(&sessions, "s_cccccccccccccccc", &[line]);
+    let error = history(&sessions.join("s_cccccccccccccccc")).unwrap_err();
+    assert!(matches!(error, Error::Pointer { .. }));
+    assert_eq!(error.code(), contract::ErrorCode::LogCorrupt);
+}
+
+#[test]
+fn a_project_pointer_outside_projects_is_a_pointer() {
+    // A flat `sessions/` layout has no projects layer to climb: a
+    // recorded project cannot resolve from stored locations.
+    let home = fakes::TempDir::new("log-history-flat-project");
+    let sessions = home.path().join("sessions");
+    write_lines(
+        &sessions,
+        "s_cccccccccccccccc",
+        &[started_in(
+            "s_cccccccccccccccc",
+            0,
+            "s_rrrrrrrrrrrrrrrr",
+            0,
+            Some("-work-old"),
+        )],
+    );
+    let error = history(&sessions.join("s_cccccccccccccccc")).unwrap_err();
+    assert!(matches!(error, Error::Pointer { .. }));
+    assert_eq!(error.code(), contract::ErrorCode::LogCorrupt);
+}
+
+#[test]
+fn a_decoy_parent_in_the_childs_project_is_never_a_parent() {
+    // The parent id exists beside the child, but the recorded project
+    // is `-work-old`: the walk reads the recorded project only, and a
+    // sibling with the same id is not a fallback.
+    let home = fakes::TempDir::new("log-history-decoy");
+    let new_sessions = home
+        .path()
+        .join("projects")
+        .join("-work-new")
+        .join("sessions");
+    write_lines(
+        &new_sessions,
+        "s_rrrrrrrrrrrrrrrr",
+        &[started("s_rrrrrrrrrrrrrrrr", 0, None)],
+    );
+    let old_sessions = home
+        .path()
+        .join("projects")
+        .join("-work-old")
+        .join("sessions");
+    write_lines(
+        &old_sessions,
+        "s_oooooooooooooooo",
+        &[started("s_oooooooooooooooo", 0, None)],
+    );
+    write_lines(
+        &new_sessions,
+        "s_cccccccccccccccc",
+        &[started_in(
+            "s_cccccccccccccccc",
+            0,
+            "s_rrrrrrrrrrrrrrrr",
+            0,
+            Some("-work-old"),
+        )],
+    );
+    let error = history(&new_sessions.join("s_cccccccccccccccc")).unwrap_err();
+    let Error::NotFound(path) = error else {
+        panic!("a decoy sibling is not the recorded parent");
+    };
+    assert_eq!(path, old_sessions.join("s_rrrrrrrrrrrrrrrr"));
+}
+
+#[test]
+fn an_alternating_project_chain_links_each_hop_in_its_recorded_project() {
+    // Root R in `-work-old`; M in `-work-new` names R with its project;
+    // G back in `-work-old` names M with its project. Each segment reads
+    // from its own directory, bounded by its own point.
+    let home = fakes::TempDir::new("log-history-alternating");
+    let root = project_dir(&home, "-work-old", "s_rrrrrrrrrrrrrrrr");
+    session_log(
+        &root,
+        (started("s_rrrrrrrrrrrrrrrr", 0, None) + &plain("s_rrrrrrrrrrrrrrrr", 1, "turn_started"))
+            .as_bytes(),
+    );
+    // Past M's point the parent holds bytes that do not parse: the walk
+    // and the bounded read leave them unread.
+    corrupt(&root, 1);
+    let middle = project_dir(&home, "-work-new", "s_bbbbbbbbbbbbbbbb");
+    session_log(
+        &middle,
+        (started_in(
+            "s_bbbbbbbbbbbbbbbb",
+            0,
+            "s_rrrrrrrrrrrrrrrr",
+            0,
+            Some("-work-old"),
+        ) + &plain("s_bbbbbbbbbbbbbbbb", 1, "turn_started"))
+            .as_bytes(),
+    );
+    let grandchild = project_dir(&home, "-work-old", "s_gggggggggggggggg");
+    session_log(
+        &grandchild,
+        started_in(
+            "s_gggggggggggggggg",
+            0,
+            "s_bbbbbbbbbbbbbbbb",
+            1,
+            Some("-work-new"),
+        )
+        .as_bytes(),
+    );
+    let segments = history(&grandchild).unwrap();
+    assert_eq!(
+        segments,
+        vec![
+            Segment {
+                session_id: SessionId("s_rrrrrrrrrrrrrrrr".into()),
+                dir: root.clone(),
+                to: Some(Seq(0)),
+            },
+            Segment {
+                session_id: SessionId("s_bbbbbbbbbbbbbbbb".into()),
+                dir: middle.clone(),
+                to: Some(Seq(1)),
+            },
+            Segment {
+                session_id: SessionId("s_gggggggggggggggg".into()),
+                dir: grandchild.clone(),
+                to: None,
+            },
+        ]
+    );
+    let root_lines = segments[0].lines(0).unwrap();
+    assert_eq!(root_lines.len(), 1);
+    assert_eq!(root_lines[0].seq, Some(Seq(0)));
+    let middle_lines = segments[1].lines(0).unwrap();
+    assert_eq!(
+        middle_lines
+            .iter()
+            .map(|line| line.seq.as_ref().unwrap().0)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+}
+
+#[test]
+fn a_cross_project_cycle_is_a_pointer() {
+    // A in `-work-new` names B in `-work-old`, and B names A back: the
+    // walk stops on the repeat instead of climbing forever.
+    let home = fakes::TempDir::new("log-history-cross-cycle");
+    let a = project_dir(&home, "-work-new", "s_aaaaaaaaaaaaaaaa");
+    session_log(
+        &a,
+        started_in(
+            "s_aaaaaaaaaaaaaaaa",
+            0,
+            "s_bbbbbbbbbbbbbbbb",
+            0,
+            Some("-work-old"),
+        )
+        .as_bytes(),
+    );
+    let b = project_dir(&home, "-work-old", "s_bbbbbbbbbbbbbbbb");
+    session_log(
+        &b,
+        started_in(
+            "s_bbbbbbbbbbbbbbbb",
+            0,
+            "s_aaaaaaaaaaaaaaaa",
+            0,
+            Some("-work-new"),
+        )
+        .as_bytes(),
+    );
+    let error = history(&a).unwrap_err();
+    let code = error.code();
+    let Error::Pointer { path, reason } = error else {
+        panic!("a cross-project cycle has a history");
+    };
+    assert_eq!(path, a.join(EVENTS));
+    assert_eq!(reason, "the forked_from chain repeats a session");
+    assert_eq!(code, contract::ErrorCode::LogCorrupt);
+}
+
+#[test]
+fn a_recorded_project_outside_projects_is_a_pointer() {
+    // A project key that is not one path component cannot name a project
+    // directory: the walk fails closed without reading past `projects/`.
+    let home = fakes::TempDir::new("log-history-project-traversal");
+    let child = project_dir(&home, "-work-new", "s_cccccccccccccccc");
+    for key in ["", ".", "..", "../escape", "a/b", "/abs"] {
+        session_log(
+            &child,
+            started_in("s_cccccccccccccccc", 0, "s_rrrrrrrrrrrrrrrr", 0, Some(key)).as_bytes(),
+        );
+        let error = history(&child).unwrap_err();
+        let code = error.code();
+        let Error::Pointer { path, reason } = error else {
+            panic!("project {key:?} has a history");
+        };
+        assert_eq!(path, child.join(EVENTS), "project {key:?}");
+        assert_eq!(
+            reason, "the recorded parent project is not one path component",
+            "project {key:?}"
+        );
+        assert_eq!(code, contract::ErrorCode::LogCorrupt);
+    }
+}
+
+#[test]
+fn a_recorded_parent_id_outside_its_sessions_dir_is_a_pointer() {
+    // A parent session that is not one path component cannot name a
+    // session directory, beside the child or in a recorded project.
+    let home = fakes::TempDir::new("log-history-parent-traversal");
+    let child = project_dir(&home, "-work-new", "s_cccccccccccccccc");
+    for (parent, project) in [
+        ("..", None),
+        ("../s_rrrrrrrrrrrrrrrr", None),
+        ("s_rrrrrrrrrrrrrrrr/x", None),
+        ("..", Some("-work-old")),
+        ("../s_rrrrrrrrrrrrrrrr", Some("-work-old")),
+        ("s_rrrrrrrrrrrrrrrr/x", Some("-work-old")),
+    ] {
+        session_log(
+            &child,
+            started_in("s_cccccccccccccccc", 0, parent, 0, project).as_bytes(),
+        );
+        let error = history(&child).unwrap_err();
+        let code = error.code();
+        let Error::Pointer { path, reason } = error else {
+            panic!("parent {parent:?} has a history");
+        };
+        assert_eq!(path, child.join(EVENTS), "parent {parent:?}");
+        assert_eq!(
+            reason, "the recorded parent session is not one path component",
+            "parent {parent:?}"
+        );
+        assert_eq!(code, contract::ErrorCode::LogCorrupt);
+    }
 }
 
 #[test]

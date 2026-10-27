@@ -237,6 +237,7 @@ fn a_rewound_session_holds_only_its_own_first_line_before_its_prompt() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         note.clone(),
         None,
@@ -288,6 +289,7 @@ fn a_job_the_old_session_left_running_is_no_orphan_in_the_new_one() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         String::new(),
         None,
@@ -343,6 +345,7 @@ fn a_handoff_started_in_the_new_session_after_a_rewind_names_no_job() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         String::new(),
         None,
@@ -403,6 +406,7 @@ fn a_rewound_sessions_first_request_matches_the_olds_at_the_point() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         note.clone(),
         None,
@@ -534,6 +538,7 @@ fn a_summary_follows_history_before_the_note_live_and_resumed() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         note.clone(),
         None,
@@ -612,6 +617,7 @@ fn a_rewound_session_records_the_worktree_it_is_given() {
     let from = || Point {
         session_id: SessionId("s_test".into()),
         seq: Seq(at),
+        project: None,
     };
     let worktree = Worktree {
         path: "/w/tree".into(),
@@ -660,6 +666,7 @@ fn a_resumed_rewound_session_keeps_its_history_note_and_key() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         note.clone(),
         None,
@@ -741,6 +748,7 @@ fn a_rewind_of_a_rewind_folds_both_points_in_order() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         note_ab.clone(),
         None,
@@ -762,6 +770,7 @@ fn a_rewind_of_a_rewind_folds_both_points_in_order() {
         Point {
             session_id: SessionId(B_ID.into()),
             seq: Seq(b_turn),
+            project: None,
         },
         note_bc.clone(),
         None,
@@ -801,6 +810,7 @@ fn a_rewind_through_the_chain_holds_no_line_of_the_middle_session() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         note_ab,
         None,
@@ -815,6 +825,7 @@ fn a_rewind_through_the_chain_holds_no_line_of_the_middle_session() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         note.clone(),
         None,
@@ -888,6 +899,7 @@ fn an_image_in_the_inherited_history_reads_from_the_session_that_wrote_it() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(start),
+            project: None,
         },
         String::new(),
         None,
@@ -989,6 +1001,7 @@ fn a_pdf_in_the_inherited_history_reads_from_the_session_that_wrote_it() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         String::new(),
         None,
@@ -1150,6 +1163,7 @@ fn a_rewind_before_the_first_request_keeps_the_logged_model_and_thinking() {
             from: Point {
                 session_id: SessionId("s_model00000001".into()),
                 seq: Seq(1),
+                project: None,
             },
             worktree: None,
             how: Continuation::Rewind {
@@ -1433,6 +1447,7 @@ fn an_ancestor_summary_keeps_the_entire_cut_path() {
         Point {
             session_id: SessionId(A_ID.into()),
             seq: lines.last().unwrap().seq.unwrap(),
+            project: None,
         },
         "B's note".into(),
         None,
@@ -1489,6 +1504,7 @@ fn an_ancestor_summary_starts_its_excerpt_after_the_inherited_last_line() {
         Point {
             session_id: SessionId(A_ID.into()),
             seq: Seq(at),
+            project: None,
         },
         "B's note".into(),
         None,
@@ -1525,6 +1541,7 @@ fn a_summary_reads_through_a_handoff_without_its_note_request() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         "the note".into(),
         None,
@@ -2495,6 +2512,7 @@ fn an_at_end_rewind_continues_from_the_admission_time_point() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         note.clone(),
         None,
@@ -3251,6 +3269,7 @@ fn a_rewind_to_an_ancestor_point_names_that_session() {
         Some(Point {
             session_id: SessionId(A_ID.into()),
             seq: Seq(at),
+            project: None,
         }),
         None,
     );
@@ -3278,6 +3297,7 @@ fn a_seq_past_the_ancestor_bound_is_not_in_this_sessions_history() {
         Some(Point {
             session_id: SessionId(A_ID.into()),
             seq: Seq(at),
+            project: None,
         }),
         None,
     );
@@ -3303,6 +3323,7 @@ fn the_default_point_under_a_bound_is_the_ancestor_turn_before_it() {
         Some(Point {
             session_id: SessionId(A_ID.into()),
             seq: Seq(at),
+            project: None,
         }),
         None,
     );
@@ -3327,6 +3348,7 @@ fn a_summary_checks_jobs_and_the_point_before_starting() {
         Some(Point {
             session_id: SessionId(A_ID.into()),
             seq: Seq(at),
+            project: None,
         }),
         None,
     );
@@ -3346,6 +3368,7 @@ fn a_summary_checks_jobs_and_the_point_before_starting() {
         Some(Point {
             session_id: SessionId(A_ID.into()),
             seq: Seq(at),
+            project: None,
         }),
         None,
     );
@@ -3485,6 +3508,7 @@ fn a_rewound_session_after_a_handoff_starts_from_the_handoffs_context() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         note.clone(),
         None,
@@ -3562,6 +3586,7 @@ fn a_rewound_session_before_a_handoff_ignores_it() {
         Point {
             session_id: SessionId("s_test".into()),
             seq: Seq(at),
+            project: None,
         },
         note.clone(),
         None,
@@ -3669,6 +3694,7 @@ fn known_hosts_rewind_retains_hosts_before_the_point_and_reviews_later_hosts() {
             from: Point {
                 session_id: SessionId("s_test".into()),
                 seq: at,
+                project: None,
             },
             worktree: None,
             how: Continuation::Rewind {

@@ -1454,3 +1454,79 @@ fn remove_artifact_at_removes_one_direct_child_and_names_a_missing_one() {
     );
     assert_eq!(error.code(), ErrorCode::IoFailed);
 }
+
+fn moved_event() -> Event {
+    Event::Moved(contract::events::Moved {
+        new_session_id: SessionId("s_new".into()),
+        seq: Seq(3),
+        workspace: "/work/other".into(),
+    })
+}
+
+#[test]
+fn a_failed_pre_write_barrier_writes_no_moved() {
+    after_sync(|| None);
+    let (sessions, log) = offer_log();
+    after_sync(|| Some(std::io::Error::other("no barrier sync")));
+    let failed = log.append(&moved_event(), None, None);
+    assert!(
+        matches!(&failed, Err(crate::Error::Io { .. })),
+        "{failed:?}"
+    );
+    assert_eq!(failed.unwrap_err().code(), ErrorCode::IoFailed);
+    assert_eq!(
+        crate::read(&sessions.path().join("s_1")).unwrap(),
+        Vec::new(),
+        "the barrier failure writes nothing"
+    );
+    let later = log.append(&moved_event(), None, None);
+    assert!(
+        matches!(&later, Err(crate::Error::Poisoned { .. })),
+        "{later:?}"
+    );
+    after_sync(|| None);
+}
+
+#[test]
+fn a_failed_moved_sync_keeps_its_line_without_truncation() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    after_sync(|| None);
+    let (sessions, log) = offer_log();
+    let dir = sessions.path().join("s_1");
+    let calls = std::sync::Arc::new(AtomicUsize::new(0));
+    after_sync(move || {
+        if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            None
+        } else {
+            Some(std::io::Error::other("no moved sync"))
+        }
+    });
+    let failed = log.append(&moved_event(), None, None);
+    assert!(
+        matches!(&failed, Err(crate::Error::Io { .. })),
+        "{failed:?}"
+    );
+    assert_eq!(failed.unwrap_err().code(), ErrorCode::IoFailed);
+    // The failure sticks, as after any failed write.
+    let later = log.append(&moved_event(), None, None);
+    assert!(
+        matches!(&later, Err(crate::Error::Poisoned { .. })),
+        "{later:?}"
+    );
+    // The line was written before its sync failed: reopening keeps it,
+    // with no truncation, so the hub starts the same child from it.
+    let lines = crate::read(&dir).unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].kind, "moved");
+    drop(log);
+    after_sync(|| None);
+    Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert_eq!(crate::read(&dir).unwrap().len(), 1);
+    after_sync(|| None);
+}
