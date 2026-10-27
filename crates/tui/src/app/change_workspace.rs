@@ -38,11 +38,6 @@ impl ChangeWorkspace {
         self.pending.push(Pending { id, old });
     }
 
-    /// Whether `id` is a `change_workspace` on the wire.
-    pub(super) fn matches(&self, id: &str) -> bool {
-        self.pending.iter().any(|pending| pending.id == id)
-    }
-
     /// Takes the pending request `id` answers, leaving every other
     /// command's claim in place.
     fn take(&mut self, id: &str) -> Option<Pending> {
@@ -119,11 +114,9 @@ impl App {
 
     /// A command line lost before it was written: a lost
     /// `change_workspace` keeps nothing, since the hub never answers a
-    /// line it never got. True when `id` was the pending one.
-    pub(in crate::app) fn change_workspace_dropped(&mut self, id: &str) -> bool {
-        let matches = self.change_workspace.matches(id);
+    /// line it never got.
+    pub(in crate::app) fn change_workspace_dropped(&mut self, id: &str) {
         self.change_workspace.dropped(id);
-        matches
     }
 }
 

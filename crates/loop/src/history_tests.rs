@@ -2225,3 +2225,101 @@ fn a_grant_after_the_move_folds_after_the_reset() {
     assert_eq!(folded.grants.len(), 1);
     assert_eq!(folded.grants[0].tool, "git");
 }
+
+/// A workspace change clears grants and offers only without a parent:
+/// the same workspace keeps both, and a delegate fork into another
+/// workspace keeps both, so the `&&` in the guard is load-bearing.
+#[test]
+fn a_workspace_change_clears_grants_and_offers_only_without_a_parent() {
+    fn child_started(workspace: &str, parent: Option<Parent>) -> Event {
+        Event::SessionStarted(SessionStarted {
+            workspace: workspace.to_owned(),
+            variables: Variables {
+                path: "/usr/bin".to_owned(),
+                names: Vec::new(),
+                source: VariablesSource::Inherited,
+            },
+            parent,
+            forked_from: None,
+            rewind: None,
+            worktree: None,
+            supervised: false,
+        })
+    }
+
+    fn echo_grant() -> Event {
+        Event::PermissionResolved(PermissionResolved {
+            call: None,
+            request_id: None,
+            decision: Decision::Allow,
+            decided_by: DecidedBy::Person,
+            reason: None,
+            feedback: None,
+            grant: Some(Grant {
+                tool: "shell".to_owned(),
+                prefix: "echo".to_owned(),
+            }),
+            rule: None,
+            reviewer: None,
+            hosts: None,
+        })
+    }
+
+    fn check(
+        name: &str,
+        workspace: &str,
+        parent: Option<Parent>,
+        grants: usize,
+        offers: (usize, usize),
+    ) {
+        let (_home, sessions) = sessions(name);
+        write_log(
+            &sessions,
+            A,
+            &[
+                envelope(A, 0, None, None, &started("/a", None)),
+                envelope(A, 1, None, None, &echo_grant()),
+                envelope(A, 2, None, None, &offered("r_offer")),
+            ],
+        );
+        write_log(
+            &sessions,
+            B,
+            &[envelope(
+                B,
+                0,
+                None,
+                None,
+                &child_started(workspace, parent),
+            )],
+        );
+        let folded = fold(&[
+            log::Segment {
+                session_id: SessionId(A.to_owned()),
+                dir: sessions.join(A),
+                to: Some(Seq(2)),
+            },
+            log::Segment {
+                session_id: SessionId(B.to_owned()),
+                dir: sessions.join(B),
+                to: None,
+            },
+        ])
+        .unwrap();
+        assert_eq!(folded.grants.len(), grants);
+        assert_eq!(folded.offers.counts(), offers);
+    }
+
+    check("guard-same-workspace", "/a", None, 1, (1, 0));
+    check("guard-move", "/b", None, 0, (0, 0));
+    check(
+        "guard-delegate",
+        "/b",
+        Some(Parent {
+            session_id: SessionId(A.to_owned()),
+            delegate_id: contract::JobId("j_parent".to_owned()),
+        }),
+        1,
+        (1, 0),
+    );
+}
