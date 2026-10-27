@@ -11,6 +11,8 @@ const ATTACH_FIXTURES: [&str; 2] = ["1 MiB", "10 MiB"];
 /// `fixture (bytes): median ms` part per fixture. The flat first-frame
 /// bound and the pass-end ordinary ceiling live in the table's cells, so
 /// no formula renders here. A malformed metric is one failure naming `id`.
+/// The attach row always takes 5 samples per fixture
+/// (`docs/performance.md:184-185`): any other declared count fails.
 pub(super) fn fixture_medians(id: &str, results: Option<&Results>) -> (Vec<String>, String) {
     let entries = match metric(results, id).and_then(|value| {
         value
@@ -47,6 +49,15 @@ pub(super) fn fixture_medians(id: &str, results: Option<&Results>) -> (Vec<Strin
     let mut shown = Vec::new();
     // `metric` fails on `None`, so results exists past here.
     let runs = results.map(|results| results.runs_of(id)).unwrap_or(0);
+    // The attach row always takes 5 samples per fixture
+    // (`docs/performance.md:184-185`): a declared count of 3 is malformed,
+    // even when the samples match it.
+    if runs != 5 {
+        return (
+            vec![format!("{id}: {runs} runs, expected 5")],
+            String::new(),
+        );
+    }
     for fixture in ATTACH_FIXTURES {
         let Some(samples) = by_fixture.get(fixture) else {
             failures.push(format!("{id}: no {fixture} fixture"));

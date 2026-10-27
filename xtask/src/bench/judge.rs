@@ -323,11 +323,11 @@ fn class_name(class: SpeedClass) -> &'static str {
 }
 
 /// Each attach fixture's median ms from strictly validated entries: known
-/// fixtures only, `log_bytes` and `ms` present, exactly the declared run
-/// count per fixture, each `ms` finite and at or above zero. `fixture_medians`
-/// itself does not reject negatives, so this runs before any advisory
-/// handling: a negative or non-finite `ms` is a named configuration
-/// failure even on an advisory model.
+/// fixtures only, `log_bytes` and `ms` present, exactly five runs per
+/// fixture (`docs/performance.md:184-185`), each `ms` finite and at or
+/// above zero. `fixture_medians` itself does not reject negatives, so
+/// this runs before any advisory handling: a negative or non-finite `ms`
+/// is a named configuration failure even on an advisory model.
 struct AttachMedians {
     /// Median ms of the 1 MiB fixture.
     one_mib: f64,
@@ -340,6 +340,12 @@ fn attach_medians(results: Option<&Results>, id: &str) -> Result<AttachMedians, 
         .as_array()
         .ok_or_else(|| format!("{id}: not an array"))?;
     let runs = results.map(|results| results.runs_of(id)).unwrap_or(0);
+    // The attach row always takes 5 samples per fixture
+    // (`docs/performance.md:184-185`): a declared count of 3 is malformed,
+    // even when the samples match it.
+    if runs != 5 {
+        return Err(format!("{id}: {runs} runs, expected 5"));
+    }
     let mut one_mib = Vec::new();
     let mut ten_mib = Vec::new();
     for entry in entries {
