@@ -87,6 +87,7 @@ const DRAWN_ORDER: &[&str] = &[
     "approvals",
     "?",
     "help",
+    "delegates",
 ];
 
 #[test]
@@ -150,6 +151,7 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         [
             &"effort",
             &"cost",
+            &"agents",
             &"cwd",
             &"config",
             &"keybindings",
@@ -168,6 +170,8 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
     assert!(credential.line().contains("/credential [<label>]"));
     assert!(is_built_in("credential"));
     assert!(is_built_in("rewind"));
+    assert!(is_built_in("delegates"));
+    assert!(is_built_in("agents"));
     assert!(!is_built_in("tdd"));
 }
 

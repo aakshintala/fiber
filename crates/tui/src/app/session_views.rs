@@ -33,6 +33,8 @@ pub(crate) enum SessionView {
     Delegates,
     /// The running jobs, from "N jobs running".
     Jobs,
+    /// `/delegates`.
+    AllDelegates,
     /// A tool call's whole view, from its more row or its opened row.
     Call(usize),
     /// `/rewind`.
@@ -56,6 +58,8 @@ pub(in crate::app) enum Open {
     Delegates(List),
     /// The running jobs.
     Jobs(List),
+    /// `/delegates`.
+    AllDelegates(List),
     /// A tool call's whole view, boxed: it holds the call's pages.
     Call(Box<CallView>),
     /// `/rewind`.
@@ -119,6 +123,7 @@ impl App {
             SessionView::ChangedFiles => Open::Files(List::default()),
             SessionView::Delegates => Open::Delegates(List::default()),
             SessionView::Jobs => Open::Jobs(List::default()),
+            SessionView::AllDelegates => Open::AllDelegates(List::default()),
             SessionView::Call(id) => return self.open_call_view(id),
             SessionView::Rewind => {
                 self.session_views.open = Some(Open::Rewind(List::default()));
@@ -164,7 +169,7 @@ impl App {
         let (rows, height) = self.session_view_list_metrics()?;
         if matches!(
             self.session_views.open,
-            Some(Open::Delegates(_)) | Some(Open::Jobs(_))
+            Some(Open::Delegates(_)) | Some(Open::Jobs(_)) | Some(Open::AllDelegates(_))
         ) {
             // Enter resolves the selected row to its serial at key time,
             // where no press/release race exists; opening the item's view
@@ -172,7 +177,8 @@ impl App {
             if *key == Key::Enter {
                 return Some(self.session_view_open_selected());
             }
-            if let Some(Open::Delegates(list) | Open::Jobs(list)) = self.session_views.open.as_mut()
+            if let Some(Open::Delegates(list) | Open::Jobs(list) | Open::AllDelegates(list)) =
+                self.session_views.open.as_mut()
             {
                 list.key(key, rows, height);
             }
@@ -222,17 +228,18 @@ impl App {
     pub(in crate::app) fn session_view_click(&mut self, spot: Spot) -> Effect {
         if matches!(
             self.session_views.open,
-            Some(Open::Delegates(_)) | Some(Open::Jobs(_))
+            Some(Open::Delegates(_)) | Some(Open::Jobs(_)) | Some(Open::AllDelegates(_))
         ) {
-            // A click on the text opens the row's serial when it still
-            // runs; a click on the blank tail only selects the row.
+            // A click on the text opens the row's serial, running or
+            // finished; a click on the blank tail only selects the row.
             match spot {
                 Spot::Close => self.close_session_view(),
                 Spot::Item(serial) => return self.open_serial(serial),
                 Spot::Row(at) => {
                     if let Some((rows, height)) = self.session_view_list_metrics()
-                        && let Some(Open::Delegates(list) | Open::Jobs(list)) =
-                            self.session_views.open.as_mut()
+                        && let Some(
+                            Open::Delegates(list) | Open::Jobs(list) | Open::AllDelegates(list),
+                        ) = self.session_views.open.as_mut()
                     {
                         list.select(at, rows, height);
                     }
@@ -290,7 +297,9 @@ impl App {
     /// finished job opens its replay.
     fn session_view_open_selected(&mut self) -> Effect {
         let selected = match self.session_views.open.as_ref() {
-            Some(Open::Delegates(list)) | Some(Open::Jobs(list)) => list.selected(),
+            Some(Open::Delegates(list))
+            | Some(Open::Jobs(list))
+            | Some(Open::AllDelegates(list)) => list.selected(),
             Some(Open::Usage(_))
             | Some(Open::Quota(_))
             | Some(Open::Context(_))
@@ -318,7 +327,7 @@ impl App {
     /// serial; a job fills one.
     fn session_view_list_serials(&self) -> Vec<Option<u64>> {
         match self.session_views.open.as_ref() {
-            Some(Open::Delegates(_) | Open::Jobs(_)) => self
+            Some(Open::Delegates(_) | Open::Jobs(_) | Open::AllDelegates(_)) => self
                 .session_view_screen(0)
                 .into_iter()
                 .flat_map(|frame| frame.rows)
@@ -409,6 +418,7 @@ impl App {
             }
             Open::Delegates(list) => Some(crate::running_view::delegates_frame(self, *list)),
             Open::Jobs(list) => Some(crate::running_view::jobs_frame(self, *list)),
+            Open::AllDelegates(list) => Some(crate::running_view::all_delegates_frame(self, *list)),
             Open::Call(view) => Some(view.frame()),
             Open::Rewind(list) => {
                 let jobs = self.rewind_stopping();
