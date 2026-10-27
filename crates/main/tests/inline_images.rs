@@ -562,7 +562,10 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
     // click opens it, and the click itself transmits nothing
     // (`docs/tui.md`, "Images").
     const READS: usize = 255;
-    let setup = Setup::new();
+    let mut setup = Setup::new();
+    // The 255-read run and its later screen and frame waits share one
+    // bounded wall-clock budget with room for load.
+    setup.deadline = Deadline::after(Duration::from_secs(120));
     script_reads(&setup, true, READS, false);
     // A standing allow rule for `read`: 255 approval panels would bury
     // the turn, and the reads need no review.
@@ -719,10 +722,11 @@ fn probe_live_holder_is_named() {
         let marker = marker.clone();
         move || fakes::matching(&marker).is_ok_and(|pids| pids.contains(&id))
     });
-    // A short expiry names the live holder without waiting out a funded
-    // wait: the listing already ran, so the expiry names the holder.
-    let err = fakes::try_matching_exits(&marker, Deadline::after(Duration::from_millis(200)))
-        .expect_err("the holder outlives the short wait, so it fails");
+    // A spent expiry still names the live holder: the holder listing
+    // takes its own budget, so the expiry names the holder without
+    // waiting out a funded wait.
+    let err = fakes::try_matching_exits(&marker, Deadline::after(Duration::ZERO))
+        .expect_err("the holder outlives the spent wait, so it fails");
     let message = err.to_string();
     assert!(
         message.contains(&id.to_string()),
