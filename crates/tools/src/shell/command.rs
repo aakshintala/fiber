@@ -208,34 +208,32 @@ fn execute_inner(
         Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace) {
             Ok(prepared) => Some(prepared),
             Err(cause) => {
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, cause));
+                return Err(std::io::Error::other(cause));
             }
         },
     };
     support::group::detach(&mut cmd, tty);
     #[cfg(target_os = "linux")]
     if let Some(prepared) = prepared {
+        #[allow(
+            unsafe_code,
+            reason = "installs the prepared Linux policy between fork and exec"
+        )]
         // SAFETY: The closure runs between fork and exec, so it only runs
         // syscalls: Landlock `restrict_self` and seccomp `apply_filter` on a
         // policy prepared before fork. Success performs no allocation; an
         // error builds an `io::Error` from the errno and aborts spawn, so the
         // command never runs unconfined. See docs/code-quality.md, "Unsafe".
-        #[allow(
-            unsafe_code,
-            reason = "installs the prepared Linux policy between fork and exec"
-        )]
         unsafe {
             use std::os::unix::process::CommandExt as _;
             let mut slot = Some(prepared);
             cmd.pre_exec(move || {
                 let Some(prepared) = slot.take() else {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return Err(std::io::Error::other(
                         "the sandbox policy was already installed",
                     ));
                 };
-                super::sandbox::install(prepared)
-                    .map_err(|cause| std::io::Error::new(std::io::ErrorKind::Other, cause))
+                super::sandbox::install(prepared).map_err(std::io::Error::other)
             });
         }
     }

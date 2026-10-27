@@ -362,10 +362,10 @@ pub(crate) fn sandbox_settings(
 ) -> tools::SandboxSettings {
     use std::path::PathBuf;
     fn expand(path: &str) -> PathBuf {
-        if let Some(rest) = path.strip_prefix("~/") {
-            if let Some(home) = std::env::var_os("HOME") {
-                return PathBuf::from(home).join(rest);
-            }
+        if let Some(rest) = path.strip_prefix("~/")
+            && let Some(home) = std::env::var_os("HOME")
+        {
+            return PathBuf::from(home).join(rest);
         }
         PathBuf::from(path)
     }

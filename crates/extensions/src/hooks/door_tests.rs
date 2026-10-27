@@ -671,7 +671,7 @@ fn own_tool_hooks_fail_when_reached_and_run_normally_after_the_answer() {
                             declared: &contract::shapes::DeclaredEffects {
                                 effects: vec![contract::shapes::Effect::Reads],
                                 reversible: true,
-                                paths: None
+                                paths: None,
                                 confined: false,
                             }
                         })

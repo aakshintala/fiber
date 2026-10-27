@@ -285,7 +285,7 @@ fn compile_seccomp() -> Result<seccompiler::BpfProgram, String> {
         libc::SYS_accept4,
         libc::SYS_io_uring_setup,
     ] {
-        map.insert(i64::from(syscall), Vec::new());
+        map.insert(syscall, Vec::new());
     }
     let filter = SeccompFilter::new(
         map,
@@ -349,25 +349,28 @@ fn join_slash(root: &Path) -> PathBuf {
 }
 
 /// The rule count and the ancestor-walk time for the PR body, measured on
-/// Linux for the owner's home directory. Test-only: its one caller prints
+/// Linux for the owner's home directory. Test-only: its one caller keeps
 /// the figures for the record.
 #[cfg(all(target_os = "linux", test))]
-pub(crate) fn measure_home_walk() -> (usize, std::time::Duration) {
-    use std::time::Instant;
-    let home = std::env::var_os("HOME")
-        .map_or_else(|| PathBuf::from("/root"), |value| PathBuf::from(value));
+pub(crate) fn measure_home_walk(
+    clock: &dyn contract::clock::Clock,
+) -> (usize, std::time::Duration) {
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from);
     let settings = Settings {
         enabled: true,
         allow_write: Vec::new(),
         deny_read: Vec::new(),
         fiber_home: home,
     };
-    let start = Instant::now();
+    let start = clock.now();
     let mut rules: Vec<landlock::PathBeneath<OwnedFd>> = Vec::new();
     for deny in denied_paths(&settings) {
-        let _ = add_ancestor_grants(&deny, landlock::ABI::V2, &mut rules);
+        // A deny point that cannot be walked contributes no grants; the
+        // sandbox still confines everything else, so the measurement
+        // skips the failure instead of aborting the count.
+        let _walked = add_ancestor_grants(&deny, landlock::ABI::V2, &mut rules);
     }
-    (rules.len(), start.elapsed())
+    (rules.len(), clock.now().saturating_duration_since(start))
 }
 
 #[cfg(test)]

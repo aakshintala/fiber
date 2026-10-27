@@ -481,19 +481,19 @@ pub(crate) fn parts_in(
     // The startup notices are written with the MCP notices, after
     // `fiber_started`.
     let sandbox_settings = settings::sandbox_settings(&config, &home);
-    if sandbox_settings.enabled {
-        if let Err(unavailable) = tools::sandbox_check_available(&sandbox_settings, &workspace) {
-            let code = if unavailable.reason.contains("inside a writable path") {
-                ErrorCode::InvalidArguments
-            } else {
-                ErrorCode::ToolError
-            };
-            startup_notices.push(contract::events::Notice {
-                code,
-                message: format!("sandbox unavailable: {}", unavailable.reason),
-                extension: None,
-            });
-        }
+    if sandbox_settings.enabled
+        && let Err(unavailable) = tools::sandbox_check_available(&sandbox_settings, &workspace)
+    {
+        let code = if unavailable.reason.contains("inside a writable path") {
+            ErrorCode::InvalidArguments
+        } else {
+            ErrorCode::ToolError
+        };
+        startup_notices.push(contract::events::Notice {
+            code,
+            message: format!("sandbox unavailable: {}", unavailable.reason),
+            extension: None,
+        });
     }
     let sandbox = std::sync::Arc::new(std::sync::Mutex::new(sandbox_settings));
     let mut mcp = mcp_servers::specs(&config)?;

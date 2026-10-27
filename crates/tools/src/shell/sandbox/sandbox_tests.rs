@@ -168,10 +168,10 @@ fn missing_deny_path_stops_the_walk() {
 fn home_walk_reports_a_rule_count_within_a_generous_deadline() {
     // The PR body reports the rule count and walk time for the home
     // directory; the walk is bounded by the ancestor chain, so one second
-    // is orders of magnitude above its cost. The figures print for the
-    // record; the test pins that the walk completes.
-    let (rules, elapsed) = measure_home_walk();
-    eprintln!("home walk: {rules} rules in {elapsed:?}");
+    // is orders of magnitude above its cost. The test pins that the walk
+    // completes.
+    let clock = support::clock::System;
+    let (_rules, elapsed) = measure_home_walk(&clock);
     assert!(
         elapsed < std::time::Duration::from_secs(1),
         "home walk took {elapsed:?}"

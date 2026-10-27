@@ -3127,15 +3127,7 @@ fn a_confined_shell_runs_and_marks_its_effects() {
     assert!(!effects.declared.confined);
     let output = shell.run(&args, &CancelToken::new(), &Recorder::default());
     assert!(output.error.is_none());
-    let text: String = output
-        .content
-        .iter()
-        .filter_map(|part| match part {
-            ContentPart::Text { text } => Some(text.clone()),
-            _ => None,
-        })
-        .collect();
-    assert!(text.contains("hi"));
+    assert!(text(&output).contains("hi"));
 }
 
 #[test]
