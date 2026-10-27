@@ -526,6 +526,10 @@ fn a_warming_refresh_uses_the_session_factory_at_the_first_attempt() {
     let start = world.clock.now();
     let stop = world.looped.warm_stop(start).expect("the session warms");
     // No code under test waits on the clock here; the refresh compares its due point only (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     world.clock.advance(Duration::from_secs(3575));
     let refreshed = world.looped.refresh(stop).unwrap();
     assert!(
@@ -657,6 +661,10 @@ fn a_cancelled_turn_cancels_its_warming_refresh() {
     let start = world.clock.now();
     let stop = world.looped.warm_stop(start).expect("the session warms");
     // No code under test waits on the clock here; the refresh compares its due point only (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     world.clock.advance(Duration::from_secs(3575));
     let refreshed = world.looped.refresh(stop).unwrap();
     assert!(
@@ -860,6 +868,10 @@ fn a_switch_moves_session_reviewer_and_warm_to_the_new_factories() {
     let start = world.clock.now();
     let stop = world.looped.warm_stop(start).expect("the new route warms");
     // No code under test waits on the clock here; the refresh compares its due point only (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     world.clock.advance(Duration::from_secs(3575));
     let refreshed = world.looped.refresh(stop).unwrap();
     assert!(matches!(refreshed, crate::warm::Refreshed::Sent));

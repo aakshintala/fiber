@@ -59,9 +59,10 @@ pub(crate) fn is_built_in(name: &str) -> bool {
 /// `commands`, the session's `commands` answer, in order, each with the
 /// hint and tag it gives. An
 /// extension row (`extension` set) named like a drawn built-in takes that
-/// row's slot, with its own description, hint and tag; one named like an
-/// alias takes only that alias off its row, leaving the row's other
-/// aliases; any other row named like a built-in is left out.
+/// row's slot, with its own description, hint and tag, and keeps its
+/// unclaimed aliases; one named like an alias takes only that alias off
+/// its row, leaving the row's other aliases; any other row named like a
+/// built-in is left out.
 pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
     let replacement = |name: &str| {
         commands
@@ -69,10 +70,18 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
             .find(|command| command.name == name && command.extension)
     };
     let built_ins = TABLE.iter().map(|entry| {
+        // An extension row named like an alias takes that
+        // alias only, so only one entry of it shows; the row
+        // keeps its other aliases.
+        let aliases: Vec<String> = aliases_of(entry.name)
+            .iter()
+            .filter(|alias| replacement(alias).is_none())
+            .map(|alias| (*alias).to_owned())
+            .collect();
         if let Some(command) = replacement(entry.name) {
             Row {
                 name: command.name.clone(),
-                aliases: Vec::new(),
+                aliases,
                 description: command.description.clone(),
                 hint: command.argument_hint.clone(),
                 tag: command.tag.clone(),
@@ -80,14 +89,7 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
         } else {
             Row {
                 name: entry.name.to_owned(),
-                // An extension row named like an alias takes that
-                // alias only, so only one entry of it shows; the row
-                // keeps its other aliases.
-                aliases: aliases_of(entry.name)
-                    .iter()
-                    .filter(|alias| replacement(alias).is_none())
-                    .map(|alias| (*alias).to_owned())
-                    .collect(),
+                aliases,
                 description: entry.description.to_owned(),
                 hint: entry.hint.map(str::to_owned),
                 tag: COMMAND.to_owned(),

@@ -1320,6 +1320,10 @@ fn clock_jump_past_deadline_during_retry_wait_fails() {
         "the retry wait to park at its target"
     );
     // Late wake past the 30 s retry park to 100 s, past the 60 s deadline; the park is proven just above (ruling 6261259790).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "late wake: one advance past a park proven at its exact instant just before (ruling 6261259790)"
+    )]
     clock.advance(Duration::from_secs(100));
     let failure = err(Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&done_rx, "the jumped retry wait to fail"));

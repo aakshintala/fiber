@@ -682,7 +682,12 @@ fn a_written_but_undrained_answer_waits_out_the_bound() {
         clock.await_parked(end, fakes::Deadline::after(DEADLINE)),
         "the answer waits for the drain"
     );
-    clock.advance(crate::port::STOP_CLOSE_WAIT + Duration::from_secs(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        crate::port::STOP_CLOSE_WAIT,
+        &fakes::Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE).recv_or_fail(&done_rx, "the wait ends at the bound");
     let line: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(
@@ -2293,9 +2298,19 @@ fn the_idle_timer_starts_when_the_open_count_reaches_zero() {
     let first = hub.register(&a).expect("the clone succeeds");
     assert_eq!(hub.zero_since(), None, "an open client clears the timer");
     let second = hub.register(&b).expect("the clone succeeds");
+    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(5));
     disconnect(&hub, first);
     assert_eq!(hub.zero_since(), None, "one client is still open");
+    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(5));
     disconnect(&hub, second);
     assert_eq!(hub.zero_since(), Some(clock.now()), "0 at the departure");
@@ -2328,10 +2343,20 @@ fn rollback_removes_the_count_and_restarts_the_timer_at_zero() {
     let first = hub.register(&a).expect("the clone succeeds");
     let second = hub.register(&b).expect("the clone succeeds");
     assert_eq!(hub.clients(), 2);
+    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(5));
     hub.rollback(first);
     assert_eq!(hub.clients(), 1);
     assert_eq!(hub.zero_since(), None, "one client is still open");
+    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(5));
     hub.rollback(second);
     assert_eq!(hub.clients(), 0);
@@ -3311,7 +3336,7 @@ fn prompts(starter: &FakeStarter) -> usize {
 /// The first-prompt thread re-checked after an advance of `by` and is
 /// still waiting for `due`.
 fn still_waiting(clock: &fakes::clock::FakeClock, due: std::time::Instant, by: Duration) {
-    let mark = clock.advance_marked(by);
+    let mark = clock.advance_when_parked(Some(due), None, by, &fakes::Deadline::after(DEADLINE));
     assert!(
         clock.await_parked_since(&mark, Some(due), fakes::Deadline::after(DEADLINE)),
         "the first prompt re-checked and still waits"
@@ -3382,12 +3407,16 @@ fn a_summary_subscribe_waits_for_the_bound() {
     let (session, due) = start_with_content(&mut client, &temp, &clock);
     client.send(&relayed_subscribe("c_summary", &session, "summary"));
     let _answer = accepted(&client.next("the summary answer"));
-    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
     still_waiting(&clock, due, Duration::ZERO);
     assert_eq!(prompts(&starter), 0);
     still_waiting(&clock, due, Duration::from_millis(999));
     assert_eq!(prompts(&starter), 0, "one millisecond before the bound");
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(1),
+        &fakes::Deadline::after(DEADLINE),
+    );
     assert!(starter.await_received(3, DEADLINE));
     assert_eq!(prompts(&starter), 1, "the prompt goes at the bound");
 }
@@ -3404,10 +3433,14 @@ fn a_full_subscribe_on_another_connection_does_not_release() {
     other.send(&relayed_subscribe("c_other", &session, "full"));
     let (id, _) = accepted(&other.next("the other client's answer"));
     assert_eq!(id, "c_other");
-    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
     still_waiting(&clock, due, Duration::ZERO);
     assert_eq!(prompts(&starter), 0);
-    clock.advance(FIRST_PROMPT_WAIT);
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        FIRST_PROMPT_WAIT,
+        &fakes::Deadline::after(DEADLINE),
+    );
     assert!(starter.await_received(3, DEADLINE));
     assert_eq!(prompts(&starter), 1);
 }
@@ -3438,7 +3471,12 @@ fn a_failed_answer_write_still_arms_the_bound() {
         clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
         "the bound is armed"
     );
-    clock.advance(FIRST_PROMPT_WAIT);
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        FIRST_PROMPT_WAIT,
+        &fakes::Deadline::after(DEADLINE),
+    );
     assert!(starter.await_received(2, DEADLINE));
     assert_eq!(prompts(&starter), 1);
 }
@@ -3465,8 +3503,16 @@ fn a_connection_that_never_subscribes_gets_the_prompt_at_the_bound() {
     let mut client = Client::connect(&hub);
     client.hello();
     let (session, due) = start_with_content(&mut client, &temp, &clock);
-    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
-    clock.advance(FIRST_PROMPT_WAIT);
+    assert!(
+        clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
+        "the first prompt waits at its bound"
+    );
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        FIRST_PROMPT_WAIT,
+        &fakes::Deadline::after(DEADLINE),
+    );
     assert!(starter.await_received(2, DEADLINE));
     client.send(&relayed_subscribe("c_late", &session, "full"));
     let (id, _) = accepted(&client.next("the late subscription's answer"));
