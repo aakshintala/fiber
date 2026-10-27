@@ -542,6 +542,10 @@ fn a_silent_handshake_records_nothing_on_the_injected_clock() {
     // Half the bound passes with no client bytes: the same reader
     // announces its next wait in sequence, still parked on the silent
     // peer, having answered nothing and recorded nothing.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     clock.advance(Duration::from_secs(15));
     let still_deadline = Deadline::after(CONNECT_WITHIN);
     let still = loop {

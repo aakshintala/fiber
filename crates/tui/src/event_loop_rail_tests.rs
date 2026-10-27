@@ -70,10 +70,6 @@ fn live(session: &str, since: u64) -> Line {
 }
 
 #[test]
-#[allow(
-    clippy::disallowed_methods,
-    reason = "No code under test waits on the fake clock (ruling 6179406086, #2334 comment, part B)."
-)]
 fn the_loop_gives_the_app_the_wall_time() {
     let mut lp = wide();
     let clock = fakes::clock::FakeClock::new();
@@ -84,6 +80,10 @@ fn the_loop_gives_the_app_the_wall_time() {
     feed(&mut lp, vec![Input::Resize]);
     assert!(shown(&lp).contains("16s"), "{}", shown(&lp));
     // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "No code under test waits on the fake clock (ruling 6179406086, #2334 comment, part B)."
+    )]
     clock.advance(Duration::from_secs(60));
     feed(&mut lp, vec![Input::Resize]);
     assert!(shown(&lp).contains("1m"), "{}", shown(&lp));

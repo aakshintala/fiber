@@ -737,6 +737,10 @@ fn timeout_leaves_a_stubborn_group_listed_at_its_bound() {
     // Jump to one nanosecond short of the end: every pass between still
     // found the scripted group alive and sent again.
     // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline (ruling 6260728504)"
+    )]
     let mark = clock.advance_marked(
         doors::SHUTDOWN_BOUND
             .checked_sub(Duration::from_nanos(1))
@@ -822,6 +826,10 @@ fn timeout_with_a_live_leader_answers_at_the_bound_without_the_reap() {
     );
     // Jump to one nanosecond short of the end: still parked, no answer.
     // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline (ruling 6260728504)"
+    )]
     let mark = clock.advance_marked(
         doors::SHUTDOWN_BOUND
             .checked_sub(Duration::from_nanos(1))
@@ -1033,6 +1041,10 @@ fn a_key_finished_after_its_timeout_is_refused() {
         std::fs::write(&go, "").unwrap();
         generation_reaches(&reads.wake, seen + 2, "the two wakes");
         // No code under test waits on the clock here; the wait is held on the state lock between its checks (ruling 6179406086).
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
         clock.advance(timeout + Duration::from_secs(1));
     }
     let error = Deadline::after(DEADLINE)
@@ -1770,8 +1782,18 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
     );
     let cycles = (doors::SHUTDOWN_BOUND.as_millis() / 50) as usize;
     // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline (ruling 6260728504)"
+    )]
     let mut mark = clock.advance_marked(Duration::from_millis(50));
     let mut answer = None;
+    // Crosses only poll pauses to the shutdown end; the loop below holds the
+    // single raw advance, proven parked at its poll (ruling 6260728504).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline (ruling 6260728504)"
+    )]
     for _ in 1..cycles {
         if let Ok(got) = settled.try_recv() {
             answer = Some(got);
@@ -2055,7 +2077,17 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
         "the settle parked at its poll"
     );
     // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline (ruling 6260728504)"
+    )]
     let mut mark = clock.advance_marked(Duration::from_millis(50));
+    // Crosses only poll pauses to the shutdown end; the loop below holds the
+    // single raw advance, proven parked at its poll (ruling 6260728504).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline (ruling 6260728504)"
+    )]
     loop {
         if let Ok(answer) = finished.try_recv() {
             assert!(
@@ -2329,6 +2361,10 @@ fn an_empty_shutdown_answers_true_past_its_end() {
         "an empty shutdown settles at once"
     );
     // No code under test waits on the clock here; the first shutdown has answered without parking (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(doors::SHUTDOWN_BOUND + Duration::from_secs(1));
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(

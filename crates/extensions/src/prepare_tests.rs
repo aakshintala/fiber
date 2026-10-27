@@ -275,6 +275,10 @@ fn a_stalled_install_step_is_stopped_at_its_deadline() {
     );
     // At the install-step deadline the run stops.
     // Crosses only poll pauses to the install-step deadline; the run is proven parked at its poll (ruling 6260728504).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline (ruling 6260728504)"
+    )]
     clock.advance(INSTALL_STEP_DEADLINE);
     let kill_at = clock.now() + GRACE;
     let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);

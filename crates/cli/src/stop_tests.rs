@@ -289,6 +289,12 @@ fn a_silent_hub_fails_at_the_deadline() {
         clock.await_parked(due, Deadline::after(DEADLINE)),
         "the exchange parks at its deadline"
     );
+    // Late wake past the due park to STOP_WITHIN + 1 s; the park is
+    // proven just above (ruling 6261259790).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "late wake: one advance past a park proven at its exact instant just before (ruling 6261259790)"
+    )]
     clock.advance(STOP_WITHIN + Duration::from_secs(1));
     let (result, out) = Deadline::after(DEADLINE)
         .recv(&done)
@@ -979,6 +985,12 @@ fn a_failed_close_read_is_lost_not_late() {
     let advancer = Arc::clone(&clock);
     thread::spawn(move || {
         if advancer.await_parked(due, Deadline::after(DEADLINE)) {
+            // Late wake past the due park to STOP_WITHIN + 1 s; the park
+            // is proven just above (ruling 6261259790).
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "late wake: one advance past a park proven at its exact instant just before (ruling 6261259790)"
+            )]
             advancer.advance(STOP_WITHIN + Duration::from_secs(1));
         }
     });

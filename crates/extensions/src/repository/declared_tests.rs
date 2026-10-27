@@ -697,6 +697,10 @@ fn stalled_ls_files_child() {
             assert!(early.is_none(), "the stall answers only at its deadline");
             // At the git deadline the run stops.
             // Crosses only poll pauses to the git deadline; the run is proven parked at its poll (ruling 6260728504).
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline (ruling 6260728504)"
+            )]
             clock.advance(GIT_DEADLINE);
             // The run parks for the grace, or answers at once when the stall dies
             // on SIGTERM with no grace park; an answer meanwhile ends this at

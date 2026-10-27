@@ -796,6 +796,10 @@ fn stalled_first_run(init: &str, hold: bool, steps: &[u64]) -> Called {
     // The last step may pass the abandon instant, which
     // `advance_when_parked` refuses, so it waits for the park itself.
     assert!(clock.await_parked(asked + ABANDON_AT, Deadline::after(WAIT)));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "late wake: one advance past a park proven at its exact instant just before (ruling 6261259790)"
+    )]
     clock.advance(Duration::from_millis(*last));
     let called = Deadline::after(WAIT).recv_or_fail(&answer, "the first run's answer");
     drop(release_tx);

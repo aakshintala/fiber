@@ -76,20 +76,40 @@ fn milestones_count_from_the_send_not_from_pre_send_work() {
     let clock = fakes::clock::FakeClock::new();
     // Work before the send, such as signing, is in no duration.
     // No code under test waits on the clock here; it stamps pre-send work outside any duration (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(30));
     let mut finish = record(&log, &clock, clock.now());
     // No code under test waits on the clock here; it stamps the send (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(5));
     finish.sent(clock.now(), 200);
     // No code under test waits on the clock here; it stamps the first token (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(7));
     finish.latch_first_token();
     // A later delta never overwrites the first stamp.
     // No code under test waits on the clock here; it stamps a later token (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(17));
     finish.latch_first_token();
     finish.set_bytes(91);
     // No code under test waits on the clock here; it stamps the finish (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(20));
     finish.finish();
     let lines = log.lines();
@@ -141,6 +161,10 @@ fn a_backwards_clock_contributes_zero() {
     let clock = fakes::clock::FakeClock::new();
     let earlier = clock.now();
     // No code under test waits on the clock here; it stamps the earlier instant the backwards subtraction reads (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(9));
     // The stamps predate the send: no panic, no fabricated duration.
     let mut finish = record(&log, &clock, clock.now());
@@ -186,9 +210,17 @@ fn the_first_latch_wins() {
     let mut finish = record(&log, &clock, clock.now());
     finish.sent(clock.now(), 200);
     // No code under test waits on the clock here; it stamps the latch (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(4));
     finish.latch_first_token();
     // No code under test waits on the clock here; it stamps a second latch (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(40));
     finish.latch_first_token();
     finish.finish();
@@ -203,6 +235,10 @@ fn finish_writes_once() {
     finish.sent(clock.now(), 200);
     finish.finish();
     // No code under test waits on the clock here; it stamps a second finish (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(100));
     finish.finish();
     let lines = log.lines();

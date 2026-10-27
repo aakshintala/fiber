@@ -339,6 +339,10 @@ fn a_new_clock_starts_at_its_origin_and_the_fixed_epoch() {
 #[test]
 fn advance_moves_now_and_wall_by_the_same_duration() {
     let clock = FakeClock::new();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_millis(5));
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
     assert_eq!(clock.wall(), wall_epoch() + Duration::from_millis(5));
@@ -450,6 +454,10 @@ fn wait_until_parks_and_advance_wakes_it() {
     // The thread still holds the stand-in mutex. `advance` wakes it only
     // after `wait_until` has registered the park and the closure is in
     // `Condvar::wait`.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_secs(10));
     assert_eq!(
         Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -639,6 +647,10 @@ fn advance_skips_a_waker_whose_owner_was_dropped() {
     let wake: Arc<dyn Wake> = stand;
     clock.subscribe(Arc::downgrade(&wake));
     drop(wake);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_secs(1));
     assert_eq!(clock.now(), clock.origin() + Duration::from_secs(1));
 }
@@ -651,6 +663,10 @@ fn two_advances_both_move_the_clock() {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             barrier.wait();
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+            )]
             clock.advance(Duration::from_millis(1));
             if let Ok(()) = tx.send(()) {}
         });
@@ -753,6 +769,10 @@ fn a_park_present_at_the_advance_does_not_match() {
         clock.await_parked(until, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "waited for the thread to park at the deadline"
     );
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     assert!(
         !clock.await_parked_since(&mark, Some(until), Deadline::after(Duration::ZERO)),
@@ -809,6 +829,10 @@ fn a_later_park_at_any_deadline_by_a_thread_in_the_mark_matches() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&second_rx)
         .expect("waited for the second park");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     let (awaited_tx, awaited_rx) = mpsc::channel();
     let clock_wait = Arc::clone(&clock);
@@ -842,6 +866,10 @@ fn a_park_by_a_thread_absent_from_the_mark_does_not_match() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -907,6 +935,10 @@ fn only_the_park_with_the_awaited_until_matches() {
             .expect("waited for the first park"),
         "first"
     );
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     release_tx.send(()).unwrap();
     assert_eq!(
@@ -956,6 +988,10 @@ fn advance_marked_moves_the_clock_and_wakes_subscribers() {
     let (tx, rx) = mpsc::channel();
     let wake: Arc<dyn Wake> = Arc::new(ChanWake(tx));
     clock.subscribe(Arc::downgrade(&wake));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance_marked(Duration::from_millis(5));
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
     assert_eq!(clock.wall(), wall_epoch() + Duration::from_millis(5));
@@ -1167,6 +1203,10 @@ fn a_thread_that_left_its_park_before_the_advance_matches_its_next_park() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&left)
         .expect("waited for the thread to leave its park");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     gate.send(()).unwrap();
     assert!(
@@ -1195,6 +1235,10 @@ fn a_re_park_before_the_advance_does_not_match() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&second)
         .expect("waited for the thread to park again");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     assert!(
         !clock.await_parked_since(&mark, Some(until), Deadline::after(Duration::ZERO)),
@@ -1231,6 +1275,10 @@ fn await_any(clock: &Arc<FakeClock>, mark: &super::Mark) -> bool {
 #[test]
 fn await_any_parked_since_is_false_when_no_thread_parks_again() {
     let clock = FakeClock::new();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     assert!(
         !clock.await_any_parked_since(&mark, Deadline::after(Duration::from_millis(30))),
@@ -1254,6 +1302,10 @@ fn await_any_parked_since_matches_a_next_park_after_a_leave() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&left)
         .expect("waited for the thread to leave its park");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     let (awaited_tx, awaited_rx) = mpsc::channel();
     let (checked, release_check) = clock.pause_next_await_any_predicate();
@@ -1302,6 +1354,10 @@ fn await_any_parked_since_needs_an_id_past_the_mark() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&first)
         .expect("waited for the thread to park");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     assert!(
         !clock.await_any_parked_since(&mark, Deadline::after(Duration::from_millis(30))),
@@ -1335,6 +1391,10 @@ fn await_any_parked_since_ignores_a_thread_absent_from_the_mark() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1365,6 +1425,10 @@ fn a_thread_parking_after_the_advance_is_absent_from_the_mark() {
         clock.await_parked_unbounded(Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "thread A is parked unbounded"
     );
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     let (parked_b, release_b, exit_b, b_id) = park_once(&clock, None);
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1514,6 +1578,10 @@ fn a_thread_waited_on_by_id_is_in_the_mark_for_its_next_park() {
         "thread B parked unbounded: {:?}, thread {b_id:?}",
         clock.parked(),
     );
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     let mark = clock.advance_marked(Duration::from_millis(1));
     release_tx.send(()).unwrap();
     let wait = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
@@ -1809,6 +1877,10 @@ fn a_step_past_the_named_threads_stale_park_waits_for_its_new_park() {
 #[test]
 fn a_move_before_a_wait_does_not_fail_the_next_advance() {
     let clock = FakeClock::new();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_secs(1));
     let until = clock.now() + Duration::from_secs(30);
     let (parked, release, exit, thread) = park_seq(&clock, vec![Some(until)]);
@@ -1847,6 +1919,10 @@ fn another_drivers_move_fails_an_active_advance_wait() {
     // The pause holds the state lock, so release it before reading now().
     resume.send(()).unwrap();
     let before = clock.now();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance_marked(Duration::from_millis(1));
     let message = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the other-driver failure")
@@ -1874,6 +1950,10 @@ fn a_move_then_a_wrong_park_reports_the_move() {
     );
     Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&entered, "the helper's pass pause");
     let before = clock.now();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance_marked(Duration::from_millis(1));
     let (parked, release, exit, _) = park_once(&clock, Some(e + Duration::from_secs(1)));
     Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the later wrong park");
@@ -1908,6 +1988,10 @@ fn a_wrong_park_then_a_move_reports_the_wrong_park() {
     let (parked, release, exit, _) = park_once(&clock, Some(e + Duration::from_secs(1)));
     Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the earlier wrong park");
     let before = clock.now();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance_marked(Duration::from_millis(1));
     resume.send(()).unwrap();
     let message = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1938,6 +2022,10 @@ fn a_move_before_the_named_park_fails_rather_than_matches() {
     );
     Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&entered, "the helper's pass pause");
     let before = clock.now();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance_marked(Duration::from_millis(1));
     let (parked, release, exit, _) = park_once(&clock, Some(e));
     Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the later matching park");
@@ -1961,6 +2049,10 @@ fn a_named_threads_park_held_across_an_advance_does_not_match() {
     let e = clock.now() + Duration::from_secs(30);
     let (parked, release, exit, a) = park_once(&clock, Some(e));
     Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "A's park");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_millis(1));
     let before = clock.now();
     let outcome = run_advance_when_parked(
@@ -2035,6 +2127,10 @@ fn one_fresh_park_beside_stale_parks_matches_with_no_thread_named() {
     let parked = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     parked.recv_or_fail(&a_park, "A's park");
     parked.recv_or_fail(&b_park, "B's park");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_millis(1));
     let (c_park, c_release, c_exit, c) = park_once(&clock, Some(e));
     Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&c_park, "C's fresh park");
@@ -2560,6 +2656,10 @@ fn advance_when_parked_rejects_a_named_park_at_now() {
 #[test]
 fn advance_when_parked_rejects_a_named_park_before_now() {
     let clock = FakeClock::new();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_millis(5));
     let past = clock.origin();
     let now = clock.now();
@@ -3390,12 +3490,20 @@ fn subscribing_one_waker_twice_wakes_it_once_per_advance() {
     let wake: Arc<dyn Wake> = Arc::new(ChanWake(tx));
     clock.subscribe(Arc::downgrade(&wake));
     clock.subscribe(Arc::downgrade(&Arc::clone(&wake)));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_millis(5));
     assert!(rx.try_recv().is_ok(), "one advance wakes the waker once");
     assert!(
         matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "the second subscription wakes nothing more"
     );
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_millis(5));
     assert!(
         rx.try_recv().is_ok(),
@@ -3416,6 +3524,10 @@ fn two_distinct_wakers_each_wake_once_per_advance() {
     let second: Arc<dyn Wake> = Arc::new(ChanWake(tx));
     clock.subscribe(Arc::downgrade(&first));
     clock.subscribe(Arc::downgrade(&second));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_millis(5));
     assert!(rx.try_recv().is_ok(), "the first waker wakes");
     assert!(rx.try_recv().is_ok(), "the second waker wakes");
@@ -3859,6 +3971,10 @@ fn advance_when_parked_threads_ignores_parks_made_before_the_last_move() {
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     // Even a zero-length move closes the boundary: both parks are stale.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::ZERO);
     let now = clock.now();
     let outcome = run_advance_when_parked_threads(
@@ -4434,6 +4550,10 @@ fn advance_when_parked_then_never_runs_the_hook_for_another_drivers_move() {
     // The pause holds the state lock, so the release goes first.
     release_waiter.send(()).expect("released the wait");
     let before = clock.now();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance_marked(Duration::from_millis(1));
     let message = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
@@ -4725,6 +4845,10 @@ fn try_advance_when_parked_ignores_a_stale_park() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     // The held park predates this move, so it is stale: it neither matches
     // nor mismatches.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_millis(1));
     let now = clock.now();
     let outcome = run_try_advance_when_parked(
@@ -5185,6 +5309,10 @@ fn try_advance_when_parked_rejects_a_named_park_at_or_before_now() {
     assert_eq!(clock.now(), at_now, "a rejected wait moves no time");
     // Before now: a move after the named instant fails the same way.
     let clock = FakeClock::new();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_millis(5));
     let past = clock.origin();
     let now = clock.now();
@@ -5321,6 +5449,10 @@ fn another_drivers_move_fails_a_soft_advance_wait() {
     // The pause holds the state lock, so release it before reading now().
     resume.send(()).unwrap();
     let before = clock.now();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance_marked(Duration::from_millis(1));
     let message = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the other-driver failure")
@@ -5607,10 +5739,18 @@ fn only_an_exactly_parked_deadline_authorises_an_advance() {
         let error = result.as_ref().err().cloned().unwrap_or_default();
         let before_cleanup = clock.now();
         let parked_before_cleanup = clock.parked();
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+        )]
         clock.advance(Duration::from_millis(9));
         let early_finished = Deadline::after(MUST_SUCCEED_WITHIN).recv(&early_done);
         let late_reparked = Deadline::after(MUST_SUCCEED_WITHIN).recv(&late_parked);
         let late_still_parked = clock.parked().contains(&Some(late));
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+        )]
         clock.advance(Duration::from_millis(2));
         let late_finished = Deadline::after(MUST_SUCCEED_WITHIN).recv(&late_done);
 
@@ -5639,6 +5779,10 @@ fn only_an_exactly_parked_deadline_authorises_an_advance() {
 #[test]
 fn advance_when_parked_in_on_a_saturated_clock_errors_before_waiting() {
     let clock = FakeClock::with_sleep(Sleep::Waits);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::MAX);
     let now = clock.now();
     // A zero bound proves the overflow guard wins: without it the wait ends
@@ -5689,6 +5833,10 @@ fn advance_when_parked_in_past_what_the_wall_can_represent_errors_before_waiting
 #[test]
 fn parked_offsets_reports_the_offset_and_the_remaining_deadline() {
     let clock = FakeClock::with_sleep(Sleep::Waits);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "support::clock self-test deliberately moves the clock; exempt (docs/testing.md, \"Waits and timeouts\")"
+    )]
     clock.advance(Duration::from_secs(5));
     let until = clock.now() + Duration::from_secs(10);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
