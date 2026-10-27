@@ -1186,6 +1186,18 @@ fn steering_selected_hides_the_item_hint_itself() {
     ));
     app.select_steering(0);
     assert!(app.steering_selected().is_some());
+    // Selecting loads the row's text, so clear it with Backspace: that
+    // empties the draft while the selection stays, isolating the first
+    // `||`'s steering arm (`!open` false, draft empty).
+    let now = fakes::clock::FakeClock::new().now();
+    while !app.input().expand().is_empty() {
+        app.on_key(Key::Backspace, now);
+    }
+    assert!(
+        app.steering_selected().is_some(),
+        "the selection survives clearing the draft"
+    );
+    assert!(app.input().expand().is_empty(), "the draft is empty");
     assert!(app.item_open());
     assert!(app.item_view().is_some());
     // The first `||` matters alone here: not-open is false, the draft
