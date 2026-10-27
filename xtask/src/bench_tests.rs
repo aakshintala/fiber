@@ -18,7 +18,7 @@ const DOC: &str = concat!(
     "| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked | 16 ms | 12 ms | 13 ms | 55 % | 9 % |\n",
     "| Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked | 7 ms | 8 ms | 11 ms | 18 % | 8 % |\n",
     "| Terminal to its first frame, attaching | 50 ms | Linux x86_64 | picked | 50 ms | 50 ms | 50 ms | — | — |\n",
-    "| Terminal attaching, to the end of the opening pass | 0 ms | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| Terminal attaching, to the end of the opening pass | 420.4 ms (1 MiB); 2,784.8 ms (10 MiB) | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Terminal, attaching a 10 MiB session | 200 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Session, memory kept after the busy turn | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
@@ -1340,8 +1340,8 @@ fn a_numbered_pass_end_class_cell_fails_the_table_check() {
         head = without_metric(&head, id);
     }
     let doc = doc_with(
-        "| Terminal attaching, to the end of the opening pass | 0 ms | Linux x86_64 | picked | — |",
-        "| Terminal attaching, to the end of the opening pass | 0 ms | Linux x86_64 | picked | 50 ms |",
+        "| Terminal attaching, to the end of the opening pass | 420.4 ms (1 MiB); 2,784.8 ms (10 MiB) | Linux x86_64 | picked | — |",
+        "| Terminal attaching, to the end of the opening pass | 420.4 ms (1 MiB); 2,784.8 ms (10 MiB) | Linux x86_64 | picked | 50 ms |",
     );
     let out = judge_doc(
         &doc,
@@ -3455,7 +3455,9 @@ fn class_ceiling_cells_carry_the_ruled_figures() {
         .find(|l| l.starts_with("| Terminal attaching, to the end of the opening pass"))
         .unwrap();
     assert!(
-        pass.contains("| 0 ms | Linux x86_64 | picked | — | — | — | — | — |"),
+        pass.contains(
+            "| 420.4 ms (1 MiB); 2,784.8 ms (10 MiB) | Linux x86_64 | picked | — | — | — | — | — |"
+        ),
         "{pass}"
     );
 }
@@ -4170,7 +4172,10 @@ fn pass_end_stays_advisory_while_every_class_cell_is_dash() {
         "Terminal attaching, to the end of the opening pass",
     );
     assert!(line.ends_with("| advisory |"), "{line}");
-    assert!(line.contains("0 ms"), "{line}");
+    assert!(
+        line.contains("420.4 ms (1 MiB); 2,784.8 ms (10 MiB)"),
+        "{line}"
+    );
     assert_eq!(
         line.split('|').nth(4).unwrap().trim(),
         "1 MiB (1,050,100 bytes): 40.5 ms; 10 MiB (10,490,000 bytes): 97.0 ms"
