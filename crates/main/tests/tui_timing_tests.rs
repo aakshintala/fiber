@@ -128,6 +128,25 @@ fn seed(setup: &Setup, extra: Value) {
     write_json(&setup.home().join("config.json"), &config);
 }
 
+/// Every complete `op_timing` line in the `tui-<pid>` diagnostic file,
+/// in file order; none when the process wrote nothing there, as on the
+/// base, where the terminal holds no timer. A read can land mid-write
+/// while the process runs, so an unterminated final line is a torn
+/// record and is never parsed.
+fn parse_op_lines(contents: &str) -> Vec<Value> {
+    // Every diagnostic write ends its record with a newline, so a final
+    // line without one is still being written and never parses whole.
+    let mut lines: Vec<&str> = contents.lines().collect();
+    if !contents.ends_with('\n') {
+        lines.pop();
+    }
+    lines
+        .into_iter()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|line: &Value| line["code"] == "op_timing")
+        .collect()
+}
+
 /// Every `op_timing` line in the `tui-<pid>` diagnostic file, in file
 /// order; none when the process wrote nothing there, as on the base,
 /// where the terminal holds no timer.
@@ -136,12 +155,7 @@ fn op_lines(setup: &Setup, pid: u32) -> Vec<Value> {
     if !path.exists() {
         return Vec::new();
     }
-    fs::read_to_string(&path)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .filter(|line: &Value| line["code"] == "op_timing")
-        .collect()
+    parse_op_lines(&fs::read_to_string(&path).unwrap())
 }
 
 fn ops(setup: &Setup, pid: u32, op: &str) -> Vec<Value> {
@@ -149,6 +163,45 @@ fn ops(setup: &Setup, pid: u32, op: &str) -> Vec<Value> {
         .into_iter()
         .filter(|line| line["data"]["op"] == op)
         .collect()
+}
+
+/// One complete `op_timing` record, serialized as the diagnostic writer
+/// leaves it: a single newline-terminated JSON line.
+fn one_op_line() -> (Value, String) {
+    let record = json!({
+        "ts": 1700000000007u64,
+        "level": "debug",
+        "process": "tui",
+        "code": "op_timing",
+        "message": "An operation ended.",
+        "data": {"op": "tui.log_read", "ms": 7},
+    });
+    let line = serde_json::to_string(&record).unwrap();
+    assert!(line.len() > 42, "the record reaches past column 42: {line}");
+    (record, line)
+}
+
+/// A read that lands mid-write holds a final record cut at column 42,
+/// inside a string: the base parser unwraps it and panics with EOF, and
+/// the shared parser drops it while keeping the complete records.
+#[test]
+fn a_final_record_cut_at_column_42_is_ignored() {
+    let (record, line) = one_op_line();
+    let cut = &line[..42];
+    let error = serde_json::from_str::<Value>(cut).unwrap_err();
+    assert!(error.is_eof(), "the cut record ends mid-value: {error}");
+    assert_eq!(error.column(), 42, "the cut lands at column 42: {error}");
+    let parsed = parse_op_lines(&format!("{line}\n{cut}"));
+    assert_eq!(parsed, vec![record], "only the complete record parses");
+}
+
+/// Newline-terminated records all parse, so the torn-tail rule keeps no
+/// complete line back.
+#[test]
+fn newline_terminated_records_all_parse() {
+    let (record, line) = one_op_line();
+    let parsed = parse_op_lines(&format!("{line}\n{line}\n"));
+    assert_eq!(parsed, vec![record.clone(), record]);
 }
 
 /// The wire promise on every terminal timer: the process identity, no
