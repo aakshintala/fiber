@@ -2,26 +2,18 @@
 //! "Selection and copy"), against the app and the view it draws.
 
 use std::path::PathBuf;
-use std::time::Instant;
 
-use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
 use super::COPY_FAILED;
+use crate::app::testkit::{SESSION, hello, now};
 use crate::app::{App, Effect, SurfaceId, Target};
 use crate::home::Launch;
 use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::{self, TargetId};
-
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
-
-/// The injected clock's now.
-fn now() -> Instant {
-    fakes::clock::FakeClock::new().now()
-}
 
 /// A line of the session, numbered `seq` when it has one.
 fn line(kind: &str, payload: Value, action: Option<&str>, seq: Option<u64>) -> Line {
@@ -34,16 +26,6 @@ fn line(kind: &str, payload: Value, action: Option<&str>, seq: Option<u64>) -> L
         action_id: action.map(|id| contract::ActionId(id.to_owned())),
         seq: seq.map(contract::Seq),
         payload: payload.as_object().cloned().unwrap_or_default(),
-    })
-}
-
-/// The hub's `hub_hello`.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
     })
 }
 
