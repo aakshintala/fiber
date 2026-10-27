@@ -63,6 +63,7 @@ const DRAWN_ORDER: &[&str] = &[
     "usage",
     "quota",
     "status",
+    "doctor",
     "diff",
     "release-notes",
     "copy",
@@ -466,4 +467,17 @@ fn quota_opens_the_view_from_the_list() {
         quota.line(),
         "/quota  Opens the quota view and fetches every label's quota.  command"
     );
+}
+
+#[test]
+fn doctor_opens_the_report_from_the_list() {
+    let all = rows(&[]);
+    let doctor = all.iter().find(|row| row.name == "doctor").unwrap();
+    assert_eq!(doctor.line(), "/doctor  Opens the doctor report.  command");
+    let names: Vec<&str> = all.iter().map(|row| row.name.as_str()).collect();
+    let (status, doctor) = (
+        names.iter().position(|name| *name == "status").unwrap(),
+        names.iter().position(|name| *name == "doctor").unwrap(),
+    );
+    assert_eq!(doctor, status + 1);
 }
