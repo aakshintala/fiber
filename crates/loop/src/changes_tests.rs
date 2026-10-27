@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
-use contract::events::{Event, InstructionReason, InstructionSent};
+use contract::events::{DirectoryAdded, Event, InstructionReason, InstructionSent};
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::{Envelope, Seq, SessionId};
 use fakes::clock::FakeClock;
@@ -2267,4 +2267,135 @@ fn prune_line_follows_a_declared_write_not_the_tool_name() {
     // A tool named `write` that declares only a read gets none.
     assert!(pruned_with(&state, &workspace, vec![Effect::Reads], &keys).is_empty());
     assert!(pruned_with(&state, &workspace, Vec::new(), &keys).is_empty());
+}
+
+/// Declared `writes` effects over absolute `paths`.
+fn declared_abs(paths: &[String]) -> DeclaredEffects {
+    DeclaredEffects {
+        effects: vec![Effect::Writes],
+        reversible: true,
+        paths: Some(paths.to_vec()),
+    }
+}
+
+#[test]
+fn added_roots_send_their_instruction_file_only_when_a_call_touches_them() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    let shared = home.join("shared");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    std::fs::create_dir_all(&shared).unwrap();
+    let workspace = canon(&workspace);
+    let shared = canon(&shared);
+    let fake = clock();
+    let prompt = inputs(&home, &fake);
+    let message =
+        opening::collect_with_added(&prompt, &workspace, std::slice::from_ref(&shared)).message;
+    assert_eq!(message.added_directories, [shared.display().to_string()]);
+    let mut state = State::initial(&message, &workspace, &prompt);
+    // Untouched, the next turn start reads nothing from the added root.
+    write(&shared.join("AGENTS.md"), "Shared rules.\n");
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    // A call touching the added root queues its file with the full text.
+    let own = state.call_completed(
+        &workspace,
+        &declared_abs(&[shared.join("new.rs").display().to_string()]),
+    );
+    assert!(own.is_empty());
+    let queued = state.take_queued();
+    assert_eq!(queued.len(), 1);
+    let Event::InstructionFile(file) = &queued[0] else {
+        panic!("the touch queues the added root's file: {queued:?}");
+    };
+    assert_eq!(file.path, shared.join("AGENTS.md").display().to_string());
+    assert_eq!(file.reason, InstructionReason::Subdirectory);
+    assert_eq!(file.sent, InstructionSent::Full);
+}
+
+#[test]
+fn resumed_state_restores_added_roots_and_sends_their_files_on_touch() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    let shared = home.join("shared");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    std::fs::create_dir_all(&shared).unwrap();
+    let workspace = canon(&workspace);
+    let shared = canon(&shared);
+    let fake = clock();
+    // The add lands mid-context, after the opening: the resume restores
+    // it from the event, before any call touches the root.
+    let added = Event::DirectoryAdded(DirectoryAdded {
+        path: shared.display().to_string(),
+    });
+    let lines = vec![
+        envelope(
+            "opening_message",
+            &Event::OpeningMessage(opening::collect(&inputs(&home, &fake), &workspace).message),
+        ),
+        envelope("directory_added", &added),
+    ];
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    write(&shared.join("AGENTS.md"), "Shared rules.\n");
+    // Untouched, the resume reads nothing from the restored root.
+    assert!(state.take_queued().is_empty());
+    assert!(state.check(&*fake).files.is_empty());
+    // A call touching the root queues its file, as in the live session.
+    let own = state.call_completed(
+        &workspace,
+        &declared_abs(&[shared.join("new.rs").display().to_string()]),
+    );
+    assert!(own.is_empty());
+    let queued = state.take_queued();
+    assert_eq!(queued.len(), 1);
+    let Event::InstructionFile(file) = &queued[0] else {
+        panic!("the touch queues the restored root's file: {queued:?}");
+    };
+    assert_eq!(file.reason, InstructionReason::Subdirectory);
+}
+
+#[test]
+fn resumed_state_keeps_added_folders_across_a_handoff_opening() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    let shared = home.join("shared");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    std::fs::create_dir_all(&shared).unwrap();
+    let workspace = canon(&workspace);
+    let shared = canon(&shared);
+    let fake = clock();
+    // The first context adds the folder; the handoff's opening lists it;
+    // a call in the new context touches it.
+    let touched = shared.join("new.rs").display().to_string();
+    let touched = [touched.as_str()];
+    let first = opening::collect(&inputs(&home, &fake), &workspace).message;
+    let mut second = opening::collect(&inputs(&home, &fake), &workspace).message;
+    second.added_directories = vec![shared.display().to_string()];
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(first)),
+        envelope(
+            "directory_added",
+            &Event::DirectoryAdded(DirectoryAdded {
+                path: shared.display().to_string(),
+            }),
+        ),
+        envelope("opening_message", &Event::OpeningMessage(second)),
+        started("a_1", Some(&touched)),
+        finished("a_1"),
+    ];
+    // The touched root held no file at the resume: nothing is queued.
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    assert!(state.take_queued().is_empty());
+    // A file created later in the restored root is `created` at the next
+    // turn start, as in the live session.
+    write(&shared.join("AGENTS.md"), "Shared rules.\n");
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(
+        out.files[0].path,
+        shared.join("AGENTS.md").display().to_string()
+    );
+    assert_eq!(out.files[0].reason, InstructionReason::Created);
+    assert_eq!(out.files[0].sent, InstructionSent::Full);
 }

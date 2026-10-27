@@ -434,7 +434,7 @@ impl Loop {
         // notices by, and the set's snapshot would keep the old one
         // (`docs/system-prompt.md`, "Size").
         let inputs = self.skills.with_disabled(&self.prompt);
-        let collected = crate::opening::collect(&inputs, &self.workspace);
+        let collected = crate::opening::collect_with_added(&inputs, &self.workspace, &self.added);
         let crate::opening::Collected {
             message,
             notices,

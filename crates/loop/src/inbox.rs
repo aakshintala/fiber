@@ -949,6 +949,7 @@ impl Loop {
                     path: resolved.display().to_string(),
                 });
                 self.write(&event, None, None)?;
+                self.changes.track_added(&resolved);
                 self.added.push(resolved);
                 accept(ack);
             }

@@ -748,7 +748,8 @@ fn samples() -> Vec<(&'static str, Value)> {
             "files": [{"path": "/h/data/fiber.test-notes/index.md", "content": "- [[x]]"}],
             "budget_bytes": 25000}],
             "skills": [{"name": "s", "description": "d", "path": "/s/SKILL.md",
-            "source": "repository"}]}),
+            "source": "repository"}],
+            "added_directories": ["/shared"]}),
         ),
         (
             "instruction_file",
@@ -1139,6 +1140,21 @@ fn an_opening_message_without_sections_reads_and_writes_back_without_the_key() {
         panic!("not an opening_message");
     };
     assert!(message.extension_sections.is_empty());
+    let written = Value::Object(Event::OpeningMessage(message).payload().unwrap());
+    assert_eq!(written, payload);
+}
+
+#[test]
+fn an_opening_message_with_added_folders_reads_and_writes_them_back() {
+    let payload = json!({"environment": {"date": "2026-09-29", "os": "linux",
+        "arch": "x86_64", "shell": "bash", "workspace": "/w", "git": {"branch": null},
+        "session_log": "/l"}, "instruction_files": [],
+        "skills": [], "added_directories": ["/shared", "/other"]});
+    let Some(Event::OpeningMessage(message)) = read("opening_message", payload.clone()).unwrap()
+    else {
+        panic!("not an opening_message");
+    };
+    assert_eq!(message.added_directories, ["/shared", "/other"]);
     let written = Value::Object(Event::OpeningMessage(message).payload().unwrap());
     assert_eq!(written, payload);
 }

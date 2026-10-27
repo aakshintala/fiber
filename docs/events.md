@@ -965,6 +965,7 @@ Durable.
 | `instruction_files` | array | yes | each file sent, in order: `path` and `content` (strings) |
 | `extension_sections` | array | no | each extension section sent, in order, each entry as below; absent when empty |
 | `skills` | array | yes | the skills listing, each entry as below |
+| `added_directories` | array | no | the session's added folders, resolved, in log order; absent when empty |
 
 | `environment` key | Type | Required | Meaning |
 |---|---|---|---|

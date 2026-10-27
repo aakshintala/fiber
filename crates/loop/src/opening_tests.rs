@@ -19,7 +19,7 @@ use contract::provider::Input;
 use contract::{Envelope, Seq, SessionId};
 use fakes::clock::FakeClock;
 
-use super::{collect, date_of, render};
+use super::{collect, collect_with_added, date_of, render};
 use crate::prompt::PromptInputs;
 
 fn clock() -> Arc<FakeClock> {
@@ -1177,4 +1177,38 @@ fn a_zero_budget_with_a_non_empty_file_is_over() {
         text.contains("Fiber: these files are 1 bytes, over their budget of 0 bytes. Prune them."),
         "{text}"
     );
+}
+
+#[test]
+fn added_folders_are_listed_but_never_read_at_the_opening() {
+    let (base, _held) = dir();
+    let home = base.join("home");
+    let workspace = base.join("work");
+    let shared = base.join("shared");
+    write(&workspace.join("AGENTS.md"), "Workspace rules.\n");
+    write(&shared.join("AGENTS.md"), "Shared rules.\n");
+    let fake = clock();
+    let shared = canon(&shared);
+    let message = collect_with_added(
+        &inputs(&home, &fake),
+        &workspace,
+        std::slice::from_ref(&shared),
+    )
+    .message;
+    // Recorded in log order, resolved.
+    assert_eq!(message.added_directories, [shared.display().to_string()]);
+    // Never read: only the workspace's file is sent.
+    assert_eq!(message.instruction_files.len(), 1);
+    assert_eq!(
+        message.instruction_files[0].path,
+        canon(&workspace.join("AGENTS.md")).display().to_string()
+    );
+    // Listed after the files.
+    let text = render(&message);
+    assert!(text.contains("# Added folders"), "{text}");
+    assert!(text.contains(&format!("- {}", shared.display())), "{text}");
+    // Without added folders the text reads as before.
+    let plain = collected(&home, &workspace, &fake).message;
+    assert!(plain.added_directories.is_empty());
+    assert!(!render(&plain).contains("Added folders"));
 }

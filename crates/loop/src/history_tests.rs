@@ -1382,6 +1382,7 @@ fn opening() -> Event {
         instruction_files: Vec::new(),
         extension_sections: Vec::new(),
         skills: Vec::new(),
+        added_directories: Vec::new(),
     })
 }
 
