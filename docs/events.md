@@ -431,7 +431,7 @@ session").
 
 #### `directory_added`
 
-Durable. Written when the session accepts an `add_directory` driver command (`docs/invocation.md`, "Driver commands") for a folder outside the current boundary. A fresh Fiber spawn also writes an event for each inherited folder not already covered by its workspace, before its opening. A fork uses its parent's events through the chosen history point instead of copying them. A folder already inside the workspace or an added folder is accepted with no event written.
+Durable. Written when the session accepts an `add_directory` driver command (`docs/invocation.md`, "Driver commands") for a folder outside the current boundary, and by a delegate at spawn for each of its parent's added folders that its folded history does not already hold (`docs/delegates.md`, "Forks"). An `add_directory` command for a folder already inside the workspace or an added folder is accepted with no event written.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
