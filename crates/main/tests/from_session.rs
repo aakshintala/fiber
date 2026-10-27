@@ -818,8 +818,31 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
         stream(&[spawn_call("fiber:pb/m")])
     })
     .unwrap();
-    let server_child =
-        fakes::ProviderServer::start([text_reply("d-one"), text_reply("d-two")]).unwrap();
+    // The delegate's first turn runs a shell held on a fifo, so its run
+    // stays open and live while the steer goes out: the shell blocks
+    // reading the fifo, and the test holds the write end open with no
+    // data until the steer is accepted. The steered message joins the
+    // open turn, and the next model call carries it. A real `sleep`
+    // would hold the run on the wall clock instead (`docs/testing.md`,
+    // "Waits and timeouts").
+    let hold = setup.workspace().join("delegate.hold.fifo");
+    fakes::fifo(&hold);
+    let hold_arg = hold.to_string_lossy().into_owned();
+    let marked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen_mark = Arc::clone(&marked);
+    let server_child = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if text.contains(MARK) {
+            seen_mark.store(true, std::sync::atomic::Ordering::SeqCst);
+            return text_reply("d-two-done");
+        }
+        stream(&[function_call(
+            "call_hold",
+            "shell",
+            &json!({"command": format!("read line < '{hold_arg}'")}),
+        )])
+    })
+    .unwrap();
     install_model(&setup, "pa", &server_parent);
     install_model(&setup, "pb", &server_child);
     configure_delegates(&setup);
@@ -837,10 +860,34 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
         .unwrap()
         .to_owned();
     assert_ne!(delegate, parent, "the delegate is its own session");
+    // The prompt goes out only once the parent's first turn has ended: the
+    // turn's end proves the parent is idle, so the loop must accept it.
+    let first_turn = until(&client, "the parent's first turn to end", |line| {
+        line["kind"] == "turn_completed" && line["session_id"] == parent
+    });
+    first_turn.last().expect("the turn ended");
+    // The delegate's first step sends one model call: a step is one
+    // round-trip to the model (`docs/loop.md`, "One step", steps 3-4), so
+    // the first recorded request proves the delegate's turn started.
     assert!(
         server_child.await_requests(1, setup.deadline),
         "the delegate is running"
     );
+    // The writer open is the hold signal: opening for writing blocks until
+    // the shell opens the fifo for reading, and the shell's command does
+    // that only in its blocking `read` — so the open returning proves the
+    // shell is held. The first model call alone only proves the provider
+    // was hit, not that the hold runs. The writer stays open with no data
+    // until the release below; the blocking open runs on a thread bounded
+    // by the deadline, as a blocking wait must (`docs/testing.md`, "Waits
+    // and timeouts").
+    let hold_open = hold.clone();
+    let held = support::bounded(setup.deadline, "the delegate shell to hold", move || {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&hold_open)
+            .expect("the delegate shell opened the fifo")
+    });
     client.send(
         &json!({
             "id": "c_prompt_msg",
@@ -852,10 +899,6 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
     );
     let prompted = recv_answer(&client, "c_prompt_msg", "the prompt acknowledgement");
     assert_eq!(prompted["kind"], "command_accepted", "{prompted}");
-    assert!(
-        server_child.await_requests(2, setup.deadline),
-        "the delegate_message steers the delegate"
-    );
     let requested = until(&client, "the delegate_message call", |line| {
         line["kind"] == "tool_call_requested" && line["payload"]["name"] == "delegate_message"
     });
@@ -870,6 +913,36 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
         done.last().expect("the completion arrived")["payload"]["status"],
         "completed",
         "{done:?}"
+    );
+    // The delegate's second model call has not happened yet: its first
+    // turn is still blocked on the held shell, so the steer was accepted
+    // while the delegate was live. Results return and the next step — with
+    // its request — runs only after every call returns (`docs/loop.md`,
+    // "One step", steps 6-7), and the steered message joins at that next
+    // step boundary (`docs/delegates.md`, "Talking to a delegate"), so the
+    // count is still 1.
+    assert_eq!(
+        server_child.requests().len(),
+        1,
+        "the delegate stays live on its held shell through the steer"
+    );
+    // The test releases the hold after the steer is accepted: the open
+    // turn continues, and its next model call carries the steered message
+    // (`docs/loop.md`, "One step", step 7; `docs/delegates.md`, "Talking
+    // to a delegate"). The writer stayed open with no data until now, so
+    // the shell was still blocked in its `read`; the test keeps its end
+    // open until the child reads the release (`docs/testing.md`, "Waits
+    // and timeouts").
+    support::bounded(setup.deadline, "the delegate shell to release", move || {
+        std::io::Write::write_all(&mut &held, b"go\n").unwrap();
+    });
+    assert!(
+        server_child.await_requests(2, setup.deadline),
+        "the delegate_message steers the delegate"
+    );
+    assert!(
+        marked.load(std::sync::atomic::Ordering::SeqCst),
+        "the steered message reaches the delegate's next model call"
     );
     // `now` stops the delegate as a stop does; a graceful close waits out
     // the delegate's far idle exit. The guard reaps the delegate, which
