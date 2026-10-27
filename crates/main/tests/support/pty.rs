@@ -1067,17 +1067,35 @@ impl Run {
             if let Err(err) = fakes::kill_matching(&workspace) {
                 panic!("killing the sessions in the workspace: {err}");
             }
-            if let Err(err) = fakes::try_matching_exits(&workspace, self.deadline.cleanup_phase()) {
-                panic!(
-                    "waited until the deadline for every process holding the workspace path to exit: {err}"
-                );
-            }
+            wait_for_workspace_holders(
+                &workspace,
+                self.deadline.cleanup_phase(),
+                fakes::try_matching_exits,
+            );
             sessions.stand_down(self.deadline.cleanup_phase());
         }
         Exited {
             status: output.status,
             terminal: self.shared.lock().unwrap().output(),
         }
+    }
+}
+
+/// The one workspace-holder cleanup wait: confirms no process still
+/// holds the workspace path under the cleanup-phase deadline it is
+/// given, so a spent success-path budget cannot starve it. The wait
+/// itself is injected, so the constant-check test pins the budget
+/// without a process wait.
+#[track_caller]
+fn wait_for_workspace_holders(
+    workspace: &str,
+    deadline: Deadline,
+    wait: impl FnOnce(&str, Deadline) -> io::Result<()>,
+) {
+    if let Err(err) = wait(workspace, deadline) {
+        panic!(
+            "waited until the deadline for every process holding the workspace path to exit: {err}"
+        );
     }
 }
 
@@ -1467,205 +1485,31 @@ mod tests {
     /// The workspace-holder cleanup wait draws on the cleanup phase,
     /// not the journey's spent success-path budget: a fake clock
     /// advanced past WAITS leaves the shared wait with nothing, while
-    /// the cleanup phase still holds CLEANUP minus WAITS. A spent wait
-    /// on an absent path names no holder, because no listing runs
-    /// before the deadline; the cleanup phase on the same absent path
-    /// succeeds; a live holder under it is named with its pid and
-    /// command line; and the run's own wait confirms an absent
-    /// workspace even after the success-path budget is spent during
-    /// its hub pause.
+    /// the cleanup phase still holds CLEANUP minus WAITS. The extracted
+    /// wait forwards the cleanup-phase deadline it is given. A constant
+    /// check only: no pty run, no real-clock hold, no process wait, so
+    /// this test compiles into every main test binary that includes
+    /// this support module.
     #[test]
     fn workspace_cleanup_wait_uses_the_cleanup_phase() {
-        use std::os::unix::process::CommandExt as _;
-
         let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
         let deadline = Deadline::on(&**clock);
-        let terminal = open(80, 24);
-        let main = fs::File::from(terminal.main);
-        let run = Run::attach(main, 80, 24, deadline);
         // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
         clock.advance(fakes::deadline::WAITS);
         assert!(deadline.left().is_zero(), "the shared wait budget is spent");
+        let cleanup = deadline.cleanup_phase();
         assert_eq!(
-            run.deadline.cleanup_phase().left(),
+            cleanup.left(),
             fakes::deadline::CLEANUP.saturating_sub(fakes::deadline::WAITS),
-            "the cleanup wait keeps its own budget"
+            "the cleanup wait keeps its own budget after WAITS is spent"
         );
-        let stem = format!("fiber-cleanup-{}", std::process::id());
-        let absent = std::env::temp_dir()
-            .join(format!("{stem}-absent"))
-            .to_string_lossy()
-            .into_owned();
-        // A spent wait on an absent path names no holder, because no
-        // listing runs before the deadline.
-        let err = fakes::try_matching_exits(&absent, deadline)
-            .expect_err("a spent budget waits on nothing, so it fails");
-        assert_eq!(
-            err.to_string(),
-            "deadline expired waiting for exit",
-            "a spent budget names no holder"
-        );
-        // The cleanup phase on the same absent path succeeds: absence
-        // alone never fails the wait.
-        fakes::try_matching_exits(&absent, run.deadline.cleanup_phase())
-            .expect("nothing holds the path, so the cleanup wait succeeds");
-        // A live holder under the cleanup phase is named with its pid
-        // and command line. Controlled hold: the shell blocks reading a
-        // stdin pipe the test holds open, and its command line carries
-        // the marker as its name.
-        let marker = std::env::temp_dir()
-            .join(format!("{stem}-holder"))
-            .to_string_lossy()
-            .into_owned();
-        let mut child = Command::new("sh")
-            .args(["-c", "read line", &marker])
-            .process_group(0)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("the marked shell starts");
-        let id = child.id();
-        let stdin = child.stdin.take().expect("the marked shell holds stdin");
-        fakes::wait_until(
-            "the marked shell to list",
-            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-            {
-                let marker = marker.clone();
-                move || fakes::matching(&marker).is_ok_and(|pids| pids.contains(&id))
-            },
-        );
-        // A short expiry names the live holder without waiting out the
-        // funded wait: the listing already ran, so the expiry names it.
-        let err = fakes::try_matching_exits(&marker, Deadline::after(Duration::from_millis(200)))
-            .expect_err("the holder outlives the short wait, so it fails");
-        let message = err.to_string();
-        assert!(
-            message.contains(&id.to_string()),
-            "the expiry names the holder pid: {message}"
-        );
-        assert!(
-            message.contains(&marker),
-            "the expiry names the holder command line: {message}"
-        );
-        // A funded cleanup wait stays pending while the holder lives:
-        // it runs on a thread, and a bounded receive must time out, a
-        // bound of several of the wait's own probe intervals. Releasing
-        // the pipe ends the shell, and the same wait then succeeds.
-        let marker_text = marker.clone();
-        let cleanup = run.deadline.cleanup_phase();
-        let (answered, answer) = mpsc::channel();
-        thread::spawn(move || {
-            answered
-                .send(fakes::try_matching_exits(&marker_text, cleanup))
-                .unwrap_or(());
+        wait_for_workspace_holders("fiber-cleanup-absent", cleanup, |_, received| {
+            assert_eq!(
+                received.left(),
+                fakes::deadline::CLEANUP.saturating_sub(fakes::deadline::WAITS),
+                "the wait receives the full cleanup budget"
+            );
+            Ok(())
         });
-        assert!(
-            Deadline::after(Duration::from_millis(500))
-                .recv(&answer)
-                .is_err(),
-            "the cleanup wait answered while the holder lived"
-        );
-        drop(stdin);
-        fakes::within(
-            "the marked shell to reap",
-            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-            move || {
-                let mut child = child;
-                child.wait()
-            },
-        )
-        .expect("the marked shell reaps");
-        assert!(
-            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-                .recv(&answer)
-                .is_ok_and(|result| result.is_ok()),
-            "the cleanup wait succeeds once the holder exits"
-        );
-        // The run's own workspace wait draws on the cleanup phase: a
-        // run whose success-path budget is spent during its hub pause
-        // still confirms an absent workspace. The hub socket is the
-        // pause point: the wait blocks there with a full budget, the
-        // test spends WAITS, then removes the socket, so only the
-        // workspace wait sees the spent budget.
-        let wait_clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
-        let wait_deadline = Deadline::on(&**wait_clock);
-        let wait_term = open(80, 24);
-        let wait_main = fs::File::from(wait_term.main);
-        let wait_side = wait_term.terminal;
-        drop(wait_side);
-        let mut wait_run = Run::attach(wait_main, 80, 24, wait_deadline);
-        // An owned child for the run: `true` exits at once, so the
-        // child wait succeeds with a full budget before the pause.
-        let owned = Command::new("true")
-            .process_group(0)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("the run child starts");
-        let owned_group = owned.id();
-        wait_run.child = Some(owned);
-        wait_run.watchdog = Some(Watchdog::group(owned_group));
-        let hub_path = std::env::temp_dir().join(format!("{stem}-hub"));
-        fs::write(&hub_path, b"").expect("the hub pause exists");
-        wait_run.hub_socket = hub_path.clone();
-        let wait_absent = std::env::temp_dir()
-            .join(format!("{stem}-wait-absent"))
-            .to_string_lossy()
-            .into_owned();
-        wait_run.sessions = Some((Watchdog::matching(&wait_absent), wait_absent.clone()));
-        let wait_shared = Arc::clone(&wait_run.shared);
-        let wait_group_for_signal = owned_group;
-        let hub_signal = hub_path.clone();
-        let (finished, result) = mpsc::channel();
-        let handle = thread::spawn(move || {
-            let outcome =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| wait_run.wait()));
-            finished.send(outcome).unwrap_or(());
-        });
-        // The group empties once the child is reaped, and the reader ends
-        // at end of file. Keep the socket present while the run passes its
-        // earlier success-path waits and settles at the hub pause.
-        fakes::wait_until(
-            "the wait to reach its hub pause",
-            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-            {
-                let wait_shared = Arc::clone(&wait_shared);
-                move || {
-                    !fakes::group_alive(wait_group_for_signal)
-                        && wait_shared.lock().unwrap().ended
-                        && hub_signal.exists()
-                }
-            },
-        );
-        assert!(hub_path.exists(), "the wait holds at its hub pause");
-        assert!(
-            matches!(
-                Deadline::after(Duration::from_millis(500)).recv(&result),
-                Err(mpsc::RecvTimeoutError::Timeout)
-            ),
-            "the run remains at the held hub pause after its earlier success-path waits"
-        );
-        // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
-        wait_clock.advance(fakes::deadline::WAITS);
-        assert!(
-            wait_deadline.left().is_zero(),
-            "the success-path budget is spent before the workspace wait"
-        );
-        fs::remove_file(&hub_path).expect("the hub pause releases");
-        let outcome = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-            .recv_or_fail(&result, "Run::wait to finish its cleanup");
-        let joined = fakes::within(
-            "the Run::wait thread to finish",
-            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-            move || handle.join(),
-        );
-        assert!(joined.is_ok(), "the Run::wait thread panicked outside wait");
-        let exited = match outcome {
-            Ok(exited) => exited,
-            Err(payload) => std::panic::resume_unwind(payload),
-        };
-        assert_eq!(exited.status.code(), Some(0));
     }
 }
