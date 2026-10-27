@@ -540,25 +540,49 @@ fn listed_exit(
     list: impl FnMut() -> io::Result<Vec<u32>> + Send + 'static,
     deadline: Duration,
 ) -> io::Result<()> {
+    // The first listing runs on the caller's thread with its own budget:
+    // a spent exit budget still leaves the holder-listing budget, so the
+    // expiry names the holders; otherwise the listing shares what remains
+    // of the exit budget, capped at the holder-listing budget, so a
+    // listing that never answers expires with the exit wait.
+    let budget = if deadline.is_zero() {
+        MUST_SUCCEED_WITHIN
+    } else {
+        std::cmp::min(deadline, MUST_SUCCEED_WITHIN)
+    };
+    let (listed, listing) = mpsc::channel();
+    thread::spawn(move || {
+        let mut list = list;
+        let result = list();
+        match listed.send((list, result)) {
+            Ok(()) | Err(_) => {}
+        }
+    });
     let (done, finished) = mpsc::channel::<io::Result<()>>();
     let (stop, stopped) = mpsc::channel::<()>();
     // The latest listing, published after each one: the deadline's read
     // names the holders even while the wait still runs.
     let outstanding = Arc::new(Mutex::new(Vec::<u32>::new()));
+    let (mut list, mut pids) = match Deadline::after(budget).recv(&listing) {
+        Ok((list, result)) => match result {
+            Ok(pids) => {
+                // Published before the wait starts, so a spent exit
+                // budget still names these holders.
+                publish(&outstanding, &pids);
+                (list, pids)
+            }
+            Err(err) => {
+                return Err(io::Error::other(format!("first pgrep failed: {err}")));
+            }
+        },
+        Err(_) => {
+            let pids = lock(&outstanding).clone();
+            return Err(expiry_error(&pids));
+        }
+    };
     let published = Arc::clone(&outstanding);
     thread::spawn(move || {
-        let mut list = list;
-        // The first listing's failure names itself; every later listing
-        // ran after a wait, so each names the second.
-        let mut pids = match list() {
-            Ok(pids) => pids,
-            Err(err) => {
-                match done.send(Err(io::Error::other(format!("first pgrep failed: {err}")))) {
-                    Ok(()) | Err(_) => {}
-                }
-                return;
-            }
-        };
+        // Every later listing ran after a wait, so each names the second.
         loop {
             publish(&published, &pids);
             if !wait_exits(&pids, &stopped, alive) {
@@ -600,8 +624,9 @@ fn listed_exit(
 /// Waits up to what remains of `deadline` on the wall clock for every process whose command
 /// line contains `text` to exit: one `pgrep` lists the matches, the probes
 /// wait for each listed pid, and `pgrep` lists again after every wait until
-/// nothing matches. One thread, one deadline; a process that starts after
-/// an earlier listing is waited on like every earlier match.
+/// nothing matches. The first listing runs on the caller's thread with its
+/// own budget; one thread then waits under the deadline. A process that
+/// starts after an earlier listing is waited on like every earlier match.
 ///
 /// # Errors
 ///
