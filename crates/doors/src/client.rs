@@ -40,6 +40,7 @@ const PROCESS_ONLY: &str = "`call` and `ready` ride a process extension's own pi
 const PAST: &str = "`from_seq` is past the latest line.";
 const REVERSED: &str = "`to_seq` is before `from_seq`.";
 pub(crate) const ENDED: &str = "The session ended before answering.";
+const CLOSING_PROMPT: &str = "The session is closing and takes no new turn.";
 /// A `steer_drop` names nothing still queued: the loop's stale answer
 /// reads the same (`docs/invocation.md`, "What each command does").
 const STALE_DROP: &str = "That steering message was already applied, or was never queued.";
@@ -239,6 +240,9 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
         reject(conn, Some(line.id), ErrorCode::DuplicateCommand, DUPLICATE);
         return;
     }
+    #[cfg(test)]
+    conn.gate
+        .note(crate::session::tests::Probe::CommandReserved);
     if !conn.subscribed() && line.command != "subscribe" {
         reject(
             conn,
@@ -856,16 +860,31 @@ fn deliver_message(
     };
     if prompt {
         let ack = inbox_ack(conn, id.clone());
-        let ack = match conn.gate.history.get().cloned().flatten() {
-            Some(path) => {
-                conn.gate
-                    .prompts
-                    .register(id.clone(), message.content.clone());
-                crate::prompt_history::recorded(ack, path, &conn.gate, id)
-            }
-            None => ack,
-        };
-        conn.gate.deliver(Delivery::Prompt(message, ack));
+        let mut prompt = Some((id, message, ack));
+        let gate = &conn.gate;
+        // A closed admission rejects the prompt with the loop's closing
+        // message; an admitted prompt is queued and recorded under the lock.
+        let admitted = gate.admission.admit(|| {
+            let Some((id, message, ack)) = prompt.take() else {
+                unreachable!("admission runs its closure once");
+            };
+            let ack = match gate.history.get().cloned().flatten() {
+                Some(path) => {
+                    gate.prompts.register(id.clone(), message.content.clone());
+                    crate::prompt_history::recorded(ack, path, gate, id)
+                }
+                None => ack,
+            };
+            gate.deliver(Delivery::Prompt(message, ack));
+        });
+        if admitted.is_none()
+            && let Some((_, _, ack)) = prompt.take()
+        {
+            ack.0(Err(Rejection {
+                code: ErrorCode::Closing,
+                message: CLOSING_PROMPT.to_owned(),
+            }));
+        }
     } else {
         admit_steer(conn, id, message);
     }

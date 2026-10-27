@@ -4399,9 +4399,10 @@ fn segment_turns(
     lines
 }
 
-/// An open across a continuation point walks the chain: the own
-/// windows, then the ancestor's under its session, and the joint
-/// total matches the joint fold.
+/// An open across a continuation point draws the own screen first,
+/// then walks the chain: the own window draws before the ancestor's
+/// count under its session, and the joint total matches the joint
+/// fold.
 #[test]
 fn the_open_walks_the_chain_and_shows_the_joint_total() {
     const ROOT: &str = "s_arrrrrrrrrrrrrr";
@@ -4412,7 +4413,8 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
     let point = root_seq - 1;
     let mut child = vec![started(CHILD, Some((ROOT, point)))];
     let mut child_seq = 1u64;
-    child.extend(segment_turns(CHILD, "child reply", 200, 2, &mut child_seq));
+    child.extend(segment_turns(CHILD, "child reply", 200, 30, &mut child_seq));
+    assert!(child.len() <= 256, "the own run fits one window");
     let open = tail_open(
         child.clone(),
         Full::Hung,
@@ -4437,6 +4439,7 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
             .map(|command| &command["args"])
             .collect::<Vec<_>>(),
         vec![&json!({}), &json!({"session_id": ROOT, "to_seq": point}),],
+        // docs/tui.md:2426-2440 ("History and paging"): own window before ancestor count.
         "the own window, then the ancestor's under its session: {histories:?}"
     );
     let mut preview = crate::window::Pages::new(60);
@@ -4446,20 +4449,534 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
     assert_eq!(
         open.lp.app.scroll().1,
         preview.index().total(),
+        // docs/tui.md:2432-2434 ("History and paging"): count carries ancestor runs above the preview for the joint total.
         "the joint total spans the chain"
     );
     // The preview follows to the bottom: the last frame shows the
     // child, the joint total counts the chain, and the trimmed
     // ancestor page stays paged under its own session for a scroll up.
+    // The child frame precedes the ancestor count request by
+    // construction here: the own window fills the screen, so the first
+    // frame draws before the count runs. The parked-draw proof of that
+    // order is the_first_frame_draws_before_the_ancestor_count_and_the_raise:
+    // pre- and post-count frames are pixel-identical while following
+    // the bottom, so no frame-content assert can state it.
     let drawn = frames(&open).join("\n");
-    assert!(drawn.contains("child reply 1"), "the child shows: {drawn}");
+    // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
+    assert!(drawn.contains("child reply 29"), "the child shows: {drawn}");
     let pages = open.lp.app.pages();
     let total = pages.index().total();
     let top_needs = pages.needs(0, total);
     assert!(
         top_needs.iter().any(|(session, range)| session.0 == ROOT
             && *range == (contract::Seq(0)..=contract::Seq(point))),
+        // docs/tui.md:2484-2493 ("History and paging"): chain as one history, ancestor pages under its session.
         "the ancestor stays paged under its session: {top_needs:?}"
+    );
+}
+
+/// A child that cannot fill the display waits through the chain root:
+/// the root completes the preview before the first frame and the `full`
+/// raise. The parked flush proves the chain-root answer precedes the
+/// first draw; the joint total is exact after the count, before the bar.
+#[test]
+fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    const ROOT: &str = "s_arrrrrrrrrrrrrr";
+    const CHILD: &str = "s_aaaaaaaaaaaaaaaa";
+    let mut root_seq = 1u64;
+    let mut ancestor = vec![started(ROOT, None)];
+    ancestor.extend(segment_turns(ROOT, "root reply", 100, 4, &mut root_seq));
+    let point = root_seq - 1;
+    let mut child = vec![started(CHILD, Some((ROOT, point)))];
+    child.push(line(
+        "turn_started",
+        Some(1),
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "child prompt"}]}]}),
+    ));
+    let mut size = crate::app::App::new(std::path::PathBuf::from("/w"));
+    size.set_size(60, 12);
+    let height = size.conversation_height();
+    let mut child_pages = crate::window::Pages::new(60);
+    for line in &child {
+        child_pages.apply(line);
+    }
+    assert!(
+        child_pages.index().total() < height,
+        // docs/tui.md:2443-2445 ("History and paging"): the terminal asks
+        // for older own-segment windows until the preview fills.
+        "the child alone cannot fill the display"
+    );
+    let mut joint_pages = crate::window::Pages::new(60);
+    for line in ancestor.iter().chain(&child) {
+        joint_pages.apply(line);
+    }
+    assert!(
+        joint_pages.index().total() >= height,
+        // docs/tui.md:2449-2450 ("History and paging"): a run that reaches
+        // `seq 0` short of the display crosses into its ancestors before
+        // the first frame instead.
+        "the crossed run fills the display"
+    );
+    let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: false,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        open_at: crate::OpenAt::Session(contract::SessionId(CHILD.to_owned()), None),
+        ..Default::default()
+    });
+    app.set_size(60, 12);
+    let (events_tx, events) = mpsc::channel();
+    let block = std::sync::Arc::new(AtomicBool::new(false));
+    let (release_tx, release) = mpsc::channel();
+    let backend = RecordBackend {
+        inner: ratatui::backend::TestBackend::new(60, 12),
+        events: events_tx,
+        block: std::sync::Arc::clone(&block),
+        release,
+    };
+    let screen = super::Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = super::super::Loop::for_test(app, screen);
+    lp.hover = false;
+    let (ours, theirs) = pair();
+    theirs
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    let mut reader = std::io::BufReader::new(theirs);
+    let socket_line = |reader: &mut std::io::BufReader<UnixStream>| {
+        let mut text = String::new();
+        match std::io::BufRead::read_line(reader, &mut text) {
+            Ok(0) => panic!("the hub hung up"),
+            Ok(_) => Some(text),
+            Err(_) => None,
+        }
+    };
+    let (tx, rx) = mpsc::channel();
+    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        seen.push(socket_line(&mut reader).unwrap_or_else(|| panic!("an open line")));
+    }
+    let lines: Vec<serde_json::Value> = seen
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let summary = lines
+        .iter()
+        .find(|line| line["command"] == "subscribe")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a summary subscribe: {lines:?}"))
+        .to_owned();
+    while events.try_recv().is_ok() {}
+    block.store(true, Ordering::SeqCst);
+    let ack = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(CHILD.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("command_id".to_owned(), serde_json::Value::String(summary))]
+            .into_iter()
+            .collect(),
+    });
+    let worker = std::thread::Builder::new()
+        .name("short-child-root".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            let out = lp.step(Input::Hub(ack), &rx);
+            (lp, out)
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let commands = socket_line(&mut reader).unwrap_or_else(|| panic!("commands after acceptance"));
+    let commands: serde_json::Value = serde_json::from_str(&commands).unwrap_or_default();
+    assert_eq!(commands["command"], "commands");
+    let first = socket_line(&mut reader).unwrap_or_else(|| panic!("the child window read"));
+    let first: serde_json::Value = serde_json::from_str(&first).unwrap_or_default();
+    assert_eq!(first["command"], "history");
+    assert_eq!(
+        first["args"],
+        json!({}),
+        // docs/tui.md:2438 ("History and paging"): asks `history` with no
+        // `from_seq` for the session's last lines.
+        "the newest own window first"
+    );
+    let first_id = first["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a history id"))
+        .to_owned();
+    let window = doors_window(&child, &json!({}));
+    let mut answer = serde_json::to_value(super::line("command_accepted", None, None, json!({})))
+        .unwrap_or_default();
+    answer["payload"] = json!({"command_id": first_id, "result": {"lines": window}});
+    let answer: contract::Envelope =
+        serde_json::from_value(answer).unwrap_or_else(|err| panic!("an answer: {err}"));
+    tx.send(Input::Hub(Line::Session(answer)))
+        .unwrap_or_else(|err| panic!("answer: {err}"));
+    // The child alone leaves the display short, so the read crosses the
+    // seam before the first frame: the ancestor request goes out while
+    // the flush still parks, proving the root precedes the draw.
+    let second = socket_line(&mut reader).unwrap_or_else(|| panic!("the chain-root read"));
+    let second: serde_json::Value = serde_json::from_str(&second).unwrap_or_default();
+    assert_eq!(second["command"], "history");
+    assert_eq!(
+        second["args"],
+        json!({"session_id": ROOT, "to_seq": point}),
+        // docs/tui.md:2449-2450 ("History and paging"): a run that reaches
+        // `seq 0` short of the display crosses into its ancestors before
+        // the first frame instead.
+        "the chain-root request precedes the first frame"
+    );
+    let second_id = second["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a count id"))
+        .to_owned();
+    let window = doors_window(&ancestor, &second["args"]);
+    let mut answer = serde_json::to_value(super::line("command_accepted", None, None, json!({})))
+        .unwrap_or_default();
+    answer["payload"] = json!({"command_id": second_id, "result": {"lines": window}});
+    let answer: contract::Envelope =
+        serde_json::from_value(answer).unwrap_or_else(|err| panic!("an answer: {err}"));
+    tx.send(Input::Hub(Line::Session(answer)))
+        .unwrap_or_else(|err| panic!("answer: {err}"));
+    // The crossed run now fills the display, so no third read goes out
+    // before the frame: the parked flush reports with nothing further on
+    // the socket.
+    let wait = Deadline::after(DEADLINE);
+    let first_frame = wait.recv_or_fail(&events, "the first frame");
+    assert!(first_frame.starts_with("frame\n"), "{first_frame:?}");
+    assert_eq!(
+        wait.recv_or_fail(&events, "the parked first flush"),
+        "frame-enter"
+    );
+    reader
+        .get_mut()
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("non-blocking: {err}"));
+    assert!(
+        socket_line(&mut reader).is_none(),
+        "a hub command went out after the root but before the first frame drew"
+    );
+    reader
+        .get_mut()
+        .set_nonblocking(false)
+        .unwrap_or_else(|err| panic!("blocking: {err}"));
+    assert!(
+        first_frame.contains("▣ completed"),
+        // docs/tui.md:2445-2446 ("History and paging"): the first frame
+        // draws the preview.
+        "the root supplies the fill: {first_frame}"
+    );
+    assert!(
+        first_frame.contains("child prompt"),
+        // docs/tui.md:2445-2446 ("History and paging"): the first frame
+        // draws the preview.
+        "the child remains visible: {first_frame}"
+    );
+    block.store(false, Ordering::SeqCst);
+    release_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    let raise = socket_line(&mut reader).unwrap_or_else(|| panic!("the raise"));
+    let raise: serde_json::Value = serde_json::from_str(&raise).unwrap_or_default();
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(
+        raise["args"],
+        json!({"level": "full"}),
+        // docs/tui.md:2451 ("History and paging"): the terminal then raises
+        // the subscription to `full`.
+        "the raise follows the root-filled frame"
+    );
+    let (lp, out) = worker.join().unwrap_or_else(|_| panic!("the worker"));
+    assert_eq!(out, None);
+    let mut joint = crate::window::Pages::new(60);
+    for line in ancestor.iter().chain(&child) {
+        joint.apply(line);
+    }
+    assert_eq!(
+        lp.app.scroll().1,
+        joint.index().total(),
+        // docs/tui.md:2446-2448 ("History and paging"): after the frame the
+        // terminal reads older windows to the chain root, carrying ancestor
+        // runs above the preview for the joint total.
+        "the joint total spans the chain"
+    );
+    let pages = lp.app.pages();
+    let held: Vec<(String, u64, u64)> = pages
+        .index()
+        .pages()
+        .iter()
+        .filter(|page| page.lines > 0)
+        .map(|page| (page.session.0.clone(), page.first_seq.0, page.last_seq.0))
+        .collect();
+    assert!(
+        held.iter()
+            .any(|(session, first, last)| session == ROOT && *first == 0 && *last == point),
+        // docs/tui.md:2492-2493 ("History and paging"): a dropped ancestor
+        // page loads again with `history` under its `session_id`.
+        "the ancestor stays paged under its session: {held:?}"
+    );
+}
+
+/// The first frame draws the own-log screen before any ancestor count
+/// request and before the `full` raise: the own window fills the
+/// display, so the frame shows the child's last page without waiting
+/// for the ancestor; the ancestor count follows the frame, and the
+/// raise goes last with the joint total exact.
+#[test]
+fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    const ROOT: &str = "s_arrrrrrrrrrrrrr";
+    const CHILD: &str = "s_aaaaaaaaaaaaaaaa";
+    let mut root_seq = 1u64;
+    let mut ancestor = vec![started(ROOT, None)];
+    ancestor.extend(segment_turns(ROOT, "root reply", 100, 3, &mut root_seq));
+    let point = root_seq - 1;
+    let mut child_seq = 1u64;
+    let mut child = vec![started(CHILD, Some((ROOT, point)))];
+    child.extend(segment_turns(CHILD, "child reply", 200, 30, &mut child_seq));
+    assert!(child.len() <= 256, "the own run fits one window");
+    let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: false,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        open_at: crate::OpenAt::Session(contract::SessionId(CHILD.to_owned()), None),
+        ..Default::default()
+    });
+    app.set_size(60, 12);
+    let (events_tx, events) = mpsc::channel();
+    let block = std::sync::Arc::new(AtomicBool::new(false));
+    let (release_tx, release) = mpsc::channel();
+    let backend = RecordBackend {
+        inner: ratatui::backend::TestBackend::new(60, 12),
+        events: events_tx,
+        block: std::sync::Arc::clone(&block),
+        release,
+    };
+    let screen = super::Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = super::super::Loop::for_test(app, screen);
+    lp.hover = false;
+    let (ours, theirs) = pair();
+    theirs
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    let mut reader = std::io::BufReader::new(theirs);
+    let socket_line = |reader: &mut std::io::BufReader<UnixStream>| {
+        let mut text = String::new();
+        match std::io::BufRead::read_line(reader, &mut text) {
+            Ok(0) => panic!("the hub hung up"),
+            Ok(_) => Some(text),
+            Err(_) => None,
+        }
+    };
+    let (tx, rx) = mpsc::channel();
+    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    // The launch open's lines: feed, recent and the summary subscribe.
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        seen.push(socket_line(&mut reader).unwrap_or_else(|| panic!("an open line")));
+    }
+    let lines: Vec<serde_json::Value> = seen
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let summary = lines
+        .iter()
+        .find(|line| line["command"] == "subscribe")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a summary subscribe: {lines:?}"))
+        .to_owned();
+    while events.try_recv().is_ok() {}
+    // The own window fills the display on its own segment.
+    let height = lp.app.conversation_height();
+    let mut filled = crate::window::Pages::new(60);
+    for line in doors_window(&child, &json!({})) {
+        filled.apply(&line);
+    }
+    assert!(
+        filled.index().total() >= height,
+        // docs/tui.md:2430-2431 ("History and paging"): older own-segment windows until the preview fills.
+        "the own window fills the screen"
+    );
+    // Acking the summary starts the tail read on a worker; the first
+    // frame parks in its flush once the preview installs.
+    block.store(true, Ordering::SeqCst);
+    let ack = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(CHILD.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("command_id".to_owned(), serde_json::Value::String(summary))]
+            .into_iter()
+            .collect(),
+    });
+    let worker = std::thread::Builder::new()
+        .name("first-frame".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            let out = lp.step(Input::Hub(ack), &rx);
+            (lp, out)
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let commands = socket_line(&mut reader).unwrap_or_else(|| panic!("commands after acceptance"));
+    let commands: serde_json::Value = serde_json::from_str(&commands).unwrap_or_default();
+    assert_eq!(commands["command"], "commands");
+    let read = socket_line(&mut reader).unwrap_or_else(|| panic!("the tail read"));
+    let read: serde_json::Value = serde_json::from_str(&read).unwrap_or_default();
+    assert_eq!(read["command"], "history");
+    // docs/tui.md:2428-2430 ("History and paging"): asks history with no from_seq for the last lines.
+    assert_eq!(read["args"], json!({}), "the newest own window first");
+    let history = read["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a history id"))
+        .to_owned();
+    let window = doors_window(&child, &json!({}));
+    let mut answer = serde_json::to_value(super::line("command_accepted", None, None, json!({})))
+        .unwrap_or_default();
+    answer["payload"] = json!({"command_id": history, "result": {"lines": window}});
+    let answer: contract::Envelope =
+        serde_json::from_value(answer).unwrap_or_else(|err| panic!("an answer: {err}"));
+    tx.send(Input::Hub(Line::Session(answer)))
+        .unwrap_or_else(|err| panic!("answer: {err}"));
+    // The first frame draws before any ancestor read: the parked flush
+    // reports, while any hub command on the socket fails: the ancestor
+    // count and the raise both follow the frame.
+    // docs/tui.md:2431-2434 ("History and paging"): the first frame draws
+    // the preview before the ancestor count and the raise.
+    let wait = Deadline::after(DEADLINE);
+    let first = wait.recv_or_fail(&events, "the first frame");
+    assert!(first.starts_with("frame\n"), "{first:?}");
+    assert_eq!(
+        wait.recv_or_fail(&events, "the parked first flush"),
+        "frame-enter"
+    );
+    // While the flush parks, no hub command goes out: the socket reads
+    // non-blocking and finds none.
+    reader
+        .get_mut()
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("non-blocking: {err}"));
+    assert!(
+        socket_line(&mut reader).is_none(),
+        "a hub command went out before the first frame drew"
+    );
+    reader
+        .get_mut()
+        .set_nonblocking(false)
+        .unwrap_or_else(|err| panic!("blocking: {err}"));
+    // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
+    assert!(
+        first.contains("child reply 29"),
+        "the first frame shows the child's last page: {first}"
+    );
+    // One release: the frame finishes, the ancestor count follows it,
+    // and the raise goes last.
+    block.store(false, Ordering::SeqCst);
+    release_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    let count = socket_line(&mut reader).unwrap_or_else(|| panic!("the ancestor count"));
+    let count: serde_json::Value = serde_json::from_str(&count).unwrap_or_default();
+    assert_eq!(count["command"], "history");
+    assert_eq!(
+        count["args"],
+        json!({"session_id": ROOT, "to_seq": point}),
+        // docs/tui.md:2432-2434 ("History and paging"): after the frame, older windows and ancestors for the joint total.
+        "the ancestor count follows the frame"
+    );
+    let count_id = count["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a count id"))
+        .to_owned();
+    let window = doors_window(&ancestor, &count["args"]);
+    let mut answer = serde_json::to_value(super::line("command_accepted", None, None, json!({})))
+        .unwrap_or_default();
+    answer["payload"] = json!({"command_id": count_id, "result": {"lines": window}});
+    let answer: contract::Envelope =
+        serde_json::from_value(answer).unwrap_or_else(|err| panic!("an answer: {err}"));
+    tx.send(Input::Hub(Line::Session(answer)))
+        .unwrap_or_else(|err| panic!("answer: {err}"));
+    let raise = socket_line(&mut reader).unwrap_or_else(|| panic!("the raise"));
+    let raise: serde_json::Value = serde_json::from_str(&raise).unwrap_or_default();
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(
+        raise["args"],
+        json!({"level": "full"}),
+        // docs/tui.md:2451 ("History and paging"): then raises the subscription to full.
+        "the raise follows the count"
+    );
+    let (lp, out) = worker.join().unwrap_or_else(|_| panic!("the worker"));
+    assert_eq!(out, None);
+    // The ancestor count is included: the joint total spans the chain,
+    // and the ancestor stays paged under its own session.
+    let mut joint = crate::window::Pages::new(60);
+    for line in ancestor.iter().chain(&child) {
+        joint.apply(line);
+    }
+    assert_eq!(
+        lp.app.scroll().1,
+        joint.index().total(),
+        // docs/tui.md:2432-2434 ("History and paging"): count carries ancestor runs above the preview for the joint total.
+        "the joint total spans the chain"
+    );
+    let pages = lp.app.pages();
+    // The ancestor stays paged under its own session, before the own
+    // run: the index carries both runs whether or not the window since
+    // trimmed the ancestor's pages out of the frame.
+    let held: Vec<(String, u64, u64)> = pages
+        .index()
+        .pages()
+        .iter()
+        .filter(|page| page.lines > 0)
+        .map(|page| (page.session.0.clone(), page.first_seq.0, page.last_seq.0))
+        .collect();
+    assert!(
+        held.iter()
+            .any(|(session, first, last)| session == ROOT && *first == 0 && *last == point),
+        // docs/tui.md:2484-2493 ("History and paging"): chain as one history, ancestor pages under its session.
+        "the ancestor stays paged under its session: {held:?}"
+    );
+    assert!(
+        held.iter()
+            .take_while(|(session, _, _)| session == ROOT)
+            .count()
+            > 0
+            && held
+                .iter()
+                .skip_while(|(session, _, _)| session == ROOT)
+                .all(|(session, _, _)| session == CHILD),
+        // docs/tui.md:2484-2489 ("History and paging"): chain as one history, ancestors before the own run.
+        "ancestors first, then the own run: {held:?}"
     );
 }
 

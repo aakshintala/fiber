@@ -10,18 +10,29 @@ use crate::slash;
 use contract::events::CommandInfo;
 use serde_json::json;
 
-/// Every row that carries an alias, as `(name, alias)`, in table order.
-const ALIASES: &[(&str, &str)] = &[
-    ("thinking", "effort"),
-    ("usage", "cost"),
-    ("pwd", "cwd"),
-    ("settings", "config"),
-    ("keys", "keybindings"),
-    ("name", "rename"),
-    ("feedback", "bug"),
-    ("quit", "exit"),
-    ("delegates", "agents"),
+/// Every row that carries aliases, as `(name, aliases)`, in table order.
+const ALIASES: &[(&str, &[&str])] = &[
+    ("thinking", &["effort"]),
+    ("usage", &["cost"]),
+    ("pwd", &["cwd"]),
+    ("rules", &["permissions"]),
+    ("settings", &["config"]),
+    ("keys", &["keybindings", "keymap"]),
+    ("handoff", &["compact"]),
+    ("name", &["rename"]),
+    ("close", &["stop"]),
+    ("feedback", &["bug"]),
+    ("quit", &["exit"]),
+    ("delegates", &["agents"]),
 ];
+
+/// Every `(name, alias)` pair, in table order.
+fn pairs() -> Vec<(&'static str, &'static str)> {
+    ALIASES
+        .iter()
+        .flat_map(|(name, aliases)| aliases.iter().map(|alias| (*name, *alias)))
+        .collect()
+}
 
 /// Runs `command` through Enter on `app` with the draft set whole, so
 /// dispatch reads the name as typed rather than a completion row.
@@ -44,30 +55,51 @@ fn extension(name: &str) -> CommandInfo {
 #[test]
 fn each_alias_rides_on_its_commands_row_and_has_no_row_of_its_own() {
     let all = slash::rows(&[]);
-    let carried: Vec<(&str, &str)> = all
+    let carried: Vec<(&str, Vec<&str>)> = all
         .iter()
-        .filter_map(|row| row.alias.as_deref().map(|alias| (row.name.as_str(), alias)))
+        .map(|row| {
+            (
+                row.name.as_str(),
+                row.aliases.iter().map(String::as_str).collect(),
+            )
+        })
+        .filter(|(_, aliases): &(&str, Vec<&str>)| !aliases.is_empty())
         .collect();
-    assert_eq!(carried, ALIASES);
-    for (_, alias) in ALIASES {
-        assert!(all.iter().all(|row| row.name != *alias), "/{alias}");
+    let wanted: Vec<(&str, Vec<&str>)> = ALIASES
+        .iter()
+        .map(|(name, aliases)| (*name, aliases.to_vec()))
+        .collect();
+    // The `/` list draws built-ins in this order with each alias
+    // after its row's name, never as a row (`docs/tui.md:1961,1965`).
+    assert_eq!(carried, wanted);
+    for (_, alias) in pairs() {
+        // Aliases never draw as rows of their own (`docs/tui.md:1965`).
+        assert!(all.iter().all(|row| row.name != alias), "/{alias}");
     }
+    // Aliases draw after their name (`docs/tui.md:1965`).
     let name = all.iter().find(|row| row.name == "name").unwrap();
     assert_eq!(
         name.line(),
         "/name /rename <text>  Names the session.  command"
+    );
+    let keys = all.iter().find(|row| row.name == "keys").unwrap();
+    // The table lists `/keybindings` before `/keymap` (`docs/tui.md:1944,1965`).
+    assert_eq!(
+        keys.line(),
+        "/keys /keybindings /keymap  Opens the rebinding screen.  command"
     );
 }
 
 #[test]
 fn typing_an_alias_finds_only_its_commands_row() {
     let all = slash::rows(&[]);
-    for (name, alias) in ALIASES {
+    for (name, alias) in pairs() {
         let found: Vec<&str> = slash::filter(&all, alias)
             .iter()
             .map(|row| row.name.as_str())
             .collect();
-        assert_eq!(found, [*name], "/{alias}");
+        // Typing an alias runs its row's command (`docs/tui.md:1965`).
+        assert_eq!(found, [name], "/{alias}");
     }
 }
 
@@ -190,14 +222,15 @@ fn enter_on_a_typed_alias_runs_its_commands_row() {
 fn an_extension_named_like_an_alias_takes_that_name() {
     let rows = slash::rows(&[extension("config")]);
     let settings = rows.iter().find(|row| row.name == "settings").unwrap();
-    assert_eq!(settings.alias, None);
+    // The extension takes this alias from the built-in row (`docs/tui.md:1974`).
+    assert!(settings.aliases.is_empty());
     assert_eq!(
         settings.line(),
         "/settings  Opens the configuration keys.  command"
     );
     let configs: Vec<&slash::Row> = rows
         .iter()
-        .filter(|row| row.name == "config" || row.alias.as_deref() == Some("config"))
+        .filter(|row| row.name == "config" || row.aliases.iter().any(|alias| alias == "config"))
         .collect();
     assert_eq!(configs.len(), 1);
     assert_eq!(configs[0].tag, "acme");
@@ -224,5 +257,103 @@ fn a_skill_named_like_an_alias_is_left_out_of_the_list() {
     let rows = slash::rows(&[skill]);
     assert!(rows.iter().all(|row| row.tag != "skill"));
     let feedback = rows.iter().find(|row| row.name == "feedback").unwrap();
-    assert_eq!(feedback.alias.as_deref(), Some("bug"));
+    assert_eq!(feedback.aliases, ["bug"]);
+}
+
+#[test]
+fn compact_starts_a_handoff_with_instructions_as_handoff_does() {
+    for command in ["/handoff take over", "/compact take over"] {
+        let mut app = attached();
+        let lines = sent(run(&mut app, command));
+        // Typing the alias runs the same one command (`docs/tui.md:1965`).
+        assert_eq!(lines.len(), 1, "{command}");
+        assert_eq!(lines[0]["command"], "handoff", "{command}");
+        assert_eq!(
+            lines[0]["args"],
+            json!({"instructions": "take over"}),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn keymap_opens_the_rebinding_screen_as_keys_does() {
+    // Typing an alias runs its row's command (`docs/tui.md:1965`).
+    for command in ["/keys", "/keymap"] {
+        let mut app = attached();
+        run(&mut app, command);
+        assert!(app.keys_screen_open(), "{command}");
+    }
+}
+
+#[test]
+fn permissions_opens_the_standing_rules_as_rules_does() {
+    // Typing an alias runs its row's command (`docs/tui.md:1965`).
+    for command in ["/rules", "/permissions"] {
+        let mut app = attached();
+        assert_eq!(run(&mut app, command), Effect::None, "{command}");
+        let frame = app.config_view_screen().expect("the view is open");
+        assert_eq!(frame.title, "Rules", "{command}");
+        assert_eq!(frame.command, "/rules", "{command}");
+    }
+}
+
+#[test]
+fn stop_stops_the_session_as_close_does() {
+    for command in ["/close", "/stop"] {
+        let mut app = attached();
+        let lines = sent(run(&mut app, command));
+        // Typing the alias runs the same one command (`docs/tui.md:1965`).
+        assert_eq!(lines.len(), 1, "{command}");
+        assert_eq!(lines[0]["command"], "close", "{command}");
+        assert_eq!(lines[0]["args"], json!({"now": true}), "{command}");
+    }
+}
+
+#[test]
+fn stop_all_asks_to_close_all_as_close_all_does() {
+    let mut first = attached();
+    let mut second = attached();
+    assert_eq!(run(&mut first, "/close all"), Effect::None);
+    assert_eq!(run(&mut second, "/stop all"), Effect::None);
+    assert_eq!(first.close_all_question(), second.close_all_question());
+    assert_eq!(first.notice(), second.notice());
+    assert!(
+        first.close_all_question().is_some() || first.notice().is_some(),
+        "one of the close-all paths answers"
+    );
+}
+
+#[test]
+fn an_extension_named_like_one_keys_alias_keeps_the_other() {
+    for (taken, kept) in [("keymap", "keybindings"), ("keybindings", "keymap")] {
+        let rows = slash::rows(&[extension(taken)]);
+        let keys = rows.iter().find(|row| row.name == "keys").unwrap();
+        assert_eq!(keys.aliases, [kept], "{taken}");
+        assert_eq!(
+            keys.line(),
+            format!("/keys /{kept}  Opens the rebinding screen.  command"),
+            "{taken}"
+        );
+        let claimed: Vec<&slash::Row> = rows
+            .iter()
+            .filter(|row| row.name == taken || row.aliases.iter().any(|alias| alias == taken))
+            .collect();
+        // Only the extension's row shows the taken alias: the
+        // built-in row drops it (`docs/tui.md:1974`).
+        assert_eq!(claimed.len(), 1, "{taken}");
+        assert_eq!(claimed[0].tag, "acme", "{taken}");
+        let mut app = attached();
+        answer_rows(
+            &mut app,
+            json!([{"name": taken, "description": format!("The {taken} extension."),
+                "tag": "acme", "extension": true}]),
+        );
+        let lines = sent(run(&mut app, &format!("/{taken}")));
+        // The taken name runs the extension's command (`docs/tui.md:1974`).
+        assert_eq!(lines.len(), 1, "{taken}");
+        assert_eq!(lines[0]["command"], "command", "{taken}");
+        assert_eq!(lines[0]["args"], json!({"name": taken}), "{taken}");
+        assert!(!app.keys_screen_open(), "{taken}");
+    }
 }

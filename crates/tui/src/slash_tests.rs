@@ -1,7 +1,7 @@
 //! Tests for the `/` list.
 
 use super::{Row, SHOWN, extensions, filter, is_built_in, rows, window_start};
-use crate::app::commands::{TABLE, alias_of};
+use crate::app::commands::{TABLE, aliases_of};
 use contract::commands::BUILT_IN_COMMANDS;
 use contract::events::CommandInfo;
 
@@ -147,23 +147,30 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         .iter()
         .filter(|name| !table_names().contains(name))
         .collect();
-    assert_eq!(
-        extra,
-        [
-            &"effort",
-            &"cost",
-            &"agents",
-            &"cwd",
-            &"config",
-            &"keybindings",
-            &"rename",
-            &"exit",
-            &"bug"
-        ]
-    );
-    // Every alias is a contract name, so an extension or a skill cannot
-    // take it unannounced.
-    for alias in TABLE.iter().filter_map(|entry| alias_of(entry.name)) {
+    // This terminal draws `rewind` among the built-in rows.
+    let wanted = [
+        &"effort",
+        &"cost",
+        &"agents",
+        &"cwd",
+        &"permissions",
+        &"config",
+        &"keybindings",
+        &"keymap",
+        &"compact",
+        &"rename",
+        &"stop",
+        &"exit",
+        &"bug",
+    ];
+    // The table enumerates the complete alias set (`docs/tui.md:1920–1959,1965`).
+    assert_eq!(extra, wanted);
+    // An extension or skill named like an alias cannot take it silently
+    // (`docs/tui.md:1974`).
+    for alias in TABLE
+        .iter()
+        .flat_map(|entry| aliases_of(entry.name).iter().copied())
+    {
         assert!(is_built_in(alias), "{alias}");
     }
     let rows = rows(&[]);
@@ -316,11 +323,12 @@ fn prefix_matches_come_before_contains_matches() {
 
 #[test]
 fn a_row_draws_name_hint_description_and_tag() {
+    // The table orders `/compact` after `/handoff` (`docs/tui.md:1947,1965`).
     let all = rows(&[]);
     let handoff = all.iter().find(|row| row.name == "handoff");
     assert_eq!(
         handoff.map(Row::line),
-        Some("/handoff [instructions]  Starts a handoff.  command".to_owned())
+        Some("/handoff /compact [instructions]  Starts a handoff.  command".to_owned())
     );
     let home = all.iter().find(|row| row.name == "home");
     assert_eq!(
