@@ -47,7 +47,7 @@ const FORK_TURN: &[&str] = &[
 ];
 
 fn task() -> String {
-    fork_task(&SessionId("s_test".into()), 1, "check it")
+    fork_task(&SessionId("s_test".into()), 1, "check it", "")
 }
 
 fn tool(name: &'static str) -> Arc<dyn Tool> {
@@ -139,6 +139,74 @@ fn start(
     )
     .unwrap();
     (looped, tx, provider, dir)
+}
+
+#[test]
+fn an_isolated_fork_records_its_effective_worktree_instead_of_the_inherited_one() {
+    let parent = parent();
+    let home = parent.dir.parent().unwrap().to_path_buf();
+    let log = Arc::new(
+        log::Log::create(&home, SessionId("s_isolated".into()), parent.clock.clone()).unwrap(),
+    );
+    let dir = log.dir().to_path_buf();
+    let (_tx, rx) = mpsc::channel();
+    let inherited = Worktree {
+        path: "/inherited".into(),
+        branch: "parent".into(),
+        repository: Some("/repo".into()),
+    };
+    let effective = Worktree {
+        path: "/isolated".into(),
+        branch: "fork".into(),
+        repository: Some("/repo".into()),
+    };
+    let looped = Loop::rewound_with_worktree(
+        r#loop::Session {
+            log,
+            provider: Arc::new(ScriptedProvider::new(vec![Scripted::text("done")])),
+            model: Model {
+                reference: MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: PromptInputs::new(
+                home,
+                "/bin/sh".into(),
+                dir.join("events.jsonl").display().to_string(),
+                parent.clock.clone(),
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: Permissions {
+                workspace: "/isolated".into(),
+                credentials: parent.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: parent.rules.clone(),
+            },
+        },
+        Rewound {
+            from: point(&parent.dir, 2),
+            worktree: Some(inherited),
+            how: Continuation::Fork {
+                parent: Parent {
+                    session_id: SessionId("s_test".into()),
+                    delegate_id: JobId("j_fork".into()),
+                },
+            },
+            factory: None,
+        },
+        Some(effective.clone()),
+    )
+    .unwrap();
+    let lines = log::read(&dir).unwrap();
+    assert_eq!(kinds(&lines), ["session_started"]);
+    assert_eq!(
+        lines[0].payload["worktree"],
+        serde_json::to_value(effective).unwrap()
+    );
+    assert_eq!(lines[0].payload["workspace"], "/isolated");
+    drop(looped);
 }
 
 fn fork(
@@ -402,6 +470,46 @@ fn a_session_start_context_sits_between_the_prefix_and_fork_task() {
     assert_eq!(lines[1].payload["hook"], "session_start");
     assert_eq!(lines[1].payload["text"], "hook says hi");
     assert_eq!(lines[2].payload["input"][0]["content"][0]["text"], task());
+}
+
+#[test]
+fn an_isolated_forks_workspace_notice_follows_start_context_without_changing_the_prefix() {
+    let session = parent();
+    let hooks = StartHooks::new();
+    hooks.answer(start_added("fiber.test/start", "hook says hi"));
+    let (b, tx, provider, dir) = fork(
+        &session,
+        point(&session.dir, 2),
+        Vec::new(),
+        vec![Scripted::text("fork-done")],
+    );
+    let notice = r#loop::fork_workspace("/fork", "/parent");
+    let task = fork_task(&SessionId("s_test".into()), 1, "check it", &notice);
+    let _b = turn(b.hooks(hooks), &tx, &task);
+    let parent = &session.provider.requests()[2];
+    let first = &provider.requests()[0];
+    let k = parent.conversation.len();
+    // First-turn context stays between the inherited prefix and task.
+    assert_eq!(first.conversation[..k], parent.conversation[..]);
+    assert_eq!(first.conversation.len(), k + 2);
+    assert_eq!(user(&first.conversation[k]), "hook says hi");
+    assert_eq!(user(&first.conversation[k + 1]), task);
+    let lines = log::read(&dir).unwrap();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "context_added",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed"
+        ]
+    );
+    assert_eq!(lines[2].payload["input"][0]["content"][0]["text"], task);
 }
 
 struct MessageHooks(Mutex<Option<BeforeMessageAnswer>>);

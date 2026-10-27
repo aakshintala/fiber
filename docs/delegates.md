@@ -262,7 +262,17 @@ path is `invalid_arguments` and a git failure is `io_failed`.
   pruning").
 - `delegate_finished` reports the path, the branch and whether it is dirty.
 - A resume goes back into the kept worktree, or gets a fresh one from the
-  current HEAD if it was removed.
+  current HEAD if it was removed. It reads the delegate's worktree record and
+  run boundary from the delegate's project, including when `workspace` selected
+  a different repository from the parent's. A removed worktree starts from its
+  recorded repository, then is recreated at the same path and branch before
+  `fiber_started`. The resumed session removes a clean recreated worktree and
+  keeps a dirty one; the parent reports its state without removing it again.
+- If neither the workspace nor its recorded repository is available, resume
+  fails before launch with `io_failed`, naming the missing workspace. Without
+  a recorded worktree, a missing workspace fails the same way. An unreadable
+  worktree record or run boundary fails closed with `tool_error`. A message to
+  a live delegate steers it without checking workspace or repository existence.
 - `worktree` outside a git repository fails with `invalid_arguments`.
 
 ## Forks
@@ -294,6 +304,19 @@ path is `invalid_arguments` and a git failure is `io_failed`.
   - A call whose ancestry reaches a command root is refused: the point walk
     stops at a root call with `ran_by.command_id`, and the call fails with
     `invalid_arguments`.
+- With `isolation: worktree`, the fork records its own worktree on
+  `session_started`, separately from the worktree in its inherited history.
+  It shares both worktree locks for its life. Its parent releases the new
+  worktree's handoff share only after the durable `session_started`
+  acknowledges adoption; failed startup retains that share through child exit.
+- When the fork's workspace differs from its parent's, its first user message
+  includes this paragraph before the unattended instruction and task:
+
+  > Your workspace is {workspace}, a worktree of {parent_workspace}. Paths above under {parent_workspace} are at the same place under yours; work only in yours.
+
+  Equal workspaces add no paragraph. The inherited prefix stays byte-identical.
+  `session_start` context and other first-turn items keep their normal place
+  between that prefix and the fork's first user message.
 - Other harnesses have no fork: a Fiber conversation cannot be handed to them.
 
 ## Harness extensions
