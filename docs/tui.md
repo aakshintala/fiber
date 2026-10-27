@@ -2845,12 +2845,7 @@ CPU and time to first frame. The design keeps to them this way:
 - **Nothing runs while nothing happens.** With no turn, delegate or job
   running, there is no timer: no frame, no byte written. A still pointer sends
   nothing under hover.
-- **The first frame waits on nothing but the opening pass and loading TUI
-  extensions.** Keyboard detection, the logo's image and session listing each
-  arrive after it. The budget is measured with no TUI extension installed.
-  Attaching to a session reads its whole log once before the first frame
-  ("History and paging"): about 12 ms per MiB of log on macOS arm64, so a
-  large session takes longer to open than a new one.
+- **The first frame waits on nothing but the session's last page and loading TUI extensions.** Keyboard detection, the logo's image and session listing each arrive after it. The budget is measured with no TUI extension installed. Attaching reads the last page with `history` before the first frame, and the whole log once after it ("History and paging"). The pass takes about 12 ms per MiB of log on macOS arm64, so the scroll bar of a large session appears later than a small one's.
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**
 - **Each frame is written inside synchronized output, mode 2026.** The first frame and frames drawn on resize are included; a terminal without support ignores the sequences.

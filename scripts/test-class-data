@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
-# The offline self-test for scripts/class-data (#2446): with a fixture
-# directory as the fourth argument, the fast "Terminal to its first
-# frame, attaching" 10 MiB run reproduces the committed file's entries
-# for the fixture's main files byte for byte; usage errors, unknown
-# classes, unknown rows and unknown fixtures exit 2; and an artifact
+# The offline self-test for scripts/class-data (#2446): usage errors,
+# unknown classes and unknown rows exit 2; the session_list row over a
+# hand-written fixture emits its plain-number samples; and an artifact
 # whose CPU is outside the class stays out of the output.
 # No network: a shadow gh on the PATH fails the test if the script calls it.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 fixture=$PWD/scripts/class-data-fixture
-committed=xtask/tests/class_data/9v45-attach-10mib.json
 row="Terminal to its first frame, attaching"
 err=$(mktemp)
 tmp=$(mktemp -d)
@@ -48,7 +45,9 @@ rc=0
 scripts/class-data fast "$row" "10 MiB" "$fixture" extra >/dev/null 2>"$err" || rc=$?
 [ "$rc" -eq 2 ] || fail "five arguments exited $rc, want 2"
 
-# An unknown class exits 2, and so do an unknown row and an unknown fixture.
+# An unknown class exits 2, and so does an unknown row with either
+# fixture: the attaching row is gone, so both row arms fail the row
+# lookup.
 rc=0
 scripts/class-data plaid "$row" "10 MiB" "$fixture" >/dev/null 2>"$err" || rc=$?
 [ "$rc" -eq 2 ] || fail "unknown class exited $rc, want 2"
@@ -57,106 +56,7 @@ scripts/class-data fast "Terminal to its first frame" "10 MiB" "$fixture" >/dev/
 [ "$rc" -eq 2 ] || fail "unknown row exited $rc, want 2"
 rc=0
 scripts/class-data fast "$row" "1 MiB" "$fixture" >/dev/null 2>"$err" || rc=$?
-[ "$rc" -eq 2 ] || fail "unknown fixture exited $rc, want 2"
-
-# The fast attaching 10 MiB run over the fixture directory.
-if ! scripts/class-data fast "$row" "10 MiB" "$fixture" >"$tmp/out.json" 2>"$err"; then
-  echo "scripts/test-class-data: class-data fast attaching 10 MiB failed:" >&2; cat "$err" >&2; exit 1
-fi
-
-# The fixture's main files, in file order: the set the script must emit.
-jq -r '[.artifacts[] | .name | sub("^benchmarks-"; "") | .[0:8] | "main " + .] | sort | .[]' "$fixture/listing.json" >"$tmp/files.txt"
-[ -s "$tmp/files.txt" ] || fail "the fixture holds no artifacts"
-want=$(wc -l <"$tmp/files.txt" | tr -d ' ')
-entries=$(grep -c '"file"' "$tmp/out.json" || true)
-[ "$entries" -eq "$want" ] || fail "emitted $entries entries for $want fixture files"
-# The committed file's lines for those files, the last comma dropped:
-# the script's whole document must equal this, byte for byte.
-{
-  echo "["
-  while IFS= read -r f; do
-    grep -F "\"file\": \"$f\"" "$committed" || fail "the committed file has no entry for $f"
-  done <"$tmp/files.txt" >"$tmp/lines.txt"
-  sed '$ s/,$//' "$tmp/lines.txt"
-  echo "]"
-} >"$tmp/expected.json"
-if ! diff "$tmp/expected.json" "$tmp/out.json" >/dev/null; then
-  echo "scripts/test-class-data: output differs from the committed entries:" >&2
-  diff "$tmp/expected.json" "$tmp/out.json" >&2
-  exit 1
-fi
-
-# A mixed-CPU fixture: the fast head, a slow head, an expired fast head,
-# a fast head from another branch, a fast head from a forked repository
-# and a non-benchmark artifact record. Only the live fast head may appear
-# in the fast output, and only the slow head in the slow output.
-# The non-benchmark record has no directory: the name guard must skip it
-# before any read, so a flipped guard fails the run with exit 1.
-mixed=$tmp/mixed
-mkdir -p "$mixed"
-fast_name=$(jq -r '.artifacts[0].name' "$fixture/listing.json")
-mkdir -p "$mixed/$fast_name"
-cp "$fixture/$fast_name/head.json" "$mixed/$fast_name/head.json"
-stripped=${fast_name#benchmarks-}
-fast_short=${stripped:0:8}
-slow_full="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-slow_name="benchmarks-$slow_full"
-mkdir -p "$mixed/$slow_name"
-jq '.cpu = "AMD EPYC 7763 64-Core Processor"' "$mixed/$fast_name/head.json" >"$mixed/$slow_name/head.json"
-gone_full="fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
-gone_name="benchmarks-$gone_full"
-mkdir -p "$mixed/$gone_name"
-cp "$mixed/$fast_name/head.json" "$mixed/$gone_name/head.json"
-fork_full="1111111111111111111111111111111111111111111111111111111111111111"
-fork_name="benchmarks-$fork_full"
-mkdir -p "$mixed/$fork_name"
-cp "$mixed/$fast_name/head.json" "$mixed/$fork_name/head.json"
-stranger_full="2222222222222222222222222222222222222222222222222222222222222222"
-stranger_name="benchmarks-$stranger_full"
-mkdir -p "$mixed/$stranger_name"
-cp "$mixed/$fast_name/head.json" "$mixed/$stranger_name/head.json"
-jq --arg fast "$fast_name" --arg slow "$slow_name" --arg gone "$gone_name" --arg fork "$fork_name" --arg stranger "$stranger_name" \
-  '.artifacts[0] as $one | {total_count: 6, artifacts: [$one, ($one | .name = $slow), ($one | .name = $gone | .expired = true), ($one | .name = $fork | .workflow_run.head_branch = "other"), ($one | .name = $stranger | .workflow_run.head_repository_id = 1), ($one | .name = "mutants-0")]}' \
-  "$fixture/listing.json" >"$mixed/listing.json"
-
-if ! scripts/class-data fast "$row" "10 MiB" "$mixed" >"$tmp/fast.json" 2>"$err"; then
-  echo "scripts/test-class-data: class-data over the mixed fixture failed:" >&2; cat "$err" >&2; exit 1
-fi
-[ "$(grep -c '"file"' "$tmp/fast.json" || true)" -eq 1 ] || fail "fast output over the mixed fixture has no single entry:"
-grep -Fq "\"file\": \"main $fast_short\"" "$tmp/fast.json" || fail "fast output lost the fast head"
-grep -Fq "${slow_full:0:8}" "$tmp/fast.json" && fail "fast output holds the slow head"
-grep -Fq "${gone_full:0:8}" "$tmp/fast.json" && fail "fast output holds the expired head"
-grep -Fq "${fork_full:0:8}" "$tmp/fast.json" && fail "fast output holds the other-branch head"
-grep -Fq "${stranger_full:0:8}" "$tmp/fast.json" && fail "fast output holds the forked-repository head"
-if ! scripts/class-data slow "$row" "10 MiB" "$mixed" >"$tmp/slow.json" 2>"$err"; then
-  echo "scripts/test-class-data: class-data slow over the mixed fixture failed:" >&2; cat "$err" >&2; exit 1
-fi
-[ "$(grep -c '"file"' "$tmp/slow.json" || true)" -eq 1 ] || fail "slow output over the mixed fixture has no single entry"
-grep -Fq "\"file\": \"main ${slow_full:0:8}\"" "$tmp/slow.json" || fail "slow output lost the slow head"
-grep -Fq "$fast_short" "$tmp/slow.json" && fail "slow output holds the fast head"
-# The middle class holds none of the mixed heads: an empty document.
-if ! scripts/class-data middle "$row" "10 MiB" "$mixed" >"$tmp/middle.json" 2>"$err"; then
-  echo "scripts/test-class-data: class-data middle over the mixed fixture failed:" >&2; cat "$err" >&2; exit 1
-fi
-[ "$(grep -c '"file"' "$tmp/middle.json" || true)" -eq 0 ] || fail "middle output over the mixed fixture is not empty"
-# A head in the class without this row's samples contributes no entry.
-nosamples=$tmp/nosamples
-mkdir -p "$nosamples"
-jq '{total_count: 1, artifacts: [.artifacts[0]]}' "$fixture/listing.json" >"$nosamples/listing.json"
-mkdir -p "$nosamples/$fast_name"
-jq '.metrics = {}' "$fixture/$fast_name/head.json" >"$nosamples/$fast_name/head.json"
-if ! scripts/class-data fast "$row" "10 MiB" "$nosamples" >"$tmp/nosamples.json" 2>"$err"; then
-  echo "scripts/test-class-data: class-data over the sample-less fixture failed:" >&2; cat "$err" >&2; exit 1
-fi
-[ "$(grep -c '"file"' "$tmp/nosamples.json" || true)" -eq 0 ] || fail "sample-less head contributed an entry"
-
-# A listing entry with no artifact on disk is a read failure, exit 1.
-missing=$tmp/missing
-mkdir -p "$missing"
-jq '{total_count: 1, artifacts: [.artifacts[0]]}' "$fixture/listing.json" >"$missing/listing.json"
-rc=0
-scripts/class-data fast "$row" "10 MiB" "$missing" >/dev/null 2>"$err" || rc=$?
-[ "$rc" -eq 1 ] || fail "missing head.json exited $rc, want 1"
+[ "$rc" -eq 2 ] || fail "unknown row with a second fixture exited $rc, want 2"
 
 # --- #2668 the session_list row reads plain-number samples ---
 # A hand-written session_list fixture under /tmp: its own listing plus
@@ -194,10 +94,10 @@ scripts/class-data fast "session_list" none "$slist" >/dev/null 2>"$err" || rc=$
 [ "$rc" -eq 2 ] || fail "bare session_list row exited $rc, want 2"
 
 # A mixed-CPU session_list fixture: the fast, 7763 and 9V74 heads carry
-# both metrics, plus an expired fast head and an other-branch fast head.
-# The fast session_list output holds only the fast head; the slow output
-# holds both slow CPUs; the middle output is empty. The attach slow output
-# over the same heads holds only 7763: the 9V74 widening is session_list's.
+# session_list samples (plus inert attach samples the script never reads),
+# plus an expired fast head and an other-branch fast head. The fast
+# session_list output holds only the fast head; the slow output holds both
+# slow CPUs; the middle output is empty.
 smixed=$tmp/smixed
 mkdir -p "$smixed"
 fast_full="cccccccccccccccccccccccccccccccccccccccc"
@@ -230,12 +130,6 @@ if ! scripts/class-data middle "$session_row" none "$smixed" >"$tmp/smiddle.json
   echo "scripts/test-class-data: class-data middle session_list over the mixed fixture failed:" >&2; cat "$err" >&2; exit 1
 fi
 [ "$(grep -c '"file"' "$tmp/smiddle.json" || true)" -eq 0 ] || fail "middle session_list output over the mixed fixture is not empty"
-if ! scripts/class-data slow "$row" "10 MiB" "$smixed" >"$tmp/sattach.json" 2>"$err"; then
-  echo "scripts/test-class-data: class-data slow attaching over the session_list fixture failed:" >&2; cat "$err" >&2; exit 1
-fi
-[ "$(grep -c '"file"' "$tmp/sattach.json" || true)" -eq 1 ] || fail "slow attaching output over the session_list fixture has no single entry"
-grep -Fq '"file": "main dddddddd"' "$tmp/sattach.json" || fail "slow attaching output lost the 7763 head"
-grep -Fq "eeeeeeee" "$tmp/sattach.json" && fail "slow attaching output holds the 9V74 head"
 
 # A session_list head without the metric contributes no entry.
 nometric=$tmp/nometric

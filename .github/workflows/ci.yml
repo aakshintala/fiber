@@ -1490,7 +1490,7 @@ jobs:
   ci:
     # On a draft the required `CI` check stays pending, so a draft's partial run never satisfies it.
     name: ${{ github.event.pull_request.draft && 'CI (draft)' || 'CI' }}
-    needs: [select, lint, test_linux, test, mutants, bug_red, release]
+    needs: [select, lint, test_linux, test, mutants, bug_red, release, stress]
     if: always()
     runs-on: ubuntu-24.04
     # Median 46 s; floor.
