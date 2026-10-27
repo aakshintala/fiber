@@ -4670,6 +4670,10 @@ fn a_prompt_read_after_close_is_rejected_closing() {
         "closing",
         "{prompt_answer}"
     );
+    assert_eq!(
+        support::rejection(&prompt_answer).1,
+        "The session is closing and takes no new turn."
+    );
 }
 
 /// A session message and a close racing for the admission lock, in both
