@@ -219,7 +219,12 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
         }
         Delivery::Rewind(_, args, ack) => {
             ack.0(Ok(None));
-            format!("rewind {:?}", args.seq)
+            match args {
+                contract::commands::RewindArgs::Rewind { seq, .. } => {
+                    format!("rewind {seq:?}")
+                }
+                contract::commands::RewindArgs::AtEnd => "rewind at_end".to_owned(),
+            }
         }
         Delivery::Cancelled | Delivery::Shell(..) => panic!("a wake arrives as a delivery"),
         Delivery::Job(_)
@@ -1924,9 +1929,14 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
             {
                 Delivery::Rewind(id, args, ack) => {
                     assert_eq!(id.0, "c_r1");
-                    assert_eq!(args.seq, Some(contract::Seq(5)));
-                    assert_eq!(args.from_session_id, None);
-                    assert!(!args.summarise);
+                    assert!(matches!(
+                        args,
+                        contract::commands::RewindArgs::Rewind {
+                            seq: Some(contract::Seq(5)),
+                            from_session_id: None,
+                            summarise: false,
+                        }
+                    ));
                     ack.0(Ok(Some(CommandResult::Rewind {
                         new_session_id: SessionId("s_9e2b0000000000b2".into()),
                     })));
@@ -1974,7 +1984,14 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
             {
                 Delivery::Rewind(id, args, ack) => {
                     assert_eq!(id.0, "c_r2");
-                    assert_eq!(args.seq, None);
+                    assert!(matches!(
+                        args,
+                        contract::commands::RewindArgs::Rewind {
+                            seq: None,
+                            from_session_id: None,
+                            summarise: false,
+                        }
+                    ));
                     ack.0(Err(Rejection {
                         code: ErrorCode::Busy,
                         message: "a turn is running".into(),
