@@ -1720,6 +1720,45 @@ fn slash_doctor_opens_the_report_view_on_home_and_attached() {
 }
 
 #[test]
+fn slash_doctor_keeps_long_lines_whole_and_clips_them_without_wrapping() {
+    let report = format!("head:{}:tail", "x".repeat(120));
+    let mut app = doctor_app(Some(fake()), &report);
+    app.set_size(40, 24);
+    slash_doctor(&mut app);
+
+    let frame = app.config_view_screen().expect("the view is open");
+    let row = frame.rows[0]
+        .iter()
+        .map(|(text, _, _)| text.as_str())
+        .collect::<String>();
+    assert_eq!(row, report, "the frame keeps the complete report line");
+
+    let area = Rect::new(0, 0, 40, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let screen = (0..area.height)
+        .map(|y| {
+            (0..area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    let report_row = screen
+        .iter()
+        .find(|line| line.contains("head:"))
+        .expect("the report row is visible");
+    assert_eq!(report_row.chars().count(), usize::from(area.width));
+    assert_eq!(
+        screen.iter().filter(|line| line.contains('x')).count(),
+        1,
+        "the line is clipped, not wrapped: {screen:?}"
+    );
+    assert!(!screen.iter().any(|line| line.contains(":tail")));
+}
+
+#[test]
 fn slash_doctor_ignores_extra_args_and_clears_the_draft() {
     // Extra words change nothing: the view still opens, like
     // `/status` with rest, and the draft clears.
@@ -1862,14 +1901,32 @@ impl FailingHub {
         let (client, hub) = UnixStream::pair().unwrap();
         router.attach(client);
         let (tx, lines) = mpsc::channel();
+        let router_ref = Arc::downgrade(&router);
         thread::spawn(move || {
             for line in BufReader::new(hub).lines() {
                 let Ok(line) = line else {
                     break;
                 };
-                if tx.send(serde_json::from_str(&line).unwrap()).is_err() {
+                let line: serde_json::Value = serde_json::from_str(&line).unwrap();
+                if tx.send(line.clone()).is_err() {
                     break;
                 }
+                let response: contract::HubLine = serde_json::from_value(json!({
+                    "kind": "command_rejected",
+                    "ts": 1,
+                    "schema_version": 1,
+                    "payload": {
+                        "command_id": line["id"],
+                        "code": "stale_request",
+                        "message": "hub message"
+                    }
+                }))
+                .unwrap();
+                let Some(router) = router_ref.upgrade() else {
+                    break;
+                };
+                // Answer now so a regression fails an assertion instead of hanging.
+                let _ = router.route(&Line::Hub(response));
             }
         });
         let remote = Arc::new(Remote::new(
@@ -1895,8 +1952,6 @@ impl FailingHub {
         let line = deadline.recv_or_fail(&self.lines, "global file ask");
         assert_eq!(line["command"], "configure");
         assert_eq!(line["args"], json!({"operation": "global_file"}));
-        let response: contract::HubLine = serde_json::from_value(json!({"kind":"command_rejected","ts":1,"schema_version":1,"payload":{"command_id":line["id"],"code":"stale_request","message":"hub message"}})).unwrap();
-        assert!(self.router.route(&Line::Hub(response)));
         deadline
             .recv_or_fail(&rx, "global parent answer")
             .unwrap_err()
