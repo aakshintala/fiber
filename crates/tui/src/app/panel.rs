@@ -466,10 +466,14 @@ impl PanelState {
         self.jobs_open
     }
 
-    /// A branch query is due on the next attached-session line.
+    /// A branch query is due on the next attached-session line, and the
+    /// old session's recorded root ends here: the new attachment folds
+    /// its own `session_started`, so `/pwd` waits for that fold instead
+    /// of showing stale state (`docs/tui.md`, "Slash commands").
     pub(crate) fn attached(&mut self) {
         self.due = true;
         self.quota.attached();
+        self.workspace = None;
     }
 
     /// The branch the last query answered, if any.

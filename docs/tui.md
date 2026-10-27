@@ -1952,6 +1952,8 @@ later release still applies.
 
 The `/` list shows built-in commands in this order.
 
+The range line's total counts every entry the query matches: the matching built-in rows plus the matching session commands.
+
 A row's second name, such as `/exit`, is an alias: typing it runs the same
 command, and the `/` list shows it after the name on that command's row,
 never as a row of its own.

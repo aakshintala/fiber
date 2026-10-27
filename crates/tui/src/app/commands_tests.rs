@@ -809,13 +809,43 @@ fn pwd_before_the_first_fold_shows_on_session_started() {
 }
 
 /// Folding `session_started` with no `/pwd` waiting shows no workspace
-/// notice: the fold alone is silent (`docs/tui.md`, "Slash commands").
+/// notice: the fold alone is silent, and the root is still recorded
+/// (`docs/tui.md`, "Slash commands").
 #[test]
 fn session_started_without_a_waiting_pwd_stays_silent() {
     let mut app = attached();
     app.on_line(started_with_workspace("/worktree"));
     assert!(!app.pwd_pending);
     assert!(app.notices().is_empty());
+    assert_eq!(app.panel_state().workspace(), Some("/worktree"));
+}
+
+/// Switching sessions drops the old session's recorded root: `/pwd`
+/// waits for the new session's `session_started` instead of showing
+/// the old root, then shows the new one (`docs/tui.md`,
+/// "Slash commands").
+#[test]
+fn pwd_after_a_switch_waits_for_the_new_sessions_root() {
+    for command in ["/pwd", "/cwd"] {
+        let mut app = attached();
+        app.on_line(started_with_workspace("/old"));
+        app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+        assert_eq!(app.panel_state().workspace(), None);
+        assert_eq!(enter(&mut app, command), Effect::None, "{command}");
+        assert_eq!(app.draft(), "", "{command}");
+        assert!(app.notices().is_empty(), "{command}");
+        assert!(app.pwd_pending, "{command}");
+        app.on_line(other_session_line(
+            "session_started",
+            json!({
+                "workspace": "/new",
+                "variables": {"path": "", "names": [], "source": "inherited"},
+            }),
+        ));
+        assert!(!app.pwd_pending, "{command}");
+        assert!(notice_with(&app, "workspace", "/new"), "{command}");
+        assert!(!notice_with(&app, "workspace", "/old"), "{command}");
+    }
 }
 
 /// Detaching or switching the session cancels a waiting `/pwd`: the
