@@ -218,10 +218,11 @@ and
 [permissions: an opt-in OS sandbox, and whether its commands skip the reviewer](https://github.com/aakshintala/fiber/issues/3027);
 those tickets' resolutions hold the rationale and the rejected alternatives.
 
-The sandbox is opt-in and off by default. When it is on, Fiber confines
-what a shell call can reach at the operating-system level under its own
+The opt-in sandbox policy is planned in #3027 and is not implemented in the
+current build. When implemented, it will be off by default and will confine
+what a shell call can reach at the operating-system level under Fiber's own
 policy: Seatbelt on macOS, Landlock plus seccomp on Linux; no srt, no
-bubblewrap. A shell call that runs confined skips the reviewer, as a new
+bubblewrap. A shell call that runs confined will skip the reviewer, as a new
 fast path after the credential deny and the person's standing deny and ask
 rules. The full per-platform policy is `docs/sandbox.md`.
 

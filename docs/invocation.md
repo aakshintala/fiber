@@ -1258,8 +1258,10 @@ to session artifacts.
   session's shell reaches the local socket; only a shell call that
   successfully runs confined cannot reach Fiber's local socket
   (`docs/sandbox.md`). The sandbox denies all sockets on both platforms. A
-  non-empty `sandbox.allow_unix_sockets` list makes it unavailable. An
-  `unconfined: true` call or an unavailable-sandbox fallback retains today's
+  non-empty `sandbox.allow_unix_sockets` list makes it unavailable. No
+  listed path may resolve under Fiber's `run/`, including through `..` or a
+  symlink alias (`docs/configuration.md`, "Keys"). An `unconfined: true`
+  call or an unavailable-sandbox fallback retains today's
   socket access. It would only
   stop a person whose one device is a phone from adding a second. Detection is the control
   instead. Each pairing and each revocation is written to the hub's

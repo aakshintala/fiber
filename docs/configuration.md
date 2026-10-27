@@ -99,7 +99,8 @@ this one:
 ## Keys
 
 Keys are snake_case and grouped by area. In "Repo", yes means a repository may
-set the key.
+set the key. The `sandbox.*` entries describe the planned policy in #3027; the
+current build does not read them yet.
 
 In an `extensions."<name>"` key, `<name>` is the extension's full name or,
 for an extension that has one, its short name (`docs/extensions.md`,

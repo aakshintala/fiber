@@ -345,9 +345,10 @@ here in the same pull request that adds the dependencies ("Admitting a
 crate", "Measuring memory"), not in this docs pull request: the Part 3a PR
 adds workloads shaped like Linux policy construction and application in a
 child and seccomp compilation and application, plus the runtime-together
-workload, and records the median-of-5 runs on Linux x86_64 and arm64, with
-macOS recording these Linux-only crates as not applicable rather than a
-fabricated runtime figure. Until that PR, no row above admits them.
+workload. It records the median-of-5 runs on Linux x86_64 and arm64 and the
+macOS arm64 measurement outcome. Do not pre-label a macOS result as not
+applicable; report what the measurement establishes if a Linux-only workload
+cannot run there. Until that PR, no row above admits these crates.
 
 ## Written ourselves
 
