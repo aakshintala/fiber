@@ -19,10 +19,10 @@
 )]
 
 use std::process::ExitCode;
-use std::sync::{Arc, Weak};
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::Arc;
+use std::time::Duration;
 
-use contract::clock::{Clock, Wake};
+use support::clock::System;
 
 #[path = "../tests/support/paging_args.rs"]
 mod paging_args;
@@ -37,7 +37,7 @@ fn open_report(
     height: u16,
     frame_every: usize,
 ) -> Result<String, String> {
-    let stages = tui::measure_open(events, width, height, frame_every, Arc::new(ProcessClock))?;
+    let stages = tui::measure_open(events, width, height, frame_every, Arc::new(System))?;
     let ms = |took: Duration| took.as_secs_f64() * 1000.0;
     Ok(serde_json::json!({
         "parse_ms": ms(stages.parse),
@@ -110,7 +110,7 @@ fn main() -> ExitCode {
         "session: scale {scale}, {:.2} MiB, at {width}x{height}",
         mib(events.len())
     );
-    match tui::measure_paging(&events, width, height, Arc::new(ProcessClock)) {
+    match tui::measure_paging(&events, width, height, Arc::new(System)) {
         Ok(report) => {
             print!("{report}");
             ExitCode::SUCCESS
@@ -130,34 +130,4 @@ fn mib(bytes: usize) -> f64 {
     )]
     let bytes = bytes as f64;
     bytes / 1024.0 / 1024.0
-}
-
-/// The process clock. `tui` cannot depend on `main`, which owns the one
-/// the binary uses, so the jig keeps a small one.
-struct ProcessClock;
-
-impl Clock for ProcessClock {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the paging jig times frames on the process clock; tui cannot depend on main"
-    )]
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the paging jig reads the process clock; tui cannot depend on main"
-    )]
-    fn wall(&self) -> SystemTime {
-        SystemTime::now()
-    }
-
-    fn sleep(&self, _duration: Duration) {}
-
-    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
-        wait(until.map(|until| until.saturating_duration_since(self.now())));
-    }
-
-    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
 }
