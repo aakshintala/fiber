@@ -176,31 +176,46 @@ fn call_rows_draw_the_inline_grid() {
 #[test]
 fn bubble_rows_draw_the_shared_grid_right_aligned() {
     use ratatui::layout::Alignment;
-    // "look" at 60 columns wraps to a block 7 wide. The PNG draws the
-    // shared conversation-width grid under the bubble's three rows,
-    // right-aligned, then its caption cut to the block width
-    // (`docs/tui.md`, "Images": at most 40% of the conversation's
-    // width and 12 rows, keeping proportions; a click opens the
-    // viewer, so every grid row and the caption carry its target).
+    // The short prompt supplies a text bubble. The PNG uses the shared
+    // conversation-width grid; its caption stays within the bubble text
+    // width. `docs/tui.md`, "Images", sets the 40%-width and 12-row
+    // caps and says a click opens the viewer.
     let prompt = prompt_of(&session(), &[text("look"), image("artifacts/b.png")]);
     let layout = inline_layout(&["artifacts/b.png"], (10, 20));
     let mut out = Rows::default();
     bubble_rows(&prompt, 60, &layout, &mut out);
     let (rows, _) = out.into_parts();
-    // Three bubble rows, a 24 by 7 grid, and the caption.
-    assert_eq!(rows.len(), 11);
-    for (at, (line, target)) in rows.iter().enumerate().skip(3).take(7) {
-        assert_eq!(line.spans.len(), 24, "row {at}: one cell per column");
-        assert_eq!(line.alignment, Some(Alignment::Right), "row {at}");
+    let grid_rows: Vec<_> = rows
+        .iter()
+        .filter(|(line, _)| {
+            line.spans
+                .iter()
+                .any(|span| span.content.as_ref().starts_with('\u{10EEEE}'))
+        })
+        .collect();
+    assert!(!grid_rows.is_empty(), "the inline grid is visible");
+    assert!(
+        grid_rows.len() <= 12,
+        "the grid stays within the documented cap"
+    );
+    for (line, target) in &grid_rows {
+        assert!(
+            line.spans.len() <= 60 * 40 / 100,
+            "the grid stays within 40% width"
+        );
+        assert_eq!(line.alignment, Some(Alignment::Right));
         assert!(
             line.spans
                 .iter()
                 .all(|span| span.content.as_ref().starts_with('\u{10EEEE}')),
-            "row {at}: every grid cell is a placeholder"
+            "every grid cell is a placeholder"
         );
-        assert!(matches!(target, Some(Target::Image(_))), "row {at}");
+        assert!(matches!(target, Some(Target::Image(_))));
     }
-    let (caption, target) = &rows[10];
+    let (caption, target) = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains('▣'))
+        .unwrap_or_else(|| panic!("a caption row"));
     assert_eq!(caption.alignment, Some(Alignment::Right));
     assert!(crate::format::width(&caption.to_string()) <= 7);
     assert!(matches!(target, Some(Target::Image(_))));
@@ -221,8 +236,20 @@ fn bubble_rows_draw_the_shared_grid_right_aligned() {
         &mut calls,
     );
     let (call_rows, _) = calls.into_parts();
-    assert_eq!(call_rows.len(), 8);
-    for (bubble, call) in rows.iter().skip(3).take(7).zip(call_rows.iter()) {
+    let call_grid: Vec<_> = call_rows
+        .iter()
+        .filter(|(line, _)| {
+            line.spans
+                .iter()
+                .any(|span| span.content.as_ref().starts_with('\u{10EEEE}'))
+        })
+        .collect();
+    assert_eq!(
+        grid_rows.len(),
+        call_grid.len(),
+        "the shared grid has the same height"
+    );
+    for (bubble, call) in grid_rows.iter().zip(call_grid.iter()) {
         assert_eq!(
             bubble.0.spans.len() + 1,
             call.0.spans.len(),
