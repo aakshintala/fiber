@@ -2555,6 +2555,12 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   matches and the selection share.
 - **Pages load inside the frame** that needs them. There is no background
   loading.
+- **Queued inputs share a frame by kind.** Queued hub lines and ticks share
+  one frame in arrival order, up to 4,096 inputs, so a stream that never
+  empties still draws. A run of queued terminal reads shares one frame, so a
+  run of wheel steps draws once. A key, click or resize draws its own frame at
+  once, so click targets always come from a frame the person saw, and a key
+  that swaps the screen does not carry the next key's work.
 - **Search streams the session's lines** with `history`, rendering each page to text and keeping only its
   matches. On a large session it does not run on every keystroke: it waits for
   a pause in typing of a quarter of a second, or runs off the frame thread.
