@@ -855,34 +855,26 @@ fn deliver_message(
         },
     };
     if prompt {
-        let gate = Arc::clone(&conn.gate);
-        let admission = Arc::clone(&gate.admission);
-        let mut ack = Some(inbox_ack(conn, id.clone()));
-        let mut message = Some(message);
-        let mut id = Some(id);
+        let ack = inbox_ack(conn, id.clone());
+        let mut prompt = Some((id, message, ack));
+        let gate = &conn.gate;
         // A closed admission rejects the prompt with the loop's closing
         // message; an admitted prompt is queued and recorded under the lock.
-        let admitted = admission.admit(|| {
-            let Some(ack) = ack.take() else {
-                unreachable!("admission runs its closure once");
-            };
-            let Some(message) = message.take() else {
-                unreachable!("admission runs its closure once");
-            };
-            let Some(id) = id.take() else {
+        let admitted = gate.admission.admit(|| {
+            let Some((id, message, ack)) = prompt.take() else {
                 unreachable!("admission runs its closure once");
             };
             let ack = match gate.history.get().cloned().flatten() {
                 Some(path) => {
                     gate.prompts.register(id.clone(), message.content.clone());
-                    crate::prompt_history::recorded(ack, path, &gate, id)
+                    crate::prompt_history::recorded(ack, path, gate, id)
                 }
                 None => ack,
             };
             gate.deliver(Delivery::Prompt(message, ack));
         });
         if admitted.is_none()
-            && let Some(ack) = ack.take()
+            && let Some((_, _, ack)) = prompt.take()
         {
             ack.0(Err(Rejection {
                 code: ErrorCode::Closing,
