@@ -573,6 +573,14 @@ impl App {
             }
             "command_accepted" => {
                 if let Some(accepted) = super::read!(envelope, CommandAccepted) {
+                    // A pending fork attaches before any open view
+                    // handles the answer: opening another view resets
+                    // the rewind view, not the fork.
+                    if self.fork_pending.as_deref() == Some(accepted.command_id.0.as_str())
+                        && let Some(lines) = self.rewind_send_accepted(&accepted)
+                    {
+                        return lines;
+                    }
                     if matches!(self.session_views.open, Some(Open::Call(_))) {
                         return self.call_view_answered(&accepted);
                     }
@@ -587,6 +595,12 @@ impl App {
             }
             "command_rejected" => {
                 if let Some(rejected) = super::read!(envelope, CommandRejected) {
+                    // A pending fork's refusal shows as a notice before
+                    // any open view folds it: opening another view resets
+                    // the rewind view, not the fork.
+                    if self.rewind_fork_refused(&rejected) {
+                        return Vec::new();
+                    }
                     if matches!(self.session_views.open, Some(Open::Call(_))) {
                         self.call_view_refused(&rejected);
                     } else if matches!(self.session_views.open, Some(Open::Rewind(_))) {

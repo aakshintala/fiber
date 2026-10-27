@@ -427,6 +427,155 @@ fn a_rewind_continues_the_session_from_the_latest_turn() {
 }
 
 #[test]
+fn an_at_end_rewind_continues_the_session_from_the_latest_point() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup);
+    let old = hubbed.start("c1_start", "c1_sub", "one");
+    let client = hubbed.client();
+    hubbed.prompt("c1_p2", &old, "two");
+
+    // The admission-time point is the log's last line before the rewind.
+    let at = session_log(&setup, &old).last().unwrap()["seq"]
+        .as_u64()
+        .unwrap();
+
+    client.send(&rewind("c1_rw", &old, json!({"at_end": true})));
+    let ack = until_ack(client, "the rewind acknowledgement", "c1_rw");
+    let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .expect("the rewind answers with a session id")
+        .to_owned();
+
+    // Without sending anything, the client receives the new session's lines.
+    until(client, "the new session's start", |line| {
+        line["session_id"] == next && line["kind"] == "session_started"
+    });
+
+    // The old log ends `rewound`, naming the admission-time point, with
+    // no summary and no `fiber_exited`.
+    let old_log = session_log(&setup, &old);
+    let kinds: Vec<&str> = old_log
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds.last().unwrap(), &"rewound", "{kinds:?}");
+    let rewound = old_log.last().unwrap();
+    assert_eq!(rewound["payload"]["seq"], at);
+    assert!(rewound["payload"].get("jobs").is_none());
+    assert!(rewound["payload"].get("summary").is_none());
+    assert_eq!(rewound["payload"]["new_session_id"], next);
+    assert!(
+        rewound
+            .get("payload")
+            .unwrap()
+            .get("from_session_id")
+            .is_none()
+    );
+
+    // The new session starts on its own: its `fiber_started` arrives live.
+    until(client, "the new session's fiber_started", |line| {
+        line["session_id"] == next && line["kind"] == "fiber_started"
+    });
+    until(client, "the new session's extensions_loaded", |line| {
+        line["session_id"] == next && line["kind"] == "extensions_loaded"
+    });
+    // The new log before any prompt is one fresh start continuing the old
+    // through the admission-time point.
+    let new_log = session_log(&setup, &next);
+    let new_kinds: Vec<&str> = new_log
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        new_kinds,
+        ["session_started", "fiber_started", "extensions_loaded"],
+        "{new_kinds:?}"
+    );
+    let first = &new_log[0];
+    assert_eq!(
+        first["payload"]["forked_from"],
+        json!({"session_id": old, "seq": at})
+    );
+    assert!(first["payload"]["rewind"].get("jobs").is_none());
+    assert!(first["payload"].get("parent").is_none());
+    let note = first["payload"]["rewind"]["note"].as_str().unwrap();
+    assert!(note.contains("rewound to this point"), "{note}");
+    assert!(note.contains("No file was written"), "{note}");
+    assert!(
+        new_log.iter().all(|line| line["session_id"] == next),
+        "no line names the old session"
+    );
+
+    // The new session answers, with the whole history through the point
+    // before the note: the old request's inputs byte for byte, then the
+    // last turn's completion, the note, and the new prompt. Later
+    // old-log lines (`rewound`) ride along in neither.
+    hubbed.prompt("c1_p3", &next, "three");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3, "one request per turn");
+    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let third: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    let second_keys: Vec<&str> = second
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let third_keys: Vec<&str> = third
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(second_keys, third_keys, "the same top-level keys");
+    for key in second_keys {
+        if key == "input" {
+            continue;
+        }
+        assert_eq!(
+            serde_json::to_string(&second[key]).unwrap(),
+            serde_json::to_string(&third[key]).unwrap(),
+            "the {key} matches byte for byte"
+        );
+    }
+    let before = second["input"].as_array().unwrap();
+    let after = third["input"].as_array().unwrap();
+    assert!(after.len() > before.len(), "{after:?}");
+    for (index, item) in before.iter().enumerate() {
+        assert_eq!(
+            serde_json::to_string(&after[index]).unwrap(),
+            serde_json::to_string(item).unwrap(),
+            "input[{index}] matches byte for byte"
+        );
+    }
+    let middle = &after[before.len()..after.len() - 2];
+    assert!(!middle.is_empty(), "the last turn rides along: {after:?}");
+    assert!(
+        serde_json::to_string(&after[after.len() - 2])
+            .unwrap()
+            .contains("rewound to this point"),
+        "input[len - 2] is the note: {}",
+        after[after.len() - 2]
+    );
+    assert!(
+        serde_json::to_string(&after[after.len() - 1])
+            .unwrap()
+            .contains("three"),
+        "input[len - 1] is the new prompt: {}",
+        after[after.len() - 1]
+    );
+
+    // The old log eventually ends `rewound`, with nothing after it.
+    let old_log = session_log(&setup, &old);
+    assert_eq!(old_log.last().unwrap()["kind"], "rewound");
+
+    hubbed.close("c1_close", &next);
+    hubbed.finish();
+}
+
+#[test]
 fn a_rewind_stops_a_running_job_and_the_note_names_it() {
     let setup = Setup::new();
     let sleep = function_call(

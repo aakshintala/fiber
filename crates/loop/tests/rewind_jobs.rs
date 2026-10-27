@@ -20,15 +20,15 @@ use std::thread;
 
 use contract::commands::RewindArgs;
 use contract::events::{
-    CommandResult, Event, JobCompleted, JobStarted, Outcome, Parent, SessionStarted, TurnOutcome,
-    Variables, VariablesSource,
+    CommandResult, Event, JobCompleted, JobStarted, Outcome, Parent, SessionStarted,
+    ToolCallRequested, TurnOutcome, Variables, VariablesSource,
 };
 use contract::inbox::{Ack, Answer, Claim, Delivery, JobNotice, Rejection};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{Failure, Point};
 use contract::tool::Tool;
-use contract::{CommandId, ErrorCode, JobId, Seq, SessionId};
+use contract::{ActionId, CommandId, ErrorCode, JobId, Seq, SessionId};
 use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use log::Log;
@@ -101,11 +101,12 @@ fn run_a_with_id(id: &str) -> Session {
     session
 }
 
-fn args(from: Option<&str>, seq: Option<u64>, summarise: bool) -> RewindArgs {
+fn args(from: Option<&str>, seq: Option<u64>, summarise: bool, at_end: bool) -> RewindArgs {
     RewindArgs {
         from_session_id: from.map(|id| SessionId(id.into())),
         seq: seq.map(Seq),
         summarise,
+        at_end,
     }
 }
 
@@ -408,7 +409,7 @@ fn rewind_checked(dir: &std::path::Path) -> (Delivery, mpsc::Receiver<Answer>) {
     (
         Delivery::Rewind(
             CommandId("c_rewind".into()),
-            args(None, None, false),
+            args(None, None, false, false),
             Ack(Box::new(move |answer| {
                 let last = log::read(&dir).unwrap().pop().unwrap();
                 assert_eq!(last.kind, "rewound");
@@ -429,7 +430,7 @@ fn a_rewind_with_no_job_running_writes_only_rewound() {
         .take()
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
-    let (rw, answered) = support::rewind(args(None, None, false));
+    let (rw, answered) = support::rewind(args(None, None, false, false));
     let (_looped, outcome) = drive(looped, &session.inbox, rw);
     accepted(answer_of(answered));
     assert_eq!(outcome, None);
@@ -496,6 +497,107 @@ fn a_rewind_stops_two_running_jobs_before_rewound() {
 }
 
 #[test]
+fn an_at_end_rewind_stops_running_jobs_after_the_point() {
+    let mut session = run_a_with_id(A_ID);
+    let dir = session.dir.clone();
+    let (jobs, stops) = FakeJobs::new(&["j_1", "j_2"]);
+    let looped = session
+        .looped
+        .take()
+        .unwrap()
+        .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    // The admission-time point is the last line before the rewind: the
+    // job ends the stop writes land after it.
+    let before = log::read(&dir).unwrap();
+    let at = before.last().unwrap().seq.unwrap().0;
+    let (rw, answered) = support::rewind(args(None, None, false, true));
+    let inbox = session.inbox.clone();
+    inbox.send(rw).unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut looped = looped;
+        let outcome = looped.turn().unwrap();
+        done.send(outcome).unwrap();
+    });
+    for _ in 0..2 {
+        Deadline::after(DEADLINE)
+            .recv(&stops)
+            .expect("the job is stopped");
+    }
+    jobs.end(&inbox, "j_1", Outcome::Cancelled, None);
+    jobs.end(&inbox, "j_2", Outcome::Cancelled, None);
+    let outcome = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the rewind ended in time");
+    assert_eq!(outcome, None);
+    let new = accepted(answer_of(answered));
+    assert_eq!(
+        log::read(&dir).unwrap().last().unwrap().payload["new_session_id"],
+        json!(new.0)
+    );
+    let lines = log::read(&dir).unwrap();
+    let tail: Vec<&str> = lines
+        .iter()
+        .rev()
+        .take(3)
+        .map(|line| line.kind.as_str())
+        .collect();
+    assert_eq!(tail, ["rewound", "job_completed", "job_completed"]);
+    // `rewound` names the admission-time point, not the later job ends.
+    assert_eq!(lines.last().unwrap().payload["seq"], json!(at));
+    assert!(lines.last().unwrap().payload.get("summary").is_none());
+    // The note names the stopped jobs with no files written after the
+    // point: the child's history ends at the point, before the ends.
+    let note = rewind_note_with_jobs(&dir, &dir, Seq(at)).unwrap();
+    assert!(
+        note.contains("No file was written and no command was run after this point."),
+        "{note}"
+    );
+    assert!(note.contains("- j_1"), "{note}");
+    assert!(note.contains("- j_2"), "{note}");
+}
+
+#[test]
+fn an_at_end_rewind_with_an_unanswered_call_stops_no_job() {
+    let mut session = run_a_with_id(A_ID);
+    let dir = session.dir.clone();
+    let (jobs, stops) = FakeJobs::new(&["j_1"]);
+    let looped = session
+        .looped
+        .take()
+        .unwrap()
+        .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    // A crash left a call requested with no result on the log.
+    session
+        .log
+        .append(
+            &Event::ToolCallRequested(ToolCallRequested {
+                name: "write_file".into(),
+                arguments: json!({}),
+                provider_id: None,
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            }),
+            None,
+            Some(ActionId("a_orphan".into())),
+        )
+        .unwrap();
+    let before = log_bytes(&dir);
+    let (rw, answered) = support::rewind(args(None, None, false, true));
+    let inbox = take_inbox(&mut session);
+    drop(drive_closed(looped, inbox, vec![rw]));
+    let rejection = rejected(answer_of(answered));
+    assert_eq!(rejection.code, ErrorCode::NotStepBoundary);
+    assert_eq!(
+        rejection.message,
+        "The end of the log is not a step boundary: a tool call before it has no recorded result."
+    );
+    assert_eq!(log_bytes(&dir), before, "a refusal writes nothing");
+    assert!(stops.try_recv().is_err(), "no stop was sent");
+}
+
+#[test]
 fn a_job_ending_indeterminate_is_written_verbatim_before_rewound() {
     let mut session = run_a_with_id(A_ID);
     let dir = session.dir.clone();
@@ -505,7 +607,7 @@ fn a_job_ending_indeterminate_is_written_verbatim_before_rewound() {
         .take()
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
-    let (rw, answered) = support::rewind(args(None, None, false));
+    let (rw, answered) = support::rewind(args(None, None, false, false));
     let inbox = session.inbox.clone();
     inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
@@ -563,7 +665,7 @@ fn a_job_that_never_ends_keeps_the_wait_open_until_its_end_arrives() {
         .take()
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
-    let (rw, answered) = support::rewind(args(None, None, false));
+    let (rw, answered) = support::rewind(args(None, None, false, false));
     let inbox = session.inbox.clone();
     inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
@@ -618,7 +720,7 @@ fn deliveries_during_the_stop_wait_are_refused_closing_or_dropped() {
         .take()
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
-    let (rw, answered) = support::rewind(args(None, None, false));
+    let (rw, answered) = support::rewind(args(None, None, false, false));
     let inbox = session.inbox.clone();
     inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
@@ -637,7 +739,7 @@ fn deliveries_during_the_stop_wait_are_refused_closing_or_dropped() {
     inbox
         .send(Delivery::Prompt(message("later"), prompt_ack))
         .unwrap();
-    let (rw2, rw2_answered) = support::rewind(args(None, None, false));
+    let (rw2, rw2_answered) = support::rewind(args(None, None, false, false));
     inbox.send(rw2).unwrap();
     let (close_ack, close_answered) = asked();
     inbox.send(Delivery::Close(close_ack)).unwrap();
@@ -685,7 +787,7 @@ fn a_monitor_batch_during_the_stop_wait_is_dropped() {
         .take()
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
-    let (rw, answered) = support::rewind(args(None, None, false));
+    let (rw, answered) = support::rewind(args(None, None, false, false));
     let inbox = session.inbox.clone();
     inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
@@ -736,7 +838,7 @@ fn a_rewind_to_an_ancestor_point_stops_the_jobs_in_the_old_log() {
     );
     let (jobs, stops) = FakeJobs::new(&["j_1"]);
     let looped = looped.jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
-    let (rw, answered) = support::rewind(args(Some(A_ID), Some(first - 1), false));
+    let (rw, answered) = support::rewind(args(Some(A_ID), Some(first - 1), false, false));
     tx.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -778,7 +880,7 @@ fn refusals_send_no_stop_with_jobs_running() {
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let before = log::read(&dir).unwrap().len();
-    let (rw, answered) = support::rewind(args(None, None, true));
+    let (rw, answered) = support::rewind(args(None, None, true, false));
     let inbox = take_inbox(&mut session);
     drop(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
@@ -813,7 +915,7 @@ fn refusals_send_no_stop_with_jobs_running() {
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let before = log_bytes(&dir);
-    let (rw, answered) = support::rewind(args(None, Some(u64::MAX), false));
+    let (rw, answered) = support::rewind(args(None, Some(u64::MAX), false, false));
     let inbox = take_inbox(&mut session);
     drop(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
@@ -837,7 +939,7 @@ fn a_job_end_admitted_with_the_rewind_refuses_busy() {
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let inbox = take_inbox(&mut session);
     jobs.end(&inbox, "j_1", Outcome::Cancelled, None);
-    let (rw, answered) = support::rewind(args(None, None, false));
+    let (rw, answered) = support::rewind(args(None, None, false, false));
     inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -876,7 +978,7 @@ fn a_closed_inbox_ends_the_wait_with_the_job_still_running() {
         .take()
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
-    let (rw, answered) = support::rewind(args(None, None, false));
+    let (rw, answered) = support::rewind(args(None, None, false, false));
     tx.send(rw).unwrap();
     drop(tx);
     let (done, finished) = mpsc::channel();
@@ -936,7 +1038,7 @@ fn the_note_after_a_stop_names_the_jobs_with_their_descriptions() {
         .take()
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
-    let (rw, answered) = support::rewind(args(None, None, false));
+    let (rw, answered) = support::rewind(args(None, None, false, false));
     let inbox = session.inbox.clone();
     inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
@@ -1144,7 +1246,7 @@ fn a_job_ending_during_the_rewind_stop_wait_is_redacted_in_its_end_and_its_file(
     let looped = looped
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>)
         .hooks(hooks.clone());
-    let (rw, answered) = support::rewind(args(None, None, false));
+    let (rw, answered) = support::rewind(args(None, None, false, false));
     let inbox = session.inbox.clone();
     inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
@@ -1237,7 +1339,7 @@ fn a_withheld_job_end_during_the_rewind_stop_wait_withholds_its_file_and_notice(
     let looped = looped
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>)
         .hooks(hooks.clone());
-    let (rw, answered) = support::rewind(args(None, None, false));
+    let (rw, answered) = support::rewind(args(None, None, false, false));
     let inbox = session.inbox.clone();
     inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
@@ -1312,7 +1414,7 @@ fn a_delegate_end_during_the_rewind_stop_wait_is_hooked_in_full_and_artifacted()
     let looped = looped
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>)
         .hooks(hooks.clone());
-    let (rw, answered) = support::rewind(args(None, None, false));
+    let (rw, answered) = support::rewind(args(None, None, false, false));
     let inbox = session.inbox.clone();
     inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();

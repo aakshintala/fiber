@@ -2,7 +2,7 @@
 //! the point in this session's log or an ancestor's, and `rewound` as the
 //! last line.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use contract::commands::RewindArgs;
@@ -107,7 +107,7 @@ impl Loop {
             }
         };
         let lines = log::read(&target.dir)?;
-        let point = match point_for(&lines, &target, args.seq) {
+        let point = match point_for(&lines, &target, args.seq, args.at_end) {
             Ok(point) => point,
             Err(rejection) => {
                 (ack.0)(Err(rejection));
@@ -247,12 +247,17 @@ pub(crate) fn refuse_after_rewound(delivery: Delivery) {
 /// point is a step boundary: the log holds a `turn_started` or a
 /// `step_started` just after it, and no tool call before it is answered
 /// after it (`docs/events.md`, "Rewind"). A point past the bound is not in
-/// this session's history.
+/// this session's history. With `at_end`, the point is the log's last line
+/// as read at admission, with every tool call in the log answered.
 pub(crate) fn point_for(
     lines: &[Envelope],
     target: &Target,
     requested: Option<Seq>,
+    at_end: bool,
 ) -> Result<u64, Rejection> {
+    if at_end {
+        return end_point(lines);
+    }
     match requested {
         None => {
             let mut latest = None;
@@ -293,6 +298,41 @@ pub(crate) fn point_for(
             boundary(lines, seq.0)
         }
     }
+}
+
+/// The end-of-log point (`at_end`, sent by `/fork`): the last durable
+/// line's `seq` as read at admission. It needs no next line, but every
+/// tool call in the log must be answered: each action id a
+/// `tool_call_requested` or `tool_call_started` line names needs a
+/// matching `tool_call_completed` line.
+fn end_point(lines: &[Envelope]) -> Result<u64, Rejection> {
+    let not_boundary = |reason: &str| Rejection {
+        code: ErrorCode::NotStepBoundary,
+        message: format!("The end of the log is not a step boundary: {reason}."),
+    };
+    let Some(last) = lines.last() else {
+        return Err(not_boundary("the log holds no line"));
+    };
+    let Some(seq) = last.seq.map(|seq| seq.0) else {
+        return Err(not_boundary("its last line has no recorded position"));
+    };
+    let mut completed = HashSet::new();
+    for line in lines {
+        if line.kind == "tool_call_completed"
+            && let Some(action) = &line.action_id
+        {
+            completed.insert(action);
+        }
+    }
+    for line in lines {
+        if (line.kind == "tool_call_requested" || line.kind == "tool_call_started")
+            && let Some(action) = &line.action_id
+            && !completed.contains(action)
+        {
+            return Err(not_boundary("a tool call before it has no recorded result"));
+        }
+    }
+    Ok(seq)
 }
 
 /// Whether `point` is a step boundary in `lines`: the log holds a

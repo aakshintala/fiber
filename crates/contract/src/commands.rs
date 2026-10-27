@@ -511,8 +511,12 @@ pub struct Handoff {
 }
 
 /// The `args` of `rewind`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+///
+/// With `at_end`, the point is the log's last line, resolved at admission;
+/// only the session's own end is a fork point, so `at_end` with `seq`,
+/// `from_session_id` or `summarise` present, even `summarise: false`, is
+/// `invalid_arguments`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RewindArgs {
     /// The session to rewind; absent means this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -523,6 +527,40 @@ pub struct RewindArgs {
     /// Whether to summarise the path after the point.
     #[serde(default)]
     pub summarise: bool,
+    /// Whether to rewind to the end of the log (`/fork` sends this).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub at_end: bool,
+}
+
+impl<'de> Deserialize<'de> for RewindArgs {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            #[serde(default)]
+            from_session_id: Option<SessionId>,
+            #[serde(default)]
+            seq: Option<Seq>,
+            #[serde(default)]
+            summarise: Option<bool>,
+            #[serde(default)]
+            at_end: bool,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        if raw.at_end
+            && (raw.from_session_id.is_some() || raw.seq.is_some() || raw.summarise.is_some())
+        {
+            return Err(D::Error::custom(
+                "`at_end` takes no `seq`, `from_session_id` or `summarise`",
+            ));
+        }
+        Ok(Self {
+            from_session_id: raw.from_session_id,
+            seq: raw.seq,
+            summarise: raw.summarise.unwrap_or(false),
+            at_end: raw.at_end,
+        })
+    }
 }
 
 /// The `args` of `shell`.
@@ -595,6 +633,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "keymap",
     "skills",
     "rewind",
+    "fork",
     "handoff",
     "compact",
     "name",

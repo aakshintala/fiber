@@ -204,23 +204,34 @@ impl App {
 
     /// A hub-relayed `command_rejected` for the sent `rewind` settles
     /// it with the start's code: the terminal never moves. True when
-    /// the id was the send's; any other id reaches no rewind state.
+    /// the id was the send's; any other id reaches no rewind state. A
+    /// pending `/fork` settles the same way, as a notice, even when
+    /// another view is open.
     pub(in crate::app) fn rewind_hub_refused(
         &mut self,
         id: &str,
         code: &str,
         message: &str,
     ) -> bool {
+        // The hub carries the code as text; an unknown one still
+        // settles, read as itself.
+        let parsed = serde_json::from_value(Value::String(code.to_owned()))
+            .unwrap_or_else(|_| ErrorCode::Other(code.to_owned()));
+        if self.fork_pending.as_deref() == Some(id) {
+            self.fork_pending = None;
+            if parsed == ErrorCode::NotStepBoundary {
+                self.push_notice("not_step_boundary", Self::FORK_NOT_STEP_BOUNDARY.to_owned());
+            } else {
+                self.push_notice(code, message.to_owned());
+            }
+            return true;
+        }
         if !self.rewind.send.matches(id) {
             return false;
         }
-        // The hub carries the code as text; an unknown one still
-        // settles, read as itself.
-        let code = serde_json::from_value(Value::String(code.to_owned()))
-            .unwrap_or_else(|_| ErrorCode::Other(code.to_owned()));
         self.rewind_refused(&CommandRejected {
             command_id: Some(CommandId(id.to_owned())),
-            code,
+            code: parsed,
             message: message.to_owned(),
         });
         true
@@ -230,12 +241,15 @@ impl App {
     /// session subscribes full to it, asks its commands, attaches, and
     /// closes the view. The reset attachment settles the send. Any
     /// other id, or another command's shape, falls through to the
-    /// history path.
+    /// history path. A pending `/fork` attaches the same way: its id
+    /// lives beside the rewind view's state, so it still matches after
+    /// opening another view reset that state.
     pub(in crate::app) fn rewind_send_accepted(
         &mut self,
         accepted: &CommandAccepted,
     ) -> Option<Vec<String>> {
-        if !self.rewind.send.matches(&accepted.command_id.0) {
+        let fork = self.fork_pending.as_deref() == Some(accepted.command_id.0.as_str());
+        if !fork && !self.rewind.send.matches(&accepted.command_id.0) {
             return None;
         }
         let Some(CommandResult::Rewind { new_session_id }) = accepted.result.as_ref() else {
@@ -247,7 +261,63 @@ impl App {
         let lines = vec![self.subscribe(&new, Level::Full), self.ask_commands(&new)];
         self.attach(new);
         self.close_session_view();
+        if fork {
+            self.fork_pending = None;
+        }
         Some(lines)
+    }
+
+    /// Sends `/fork`'s `rewind` with `at_end`: no view opens and no
+    /// cursor point is read. The pending id lives beside the rewind
+    /// view's state, so opening another view resets that state without
+    /// dropping the fork. One fork at a time: a second `/fork` while
+    /// one waits sends nothing.
+    pub(in crate::app) fn send_fork(&mut self) -> Effect {
+        if self.fork_pending.is_some() {
+            return Effect::None;
+        }
+        let Some(serving) = self.session().cloned() else {
+            return Effect::None;
+        };
+        let id = mint();
+        let line = session_command(
+            &id,
+            "rewind",
+            &serving,
+            Some(serde_json::json!({"at_end": true})),
+        );
+        self.fork_pending = Some(id.clone());
+        Effect::Send(vec![line.to_string()])
+    }
+
+    /// The ruled `/fork` refusal for an end-of-log point that is not a
+    /// step boundary: the session ends in a tool call with no recorded
+    /// result.
+    const FORK_NOT_STEP_BOUNDARY: &str = "The session ends in a tool call with no recorded result, so it cannot be forked. Rewind to an earlier point instead.";
+
+    /// A `command_rejected` answering a pending `/fork` shows its
+    /// refusal as a notice and clears the fork, so retrying sends
+    /// again: the ruled text for `not_step_boundary`, the rejection's
+    /// own text for any other code. Any other id reaches no fork
+    /// state. True when the id was the fork's.
+    pub(in crate::app) fn rewind_fork_refused(&mut self, rejected: &CommandRejected) -> bool {
+        let Some(id) = rejected.command_id.as_ref() else {
+            return false;
+        };
+        if self.fork_pending.as_deref() != Some(id.0.as_str()) {
+            return false;
+        }
+        self.fork_pending = None;
+        if rejected.code == ErrorCode::NotStepBoundary {
+            self.push_notice("not_step_boundary", Self::FORK_NOT_STEP_BOUNDARY.to_owned());
+        } else {
+            let code = serde_json::to_value(&rejected.code)
+                .ok()
+                .and_then(|code| code.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "other".to_owned());
+            self.push_notice(&code, rejected.message.clone());
+        }
+        true
     }
 
     /// The connection ended: the pending `history` drops, and its late
@@ -410,6 +480,7 @@ impl App {
             from_session_id: from,
             seq: Some(Seq(seq)),
             summarise: self.rewind.send.summarise(),
+            at_end: false,
         })
         .unwrap_or(Value::Null);
         let id = mint();

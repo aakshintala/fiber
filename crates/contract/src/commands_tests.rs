@@ -173,6 +173,7 @@ fn defaults_fill_what_a_client_leaves_out() {
             from_session_id: None,
             seq: None,
             summarise: false,
+            at_end: false,
         })
     );
     let line = parse(r#"{"id":"c","command":"shell","args":{"command":"ls"}}"#).unwrap();
@@ -183,6 +184,75 @@ fn defaults_fill_what_a_client_leaves_out() {
             send: false
         })
     );
+}
+
+/// `at_end` defaults to false, is omitted from the wire when false, and
+/// refuses any company: `seq`, `from_session_id` or `summarise`, even an
+/// explicit `summarise: false`, since only the session's own end is a fork
+/// point.
+#[test]
+fn rewind_at_end_is_exclusive_and_omitted_when_false() {
+    let line = parse(r#"{"id":"c","command":"rewind","args":{"at_end":true}}"#).unwrap();
+    assert_eq!(
+        line.command,
+        Command::Rewind(RewindArgs {
+            from_session_id: None,
+            seq: None,
+            summarise: false,
+            at_end: true,
+        })
+    );
+    for args in [
+        json!({"seq": 12, "at_end": true}),
+        json!({"from_session_id": "s", "at_end": true}),
+        json!({"at_end": true, "summarise": true}),
+        json!({"at_end": true, "summarise": false}),
+    ] {
+        let line = json!({"id": "c", "command": "rewind", "args": args});
+        assert!(parse(&line.to_string()).is_err(), "{line}");
+    }
+    // Without `at_end`, the old keys still read.
+    let line = parse(r#"{"id":"c","command":"rewind","args":{"seq":12}}"#).unwrap();
+    assert_eq!(
+        line.command,
+        Command::Rewind(RewindArgs {
+            from_session_id: None,
+            seq: Some(Seq(12)),
+            summarise: false,
+            at_end: false,
+        })
+    );
+    // A false `at_end` is omitted on the wire, so old lines read unchanged.
+    let line = CommandLine {
+        id: CommandId("c".into()),
+        command: Command::Rewind(RewindArgs {
+            from_session_id: None,
+            seq: None,
+            summarise: false,
+            at_end: false,
+        }),
+    };
+    assert_eq!(
+        serde_json::to_string(&line).unwrap(),
+        r#"{"id":"c","command":"rewind","args":{"summarise":false}}"#
+    );
+    // A true `at_end` is written to the wire (`/fork` sends it).
+    let line = CommandLine {
+        id: CommandId("c_rewind".into()),
+        command: Command::Rewind(RewindArgs {
+            from_session_id: None,
+            seq: None,
+            summarise: false,
+            at_end: true,
+        }),
+    };
+    assert_eq!(
+        serde_json::to_string(&line).unwrap(),
+        r#"{"id":"c_rewind","command":"rewind","args":{"summarise":false,"at_end":true}}"#
+    );
+    // An unknown key still fails to read.
+    let line = json!({"id": "c", "command": "rewind", "args": {"at_end": true, "future": 1}});
+    assert!(parse(&line.to_string()).is_err(), "{line}");
 }
 
 #[test]
