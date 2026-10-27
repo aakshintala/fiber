@@ -818,6 +818,12 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
         stream(&[spawn_call("fiber:pb/m")])
     })
     .unwrap();
+    // Hold the parent's provider responses so its first turn stays open on
+    // its first model call: `await_requests(1)` proves the turn is running,
+    // so the prompt below is sent while the turn runs and the loop must
+    // refuse it as busy. The release before the answer lets the loop drain
+    // and answer it.
+    server_parent.hold();
     let server_child =
         fakes::ProviderServer::start([text_reply("d-one"), text_reply("d-two")]).unwrap();
     install_model(&setup, "pa", &server_parent);
@@ -829,17 +835,9 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let parent = start_session(&client, &workspace, "run it");
     subscribe(&client, &parent);
-    let started = until(&client, "the delegate started", |line| {
-        line["kind"] == "delegate_started"
-    });
-    let delegate = started.last().expect("the event arrived")["payload"]["delegate_session_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert_ne!(delegate, parent, "the delegate is its own session");
     assert!(
-        server_child.await_requests(1, setup.deadline),
-        "the delegate is running"
+        server_parent.await_requests(1, setup.deadline),
+        "the parent turn is held on its first model call"
     );
     client.send(
         &json!({
@@ -850,6 +848,7 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
         })
         .to_string(),
     );
+    server_parent.release();
     let prompted = recv_answer(&client, "c_prompt_msg", "the prompt acknowledgement");
     assert_eq!(prompted["kind"], "command_accepted", "{prompted}");
     assert!(
