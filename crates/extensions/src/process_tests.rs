@@ -2037,7 +2037,10 @@ fn stream_order_holds_while_tools_answer_reversed() {
         {"send": {"id": "c3", "command": "call", "args": {"call": "fiber.command", "args": ["go", wire_command_spec()]}}},
         {"send": {"id": "c4", "command": "ready"}},
         {"repeat": {"count": 4, "actions": [{"read": {}}]}},
-        {"read": {"as": "first", "expect": {"kind": "extension_request"}, "append_to": "requests"}},
+        {"read": {"as": "first", "expect": {"kind": "extension_request", "payload": {"registration": "c2"}}, "append_to": "requests"}},
+        {"send": {"id": "sync", "command": "tools", "args": {}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"write_file": {"path": {"$ref": "args.4"}, "value": "acknowledged"}},
         {"read": {"as": "second", "expect": {"kind": "extension_request"}, "append_to": "requests"}},
         {"read": {"as": "third", "expect": {"kind": "extension_request"}, "append_to": "requests"}},
         {"if": {"path": "first.payload.registration", "equals": "c2",
@@ -2062,6 +2065,7 @@ fn stream_order_holds_while_tools_answer_reversed() {
     .to_string();
     let out = fakes::TempDir::new("fiber-process-order");
     let out_path = out.path().join("order.json");
+    let marker_path = out.path().join("marker-ack");
     let owner = Harness::start(
         script,
         &[
@@ -2069,6 +2073,7 @@ fn stream_order_holds_while_tools_answer_reversed() {
             &wire_tool_spec().to_string(),
             &wire_hook_spec().to_string(),
             &wire_command_spec().to_string(),
+            marker_path.to_str().unwrap(),
         ],
         serde_json::Map::new(),
         Some(FakeDrive::new()),
@@ -2096,6 +2101,16 @@ fn stream_order_holds_while_tools_answer_reversed() {
             &caller,
         )
     });
+    // The peer writes the marker only after reading the driver's
+    // command_accepted. Wait for that proof before dispatching the command;
+    // thread spawn order alone does not order stream admission.
+    owner.pump();
+    let marker_path = marker_path.clone();
+    fakes::wait_until(
+        "the peer to read the driver acknowledgement",
+        fakes::Deadline::after(WITHIN),
+        move || marker_path.is_file(),
+    );
     let tool_extension = Arc::clone(&owner.extension);
     let tool_ref = tool.clone();
     let tool_a = std::thread::spawn(move || {
@@ -4328,9 +4343,10 @@ const RESTART_LOOP: &str = r#"[
     {"send": {"id": "ready", "command": "ready"}},
     {"repeat": {"count": 3, "actions": [{"read": {"expect": {"kind": "command_accepted"}}}]}},
     {"loop": [
-        {"read": {"as": "delivery", "expect": {"kind": "extension_request"}}},
-        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "delivery.payload.request_id"}, "result": "done"}}},
-        {"read": {"expect": {"kind": "command_accepted"}}}
+        {"read": {"as": "incoming"}},
+        {"if": {"path": "incoming.kind", "equals": "extension_request", "then": [
+            {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "incoming.payload.request_id"}, "result": "done"}}}
+        ]}}
     ]}
 ]"#;
 
@@ -4719,14 +4735,21 @@ fn finish_acknowledges_the_final_delivery_before_the_exit_allowance() {
     owner.pump();
     let outcome = first.join().expect("the hook thread ends");
     assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
+    // Wait for shutdown to observe the final acknowledgement and park at
+    // its allowance deadline before advancing fake time.
+    let term_at = owner.clock.now() + Duration::from_secs(60);
+    assert!(
+        owner
+            .clock
+            .await_parked(term_at, fakes::Deadline::after(WITHIN)),
+        "shutdown parks at the deadline after the final acknowledgement"
+    );
     owner.clock.advance(Duration::from_secs(59));
     assert!(
         !owner.extension.transport().exited(),
         "no TERM inside the allowance"
     );
-    // The fake clock has not moved since the answer, so this is the
-    // shutdown's fixed TERM deadline even if its wait starts later.
-    let term_at = owner.clock.now() + Duration::from_secs(1);
+    // One second remains before the fixed TERM deadline.
     owner.clock.advance_when_parked(
         Some(term_at),
         None,
