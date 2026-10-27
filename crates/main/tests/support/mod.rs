@@ -1791,18 +1791,46 @@ fn closed_socket_dump_keeps_stderr_and_log_tail_within_the_output_cap() {
         message.len()
     );
     let visible = &message[..OUTPUT_CAP];
-    assert!(visible.contains("fiber stderr:"), "{visible}");
-    assert!(visible.contains(stderr_sentinel), "{visible}");
+    // A large value never prints whole on failure (`docs/testing.md`, "What
+    // a test asserts"): report the length and the offsets instead.
+    assert!(
+        visible.contains("fiber stderr:"),
+        "stderr header missing from first {OUTPUT_CAP} of {}-byte message",
+        message.len()
+    );
+    assert!(
+        visible.contains(stderr_sentinel),
+        "stderr sentinel at {} outside first {OUTPUT_CAP} of {}-byte message",
+        message.find(stderr_sentinel).unwrap_or(usize::MAX),
+        message.len()
+    );
     let tail_header = "session log tail (events.jsonl, last 20 lines):";
-    assert!(visible.contains(tail_header), "{visible}");
-    assert!(visible.contains(log_sentinel), "{visible}");
+    assert!(
+        visible.contains(tail_header),
+        "log-tail header missing from first {OUTPUT_CAP} of {}-byte message",
+        message.len()
+    );
+    assert!(
+        visible.contains(log_sentinel),
+        "log-tail sentinel at {} outside first {OUTPUT_CAP} of {}-byte message",
+        message.find(log_sentinel).unwrap_or(usize::MAX),
+        message.len()
+    );
     // The diagnostics precede the dump: flipping the order back would
     // push both sentinels past the cap.
     let stderr_at = message.find(stderr_sentinel).unwrap_or(usize::MAX);
     let log_at = message.find(log_sentinel).unwrap_or(usize::MAX);
     let dump_at = message.find("got [").unwrap_or(usize::MAX);
-    assert!(stderr_at < dump_at, "{message}");
-    assert!(log_at < dump_at, "{message}");
+    assert!(
+        stderr_at < dump_at,
+        "stderr sentinel at {stderr_at} not before dump at {dump_at} ({}-byte message)",
+        message.len()
+    );
+    assert!(
+        log_at < dump_at,
+        "log-tail sentinel at {log_at} not before dump at {dump_at} ({}-byte message)",
+        message.len()
+    );
 }
 
 #[test]
