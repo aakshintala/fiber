@@ -157,6 +157,7 @@ impl Delegates {
             registry: Arc::clone(&self.jobs),
             parent: self.parent.clone(),
             workspace: self.workspace.clone(),
+            inherited: inherited_roots_reader(&self.sessions, &self.parent),
             events_for: Arc::new(move |workspace, id| {
                 let sessions = log::sessions_dir(&home, &doors::project(workspace));
                 log::SessionDir::new(&sessions, id).events()
@@ -695,6 +696,7 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
         parent: Some(launched.parent.clone()),
         delegate_id: Some(launched.job_id.clone()),
         depth: Some(launched.depth),
+        added: launched.added.clone(),
         login_shell: r#loop::variables_source() == VariablesSource::LoginShell,
         // Delegates are never supervised: they answer to their parent
         // session, not to a program outside Fiber.
@@ -733,6 +735,33 @@ fn steerer(home: &Path) -> jobs::Steer {
             }
         },
     )
+}
+
+/// Reads the parent's added folders at launch from its full history
+/// fold: the current tail for a spawn (`None`), the selected point for
+/// a fork (`docs/events.md`, "`directory_added`"). Bound at wiring to
+/// the parent's sessions and id, and read when the child launches, so
+/// an addition between wiring and launch is captured and an addition
+/// past a fork cutoff is excluded. A fold that cannot be read yields no
+/// roots: fewer roots only ever deny, so an unreadable parent log
+/// cannot widen the child.
+pub(crate) fn inherited_roots_reader(sessions: &Path, parent: &SessionId) -> jobs::InheritedRoots {
+    let sessions = sessions.to_owned();
+    let parent = parent.clone();
+    Arc::new(move |point: Option<&Point>| match point {
+        None => {
+            let dir = log::SessionDir::new(&sessions, &parent);
+            r#loop::resumed(dir.path())
+                .map(|folded| folded.added().to_vec())
+                .unwrap_or_default()
+        }
+        Some(at) => {
+            let dir = log::SessionDir::new(&sessions, &at.session_id);
+            r#loop::forked(dir.path(), at.seq)
+                .map(|folded| folded.added().to_vec())
+                .unwrap_or_default()
+        }
+    })
 }
 
 /// Reads the point a fork continues from: the parent's own log holds the

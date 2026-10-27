@@ -958,6 +958,36 @@ impl Loop {
         Ok(())
     }
 
+    /// Seeds a fresh spawn delegate's loop from its inherited parent
+    /// roots: each root resolves exactly as an `add_directory` path
+    /// does, and each resolved, non-covered root is written as the
+    /// child's own `directory_added` before the opening
+    /// (`docs/delegates.md`, "The tools"). A covered root writes
+    /// nothing, and a root removed since the parent folded it resolves
+    /// to nothing and is skipped: it permits nothing. Every folded root
+    /// is a logged path string, so the lossy render below is exact for
+    /// every root the parent could have folded.
+    pub(crate) fn seed_inherited(
+        &mut self,
+        inherited: Vec<std::path::PathBuf>,
+    ) -> Result<(), Error> {
+        for root in inherited {
+            match self.resolve_added(&root.to_string_lossy()) {
+                Ok(None) => {}
+                Ok(Some(resolved)) => {
+                    let event = Event::DirectoryAdded(DirectoryAdded {
+                        path: resolved.display().to_string(),
+                    });
+                    self.write(&event, None, None)?;
+                    self.changes.track_added(&resolved);
+                    self.added.push(resolved);
+                }
+                Err(_) => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Resolves `raw` against the workspace with symlinks resolved: the
     /// folder's path when it names an existing directory outside the
     /// effective boundary, `None` when the boundary already covers it,

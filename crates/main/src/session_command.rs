@@ -28,6 +28,12 @@ thread_local! {
     /// session-path allowance names, while `run_new` keeps the signature
     /// `rewind.rs` calls.
     static OPENED: RefCell<Option<doors::WorktreeOpener>> = RefCell::new(None);
+    /// The fresh delegate's inherited added folders, set by `run` for the
+    /// new session below and taken by its commit: the child records each
+    /// as its own `directory_added` before the opening. Empty for every
+    /// other start, so `run_new` keeps the signature `rewind.rs` and
+    /// `continue_session.rs` call.
+    static INHERITED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Holds a worktree opener for `run_new`: set on entry, the previous
@@ -233,6 +239,10 @@ pub(crate) fn run(
     if parent.is_some() {
         signals.lifeline(Box::new(std::io::stdin()));
     }
+    // The fresh delegate's inherited roots ride to `run_new` through the
+    // slot above: only its commit takes them, so any other start leaves
+    // the slot empty.
+    INHERITED.with(|cell| *cell.borrow_mut() = args.added.clone());
     new_session(
         SessionId(args.id),
         crate::per_run(args.model, args.overrides),
@@ -745,7 +755,12 @@ pub(crate) fn run_new(
                         start,
                         worktree,
                     ),
-                    (None, Some(parent)) => Loop::delegate(
+                    // The inherited roots are taken here, after
+                    // `session_started` will be written and before the
+                    // opening is built: the fresh delegate records them
+                    // as its own `directory_added` lines. Any other arm
+                    // leaves the slot alone.
+                    (None, Some(parent)) => Loop::delegate_with_added(
                         r#loop::Session {
                             log: Arc::clone(&log),
                             provider,
@@ -757,6 +772,7 @@ pub(crate) fn run_new(
                         },
                         parent,
                         worktree,
+                        INHERITED.with(|cell| cell.take()),
                     ),
                     (None, None) if supervised => Loop::supervised(
                         r#loop::Session {
@@ -966,6 +982,36 @@ mod opened_hold_tests {
         );
         OPENED.with(|cell| {
             cell.replace(stash);
+        });
+    }
+}
+
+/// The inherited-roots slot hands each value out once: whatever the
+/// thread ran before, the take empties the slot, so a later commit on
+/// the same thread sees no earlier roots.
+#[cfg(test)]
+mod inherited_slot_tests {
+    #![allow(clippy::panic, reason = "test assertions")]
+
+    use super::*;
+
+    #[test]
+    fn take_empties_the_slot() {
+        // Whatever the thread ran before: start known, hand back after.
+        let stash = INHERITED.with(|cell| cell.take());
+        INHERITED.with(|cell| {
+            *cell.borrow_mut() = vec![PathBuf::from("/shared")];
+        });
+        assert_eq!(
+            INHERITED.with(|cell| cell.take()),
+            [PathBuf::from("/shared")]
+        );
+        assert!(
+            INHERITED.with(|cell| cell.take()).is_empty(),
+            "the take leaves nothing for a later commit"
+        );
+        INHERITED.with(|cell| {
+            *cell.borrow_mut() = stash;
         });
     }
 }

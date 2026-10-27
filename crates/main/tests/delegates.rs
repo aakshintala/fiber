@@ -1200,6 +1200,139 @@ fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
 }
 
 #[test]
+fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let shared_holder = fakes::TempDir::new("inherited-shared");
+    let shared = shared_holder.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let resolved = fs::canonicalize(&shared).unwrap();
+    let message = format!("Added folder {} to the session.", resolved.display());
+
+    let parent = ProviderServer::start([
+        text_reply("ok"),
+        support::stream(&[spawn_call("fiber:pb/m")]),
+        text_reply("allow"),
+        support::hello(),
+        support::hello(),
+    ])
+    .unwrap();
+    let child =
+        ProviderServer::start([text_reply("child done"), text_reply("child again")]).unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+
+    // The parent runs headless with a known id: the startup prompt ends
+    // the first turn, the folder is added next, and a second prompt
+    // starts the turn whose spawn launches against the folded roots.
+    // Every step is awaited and no response is held, so the launch
+    // cannot beat the addition and nothing can deadlock the ack.
+    let mut running = Running::start(&setup, "s_aaaaaaaaaaaaaaaa", &["--prompt", "say ok"]);
+    running.wait_line("the session start", |line| {
+        line["kind"] == "session_started"
+    });
+    let client = running.connect(&setup);
+    subscribe(&client);
+    client.send(&format!(
+        "{{\"id\":\"c_add\",\"command\":\"add_directory\",\"args\":{{\"path\":{}}}}}",
+        serde_json::to_string(shared.to_str().unwrap()).unwrap()
+    ));
+    let answer = support::recv_answer(&client, "c_add", "the add_directory acknowledgement");
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    running.wait_line("the first turn's end", |line| {
+        line["kind"] == "turn_completed"
+    });
+    client.send(r#"{"id":"c_p2","command":"prompt","args":{"content":[{"type":"text","text":"scan the tree"}]}}"#);
+    let prompted = support::recv_answer(&client, "c_p2", "the second prompt acknowledgement");
+    assert_eq!(prompted["kind"], "command_accepted", "{prompted}");
+    // The delegate's end wakes the parent: the finish joins a turn of
+    // its own, as in the test above. The receipt's log path is what the
+    // runner resolved, so the test reads that file, not a re-derived
+    // directory.
+    let mut child_id = String::new();
+    let mut child_log_path = String::new();
+    let mut job_id = String::new();
+    running.wait_line("the delegate's finish", |line| {
+        if line["kind"] == "job_started" && child_log_path.is_empty() {
+            child_log_path = line["payload"]["output_path"].as_str().unwrap().to_owned();
+        }
+        if line["kind"] == "delegate_started" {
+            child_id = line["payload"]["delegate_session_id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            job_id = line["payload"]["job_id"].as_str().unwrap().to_owned();
+        }
+        line["kind"] == "delegate_finished"
+    });
+    assert!(!child_id.is_empty(), "the run started a delegate");
+    assert!(!child_log_path.is_empty(), "the receipt names the log");
+    assert_eq!(child.requests().len(), 1, "the child ran once");
+    assert!(
+        String::from_utf8_lossy(&child.requests()[0].body).contains(&message),
+        "the child's first request carries the event-derived add message"
+    );
+    // The child's own log records the inherited root after its
+    // `session_started`: the fold its resume and its own delegates read.
+    let child_log = || read_lines(std::path::Path::new(&child_log_path));
+    let lines = child_log();
+    let kinds = durable_kinds(&lines);
+    assert_eq!(kinds[0], "session_started");
+    let added: Vec<_> = lines
+        .iter()
+        .filter(|line| line["kind"] == "directory_added")
+        .collect();
+    assert_eq!(added.len(), 1, "the child wrote one inherited event");
+    assert_eq!(added[0]["payload"]["path"], resolved.to_str().unwrap());
+    // End the parent: the assertions below run against finished logs.
+    close_now(&client);
+    let (status, _, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+
+    // Resuming the child replays the add message from its own log and
+    // writes no duplicate event. The piped stdin stays open for the
+    // run: it is the delegate's lifeline, and EOF would read as a dead
+    // parent and stop the child with 129.
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let (mut resumed, stdin) = Running::spawn_stdin(
+        &setup,
+        &[
+            "session",
+            "--id",
+            &child_id,
+            "--workspace",
+            &workspace,
+            "--resume",
+            "--prompt",
+            "scan again",
+            "--parent",
+            "s_aaaaaaaaaaaaaaaa",
+            "--delegate-id",
+            job_id.as_str(),
+        ],
+        Stdio::piped(),
+    );
+    resumed.id = Some(child_id.clone());
+    let _lifeline = stdin;
+    let (status, _, stderr) = resumed.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(child.requests().len(), 2, "the resume ran once more");
+    assert!(
+        String::from_utf8_lossy(&child.requests()[1].body).contains(&message),
+        "the resumed request replays the add message"
+    );
+    assert_eq!(
+        child_log()
+            .iter()
+            .filter(|line| line["kind"] == "directory_added")
+            .count(),
+        1,
+        "the resume wrote no duplicate event"
+    );
+}
+
+#[test]
 fn a_jobs_wait_returns_the_delegate_final_message_with_no_notice_after() {
     let setup = support::Setup::new();
     let _guard = arm(&setup);

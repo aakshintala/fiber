@@ -145,6 +145,14 @@ impl Resumed {
     pub fn exit_seed(&self) -> crate::Summary {
         self.exit.clone()
     }
+
+    /// Every folded `directory_added` path, in log order: what a delegate
+    /// launch inherits from the parent's full history fold, and what a
+    /// fresh spawn child seeds its loop from (`docs/events.md`,
+    /// "`directory_added`").
+    pub fn added(&self) -> &[PathBuf] {
+        &self.added
+    }
 }
 
 /// Folds the log in the session directory `dir` over its chain, root

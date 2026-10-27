@@ -704,3 +704,22 @@ fn add_directory_adds_an_already_added_folder_only_once() {
     }
     assert_eq!(added(&tree), [resolved]);
 }
+
+#[test]
+fn seed_inherited_writes_each_new_root_as_the_loops_own_event() {
+    let tree = Tree::new();
+    let shared = tree.root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    let resolved = shared.canonicalize().unwrap();
+    let (mut looped, _) = started(&tree);
+    // A covered root writes nothing, and a root removed since the
+    // parent folded it is skipped: only the new root becomes an event.
+    looped
+        .seed_inherited(vec![tree.top(), tree.root.join("missing"), shared.clone()])
+        .unwrap();
+    assert_eq!(added(&tree), [resolved.display().to_string()]);
+    // Seeding again writes nothing more: the loop's own event covers
+    // the root now.
+    looped.seed_inherited(vec![shared]).unwrap();
+    assert_eq!(added(&tree).len(), 1);
+}
