@@ -3202,8 +3202,9 @@ fn an_ask_session_appends_no_prompt_even_one_a_client_sends() {
             client.send(&subscribe_line("c_sub", "summary")).unwrap();
             let _ack = answer_of(&client, "c_sub");
             send_text(&client, "c_1", "prompt", "attached");
-            (next_prompt(&inbox).0)(Ok(None));
-            assert_eq!(answer_of(&client, "c_1")["kind"], "command_accepted");
+            let rejected = answer_of(&client, "c_1");
+            assert_eq!(rejected["kind"], "command_rejected");
+            assert_eq!(rejected["payload"]["code"], "closing");
             Ok(())
         })
         .unwrap();
