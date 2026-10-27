@@ -18,6 +18,8 @@ use crate::settings_view::{Act, Ctx};
 use crate::swapped::{Spot, render, rows_height};
 use contract::events::{SkillInfo, SkillSource};
 
+use crate::text;
+
 const ID: &str = "c_1";
 
 /// One discovered skill, invocable and shadowing nothing.
@@ -169,7 +171,8 @@ fn rows_keep_the_answers_order_with_source_and_visibility() {
     assert!(shown[0].contains("seen"), "{shown:?}");
     assert!(!shown[0].contains("model sees it"), "{shown:?}");
     assert!(shown[1].contains("personal"), "{shown:?}");
-    assert!(shown[2].contains("extension memory"), "{shown:?}");
+    assert!(shown[2].contains("memory"), "{shown:?}");
+    assert!(!shown[2].contains("extension memory"), "{shown:?}");
     assert!(shown[2].contains("hidden"), "{shown:?}");
     assert!(!shown[2].contains("person only"), "{shown:?}");
     assert!(shown[3].contains("built in"), "{shown:?}");
@@ -382,6 +385,177 @@ fn shadow_sources_treats_a_nameless_extension_as_unresolved() {
         None,
         "a malformed extension entry drops the whole clause"
     );
+}
+
+#[test]
+fn colliding_extension_names_keep_their_kind() {
+    // An extension named after another source keeps its kind, so the two
+    // never read the same; any other extension reads as its bare name.
+    for name in ["repo", "personal", "built in"] {
+        let info = sourced(
+            "a",
+            &format!("/ext/{name}/skills/a/SKILL.md"),
+            SkillSource::Extension,
+            Some(name),
+        );
+        assert_eq!(super::source_word(&info), format!("extension {name}"));
+    }
+    let plain = sourced(
+        "a",
+        "/ext/memory/skills/a/SKILL.md",
+        SkillSource::Extension,
+        Some("memory"),
+    );
+    assert_eq!(super::source_word(&plain), "memory");
+    assert_eq!(super::source_word(&repository("a")), "repo");
+    assert_eq!(super::source_word(&personal("a")), "personal");
+    assert_eq!(super::source_word(&builtin("a")), "built in");
+}
+
+#[test]
+fn shadow_sources_lists_a_personal_source_and_a_personal_named_extension() {
+    // Deduplication is by source identity, not by display word: a personal
+    // skill and an extension named `personal` are two sources.
+    let infos = vec![
+        sourced(
+            "review",
+            "/home/skills/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+        sourced(
+            "review",
+            "/ext/personal/skills/review/SKILL.md",
+            SkillSource::Extension,
+            Some("personal"),
+        ),
+    ];
+    let paths = vec![
+        "/home/skills/review/SKILL.md".to_owned(),
+        "/ext/personal/skills/review/SKILL.md".to_owned(),
+    ];
+    assert_eq!(
+        shadowed_by(&paths, &infos),
+        Some(vec!["personal".to_owned(), "extension personal".to_owned()])
+    );
+}
+
+/// A repository winner shadowing a personal, a long-named extension and a
+/// built-in skill, all named `review`.
+fn long_shadowed_view(fake: &Fake) -> Skills {
+    let mut win = repository("review");
+    win.description = "Checks a diff.".to_owned();
+    win.shadows = vec![
+        "/home/skills/review/SKILL.md".to_owned(),
+        "/ext/review-kit/skills/review/SKILL.md".to_owned(),
+        "/fiber/docs/skills/review/SKILL.md".to_owned(),
+    ];
+    let infos = vec![
+        win,
+        sourced(
+            "review",
+            "/home/skills/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+        sourced(
+            "review",
+            "/ext/review-kit/skills/review/SKILL.md",
+            SkillSource::Extension,
+            Some("review-kit"),
+        ),
+        sourced(
+            "review",
+            "/fiber/docs/skills/review/SKILL.md",
+            SkillSource::Builtin,
+            None,
+        ),
+    ];
+    opened(fake, &infos)
+}
+
+#[test]
+fn narrow_rows_cut_the_description_then_the_name_then_the_source() {
+    // `repository("review")` is `review · Test first. · repo · seen`.
+    let fake = fake_with(off(&[], &[]));
+    let skills = opened(&fake, &[repository("review")]);
+    // Only the description gives: the name and the source stay whole
+    // while the description ends in `…`.
+    let row = &rows(&skills, 75, 22)[0];
+    assert!(row.contains("review · Test firs… · repo · seen"), "{row:?}");
+    assert_eq!(row.matches("[on]").count(), 2, "{row:?}");
+    assert!(text::width(row) <= 75, "{row:?}");
+    // With the description gone, the name is cut while the source stays
+    // whole.
+    let row = &rows(&skills, 63, 22)[0];
+    assert!(row.contains("rev… ·  · repo · seen"), "{row:?}");
+    assert_eq!(row.matches("[on]").count(), 2, "{row:?}");
+    assert!(text::width(row) <= 63, "{row:?}");
+    // Last the source itself ends in `…`; both switches are still whole.
+    let row = &rows(&skills, 58, 22)[0];
+    assert!(row.contains("re… · seen"), "{row:?}");
+    assert!(!row.contains("repo"), "{row:?}");
+    assert_eq!(row.matches("[on]").count(), 2, "{row:?}");
+    assert!(text::width(row) <= 58, "{row:?}");
+}
+
+#[test]
+fn a_long_shadow_list_is_cut_after_the_switches() {
+    let fake = fake_with(off(&[], &[]));
+    let skills = long_shadowed_view(&fake);
+    let row = &rows(&skills, 100, 22)[0];
+    // The clause moved past both switches, tail-cut with `…`.
+    let everywhere = row.find("everywhere").expect("switches first");
+    let shadows = row.find("shadows").expect("the clause");
+    assert!(shadows > everywhere, "{row:?}");
+    assert!(row.contains("shadows personal,"), "{row:?}");
+    assert!(row.ends_with("…"), "{row:?}");
+    assert_eq!(row.matches("[on]").count(), 2, "{row:?}");
+    assert!(text::width(row) <= 100, "{row:?}");
+}
+
+#[test]
+fn the_shadows_clause_drops_out_below_its_minimum() {
+    let fake = fake_with(off(&[], &[]));
+    let skills = long_shadowed_view(&fake);
+    // At 67 columns the fixed fields and both switches leave exactly the
+    // ` · shadows …` minimum, so the clause stays as that minimum.
+    let kept = &rows(&skills, 67, 22)[0];
+    assert!(kept.contains("shadows"), "{kept:?}");
+    assert!(kept.ends_with("…"), "{kept:?}");
+    assert_eq!(kept.matches("[on]").count(), 2, "{kept:?}");
+    assert!(text::width(kept) <= 67, "{kept:?}");
+    // One column narrower leaves less than the minimum, so the clause is
+    // left out and the switches stay whole.
+    let dropped = &rows(&skills, 66, 22)[0];
+    assert!(!dropped.contains("shadows"), "{dropped:?}");
+    assert_eq!(dropped.matches("[on]").count(), 2, "{dropped:?}");
+    assert!(text::width(dropped) <= 66, "{dropped:?}");
+}
+
+#[test]
+fn a_long_own_source_is_cut_last_with_switches_whole() {
+    let fake = fake_with(off(&[], &[]));
+    let mut info = sourced(
+        "review",
+        "/ext/a-very-long-extension-name/skills/review/SKILL.md",
+        SkillSource::Extension,
+        Some("a-very-long-extension-name"),
+    );
+    info.description = "Checks a diff.".to_owned();
+    let skills = opened(&fake, &[info]);
+    // The description and the name are gone before the long source is
+    // touched.
+    let row = &rows(&skills, 81, 22)[0];
+    assert!(row.contains("a-very-long-extension-name · seen"), "{row:?}");
+    assert!(!row.contains("Checks a"), "{row:?}");
+    assert_eq!(row.matches("[on]").count(), 2, "{row:?}");
+    assert!(text::width(row) <= 81, "{row:?}");
+    // Narrower still, the source itself ends in `…`.
+    let row = &rows(&skills, 70, 22)[0];
+    assert!(row.contains("a-very-long-ex… · seen"), "{row:?}");
+    assert_eq!(row.matches("[on]").count(), 2, "{row:?}");
+    assert!(text::width(row) <= 70, "{row:?}");
 }
 
 #[test]
@@ -1106,9 +1280,12 @@ fn initial_frame_selects_the_first_skill() {
         .collect::<Vec<_>>()
         .join("");
     assert!(
-        head.contains(
-            "review · Checks a diff. · repo · seen · shadows personal, review-kit, built in · this project"
-        ),
+        head.contains("review · Checks a diff. · repo · seen · this project"),
+        "{head:?}"
+    );
+    // The shadows clause follows both switches, whole at this width.
+    assert!(
+        head.ends_with(" · shadows personal, review-kit, built in"),
         "{head:?}"
     );
     assert!(head.contains("[on]"), "{head:?}");

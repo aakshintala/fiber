@@ -20,6 +20,10 @@ use crate::text;
 /// counts it, as on `/tools`.
 const WIDEST_SWITCH: &str = "[off]";
 
+/// The shadows clause at its shortest: the row keeps room for this much
+/// before it leaves the clause out.
+const SHADOWS_MIN: &str = " · shadows …";
+
 /// The details lines below the rows at most.
 const DETAILS: usize = 2;
 
@@ -67,13 +71,17 @@ fn visibility_word(visibility: Visibility) -> &'static str {
 }
 
 /// Where a skill comes from, as the rows show it
-/// (`docs/tui.md`, "Swapped views").
+/// (`docs/tui.md`, "Swapped views"): the bare extension name, unless that
+/// name is taken by another source, when the kind keeps them apart.
 fn source_word(info: &SkillInfo) -> String {
     match info.source {
         SkillSource::Repository => "repo".to_owned(),
         SkillSource::Personal => "personal".to_owned(),
         SkillSource::Extension => match &info.extension {
-            Some(name) => format!("extension {name}"),
+            Some(name) if name == "repo" || name == "personal" || name == "built in" => {
+                format!("extension {name}")
+            }
+            Some(name) => name.clone(),
             None => "extension".to_owned(),
         },
         SkillSource::Builtin => "built in".to_owned(),
@@ -82,7 +90,8 @@ fn source_word(info: &SkillInfo) -> String {
 
 /// The shadowed sources a row names, in precedence order: repo, personal,
 /// extensions by extension name, then built in (`docs/tui.md`, "Swapped
-/// views"). Each source appears once, however many shadow paths map to it.
+/// views"). Each source appears once, however many shadow paths map to it:
+/// two entries sharing a display word but not a source stay separate.
 /// `None` when no path maps, or when any path fails to: a path with no
 /// matching skill entry, or an extension entry with no extension name, is a
 /// data inconsistency, so the row leaves out the whole `shadows` clause
@@ -94,17 +103,17 @@ fn shadow_sources(shadows: &[String], infos: &[SkillInfo]) -> Option<Vec<String>
     let mut seen: Vec<(u8, String, String)> = Vec::new();
     for path in shadows {
         let info = infos.iter().find(|info| info.path == *path)?;
-        let (rank, key, word) = match info.source {
-            SkillSource::Repository => (0, String::new(), "repo".to_owned()),
-            SkillSource::Personal => (1, String::new(), "personal".to_owned()),
-            SkillSource::Extension => {
-                let name = info.extension.as_ref()?;
-                (2, name.clone(), name.clone())
-            }
-            SkillSource::Builtin => (3, String::new(), "built in".to_owned()),
+        let (rank, key) = match info.source {
+            SkillSource::Repository => (0, String::new()),
+            SkillSource::Personal => (1, String::new()),
+            SkillSource::Extension => (2, info.extension.clone()?),
+            SkillSource::Builtin => (3, String::new()),
         };
-        if !seen.iter().any(|(_, _, shown)| *shown == word) {
-            seen.push((rank, key, word));
+        if !seen
+            .iter()
+            .any(|(ranked, keyed, _)| (*ranked, keyed) == (rank, &key))
+        {
+            seen.push((rank, key, source_word(info)));
         }
     }
     seen.sort();
@@ -487,10 +496,12 @@ impl Skills {
     }
 
     /// One skill's cells: `<name> · <description> · <source> ·
-    /// <visibility>[ · shadows <sources>] · this project ` and its
-    /// switch, then ` · everywhere ` and its switch. The name and the
-    /// description are cut to the room the rest of the row leaves, so
-    /// both switches stay reachable at narrow widths, as on `/tools`.
+    /// <visibility> · this project ` and its switch, then ` · everywhere `
+    /// and its switch, then the shadows clause. The row stays one line:
+    /// both switches stay whole, and the clause past them is cut from its
+    /// tail with `…`. The description is cut first, then the name, then
+    /// the skill's own source, keeping room for at least ` · shadows …`;
+    /// below that minimum the clause is left out.
     fn skill_cells(
         &self,
         index: usize,
@@ -499,7 +510,7 @@ impl Skills {
     ) -> Vec<(String, Option<Spot>, Ink)> {
         let selected = index == self.list.selected();
         let visibility = visibility_word(visibility(info, &self.off));
-        let shadows = match shadow_sources(&info.shadows, &self.infos) {
+        let full = match shadow_sources(&info.shadows, &self.infos) {
             Some(sources) => format!(" · shadows {}", sources.join(", ")),
             None => String::new(),
         };
@@ -508,10 +519,33 @@ impl Skills {
         // Each switch follows a column holding the focus mark, in the
         // place of the space before it, as on `/tools`.
         let widest = format!("{project} {WIDEST_SWITCH}{everywhere} {WIDEST_SWITCH}");
-        let fixed = format!(" · {} · {visibility}{shadows}", source_word(info));
-        let room = width.saturating_sub(GUTTER + text::width(&fixed) + text::width(&widest));
-        let head = format!("{} · {}", info.name, info.description);
-        let head = format!("{}{fixed}", text::cut(&head, room, "…"));
+        // The separators around the variable fields, the visibility, the
+        // gutter and both switches at their widest never give.
+        let fixed =
+            GUTTER + 3 * text::width(" · ") + text::width(visibility) + text::width(&widest);
+        // The clause stays when the fixed fields and both switches leave
+        // at least its shortest form; else the fields take that room.
+        let keep = !full.is_empty() && width.saturating_sub(fixed) >= text::width(SHADOWS_MIN);
+        let room = if keep {
+            width.saturating_sub(fixed + text::width(SHADOWS_MIN))
+        } else {
+            width.saturating_sub(fixed)
+        };
+        let source = source_word(info);
+        let description_room = room.saturating_sub(text::width(&info.name) + text::width(&source));
+        let description = text::cut(&info.description, description_room, "…");
+        let name_room = room.saturating_sub(text::width(&description) + text::width(&source));
+        let name = text::cut(&info.name, name_room, "…");
+        let source_room = room.saturating_sub(text::width(&description) + text::width(&name));
+        let source = text::cut(&source, source_room, "…");
+        let head = format!("{name} · {description} · {source} · {visibility}");
+        // Past the switches the clause shows what fits, tail-cut.
+        let shadows = if keep {
+            let leftover = width.saturating_sub(GUTTER + text::width(&head) + text::width(&widest));
+            text::cut(&full, leftover, "…")
+        } else {
+            String::new()
+        };
         let switch = |scope: SwitchScope, at: usize| {
             let mark = if selected && self.focus == scope {
                 ("›".to_owned(), None, Ink::Heading)
@@ -537,6 +571,7 @@ impl Skills {
             (everywhere.to_owned(), None, Ink::Plain),
             everywhere_mark,
             everywhere_switch,
+            (shadows, None, Ink::Plain),
         ]
     }
 }

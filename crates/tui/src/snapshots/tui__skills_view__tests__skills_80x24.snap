@@ -1,12 +1,11 @@
 ---
 source: crates/tui/src/skills_view_tests.rs
-assertion_line: 1060
 expression: "text.join(\"\\n\")"
 ---
  Skills  /skills                                                     Esc returns
-  tdd … · repo · seen · shadows personal · this project [on] · everywhere [on]
+  tdd · Test … · repo · seen · this project [on] · everywhere [on] · shadows …
 › tdd · Mine. · personal · hidden · this project›[on] · everywhere [on]
-  recall · … · extension memory · hidden · this project [on] · everywhere [on]
+  recall · Remember. · memory · hidden · this project [on] · everywhere [on]
   built · Built in. · built in · hidden · this project [on] · everywhere [off]
 
 
