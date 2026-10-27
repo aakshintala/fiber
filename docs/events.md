@@ -437,7 +437,7 @@ Durable. Written when the session accepts an `add_directory` driver command (`do
 |---|---|---|---|
 | `path` | string | yes | the added folder's resolved path |
 
-The fold adds each resolved path at its first `directory_added` event and keeps it in that position. A later event for the same canonical path does not move it: B, A, B folds to B, A. A resume rebuilds the same order from the log. The opening message rebuilt at a handoff lists the folders in that order (`docs/system-prompt.md`, "After a handoff"). A fork or a rewind from a point after the event keeps it, and one from a point before it does not.
+The fold adds each resolved path at its first `directory_added` event and keeps it in that position. A later event for the same canonical path does not move it: B, A, B folds to B, A. A resume rebuilds the same order from the log. The opening message rebuilt at a handoff lists the folders in that order (`docs/system-prompt.md`, "After a handoff"). A fork or a rewind from a point after the event keeps it, and one from a point before it does not. For a fresh delegate spawn, the opening lists inherited folders, so their seed events add no separate folder-added messages. A later addition to a running fork does render its normal message.
 
 #### `clients`
 
