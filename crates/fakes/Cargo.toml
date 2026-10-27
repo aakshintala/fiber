@@ -16,6 +16,8 @@ rustix.workspace = true
 # gzip for the release fixtures `ustar` builds.
 flate2.workspace = true
 serde_json.workspace = true
+signal-hook.workspace = true
+libc = "0.2"
 
 # The jig (docs/testing.md, "Jigs"): a binary jig tested by
 # `tests/provider_server_jig.rs`, which runs the built binary.

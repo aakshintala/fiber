@@ -50,7 +50,7 @@ fn change_workspace(path: &str) -> (Delivery, mpsc::Receiver<Answer>) {
 }
 
 fn move_args() -> RewindArgs {
-    RewindArgs {
+    RewindArgs::Rewind {
         from_session_id: None,
         seq: None,
         summarise: false,

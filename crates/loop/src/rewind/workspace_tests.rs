@@ -179,7 +179,7 @@ fn a_moved_aftermath_refuses_change_workspace_closing() {
             (|ack| {
                 Delivery::Rewind(
                     CommandId("c_r".into()),
-                    contract::commands::RewindArgs {
+                    contract::commands::RewindArgs::Rewind {
                         from_session_id: None,
                         seq: None,
                         summarise: false,

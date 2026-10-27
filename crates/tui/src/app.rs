@@ -14,7 +14,7 @@ use contract::events::{
     SteeringQueue, TurnStarted,
 };
 use contract::shapes::ContentPart;
-use contract::{Envelope, HubLine, Seq, SessionId};
+use contract::{CommandId, Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
 use ratatui::layout::Rect;
 use serde_json::{Map, Value, json};
@@ -64,6 +64,7 @@ mod form;
 #[path = "history.rs"]
 mod history;
 mod home;
+pub(crate) mod hooks_view;
 mod hub_version;
 mod images;
 pub(crate) mod items;
@@ -340,6 +341,10 @@ pub(crate) struct App {
     /// The `/cd` move's pending correlation (`docs/tui.md`, "Moving
     /// workspace").
     change_workspace: change_workspace::ChangeWorkspace,
+    /// A sent `/fork` waiting for its answer: its command id. It lives
+    /// beside the rewind view's state, so opening another view resets
+    /// that state without dropping the fork (`docs/tui.md`, "Rewind").
+    fork_pending: Option<CommandId>,
     /// The open delegate or job view and the per-job fold (`docs/tui.md`,
     /// "Swapped views").
     items: items::Items,
@@ -439,6 +444,7 @@ impl App {
             session_views: session_views::SessionViews::default(),
             rewind: rewind::Rewind::default(),
             change_workspace: change_workspace::ChangeWorkspace::default(),
+            fork_pending: None,
             items: items::Items::default(),
             reconnect: reconnect::Reconnect::default(),
             launch_overrides: Vec::new(),

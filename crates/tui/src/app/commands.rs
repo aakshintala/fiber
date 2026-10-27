@@ -123,6 +123,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_tools,
     },
     CommandEntry {
+        name: "hooks",
+        description: "Opens the hooks view.",
+        hint: None,
+        run: run_hooks,
+    },
+    CommandEntry {
         name: "mcp",
         description: "Opens the MCP servers view.",
         hint: None,
@@ -235,6 +241,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         description: "Moves the session to another workspace.",
         hint: Some("<path>"),
         run: run_cd,
+    },
+    CommandEntry {
+        name: "fork",
+        description: "Rewinds to the end of the conversation.",
+        hint: None,
+        run: run_fork,
     },
     CommandEntry {
         name: "handoff",
@@ -459,6 +471,11 @@ fn run_tools(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Tools))
 }
 
+fn run_hooks(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::Hooks))
+}
+
 fn run_mcp(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Mcp))
 }
@@ -496,6 +513,15 @@ impl App {
         }
         effect
     }
+}
+
+fn run_fork(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    let Phase::Attached { .. } = &app.phase else {
+        app.push_notice("session_not_found", NO_SESSION.to_owned());
+        return Some(Effect::None);
+    };
+    Some(app.send_fork())
 }
 
 fn run_delegates(app: &mut App, _rest: &str) -> Option<Effect> {

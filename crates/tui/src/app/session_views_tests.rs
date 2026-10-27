@@ -1631,3 +1631,97 @@ fn the_quota_view_renders_reset_times_against_the_injected_wall_clock() {
     let shown = screen(&app, 80, 24).0;
     assert!(shown.contains("resets in 3h12m"), "{shown}");
 }
+
+fn accepted_hooks(id: &str, hooks: serde_json::Value) -> Line {
+    session_line(
+        SESSION,
+        "command_accepted",
+        None,
+        json!({"command_id": id, "result": {"hooks": hooks}}),
+    )
+}
+
+fn open_hooks(app: &mut App) -> Value {
+    command(app.open_session_view(SessionView::Hooks))
+}
+
+/// A mismatched or late hooks answer folds nowhere: once `/hooks` sends a
+/// newer query its older answer is stale, and once another view replaces it
+/// the late answer belongs to no open view. Flipping the id check would
+/// show stale rows; dropping the view check would fill the wrong view.
+#[test]
+fn a_stale_or_replaced_hooks_answer_folds_nowhere() {
+    let mut app = files_attached(80, 24);
+    let first = open_hooks(&mut app);
+    let first_id = first["id"].as_str().unwrap().to_owned();
+    assert_eq!(first["command"], "hooks");
+    let second = open_hooks(&mut app);
+    let second_id = second["id"].as_str().unwrap().to_owned();
+    assert_ne!(first_id, second_id, "a newer query mints a newer id");
+    // The older answer arrives after the newer query: it folds nowhere,
+    // so the view keeps waiting instead of showing stale rows.
+    app.on_line(accepted_hooks(
+        &first_id,
+        json!([{"kind": "hook", "extension": "stale", "point": "before_tool", "on_failure": "blocking"}]),
+    ));
+    assert!(
+        screen(&app, 80, 24).0.contains("No hooks"),
+        "{}",
+        screen(&app, 80, 24).0
+    );
+    // The newer answer fills the view with all three columns.
+    app.on_line(accepted_hooks(
+        &second_id,
+        json!([
+            {"kind": "hook", "extension": "ext", "point": "before_tool", "on_failure": "blocking"},
+            {"kind": "watcher", "extension": "ext", "kinds": ["turn_completed"]},
+        ]),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("Hooks"), "{shown}");
+    assert!(shown.contains("ext"), "{shown}");
+    assert!(shown.contains("before_tool"), "{shown}");
+    assert!(shown.contains("blocking"), "{shown}");
+    assert!(shown.contains("watcher"), "{shown}");
+    // Another view replaces `/hooks`: the late answer folds nowhere.
+    assert_eq!(app.open_session_view(SessionView::Usage), Effect::None);
+    app.on_line(accepted_hooks(
+        &second_id,
+        json!([{"kind": "hook", "extension": "late", "point": "after_tool", "on_failure": "non-blocking"}]),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(!shown.contains("late"), "{shown}");
+    assert!(shown.contains("Usage"), "{shown}");
+}
+
+/// A matching hooks rejection drops the pending query while a mismatched
+/// one keeps it: the next answer folds only for the live query. Dropping
+/// the clear would fill a refused view with a late answer; flipping the id
+/// check would fill it for the wrong query and drop the live one.
+#[test]
+fn a_matching_hooks_rejection_drops_the_query_and_a_mismatched_one_keeps_it() {
+    let mut app = files_attached(80, 24);
+    let first = open_hooks(&mut app);
+    let first_id = first["id"].as_str().unwrap().to_owned();
+    // The matching rejection drops the wait: the late answer folds nowhere.
+    app.on_line(rejected_diff(SESSION, &first_id, "gone"));
+    app.on_line(accepted_hooks(
+        &first_id,
+        json!([{"kind": "hook", "extension": "late", "point": "before_tool", "on_failure": "blocking"}]),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(!shown.contains("late"), "{shown}");
+    assert!(shown.contains("No hooks"), "{shown}");
+    // A newer query waits again; a mismatched rejection keeps it, so its
+    // answer fills the view.
+    let second = open_hooks(&mut app);
+    let second_id = second["id"].as_str().unwrap().to_owned();
+    app.on_line(rejected_diff(SESSION, "c_other", "wrong query"));
+    app.on_line(accepted_hooks(
+        &second_id,
+        json!([{"kind": "hook", "extension": "ext", "point": "before_tool", "on_failure": "blocking"}]),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("ext"), "{shown}");
+    assert!(shown.contains("before_tool"), "{shown}");
+}
