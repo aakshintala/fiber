@@ -181,9 +181,10 @@ fn one_op_line() -> (Value, String) {
     (record, line)
 }
 
-/// A read that lands mid-write holds a final record cut at column 42,
-/// inside a string: the base parser unwraps it and panics with EOF, and
-/// the shared parser drops it while keeping the complete records.
+/// A read that lands mid-write can hold a final record cut at column 42,
+/// inside a string: it is no complete line (`docs/state.md`, "Diagnostic
+/// logs": each line is one JSON object), so the shared parser drops it
+/// while keeping the complete records.
 #[test]
 fn a_final_record_cut_at_column_42_is_ignored() {
     let (record, line) = one_op_line();
@@ -195,7 +196,8 @@ fn a_final_record_cut_at_column_42_is_ignored() {
     assert_eq!(parsed, vec![record], "only the complete record parses");
 }
 
-/// Newline-terminated records all parse, so the torn-tail rule keeps no
+/// Newline-terminated records all parse (`docs/state.md`, "Diagnostic
+/// logs": each line is one JSON object), so the torn-tail rule keeps no
 /// complete line back.
 #[test]
 fn newline_terminated_records_all_parse() {
