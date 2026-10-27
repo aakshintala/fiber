@@ -4019,6 +4019,50 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
         "clash",
         "description: Clash template.\nargument-hint: <tag>\ndisable-model-invocation: true\n",
     );
+    // The size and modification time just written: a later turn-start read
+    // that disagrees with them points at a torn read, while a read that
+    // agrees yet reports the old header points at the stale-cache path in
+    // `discover_cached` (`crates/loop/src/skills.rs:176`). Neither
+    // candidate is established as the cause.
+    let clash_skill = setup.workspace().join(".agents/skills/clash/SKILL.md");
+    let clash_written = fs::metadata(&clash_skill)
+        .map(|metadata| {
+            format!(
+                "size={} modified={:?}",
+                metadata.len(),
+                metadata.modified().ok()
+            )
+        })
+        .unwrap_or_else(|error| format!("unreadable: {error}"));
+    let clash_diagnostic = || {
+        let bytes = fs::read(&clash_skill)
+            .map(|bytes| format!("{} bytes: {bytes:?}", bytes.len()))
+            .unwrap_or_else(|error| format!("unreadable: {error}"));
+        let current = fs::metadata(&clash_skill)
+            .map(|metadata| {
+                format!(
+                    "size={} modified={:?}",
+                    metadata.len(),
+                    metadata.modified().ok()
+                )
+            })
+            .unwrap_or_else(|error| format!("unreadable: {error}"));
+        format!(
+            "clash SKILL.md path={} written=[{clash_written}] current=[{current}] bytes=[{bytes}]",
+            clash_skill.display(),
+        )
+    };
+    let turn_notices = |turn: &[Value]| {
+        turn.iter()
+            .filter(|line| line["kind"] == "notice")
+            .map(|line| {
+                format!(
+                    "code={} message={} path={}",
+                    line["payload"]["code"], line["payload"]["message"], line["payload"]["path"]
+                )
+            })
+            .collect::<Vec<_>>()
+    };
     send(
         &client,
         r#"{"id":"c_second","command":"prompt","args":{"content":[{"type":"text","text":"hi again"}]}}"#,
@@ -4032,7 +4076,9 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
                 && line["payload"]["code"] == "skill_shadowed"
                 && line["payload"]["extension"] == "fiber.test/clashbox"
         }),
-        "the turn-start refresh forwards the template's shadow notice: {second_turn:?}"
+        "the turn-start refresh forwards the template's shadow notice: second_turn={second_turn:?} notices={:?} before={before:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
     );
     send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
     let answered = until_session(&client, "the commands answer", |line| {
@@ -4040,22 +4086,34 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
     });
     let result = answered.last().unwrap()["payload"]["result"].clone();
     let rows = result["commands"].as_array().unwrap();
-    assert_eq!(rows.len(), 3, "no row lost and none restored: {result:?}");
+    assert_eq!(
+        rows.len(),
+        3,
+        "no row lost and none restored: result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
+    );
     assert!(
         rows.contains(&json!({"name": "keep", "description": "Keeps it.", "tag": "skill"})),
-        "the unrelated skill row stands: {result:?}"
+        "the unrelated skill row stands: result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
     );
     assert!(
         rows.contains(
             &json!({"name": "other", "description": "Other ext.", "tag": "fiber.test/clashbox", "extension": true})
         ),
-        "the reload's unrelated extension row stands: {result:?}"
+        "the reload's unrelated extension row stands: result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
     );
     assert!(
         rows.contains(
             &json!({"name": "clash", "description": "Clash template.", "argument_hint": "<tag>", "tag": "template"})
         ),
-        "the template wins its name: {result:?}"
+        "the template wins its name: result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let _tail = until_session_close(&client);
@@ -4065,6 +4123,8 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
     assert!(
         rows.iter()
             .all(|row| row["tag"] != "fiber.test/clashbox" || row["name"] != "clash"),
-        "the shadowed extension row stays out: {result:?}"
+        "the shadowed extension row stays out: result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
     );
 }
