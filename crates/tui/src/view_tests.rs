@@ -370,6 +370,159 @@ fn sized(app: &mut App, width: u16, height: u16) -> String {
     text(&buf)
 }
 
+/// A conversation exercising every 4b seam plus a notice, each replaced
+/// through one test renderer: one fixed-shape assertion per seam pins
+/// the replacement, and the snapshot pins the whole frame.
+#[test]
+fn conversation_slots_replace_through_the_seam() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    use serde_json::json;
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(at(
+        "preamble_built",
+        None,
+        0,
+        json!({"reason": "start", "model": "fake/m", "context_window": 1_000_000,
+            "tool_choice": "auto", "cache_lifetime": "5m", "system_prompt": "", "tools": []}),
+    ));
+    // A completed turn with a tool group, a steer and an answered form.
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_1"),
+        0,
+        json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_1"),
+        1_000,
+        json!({"status": "completed", "content": [{"type": "text", "text": "fn a() {}"}]}),
+    ));
+    app.on_line(steered("s_aaaaaaaaaaaaaaaa", "use x"));
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_2"),
+        2_000,
+        json!({"name": "ask_user", "arguments": {"questions": [{"header": "Base"}, {"header": "Name"}]}}),
+    ));
+    app.on_line(at(
+        "interaction_requested",
+        None,
+        2_000,
+        json!({"request_id": "r_4f", "kind": "form", "action_ids": ["a_2"],
+            "fields": [{"header": "Base", "question": "Which branch?", "multiSelect": true,
+                "options": [{"label": "main (Recommended)", "description": "the default"}, {"label": "dev"}]},
+                {"header": "Name", "question": "What name?"}]}),
+    ));
+    app.on_line(at(
+        "interaction_resolved",
+        None,
+        3_000,
+        json!({"request_id": "r_4f", "by": "person",
+            "answers": [{"labels": ["main (Recommended)", "dev"], "text": "and tags"}, {"skipped": true}],
+            "note": "by friday"}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_2"),
+        3_000,
+        json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+    ));
+    app.on_line(at(
+        "handoff_started",
+        None,
+        3_000,
+        json!({"trigger": "auto"}),
+    ));
+    // The note streams under its own action, then the completion names it.
+    app.on_line(at(
+        "assistant_message_delta",
+        Some("a_n"),
+        3_000,
+        json!({"text": "the plan"}),
+    ));
+    app.on_line(at(
+        "text_completed",
+        Some("a_n"),
+        3_000,
+        json!({"text": "the plan"}),
+    ));
+    app.on_line(at(
+        "handoff_completed",
+        None,
+        4_000,
+        json!({"outcome": "completed", "note": ["a_n"], "tokens_before": 100}),
+    ));
+    app.on_line(at(
+        "text_completed",
+        Some("a_m"),
+        4_000,
+        json!({"text": "Done."}),
+    ));
+    app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    // A failed turn for the error line.
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "again"));
+    app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
+    // A notice above the working line.
+    app.push_notice("io_failed", "a read failed".to_owned());
+    // One hook per seam: every 4b slot draws the same replacement.
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &[
+            "group_line",
+            "steer",
+            "answers",
+            "handoff_band",
+            "error_line",
+            "notice",
+        ],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    ));
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.install_renderer(renderer);
+    let shown = sized(&mut app, WIDTH, 40);
+    // One hook per seam: the renderer saw every 4b slot.
+    {
+        let mut slots: Vec<String> = fake
+            .calls
+            .borrow()
+            .iter()
+            .map(|call| call.1.clone())
+            .collect();
+        slots.sort();
+        slots.dedup();
+        assert_eq!(
+            slots,
+            [
+                "answers",
+                "error_line",
+                "group_line",
+                "handoff_band",
+                "notice",
+                "steer"
+            ],
+            "{shown}"
+        );
+    }
+    // One fixed-shape assertion per seam: the built-in marker is gone,
+    // the replacement stands, and the terminal keeps its own rows.
+    assert!(!shown.contains("use x"), "{shown}");
+    assert!(!shown.contains("you answered"), "{shown}");
+    assert!(!shown.contains('⇄'), "{shown}");
+    assert!(shown.contains("▸ note"), "{shown}");
+    assert!(!shown.contains('✗'), "{shown}");
+    assert!(!shown.contains("a read failed"), "{shown}");
+    assert!(shown.contains("custom"), "{shown}");
+    // The completed group stays collapsed: its built-in summary sentence is
+    // gone and its context line survives, with no call ledger leaking out.
+    assert!(!shown.contains("asked 2 questions"), "{shown}");
+    assert!(!shown.contains("⠋ read"), "{shown}");
+    assert!(shown.contains("completed · 2 calls"), "{shown}");
+    insta::assert_snapshot!("conversation_slots_replaced", shown);
+}
+
 #[test]
 fn a_short_screen_keeps_the_input_line_last() {
     let now = fakes::clock::FakeClock::new().now();
