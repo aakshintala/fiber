@@ -1750,3 +1750,90 @@ fn an_accepted_import_in_the_open_delegate_session_opens_the_report() {
         "Imported from Codex"
     );
 }
+
+#[test]
+fn item_view_carries_the_delegate_thinking_level() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    app.on_line(live(
+        DELEGATE_A,
+        json!({"parent": SESSION, "state": "streaming", "thinking": "high"}),
+    ));
+    let _ = open(&mut app, "j_1");
+    assert!(app.item_open());
+    assert_eq!(
+        app.item_view().expect("the open item").level,
+        Some("high".to_owned())
+    );
+}
+
+#[test]
+fn item_view_leaves_the_level_out_without_a_thinking_level() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    let _ = open(&mut app, "j_1");
+    // No status row held for the delegate: no level.
+    assert_eq!(app.item_view().expect("the open item").level, None);
+    // A status row with no thinking level: still no level.
+    app.on_line(live(
+        DELEGATE_A,
+        json!({"parent": SESSION, "state": "streaming"}),
+    ));
+    assert_eq!(app.item_view().expect("the open item").level, None);
+}
+
+#[test]
+fn item_view_carries_the_open_job_id() {
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1");
+    let _ = open(&mut app, "j_1");
+    assert!(app.item_open());
+    assert_eq!(
+        app.item_view().expect("the open item").job_id,
+        JobId("j_1".to_owned())
+    );
+}
+
+#[test]
+fn item_view_marks_only_a_tty_job() {
+    let mut app = home();
+    opened(&mut app);
+    // A tty-marked shell job takes the flag.
+    mark_tty(&mut app);
+    job_started(&mut app, "j_9", "run the editor", 0, "a_1");
+    // An ordinary job on an unmarked action does not.
+    job_started(&mut app, "j_2", "build the workspace", 0, "a_2");
+    // A delegate does not.
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    let _ = open(&mut app, "j_9");
+    assert!(app.item_view().expect("the tty job").tty);
+    let _ = open(&mut app, "j_2");
+    assert!(!app.item_view().expect("the ordinary job").tty);
+    let _ = open(&mut app, "j_1");
+    assert!(!app.item_view().expect("the delegate").tty);
+}
+
+#[test]
+fn a_finished_tty_job_keeps_its_tty_mark_after_its_output_clears() {
+    let mut app = home();
+    opened(&mut app);
+    mark_tty(&mut app);
+    job_started(&mut app, "j_9", "run the editor", 0, "a_1");
+    job_text(&mut app, "j_9", "$ edit file.txt\n");
+    // Finishing while closed clears the live output ...
+    complete(&mut app, "j_9");
+    let record = app
+        .items
+        .jobs
+        .get(&JobId("j_9".to_owned()))
+        .expect("the folded job");
+    assert!(record.output.is_none());
+    // ... but opening afterward still sees the tty mark.
+    let _ = open(&mut app, "j_9");
+    let view = app.item_view().expect("the open job");
+    assert!(view.tty);
+    assert_eq!(view.job_id, JobId("j_9".to_owned()));
+}
