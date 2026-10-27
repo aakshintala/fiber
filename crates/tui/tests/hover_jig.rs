@@ -17,8 +17,11 @@ mod jig;
 use std::process::Output;
 
 /// Reports per case in this test: the jig defaults to 20,000, which takes
-/// minutes in debug, so the test passes an explicit shorter count.
-const REPORTS: &str = "50";
+/// minutes in debug, so the test passes an explicit shorter count. Twenty
+/// reports run the exchange in about 0.9 s alone, so at five times that
+/// cost, the contention that pushed fifty reports (about 2.0 s alone) past
+/// the 10 s hang guard, this still finishes inside half the guard.
+const REPORTS: &str = "20";
 
 /// A usage error: exit code 2 with the usage on stderr and no report, so
 /// a renamed argument fails here before the release job.
