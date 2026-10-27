@@ -16,9 +16,10 @@ use rustix::process::{Pid, Signal};
 
 use super::{
     GONE_ARGS, MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, PS_TIMEOUT, WATCHDOG_SCRIPT, alive,
-    bounded, group_alive, group_empties, group_lives, kill_group, kill_matching, kill_pid,
-    listed_exit, lives, matching, matching_exits, pattern, pid_alive, pids_exit, read_lookup,
-    signal_group, signal_named, signal_pid, spawn_lookup, try_matching_exits, wait_exits,
+    bounded, group_alive, group_answer, group_empties, group_lives, kill_group, kill_matching,
+    kill_pid, listed_exit, lives, matching, matching_exits, pattern, pid_alive, pids_exit,
+    read_lookup, signal_group, signal_named, signal_pid, spawn_lookup, try_matching_exits,
+    wait_exits,
 };
 use crate::deadline::Deadline;
 
@@ -204,17 +205,11 @@ fn group_alive_sees_a_killed_child_until_it_is_reaped() {
     // killed-but-unreaped state. The stored answer is this probe's own
     // result, so a failure names the kernel's reply and the child's wait
     // state.
-    let mut raw = None;
-    let probed = signal_group(group, "0", |id, _| {
-        let answer = rustix::process::test_kill_process_group(id);
-        raw = Some(answer);
-        answer
-    })
-    .unwrap();
+    let answer = group_answer(group);
     let waited = guard.0.as_mut().unwrap().try_wait();
     assert!(
-        probed,
-        "an unreaped zombie's group must read as alive (probe {raw:?}, child {waited:?})"
+        answer.is_ok(),
+        "an unreaped zombie's group must read as alive (probe {answer:?}, child {waited:?})"
     );
     let child = guard.0.take().unwrap();
     drop(guard);
