@@ -688,8 +688,35 @@ fn a_pointer_with_a_session_and_a_seq_reads_both_ways() {
     assert_eq!(view.forked_from(), Some(SessionId("s_p".to_owned())));
     assert_eq!(
         view.fork_point().unwrap(),
-        Some((SessionId("s_p".to_owned()), Seq(3)))
+        Some((SessionId("s_p".to_owned()), Seq(3), None))
     );
+}
+
+#[test]
+fn a_pointer_with_a_project_links_it() {
+    let view = SessionStarted::parse(
+        br#"{"kind":"session_started","payload":{"workspace":"/w","forked_from":{"session_id":"s_p","seq":3,"project":"-work-old"}}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        view.fork_point().unwrap(),
+        Some((
+            SessionId("s_p".to_owned()),
+            Seq(3),
+            Some("-work-old".to_owned())
+        ))
+    );
+}
+
+#[test]
+fn a_pointer_with_a_non_string_project_is_malformed() {
+    for project in [r#"7"#, r#"null"#, r#"{"key":"-work-old"}"#] {
+        let line = format!(
+            r#"{{"kind":"session_started","payload":{{"workspace":"/w","forked_from":{{"session_id":"s_p","seq":3,"project":{project}}}}}}}"#
+        );
+        let view = SessionStarted::parse(line.as_bytes()).unwrap();
+        assert!(view.fork_point().is_err(), "{line}");
+    }
 }
 
 #[test]
@@ -799,7 +826,7 @@ fn first_line_of_a_session_started_gives_the_view() {
     assert_eq!(view.forked_from(), Some(SessionId("s_p".to_owned())));
     assert_eq!(
         view.fork_point().unwrap(),
-        Some((SessionId("s_p".to_owned()), Seq(3)))
+        Some((SessionId("s_p".to_owned()), Seq(3), None))
     );
 }
 

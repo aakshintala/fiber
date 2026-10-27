@@ -303,7 +303,9 @@ Durable. The last line a process writes for a session.
 A process is the unit these two lines bound (`GLOSSARY.md`, "Process"). They are
 durable for one reason: a `fiber_started` with no matching `fiber_exited` is the
 only record that a process died rather than finished. A session that was rewound
-ends with `rewound` instead, which closes the boundary the same way ("Rewind").
+ends with `rewound` instead, and a session that moved workspace ends with
+`moved` instead, each closing the boundary the same way ("Rewind", "Change
+workspace").
 That is the same trick tool calls use below.
 
 `fiber_exited` copies the final message's text as well as pointing at it, so a
@@ -337,7 +339,7 @@ the envelope's `ts`.
 | `workspace` | string | yes | the workspace root |
 | `variables` | object | yes | the environment variables the session runs commands with, without their values: `path` (string, the `PATH`), `names` (array of strings, the other variables' names, sorted) and `source`, `login_shell` when the hub's login-shell capture succeeded, or `inherited` when it failed or for a session `fiber ask` started; a delegate carries its parent's (`docs/invocation.md`, "A session's environment") |
 | `parent` | object | no | for a delegate: `session_id`, its parent session, and `delegate_id`, the delegate's `job_id` there (`docs/delegates.md`) |
-| `forked_from` | object | no | for a fork or a rewind: `session_id` and `seq`, the point it continues from (`docs/delegates.md`, "Forks"; "Rewind" below) |
+| `forked_from` | object | no | for a fork, a rewind, or a workspace move: `session_id` and `seq`, the parent session and the point it continues from; `project` (string, optional), the parent's project key when it differs from this session's (`docs/state.md`, "Projects"; `docs/delegates.md`, "Forks"; "Rewind" and "Change workspace" below) |
 | `rewind` | object | no | for a rewind: `summary` (string, optional) and `note` (string) |
 | `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind, a fork, or a `start` `continues` continues: `path` and `branch` (strings), and `repository` (string), the absolute path of the repository's git common directory, which a resume recreates a removed worktree from; `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
 | `supervised` | boolean | no | true when a program drives the session (`docs/permissions.md`, "Supervised sessions"): fixed at `start`, kept across a resume; absent means false |
@@ -352,6 +354,17 @@ Durable. The last line of a session that was rewound ("Rewind" below).
 | `seq` | integer | yes | the point |
 | `from_session_id` | string | no | the session whose log `seq` counts in, when it is not this one: a session on this session's `forked_from` chain |
 | `summary` | string | no | the old session's summary of the path after the point |
+
+#### `moved`
+
+Durable. The last line of a session that moved workspace ("Change workspace"
+below). Its payload has no `summary` or `from_session_id`.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `new_session_id` | string | yes | the session that continues this one |
+| `seq` | integer | yes | the last durable line before `moved`; the child's `forked_from.seq` is this value |
+| `workspace` | string | yes | the resolved absolute workspace of the new session |
 
 #### `turn_started`
 
@@ -1390,6 +1403,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | Command | `result` keys |
 |---|---|
 | `rewind` | `new_session_id` (string), the session that continues this one |
+| `change_workspace` | `new_session_id` (string), the session that continues this one |
 | `tools` | `tools`, an array with one object per declared tool: `name` (string), `source` (`builtin`, `extension` or `mcp`), `server` or `extension` (string, the tool's server or extension, when not built in), `tool` (string, the server's own name for the tool, when the source is `mcp`), `state` (`full`, `deferred` or `loaded`), `bytes` (integer) and `tokens` (integer, estimated, absent before the first request) (`docs/tools.md`, "Seeing the tools") |
 | `hooks` | `hooks`, an array with one object per hook and watcher the session registered, hooks first in hook-point table order and run order, then watchers in registration order: for a hook `extension` (string, `hooks` for a declared entry), `entry` (string, only for a declared entry), `point` (string), `on_failure` (`blocking` or `non-blocking`) and `phase` (string, only when declared), with `kind` `hook`; for a watcher `extension` (string, `hooks` for a declared entry), `entry` (string, only for a declared entry) and `kinds` (array of strings), with `kind` `watcher` (`docs/invocation.md`, "What each command does") |
 | `mcp_servers` | `servers`, an array with one object per configured server: `name` (string), `layer` (string: `global`, `project` or `repository`), `state` (string: `connecting`, `ready`, `failed` or `needs-login`), `reason` (string, the failure's sentence, empty when the server did not fail), `tools` (integer, its tool count, absent while `connecting`), `approved` (boolean, false only on a repository's server nobody approved) and `auth_url` (string, the login URL, only while a login waits) (`docs/mcp.md`, "Servers, their state and the per-server commands") |
@@ -1433,6 +1447,12 @@ Every driver command is answered with exactly one of these, echoing its id
 | `message` | string | yes | Fiber's own sentence |
 | `held` | array of strings | no | only on a hub `delete` refusal with `code: session_held`: every session in the confirmed set whose lock another process holds, in check order; other `session_held` refusals omit this field. The refusal's `message` keeps its existing single-session wording (`docs/invocation.md`, "Deleting and pruning"). |
 
+A workspace move to the folder the session is already in answers:
+
+```json
+{"kind":"command_rejected","session_id":"s_aaaaaaaaaaaaaaaa","ts":0,"schema_version":1,"payload":{"command_id":"c_cd","code":"invalid_arguments","message":"already in that folder"}}
+```
+
 ## Resume
 
 A session is reconstructed from the log and its
@@ -1453,8 +1473,8 @@ What the reader can tell about work that was in flight, from the log alone:
 | `tool_call_completed` | ran, with its outcome |
 | `job_started`, no `job_completed` | the process that ran it died; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned` |
 | `turn_started`, no `turn_completed` | the turn was cut short; render what was logged and say so, unless a `fiber_exited` with `suspended_on` follows, in which case the turn resumes with the request raised again |
-| `fiber_started`, no `fiber_exited` or `rewound` after it | that process died rather than exited |
-| `rewound` last | the session continued elsewhere |
+| `fiber_started`, no `fiber_exited`, `rewound` or `moved` after it | that process died rather than exited |
+| `rewound` or `moved` last | the session continued elsewhere |
 | `handoff_started`, no `handoff_completed` | the process died during a handoff; the handoff did not take effect, and the model's context is what it was before it |
 
 On open, Fiber writes that `job_completed` and does not touch any process. A
@@ -1554,6 +1574,50 @@ The model does not rewind. For planned speculative work it uses
 `delegate_fork`, with `isolation: worktree` where files matter. For an
 unplanned dead end it hands off: it restarts its own context from a note it
 writes. How a handoff works is `docs/handoff.md`.
+
+## Change workspace
+
+A session moves to another folder by starting a new session that continues it
+there. A person moves with `/cd <path>` in the terminal, a driver with the
+`change_workspace` command (`docs/invocation.md`).
+
+- **It is a pointer.** The new session's `session_started` carries
+  `forked_from { session_id, seq }`, naming the old session and the last
+  durable line before `moved`. It also carries `project` when the old session
+  is in another project. Nothing is copied. The old session keeps its history.
+  Existing log records are never rewritten. Job-stop completion records may
+  precede `moved`, which is the final durable line. Its payload stores the new
+  session id, the point before `moved`, and the resolved target workspace.
+- **The pointer names its project.** When `forked_from.project` is present,
+  history readers open that project's session directory directly. When it is
+  absent, the parent is in the child's project. A missing parent fails closed;
+  readers do not scan other projects.
+- **It continues from the latest point, with no summary.** The new session
+  shares the old session's history up to that point, as a rewind does
+  (`GLOSSARY.md`, "Rewind").
+- **A session keeps one workspace for its whole life.** Permissions, the
+  sandbox, hooks, delegates, resume and project grouping read the workspace
+  from each session's own `session_started`, unchanged
+  (`docs/invocation.md`, "Isolation").
+- **Jobs stop.** Every job still running when the session moves stops, as for
+  a rewind ("Rewind" above).
+- **It never starts a turn.** The new session waits for a prompt.
+- **The old session is closed first.** While the process still holds the old
+  session's lock, each job still running ends as the normal stop ends it,
+  `cancelled` or `failed` with `indeterminate`, before `moved`. The `seq` in
+  `moved` names the last durable line before that event. Fiber makes `moved`
+  durable, then starts the child. `moved` is the last line the process writes
+  to that log, and closes the process boundary as `fiber_exited` does. A
+  failure before `moved` is written does not start the child. Once `moved` is
+  in the log, the hub starts the child when the old process exits, as it does
+  after `rewound`, even if the write's sync failed.
+- **History paging walks the link as after a rewind.** A client pages back
+  past the new session's first line by reading `forked_from` from its
+  `session_started`, asking `history` with that `session_id` and `to_seq`
+  set to that `seq`, and doing the same for each further ancestor
+  (`docs/invocation.md`, "Driver commands", `history`). The reader resolves
+  each parent in `forked_from.project` when present, or in the child's project
+  otherwise.
 
 ## Writing
 

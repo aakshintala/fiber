@@ -433,13 +433,13 @@ impl Drop for BusyGuard<'_> {
 }
 
 /// Folds the complete lines past `mark.read` into `live`: a
-/// `fiber_started` past the mark makes it live, a `fiber_exited` or
-/// `rewound` after it ends it. `read` moves past the last complete line
-/// only, so a partial tail is read again next time. Every consumed
-/// complete-line byte is read at most once: bytes before the offset are
-/// never read. A file shorter than `read` was replaced: resets `read` to
-/// 0 and `live` to false first, then reads the new file from its start.
-/// A scan that cannot open the log returns the mark unchanged.
+/// `fiber_started` past the mark makes it live, a `fiber_exited`,
+/// `rewound` or `moved` after it ends it. `read` moves past the last
+/// complete line only, so a partial tail is read again next time. Every
+/// consumed complete-line byte is read at most once: bytes before the
+/// offset are never read. A file shorter than `read` was replaced: resets
+/// `read` to 0 and `live` to false first, then reads the new file from its
+/// start. A scan that cannot open the log returns the mark unchanged.
 fn step(mark: Mark) -> Mark {
     let Some(dir) = mark.log.clone() else {
         return mark;
@@ -450,7 +450,7 @@ fn step(mark: Mark) -> Mark {
     let scanned = log::lines_from(&dir, mark.read, |line| {
         match log::kind_of(line).as_deref() {
             Some("fiber_started") => transition = Some(true),
-            Some("fiber_exited" | "rewound") => transition = Some(false),
+            Some("fiber_exited" | "rewound" | "moved") => transition = Some(false),
             _ => {}
         }
     });

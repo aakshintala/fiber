@@ -719,6 +719,7 @@ fn start_rewound(
             from: contract::shapes::Point {
                 session_id: SessionId("s_test".into()),
                 seq: from,
+                project: None,
             },
             worktree: None,
             how: r#loop::Continuation::Rewind {

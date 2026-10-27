@@ -193,8 +193,13 @@ impl SessionStarted {
 
     /// What the first line forks from: the strict policy history walks
     /// by. Absent is `Ok(None)`; any present value without a string
-    /// `session_id` and a `u64` `seq` is malformed.
-    pub(crate) fn fork_point(&self) -> Result<Option<(SessionId, Seq)>, MalformedFork> {
+    /// `session_id`, a `u64` `seq` and, when present, a string `project`
+    /// is malformed. The project is the parent's project key
+    /// (`docs/state.md`, "Projects"): absent means the parent is in the
+    /// child's project.
+    pub(crate) fn fork_point(
+        &self,
+    ) -> Result<Option<(SessionId, Seq, Option<String>)>, MalformedFork> {
         let Some(from) = self.forked_from.as_ref() else {
             return Ok(None);
         };
@@ -202,7 +207,15 @@ impl SessionStarted {
             from.get("session_id").and_then(Value::as_str),
             from.get("seq").and_then(Value::as_u64),
         ) {
-            (Some(session), Some(seq)) => Ok(Some((SessionId(session.to_owned()), Seq(seq)))),
+            (Some(session), Some(seq)) => Ok(Some((
+                SessionId(session.to_owned()),
+                Seq(seq),
+                match from.get("project") {
+                    None => None,
+                    Some(Value::String(project)) => Some(project.clone()),
+                    Some(_) => return Err(MalformedFork),
+                },
+            ))),
             _ => Err(MalformedFork),
         }
     }

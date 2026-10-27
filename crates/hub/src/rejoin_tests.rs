@@ -117,6 +117,11 @@ fn rewound(id: &str, next: &str) -> Value {
         "payload": {"new_session_id": next, "seq": 3, "jobs": []}})
 }
 
+fn moved(id: &str, next: &str) -> Value {
+    json!({"kind": "moved", "session_id": id, "ts": 3, "schema_version": 1,
+        "payload": {"new_session_id": next, "seq": 3, "workspace": "/target"}})
+}
+
 /// A `session_status` payload: `state` unless said otherwise; `parent`
 /// marks a delegate.
 fn payload(state: &str, parent: Option<&str>) -> Value {
@@ -1214,6 +1219,18 @@ fn a_later_rewound_ends_it() {
 }
 
 #[test]
+fn a_later_moved_ends_it() {
+    let held = fakes::TempDir::new("jl-moved");
+    let log = log_file(
+        held.path(),
+        "events.jsonl",
+        &log_bytes(&[&kind_line("fiber_started"), &kind_line("moved")]),
+    );
+    let mark = step(mark_for(Some(log), 0, true, 1));
+    assert!(!mark.live);
+}
+
+#[test]
 fn other_kinds_change_nothing() {
     let held = fakes::TempDir::new("jl");
     let log = log_file(
@@ -1791,6 +1808,41 @@ fn a_rewound_last_line_never_rejoins_the_old_session() {
     await_scanner(&clock);
     await_pass(&done, "the quiet scan");
     assert!(!rebound.has_rejoin(), "a rewound log rejoins nothing");
+}
+
+#[test]
+fn a_moved_last_line_never_rejoins_the_old_session() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let (hub, clock) = temp.hub(FakeStarter::hang(&temp.dir));
+    wire(&hub);
+    start(&hub.feed, &clock);
+    let sid = id(16);
+    let next = id(17);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
+    let fake = Fake::bind(&temp.dir, &sid);
+    let mut client = Client::connect(&hub);
+    assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
+    client.send(&json!({
+        "id": "c_sub", "session_id": sid, "command": "subscribe", "args": {"level": "summary"},
+    }));
+    assert_eq!(
+        client.next("the subscribe acknowledgement")["kind"],
+        "command_accepted"
+    );
+    temp.append(&sid, &fiber_exited(&sid));
+    fake.stop_listening();
+    fake.unlink();
+    fake.shutdown_write();
+    fake.await_closed();
+    temp.append(&sid, &fiber_started(&sid));
+    temp.append(&sid, &moved(&sid, &next));
+    let rebound = Fake::bind(&temp.dir, &sid);
+    let done = arm_pass(&hub);
+    advance_to_scan(&clock);
+    await_scanner(&clock);
+    await_pass(&done, "the quiet scan");
+    assert!(!rebound.has_rejoin(), "a moved log rejoins nothing");
 }
 
 #[test]

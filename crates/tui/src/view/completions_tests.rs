@@ -122,7 +122,7 @@ fn slash_eight_of_long_list() {
     let shown = screen(&app, 160, 48);
     // The range counts matching entries, not just visible rows
     // (`docs/tui.md`, "Slash commands").
-    assert!(shown.contains("1–8 of 62 · ↓ 54 more"), "{shown}");
+    assert!(shown.contains("1–8 of 63 · ↓ 55 more"), "{shown}");
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
     // The first match is focused (`docs/tui.md:1682`).
@@ -215,7 +215,7 @@ fn a_scrolled_slash_list_counts_both_directions() {
     // follow the list. The range counts matching entries, not just visible
     // rows (`docs/tui.md`, "Slash commands").
     assert!(
-        shown.contains("↑ 3 above · 4–11 of 62 · ↓ 51 more"),
+        shown.contains("↑ 3 above · 4–11 of 63 · ↓ 52 more"),
         "{shown}"
     );
     let buf = buffer(&app, 160, 48);
@@ -403,7 +403,7 @@ fn narrow_slash() {
     // (`docs/tui.md`, "Slash commands").
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
     // The range counts matching entries, not just visible rows.
-    assert!(screen(&app, 100, 40).contains("1–8 of 62 · ↓ 54 more"));
+    assert!(screen(&app, 100, 40).contains("1–8 of 63 · ↓ 55 more"));
 }
 
 #[test]
@@ -735,7 +735,7 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     // `/hooks` follows `/tools` (`docs/tui.md`, "Slash commands"): ten downs bar `/context`.
     assert!(row_text(&buf, bars[0]).contains("context"), "{shown}");
     // The range counts matching entries, not just visible rows.
-    assert!(shown.contains("of 62"), "{shown}");
+    assert!(shown.contains("of 63"), "{shown}");
 }
 
 /// A short conversation with an `@` list: the third path stays barred,
