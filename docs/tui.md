@@ -1307,7 +1307,8 @@ pins it (`docs/tools.md`, "Naming the session"). A name is drawn with each contr
 `/rewind` swaps a view into the conversation area (`docs/events.md`,
 "Rewind").
 
-- Each turn is one row, "before: <prompt>". The chosen turn opens into every
+- Each turn is one row, "before: <prompt>", or "before: rewind summary" for
+  the turn a rewind's summary ran in. The chosen turn opens into every
   step boundary: after the person's message and after each step, with the
   step's summary. The default is the start of the latest turn that is not a rewind's summary.
 - For the chosen point it shows the files Fiber's tools wrote since, the calls
@@ -1964,6 +1965,12 @@ fills the list from the answer to the latest one it sent; until that answer
 arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's command named like an alias takes that name the same way: its own row shows, and the built-in row drops the alias. An extension's commands run
 with the `command` driver command (`docs/extensions.md`, "Commands and
 screens").
+
+An unrecognised `/name` is refused: the terminal keeps the text in the
+input box and shows the notice `Unknown command /<name>. Type / for the
+list.` A first word with another `/` in it, such as `/usr/bin/env`, is a
+path and is sent as a message. On home, the same rule applies against
+the built-in commands only.
 
 ### Clearing
 

@@ -814,16 +814,90 @@ fn home_while_start_is_pending_only_clears_the_draft() {
 }
 
 #[test]
-fn an_unknown_command_is_sent_as_written() {
+fn an_unknown_command_is_refused_with_its_draft_kept() {
     let mut app = attached();
-    let lines = sent(enter(&mut app, "/foo bar"));
+    assert_eq!(enter(&mut app, "/foo bar"), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Unknown command /foo. Type / for the list.")
+    );
+    assert_eq!(app.draft(), "/foo bar");
+    // During a turn the same refusal holds: nothing is steered.
+    turn_starts(&mut app);
+    app.on_key(Key::CtrlC, now());
+    assert_eq!(enter(&mut app, "/foo"), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Unknown command /foo. Type / for the list.")
+    );
+    assert_eq!(app.draft(), "/foo");
+}
+
+#[test]
+fn a_first_word_with_another_slash_is_a_message() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/usr/bin/env"));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "prompt");
-    assert_eq!(lines[0]["args"]["content"][0]["text"], "/foo bar");
+    assert_eq!(lines[0]["args"]["content"][0]["text"], "/usr/bin/env");
+    assert_eq!(app.draft(), "");
+    // During a turn it steers, like any other message.
     turn_starts(&mut app);
-    let lines = sent(enter(&mut app, "/foo"));
+    let lines = sent(enter(&mut app, "/usr/bin/env --help"));
     assert_eq!(lines[0]["command"], "steer");
-    assert_eq!(lines[0]["args"]["content"][0]["text"], "/foo");
+    assert_eq!(
+        lines[0]["args"]["content"][0]["text"],
+        "/usr/bin/env --help"
+    );
+    assert_eq!(app.draft(), "");
+}
+
+#[test]
+fn an_unknown_slash_with_an_image_is_refused_with_both_kept() {
+    let mut app = attached();
+    type_text(&mut app, "/foo bar");
+    paste_image(&mut app);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Unknown command /foo. Type / for the list.")
+    );
+    // The kept text carries the pasted image's label, as expanded drafts do.
+    assert_eq!(app.draft(), "/foo bar[Image #1]");
+    assert!(app.draft.has_image());
+}
+
+#[test]
+fn an_unknown_slash_with_a_mid_word_image_names_the_typed_word() {
+    // The image sits inside the first word: the refusal names the
+    // typed word, not the word the image label splits.
+    let mut app = attached();
+    type_text(&mut app, "/fo");
+    // Esc closes the open `/` panel, so the paste reaches the draft.
+    app.on_key(Key::Esc, now());
+    paste_image(&mut app);
+    type_text(&mut app, "o bar");
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Unknown command /foo. Type / for the list.")
+    );
+    assert_eq!(app.draft(), "/fo[Image #1]o bar");
+    assert!(app.draft.has_image());
+}
+
+#[test]
+fn home_refuses_an_unknown_slash_and_keeps_its_built_ins() {
+    let mut app = connected();
+    assert_eq!(enter(&mut app, "/nosuch"), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Unknown command /nosuch. Type / for the list.")
+    );
+    assert_eq!(app.draft(), "/nosuch");
+    // A built-in still runs on home.
+    app.on_key(Key::CtrlC, now());
+    assert_eq!(enter(&mut app, "/quit"), Effect::Quit);
 }
 
 #[test]
@@ -1108,12 +1182,17 @@ fn a_skill_named_like_a_built_in_keeps_the_built_in() {
 }
 
 #[test]
-fn undrawn_built_ins_without_an_extension_go_out_as_typed() {
+fn rewind_opens_the_rewind_view_and_asks_history() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/rewind"));
+    assert_eq!(app.draft(), "");
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "prompt");
-    assert!(app.keymap().is_none());
+    assert_eq!(lines[0]["command"], "history");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(lines[0]["args"], json!({}));
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.title, "Rewind");
+    assert_eq!(frame.command, "/rewind");
 }
 
 #[test]
@@ -1124,7 +1203,7 @@ fn every_table_row_dispatches_and_undrawn_built_ins_fall_through() {
         assert!(app.built_in().is_some(), "/{}", entry.name);
     }
     let mut app = attached();
-    type_text(&mut app, "/rewind");
+    type_text(&mut app, "/foo");
     assert!(app.built_in().is_none());
 }
 

@@ -3,8 +3,9 @@
 //! (`docs/tui.md`, "Quit").
 
 use super::super::super::{App, Effect};
-use super::tests::{accepted, closes, commands, hello, home, rejected};
+use super::tests::{accepted, closes, commands, launch, rejected};
 use super::{Ask, Prompt};
+use crate::app::testkit::{hello, home_with};
 use crate::home::{QuitChoice, Spot};
 use crate::keys::{Button, Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
@@ -124,7 +125,7 @@ fn focus_row(app: &mut App, session: &str) {
 
 /// A linked home with one live row `A`, in `state`, focused.
 fn focused(state: Value) -> App {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(A, state));
     focus_row(&mut app, A);
@@ -187,7 +188,7 @@ fn delete_on_a_focused_live_row_opens_the_stop_question_and_sends_nothing() {
 
 #[test]
 fn the_stop_question_names_the_session_by_its_id_without_a_name() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live_named(A, "", json!({"state": "idle"}), 0, 0, 0));
     focus_row(&mut app, A);
@@ -222,7 +223,7 @@ fn each_working_state_says_working() {
 #[test]
 fn an_idle_row_with_a_job_or_a_delegate_says_working() {
     for (jobs, delegates) in [(1, 0), (0, 1)] {
-        let mut app = home();
+        let mut app = home_with(80, 24, launch());
         linked(&mut app);
         app.on_line(live_named(
             A,
@@ -269,7 +270,7 @@ fn hold_full(app: &mut App, session: &str) {
 
 #[test]
 fn clients_equal_to_the_own_full_connection_is_not_elsewhere() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live_named(
         A,
@@ -292,7 +293,7 @@ fn clients_equal_to_the_own_full_connection_is_not_elsewhere() {
 
 #[test]
 fn one_client_more_than_the_own_full_connection_is_elsewhere() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live_named(
         A,
@@ -316,7 +317,7 @@ fn one_client_more_than_the_own_full_connection_is_elsewhere() {
 
 #[test]
 fn one_client_not_held_full_is_elsewhere() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live_named(
         A,
@@ -336,7 +337,7 @@ fn one_client_not_held_full_is_elsewhere() {
 
 #[test]
 fn working_and_elsewhere_read_as_one_note() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live_named(
         A,
@@ -365,7 +366,7 @@ fn the_stop_question_freezes_when_it_opens() {
 
 #[test]
 fn an_unreadable_row_opens_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     let mut envelope = live(A, json!({"state": "idle"}));
     if let Line::Session(status) = &mut envelope {
@@ -403,7 +404,7 @@ fn crashed(session: &str, name: &str) -> Value {
 #[test]
 fn delete_on_an_exited_or_crashed_row_still_asks_to_delete() {
     for how in ["crashed", "exited"] {
-        let mut app = home();
+        let mut app = home_with(80, 24, launch());
         let (_, recent) = linked(&mut app);
         let mut row = crashed(A, "dead work");
         row["how"] = json!(how);
@@ -429,7 +430,7 @@ fn delete_on_an_exited_or_crashed_row_still_asks_to_delete() {
 
 #[test]
 fn delete_with_the_box_focused_edits_the_draft() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(A, json!({"state": "idle"})));
     for ch in "abc".chars() {
@@ -460,7 +461,7 @@ fn backspace_on_a_focused_live_row_opens_nothing() {
 
 #[test]
 fn enter_closes_that_session_now() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     app.on_line(live(A, json!({"state": "streaming"})));
     app.on_line(live_named(

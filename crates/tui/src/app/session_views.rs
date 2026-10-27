@@ -35,6 +35,8 @@ pub(crate) enum SessionView {
     Jobs,
     /// A tool call's whole view, from its more row or its opened row.
     Call(usize),
+    /// `/rewind`.
+    Rewind,
 }
 
 /// The selected row in an open session view.
@@ -56,6 +58,8 @@ pub(in crate::app) enum Open {
     Jobs(List),
     /// A tool call's whole view, boxed: it holds the call's pages.
     Call(Box<CallView>),
+    /// `/rewind`.
+    Rewind(List),
 }
 
 /// The session views' state, reset for each attachment.
@@ -116,7 +120,14 @@ impl App {
             SessionView::Delegates => Open::Delegates(List::default()),
             SessionView::Jobs => Open::Jobs(List::default()),
             SessionView::Call(id) => return self.open_call_view(id),
+            SessionView::Rewind => {
+                self.session_views.open = Some(Open::Rewind(List::default()));
+                return self.open_rewind();
+            }
         });
+        // Opening another view drops the rewind's wait: its late answer
+        // folds nowhere.
+        self.rewind = super::rewind::Rewind::default();
         Effect::None
     }
 
@@ -142,6 +153,9 @@ impl App {
         }
         if matches!(self.session_views.open, Some(Open::Call(_))) {
             return self.call_view_key(key);
+        }
+        if matches!(self.session_views.open, Some(Open::Rewind(_))) {
+            return self.rewind_key(key);
         }
         if *key == Key::Esc {
             self.close_session_view();
@@ -236,6 +250,9 @@ impl App {
             }
             return self.call_view_click(&spot);
         }
+        if let Some(Open::Rewind(_)) = self.session_views.open {
+            return self.rewind_click(spot);
+        }
         if spot == Spot::Close {
             self.close_session_view();
             return Effect::None;
@@ -280,6 +297,7 @@ impl App {
             | Some(Open::Status(_))
             | Some(Open::Files(_))
             | Some(Open::Call(_))
+            | Some(Open::Rewind(_))
             | None => {
                 return Effect::None;
             }
@@ -317,6 +335,7 @@ impl App {
             | Some(Open::Status(_))
             | Some(Open::Files(_))
             | Some(Open::Call(_))
+            | Some(Open::Rewind(_))
             | None => Vec::new(),
         }
     }
@@ -391,6 +410,10 @@ impl App {
             Open::Delegates(list) => Some(crate::running_view::delegates_frame(self, *list)),
             Open::Jobs(list) => Some(crate::running_view::jobs_frame(self, *list)),
             Open::Call(view) => Some(view.frame()),
+            Open::Rewind(list) => {
+                let jobs = self.rewind_stopping();
+                Some(super::rewind::frame(&self.rewind, &jobs, *list))
+            }
         }
     }
 
@@ -469,6 +492,12 @@ impl App {
                     if matches!(self.session_views.open, Some(Open::Call(_))) {
                         return self.call_view_answered(&accepted);
                     }
+                    if matches!(self.session_views.open, Some(Open::Rewind(_))) {
+                        if let Some(lines) = self.rewind_send_accepted(&accepted) {
+                            return lines;
+                        }
+                        return self.rewind_answered(envelope, &accepted);
+                    }
                     self.session_views_answered(&accepted);
                 }
             }
@@ -476,6 +505,8 @@ impl App {
                 if let Some(rejected) = super::read!(envelope, CommandRejected) {
                     if matches!(self.session_views.open, Some(Open::Call(_))) {
                         self.call_view_refused(&rejected);
+                    } else if matches!(self.session_views.open, Some(Open::Rewind(_))) {
+                        self.rewind_refused(&rejected);
                     } else {
                         self.session_views_rejected(&rejected);
                     }
@@ -532,6 +563,25 @@ impl App {
     /// Closes the view and empties its fold for the next attachment.
     pub(in crate::app) fn session_views_reset(&mut self) {
         self.session_views = SessionViews::default();
+        // Leaving the session drops the rewind view's fold with it: the
+        // next open pages the new session's chain from its tip.
+        self.rewind = super::rewind::Rewind::default();
+    }
+
+    /// Moves the open rewind view's list to `at`: the fold's selection.
+    /// A closed or missing view moves nothing.
+    pub(in crate::app) fn rewind_list_to(&mut self, at: usize, rows: usize) {
+        if let Some(Open::Rewind(list)) = self.session_views.open.as_mut() {
+            list.select(at, rows, usize::MAX);
+        }
+    }
+
+    /// The open rewind view's list, to move with the cursor.
+    pub(in crate::app) fn rewind_list_mut(&mut self) -> Option<&mut List> {
+        match self.session_views.open.as_mut() {
+            Some(Open::Rewind(list)) => Some(list),
+            _ => None,
+        }
     }
 
     /// Closes the view and drops any answer that arrives for its diff request.
@@ -540,6 +590,7 @@ impl App {
         self.session_views.request = None;
         self.session_views.diff = None;
         self.session_views.diff_list = List::default();
+        self.rewind = super::rewind::Rewind::default();
     }
 }
 
