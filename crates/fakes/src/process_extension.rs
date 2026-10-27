@@ -11,16 +11,39 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 
 use crate::Watchdog;
 use crate::deadline::Deadline;
+use serde_json::Value;
 
-/// The example `cargo test` built beside the test binary
-/// (`target/<profile>/examples/process-extension`), so a test starts no
+/// A command for the checked-in process extension example. The fixture
+/// controller warms the binary before returning it, so a test starts no
 /// cargo and waits on no build lock.
+pub struct ProcessCommand {
+    program: PathBuf,
+    args: Vec<String>,
+}
+
+impl ProcessCommand {
+    /// The example executable.
+    pub fn program(&self) -> &Path {
+        &self.program
+    }
+
+    /// The mode and optional protocol configuration passed to it.
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+
+    /// Takes the executable and argv for a caller that owns the child.
+    pub fn into_parts(self) -> (PathBuf, Vec<String>) {
+        (self.program, self.args)
+    }
+}
+
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 fn example_path() -> PathBuf {
     let mut path = std::env::current_exe().expect("the test binary knows its path");
@@ -46,15 +69,61 @@ pub struct ProcessFixture {
     reason = "a test helper; a failure is the test's"
 )]
 impl ProcessFixture {
+    /// Returns a warmed command for the shared process extension fixture.
+    /// `configuration` is serialized as one argv value for protocol modes;
+    /// `echo` and `hold` ignore it.
+    #[track_caller]
+    pub fn command(mode: &str, configuration: Option<&Value>) -> ProcessCommand {
+        let example = example_path();
+        crate::warm_up(&example, &["bogus-mode"], 2);
+        let mut fixture_args = vec![mode.to_owned()];
+        if let Some(configuration) = configuration {
+            fixture_args.push(configuration.to_string());
+        }
+        if configuration
+            .and_then(|config| config.get("ignore_term"))
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            let mut args = vec![
+                "-c".to_owned(),
+                "trap '' TERM; exec \"$@\"".to_owned(),
+                "process-extension-wrapper".to_owned(),
+                example.display().to_string(),
+            ];
+            args.extend(fixture_args);
+            ProcessCommand {
+                program: PathBuf::from("/bin/sh"),
+                args,
+            }
+        } else {
+            ProcessCommand {
+                program: example,
+                args: fixture_args,
+            }
+        }
+    }
+
     /// Starts the example in `mode` (`echo` or `hold`). Warms the binary
     /// past its first-exec stall first, so the exchange keeps its own
     /// deadline.
     #[track_caller]
     pub fn spawn(mode: &str) -> Self {
-        let path = example_path();
-        crate::warm_up(&path, &["bogus-mode"], 2);
-        let mut child = Command::new(&path)
-            .arg(mode)
+        let command = Self::command(mode, None);
+        Self::spawn_command(command)
+    }
+
+    /// Starts a protocol-mode peer through the same bounded controller.
+    #[track_caller]
+    pub fn spawn_protocol(configuration: &Value) -> Self {
+        let command = Self::command("peer", Some(configuration));
+        Self::spawn_command(command)
+    }
+
+    #[track_caller]
+    fn spawn_command(command: ProcessCommand) -> Self {
+        let mut child = Command::new(command.program)
+            .args(command.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

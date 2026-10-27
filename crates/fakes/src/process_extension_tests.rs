@@ -59,6 +59,49 @@ fn a_hold_is_acknowledged_then_released_before_the_join() {
 }
 
 #[test]
+fn a_protocol_peer_acknowledges_each_hold_before_release() {
+    let script = serde_json::json!([
+        {"read": {"expect": {"kind": "hello"}}},
+        {"send": {
+            "kind": "ready",
+            "request_id": {"$ref": "last.request_id"}
+        }},
+        {"read": {"expect": {"kind": "ack"}}},
+        {"hold": {
+            "ack": {"held": true},
+            "release_on": "line",
+            "release_line": {"kind": "release"}
+        }},
+        {"wait_silent": {"timeout_ms": 2}},
+        {"send": {"released": true}}
+    ]);
+    let mut fixture = ProcessFixture::spawn_protocol(&script);
+    let deadline = within();
+    fixture.send(r#"{"kind":"hello","request_id":"caller-17"}"#);
+    assert_eq!(
+        fixture.wait_for(deadline, "the peer ready line", |line| {
+            line == r#"{"kind":"ready","request_id":"caller-17"}"#
+        }),
+        r#"{"kind":"ready","request_id":"caller-17"}"#,
+    );
+    fixture.send(r#"{"kind":"ack"}"#);
+    assert_eq!(
+        fixture.wait_for(deadline, "the hold acknowledgment", |line| {
+            line == r#"{"held":true}"#
+        }),
+        r#"{"held":true}"#,
+    );
+    fixture.send(r#"{"kind":"release"}"#);
+    assert_eq!(
+        fixture.wait_for(deadline, "the release answer", |line| {
+            line == r#"{"released":true}"#
+        }),
+        r#"{"released":true}"#,
+    );
+    fixture.finish(deadline);
+}
+
+#[test]
 fn the_fixture_usage_error_names_its_modes() {
     warm_up(&super::example_path(), &["bogus-mode"], 2);
 }

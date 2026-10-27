@@ -1484,9 +1484,8 @@ fn positional_references_share_the_generation_triple() {
 }
 
 // Process transport and request lifecycle: the owner behind the package
-// seam, with real child processes answering over the pipe. Each peer is a
-// `python3` script reading JSON lines from its stdin and writing its
-// answers to its stdout, as a process extension does.
+// seam, with the shared checked-in Rust process fixture answering over the
+// pipe. Each test supplies bounded JSON protocol actions.
 
 use std::sync::{Arc, Mutex};
 
@@ -1624,8 +1623,8 @@ struct Harness {
 }
 
 impl Harness {
-    /// Starts `python3 -c script` with `args` in a scratch workspace, the
-    /// hello carrying `state`, answered through `drive`.
+    /// Starts the shared Rust process fixture with a JSON protocol plan and
+    /// `args` in a scratch workspace, the hello carrying `state`.
     fn start(
         script: &str,
         args: &[&str],
@@ -1696,8 +1695,22 @@ impl Harness {
             extension: "fiber.test/proc".into(),
             home: dir.path().to_path_buf(),
         };
-        let mut argv = vec!["-c".to_owned(), script.to_owned()];
-        argv.extend(args.iter().map(|arg| (*arg).to_owned()));
+        let mut plan: Value =
+            serde_json::from_str(script).expect("the process fixture plan is valid JSON");
+        if let Some(object) = plan.as_object_mut() {
+            object.insert(
+                "args".to_owned(),
+                Value::Array(
+                    args.iter()
+                        .map(|arg| Value::String((*arg).to_owned()))
+                        .collect(),
+                ),
+            );
+        } else {
+            plan = json!({"actions": plan, "args": args});
+        }
+        let process = fakes::ProcessFixture::command("peer", Some(&plan));
+        let (program, argv) = process.into_parts();
         let launch_clock: Arc<dyn contract::clock::Clock> = clock.clone();
         // One standalone store behind both the launch and the services,
         // as the package seam's, before the session folds it.
@@ -1707,7 +1720,7 @@ impl Harness {
             owner: "fiber.test/proc".to_owned(),
             runtime,
             registry: Arc::clone(&registry),
-            program: std::path::PathBuf::from("python3"),
+            program,
             args: argv,
             context,
             drive,
@@ -1829,9 +1842,11 @@ fn wire_command_spec() -> Value {
 fn hello_is_first_with_the_documented_fields() {
     let out = fakes::TempDir::new("fiber-process-hello");
     let out_path = out.path().join("first.jsonl");
-    let script = r#"import sys
-line = sys.stdin.readline()
-open(sys.argv[1], "w").write(line if line else "")"#;
+    let script = &json!([
+        {"read": {}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "last"}}},
+    ])
+    .to_string();
     let mut state = serde_json::Map::new();
     state.insert("k".to_owned(), json!("v"));
     let owner = Harness::start(
@@ -1871,32 +1886,18 @@ open(sys.argv[1], "w").write(line if line else "")"#;
 /// request reads `stale_request`.
 #[test]
 fn registrations_stand_only_before_ready() {
-    let script = r#"import sys, json
-TOOL = json.loads(sys.argv[2])
-HOOK = json.loads(sys.argv[3])
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-def call(cid, call, args, rid=None):
-    a = {"call": call, "args": args}
-    if rid is not None:
-        a["request_id"] = rid
-    write({"id": cid, "command": "call", "args": a})
-read()
-call("c1", "fiber.tool", ["t", TOOL])
-call("c2", "fiber.hook", ["turn_end", HOOK])
-write({"id": "c3", "command": "ready"})
-answers = [read(), read(), read()]
-call("c4", "fiber.tool", ["late", TOOL])
-call("c5", "fiber.tool", ["dead", TOOL], "r_dead")
-answers += [read(), read()]
-open(sys.argv[1], "w").write(json.dumps(answers))"#;
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", wire_tool_spec()]}}},
+        {"send": {"id": "c2", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", wire_hook_spec()]}}},
+        {"send": {"id": "c3", "command": "ready"}},
+        {"repeat": {"count": 3, "actions": [{"read": {"append_to": "answers"}}]}},
+        {"send": {"id": "c4", "command": "call", "args": {"call": "fiber.tool", "args": ["late", wire_tool_spec()]}}},
+        {"send": {"id": "c5", "command": "call", "args": {"call": "fiber.tool", "args": ["dead", wire_tool_spec()], "request_id": "r_dead"}}},
+        {"repeat": {"count": 2, "actions": [{"read": {"append_to": "answers"}}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "answers"}}},
+    ])
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-register");
     let out_path = out.path().join("answers.json");
     let owner = Harness::start(
@@ -1951,24 +1952,15 @@ open(sys.argv[1], "w").write(json.dumps(answers))"#;
 /// failure, and the registry holds nothing from either call.
 #[test]
 fn a_failed_package_fails_later_calls_with_the_first_failure() {
-    let script = r#"import sys, json
-PROVIDER = json.loads(sys.argv[2])
-TOOL = json.loads(sys.argv[3])
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-write({"id": "c1", "command": "call", "args": {"call": "fiber.provider", "args": ["p", PROVIDER]}})
-write({"id": "c2", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
-write({"id": "c3", "command": "ready"})
-answers = [read(), read(), read()]
-open(sys.argv[1], "w").write(json.dumps(answers))"#;
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "fiber.provider", "args": ["p", provider_spec()]}}},
+        {"send": {"id": "c2", "command": "call", "args": {"call": "fiber.tool", "args": ["t", wire_tool_spec()]}}},
+        {"send": {"id": "c3", "command": "ready"}},
+        {"repeat": {"count": 3, "actions": [{"read": {"append_to": "answers"}}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "answers"}}},
+    ])
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-failed");
     let out_path = out.path().join("answers.json");
     let owner = Harness::start(
@@ -2021,69 +2013,52 @@ open(sys.argv[1], "w").write(json.dumps(answers))"#;
 /// command runs only after the hook's reply.
 #[test]
 fn stream_order_holds_while_tools_answer_reversed() {
-    let script = r#"import sys, json
-TOOL = json.loads(sys.argv[2])
-HOOK = json.loads(sys.argv[3])
-COMMAND = json.loads(sys.argv[4])
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-def call(cid, call, args):
-    write({"id": cid, "command": "call", "args": {"call": call, "args": args}})
-read()
-call("c1", "fiber.tool", ["t", TOOL])
-call("c2", "fiber.hook", ["turn_end", HOOK])
-call("c3", "fiber.command", ["go", COMMAND])
-write({"id": "c4", "command": "ready"})
-for _ in range(4):
-    read()
-def reply(rid, result):
-    write({"id": "p-" + rid, "command": "reply", "args": {"request_id": rid, "result": result}})
-skipped = []
-def read_request():
-    # Replies are answered as they pump, so an acknowledgment can arrive
-    # before a later request: skip to the next request, keeping the
-    # acknowledgment for the final count.
-    while True:
-        line = read()
-        if line["kind"] == "extension_request":
-            return line["payload"]
-        skipped.append(line)
-log = []
-def got(request):
-    log.append(["got", request["registration"]])
-def answered(request, result):
-    reply(request["request_id"], result)
-    log.append(["replied", result])
-# The hook may lose the send race to the tools: read until the hook
-# arrives, buffering early tools, then wait for both tools.
-held = None
-tools = []
-while held is None:
-    request = read_request()
-    got(request)
-    if request["registration"] == "c2":
-        held = request
-    else:
-        tools.append(request)
-while len(tools) < 2:
-    request = read_request()
-    got(request)
-    tools.append(request)
-for index, request in enumerate(reversed(tools)):
-    answered(request, "tool-%d" % index)
-answered(held, held["registration"])
-command = read_request()
-got(command)
-answered(command, command["registration"])
-acks = skipped + [read() for _ in range(4 - len(skipped))]
-open(sys.argv[1], "w").write(json.dumps({"log": log, "acks": acks}))"#;
+    let reply = |name: &str, id: &str, result: Value| {
+        json!({"send": {"id": id, "command": "reply", "args": {
+            "request_id": {"$ref": format!("{name}.payload.request_id")}, "result": result,
+        }}})
+    };
+    let reversed = |hook: &str, first: &str, second: &str| {
+        json!([
+            reply(second, "p-tool-0", json!("tool-0")),
+            reply(first, "p-tool-1", json!("tool-1")),
+            reply(
+                hook,
+                "p-hook",
+                json!({"$ref": format!("{hook}.payload.registration")})
+            ),
+        ])
+    };
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", wire_tool_spec()]}}},
+        {"send": {"id": "c2", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", wire_hook_spec()]}}},
+        {"send": {"id": "c3", "command": "call", "args": {"call": "fiber.command", "args": ["go", wire_command_spec()]}}},
+        {"send": {"id": "c4", "command": "ready"}},
+        {"repeat": {"count": 4, "actions": [{"read": {}}]}},
+        {"read": {"as": "first", "expect": {"kind": "extension_request"}, "append_to": "requests"}},
+        {"read": {"as": "second", "expect": {"kind": "extension_request"}, "append_to": "requests"}},
+        {"read": {"as": "third", "expect": {"kind": "extension_request"}, "append_to": "requests"}},
+        {"if": {"path": "first.payload.registration", "equals": "c2",
+            "then": reversed("first", "second", "third"),
+            "else": [{"if": {"path": "second.payload.registration", "equals": "c2",
+                "then": reversed("second", "first", "third"),
+                "else": reversed("third", "first", "second"),
+            }}],
+        }},
+        // Three reply acknowledgements and the command can interleave.
+        // Its reply adds one more acknowledgement, for five lines total.
+        {"repeat": {"count": 5, "actions": [
+            {"read": {"as": "next", "append_to": "tail"}},
+            {"if": {"path": "next.kind", "equals": "extension_request", "then": [
+                reply("next", "p-command", json!({"$ref": "next.payload.registration"})),
+            ]}},
+        ]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {
+            "requests": {"$ref": "requests"}, "tail": {"$ref": "tail"},
+        }}},
+    ])
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-order");
     let out_path = out.path().join("order.json");
     let owner = Harness::start(
@@ -2196,7 +2171,28 @@ open(sys.argv[1], "w").write(json.dumps({"log": log, "acks": acks}))"#;
     // The stream order: the command is read only after the hook's
     // reply, while both tools answer reversed in between. Arrival order
     // varies with the send race; the reply order does not.
-    let report = read_json_file(&out_path, "the dispatch order");
+    let recorded = read_json_file(&out_path, "the dispatch order");
+    let mut log: Vec<Value> = recorded["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|request| json!(["got", request["payload"]["registration"]]))
+        .collect();
+    log.extend([
+        json!(["replied", "tool-0"]),
+        json!(["replied", "tool-1"]),
+        json!(["replied", "c2"]),
+    ]);
+    let mut acks = Vec::new();
+    for line in recorded["tail"].as_array().unwrap() {
+        if line["kind"] == "extension_request" {
+            log.push(json!(["got", line["payload"]["registration"]]));
+            log.push(json!(["replied", line["payload"]["registration"]]));
+        } else {
+            acks.push(line.clone());
+        }
+    }
+    let report = json!({"log": log, "acks": acks});
     for (index, ack) in report["acks"]
         .as_array()
         .expect("four acks")
@@ -2247,34 +2243,20 @@ open(sys.argv[1], "w").write(json.dumps({"log": log, "acks": acks}))"#;
 /// `stale_request`, and the next hook stays healthy.
 #[test]
 fn a_timed_out_hook_drops_its_late_reply() {
-    let script = r#"import sys, json
-HOOK = json.loads(sys.argv[2])
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-def call(cid, call, args):
-    write({"id": cid, "command": "call", "args": {"call": call, "args": args}})
-read()
-call("c1", "fiber.hook", ["turn_end", HOOK])
-write({"id": "c2", "command": "ready"})
-for _ in range(2):
-    read()
-def reply(rid, result):
-    write({"id": "p-" + rid, "command": "reply", "args": {"request_id": rid, "result": result}})
-first = read()["payload"]
-release = read()
-assert release == {"test_release": True}, release
-reply(first["request_id"], "late")
-second = read()["payload"]
-reply(second["request_id"], "fresh")
-answers = [read(), read()]
-open(sys.argv[1], "w").write(json.dumps(answers))"#;
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", wire_hook_spec()]}}},
+        {"send": {"id": "c2", "command": "ready"}},
+        {"repeat": {"count": 2, "actions": [{"read": {}}]}},
+        {"read": {"as": "first"}},
+        {"hold": {"release_on": "line", "release_line": {"test_release": true}}},
+        {"send": {"id": "p-late", "command": "reply", "args": {"request_id": {"$ref": "first.payload.request_id"}, "result": "late"}}},
+        {"read": {"as": "second"}},
+        {"send": {"id": "p-fresh", "command": "reply", "args": {"request_id": {"$ref": "second.payload.request_id"}, "result": "fresh"}}},
+        {"repeat": {"count": 2, "actions": [{"read": {"append_to": "answers"}}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "answers"}}},
+    ])
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-timeout");
     let out_path = out.path().join("answers.json");
     let owner = Harness::start(
@@ -2365,29 +2347,18 @@ open(sys.argv[1], "w").write(json.dumps(answers))"#;
 /// dropped as `stale_request`, and the dispatch fails stopped.
 #[test]
 fn a_cancelled_dispatch_drops_its_late_reply() {
-    let script = r#"import sys, json
-HOOK = json.loads(sys.argv[2])
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-def call(cid, call, args):
-    write({"id": cid, "command": "call", "args": {"call": call, "args": args}})
-read()
-call("c1", "fiber.hook", ["turn_end", HOOK])
-write({"id": "c2", "command": "ready"})
-for _ in range(2):
-    read()
-request = read()["payload"]
-release = read()
-assert release == {"test_release": True}, release
-write({"id": "p-late", "command": "reply", "args": {"request_id": request["request_id"], "result": "late"}})
-open(sys.argv[1], "w").write(json.dumps([read()]))"#;
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", wire_hook_spec()]}}},
+        {"send": {"id": "c2", "command": "ready"}},
+        {"repeat": {"count": 2, "actions": [{"read": {}}]}},
+        {"read": {"as": "request"}},
+        {"hold": {"release_on": "line", "release_line": {"test_release": true}}},
+        {"send": {"id": "p-late", "command": "reply", "args": {"request_id": {"$ref": "request.payload.request_id"}, "result": "late"}}},
+        {"read": {}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": [{"$ref": "last"}]}},
+    ])
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-cancel");
     let out_path = out.path().join("answers.json");
     let owner = Harness::start(
@@ -2454,24 +2425,17 @@ open(sys.argv[1], "w").write(json.dumps([read()]))"#;
 /// refuses, and an ordinary driver command goes through the `Drive` seam.
 #[test]
 fn malformed_unknown_and_forwarded_lines() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-sys.stdout.write("not json\n"); sys.stdout.flush()
-write({"id": "u1", "command": "frob"})
-write({"id": "c9", "command": "call", "args": {"call": 42}})
-write({"id": "b1", "command": "reply", "args": {"request_id": "r_x", "confirmed": True}})
-write({"id": "v1", "command": "tools", "args": {}})
-answers = [read(), read(), read(), read()]
-open(sys.argv[1], "w").write(json.dumps(answers))"#;
+    let script = &json!([
+        {"read": {}},
+        {"send_raw": "not json"},
+        {"send": {"id": "u1", "command": "frob"}},
+        {"send": {"id": "c9", "command": "call", "args": {"call": 42}}},
+        {"send": {"id": "b1", "command": "reply", "args": {"request_id": "r_x", "confirmed": true}}},
+        {"send": {"id": "v1", "command": "tools", "args": {}}},
+        {"repeat": {"count": 4, "actions": [{"read": {"append_to": "answers"}}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "answers"}}},
+    ])
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-wire");
     let out_path = out.path().join("answers.json");
     let drive = FakeDrive::new();
@@ -2521,18 +2485,13 @@ open(sys.argv[1], "w").write(json.dumps(answers))"#;
 /// With no driver the session is closing, and `host.drive` raises it.
 #[test]
 fn drive_without_a_driver_closes() {
-    let script = r#"import sys, json
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-sys.stdout.write(json.dumps({"id": "v1", "command": "tools", "args": {}}) + "\n")
-sys.stdout.flush()
-open(sys.argv[1], "w").write(sys.stdin.readline())"#;
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "v1", "command": "tools", "args": {}}},
+        {"read": {}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "last"}}},
+    ])
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-nodrive");
     let out_path = out.path().join("answer.jsonl");
     let owner = Harness::start(
@@ -2609,27 +2568,18 @@ fn host_calls_reach_services_with_timer_attribution() {
         ("k3", "state.set", json!(["k", 1])),
         ("k4", "state.unset", json!(["k"])),
     ];
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-calls = json.loads(sys.argv[2])
-write({"id": "ready", "command": "ready"})
-for (cid, call, args) in calls:
-    write({"id": cid, "command": "call", "args": {"call": call, "args": args}})
-answers = {}
-for _ in range(len(calls) + 1):
-    answer = read()
-    answers[answer["payload"]["command_id"]] = answer
-del answers["ready"]
-open(sys.argv[1], "w").write(json.dumps(answers))"#;
+    let mut actions = vec![
+        json!({"read": {}}),
+        json!({"send": {"id": "ready", "command": "ready"}}),
+    ];
+    actions.extend(calls.iter().map(|(id, call, args)| {
+        json!({"send": {"id": id, "command": "call", "args": {"call": call, "args": args}}})
+    }));
+    actions.extend([
+        json!({"repeat": {"count": calls.len() + 1, "actions": [{"read": {"append_to": "answers"}}]}}),
+        json!({"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "answers"}}}),
+    ]);
+    let script = &json!(actions).to_string();
     let out = fakes::TempDir::new("fiber-process-host-calls");
     let out_path = out.path().join("answers.json");
     let owner = Harness::start(
@@ -2645,7 +2595,20 @@ open(sys.argv[1], "w").write(json.dumps(answers))"#;
         owner.pump();
     }
     assert_eq!(owner.drain(), CloseReason::Eof);
-    let answers = read_json_file(&out_path, "the host call answers");
+    let recorded = read_json_file(&out_path, "the host call answers");
+    let mut answers: serde_json::Map<String, Value> = recorded
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|answer| {
+            (
+                answer["payload"]["command_id"].as_str().unwrap().to_owned(),
+                answer.clone(),
+            )
+        })
+        .collect();
+    assert!(answers.remove("ready").is_some());
+    let answers = Value::Object(answers);
     assert_eq!(answers.as_object().unwrap().len(), calls.len());
     for (id, _, _) in &calls {
         let answer = &answers[id];
@@ -2714,22 +2677,15 @@ open(sys.argv[1], "w").write(json.dumps(answers))"#;
 /// service's answer reaches the wire unchanged.
 #[test]
 fn a_failing_service_rejects_with_its_code() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-write({"id": "ready", "command": "ready"})
-write({"id": "c1", "command": "call", "args": {"call": "host.log", "args": ["hi"]}})
-read()
-answer = read()
-open(sys.argv[1], "w").write(json.dumps(answer))"#;
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "host.log", "args": ["hi"]}}},
+        {"read": {}},
+        {"read": {}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "last"}}},
+    ])
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-failing");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -2755,22 +2711,15 @@ open(sys.argv[1], "w").write(json.dumps(answer))"#;
 /// record no operation.
 #[test]
 fn a_refused_host_call_runs_nothing() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-write({"id": "ready", "command": "ready"})
-write({"id": "c1", "command": "call", "args": {"call": "host.exec", "args": [7]}})
-read()
-answer = read()
-open(sys.argv[1], "w").write(json.dumps(answer))"#;
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "host.exec", "args": [7]}}},
+        {"read": {}},
+        {"read": {}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "last"}}},
+    ])
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refused");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -2799,20 +2748,13 @@ open(sys.argv[1], "w").write(json.dumps(answer))"#;
 /// refuses with the entry sentence, and the services record nothing.
 #[test]
 fn entry_refusals_land_before_decode() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-write({"id": "c1", "command": "call", "args": {"call": "host.exec", "args": ["prog"]}})
-answer = read()
-open(sys.argv[1], "w").write(json.dumps(answer))"#;
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "host.exec", "args": ["prog"]}}},
+        {"read": {}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "last"}}},
+    ])
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-entry");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -2841,28 +2783,18 @@ open(sys.argv[1], "w").write(json.dumps(answer))"#;
 /// the dispatch with its value.
 #[test]
 fn a_tool_request_anchors_its_inner_call() {
-    let script = r#"import sys, json
-TOOL = json.loads(sys.argv[2])
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-write({"id": "c1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
-write({"id": "ready", "command": "ready"})
-read()
-read()
-request = read()
-rid = request["payload"]["request_id"]
-write({"id": "c2", "command": "call", "args": {"call": "host.tool", "args": ["inner", {}], "request_id": rid}})
-answer = read()
-write({"id": "p-r", "command": "reply", "args": {"request_id": rid, "result": 7}})
-open(sys.argv[1], "w").write(json.dumps(answer))"#;
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", wire_tool_spec()]}}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"repeat": {"count": 2, "actions": [{"read": {}}]}},
+        {"read": {"as": "request"}},
+        {"send": {"id": "c2", "command": "call", "args": {"call": "host.tool", "args": ["inner", {}], "request_id": {"$ref": "request.payload.request_id"}}}},
+        {"read": {"as": "answer"}},
+        {"send": {"id": "p-r", "command": "reply", "args": {"request_id": {"$ref": "request.payload.request_id"}, "result": 7}}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "answer"}}},
+    ])
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-attribution");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -2987,35 +2919,34 @@ fn expired_pair() -> Value {
     json!({"token": "tok-old", "expires_at": 1})
 }
 
+/// Starts a refresh plan with the hello, provider request and refresh call.
+fn refresh_plan(actions: Value) -> Value {
+    let mut plan = vec![
+        json!({"read": {}}),
+        json!({"read": {"as": "parent"}}),
+        json!({"send": {"id": "c1", "command": "call", "args": {
+            "call": "host.oauth.refresh", "args": [true],
+            "request_id": {"$ref": "parent.payload.request_id"},
+        }}}),
+    ];
+    plan.extend(actions.as_array().unwrap().iter().cloned());
+    json!(plan)
+}
+
 /// A refresh the child answers, seeing the protocol positions.
 #[test]
 fn refresh_runs_its_function_nested_and_stores_what_it_returns() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-parent = read()
-rid = parent["payload"]["request_id"]
-write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-nested = read()
-assert nested["kind"] == "extension_request", nested
-payload = nested["payload"]
-assert payload["registration"] == "c1", payload
-assert payload["key"] == "1", payload
-assert payload["args"] == [{"token": "tok-old", "expires_at": 1}], payload
-fresh = {"token": "tok-fresh", "expires_at": 2000000000}
-write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": fresh}})
-answer = read_answer("c1")
-assert answer["kind"] == "command_accepted", answer
-assert answer["payload"]["result"]["value"] == fresh, answer
-open(sys.argv[1], "w").write(json.dumps({"nested": payload, "answer": answer["payload"]}))"#;
+    let script = &refresh_plan(json!([
+        {"read": {"as": "nested", "expect": {"kind": "extension_request", "payload": {
+            "registration": "c1", "key": "1", "args": [expired_pair()],
+        }}}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "nested.payload.request_id"}, "result": {"token": "tok-fresh", "expires_at": FRESH_EXPIRES}}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c1"}},
+        {"if": {"path": "last.kind", "equals": "command_accepted", "else": [{"exit": true}]}},
+        {"if": {"path": "last.payload.result.value", "equals": {"token": "tok-fresh", "expires_at": FRESH_EXPIRES}, "else": [{"exit": true}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"nested": {"$ref": "nested.payload"}, "answer": {"$ref": "last.payload"}}}},
+    ]))
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-nested");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -3051,23 +2982,11 @@ open(sys.argv[1], "w").write(json.dumps({"nested": payload, "answer": answer["pa
 /// line the child reads is the acceptance, not an `extension_request`.
 #[test]
 fn refresh_returns_a_fresh_pair_without_a_nested_call() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-parent = read()
-rid = parent["payload"]["request_id"]
-write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-answer = read()
-assert answer["kind"] == "command_accepted", answer
-open(sys.argv[1], "w").write(json.dumps(answer["payload"]["result"]["value"]))"#;
+    let script = &refresh_plan(json!([
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "last.payload.result.value"}}},
+    ]))
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-fresh");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -3098,31 +3017,17 @@ open(sys.argv[1], "w").write(json.dumps(answer["payload"]["result"]["value"]))"#
 /// write and sends no nested call of its own.
 #[test]
 fn concurrent_refreshes_serialize_on_the_credential_lock() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-parent = read()
-rid = parent["payload"]["request_id"]
-write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-nested = read()
-payload = nested["payload"]
-assert payload["registration"] == "c1", payload
-fresh = {"token": "tok-fresh", "expires_at": 2000000000}
-write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": fresh}})
-first = read_answer("c1")
-assert first["kind"] == "command_accepted", first
-write({"id": "c2", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-second = read_answer("c2")
-assert second["kind"] == "command_accepted", second
-open(sys.argv[1], "w").write(json.dumps({"first": first["payload"]["result"]["value"], "second": second["payload"]["result"]["value"]}))"#;
+    let script = &refresh_plan(json!([
+        {"read": {"as": "nested", "expect": {"payload": {"registration": "c1"}}}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "nested.payload.request_id"}, "result": {"token": "tok-fresh", "expires_at": FRESH_EXPIRES}}}},
+        {"read_until": {"as": "first", "path": "payload.command_id", "equals": "c1"}},
+        {"if": {"path": "first.kind", "equals": "command_accepted", "else": [{"exit": true}]}},
+        {"send": {"id": "c2", "command": "call", "args": {"call": "host.oauth.refresh", "args": [true], "request_id": {"$ref": "parent.payload.request_id"}}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c2"}},
+        {"if": {"path": "last.kind", "equals": "command_accepted", "else": [{"exit": true}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"first": {"$ref": "first.payload.result.value"}, "second": {"$ref": "last.payload.result.value"}}}},
+    ]))
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-serial");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -3156,26 +3061,14 @@ open(sys.argv[1], "w").write(json.dumps({"first": first["payload"]["result"]["va
 /// unusable shape fails the refresh and leaves the stored pair alone.
 #[test]
 fn refresh_refuses_an_unusable_function_result() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-parent = read()
-rid = parent["payload"]["request_id"]
-write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-nested = read()
-payload = nested["payload"]
-write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": {"nope": True}}})
-answer = read_answer("c1")
-assert answer["kind"] == "command_rejected", answer
-open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let script = &refresh_plan(json!([
+        {"read": {"as": "nested", "expect": {"payload": {"registration": "c1"}}}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "nested.payload.request_id"}, "result": {"nope": true}}}},
+        {"read_until": {"as": "answer", "path": "payload.command_id", "equals": "c1"}},
+        {"if": {"path": "answer.kind", "equals": "command_rejected", "else": [{"exit": true}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "answer.payload"}}}
+    ]))
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-unusable");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -3215,26 +3108,14 @@ open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
 /// refresh as by a login.
 #[test]
 fn refresh_refuses_an_expired_function_result() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-parent = read()
-rid = parent["payload"]["request_id"]
-write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-nested = read()
-payload = nested["payload"]
-write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": {"token": "tok-dead", "expires_at": 1}}})
-answer = read_answer("c1")
-assert answer["kind"] == "command_rejected", answer
-open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let script = &refresh_plan(json!([
+        {"read": {"as": "nested"}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "nested.payload.request_id"}, "result": {"token": "tok-dead", "expires_at": 1}}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c1"}},
+        {"if": {"path": "last.kind", "equals": "command_rejected", "else": [{"exit": true}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "last.payload"}}},
+    ]))
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-expired");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -3270,26 +3151,14 @@ open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
 /// raised table passes through the Lua attempt unchanged.
 #[test]
 fn refresh_passes_the_function_failure_through() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-parent = read()
-rid = parent["payload"]["request_id"]
-write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-nested = read()
-payload = nested["payload"]
-write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "error": {"code": "extension_failed", "message": "the vendor said no"}}})
-answer = read_answer("c1")
-assert answer["kind"] == "command_rejected", answer
-open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let script = &refresh_plan(json!([
+        {"read": {"as": "nested"}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "nested.payload.request_id"}, "error": {"code": "extension_failed", "message": "the vendor said no"}}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c1"}},
+        {"if": {"path": "last.kind", "equals": "command_rejected", "else": [{"exit": true}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "last.payload"}}},
+    ]))
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-raises");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -3322,26 +3191,14 @@ open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
 /// deadline ends the wait, and the stored pair stands.
 #[test]
 fn refresh_times_out_when_its_function_never_answers() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-parent = read()
-rid = parent["payload"]["request_id"]
-write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-nested = read()
-assert nested["kind"] == "extension_request", nested
-open(sys.argv[2], "w").write(json.dumps({"nested": True}))
-answer = read_answer("c1")
-assert answer["kind"] == "command_rejected", answer
-open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let script = &refresh_plan(json!([
+        {"read": {"expect": {"kind": "extension_request"}}},
+        {"write_file": {"path": {"$ref": "args.1"}, "value": {"nested": true}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c1"}},
+        {"if": {"path": "last.kind", "equals": "command_rejected", "else": [{"exit": true}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "last.payload"}}},
+    ]))
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-timeout");
     let out_path = out.path().join("answer.json");
     let nested_path = out.path().join("nested.json");
@@ -3381,26 +3238,13 @@ open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
 /// answered, so the refresh fails unreached.
 #[test]
 fn refresh_cancel_ends_its_nested_wait() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-parent = read()
-rid = parent["payload"]["request_id"]
-write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-nested = read()
-assert nested["kind"] == "extension_request", nested
-open(sys.argv[2], "w").write(json.dumps({"nested": True}))
-answer = read()
-assert answer["kind"] == "command_rejected", answer
-open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let script = &refresh_plan(json!([
+        {"read": {"expect": {"kind": "extension_request"}}},
+        {"write_file": {"path": {"$ref": "args.1"}, "value": {"nested": true}}},
+        {"read": {"expect": {"kind": "command_rejected"}}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "last.payload"}}},
+    ]))
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-cancel");
     let out_path = out.path().join("answer.json");
     let nested_path = out.path().join("nested");
@@ -3440,29 +3284,15 @@ open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
 /// kept in the slot and answered.
 #[test]
 fn refresh_in_a_login_fills_the_slot_without_a_file() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-parent = read()
-rid = parent["payload"]["request_id"]
-write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-nested = read()
-payload = nested["payload"]
-assert payload["args"] == [None], payload
-fresh = {"token": "tok-login", "expires_at": 2000000000}
-write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": fresh}})
-answer = read_answer("c1")
-assert answer["kind"] == "command_accepted", answer
-assert answer["payload"]["result"]["value"] == fresh, answer
-open(sys.argv[1], "w").write(json.dumps(answer["payload"]["result"]["value"]))"#;
+    let script = &refresh_plan(json!([
+        {"read": {"as": "nested", "expect": {"payload": {"args": [null]}}}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "nested.payload.request_id"}, "result": {"token": "tok-login", "expires_at": FRESH_EXPIRES}}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c1"}},
+        {"if": {"path": "last.kind", "equals": "command_accepted", "else": [{"exit": true}]}},
+        {"if": {"path": "last.payload.result.value", "equals": {"token": "tok-login", "expires_at": FRESH_EXPIRES}, "else": [{"exit": true}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "last.payload.result.value"}}},
+    ]))
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-login");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -3493,26 +3323,14 @@ open(sys.argv[1], "w").write(json.dumps(answer["payload"]["result"]["value"]))"#
 /// empty: nothing is stored from a failed login.
 #[test]
 fn refresh_in_a_login_refuses_an_unusable_function_result() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-parent = read()
-rid = parent["payload"]["request_id"]
-write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-nested = read()
-payload = nested["payload"]
-write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": {"nope": True}}})
-answer = read_answer("c1")
-assert answer["kind"] == "command_rejected", answer
-open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let script = &refresh_plan(json!([
+        {"read": {"as": "nested", "expect": {"payload": {"registration": "c1", "args": [null]}}}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "nested.payload.request_id"}, "result": {"nope": true}}}},
+        {"read_until": {"as": "answer", "path": "payload.command_id", "equals": "c1"}},
+        {"if": {"path": "answer.kind", "equals": "command_rejected", "else": [{"exit": true}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "answer.payload"}}}
+    ]))
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-login-bad");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -3540,38 +3358,42 @@ open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
 /// the callback, as the Lua lock arm does.
 #[test]
 fn refresh_without_a_scope_names_the_callback() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-def call(cid, call, args, rid=None):
-    line = {"id": cid, "command": "call", "args": {"call": call, "args": args}}
-    if rid is not None:
-        line["args"]["request_id"] = rid
-    write(line)
-answers = {}
-read()
-call("e1", "host.oauth.refresh", [True])
-call("ready", "ready", [])
-answers["e1"] = read()["payload"]
-read()
-go = read()
-for index, rid in enumerate(go["payload"]["rids"]):
-    call("r%d" % index, "host.oauth.refresh", [True], rid)
-for _ in go["payload"]["rids"]:
-    answer = read()
-    answers[answer["payload"]["command_id"]] = answer["payload"]
-open(sys.argv[1], "w").write(json.dumps(answers))"#;
+    let script = json!([
+        {"read": {}},
+        {"send": {"id": "e1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [true]}}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read_until": {"as": "e1", "path": "payload.command_id", "equals": "e1"}},
+        {"read": {"as": "ready_ack", "expect": {"kind": "command_accepted"}}},
+        {"read": {"as": "go", "expect": {"kind": "extension_request"}}},
+        {"send": {"id": "r0", "command": "call", "args": {"call": "host.oauth.refresh", "args": [true], "request_id": {"$ref": "go.payload.rids.0"}}}},
+        {"read_until": {"as": "r0", "path": "payload.command_id", "equals": "r0"}},
+        {"send": {"id": "r1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [true], "request_id": {"$ref": "go.payload.rids.1"}}}},
+        {"read_until": {"as": "r1", "path": "payload.command_id", "equals": "r1"}},
+        {"send": {"id": "r2", "command": "call", "args": {"call": "host.oauth.refresh", "args": [true], "request_id": {"$ref": "go.payload.rids.2"}}}},
+        {"read_until": {"as": "r2", "path": "payload.command_id", "equals": "r2"}},
+        {"send": {"id": "r3", "command": "call", "args": {"call": "host.oauth.refresh", "args": [true], "request_id": {"$ref": "go.payload.rids.3"}}}},
+        {"read_until": {"as": "r3", "path": "payload.command_id", "equals": "r3"}},
+        {"send": {"id": "r4", "command": "call", "args": {"call": "host.oauth.refresh", "args": [true], "request_id": {"$ref": "go.payload.rids.4"}}}},
+        {"read_until": {"as": "r4", "path": "payload.command_id", "equals": "r4"}},
+        {"send": {"id": "r5", "command": "call", "args": {"call": "host.oauth.refresh", "args": [true], "request_id": {"$ref": "go.payload.rids.5"}}}},
+        {"read_until": {"as": "r5", "path": "payload.command_id", "equals": "r5"}},
+        {"send": {"id": "r6", "command": "call", "args": {"call": "host.oauth.refresh", "args": [true], "request_id": {"$ref": "go.payload.rids.6"}}}},
+        {"read_until": {"as": "r6", "path": "payload.command_id", "equals": "r6"}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {
+            "e1": {"$ref": "e1.payload"},
+            "r0": {"$ref": "r0.payload"},
+            "r1": {"$ref": "r1.payload"},
+            "r2": {"$ref": "r2.payload"},
+            "r3": {"$ref": "r3.payload"},
+            "r4": {"$ref": "r4.payload"},
+            "r5": {"$ref": "r5.payload"},
+            "r6": {"$ref": "r6.payload"}
+        }}}
+    ]).to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-refusals");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
-        script,
+        &script,
         &[out_path.to_str().unwrap()],
         serde_json::Map::new(),
         None,
@@ -3637,26 +3459,13 @@ open(sys.argv[1], "w").write(json.dumps(answers))"#;
 /// answer would leak an old request context into the new generation.
 #[test]
 fn refresh_retired_mid_wait_answers_nothing() {
-    let script = r#"import sys, json, select
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-parent = read()
-rid = parent["payload"]["request_id"]
-write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-nested = read()
-assert nested["kind"] == "extension_request", nested
-open(sys.argv[2], "w").write(json.dumps({"nested": True}))
-ready, _, _ = select.select([sys.stdin], [], [], 3)
-saw = read()["kind"] if ready else "silent"
-open(sys.argv[1], "w").write(json.dumps({"saw": saw}))"#;
+    let script = &refresh_plan(json!([
+        {"read": {"as": "nested", "expect": {"kind": "extension_request"}}},
+        {"write_file": {"path": {"$ref": "args.1"}, "value": {"nested": true}}},
+        {"wait_silent": {"timeout_ms": 3000}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"saw": "silent"}}}
+    ]))
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-retire");
     let out_path = out.path().join("answer.json");
     let nested_path = out.path().join("nested.json");
@@ -3799,37 +3608,23 @@ fn production_services(
 /// the hook's transaction, and the reply commits it.
 #[test]
 fn hook_state_writes_commit_on_success() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-hook = json.loads(sys.argv[2])
-read()
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-registered = read()
-assert registered["kind"] == "command_accepted", registered
-read()
-delivery = read()
-assert delivery["kind"] == "extension_request", delivery
-rid = delivery["payload"]["request_id"]
-write({"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 1], "request_id": rid}})
-answer = read()
-assert answer["kind"] == "command_accepted", answer
-write({"id": "p1", "command": "reply", "args": {"request_id": rid, "result": "done"}})
-ack = read()
-assert ack["kind"] == "command_accepted", ack
-open(sys.argv[1], "w").write(json.dumps({"done": True}))"#;
+    let script = json!([
+        {"read": {}},
+        {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.1"}]}}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"read": {"as": "delivery", "expect": {"kind": "extension_request"}}},
+        {"send": {"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 1], "request_id": {"$ref": "delivery.payload.request_id"}}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "delivery.payload.request_id"}, "result": "done"}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"done": true}}}
+    ]).to_string();
     let out = fakes::TempDir::new("fiber-process-state-commit");
     let out_path = out.path().join("done.json");
     let owner = Harness::start_with_services(
-        script,
+        &script,
         &[out_path.to_str().unwrap(), &wire_hook_spec().to_string()],
         serde_json::Map::new(),
         None,
@@ -3867,33 +3662,21 @@ open(sys.argv[1], "w").write(json.dumps({"done": True}))"#;
 /// joined the hook's transaction, and the missed reply drops it.
 #[test]
 fn hook_state_writes_discard_on_timeout() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-hook = json.loads(sys.argv[2])
-read()
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-registered = read()
-assert registered["kind"] == "command_accepted", registered
-read()
-delivery = read()
-assert delivery["kind"] == "extension_request", delivery
-rid = delivery["payload"]["request_id"]
-write({"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 1], "request_id": rid}})
-answer = read()
-assert answer["kind"] == "command_accepted", answer"#;
+    let script = json!([
+        {"read": {}},
+        {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.1"}]}}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"read": {"as": "delivery", "expect": {"kind": "extension_request"}}},
+        {"send": {"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 1], "request_id": {"$ref": "delivery.payload.request_id"}}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"exit": true}
+    ]).to_string();
     let out = fakes::TempDir::new("fiber-process-state-discard");
     let out_path = out.path().join("done.json");
     let owner = Harness::start_with_services(
-        script,
+        &script,
         &[out_path.to_str().unwrap(), &wire_hook_spec().to_string()],
         serde_json::Map::new(),
         None,
@@ -3931,48 +3714,28 @@ assert answer["kind"] == "command_accepted", answer"#;
 /// once, with no hook call open.
 #[test]
 fn command_and_watcher_writes_land_without_a_transaction() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-command = json.loads(sys.argv[2])
-watch = json.loads(sys.argv[3])
-read()
-write({"id": "c1", "command": "call", "args": {"call": "fiber.command", "args": ["go", command]}})
-write({"id": "w1", "command": "call", "args": {"call": "fiber.watch", "args": [["turn_started"], watch]}})
-write({"id": "ready", "command": "ready"})
-for _ in range(3):
-    ack = read()
-    assert ack["kind"] == "command_accepted", ack
-first = read()
-assert first["kind"] == "extension_request", first
-rid = first["payload"]["request_id"]
-write({"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 1], "request_id": rid}})
-answer = read()
-assert answer["kind"] == "command_accepted", answer
-write({"id": "p1", "command": "reply", "args": {"request_id": rid, "result": "done"}})
-ack = read()
-assert ack["kind"] == "command_accepted", ack
-second = read()
-assert second["kind"] == "extension_request", second
-rid = second["payload"]["request_id"]
-write({"id": "s2", "command": "call", "args": {"call": "state.set", "args": ["j", 2], "request_id": rid}})
-answer = read()
-assert answer["kind"] == "command_accepted", answer
-write({"id": "p2", "command": "reply", "args": {"request_id": rid, "result": "done"}})
-ack = read()
-assert ack["kind"] == "command_accepted", ack
-open(sys.argv[1], "w").write(json.dumps({"done": True}))"#;
+    let script = json!([
+        {"read": {}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "fiber.command", "args": ["go", {"$json": "args.1"}]}}},
+        {"send": {"id": "w1", "command": "call", "args": {"call": "fiber.watch", "args": [["turn_started"], {"$json": "args.2"}]}}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"repeat": {"count": 3, "actions": [{"read": {"expect": {"kind": "command_accepted"}}}]}},
+        {"read": {"as": "first", "expect": {"kind": "extension_request"}}},
+        {"send": {"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 1], "request_id": {"$ref": "first.payload.request_id"}}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "first.payload.request_id"}, "result": "done"}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"read": {"as": "second", "expect": {"kind": "extension_request"}}},
+        {"send": {"id": "s2", "command": "call", "args": {"call": "state.set", "args": ["j", 2], "request_id": {"$ref": "second.payload.request_id"}}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"send": {"id": "p2", "command": "reply", "args": {"request_id": {"$ref": "second.payload.request_id"}, "result": "done"}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"done": true}}}
+    ]).to_string();
     let out = fakes::TempDir::new("fiber-process-state-direct");
     let out_path = out.path().join("done.json");
     let owner = Harness::start_with_services(
-        script,
+        &script,
         &[
             out_path.to_str().unwrap(),
             &wire_command_spec().to_string(),
@@ -4028,32 +3791,22 @@ open(sys.argv[1], "w").write(json.dumps({"done": True}))"#;
 /// stand, and 65,537 are refused with the bound's sentence.
 #[test]
 fn state_set_holds_the_size_bound() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-write({"id": "ready", "command": "ready"})
-read()
-read()
-ok = "x" * 65534
-write({"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", ok]}})
-answer = read()
-assert answer["kind"] == "command_accepted", answer
-big = "x" * 65535
-write({"id": "s2", "command": "call", "args": {"call": "state.set", "args": ["k", big]}})
-answer = read()
-assert answer["kind"] == "command_rejected", answer
-open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
+    let script = json!([
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read": {}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"repeat_string": {"as": "ok", "value": "x", "count": 65534}},
+        {"send": {"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", {"$ref": "ok"}]}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"repeat_string": {"as": "big", "value": "x", "count": 65535}},
+        {"send": {"id": "s2", "command": "call", "args": {"call": "state.set", "args": ["k", {"$ref": "big"}]}}},
+        {"read": {"as": "answer", "expect": {"kind": "command_rejected"}}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"$ref": "answer.payload"}}}
+    ]).to_string();
     let out = fakes::TempDir::new("fiber-process-state-bound");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start_with_services(
-        script,
+        &script,
         &[out_path.to_str().unwrap()],
         serde_json::Map::new(),
         None,
@@ -4090,27 +3843,14 @@ open(sys.argv[1], "w").write(json.dumps(answer["payload"]))"#;
 /// Nothing else the refresh touches names them.
 #[test]
 fn refresh_keeps_tokens_out_of_everything_but_the_protocol() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-def read_answer(cid):
-    while True:
-        line = read()
-        if line.get("payload", {}).get("command_id") == cid:
-            return line
-read()
-parent = read()
-rid = parent["payload"]["request_id"]
-write({"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [True], "request_id": rid}})
-nested = read()
-payload = nested["payload"]
-fresh = {"token": "tok-fresh", "expires_at": 2000000000}
-write({"id": "p1", "command": "reply", "args": {"request_id": payload["request_id"], "result": fresh}})
-answer = read_answer("c1")
-assert answer["kind"] == "command_accepted", answer
-open(sys.argv[1], "w").write(json.dumps({"nested": nested, "answer": answer}))"#;
+    let script = &refresh_plan(json!([
+        {"read": {"as": "nested"}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "nested.payload.request_id"}, "result": {"token": "tok-fresh", "expires_at": FRESH_EXPIRES}}}},
+        {"read_until": {"as": "answer", "path": "payload.command_id", "equals": "c1"}},
+        {"if": {"path": "answer.kind", "equals": "command_accepted", "else": [{"exit": true}]}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"nested": {"$ref": "nested"}, "answer": {"$ref": "answer"}}}},
+    ]))
+    .to_string();
     let out = fakes::TempDir::new("fiber-process-refresh-redacted");
     let out_path = out.path().join("answer.json");
     let owner = Harness::start(
@@ -4187,13 +3927,13 @@ fn lifecycle_restarts(owner: &Harness) -> u32 {
 /// A child `ready` between the startup check and its park wakes the wait.
 #[test]
 fn ready_between_startup_check_and_park_wakes_the_waiter() {
-    let script = r#"import sys, json
-read = lambda: json.loads(sys.stdin.readline())
-read()
-sys.stdout.write('{"id":"ready","command":"ready"}' + chr(10))
-sys.stdout.flush()
-read()"#;
-    let owner = Harness::start(script, &[], serde_json::Map::new(), None);
+    let script = json!([
+        {"read": {}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"hold": {"release_on": "never"}}
+    ])
+    .to_string();
+    let owner = Harness::start(&script, &[], serde_json::Map::new(), None);
     let shared = Arc::clone(owner.extension.shared());
     let cancel = support::cancel::Token::new();
     let (checked, checked_rx) = std::sync::mpsc::channel();
@@ -4202,7 +3942,9 @@ read()"#;
     let waiter = std::thread::spawn(move || {
         let mut pause = || {
             checked.send(()).expect("the test awaits the pause point");
-            let _ = release_rx.recv();
+            match release_rx.recv() {
+                Ok(()) | Err(_) => {}
+            }
         };
         let result = super::process::lifecycle::await_ready_with_pause(
             &shared,
@@ -4211,7 +3953,9 @@ read()"#;
             &cancel,
             &mut pause,
         );
-        let _ = answer.send(result);
+        match answer.send(result) {
+            Ok(()) | Err(_) => {}
+        }
     });
     fakes::Deadline::after(WITHIN)
         .recv_or_fail(&checked_rx, "startup to reach the pre-park pause point");
@@ -4229,11 +3973,12 @@ read()"#;
 /// after its state check but before its park.
 #[test]
 fn ready_between_restart_check_and_park_wakes_the_waiter() {
-    let script = r#"import sys, json
-read = lambda: json.loads(sys.stdin.readline())
-read()
-read()"#;
-    let owner = Harness::start(script, &[], serde_json::Map::new(), None);
+    let script = json!([
+        {"read": {}},
+        {"hold": {"release_on": "never"}}
+    ])
+    .to_string();
+    let owner = Harness::start(&script, &[], serde_json::Map::new(), None);
     let shared = Arc::clone(owner.extension.shared());
     super::process::lifecycle::set_restarting_for_test(&shared);
     let cancel = support::cancel::Token::new();
@@ -4251,12 +3996,16 @@ read()"#;
         waiters.push(std::thread::spawn(move || {
             let mut pause = || {
                 checked.send(()).expect("the test awaits the pause point");
-                let _ = release_rx.recv();
+                match release_rx.recv() {
+                    Ok(()) | Err(_) => {}
+                }
             };
             let result = super::process::lifecycle::ensure_running_with_pause(
                 &shared, None, &cancel, &mut pause,
             );
-            let _ = answer.send(result);
+            match answer.send(result) {
+                Ok(()) | Err(_) => {}
+            }
         }));
     }
     drop(checked);
@@ -4315,15 +4064,13 @@ fn pump_closed(owner: &Harness, what: &str) {
 /// beyond the observation.
 #[test]
 fn startup_ready_before_the_deadline_answers_ok() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-read()
-write({"id": "ready", "command": "ready"})
-read()"#;
-    let owner = Harness::start(script, &[], serde_json::Map::new(), None);
+    let script = json!([
+        {"read": {}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"hold": {"release_on": "never"}}
+    ])
+    .to_string();
+    let owner = Harness::start(&script, &[], serde_json::Map::new(), None);
     owner.pump();
     let cancel = support::cancel::Token::new();
     let deadline = Some(owner.clock.now() + Duration::from_secs(60));
@@ -4341,12 +4088,8 @@ read()"#;
 /// generation: startup never restarts, it leaves the extension out.
 #[test]
 fn startup_missed_ready_kills_and_retires() {
-    let script = r#"import sys, json
-def read():
-    return json.loads(sys.stdin.readline())
-read()
-read()"#;
-    let owner = Harness::start(script, &[], serde_json::Map::new(), None);
+    let script = json!([{"read": {}}, {"hold": {"release_on": "never"}}]).to_string();
+    let owner = Harness::start(&script, &[], serde_json::Map::new(), None);
     let cancel = support::cancel::Token::new();
     let deadline = Some(owner.clock.now() + Duration::from_secs(60));
     // No pump: the child's ready, if any, stays unread.
@@ -4371,12 +4114,8 @@ read()"#;
 /// deadline does.
 #[test]
 fn startup_cancel_kills_and_retires() {
-    let script = r#"import sys, json
-def read():
-    return json.loads(sys.stdin.readline())
-read()
-read()"#;
-    let owner = Harness::start(script, &[], serde_json::Map::new(), None);
+    let script = json!([{"read": {}}, {"hold": {"release_on": "never"}}]).to_string();
+    let owner = Harness::start(&script, &[], serde_json::Map::new(), None);
     let cancel = support::cancel::Token::new();
     cancel.cancel();
     let deadline = Some(owner.clock.now() + Duration::from_secs(60));
@@ -4398,17 +4137,14 @@ read()"#;
 /// keeps what arrived, and the wedged child still goes.
 #[test]
 fn startup_registrations_without_ready_do_not_meet_the_deadline() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-hook = json.loads(sys.argv[1])
-read()
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-read()"#;
+    let script = json!([
+        {"read": {}},
+        {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"hold": {"release_on": "never"}}
+    ]).to_string();
     let owner = Harness::start(
-        script,
+        &script,
         &[&wire_hook_spec().to_string()],
         serde_json::Map::new(),
         None,
@@ -4438,26 +4174,20 @@ read()"#;
 /// observed.
 #[test]
 fn death_retires_the_generation_and_stales_pending_calls() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-hook = json.loads(sys.argv[1])
-read()
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-registered = read()
-assert registered["kind"] == "command_accepted", registered
-read()
-delivery = read()
-assert delivery["kind"] == "extension_request", delivery
-open(sys.argv[2], "w").write(json.dumps({"delivered": True}))
-read()"#;
+    let script = json!([
+        {"read": {}},
+        {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"read": {"expect": {"kind": "extension_request"}}},
+        {"write_file": {"path": {"$ref": "args.1"}, "value": {"delivered": true}}},
+        {"hold": {"release_on": "never"}}
+    ]).to_string();
     let out = fakes::TempDir::new("fiber-process-death-delivery");
     let marker_path = out.path().join("delivered.json");
     let owner = Harness::start(
-        script,
+        &script,
         &[&wire_hook_spec().to_string(), marker_path.to_str().unwrap()],
         serde_json::Map::new(),
         None,
@@ -4499,26 +4229,20 @@ read()"#;
 /// death counter stays at zero.
 #[test]
 fn hook_timeout_leaves_the_child_death_counter_alone() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-hook = json.loads(sys.argv[1])
-read()
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-registered = read()
-assert registered["kind"] == "command_accepted", registered
-read()
-delivery = read()
-assert delivery["kind"] == "extension_request", delivery
-open(sys.argv[2], "w").write(json.dumps({"delivered": True}))
-read()"#;
+    let script = json!([
+        {"read": {}},
+        {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"read": {"expect": {"kind": "extension_request"}}},
+        {"write_file": {"path": {"$ref": "args.1"}, "value": {"delivered": true}}},
+        {"hold": {"release_on": "never"}}
+    ]).to_string();
     let out = fakes::TempDir::new("fiber-process-hook-timeout");
     let marker_path = out.path().join("delivered.json");
     let owner = Harness::start(
-        script,
+        &script,
         &[&wire_hook_spec().to_string(), marker_path.to_str().unwrap()],
         serde_json::Map::new(),
         None,
@@ -4587,55 +4311,39 @@ fn read_json_lines(path: &std::path::Path, count: usize, what: &str) -> Vec<Valu
 /// The shared-restart peer: like the one-round peer, but it answers
 /// every delivery until the kill, so two concurrent dispatches share
 /// one respawn.
-const RESTART_LOOP: &str = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-hook = json.loads(sys.argv[1])
-TOOL = json.loads(sys.argv[2])
-hello = read()
-open(sys.argv[3], "a").write(json.dumps(hello["payload"].get("state")) + "\n")
-write({"id": "t1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-answers = [read(), read(), read()]
-assert all(a["kind"] == "command_accepted" for a in answers), answers
-while True:
-    delivery = read()
-    assert delivery["kind"] == "extension_request", delivery
-    write({"id": "p1", "command": "reply", "args": {"request_id": delivery["payload"]["request_id"], "result": "done"}})
-    ack = read()
-    assert ack["kind"] == "command_accepted", ack"#;
+const RESTART_LOOP: &str = r#"[
+    {"read": {"as": "hello"}},
+    {"append_file": {"path": {"$ref": "args.2"}, "value": {"$ref": "hello.payload.state"}}},
+    {"send": {"id": "t1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", {"$json": "args.1"}]}}},
+    {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
+    {"send": {"id": "ready", "command": "ready"}},
+    {"repeat": {"count": 3, "actions": [{"read": {"expect": {"kind": "command_accepted"}}}]}},
+    {"loop": [
+        {"read": {"as": "delivery", "expect": {"kind": "extension_request"}}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "delivery.payload.request_id"}, "result": "done"}}},
+        {"read": {"expect": {"kind": "command_accepted"}}}
+    ]}
+]"#;
 
 /// The refold peer: like the one-round peer, but the first hello's
 /// child writes `k` under its delivery, so the restart hello carries
 /// the committed write back. The respawn reads the refold instead.
-const RESTART_FOLD: &str = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-hook = json.loads(sys.argv[1])
-TOOL = json.loads(sys.argv[2])
-hello = read()
-open(sys.argv[3], "a").write(json.dumps(hello["payload"].get("state")) + "\n")
-write({"id": "t1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", TOOL]}})
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-answers = [read(), read(), read()]
-assert all(a["kind"] == "command_accepted" for a in answers), answers
-delivery = read()
-assert delivery["kind"] == "extension_request", delivery
-rid = delivery["payload"]["request_id"]
-if hello["payload"].get("state", {}).get("k") == 1:
-    write({"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 2], "request_id": rid}})
-    answer = read()
-    assert answer["kind"] == "command_accepted", answer
-write({"id": "p1", "command": "reply", "args": {"request_id": rid, "result": "done"}})
-ack = read()
-assert ack["kind"] == "command_accepted", ack
-read()"#;
+const RESTART_FOLD: &str = r#"[
+    {"read": {"as": "hello"}},
+    {"append_file": {"path": {"$ref": "args.2"}, "value": {"$ref": "hello.payload.state"}}},
+    {"send": {"id": "t1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", {"$json": "args.1"}]}}},
+    {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
+    {"send": {"id": "ready", "command": "ready"}},
+    {"repeat": {"count": 3, "actions": [{"read": {"expect": {"kind": "command_accepted"}}}]}},
+    {"read": {"as": "delivery", "expect": {"kind": "extension_request"}}},
+    {"if": {"path": "hello.payload.state.k", "equals": 1, "then": [
+        {"send": {"id": "s1", "command": "call", "args": {"call": "state.set", "args": ["k", 2], "request_id": {"$ref": "delivery.payload.request_id"}}}},
+        {"read": {"expect": {"kind": "command_accepted"}}}
+    ]}},
+    {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "delivery.payload.request_id"}, "result": "done"}}},
+    {"read": {"expect": {"kind": "command_accepted"}}},
+    {"hold": {"release_on": "never"}}
+]"#;
 
 /// Starts a restart peer with `state` as its first hello's fold,
 /// logging each spawn's hello to `log`.
@@ -4942,28 +4650,16 @@ fn restart_hello_carries_the_current_folded_state() {
 /// The ordering peer: it answers one delivery, then sleeps past end of
 /// input, so TERM ends it. The log records the reply, proving the final
 /// delivery answered.
-const FINISH_ORDER: &str = r#"import sys, json, signal
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-hook = json.loads(sys.argv[1])
-hello = read()
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-answers = [read(), read()]
-assert all(a["kind"] == "command_accepted" for a in answers), answers
-delivery = read()
-assert delivery["kind"] == "extension_request", delivery
-# Fire-and-forget: the shutdown may stop the writer before the reply's
-# own answer flushes, and the test needs no answer to its reply.
-write({"id": "p1", "command": "reply", "args": {"request_id": delivery["payload"]["request_id"], "result": "done"}})
-open(sys.argv[2], "w").write(json.dumps({"replied": True}))
-while True:
-    line = sys.stdin.readline()
-    if not line:
-        while True:
-            signal.pause()"#;
+const FINISH_ORDER: &str = r#"[
+    {"read": {"as": "hello"}},
+    {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
+    {"send": {"id": "ready", "command": "ready"}},
+    {"repeat": {"count": 2, "actions": [{"read": {"expect": {"kind": "command_accepted"}}}]}},
+    {"read": {"as": "delivery", "expect": {"kind": "extension_request"}}},
+    {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "delivery.payload.request_id"}, "result": "done"}}},
+    {"write_file": {"path": {"$ref": "args.1"}, "value": {"replied": true}}},
+    {"linger": true}
+]"#;
 
 /// The shutdown starts the exit allowance only after the final delivery
 /// answers: advancing past the allowance with the reply outstanding
@@ -5053,22 +4749,16 @@ fn finish_acknowledges_the_final_delivery_before_the_exit_allowance() {
 
 /// The grace peer: it answers registrations, then ignores TERM with a
 /// logged handler and sleeps on, so only KILL ends it.
-const FINISH_GRACE: &str = r#"import sys, json, signal
-def on_term(signum, frame):
-    open(sys.argv[2], "w").write(json.dumps({"termed": True}))
-signal.signal(signal.SIGTERM, on_term)
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-hook = json.loads(sys.argv[1])
-hello = read()
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-answers = [read(), read()]
-assert all(a["kind"] == "command_accepted" for a in answers), answers
-while True:
-    signal.pause()"#;
+const FINISH_GRACE: &str = r#"{
+    "term_marker": true,
+    "actions": [
+        {"read": {"as": "hello"}},
+        {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"repeat": {"count": 2, "actions": [{"read": {"expect": {"kind": "command_accepted"}}}]}},
+        {"linger": true}
+    ]
+}"#;
 
 /// A child that ignores TERM is KILLed after the grace: the TERM lands
 /// first, the child lives through the grace, and KILL ends it.
@@ -5117,7 +4807,9 @@ fn finish_kills_a_term_ignoring_child_after_grace() {
     );
     // Move to one millisecond before KILL, then cross the named park.
     // Reusing `wait` bounds this complete grace wait, not each advance.
-    let before_kill = grace - Duration::from_millis(1);
+    let before_kill = grace
+        .checked_sub(Duration::from_millis(1))
+        .expect("the grace includes one millisecond");
     owner
         .clock
         .advance_when_parked(Some(kill_at), None, before_kill, &wait);
@@ -5150,25 +4842,19 @@ fn finish_kills_a_term_ignoring_child_after_grace() {
 /// the shutdown reaps the voluntary exit inside the allowance.
 #[test]
 fn finish_returns_a_voluntary_exit_without_signals() {
-    let script = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-hook = json.loads(sys.argv[1])
-hello = read()
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-answers = [read(), read()]
-assert all(a["kind"] == "command_accepted" for a in answers), answers
-delivery = read()
-assert delivery["kind"] == "extension_request", delivery
-write({"id": "p1", "command": "reply", "args": {"request_id": delivery["payload"]["request_id"], "result": "done"}})
-ack = read()
-assert ack["kind"] == "command_accepted", ack
-sys.exit(0)"#;
+    let script = json!([
+        {"read": {}},
+        {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"repeat": {"count": 2, "actions": [{"read": {"expect": {"kind": "command_accepted"}}}]}},
+        {"read": {"as": "delivery", "expect": {"kind": "extension_request"}}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "delivery.payload.request_id"}, "result": "done"}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"hold": {"release_on": "eof"}}
+    ])
+    .to_string();
     let owner = Harness::start(
-        script,
+        &script,
         &[&wire_hook_spec().to_string()],
         serde_json::Map::new(),
         None,
@@ -5196,22 +4882,13 @@ sys.exit(0)"#;
 
 /// The waiting peer: it answers registrations, then sleeps past end of
 /// input, so the shutdown's allowance owns it until cancel.
-const FINISH_WAIT: &str = r#"import sys, json, signal
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-hook = json.loads(sys.argv[1])
-hello = read()
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-answers = [read(), read()]
-assert all(a["kind"] == "command_accepted" for a in answers), answers
-while True:
-    line = sys.stdin.readline()
-    if not line:
-        while True:
-            signal.pause()"#;
+const FINISH_WAIT: &str = r#"[
+    {"read": {}},
+    {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
+    {"send": {"id": "ready", "command": "ready"}},
+    {"repeat": {"count": 2, "actions": [{"read": {"expect": {"kind": "command_accepted"}}}]}},
+    {"hold": {"release_on": "never"}}
+]"#;
 
 /// Cancelling the shutdown ends the wait and leaves the child: the
 /// owner stays finishing, and a second finish refuses at once.
@@ -5269,26 +4946,14 @@ fn finish_cancelled_during_the_exit_allowance_leaves_the_child() {
 
 /// The descendant peer: it holds a grandchild on its own stdout pipe,
 /// then sleeps past end of input, so only a group TERM ends both.
-const FINISH_GROUP: &str = r#"import subprocess, sys, json, signal
-grandchild = subprocess.Popen(
-    ["python3", "-c", "import signal; signal.pause()"],
-    stdout=sys.stdout,
-)
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-hook = json.loads(sys.argv[1])
-hello = read()
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-answers = [read(), read()]
-assert all(a["kind"] == "command_accepted" for a in answers), answers
-while True:
-    line = sys.stdin.readline()
-    if not line:
-        while True:
-            signal.pause()"#;
+const FINISH_GROUP: &str = r#"[
+    {"read": {}},
+    {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
+    {"send": {"id": "ready", "command": "ready"}},
+    {"repeat": {"count": 2, "actions": [{"read": {"expect": {"kind": "command_accepted"}}}]}},
+    {"spawn_descendant": {"mode": "sleep"}},
+    {"linger": true}
+]"#;
 
 /// The shutdown terms the whole group: a grandchild holding the pipes
 /// open dies with the child, and the group reads empty after.
@@ -5342,30 +5007,21 @@ fn finish_terms_the_whole_group_despite_a_held_pipe() {
 /// The retire peer: it answers one delivery, reads its answer's fate,
 /// then answers a second one. A retirement between the two stales only
 /// the first.
-const RETIRE_TWO: &str = r#"import sys, json
-def write(obj):
-    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
-def read():
-    return json.loads(sys.stdin.readline())
-hook = json.loads(sys.argv[1])
-hello = read()
-write({"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", hook]}})
-write({"id": "ready", "command": "ready"})
-answers = [read(), read()]
-assert all(a["kind"] == "command_accepted" for a in answers), answers
-delivery = read()
-assert delivery["kind"] == "extension_request", delivery
-open(sys.argv[2], "w").write(json.dumps({"first": True}))
-write({"id": "p1", "command": "reply", "args": {"request_id": delivery["payload"]["request_id"], "result": "done"}})
-ack = read()
-assert ack["kind"] == "command_rejected", ack
-assert ack["payload"]["code"] == "stale_request", ack
-delivery = read()
-assert delivery["kind"] == "extension_request", delivery
-write({"id": "p1", "command": "reply", "args": {"request_id": delivery["payload"]["request_id"], "result": "done"}})
-ack = read()
-assert ack["kind"] == "command_accepted", ack
-read()"#;
+const RETIRE_TWO: &str = r#"[
+    {"read": {}},
+    {"send": {"id": "h1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", {"$json": "args.0"}]}}},
+    {"send": {"id": "ready", "command": "ready"}},
+    {"repeat": {"count": 2, "actions": [{"read": {"expect": {"kind": "command_accepted"}}}]}},
+    {"read": {"as": "first", "expect": {"kind": "extension_request"}}},
+    {"write_file": {"path": {"$ref": "args.1"}, "value": {"first": true}}},
+    {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "first.payload.request_id"}, "result": "done"}}},
+    {"read": {"as": "first_ack", "expect": {"kind": "command_rejected"}}},
+    {"if": {"path": "first_ack.payload.code", "equals": "stale_request", "else": [{"exit": true}]}},
+    {"read": {"as": "second", "expect": {"kind": "extension_request"}}},
+    {"send": {"id": "p2", "command": "reply", "args": {"request_id": {"$ref": "second.payload.request_id"}, "result": "done"}}},
+    {"read": {"expect": {"kind": "command_accepted"}}},
+    {"hold": {"release_on": "never"}}
+]"#;
 
 /// Retiring the generation at the seam stales only the in-flight
 /// request: the late reply reads stale, and the next request answers.
