@@ -8,6 +8,7 @@ use contract::events::{TurnCompleted, TurnOutcome};
 use jiff::tz::TimeZone;
 
 use super::{Ending, Entry, Turn};
+use crate::ext::{CardPrompt, Input, PromptImage, TurnCard, TurnEnded, TurnEntry, TurnError};
 use crate::format;
 use crate::rows::Rows;
 use crate::surface::{self, Edges};
@@ -15,6 +16,7 @@ use crate::theme::Role;
 
 /// The whole-turn totals a page's draw supplies for the turn they
 /// close: the draw renders them without cloning or mutating the card.
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct DrawSummary<'a> {
     pub(crate) started: u64,
     pub(crate) calls: u64,
@@ -95,11 +97,127 @@ impl Turn {
         self.rows_with_summary(width, zone, edges, layout, None, out)
     }
 
+    /// The card's renderer input: its prompts, every entry inlined, and
+    /// its ending. `running` is the event-derived turn still running,
+    /// not click-set row state. A group entry's `running` is the turn
+    /// running with that group as its open one.
+    pub(crate) fn card_input(&self, flat: bool) -> TurnCard<'_> {
+        TurnCard {
+            prompts: self
+                .prompts
+                .iter()
+                .map(|prompt| CardPrompt {
+                    text: &prompt.text,
+                    images: prompt
+                        .images
+                        .iter()
+                        .map(|part| PromptImage {
+                            path: &part.path,
+                            width: part.width,
+                            height: part.height,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            entries: self
+                .entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    Entry::Reply { reply, .. } => Some(TurnEntry::Reply { text: reply.text() }),
+                    Entry::Steer(steered) => Some(steered.turn_entry()),
+                    Entry::Group(at) => {
+                        let running = self.ended.is_none() && self.open_group == Some(*at);
+                        self.groups
+                            .get(*at)
+                            .map(|group| TurnEntry::Group(group.turn_entry(running)))
+                    }
+                    Entry::Aside(aside) => Some(TurnEntry::Aside(aside.turn_input())),
+                    Entry::Band(band) => Some(TurnEntry::Band(band.turn_entry())),
+                    Entry::Answers(answered) => Some(TurnEntry::Answers(answered.turn_entry())),
+                })
+                .collect(),
+            started: self.started,
+            calls: self.calls,
+            usage: self.spend.usage(),
+            ended: self.ended.as_ref().map(|(ending, ts)| {
+                let (outcome, error) = match ending {
+                    Ending::Done(done) => (
+                        match done.outcome {
+                            TurnOutcome::Completed => "completed",
+                            TurnOutcome::Interrupted => "interrupted",
+                            TurnOutcome::Failed => "failed",
+                        },
+                        done.error.as_ref().map(|error| TurnError {
+                            code: error.code.clone(),
+                            message: &error.message,
+                        }),
+                    ),
+                    Ending::CutShort => ("cut short", None),
+                };
+                TurnEnded {
+                    outcome,
+                    ended_ts: *ts,
+                    error,
+                }
+            }),
+            running: self.ended.is_none(),
+            flat,
+        }
+    }
+
     /// The same card with the whole-turn totals `summary` names drawn in
     /// place of the card's own, for the turn the summary closes; any
     /// other turn draws its own fields. The view is borrowed, so recounts
-    /// neither clone nor mutate the open turn.
+    /// neither clone nor mutate the open turn. A bound `turn_card`
+    /// renderer draws the card whole: no nested slot runs inside a
+    /// replacement, and the built-in the decorator calls draws with
+    /// none bound, so it never re-enters the seam.
     pub(crate) fn rows_with_summary(
+        &self,
+        width: u16,
+        zone: &TimeZone,
+        edges: Edges,
+        layout: &crate::image::Layout,
+        summary: Option<DrawSummary<'_>>,
+        out: &mut Rows,
+    ) -> Pieces {
+        match out.fills_for("turn_card") {
+            crate::ext::SlotSelection::Draw { extension } => {
+                let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
+                let input = self.card_input(flat);
+                let wrapped = Input::TurnCard(input);
+                let builtin = |input: &Input<'_>, w: u16| {
+                    if !matches!(input, Input::TurnCard(_)) {
+                        return Vec::new();
+                    }
+                    let mut scratch = Rows::default();
+                    self.card_rows(w, zone, edges, layout, summary, &mut scratch);
+                    let (rows, _) = scratch.into_parts();
+                    rows.into_iter()
+                        .map(|(line, _)| crate::ext::spans::from_ratatui(&line.spans))
+                        .collect()
+                };
+                if let Some(fitted) =
+                    out.ext_lines("turn_card", &extension, &wrapped, width, &builtin)
+                {
+                    let drew = !fitted.is_empty();
+                    for line in fitted.iter() {
+                        out.push_fitted(line, None);
+                    }
+                    return Pieces {
+                        first: drew,
+                        last: drew,
+                    };
+                }
+            }
+            crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => {}
+        }
+        self.card_rows(width, zone, edges, layout, summary, out)
+    }
+
+    /// The card's built-in rows, drawn when no `turn_card` replacement
+    /// stands: the bubble and its time row, then the pieces on `turn`.
+    fn card_rows(
         &self,
         width: u16,
         zone: &TimeZone,

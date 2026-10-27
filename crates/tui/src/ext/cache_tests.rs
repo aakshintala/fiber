@@ -23,7 +23,10 @@ fn decision(call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>) -> Decisi
     }
 }
 
-use crate::ext::{Failure, Input, LedgerRow, RawSpan, Status};
+use crate::ext::{
+    CardPrompt, Failure, Input, LedgerRow, Prompt, PromptImage, RawSpan, ReplyText, Status,
+    ThinkingLine, TurnCard,
+};
 
 fn raw(text: &str) -> RawSpan {
     RawSpan {
@@ -712,4 +715,189 @@ mod context_regressions {
                 .is_some()
         );
     }
+}
+
+/// A card input with one reply entry: the scroll/search cache tests draw
+/// this twice and count one renderer call.
+fn card(running: bool) -> TurnCard<'static> {
+    TurnCard {
+        prompts: vec![CardPrompt {
+            text: "go",
+            images: vec![PromptImage {
+                path: "a.png",
+                width: 10,
+                height: 8,
+            }],
+        }],
+        entries: vec![crate::ext::TurnEntry::Reply { text: "ok" }],
+        started: 1,
+        calls: 0,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: std::collections::BTreeMap::new(),
+                output: 0,
+            },
+            cost: None,
+            subscription_cost: 0.0,
+        },
+        ended: None,
+        running,
+        flat: false,
+    }
+}
+
+fn prompt_input(text: &'static str) -> Input<'static> {
+    Input::Prompt(Prompt {
+        text,
+        images: Vec::new(),
+        flat: false,
+    })
+}
+
+fn reply_input(text: &'static str) -> Input<'static> {
+    Input::Reply(ReplyText { text, flat: false })
+}
+
+fn thought_input(text: &'static str, open: bool) -> Input<'static> {
+    Input::ThinkingLine(ThinkingLine {
+        text,
+        started: 1,
+        ended: Some(2),
+        open,
+        flat: false,
+    })
+}
+
+fn card_input(running: bool) -> Input<'static> {
+    Input::TurnCard(card(running))
+}
+
+/// Draws `row` at `width`, counting renderer calls.
+fn draw_counted<'a>(
+    cache: &Cache,
+    slot: &str,
+    row: &'a Input<'a>,
+    width: u16,
+    calls: &Cell<usize>,
+    answer: Result<Vec<Vec<RawSpan>>, Failure>,
+) -> Option<std::sync::Arc<Vec<crate::ext::spans::FittedLine>>> {
+    cache.lines(page(0), slot, "test", None, row, width, || {
+        decision(|| {
+            calls.set(calls.get().saturating_add(1));
+            answer.clone()
+        })
+    })
+}
+
+fn drawn(text: &str) -> Result<Vec<Vec<RawSpan>>, Failure> {
+    Ok(vec![vec![raw(text)]])
+}
+
+#[test]
+fn each_new_slot_caches_by_input_and_width() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let arguments = serde_json::json!({});
+    let _ = &arguments;
+    let cases: Vec<(&str, Input<'_>, Input<'_>)> = vec![
+        ("prompt", prompt_input("go"), prompt_input("stop")),
+        ("reply", reply_input("ok"), reply_input("changed")),
+        (
+            "thinking_line",
+            thought_input("plan", false),
+            thought_input("plan", true),
+        ),
+        ("turn_card", card_input(false), card_input(true)),
+    ];
+    for (slot, first, second) in &cases {
+        let before = calls.get();
+        assert!(
+            draw_counted(&cache, slot, first, 20, &calls, drawn("hi")).is_some(),
+            "{slot} draws"
+        );
+        assert!(
+            draw_counted(&cache, slot, first, 20, &calls, drawn("hi")).is_some(),
+            "{slot} hits"
+        );
+        assert_eq!(calls.get(), before + 1, "{slot} hits the cache");
+        assert!(
+            draw_counted(&cache, slot, first, 24, &calls, drawn("hi")).is_some(),
+            "{slot} draws at a new width"
+        );
+        assert_eq!(calls.get(), before + 2, "{slot} keys the width");
+        assert!(
+            draw_counted(&cache, slot, second, 20, &calls, drawn("hi")).is_some(),
+            "{slot} draws a new input"
+        );
+        assert_eq!(calls.get(), before + 3, "{slot} keys the input");
+    }
+}
+
+#[test]
+fn each_new_slot_failure_holds_without_width() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let cases: Vec<(&str, Input<'_>)> = vec![
+        ("prompt", prompt_input("go")),
+        ("reply", reply_input("ok")),
+        ("thinking_line", thought_input("plan", false)),
+        ("turn_card", card_input(false)),
+    ];
+    for (slot, row) in &cases {
+        let before = calls.get();
+        let fail = || draw_counted(&cache, slot, row, 20, &calls, Err(failed("test", "boom")));
+        assert!(fail().is_none(), "{slot} falls back");
+        assert!(fail().is_none(), "{slot} recalls nothing");
+        assert!(
+            draw_counted(&cache, slot, row, 24, &calls, Err(failed("test", "boom"))).is_none(),
+            "{slot} holds across widths"
+        );
+        assert_eq!(calls.get(), before + 1, "{slot} calls once");
+        let listed = cache.take_failures();
+        assert_eq!(listed.len(), 1, "{slot} lists its failure once");
+        assert_eq!(listed[0].0, *slot);
+    }
+}
+
+#[test]
+fn a_new_slot_wrong_shape_is_listed_once() {
+    crate::work::take();
+    let cache = Cache::default();
+    let row = prompt_input("go");
+    let wrong = || {
+        cache.lines(page(0), "prompt", "test", None, &row, 20, || {
+            decision(|| {
+                Ok(vec![vec![RawSpan {
+                    text: "hi".to_owned(),
+                    fg: Some("nope".to_owned()),
+                    ..RawSpan::default()
+                }]])
+            })
+        })
+    };
+    assert!(wrong().is_none());
+    assert!(wrong().is_none());
+    let listed = cache.take_failures();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "prompt");
+}
+
+#[test]
+fn scroll_and_search_redraws_hit() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let row = card_input(false);
+    for _ in 0..2 {
+        assert!(
+            draw_counted(&cache, "turn_card", &row, 20, &calls, drawn("hi")).is_some(),
+            "a redraw hits"
+        );
+    }
+    assert_eq!(calls.get(), 1, "scrolling and searching call Lua once");
+    assert_eq!(crate::work::take().renderer_calls, 1);
 }

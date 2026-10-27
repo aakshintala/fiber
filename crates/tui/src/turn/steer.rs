@@ -28,6 +28,23 @@ impl Steered {
         }
     }
 
+    /// Its card entry: the text with its images, and when it landed.
+    pub(crate) fn turn_entry(&self) -> crate::ext::TurnEntry<'_> {
+        crate::ext::TurnEntry::Steer {
+            text: &self.text,
+            images: self
+                .images
+                .iter()
+                .map(|part| crate::ext::PromptImage {
+                    path: &part.path,
+                    width: part.width,
+                    height: part.height,
+                })
+                .collect(),
+            ts: self.ts,
+        }
+    }
+
     /// A steering message with its image parts: each draws as its one
     /// clickable line under the text (`docs/tui.md`, "Images").
     pub(super) fn with_images(text: String, images: Vec<crate::image::Part>, ts: u64) -> Self {

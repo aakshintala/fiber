@@ -119,20 +119,54 @@ impl Reply {
 
     /// The rendered lines at `width`, each code block's header carrying
     /// its copy target, and each with what it adds to its logical line.
+    /// A bound `reply` renderer replaces the lines: the copy targets
+    /// sit on the code blocks they copy, so no replacement line carries
+    /// one.
     pub(crate) fn rows(&self, width: u16, out: &mut Rows) {
-        let rendered = self.rendered(width);
-        for (at, line) in rendered.lines.iter().cloned().enumerate() {
-            let block = rendered.targets.iter().position(|target| target.line == at);
-            let target = block.map(|block| Target::Copy {
-                reply: self.id,
-                block,
-            });
-            let text = rendered
-                .text
-                .get(at)
-                .cloned()
-                .unwrap_or_else(RowText::plain);
-            out.push_text((line, target), text);
+        let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
+        let input = crate::ext::ReplyText {
+            text: &self.text,
+            flat,
+        };
+        let wrapped = crate::ext::Input::Reply(input);
+        let builtin = |input: &crate::ext::Input<'_>, w: u16| {
+            if !matches!(input, crate::ext::Input::Reply(_)) {
+                return Vec::new();
+            }
+            self.rendered(w)
+                .lines
+                .iter()
+                .map(|line| crate::ext::spans::from_ratatui(&line.spans))
+                .collect()
+        };
+        let rendered = match out.fills_for("reply") {
+            crate::ext::SlotSelection::Draw { extension } => {
+                out.ext_lines("reply", &extension, &wrapped, width, &builtin)
+            }
+            crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => None,
+        };
+        match rendered {
+            Some(fitted) => {
+                for line in fitted.iter() {
+                    out.push_fitted(line, None);
+                }
+            }
+            None => {
+                let rendered = self.rendered(width);
+                for (at, line) in rendered.lines.iter().cloned().enumerate() {
+                    let block = rendered.targets.iter().position(|target| target.line == at);
+                    let target = block.map(|block| Target::Copy {
+                        reply: self.id,
+                        block,
+                    });
+                    let text = rendered
+                        .text
+                        .get(at)
+                        .cloned()
+                        .unwrap_or_else(RowText::plain);
+                    out.push_text((line, target), text);
+                }
+            }
         }
     }
 }

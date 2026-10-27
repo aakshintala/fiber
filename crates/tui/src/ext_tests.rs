@@ -1,7 +1,10 @@
 //! Tests for the seam types: the input key and the renderer handle.
 
-use super::{Decision, FailureKind, SessionCtx, SlotSelection};
-use super::{Failure, Handle, Input, LedgerRow, RawSpan, Renderer, RowError, Status};
+use super::{Decision, Ext, FailureKind, SessionCtx, SlotSelection};
+use super::{
+    Failure, Handle, Input, LedgerRow, Prompt, PromptImage, RawSpan, Renderer, ReplyText, RowError,
+    Status, ThinkingLine, TurnCard,
+};
 use contract::events::FileChange;
 use std::cell::{Cell, RefCell};
 
@@ -698,4 +701,765 @@ fn a_handle_on_another_thread_draws_built_in() {
         .join()
         .expect("resolving a handle never panics");
     assert!(handle.get().is_some());
+}
+
+/// What the shared slot fake answers a render with.
+#[derive(Debug, Clone)]
+pub(crate) enum SlotScript {
+    /// These lines.
+    Replace(Vec<Vec<RawSpan>>),
+    /// This failure.
+    Fail {
+        /// The failure family.
+        kind: FailureKind,
+        /// The Lua error, or what the spans got wrong.
+        message: String,
+    },
+    /// The built-in at the width less `trim`, with these lines first.
+    Decorate {
+        /// The badge lines drawn before the built-in's.
+        badge: Vec<Vec<RawSpan>>,
+        /// The badge's cells, kept from the built-in's width.
+        trim: u16,
+    },
+}
+
+impl Default for SlotScript {
+    fn default() -> Self {
+        Self::Replace(vec![vec![raw("X")]])
+    }
+}
+
+/// A plain span of `text`.
+pub(crate) fn raw(text: &str) -> RawSpan {
+    RawSpan {
+        text: text.to_owned(),
+        ..RawSpan::default()
+    }
+}
+
+/// A test renderer for named slots: what it fills, what it saw, and
+/// what it answers. It records only owned strings, never the input.
+#[derive(Debug, Default)]
+pub(crate) struct SlotRenderer {
+    /// The slots it fills.
+    pub(crate) fills: RefCell<Vec<String>>,
+    /// The session, slot and width of every render call, in order.
+    pub(crate) calls: RefCell<Vec<(String, String, u16)>>,
+    /// The width of every built-in call, in order.
+    pub(crate) builtins: RefCell<Vec<u16>>,
+    /// What it answers.
+    pub(crate) script: RefCell<SlotScript>,
+}
+
+impl SlotRenderer {
+    /// A renderer filling `slots`, answering `script`.
+    pub(crate) fn filling(slots: &[&str], script: SlotScript) -> Self {
+        Self {
+            fills: RefCell::new(slots.iter().map(|slot| slot.to_string()).collect()),
+            calls: RefCell::new(Vec::new()),
+            builtins: RefCell::new(Vec::new()),
+            script: RefCell::new(script),
+        }
+    }
+}
+
+impl Renderer for SlotRenderer {
+    fn name(&self) -> &str {
+        "slot-test"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        self.fills.borrow().iter().any(|filled| filled == slot)
+    }
+
+    fn render(
+        &self,
+        ctx: &SessionCtx,
+        slot: &str,
+        input: &Input<'_>,
+        width: u16,
+        builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        decide(self.name(), || -> Result<Vec<Vec<RawSpan>>, Failure> {
+            self.calls
+                .borrow_mut()
+                .push((ctx.session_id.0.clone(), slot.to_owned(), width));
+            match self.script.borrow().clone() {
+                SlotScript::Replace(lines) => Ok(lines),
+                SlotScript::Fail { kind, message } => Err(Failure {
+                    kind,
+                    extension: self.name().to_owned(),
+                    message,
+                }),
+                SlotScript::Decorate { badge, trim } => {
+                    let at = width.saturating_sub(trim);
+                    self.builtins.borrow_mut().push(at);
+                    let mut lines = builtin(input, at);
+                    lines.splice(0..0, badge);
+                    Ok(lines)
+                }
+            }
+        })
+    }
+}
+
+/// A seam holding `fake` on page `index` with session `session`: flat
+/// draws drop every style.
+pub(crate) fn seam(
+    fake: &std::rc::Rc<SlotRenderer>,
+    session: &str,
+    index: usize,
+    flat: bool,
+) -> super::Bound {
+    use std::rc::Rc;
+    let handle = Handle::create();
+    handle.set(Rc::clone(fake) as Rc<dyn Renderer>);
+    let ext = Ext {
+        handle,
+        cache: std::sync::Arc::new(super::cache::Cache::default()),
+        flat,
+    };
+    ext.bind(
+        super::cache::PageKey {
+            session: contract::SessionId(session.into()),
+            index,
+        },
+        SessionCtx {
+            session_id: contract::SessionId(session.into()),
+            halves: None,
+        },
+    )
+}
+
+/// A prompt input holding `text` with no images.
+pub(crate) fn prompt(text: &str) -> Prompt<'_> {
+    Prompt {
+        text,
+        images: Vec::new(),
+        flat: false,
+    }
+}
+
+/// A reply input holding `text`.
+pub(crate) fn reply(text: &str) -> ReplyText<'_> {
+    ReplyText { text, flat: false }
+}
+
+/// A thinking-line input for an ended thought.
+pub(crate) fn thought(text: &str) -> ThinkingLine<'_> {
+    ThinkingLine {
+        text,
+        started: 1,
+        ended: Some(2),
+        open: false,
+        flat: false,
+    }
+}
+
+/// The cache key of a prompt holding `text` with `images`.
+fn prompt_key(text: &str, images: &[PromptImage<'_>]) -> u64 {
+    Prompt {
+        text,
+        images: images.to_vec(),
+        flat: false,
+    }
+    .key("prompt")
+}
+
+/// A card input holding one reply entry: the key tests vary it field
+/// by field.
+fn card() -> TurnCard<'static> {
+    use super::{
+        CardPrompt, TurnAnswers, TurnAside, TurnBand, TurnBandState, TurnCall, TurnEntry,
+        TurnFailed, TurnGroup, TurnSection, TurnSizes, TurnStreaming, TurnThought,
+    };
+    TurnCard {
+        prompts: vec![CardPrompt {
+            text: "go",
+            images: vec![PromptImage {
+                path: "a.png",
+                width: 10,
+                height: 8,
+            }],
+        }],
+        entries: vec![
+            TurnEntry::Reply { text: "ok" },
+            TurnEntry::Steer {
+                text: "wait",
+                images: Vec::new(),
+                ts: 1,
+            },
+            TurnEntry::Group(TurnGroup {
+                first: 1,
+                last: 2,
+                running: true,
+                open: false,
+                cut: false,
+                sections: vec![TurnSection {
+                    step: 3,
+                    thoughts: vec![TurnThought {
+                        text: "plan",
+                        started: 4,
+                        ended: Some(5),
+                        open: false,
+                    }],
+                    calls: vec![TurnCall {
+                        name: "read",
+                        arguments: &serde_json::Value::Null,
+                        status: Status::Completed,
+                        exit: None,
+                        duration_ms: None,
+                        lines: 1,
+                        changes: &[],
+                        error: None,
+                        output: "done",
+                        headline: "",
+                        content: "done",
+                        answer: None,
+                        images: Vec::new(),
+                        open: false,
+                        asking: false,
+                    }],
+                    failed: vec![TurnFailed {
+                        code: "rate_limited",
+                        attempt: 1,
+                    }],
+                }],
+                streaming: vec![TurnStreaming {
+                    message: "m",
+                    index: 0,
+                    name: None,
+                    text: "arg",
+                }],
+            }),
+            TurnEntry::Aside(TurnAside::Warning { message: "down" }),
+            TurnEntry::Band(TurnBand {
+                trigger: "automatic",
+                ts: 6,
+                state: TurnBandState::Done,
+                sizes: Some(TurnSizes {
+                    before: 7,
+                    after: None,
+                }),
+            }),
+            TurnEntry::Answers(TurnAnswers::Given {
+                parts: vec![super::TurnAnswerPart {
+                    header: "Base",
+                    text: "main",
+                    skipped: false,
+                }],
+                note: None,
+                ts: 8,
+            }),
+        ],
+        started: 1,
+        calls: 0,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: std::collections::BTreeMap::new(),
+                output: 0,
+            },
+            cost: None,
+            subscription_cost: 0.0,
+        },
+        ended: None,
+        running: true,
+        flat: false,
+    }
+}
+
+fn card_key(card: &TurnCard<'_>) -> u64 {
+    card.key("turn_card")
+}
+
+#[test]
+fn the_prompt_slot_is_in_the_key() {
+    let image = PromptImage {
+        path: "a.png",
+        width: 10,
+        height: 8,
+    };
+    let one = prompt("go").key("prompt");
+    assert_ne!(one, prompt("go").key("reply"));
+    assert_ne!(one, prompt_key("go", &[image]));
+    assert_ne!(
+        one,
+        Prompt {
+            text: "go",
+            images: Vec::new(),
+            flat: true,
+        }
+        .key("prompt")
+    );
+}
+
+#[test]
+fn a_prompt_image_is_in_the_key() {
+    let at = PromptImage {
+        path: "a.png",
+        width: 10,
+        height: 8,
+    };
+    let renamed = PromptImage {
+        path: "b.png",
+        width: 10,
+        height: 8,
+    };
+    let wider = PromptImage {
+        path: "a.png",
+        width: 11,
+        height: 8,
+    };
+    let taller = PromptImage {
+        path: "a.png",
+        width: 10,
+        height: 9,
+    };
+    let one = prompt_key("go", &[at]);
+    assert_ne!(one, prompt_key("stop", &[at]));
+    for (index, varied) in [
+        [renamed].as_slice(),
+        [wider].as_slice(),
+        [taller].as_slice(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_ne!(one, prompt_key("go", varied), "case {index}");
+    }
+    assert_ne!(one, prompt_key("go", &[at, at]));
+}
+
+#[test]
+fn the_reply_is_in_the_key() {
+    let one = reply("ok").key("reply");
+    assert_ne!(one, reply("ok").key("prompt"));
+    assert_ne!(one, reply("changed").key("reply"));
+    assert_ne!(
+        one,
+        ReplyText {
+            text: "ok",
+            flat: true,
+        }
+        .key("reply")
+    );
+}
+
+#[test]
+fn the_thinking_line_is_in_the_key() {
+    let one = thought("plan").key("thinking_line");
+    assert_ne!(one, thought("plan").key("reply"));
+    assert_ne!(one, thought("other").key("thinking_line"));
+    for (index, varied) in [
+        ThinkingLine {
+            text: "plan",
+            started: 2,
+            ended: Some(2),
+            open: false,
+            flat: false,
+        },
+        ThinkingLine {
+            text: "plan",
+            started: 1,
+            ended: None,
+            open: false,
+            flat: false,
+        },
+        ThinkingLine {
+            text: "plan",
+            started: 1,
+            ended: Some(2),
+            open: true,
+            flat: false,
+        },
+        ThinkingLine {
+            text: "plan",
+            started: 1,
+            ended: Some(2),
+            open: false,
+            flat: true,
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_ne!(one, varied.key("thinking_line"), "case {index}");
+    }
+}
+
+#[test]
+fn the_turn_card_slot_and_prompts_are_in_the_key() {
+    let one = card_key(&card());
+    assert_ne!(one, card().key("prompt"));
+    let mut varied = card();
+    varied.prompts[0].text = "stop";
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.prompts[0].images[0].path = "b.png";
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.prompts[0].images[0].width = 11;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.prompts[0].images[0].height = 9;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.prompts[0].images.clear();
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.started = 2;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.calls = 1;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.running = false;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.flat = true;
+    assert_ne!(one, card_key(&varied));
+}
+
+#[test]
+fn each_entry_kind_changes_the_key() {
+    use super::{TurnAnswers, TurnAside, TurnBand, TurnBandState, TurnEntry, TurnGroup};
+    let one = card_key(&card());
+    let swaps = [
+        TurnEntry::Reply { text: "other" },
+        TurnEntry::Steer {
+            text: "wait",
+            images: Vec::new(),
+            ts: 2,
+        },
+        TurnEntry::Group(TurnGroup {
+            first: 9,
+            last: 9,
+            running: false,
+            open: false,
+            cut: false,
+            sections: Vec::new(),
+            streaming: Vec::new(),
+        }),
+        TurnEntry::Aside(TurnAside::Warning { message: "up" }),
+        TurnEntry::Band(TurnBand {
+            trigger: "other",
+            ts: 6,
+            state: TurnBandState::Writing,
+            sizes: None,
+        }),
+        TurnEntry::Answers(TurnAnswers::Declined),
+    ];
+    for (index, swap) in swaps.into_iter().enumerate() {
+        let mut varied = card();
+        varied.entries[index] = swap;
+        assert_ne!(one, card_key(&varied), "entry {index}");
+    }
+}
+
+fn card_group<'a, 'x>(card: &'a mut TurnCard<'x>) -> &'a mut super::TurnGroup<'x>
+where
+    'x: 'a,
+{
+    use super::TurnEntry;
+    let TurnEntry::Group(group) = &mut card.entries[2] else {
+        panic!("the third entry stays a group");
+    };
+    group
+}
+
+fn card_band<'a, 'x>(card: &'a mut TurnCard<'x>) -> &'a mut super::TurnBand<'x>
+where
+    'x: 'a,
+{
+    use super::TurnEntry;
+    let TurnEntry::Band(band) = &mut card.entries[4] else {
+        panic!("the fifth entry stays a band");
+    };
+    band
+}
+
+#[test]
+fn the_group_entry_is_in_the_key() {
+    let one = card_key(&card());
+    let mut varied = card();
+    card_group(&mut varied).first = 10;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).last = 10;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).running = false;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).open = true;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).cut = true;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].step = 4;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].thoughts[0].text = "other";
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].thoughts[0].started = 9;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].thoughts[0].ended = None;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].thoughts[0].open = true;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].calls[0].name = "shell";
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].calls[0].output = "other";
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].calls[0].headline = "x: y";
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].calls[0].content = "other";
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].calls[0].answer = Some("yes");
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].calls[0].open = true;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].calls[0].asking = true;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].calls[0].exit = Some(1);
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].calls[0].duration_ms = Some(3);
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].calls[0].lines = 2;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].failed[0].code = "busy";
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).sections[0].failed[0].attempt = 2;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).streaming[0].text = "other";
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_group(&mut varied).streaming[0].name = Some("shell");
+    assert_ne!(one, card_key(&varied));
+}
+
+#[test]
+fn the_call_status_and_error_are_in_the_key() {
+    use super::{RowError, TurnCall, TurnEntry};
+    let one = card_key(&card());
+    for (index, status) in [
+        Status::Pending,
+        Status::Running,
+        Status::Failed,
+        Status::Denied,
+        Status::Cancelled,
+        Status::Unknown,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut varied = card();
+        let TurnEntry::Group(group) = &mut varied.entries[2] else {
+            panic!("the third entry stays a group");
+        };
+        group.sections[0].calls[0].status = status;
+        assert_ne!(one, card_key(&varied), "status {index}");
+    }
+    let mut varied = card();
+    let TurnEntry::Group(group) = &mut varied.entries[2] else {
+        panic!("the third entry stays a group");
+    };
+    group.sections[0].calls[0].error = Some(RowError {
+        code: "nonzero_exit",
+        message: "x: y",
+    });
+    let erred = card_key(&varied);
+    assert_ne!(one, erred);
+    let TurnEntry::Group(group) = &mut varied.entries[2] else {
+        panic!("the third entry stays a group");
+    };
+    let TurnCall { error, .. } = &mut group.sections[0].calls[0];
+    error.as_mut().expect("an error").code = "tool_error";
+    assert_ne!(erred, card_key(&varied));
+    let TurnEntry::Group(group) = &mut varied.entries[2] else {
+        panic!("the third entry stays a group");
+    };
+    let TurnCall { error, .. } = &mut group.sections[0].calls[0];
+    error.as_mut().expect("an error").message = "x: z";
+    assert_ne!(erred, card_key(&varied));
+}
+
+#[test]
+fn the_band_state_is_in_the_key() {
+    use super::{TurnBandState, TurnSizes};
+    let one = card_key(&card());
+    let mut varied = card();
+    card_band(&mut varied).trigger = "other";
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_band(&mut varied).ts = 9;
+    assert_ne!(one, card_key(&varied));
+    for (index, state) in [
+        TurnBandState::Writing,
+        TurnBandState::Unchanged { cancelled: false },
+        TurnBandState::Unchanged { cancelled: true },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut varied = card();
+        card_band(&mut varied).state = state;
+        assert_ne!(one, card_key(&varied), "state {index}");
+    }
+    let mut varied = card();
+    card_band(&mut varied).sizes = None;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    card_band(&mut varied).sizes = Some(TurnSizes {
+        before: 7,
+        after: Some(9),
+    });
+    assert_ne!(one, card_key(&varied));
+}
+
+#[test]
+fn the_steer_aside_and_answers_are_in_the_key() {
+    use super::{TurnAnswers, TurnAside, TurnEntry, TurnOrphan};
+    let one = card_key(&card());
+    let mut varied = card();
+    let TurnEntry::Steer { text, .. } = &mut varied.entries[1] else {
+        panic!("the second entry stays a steer");
+    };
+    *text = "other";
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    let TurnEntry::Steer { ts, .. } = &mut varied.entries[1] else {
+        panic!("the second entry stays a steer");
+    };
+    *ts = 9;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.entries[3] = TurnEntry::Aside(TurnAside::Line {
+        text: "joined".into(),
+    });
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.entries[3] = TurnEntry::Aside(TurnAside::Orphans {
+        jobs: vec![TurnOrphan {
+            name: "job",
+            message: "left",
+        }],
+        open: false,
+    });
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.entries[3] = TurnEntry::Aside(TurnAside::Orphans {
+        jobs: vec![TurnOrphan {
+            name: "job",
+            message: "left",
+        }],
+        open: true,
+    });
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.entries[5] = TurnEntry::Answers(TurnAnswers::Declined);
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    let TurnEntry::Answers(TurnAnswers::Given { parts, note, ts }) = &mut varied.entries[5] else {
+        panic!("the sixth entry stays given");
+    };
+    parts[0].text = "other";
+    *note = Some("note");
+    *ts = 9;
+    assert_ne!(one, card_key(&varied));
+}
+
+#[test]
+fn the_ending_and_usage_are_in_the_key() {
+    use super::{TurnEnded, TurnError};
+    let one = card_key(&card());
+    let mut varied = card();
+    varied.ended = Some(TurnEnded {
+        outcome: "completed",
+        ended_ts: 2,
+        error: None,
+    });
+    let ended = card_key(&varied);
+    assert_ne!(one, ended);
+    for (index, outcome) in ["interrupted", "failed", "cut short"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut varied = card();
+        varied.ended = Some(TurnEnded {
+            outcome,
+            ended_ts: 2,
+            error: None,
+        });
+        assert_ne!(ended, card_key(&varied), "outcome {index}");
+    }
+    let mut varied = card();
+    varied.ended = Some(TurnEnded {
+        outcome: "failed",
+        ended_ts: 3,
+        error: Some(TurnError {
+            code: contract::ErrorCode::IoFailed,
+            message: "boom",
+        }),
+    });
+    let failed = card_key(&varied);
+    assert_ne!(ended, failed);
+    let mut varied = card();
+    varied.ended = Some(TurnEnded {
+        outcome: "failed",
+        ended_ts: 3,
+        error: Some(TurnError {
+            code: contract::ErrorCode::ConnectionFailed,
+            message: "boom",
+        }),
+    });
+    assert_ne!(failed, card_key(&varied));
+    let mut varied = card();
+    varied.ended = Some(TurnEnded {
+        outcome: "failed",
+        ended_ts: 3,
+        error: Some(TurnError {
+            code: contract::ErrorCode::IoFailed,
+            message: "other",
+        }),
+    });
+    assert_ne!(failed, card_key(&varied));
+    let mut varied = card();
+    varied.usage.tokens.input = 1;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.usage.tokens.cache_read = 1;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.usage.tokens.output = 1;
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.usage.tokens.cache_write.insert("default".into(), 1);
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.usage.cost = Some(1.0);
+    assert_ne!(one, card_key(&varied));
+    let mut varied = card();
+    varied.usage.subscription_cost = 1.0;
+    assert_ne!(one, card_key(&varied));
 }

@@ -74,14 +74,14 @@ impl Cache {
         width: u16,
         call: impl FnOnce() -> Decision,
     ) -> Option<Arc<Vec<FittedLine>>> {
-        let Input::LedgerRow(row) = input;
-        let key = (
-            page,
-            slot.to_owned(),
-            row.key(slot),
-            extension.to_owned(),
-            half,
-        );
+        let (input_key, flat) = match input {
+            Input::LedgerRow(row) => (row.key(slot), row.flat),
+            Input::TurnCard(card) => (card.key(slot), card.flat),
+            Input::Prompt(prompt) => (prompt.key(slot), prompt.flat),
+            Input::Reply(reply) => (reply.key(slot), reply.flat),
+            Input::ThinkingLine(line) => (line.key(slot), line.flat),
+        };
+        let key = (page, slot.to_owned(), input_key, extension.to_owned(), half);
         if support::lock(&self.failed).contains(&key) {
             return None;
         }
@@ -98,7 +98,7 @@ impl Cache {
                 if actual != extension {
                     return None;
                 }
-                match spans::fit(&lines, width, row.flat) {
+                match spans::fit(&lines, width, flat) {
                     Ok(lines) => {
                         let lines = Arc::new(lines);
                         support::lock(&self.entries).insert(entry, Arc::clone(&lines));

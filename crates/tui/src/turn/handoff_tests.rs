@@ -868,3 +868,39 @@ fn set_open_reports_whether_the_note_matched() {
     assert!(!band.set_open(&Target::Orphans(3), true));
     assert!(!band.open);
 }
+
+#[test]
+fn the_band_entry_carries_trigger_ts_and_state() {
+    use crate::ext::TurnBandState;
+    let mut writing = super::Band::new(1, "automatic".to_owned(), 6);
+    let mut band = writing.turn_entry();
+    assert_eq!(band.trigger, "automatic");
+    assert_eq!(band.ts, 6);
+    assert!(matches!(band.state, TurnBandState::Writing));
+    assert_eq!(band.sizes, None);
+    for (state, cancelled) in [
+        (
+            super::State::Done {
+                before: 7,
+                after: Some(9),
+            },
+            None,
+        ),
+        (super::State::Unchanged { cancelled: false }, Some(false)),
+        (super::State::Unchanged { cancelled: true }, Some(true)),
+    ] {
+        writing.state = state;
+        band = writing.turn_entry();
+        match (band.state, cancelled) {
+            (TurnBandState::Done, None) => {
+                let sizes = band.sizes.expect("a done band carries sizes");
+                assert_eq!((sizes.before, sizes.after), (7, Some(9)));
+            }
+            (TurnBandState::Unchanged { cancelled: got }, Some(want)) => {
+                assert_eq!(got, want);
+                assert_eq!(band.sizes, None);
+            }
+            (state, cancelled) => panic!("wrong state {state:?} {cancelled:?}"),
+        }
+    }
+}

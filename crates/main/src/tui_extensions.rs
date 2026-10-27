@@ -336,7 +336,20 @@ impl Renderer for Composite {
 }
 
 fn input_value(input: &Input<'_>) -> Value {
-    let Input::LedgerRow(row) = input;
+    match input {
+        Input::LedgerRow(row) => ledger_value(row),
+        Input::TurnCard(card) => turn_card_value(card),
+        Input::Prompt(prompt) => {
+            json!({"text": prompt.text, "images": images_value(&prompt.images), "flat": prompt.flat})
+        }
+        Input::Reply(reply) => json!({"text": reply.text, "flat": reply.flat}),
+        Input::ThinkingLine(line) => {
+            json!({"text": line.text, "started": line.started, "ended": line.ended, "open": line.open, "flat": line.flat})
+        }
+    }
+}
+
+fn ledger_value(row: &tui::ext::LedgerRow<'_>) -> Value {
     let status = match row.status {
         Status::Pending => "pending",
         Status::Running => "running",
@@ -347,6 +360,136 @@ fn input_value(input: &Input<'_>) -> Value {
         Status::Unknown => "unknown",
     };
     json!({"name": row.name, "arguments": row.arguments, "status": status, "exit": row.exit, "duration_ms": row.duration_ms, "lines": row.lines, "changes": row.changes, "error": row.error.map(|error| json!({"code": error.code, "message": error.message})), "output": row.output, "answer": row.answer, "flat": row.flat})
+}
+
+fn images_value(images: &[tui::ext::PromptImage<'_>]) -> Value {
+    images
+        .iter()
+        .map(|image| json!({"path": image.path, "width": image.width, "height": image.height}))
+        .collect()
+}
+
+fn turn_card_value(card: &tui::ext::TurnCard<'_>) -> Value {
+    json!({
+        "prompts": card.prompts.iter().map(|prompt| json!({"text": prompt.text, "images": images_value(&prompt.images)})).collect::<Vec<_>>(),
+        "entries": card.entries.iter().map(entry_value).collect::<Vec<_>>(),
+        "started": card.started,
+        "calls": card.calls,
+        "usage": &card.usage,
+        "ended": card.ended.as_ref().map(|ended| json!({
+            "outcome": ended.outcome,
+            "ended_ts": ended.ended_ts,
+            "error": ended.error.as_ref().map(|error| json!({
+                "code": serde_json::to_value(&error.code).unwrap_or(Value::Null),
+                "message": error.message,
+            })).unwrap_or(Value::Null),
+        })).unwrap_or(Value::Null),
+        "running": card.running,
+        "flat": card.flat,
+    })
+}
+
+fn entry_value(entry: &tui::ext::TurnEntry<'_>) -> Value {
+    match entry {
+        tui::ext::TurnEntry::Reply { text } => json!({"kind": "reply", "text": text}),
+        tui::ext::TurnEntry::Steer { text, images, ts } => {
+            json!({"kind": "steer", "text": text, "images": images_value(images), "ts": ts})
+        }
+        tui::ext::TurnEntry::Group(group) => json!({
+            "kind": "group",
+            "first": group.first,
+            "last": group.last,
+            "running": group.running,
+            "open": group.open,
+            "cut": group.cut,
+            "sections": group.sections.iter().map(|section| json!({
+                "step": section.step,
+                "thoughts": section.thoughts.iter().map(|thought| json!({"text": thought.text, "started": thought.started, "ended": thought.ended, "open": thought.open})).collect::<Vec<_>>(),
+                "calls": section.calls.iter().map(call_value).collect::<Vec<_>>(),
+                "failed": section.failed.iter().map(|failed| json!({"code": failed.code, "attempt": failed.attempt})).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "streaming": group.streaming.iter().map(|streaming| json!({"message": streaming.message, "index": streaming.index, "name": streaming.name, "text": streaming.text})).collect::<Vec<_>>(),
+        }),
+        tui::ext::TurnEntry::Aside(aside) => aside_value(aside),
+        tui::ext::TurnEntry::Band(band) => {
+            let (kind, cancelled) = match band.state {
+                tui::ext::TurnBandState::Writing => ("writing", Value::Null),
+                tui::ext::TurnBandState::Done => ("done", Value::Null),
+                tui::ext::TurnBandState::Unchanged { cancelled } => ("unchanged", json!(cancelled)),
+            };
+            json!({
+                "kind": "band",
+                "trigger": band.trigger,
+                "ts": band.ts,
+                "state": {"kind": kind, "cancelled": cancelled},
+                "sizes": band.sizes.map(|sizes| json!({"before": sizes.before, "after": sizes.after})).unwrap_or(Value::Null),
+            })
+        }
+        tui::ext::TurnEntry::Answers(answers) => match answers {
+            tui::ext::TurnAnswers::Given { parts, note, ts } => json!({
+                "kind": "answers",
+                "outcome": "given",
+                "parts": parts.iter().map(|part| json!({"header": part.header, "text": part.text, "skipped": part.skipped})).collect::<Vec<_>>(),
+                "note": note,
+                "ts": ts,
+            }),
+            tui::ext::TurnAnswers::Declined => json!({
+                "kind": "answers",
+                "outcome": "declined",
+                "parts": Vec::<Value>::new(),
+                "note": Value::Null,
+                "ts": Value::Null,
+            }),
+        },
+    }
+}
+
+fn call_value(call: &tui::ext::TurnCall<'_>) -> Value {
+    let status = match call.status {
+        Status::Pending => "pending",
+        Status::Running => "running",
+        Status::Completed => "completed",
+        Status::Failed => "failed",
+        Status::Denied => "denied",
+        Status::Cancelled => "cancelled",
+        Status::Unknown => "unknown",
+    };
+    json!({
+        "name": call.name,
+        "arguments": call.arguments,
+        "status": status,
+        "exit": call.exit,
+        "duration_ms": call.duration_ms,
+        "lines": call.lines,
+        "changes": call.changes,
+        "error": call.error.map(|error| json!({"code": error.code, "message": error.message})).unwrap_or(Value::Null),
+        "output": call.output,
+        "headline": call.headline,
+        "content": call.content,
+        "answer": call.answer,
+        "images": images_value(&call.images),
+        "open": call.open,
+        "asking": call.asking,
+    })
+}
+
+fn aside_value(aside: &tui::ext::TurnAside<'_>) -> Value {
+    match aside {
+        tui::ext::TurnAside::Line { text } => {
+            json!({"kind": "aside", "aside": {"kind": "line", "text": text}})
+        }
+        tui::ext::TurnAside::Warning { message } => {
+            json!({"kind": "aside", "aside": {"kind": "warning", "message": message}})
+        }
+        tui::ext::TurnAside::Orphans { jobs, open } => json!({
+            "kind": "aside",
+            "aside": {
+                "kind": "orphans",
+                "jobs": jobs.iter().map(|job| json!({"name": job.name, "message": job.message})).collect::<Vec<_>>(),
+                "open": open,
+            },
+        }),
+    }
 }
 
 fn to_vm(span: RawSpan) -> Span {

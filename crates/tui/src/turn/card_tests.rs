@@ -1470,3 +1470,307 @@ fn an_open_card_keeps_no_end_seq() {
     turn.note_seq(Some(Seq(9)));
     assert_eq!(turn.end_seq, Some(Seq(9)), "the closing line ends it");
 }
+
+/// A card drawn through a seam drawing `fake`, with no summary.
+fn draw_seamed(
+    turn: &Turn,
+    width: u16,
+    fake: &std::rc::Rc<crate::ext::tests::SlotRenderer>,
+    flat: bool,
+) -> (Vec<Row>, Vec<RowText>) {
+    let mut out = Rows::default().with_seam(crate::ext::tests::seam(fake, "s", 0, flat));
+    turn.rows_with_summary(
+        width,
+        &TimeZone::UTC,
+        Edges::BOTH,
+        &crate::image::Layout::default(),
+        None,
+        &mut out,
+    );
+    out.into_parts()
+}
+
+/// A rich turn: a prompt, a reply, steering, a thought with a call, a
+/// warning, answered and declined forms, a done band and an orphaned
+/// job, still running.
+fn rich() -> Cards {
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    text(&mut cards, "a_1", "Hello.");
+    steered(&mut cards, "use x");
+    feed(&mut cards, "reasoning_started", Some("a_t"), json!({}));
+    feed(
+        &mut cards,
+        "reasoning_completed",
+        Some("a_t"),
+        json!({"text": "Plan."}),
+    );
+    step(&mut cards);
+    requested(&mut cards, "a_2", "read", json!({"path": "src/a.rs"}));
+    completed(&mut cards, "a_2", json!({}));
+    feed(
+        &mut cards,
+        "mcp_server_failed",
+        None,
+        json!({"server": "one", "reason": "died", "will_restart": true,
+            "error": {"code": "mcp_server_unavailable", "message": "one stopped."}}),
+    );
+    requested(
+        &mut cards,
+        "a_q",
+        "ask_user",
+        json!({"questions": [{"header": "Base"}]}),
+    );
+    feed(
+        &mut cards,
+        "interaction_requested",
+        None,
+        json!({"request_id": "r_1", "kind": "form", "action_ids": ["a_q"],
+            "fields": [{"header": "Base", "question": "Which?"}]}),
+    );
+    feed(
+        &mut cards,
+        "interaction_resolved",
+        None,
+        json!({"request_id": "r_1", "by": "person",
+            "answers": [{"labels": ["main"]}], "note": "go"}),
+    );
+    completed(&mut cards, "a_q", json!({}));
+    requested(
+        &mut cards,
+        "a_d",
+        "ask_user",
+        json!({"questions": [{"header": "Other"}]}),
+    );
+    feed(
+        &mut cards,
+        "interaction_requested",
+        None,
+        json!({"request_id": "r_2", "kind": "form", "action_ids": ["a_d"],
+            "fields": [{"header": "Other", "question": "What?"}]}),
+    );
+    feed(
+        &mut cards,
+        "interaction_resolved",
+        None,
+        json!({"request_id": "r_2", "by": "person", "declined": true}),
+    );
+    completed(&mut cards, "a_d", json!({}));
+    band(&mut cards);
+    handed_off(&mut cards);
+    feed(
+        &mut cards,
+        "job_started",
+        None,
+        json!({"job_id": "j1", "description": "Build", "output_path": "/tmp/o"}),
+    );
+    feed(
+        &mut cards,
+        "job_completed",
+        None,
+        json!({"job_id": "j1", "status": "failed",
+            "error": {"code": "orphaned", "message": "left"}}),
+    );
+    cards
+}
+
+#[test]
+fn a_turn_card_replacement_draws_whole_and_skips_nested_slots() {
+    use crate::ext::tests::SlotScript;
+    let cards = rich();
+    let fake = std::rc::Rc::new(crate::ext::tests::SlotRenderer::filling(
+        &["turn_card", "prompt", "reply", "thinking_line"],
+        SlotScript::Replace(vec![vec![crate::ext::tests::raw("custom")]]),
+    ));
+    let (rows, _) = draw_seamed(&cards.turns[0], 60, &fake, false);
+    let shown = shown_rows(&rows);
+    assert_eq!(fake.calls.borrow().len(), 1, "{:?}", fake.calls.borrow());
+    assert_eq!(fake.calls.borrow()[0].1, "turn_card");
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    for built in ["Hello.", "use x", "Read", "⚠", "you answered", "⇄"] {
+        assert!(
+            !shown.iter().any(|row| row.contains(built)),
+            "{shown:?} keeps {built}"
+        );
+    }
+}
+
+#[test]
+fn a_turn_card_decorator_draws_the_built_in_card_under_its_badge() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let cards = rich();
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["turn_card"],
+        SlotScript::Decorate {
+            badge: vec![vec![raw("BADGE")]],
+            trim: 5,
+        },
+    ));
+    let (rows, _) = draw_seamed(&cards.turns[0], 60, &fake, false);
+    assert_eq!(fake.builtins.borrow().as_slice(), &[55]);
+    let shown = shown_rows(&rows);
+    assert!(
+        shown.iter().any(|row| row.starts_with("BADGE")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|row| row.contains("Hello.")), "{shown:?}");
+}
+
+#[test]
+fn a_turn_card_error_falls_back_with_one_failure() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let cards = rich();
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["turn_card"],
+        SlotScript::Fail {
+            kind: FailureKind::HookFailed,
+            message: "boom".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    for _ in 0..2 {
+        let mut out = Rows::default().with_seam(bound.clone());
+        cards.turns[0].rows_with_summary(
+            60,
+            &TimeZone::UTC,
+            Edges::BOTH,
+            &crate::image::Layout::default(),
+            None,
+            &mut out,
+        );
+        let shown = shown_rows(&out.into_parts().0);
+        assert!(shown.iter().any(|row| row.contains("Hello.")), "{shown:?}");
+    }
+    assert_eq!(
+        fake.calls.borrow().len(),
+        1,
+        "the failure calls nothing again"
+    );
+    let listed = bound.cache.take_failures();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "turn_card");
+    assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
+}
+
+#[test]
+fn a_turn_card_timeout_lists_one_extension_failed() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let cards = rich();
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["turn_card"],
+        SlotScript::Fail {
+            kind: FailureKind::ExtensionFailed,
+            message: "slow".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    let mut out = Rows::default().with_seam(bound.clone());
+    cards.turns[0].rows_with_summary(
+        60,
+        &TimeZone::UTC,
+        Edges::BOTH,
+        &crate::image::Layout::default(),
+        None,
+        &mut out,
+    );
+    let listed = bound.cache.take_failures();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].1.kind, FailureKind::ExtensionFailed);
+    let shown = shown_rows(&out.into_parts().0);
+    assert!(shown.iter().any(|row| row.contains("Hello.")), "{shown:?}");
+}
+
+#[test]
+fn the_card_running_follows_the_open_turn() {
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    assert!(cards.turns[0].card_input(false).running);
+    done(&mut cards);
+    assert!(!cards.turns[0].card_input(false).running);
+}
+
+#[test]
+fn the_card_input_holds_every_entry_variant() {
+    use crate::ext::{TurnAnswers, TurnAside, TurnBandState, TurnEntry};
+    let cards = rich();
+    let card = cards.turns[0].card_input(false);
+    assert_eq!(card.prompts.len(), 1);
+    assert_eq!(card.prompts[0].text, "go");
+    assert!(card.prompts[0].images.is_empty());
+    assert_eq!(card.started, 0);
+    assert!(card.running);
+    assert!(card.ended.is_none());
+    assert!(!card.flat);
+    let kinds: Vec<&str> = card
+        .entries
+        .iter()
+        .map(|entry| match entry {
+            TurnEntry::Reply { text } => {
+                assert_eq!(*text, "Hello.");
+                "reply"
+            }
+            TurnEntry::Steer { text, images, ts } => {
+                assert_eq!(*text, "use x");
+                assert!(images.is_empty());
+                assert_eq!(*ts, 0);
+                "steer"
+            }
+            TurnEntry::Group(group) => {
+                // The thought folds at step zero, the call after the
+                // step line, so they land in different sections.
+                assert_eq!(group.sections.len(), 2);
+                let thoughts: Vec<&&str> = group
+                    .sections
+                    .iter()
+                    .flat_map(|section| section.thoughts.iter().map(|thought| &thought.text))
+                    .collect();
+                assert_eq!(thoughts, [&"Plan."]);
+                let calls: Vec<&&str> = group
+                    .sections
+                    .iter()
+                    .flat_map(|section| section.calls.iter().map(|call| &call.name))
+                    .collect();
+                assert_eq!(calls, [&"read", &"ask_user", &"ask_user"]);
+                assert!(!group.running || group.open || !group.cut);
+                "group"
+            }
+            TurnEntry::Aside(TurnAside::Warning { message }) => {
+                assert!(message.contains("one stopped"), "{message}");
+                "warning"
+            }
+            TurnEntry::Aside(TurnAside::Orphans { jobs, open }) => {
+                assert_eq!(jobs.len(), 1);
+                assert_eq!(jobs[0].name, "Build");
+                assert_eq!(jobs[0].message, "left");
+                assert!(!open);
+                "orphans"
+            }
+            TurnEntry::Aside(TurnAside::Line { .. }) => "line",
+            TurnEntry::Band(band) => {
+                assert_eq!(band.trigger, "automatic");
+                assert!(matches!(band.state, TurnBandState::Done));
+                assert_eq!(band.sizes.map(|sizes| sizes.before), Some(1_000));
+                assert_eq!(band.sizes.and_then(|sizes| sizes.after), None);
+                "band"
+            }
+            TurnEntry::Answers(TurnAnswers::Given { parts, note, .. }) => {
+                assert_eq!(parts.len(), 1);
+                // The header rides padded to 13 cells, as the row draws it.
+                assert_eq!(parts[0].header, "Base         ");
+                assert_eq!(*note, Some("go"));
+                "given"
+            }
+            TurnEntry::Answers(TurnAnswers::Declined) => "declined",
+        })
+        .collect();
+    for expected in [
+        "reply", "steer", "group", "warning", "given", "declined", "band", "orphans",
+    ] {
+        assert!(kinds.contains(&expected), "{kinds:?} misses {expected}");
+    }
+}

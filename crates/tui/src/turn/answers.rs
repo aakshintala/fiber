@@ -73,6 +73,26 @@ pub(crate) enum Answered {
 }
 
 impl Answered {
+    /// Its card entry: the questions with the resolution's time, or the
+    /// decline.
+    pub(crate) fn turn_entry(&self) -> crate::ext::TurnAnswers<'_> {
+        match self {
+            Self::Given { parts, note, ts } => crate::ext::TurnAnswers::Given {
+                parts: parts
+                    .iter()
+                    .map(|part| crate::ext::TurnAnswerPart {
+                        header: &part.header,
+                        text: &part.text,
+                        skipped: part.skipped,
+                    })
+                    .collect(),
+                note: note.as_deref(),
+                ts: *ts,
+            },
+            Self::Declined => crate::ext::TurnAnswers::Declined,
+        }
+    }
+
     /// Fields and answers pair in order; a field with no answer, or an
     /// answer with no field, draws nothing.
     fn new(headers: &[String], answers: &[FormAnswer], note: Option<&str>, ts: u64) -> Self {

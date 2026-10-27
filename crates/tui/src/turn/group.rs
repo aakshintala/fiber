@@ -10,7 +10,10 @@ use serde_json::Value;
 
 use super::target_id;
 use crate::app::Target;
-use crate::ext::{Input, LedgerRow, RowError, Status};
+use crate::ext::{
+    Input, LedgerRow, PromptImage, RowError, Status, TurnCall, TurnFailed, TurnGroup, TurnSection,
+    TurnStreaming, TurnThought,
+};
 use crate::format::{Kind, Kinds, count, dim, heading, kind, label, opened, summary};
 use crate::rows::{RowText, Rows};
 use crate::theme::{Role, style};
@@ -538,7 +541,9 @@ impl Group {
                 // what follows it with the width less the gutter drawn.
                 let after_gutter = width.saturating_sub(gutter_shift);
                 let builtin = |input: &Input<'_>, w: u16| {
-                    let Input::LedgerRow(built) = input;
+                    let Input::LedgerRow(built) = input else {
+                        return Vec::new();
+                    };
                     vec![crate::ext::spans::from_ratatui(&self.builtin_row(built, w))]
                 };
                 let wrapped = Input::LedgerRow(input);
@@ -571,11 +576,10 @@ impl Group {
                         }
                     }
                     None => {
-                        let Input::LedgerRow(built) = &wrapped;
                         let row = fit(
                             {
                                 let mut row = vec![dim_span(gutter)];
-                                row.extend(self.builtin_row(built, after_gutter));
+                                row.extend(self.builtin_row(&input, after_gutter));
                                 row
                             },
                             max,
@@ -589,6 +593,94 @@ impl Group {
                 }
                 out.end_scope();
             }
+        }
+    }
+
+    /// Its card entry: the summary line's fields with the ledger's
+    /// sections. `running` is the turn running with this as its open
+    /// group. Statuses, errors and answers come from [`Self::ledger_input`],
+    /// so the card and the ledger never disagree.
+    pub(crate) fn turn_entry(&self, running: bool) -> TurnGroup<'_> {
+        TurnGroup {
+            first: self.first,
+            last: self.last,
+            running,
+            open: self.open,
+            cut: self.cut,
+            sections: self
+                .sections
+                .iter()
+                .map(|section| TurnSection {
+                    step: section.step,
+                    thoughts: section
+                        .thoughts
+                        .iter()
+                        .map(|thought| TurnThought {
+                            text: &thought.text,
+                            started: thought.started,
+                            ended: thought.ended,
+                            open: thought.open,
+                        })
+                        .collect(),
+                    calls: section
+                        .calls
+                        .iter()
+                        .map(|call| {
+                            // The first non-empty line, else "done": the
+                            // borrowed twin of [`first_result_line`].
+                            let first = call
+                                .content()
+                                .lines()
+                                .find(|line| !line.trim().is_empty())
+                                .unwrap_or("done");
+                            let row = self.ledger_input(call, first, false);
+                            TurnCall {
+                                name: row.name,
+                                arguments: row.arguments,
+                                status: row.status,
+                                exit: row.exit,
+                                duration_ms: row.duration_ms,
+                                lines: row.lines,
+                                changes: row.changes,
+                                error: row.error,
+                                output: first,
+                                headline: call.headline(),
+                                content: call.content(),
+                                answer: row.answer,
+                                images: call
+                                    .images
+                                    .iter()
+                                    .map(|part| PromptImage {
+                                        path: &part.path,
+                                        width: part.width,
+                                        height: part.height,
+                                    })
+                                    .collect(),
+                                open: call.open,
+                                asking: call.asking,
+                            }
+                        })
+                        .collect(),
+                    failed: section
+                        .failed
+                        .iter()
+                        .map(|(code, attempt)| TurnFailed {
+                            code,
+                            attempt: *attempt,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            streaming: self
+                .streaming
+                .iter()
+                .map(|streaming| TurnStreaming {
+                    message: &streaming.message,
+                    index: streaming.index,
+                    name: streaming.name.as_deref(),
+                    text: &streaming.text,
+                })
+                .collect(),
         }
     }
 
@@ -843,14 +935,9 @@ pub(super) fn fit(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
     out
 }
 
-/// A thought's row after `gutter`, dim and italic, cut to `width` with
-/// "…", and its text when open: "○ Thinking: <latest heading>" while
-/// the thought streams, "+ Thought: <first heading> · <span>" once
-/// ended. With no gutter the row is a thinking-only group's line, without
-/// the "○ ". An opened thought's text sits eight columns in inside the
-/// ledger and at the line's own indent outside it (`docs/tui.md`,
-/// "Thinking", "Tool groups and the ledger").
-fn thought_rows(thought: &Thought, gutter: &str, width: u16, out: &mut Rows) {
+/// A thought's row spans after `gutter`, cut to `width` with "…": the
+/// seam's built-in and the row below share them.
+fn thought_row(thought: &Thought, gutter: &str, width: u16) -> Vec<Span<'static>> {
     let max = usize::from(width);
     let row = match thought.ended {
         None => {
@@ -888,7 +975,59 @@ fn thought_rows(thought: &Thought, gutter: &str, width: u16, out: &mut Rows) {
             spans
         }
     };
-    out.push((Line::from(fit(row, max)), Some(Target::Thought(thought.id))));
+    fit(row, max)
+}
+
+/// A thought's row after `gutter`, dim and italic, cut to `width` with
+/// "…", and its text when open: "○ Thinking: <latest heading>" while
+/// the thought streams, "+ Thought: <first heading> · <span>" once
+/// ended. With no gutter the row is a thinking-only group's line, without
+/// the "○ ". An opened thought's text sits eight columns in inside the
+/// ledger and at the line's own indent outside it (`docs/tui.md`,
+/// "Thinking", "Tool groups and the ledger"). A bound `thinking_line`
+/// renderer replaces the row; an empty result draws no row and opens
+/// no body.
+fn thought_rows(thought: &Thought, gutter: &str, width: u16, out: &mut Rows) {
+    let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
+    let input = crate::ext::ThinkingLine {
+        text: &thought.text,
+        started: thought.started,
+        ended: thought.ended,
+        open: thought.open,
+        flat,
+    };
+    let wrapped = Input::ThinkingLine(input);
+    let builtin = |input: &Input<'_>, w: u16| {
+        let Input::ThinkingLine(_) = input else {
+            return Vec::new();
+        };
+        vec![crate::ext::spans::from_ratatui(&thought_row(
+            thought, gutter, w,
+        ))]
+    };
+    let rendered = match out.fills_for("thinking_line") {
+        crate::ext::SlotSelection::Draw { extension } => {
+            out.ext_lines("thinking_line", &extension, &wrapped, width, &builtin)
+        }
+        crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => None,
+    };
+    match rendered {
+        Some(fitted) => {
+            // An empty result draws no row and opens no body.
+            if fitted.is_empty() {
+                return;
+            }
+            for line in fitted.iter() {
+                out.push_fitted(line, Some(Target::Thought(thought.id)));
+            }
+        }
+        None => {
+            out.push((
+                Line::from(thought_row(thought, gutter, width)),
+                Some(Target::Thought(thought.id)),
+            ));
+        }
+    }
     if out.open_scope(Target::Thought(thought.id), thought.open) {
         let indent = if gutter.is_empty() { "" } else { INDENT };
         opened(&thought.text, indent, out);

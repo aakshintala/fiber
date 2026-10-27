@@ -210,3 +210,34 @@ fn a_rule_with_no_dashes_has_no_tail() {
         assert_eq!(texts[0].tail, tail, "width {width}");
     }
 }
+
+#[test]
+fn the_steer_entry_carries_text_images_and_ts() {
+    use crate::ext::TurnEntry;
+    let plain = Steered::new("wait".to_owned(), 7);
+    let TurnEntry::Steer { text, images, ts } = plain.turn_entry() else {
+        panic!("a steer entry");
+    };
+    assert_eq!(text, "wait");
+    assert!(images.is_empty());
+    assert_eq!(ts, 7);
+    let imaged = Steered::with_images(
+        "see".to_owned(),
+        vec![crate::image::Part {
+            session: contract::SessionId("s".into()),
+            path: "artifacts/a.png".to_owned(),
+            mime_type: "image/png".to_owned(),
+            width: 10,
+            height: 8,
+        }],
+        9,
+    );
+    let TurnEntry::Steer { text, images, ts } = imaged.turn_entry() else {
+        panic!("a steer entry");
+    };
+    assert_eq!(text, "see");
+    assert_eq!(ts, 9);
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].path, "artifacts/a.png");
+    assert_eq!((images[0].width, images[0].height), (10, 8));
+}

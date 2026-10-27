@@ -947,3 +947,28 @@ fn a_declined_page_loaded_from_history_draws_the_same_row() {
     assert!(pages.part(0).is_some(), "the first page loaded again");
     assert_eq!(pages.rows(), live);
 }
+
+#[test]
+fn the_answers_entry_carries_given_or_declined() {
+    use crate::ext::TurnAnswers;
+    let given = super::Answered::Given {
+        parts: vec![crate::format::AnswerParts {
+            header: "Base".to_owned(),
+            text: "main".to_owned(),
+            skipped: false,
+        }],
+        note: Some("go".to_owned()),
+        ts: 7,
+    };
+    let TurnAnswers::Given { parts, note, ts } = given.turn_entry() else {
+        panic!("a given entry");
+    };
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].header, "Base");
+    assert_eq!(parts[0].text, "main");
+    assert!(!parts[0].skipped);
+    assert_eq!(note, Some("go"));
+    assert_eq!(ts, 7);
+    let declined = super::Answered::Declined;
+    assert!(matches!(declined.turn_entry(), TurnAnswers::Declined));
+}

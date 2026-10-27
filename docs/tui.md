@@ -2660,8 +2660,9 @@ retried model calls with `code` and `attempt`); `{kind = "aside", aside}` (a
 line from outside the turn: `{kind = "line", text}`, `{kind = "warning",
 message}`, or `{kind = "orphans", jobs, open}` with each job its `name` and
 `message`); `{kind = "band", trigger, ts, state, sizes?}` (a handoff's band
-without its note: `state` is `writing`, `done` or `unchanged`, and `sizes`
-with `before` and `after` rides a done band); `{kind = "answers", outcome,
+without its note: `state` is `writing`, `done`, or `unchanged` with
+`cancelled`, and `sizes` with `before` (and `after`, once the first request
+after it returns) rides a done band); `{kind = "answers", outcome,
 parts, note?, ts?}` (`outcome` is `given` or `declined`; each part its
 `header`, `text`, and whether `skipped`).
 

@@ -133,6 +133,27 @@ impl Band {
         mine
     }
 
+    /// Its card entry: the band row without the note, whose toggle and
+    /// body stay the terminal's.
+    pub(crate) fn turn_entry(&self) -> crate::ext::TurnBand<'_> {
+        let (state, sizes) = match self.state {
+            State::Writing => (crate::ext::TurnBandState::Writing, None),
+            State::Done { before, after } => (
+                crate::ext::TurnBandState::Done,
+                Some(crate::ext::TurnSizes { before, after }),
+            ),
+            State::Unchanged { cancelled } => {
+                (crate::ext::TurnBandState::Unchanged { cancelled }, None)
+            }
+        };
+        crate::ext::TurnBand {
+            trigger: &self.trigger,
+            ts: self.ts,
+            state,
+            sizes,
+        }
+    }
+
     /// Toggles its note, returning the new state when `target` is this band's.
     pub(crate) fn toggle(&mut self, target: Target) -> Option<bool> {
         if target == Target::Note(self.id) {
