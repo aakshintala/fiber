@@ -201,10 +201,20 @@ fn group_alive_sees_a_killed_child_until_it_is_reaped() {
     // No reap yet: the killed child is a zombie, and the instantaneous
     // probe still reports a zombie's group as alive. Holding the reap
     // holds the killed child as a zombie, forcing the probe to read the
-    // killed-but-unreaped state.
+    // killed-but-unreaped state. The stored answer is this probe's own
+    // result, so a failure names the kernel's reply and the child's wait
+    // state.
+    let mut raw = None;
+    let probed = signal_group(group, "0", |id, _| {
+        let answer = rustix::process::test_kill_process_group(id);
+        raw = Some(answer);
+        answer
+    })
+    .unwrap();
+    let waited = guard.0.as_mut().unwrap().try_wait();
     assert!(
-        group_alive(group),
-        "an unreaped zombie's group must read as alive"
+        probed,
+        "an unreaped zombie's group must read as alive (probe {raw:?}, child {waited:?})"
     );
     let child = guard.0.take().unwrap();
     drop(guard);
