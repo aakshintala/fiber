@@ -1948,22 +1948,22 @@ later release still applies.
 | `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
-| `/rules` | Opens the standing rules. |
+| `/rules`, `/permissions` | Opens the standing rules. |
 | `/reviewer-setup` | Sets up the reviewer's notes with you (`docs/permissions.md`, "Setting up the notes"). |
 | `/settings`, `/config` | Opens the configuration keys. |
 | `/theme [<name>]` | Opens the theme picker; with a name, sets the theme at once and saves `tui.theme`. |
-| `/keys`, `/keybindings` | Opens the rebinding screen ("Bindings"). |
+| `/keys`, `/keybindings`, `/keymap` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |
 | `/rewind` | Opens the rewind view. |
 | `/cd <path>` | Moves the session to another workspace ("Moving workspace"). With no path, shows the command's usage. If the resolved path is the current workspace, refuses `invalid_arguments`, `already in that folder`. |
-| `/handoff [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
+| `/handoff [instructions]`, `/compact [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
 | `/name <text>`, `/rename <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |
 | `/logout` | Logs out ("Logging out"). |
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/clear` | Starts a fresh session in place, closing the session on screen ("Clearing"). |
-| `/close [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
+| `/close [all]`, `/stop [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
 | `/feedback <description>`, `/bug <description>` | Writes a feedback report with the description, version, platform, doctor output and the diagnostics of the session on screen, and prints its path and the issue link. With no session on screen, the diagnostics are the hub's lines only. A session this machine holds no diagnostic lines for, such as one on a remote hub, still gets its id, the instruction to export its log privately and the hub's lines, with a notice that this machine has no diagnostic lines for it. The report is the one `fiber feedback` writes (`docs/invocation.md`, "Commands and flags"). |
 | `/quit`, `/exit` | Quits ("Quit"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
@@ -1974,9 +1974,7 @@ The `/` list shows built-in commands in this order.
 
 The range line's total counts every entry the query matches: the matching built-in rows plus the matching session commands.
 
-A row's second name, such as `/exit`, is an alias: typing it runs the same
-command, and the `/` list shows it after the name on that command's row,
-never as a row of its own.
+A row's other names, such as `/exit`, are aliases: typing one runs the same command, and the `/` list shows them after the name on that command's row, never as rows of their own.
 
 The rest of the list is the session's answer to the `commands` driver command
 (`docs/invocation.md`, "What each command does"): its skills, prompt templates
@@ -2453,16 +2451,22 @@ as the person scrolls, with the `history` command, which reads by `seq` over
 the session's offset table (`docs/invocation.md`, "Driver commands";
 `docs/events.md`, "Resume").
 
-- **Opening reads the last page, then makes one streaming pass.** The
+- **Opening reads the tail before the first frame, then counts history and
+  makes one streaming pass.** The
   terminal subscribes at `summary` and asks `history`, with no `from_seq`,
-  for the session's last lines. It cuts them into pages and asks for the
-  lines before them until it holds the pages that fill the screen up from
-  its last row, and begin at a turn's start. When the held run reaches the
-  session's `seq 0`, the read continues past it into each ancestor named
-  by `forked_from`, to the chain root: on its own segment the read stops
-  once the display fills, while past a segment start it keeps going for
-  the joint total. The first frame draws those
-  pages. The terminal then raises the subscription to `full`.
+  for the session's last lines. The terminal checks each answer for
+  ascending, contiguous sequence numbers. It folds each eligible whole-turn
+  run into fresh pages. If an older answer enlarges the run before install,
+  the terminal rebuilds from fresh pages and discards the prior candidate.
+  It installs the newest candidate without another fold. The terminal asks
+  for older own-segment windows until the preview fills the screen up from
+  its last row, beginning at a turn's start. The first frame draws the
+  preview. After it, the terminal reads older windows down to the session's
+  `seq 0` and each ancestor named by `forked_from` to the chain root, carrying
+  ancestor runs above the preview for the joint total. These count reads
+  never rebuild the displayed preview. A run that reaches `seq 0` short of
+  the display crosses into its ancestors before the first frame instead. The
+  terminal then raises the subscription to `full`.
   The pass goes over the session's lines as the `full` subscription sends
   them. It builds the panel's cards and counts every row, keeping each
   row's `seq`. No event is kept: each is applied to the panel's folds and
@@ -2479,10 +2483,12 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   The one exception: rows that depend on turns before the held pages (an
   orphaned job's completion, an automatic handoff's trigger, a ledger
   toggled earlier: only rows of these kinds) may change in the frame where
-  the pass ends. At an open across the chain the preview already holds
-  the whole run to the chain root, so the landing rewrites nothing
-  across the seam. On one segment the preview holds the filled run and
-  the pass counts the rest, so the landing adds the rows above it.
+  the pass ends. An opening that fills only after crossing `seq 0` draws
+  through the chain root, so the landing rewrites nothing across the seam.
+  If the own segment fills first, the count phase adds ancestors above the
+  preview without refolding its visible pages. On one segment the preview
+  holds the filled run and the pass counts the rest, so the landing adds the
+  rows above it.
   EOF, `stream_closed`, a failed read, a disconnect and lowering
   to `summary` end the pass too. The feed's `session_left` for a session
   ends that session's pass. Waiting work then runs against what is held,
