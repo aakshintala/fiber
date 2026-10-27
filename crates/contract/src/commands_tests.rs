@@ -170,7 +170,7 @@ fn defaults_fill_what_a_client_leaves_out() {
     let line = parse(r#"{"id":"c","command":"rewind","args":{}}"#).unwrap();
     assert_eq!(
         line.command,
-        Command::Rewind(RewindArgs {
+        Command::Rewind(RewindArgs::Rewind {
             from_session_id: None,
             seq: None,
             summarise: false,
@@ -182,6 +182,112 @@ fn defaults_fill_what_a_client_leaves_out() {
         Command::Shell(Shell {
             command: "ls".into(),
             send: false
+        })
+    );
+}
+
+/// `AtEnd` refuses any company: `seq`, `from_session_id` or `summarise`,
+/// even an explicit `summarise: false` or an explicit `null`, since only
+/// the session's own end is a fork point. Absence and `null` differ: an
+/// explicit `null` is a wrong type, never absence.
+#[test]
+fn rewind_at_end_is_exclusive_and_omitted_when_false() {
+    let line = parse(r#"{"id":"c","command":"rewind","args":{"at_end":true}}"#).unwrap();
+    assert_eq!(line.command, Command::Rewind(RewindArgs::AtEnd));
+    for args in [
+        json!({"seq": 12, "at_end": true}),
+        json!({"from_session_id": "s_0123456789abcdef", "at_end": true}),
+        json!({"at_end": true, "summarise": true}),
+        json!({"at_end": true, "summarise": false}),
+        // Presence counts even when the value is `null`.
+        json!({"seq": null, "at_end": true}),
+        json!({"from_session_id": null, "at_end": true}),
+        json!({"at_end": true, "summarise": null}),
+    ] {
+        let line = json!({"id": "c", "command": "rewind", "args": args});
+        assert!(parse(&line.to_string()).is_err(), "{line}");
+        assert!(
+            serde_json::from_value::<RewindArgs>(args.clone()).is_err(),
+            "{line}"
+        );
+    }
+    // Without `at_end`, the old keys still read.
+    let line = parse(r#"{"id":"c","command":"rewind","args":{"seq":12}}"#).unwrap();
+    assert_eq!(
+        line.command,
+        Command::Rewind(RewindArgs::Rewind {
+            from_session_id: None,
+            seq: Some(Seq(12)),
+            summarise: false,
+        })
+    );
+    // A `Rewind` with defaults omits nothing it needs on the wire, so old
+    // lines read unchanged.
+    let line = CommandLine {
+        id: CommandId("c".into()),
+        command: Command::Rewind(RewindArgs::Rewind {
+            from_session_id: None,
+            seq: None,
+            summarise: false,
+        }),
+    };
+    assert_eq!(
+        serde_json::to_string(&line).unwrap(),
+        r#"{"id":"c","command":"rewind","args":{"summarise":false}}"#
+    );
+    // `AtEnd` is written to the wire as only `at_end` (`/fork` sends it).
+    let line = CommandLine {
+        id: CommandId("c_rewind".into()),
+        command: Command::Rewind(RewindArgs::AtEnd),
+    };
+    assert_eq!(
+        serde_json::to_string(&line).unwrap(),
+        r#"{"id":"c_rewind","command":"rewind","args":{"at_end":true}}"#
+    );
+    // An unknown key still fails to read.
+    let line = json!({"id": "c", "command": "rewind", "args": {"at_end": true, "future": 1}});
+    assert!(parse(&line.to_string()).is_err(), "{line}");
+    // An explicit `null` is never absence, on either mode.
+    for args in [
+        json!({"seq": null}),
+        json!({"from_session_id": null}),
+        json!({"summarise": null}),
+        json!({"at_end": null}),
+        json!({"seq": null, "at_end": false}),
+    ] {
+        let line = json!({"id": "c", "command": "rewind", "args": args});
+        assert!(parse(&line.to_string()).is_err(), "{line}");
+        assert!(
+            serde_json::from_value::<RewindArgs>(args.clone()).is_err(),
+            "{line}"
+        );
+    }
+    // A wrong type is refused on every key, with or without `at_end`.
+    for args in [
+        json!({"seq": "7"}),
+        json!({"seq": 1.5}),
+        json!({"from_session_id": 7}),
+        json!({"summarise": "yes"}),
+        json!({"summarise": 1}),
+        json!({"at_end": "yes"}),
+        json!({"at_end": 1}),
+        json!({"seq": 12, "at_end": "yes"}),
+    ] {
+        let line = json!({"id": "c", "command": "rewind", "args": args});
+        assert!(parse(&line.to_string()).is_err(), "{line}");
+        assert!(
+            serde_json::from_value::<RewindArgs>(args.clone()).is_err(),
+            "{line}"
+        );
+    }
+    // `at_end: false` reads as the default mode, without its own key.
+    let line = parse(r#"{"id":"c","command":"rewind","args":{"seq":12,"at_end":false}}"#).unwrap();
+    assert_eq!(
+        line.command,
+        Command::Rewind(RewindArgs::Rewind {
+            from_session_id: None,
+            seq: Some(Seq(12)),
+            summarise: false,
         })
     );
 }

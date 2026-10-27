@@ -120,12 +120,12 @@ fn slash_eight_of_long_list() {
     insta::assert_snapshot!("slash", screen(&app, 160, 48));
     // Eight entries and the range line, with the first match focused.
     let shown = screen(&app, 160, 48);
-    // The range counts matching built-ins and session commands
-    // (`docs/tui.md:1680-1682,1980-1982`).
-    assert!(shown.contains("1–8 of 59 · ↓ 51 more"), "{shown}");
+    // The range counts matching entries, not just the visible window
+    // (`docs/tui.md`, "Slash commands").
+    assert!(shown.contains("1–8 of 60 · ↓ 52 more"), "{shown}");
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
-    // The first match is focused (`docs/tui.md:1680`).
+    // The first match is focused (`docs/tui.md:1682`).
     assert_eq!(bars.len(), 1, "{shown}");
     assert!(row_text(&buf, bars[0]).contains("home"), "{shown}");
 }
@@ -149,8 +149,8 @@ fn slash_exit_alias() {
 #[test]
 fn slash_keys_aliases_render_and_filter_independently() {
     // Each alias, whole or in part, finds exactly the keys row, which
-    // carries both aliases on it (`docs/tui.md:1962,1984`).
-    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1962,1984`).
+    // carries both aliases on it (`docs/tui.md:1964,1987`).
+    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1964,1987`).
     for query in ["keymap", "keybindings", "keyma", "keybind"] {
         let mut app = attached(160, 48);
         type_text(&mut app, &format!("/{query}"));
@@ -214,9 +214,9 @@ fn a_scrolled_slash_list_counts_both_directions() {
     // The window follows the selection; the total and the count below
     // follow the list.
     assert!(
-        // The range counts matching built-ins and session commands
-        // (`docs/tui.md:1680-1682,1980-1982`).
-        shown.contains("↑ 3 above · 4–11 of 59 · ↓ 48 more"),
+        // The range counts matching entries, not just the visible window
+        // (`docs/tui.md`, "Slash commands").
+        shown.contains("↑ 3 above · 4–11 of 60 · ↓ 49 more"),
         "{shown}"
     );
     let buf = buffer(&app, 160, 48);
@@ -401,11 +401,11 @@ fn narrow_slash() {
     app.set_size(100, 40);
     type_text(&mut app, "/");
     // The focused match and range line follow the slash-panel rules
-    // (`docs/tui.md:1680-1682,1980-1982`).
+    // (`docs/tui.md:1682-1684,1985`).
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
-    // The range includes matching built-ins and session commands
-    // (`docs/tui.md:1680-1682,1982`).
-    assert!(screen(&app, 100, 40).contains("1–8 of 59 · ↓ 51 more"));
+    // The range counts matching entries, not just the visible window
+    // (`docs/tui.md`, "Slash commands").
+    assert!(screen(&app, 100, 40).contains("1–8 of 60 · ↓ 52 more"));
 }
 
 #[test]
@@ -732,13 +732,13 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     let buf = buffer(&app, 80, 12);
     let shown = screen(&app, 80, 12);
     let bars = barred(&buf);
-    // The selected match stays focused (`docs/tui.md:1680`).
+    // The selected match stays focused (`docs/tui.md:1682`).
     assert_eq!(bars.len(), 1, "{shown}");
-    // `/hooks` follows `/tools` (`docs/tui.md:1945-1946,1980`): ten downs bar `/context`.
+    // `/hooks` follows `/tools` (`docs/tui.md:1947-1948,1983`): ten downs bar `/context`.
     assert!(row_text(&buf, bars[0]).contains("context"), "{shown}");
-    // The range counts matching built-ins and session commands
-    // (`docs/tui.md:1680-1682,1982`).
-    assert!(shown.contains("of 59"), "{shown}");
+    // The range counts matching entries, not just the visible window
+    // (`docs/tui.md`, "Slash commands").
+    assert!(shown.contains("of 60"), "{shown}");
 }
 
 /// A short conversation with an `@` list: the third path stays barred,

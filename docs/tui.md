@@ -895,6 +895,7 @@ a click on it returns too. The views are:
   its switch, as on `/tools`; a shadowing skill adds "shadows <name>". The
   last row is "Enter shows the text · Ctrl+G opens its file", dim.
 - **`/rewind`** ("Rewind").
+- **`/fork`:** rewinds to the end of the conversation ("Rewind").
 - **A repository's offer**, before a new session's first request ("Approving
   what a repository ships").
 
@@ -1328,7 +1329,8 @@ pins it (`docs/tools.md`, "Naming the session"). A name is drawn with each contr
 ### Rewind
 
 `/rewind` swaps a view into the conversation area (`docs/events.md`,
-"Rewind").
+"Rewind"). `/fork` is a rewind to the latest point: it sends `rewind` with
+`at_end`, opens no view and offers no summary.
 
 - Each turn is one row, "before: <prompt>", or "before: rewind summary" for
   the turn a rewind's summary ran in. The chosen turn opens into every
@@ -1678,7 +1680,7 @@ what it started keeps running.
   that match the query bold; the description dim, cut with … so the tag
   always fits; the `argument-hint` in `attention`; and the tag dim at the
   right end. The first match is focused. When the list does not fit, a last
-  dim row says where the rows shown sit: "1–8 of 42 · ↓ 34 more", with "↑ 3
+  dim row says where the rows shown sit: "1–8 of 43 · ↓ 35 more", with "↑ 3
   above · " in front once it has scrolled. With nothing matching, the panel
   holds one dim row, "no matches". A
   skill the model has loaded shows in the transcript as a skill, not as a file
@@ -1962,6 +1964,7 @@ later release still applies.
 | `/keys`, `/keybindings`, `/keymap` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |
 | `/rewind` | Opens the rewind view. |
+| `/fork` | Rewinds to the end of the conversation: sends `rewind` with `at_end`, and the terminal switches to the new session. |
 | `/handoff [instructions]`, `/compact [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
 | `/name <text>`, `/rename <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |
