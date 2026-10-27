@@ -26,7 +26,7 @@ mod live;
 mod pins;
 mod residency;
 
-/// Where folding a page begins: its turn and step, the live fold's scalar
+/// Where folding a page begins: its turn and step, the live fold's
 /// continuation state, and descriptions only of earlier pages' jobs that
 /// complete orphaned on it. Rendered asides stay in resident pages.
 #[derive(Debug, Clone, Default)]
@@ -53,8 +53,8 @@ pub(crate) struct Seed {
     trigger_at: Option<u64>,
     /// The last `fiber_exited` carried `suspended_on`.
     suspended: bool,
-    /// Descriptions of jobs that complete orphaned on this page but started
-    /// on an earlier one, set once the page closes.
+    /// Descriptions of jobs that ended stopped or orphaned on this
+    /// page, set once the page closes.
     carried: HashMap<String, String>,
     /// The live durations of the page's groups, in order: a reload folds
     /// the page's durable lines only, without the ephemeral lines that

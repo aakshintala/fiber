@@ -1,0 +1,29 @@
+---
+source: crates/tui/src/app/rewind_tests.rs
+assertion_line: 1060
+expression: shot(&app)
+---
+ Rewind  /rewind                                                     Esc returns
+before: first
+  start of turn
+  after input
+  after step 1 · did things
+  end of turn
+[ ] Summarise the path after the point
+Rewind
+
+
+
+
+
+
+
+
+
+
+
+Files written since the point: /w/a.rs
+Calls that may have changed files: shell
+None of it is undone.
+Jobs that stop: task one, delegate work
+↑↓ move · Enter open/send · Space summarise · Esc close

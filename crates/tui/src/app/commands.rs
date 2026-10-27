@@ -207,6 +207,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_skills,
     },
     CommandEntry {
+        name: "rewind",
+        description: "Opens the rewind view.",
+        hint: None,
+        run: run_rewind,
+    },
+    CommandEntry {
         name: "handoff",
         description: "Starts a handoff.",
         hint: Some("[instructions]"),
@@ -429,6 +435,11 @@ fn run_mcp(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_skills(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Skills))
+}
+
+fn run_rewind(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::Rewind))
 }
 
 fn run_context(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -903,11 +914,57 @@ impl App {
         self.completion.commands_answered(accepted);
     }
 
+    /// Whether the draft starts with an unknown slash command: its first
+    /// word starts with `/`, names neither a built-in command nor an entry
+    /// in the session's current `commands` answer, and holds no second
+    /// `/`, so it is no path. Refusing posts the notice and keeps the
+    /// whole draft, image included; `true` means Enter sends nothing.
+    fn refuse_unknown_slash(&mut self) -> bool {
+        // The typed text, without image labels: `expand` draws each
+        // image as `[Image #N]`, which would split the first word.
+        let mut text = String::new();
+        for part in self.draft.content() {
+            if let contract::commands::SentPart::Text { text: run } = part {
+                text.push_str(&run);
+            }
+        }
+        let trimmed = text.trim();
+        let (head, _) = trimmed
+            .split_once(char::is_whitespace)
+            .unwrap_or((trimmed, ""));
+        let Some(name) = head.strip_prefix('/') else {
+            return false;
+        };
+        if name.is_empty() || name.contains('/') {
+            return false;
+        }
+        if slash::is_built_in(name) {
+            return false;
+        }
+        if self
+            .completion
+            .slash_rows
+            .iter()
+            .any(|row| row.name == name || row.alias.as_deref() == Some(name))
+        {
+            return false;
+        }
+        self.push_notice(
+            "unknown_command",
+            format!("Unknown command /{name}. Type / for the list."),
+        );
+        true
+    }
+
     /// Enter sends the draft: `start` with no session, `prompt` when
     /// idle, `steer` during a turn, and `shell` for a `!` command whenever
     /// attached. A draft holding an image sends its content as a prompt
-    /// or `steer`, never as a built-in or a `!` command.
+    /// or `steer`, never as a built-in or a `!` command. An unknown slash
+    /// command is refused before any of that, keeping the draft.
     pub(super) fn on_enter(&mut self) -> Effect {
+        if self.refuse_unknown_slash() {
+            return Effect::None;
+        }
         if let Some(effect) = self.built_in() {
             return effect;
         }
