@@ -1,7 +1,7 @@
 //! Tests for the `/` list.
 
 use super::{Row, SHOWN, extensions, filter, is_built_in, rows, window_start};
-use crate::app::commands::{TABLE, alias_of};
+use crate::app::commands::{TABLE, aliases_of};
 use contract::commands::BUILT_IN_COMMANDS;
 use contract::events::CommandInfo;
 
@@ -64,6 +64,7 @@ const DRAWN_ORDER: &[&str] = &[
     "status",
     "diff",
     "copy",
+    "pwd",
     "panel",
     "rail",
     "rules",
@@ -72,6 +73,7 @@ const DRAWN_ORDER: &[&str] = &[
     "theme",
     "keys",
     "skills",
+    "rewind",
     "handoff",
     "name",
     "login",
@@ -85,6 +87,7 @@ const DRAWN_ORDER: &[&str] = &[
     "approvals",
     "?",
     "help",
+    "delegates",
 ];
 
 #[test]
@@ -143,22 +146,30 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         .iter()
         .filter(|name| !table_names().contains(name))
         .collect();
-    assert_eq!(
-        extra,
-        [
-            &"effort",
-            &"cost",
-            &"config",
-            &"keybindings",
-            &"rewind",
-            &"rename",
-            &"exit",
-            &"bug"
-        ]
-    );
-    // Every alias is a contract name, so an extension or a skill cannot
-    // take it unannounced.
-    for alias in TABLE.iter().filter_map(|entry| alias_of(entry.name)) {
+    // This terminal draws `rewind` among the built-in rows.
+    let wanted = [
+        &"effort",
+        &"cost",
+        &"agents",
+        &"cwd",
+        &"permissions",
+        &"config",
+        &"keybindings",
+        &"keymap",
+        &"compact",
+        &"rename",
+        &"stop",
+        &"exit",
+        &"bug",
+    ];
+    // The table enumerates the complete alias set (`docs/tui.md:1920–1959,1965`).
+    assert_eq!(extra, wanted);
+    // An extension or skill named like an alias cannot take it silently
+    // (`docs/tui.md:1974`).
+    for alias in TABLE
+        .iter()
+        .flat_map(|entry| aliases_of(entry.name).iter().copied())
+    {
         assert!(is_built_in(alias), "{alias}");
     }
     let rows = rows(&[]);
@@ -166,6 +177,8 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
     assert!(credential.line().contains("/credential [<label>]"));
     assert!(is_built_in("credential"));
     assert!(is_built_in("rewind"));
+    assert!(is_built_in("delegates"));
+    assert!(is_built_in("agents"));
     assert!(!is_built_in("tdd"));
 }
 
@@ -254,14 +267,14 @@ fn an_extension_row_takes_its_built_in_slot() {
 
 #[test]
 fn an_extension_row_for_an_undrawn_built_in_stays_in_answer_order() {
-    let all = rows(&[skill("tdd"), extension_row("rewind")]);
-    let rewinds: Vec<&Row> = all.iter().filter(|row| row.name == "rewind").collect();
-    assert_eq!(rewinds.len(), 1);
-    assert_eq!(rewinds[0].tag, "acme");
+    let all = rows(&[skill("tdd"), extension_row("effort")]);
+    let efforts: Vec<&Row> = all.iter().filter(|row| row.name == "effort").collect();
+    assert_eq!(efforts.len(), 1);
+    assert_eq!(efforts[0].tag, "acme");
     let built_ins = rows(&[]).len();
     let (_, answered) = all.split_at(built_ins);
     let answered: Vec<&Row> = answered.iter().collect();
-    assert_eq!(names(&answered), ["tdd", "rewind"]);
+    assert_eq!(names(&answered), ["tdd", "effort"]);
 }
 
 #[test]
@@ -293,6 +306,7 @@ fn prefix_matches_come_before_contains_matches() {
         [
             "resume",
             "reviewer-setup",
+            "rewind",
             "name",
             "reload",
             "Review",
@@ -308,11 +322,12 @@ fn prefix_matches_come_before_contains_matches() {
 
 #[test]
 fn a_row_draws_name_hint_description_and_tag() {
+    // The table orders `/compact` after `/handoff` (`docs/tui.md:1947,1965`).
     let all = rows(&[]);
     let handoff = all.iter().find(|row| row.name == "handoff");
     assert_eq!(
         handoff.map(Row::line),
-        Some("/handoff [instructions]  Starts a handoff.  command".to_owned())
+        Some("/handoff /compact [instructions]  Starts a handoff.  command".to_owned())
     );
     let home = all.iter().find(|row| row.name == "home");
     assert_eq!(

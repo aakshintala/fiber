@@ -282,6 +282,10 @@ struct Rig {
     job: JobId,
     events: std::path::PathBuf,
     worktree_run: Mutex<Option<super::WorktreeRun>>,
+    /// Set by the runner thread as its first step, so an expiry can tell
+    /// a thread that never started from one that never reached its first
+    /// watch or park.
+    runner_started: Arc<AtomicBool>,
 }
 
 fn rig(replies: Vec<WatchReply>) -> Rig {
@@ -309,6 +313,7 @@ fn rig(replies: Vec<WatchReply>) -> Rig {
         job: crate::registry::mint_job_id(),
         events,
         worktree_run: Mutex::new(None),
+        runner_started: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -392,7 +397,9 @@ impl Rig {
         );
         let park = Arc::clone(&runner.park);
         let (done, waited) = mpsc::channel();
+        let started = Arc::clone(&self.runner_started);
         thread::spawn(move || {
+            started.store(true, Ordering::Relaxed);
             runner.drive(child, Some(listing), finish);
             let _sent = done.send(());
         });
@@ -438,6 +445,64 @@ fn reported(rig: &Rig) -> contract::inbox::JobNotice {
     reported_before(rig, None)
 }
 
+/// The phases a runner wait reached, for an expiry to report: the wall
+/// time the wait's own deadline spent, whether the runner thread started,
+/// how many watch calls ran, and where the fake clock is parked. The
+/// phases read in order: a thread that never started starved before the
+/// test's logic began, while a started thread with no watch call and no
+/// park never reached its first watch or park. The elapsed time comes
+/// from the wait's own deadline, never from a fresh clock read.
+fn expiry_diagnostic(deadline: &Deadline, rig: &Rig) -> String {
+    expiry_diagnostic_parts(
+        deadline,
+        rig.runner_started.load(Ordering::Relaxed),
+        rig.script.calls().len(),
+        rig.clock.now(),
+        &rig.clock.parked(),
+    )
+}
+
+/// [`expiry_diagnostic`] from the rig's `Sync` pieces, for the scoped
+/// clock-driver thread: it cannot borrow the rig itself, because the
+/// rig's inbox receiver is not `Sync`.
+fn expiry_diagnostic_parts(
+    deadline: &Deadline,
+    started: bool,
+    watch_calls: usize,
+    now: Instant,
+    parked: &[Option<Instant>],
+) -> String {
+    let elapsed = MUST_SUCCEED_WITHIN.saturating_sub(deadline.left());
+    format!(
+        "elapsed={elapsed:?} runner_started={started} watch_calls={watch_calls} now={now:?} parked={parked:?}"
+    )
+}
+
+#[test]
+fn the_expiry_diagnostic_names_elapsed_start_and_progress() {
+    let rig = rig(Vec::new());
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+    let fresh = expiry_diagnostic(&deadline, &rig);
+    assert!(
+        fresh.contains("runner_started=false"),
+        "an unstarted runner reads as starved before its thread ran: {fresh}"
+    );
+    assert!(
+        fresh.contains("watch_calls=0"),
+        "no watch call ran yet: {fresh}"
+    );
+    assert!(
+        fresh.contains("elapsed="),
+        "the wait names its wall time: {fresh}"
+    );
+    rig.runner_started.store(true, Ordering::Relaxed);
+    let started = expiry_diagnostic(&deadline, &rig);
+    assert!(
+        started.contains("runner_started=true"),
+        "a started runner reads as past thread start: {started}"
+    );
+}
+
 /// Takes the runner's report with one wall-clock deadline for the whole
 /// wait, failing at the caller's line: `#[track_caller]` reports the
 /// test's line, which the `thread::scope` closure below cannot. `expiry`
@@ -467,11 +532,7 @@ fn take_report(
             }
             Err(_) => {
                 stop.store(true, Ordering::Relaxed);
-                panic!(
-                    "{expiry}; now={:?} parked={:?}",
-                    rig.clock.now(),
-                    rig.clock.parked()
-                );
+                panic!("{expiry}; {}", expiry_diagnostic(&deadline, rig));
             }
         }
     }
@@ -486,10 +547,15 @@ fn take_report(
 /// test thread's single `Deadline` receive is the wall-clock deadline for
 /// the whole wait, driver included. The stop flag is set on every outcome
 /// of that receive, before the result is inspected, so the driver always
-/// ends within `deadline` and the scope never outlives the wait.
+/// ends within `deadline` and the scope never outlives the wait. On
+/// expiry the panic carries the wait's elapsed wall time and reached
+/// phases, so a recurrence tells starvation before the runner started
+/// from a runner that never reached its first watch or park.
 fn drive_runner_clock(
     stop: &AtomicBool,
     clock: &Arc<FakeClock>,
+    script: &Arc<Script>,
+    started: &Arc<AtomicBool>,
     deadline: &Deadline,
     horizon: Option<std::time::Instant>,
 ) {
@@ -500,9 +566,14 @@ fn drive_runner_clock(
         }
         if deadline.left().is_zero() {
             panic!(
-                "the runner did not report; now={:?} parked={:?}",
-                clock.now(),
-                clock.parked()
+                "the runner did not report; {}",
+                expiry_diagnostic_parts(
+                    deadline,
+                    started.load(Ordering::Relaxed),
+                    script.calls().len(),
+                    clock.now(),
+                    &clock.parked(),
+                )
             );
         }
         let mut candidate = carried.take();
@@ -560,9 +631,11 @@ fn reported_with_usage_before(
 ) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
     let stop = Arc::new(AtomicBool::new(false));
     let clock = Arc::clone(&rig.clock);
+    let script = Arc::clone(&rig.script);
+    let started = Arc::clone(&rig.runner_started);
     let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     thread::scope(|scope| {
-        scope.spawn(|| drive_runner_clock(&stop, &clock, &deadline, horizon));
+        scope.spawn(|| drive_runner_clock(&stop, &clock, &script, &started, &deadline, horizon));
         let mut usages = Vec::new();
         let notice = take_report(rig, &stop, "the runner did not report", &mut usages);
         (notice, usages)
@@ -2075,10 +2148,19 @@ fn a_stop_reaches_a_live_grandchild_without_sigkill() {
     // at the notice would park retire on a clock that never moves again.
     let driver_stop = Arc::new(AtomicBool::new(false));
     let driver_clock = Arc::clone(&rig.clock);
+    let driver_script = Arc::clone(&rig.script);
+    let driver_started = Arc::clone(&rig.runner_started);
     let driver_deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let notice = thread::scope(|scope| {
         scope.spawn(|| {
-            drive_runner_clock(&driver_stop, &driver_clock, &driver_deadline, Some(kill_at))
+            drive_runner_clock(
+                &driver_stop,
+                &driver_clock,
+                &driver_script,
+                &driver_started,
+                &driver_deadline,
+                Some(kill_at),
+            )
         });
         Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
@@ -3052,9 +3134,11 @@ fn take_report_with_usages(
 ) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
     let stop = Arc::new(AtomicBool::new(false));
     let clock = Arc::clone(&rig.clock);
+    let script = Arc::clone(&rig.script);
+    let started = Arc::clone(&rig.runner_started);
     let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     thread::scope(|scope| {
-        scope.spawn(|| drive_runner_clock(&stop, &clock, &deadline, None));
+        scope.spawn(|| drive_runner_clock(&stop, &clock, &script, &started, &deadline, None));
         let mut usages = Vec::new();
         let mut notice = None;
         while notice.is_none() || usages.len() < want {
@@ -3074,10 +3158,10 @@ fn take_report_with_usages(
                 Err(_) => {
                     stop.store(true, Ordering::Relaxed);
                     panic!(
-                        "the report and the streamed usage never arrived; job={} usages={want} got={} watch_calls={}",
+                        "the report and the streamed usage never arrived; job={} usages={want} got={}; {}",
                         notice.is_some(),
                         usages.len(),
-                        rig.script.calls().len(),
+                        expiry_diagnostic(&deadline, rig),
                     );
                 }
             }
@@ -3128,15 +3212,17 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     // folds it before the report, so the notice is `Completed` whether
     // or not the watcher beat the reap (see #3005).
     let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
-    let shell = format!("printf '%s\\n' '{exit}'");
-    // No gate on the forward: the fake persists every delivered line,
-    // so the reap's synchronous file replay recovers the usage even
-    // when the watcher loses the race, and the take below holds the
-    // Job and the streamed line whichever lands first. A park here
-    // would wait for the report from inside the forward while the
-    // report waits out the same bound under load; on expiry the parked
-    // thread dies holding the only claim and the line never arrives
-    // (see #3051).
+    // The child blocks on a fifo until the watch starts: an instant
+    // child would otherwise let the drive reap and report before its
+    // first launch ever runs, so no watcher would ever forward (see
+    // #3364).
+    let fifo = rig._dir.path().join("watch-started");
+    fakes::fifo(&fifo);
+    let shell = format!("read _ < '{}'; printf '%s\\n' '{exit}'", fifo.display());
+    // The watchdog owns teardown: dropping it kills the child blocked
+    // on the fifo, so a failure before the release leaves nothing
+    // parked.
+    let watchdog = Watchdog::matching(&fifo.to_string_lossy());
     let waited = rig
         .start_timeout(
             &shell,
@@ -3148,6 +3234,13 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
         )
         .0;
     let _waited = waited;
+    // The watch started, so the launch happened and its delivery is
+    // inevitable on the watcher's own thread: release the child. The
+    // watcher's forwards and the runner's reap still race (see #3005),
+    // so the take holds the Job and the streamed line whichever lands
+    // first. Every bound here is liveness only.
+    wait_calls(&rig, 1);
+    release_fifo(&fifo, b"go\n");
     // The well-formed line reaches the tap with the delegate's session id;
     // the malformed one never does, and `fiber_exited` still ends watch.
     // The tap runs before the inbox offer on the same forward, so a
@@ -3158,6 +3251,15 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     assert_eq!(usages[0].0, SessionId("s_child".into()));
     assert_eq!(usages[0].1, "g_1");
     assert_eq!(notice.completed.status, Outcome::Completed);
+    // After `fiber_exited` the runner starts no further watch
+    // (docs/delegates.md, "Lifetime"): the started watcher is the only
+    // call.
+    assert_eq!(
+        rig.script.calls().len(),
+        1,
+        "the started watcher is the only watch"
+    );
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// Runs one watch call against a log file holding `file_seqs` usage

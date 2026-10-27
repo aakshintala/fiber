@@ -108,6 +108,17 @@ fn history(lines: &[Envelope], from: u64, to: u64) -> Vec<Envelope> {
         .collect()
 }
 
+/// The open's newest or older 256-line history window, oldest first.
+fn tail_history(lines: &[Envelope], from: u64, to: u64) -> Vec<Envelope> {
+    let mut window: Vec<Envelope> = lines
+        .iter()
+        .filter(|line| line.seq.is_some_and(|seq| from <= seq.0 && seq.0 <= to))
+        .cloned()
+        .collect();
+    window.drain(..window.len().saturating_sub(256));
+    window
+}
+
 /// A session line answering command `id`.
 fn answer(kind: &str, payload: Value) -> Input {
     Input::Hub(Line::Session(line(kind, None, None, payload)))
@@ -1851,11 +1862,10 @@ fn a_batch_settles_once_at_its_end() {
 }
 
 /// `fiber resume` opens through the hub: feed, recent, the `summary`
-/// subscribe and the session's commands, then one `history` window for
-/// the tail the first frame draws, then the `full` raise with the last
-/// line read, and the 150 turns / 1,348 envelopes replay as live lines.
-/// The loop folds every batch and lands the whole session: the last
-/// reply shows, and no page is fetched twice.
+/// subscribe and the session's commands, then the newest `history` window
+/// for the first frame. The post-frame count reads older windows through
+/// seq zero before `full`; replay then lands the 150 turns / 1,348 envelopes
+/// without fetching a page twice.
 #[test]
 fn resume_open_replays_the_log_to_the_tail() {
     use std::io::{BufRead, BufReader, Write};
@@ -2053,7 +2063,7 @@ fn resume_open_replays_the_log_to_the_tail() {
                         let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
                         write(session_ack(
                             &id,
-                            json!({"lines": history(&stream, from, to)}),
+                            json!({"lines": tail_history(&stream, from, to)}),
                         ));
                     }
                     _ => write(hub_ack(&id, json!({}))),
@@ -2166,8 +2176,27 @@ fn resume_open_replays_the_log_to_the_tail() {
                 .collect()
         })
         .unwrap_or_default();
-    assert_eq!(histories.len(), 1, "{histories:?}");
-    assert_eq!(histories[0]["args"], json!({}));
+    assert_eq!(
+        histories.len(),
+        6,
+        // docs/tui.md:2446-2448 ("History and paging"): after the frame the terminal reads older windows to the chain root for the joint total.
+        "{histories:?}"
+    );
+    assert_eq!(
+        histories[0]["args"],
+        json!({}),
+        // docs/tui.md:2438 ("History and paging"): asks `history` with no `from_seq` for the session's last lines.
+        "the newest window first"
+    );
+    assert_eq!(
+        histories[1..]
+            .iter()
+            .map(|command| command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX))
+            .collect::<Vec<_>>(),
+        [1091, 835, 579, 323, 67],
+        // docs/tui.md:2446-2448 ("History and paging"): after the frame the terminal reads older windows down to the session's `seq 0` for the joint total.
+        "older count windows reach seq zero before full"
+    );
     // Every turn start the terminal applies asks `commands` again. The
     // first request loads the session's rows before the log replay.
     let seen_commands: Vec<Value> = seen.lock().map(|held| held.clone()).unwrap_or_default();

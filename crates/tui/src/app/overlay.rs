@@ -68,10 +68,11 @@ impl Tail {
     }
 
     /// Puts `older` before the held lines. Refuses a line carrying no
-    /// seq, an answer that leaves a gap within the segment (its last
-    /// seq is not one below the first held line), or a new segment
-    /// across the seam that the held run does not name, that names
-    /// another session, or that reaches above the named point.
+    /// seq, an answer whose own lines run out of order within itself,
+    /// an answer that leaves a gap within the segment (its last seq is
+    /// not one below the first held line), or a new segment across the
+    /// seam that the held run does not name, that names another
+    /// session, or that reaches above the named point.
     pub(super) fn prepend(&mut self, older: Vec<Envelope>) -> Result<(), ()> {
         if older.is_empty() {
             self.start = true;
@@ -81,6 +82,19 @@ impl Tail {
             return Ok(());
         }
         if older.iter().any(|line| line.seq.is_none()) {
+            return Err(());
+        }
+        // An answer's own lines run oldest first with no gap: a
+        // descending, duplicate or gapped pair inside one window is as
+        // out of order as a gap across windows.
+        let ascending = older.windows(2).all(|pair| match pair {
+            [previous, next] => match (previous.seq, next.seq) {
+                (Some(previous), Some(next)) => previous.0.checked_add(1) == Some(next.0),
+                _ => false,
+            },
+            _ => false,
+        });
+        if !ascending {
             return Err(());
         }
         let crossed_seam = match (self.lines.first(), older.last()) {
@@ -104,7 +118,7 @@ impl Tail {
         } else if let (Some(first), Some(last)) = (
             self.lines.first().and_then(|line| line.seq),
             older.last().and_then(|line| line.seq),
-        ) && last.0.saturating_add(1) != first.0
+        ) && last.0.checked_add(1) != Some(first.0)
         {
             return Err(());
         }
@@ -130,9 +144,63 @@ impl Tail {
             .and_then(|forked| serde_json::from_value(forked.clone()).ok())
     }
 
+    /// Whether the held lines span the seam: lines from more than one
+    /// segment are held, so the read already crossed into an ancestor.
+    /// An own-segment fill stops pre-frame reads when this is false,
+    /// leaving older windows and ancestors to the post-frame count.
+    pub(super) fn crossed_the_seam(&self) -> bool {
+        let mut sessions = self.lines.iter().map(|line| &line.session_id);
+        let Some(first) = sessions.next() else {
+            return false;
+        };
+        sessions.any(|session| session != first)
+    }
+
+    /// The held lines the count phase folds: the leading run outside
+    /// the opening session that stays strictly older than the installed
+    /// candidate's oldest folded line, oldest first, with the line
+    /// following it as the fold's trailer when that line is also older
+    /// than the floor. Older own-segment lines stay for the pass; the
+    /// trailer closes the fold below the ancestors, so the ancestor
+    /// run carries above the preview. Lines at or after the floor
+    /// already show, so folding them again would double-count the
+    /// preview the install moved into the screen.
+    pub(super) fn count_parts(
+        &self,
+        own: &SessionId,
+        floor: Option<&(SessionId, Seq)>,
+    ) -> (&[Envelope], Option<&Envelope>) {
+        let len = self
+            .lines
+            .iter()
+            .take_while(|line| line.session_id != *own)
+            .count();
+        let (prefix, trailer) = (self.lines.get(..len).unwrap_or(&[]), self.lines.get(len));
+        let Some((floor_session, floor_seq)) = floor else {
+            return (prefix, trailer);
+        };
+        let Some(at) = self
+            .lines
+            .iter()
+            .position(|line| line.session_id == *floor_session && line.seq == Some(*floor_seq))
+        else {
+            return (prefix, trailer);
+        };
+        if at < len {
+            // The floor sits inside the ancestor run: only lines strictly
+            // before it still need folding, and the trailer sits at or
+            // after the floor, so it already shows.
+            return (self.lines.get(..at).unwrap_or(&[]), None);
+        }
+        // The floor sits at or after the trailer: the whole ancestor run
+        // is older than the preview, and the trailer closes the count
+        // fold even when it is the preview's oldest line.
+        (prefix, trailer)
+    }
+
     /// Whether the held run reached its segment's first line with a
-    /// parent still to read: the next window crosses the seam even
-    /// past a filled display, for the joint total.
+    /// parent still to read: past a segment start the read keeps going
+    /// for the joint total.
     pub(super) fn seam_pending(&self) -> bool {
         self.lines.first().and_then(|line| line.seq) == Some(Seq(0))
             && self.forked_from().filter(|_| !self.crossed).is_some()
@@ -207,6 +275,11 @@ impl Tail {
     /// rows. Lines cut before the first `turn_started` never count.
     /// The open stops the read here on its own segment; past a seam it
     /// keeps walking for the joint total (`seam_pending`).
+    /// Whether the held run fills the display: the read reached its
+    /// segment's start or end, or the run's rows reach the height.
+    /// Tests only: production stops pre-frame reads on rows alone, so a
+    /// run that reaches `seq 0` short of the display still crosses.
+    #[cfg(test)]
     pub(super) fn filled(&self, fresh: &Pages, height: usize) -> bool {
         self.start
             || self.ended
@@ -228,12 +301,27 @@ impl Tail {
     }
 }
 
+/// The visible run folded once: the pages the install moves into the
+/// screen, with the last busy the fold reported. The install moves
+/// this object instead of refolding the run, and the count phase never
+/// touches it again.
+pub(super) struct Preview {
+    /// The folded pages.
+    pub(super) pages: Pages,
+    /// The last busy the fold reported.
+    pub(super) busy: Option<bool>,
+}
+
 impl App {
     /// Ends the overlay on every path: the fold drops, a landed pass can
     /// no longer fire, and the screen unfreezes, applying one stored
-    /// resize.
+    /// resize. The cached preview and any retained count go with it, so
+    /// no later open installs or counts the old run.
     pub(super) fn end_overlay(&mut self) {
         self.overlay = Overlay::None;
+        self.preview = None;
+        self.count = None;
+        self.installed_floor = None;
         self.attached_screen_mut().set_frozen(false);
     }
 

@@ -82,6 +82,7 @@ pub(crate) fn session_forked(
     parent: Parent,
     depth: u32,
     prompt: String,
+    adopted: Option<contract::shapes::Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
@@ -151,13 +152,43 @@ pub(crate) fn session_forked(
     // Installed once the child will run, so a failing fork still
     // reports its error instead of dying on a closed stdin.
     signals.lifeline(Box::new(std::io::stdin()));
-    let task = r#loop::fork_task(&parent.session_id, depth, &prompt);
+    let parent_dir = log::SessionDir::new(&sessions, &parent.session_id);
+    let parent_workspace = match log::started_first(parent_dir.path()) {
+        Ok(started) => match started.workspace {
+            Some(workspace) => workspace,
+            None => {
+                return ask_failed(failed(
+                    ErrorCode::LogCorrupt,
+                    "The parent has no workspace.",
+                ));
+            }
+        },
+        Err(_) => {
+            return ask_failed(failed(
+                ErrorCode::LogCorrupt,
+                format!(
+                    "Cannot read the parent workspace from {}.",
+                    parent_dir.path().display()
+                ),
+            ));
+        }
+    };
+    let workspace = match std::env::current_dir() {
+        Ok(workspace) => workspace,
+        Err(error) => return ask_failed(failed(ErrorCode::IoFailed, error)),
+    };
+    let notice = if workspace == Path::new(&parent_workspace) {
+        String::new()
+    } else {
+        r#loop::fork_workspace(&workspace.to_string_lossy(), &parent_workspace)
+    };
+    let task = r#loop::fork_task(&parent.session_id, depth, &prompt, &notice);
     match super::session_command::run_new(
         new,
         Vec::new(),
         Some(task),
         true,
-        worktree.clone(),
+        adopted.or_else(|| worktree.clone()),
         clock,
         signals,
         fiber,

@@ -30,6 +30,7 @@ impl App {
         [
             self.motion.take_wake(),
             self.items_wake(),
+            self.rewind_wake(),
             self.notices.notices_wake(),
         ]
         .into_iter()

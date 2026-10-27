@@ -70,6 +70,10 @@ fn live(session: &str, since: u64) -> Line {
 }
 
 #[test]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "No code under test waits on the fake clock (ruling 6179406086, #2334 comment, part B)."
+)]
 fn the_loop_gives_the_app_the_wall_time() {
     let mut lp = wide();
     let clock = fakes::clock::FakeClock::new();

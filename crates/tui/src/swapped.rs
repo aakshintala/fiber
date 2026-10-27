@@ -38,7 +38,7 @@ pub(crate) enum Spot {
     Revoke(usize),
     /// A delegate or job row, by its job's serial: a press and a release
     /// on the same serial opens that item, never the row's position.
-    /// Only the running list draws one.
+    /// Only the running lists and the all-delegates view draw one.
     Item(u64),
 }
 

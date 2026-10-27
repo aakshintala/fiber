@@ -120,7 +120,8 @@ fn slash_eight_of_forty() {
     insta::assert_snapshot!("slash", screen(&app, 160, 48));
     // Eight entries and the range line, with the first match focused.
     let shown = screen(&app, 160, 48);
-    assert!(shown.contains("1–8 of 53 · ↓ 45 more"), "{shown}");
+    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+    assert!(shown.contains("1–8 of 56 · ↓ 48 more"), "{shown}");
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
     assert_eq!(bars.len(), 1, "{shown}");
@@ -144,6 +145,62 @@ fn slash_exit_alias() {
 }
 
 #[test]
+fn slash_keys_aliases_render_and_filter_independently() {
+    // Each alias, whole or in part, finds exactly the keys row, which
+    // carries both aliases on it (`docs/tui.md:1944,1965`).
+    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1944,1965`).
+    for query in ["keymap", "keybindings", "keyma", "keybind"] {
+        let mut app = attached(160, 48);
+        type_text(&mut app, &format!("/{query}"));
+        let shown = screen(&app, 160, 48);
+        let keys = shown
+            .lines()
+            .find(|line| line.contains("Opens the rebinding screen."))
+            .expect("the keys row");
+        assert!(keys.contains("keys /keybindings /keymap"), "{shown}");
+    }
+}
+
+#[test]
+fn slash_keys_alias_spans_match_only_the_queried_alias() {
+    use super::slash_row;
+    // An unfocused row: the focused bar reads bold throughout, so the
+    // query's match shows here, where only its own spans are bold.
+    let row = crate::slash::Row {
+        name: "keys".to_owned(),
+        aliases: vec!["keybindings".to_owned(), "keymap".to_owned()],
+        description: "Opens the rebinding screen.".to_owned(),
+        hint: None,
+        tag: "command".to_owned(),
+    };
+    for (query, matched, unmatched) in [
+        ("keymap", "keymap", "keybindings"),
+        ("keybindings", "keybindings", "keymap"),
+    ] {
+        let drawn = slash_row(&row, query, 4, 150, false);
+        let cells: Vec<(char, bool)> = drawn
+            .spans
+            .iter()
+            .flat_map(|span| {
+                let bold = span.style.add_modifier.contains(Modifier::BOLD);
+                span.content.chars().map(move |ch| (ch, bold))
+            })
+            .collect();
+        let text: String = cells.iter().map(|(ch, _)| ch).collect();
+        // Char columns, not byte indices: the gutter holds `›`.
+        let cell_at = |byte: usize| text[..byte].chars().count();
+        let at = cell_at(text.find(matched).expect("the matched alias"));
+        for (n, _) in matched.chars().enumerate() {
+            assert!(cells[at + n].1, "the matched alias for {query}");
+        }
+        let at = cell_at(text.find(unmatched).expect("the quiet alias"));
+        for (n, _) in unmatched.chars().enumerate() {
+            assert!(!cells[at + n].1, "the quiet alias for {query}");
+        }
+    }
+}
+
+#[test]
 fn a_scrolled_slash_list_counts_both_directions() {
     let mut app = forty();
     type_text(&mut app, "/");
@@ -155,7 +212,8 @@ fn a_scrolled_slash_list_counts_both_directions() {
     // The window follows the selection; the total and the count below
     // follow the list.
     assert!(
-        shown.contains("↑ 3 above · 4–11 of 53 · ↓ 42 more"),
+        // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+        shown.contains("↑ 3 above · 4–11 of 56 · ↓ 45 more"),
         "{shown}"
     );
     let buf = buffer(&app, 160, 48);
@@ -340,7 +398,8 @@ fn narrow_slash() {
     app.set_size(100, 40);
     type_text(&mut app, "/");
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
-    assert!(screen(&app, 100, 40).contains("1–8 of 53 · ↓ 45 more"));
+    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+    assert!(screen(&app, 100, 40).contains("1–8 of 56 · ↓ 48 more"));
 }
 
 #[test]
@@ -445,7 +504,7 @@ fn alias_spans_bold_only_the_query() {
     let dim = Style::new().add_modifier(Modifier::DIM);
     let bold = dim.add_modifier(Modifier::BOLD);
     // Past the " /" prefix the query reads bold between dim ends.
-    let spans = alias_spans(Some("exit"), "exi");
+    let spans = alias_spans("exit", "exi");
     assert_eq!(
         spans
             .iter()
@@ -457,11 +516,9 @@ fn alias_spans_bold_only_the_query() {
     assert_eq!(spans[1].style, bold);
     assert_eq!(spans[2].style, dim);
     // No match: one dim span.
-    let spans = alias_spans(Some("exit"), "zzz");
+    let spans = alias_spans("exit", "zzz");
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].style, dim);
-    // No alias: no spans.
-    assert!(alias_spans(None, "exi").is_empty());
 }
 
 #[test]
@@ -561,7 +618,7 @@ fn windowed() -> Vec<crate::slash::Row> {
     (0..8)
         .map(|n| crate::slash::Row {
             name: format!("n{n}"),
-            alias: None,
+            aliases: Vec::new(),
             description: format!("Does n{n}."),
             hint: None,
             tag: "skill".to_owned(),
@@ -672,7 +729,8 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     assert_eq!(bars.len(), 1, "{shown}");
     // `/mcp` sits after `/tools`: ten downs bar `/quota` now.
     assert!(row_text(&buf, bars[0]).contains("usage"), "{shown}");
-    assert!(shown.contains("of 53"), "{shown}");
+    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+    assert!(shown.contains("of 56"), "{shown}");
 }
 
 /// A short conversation with an `@` list: the third path stays barred,
