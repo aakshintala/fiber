@@ -2822,9 +2822,8 @@ fn short_home_slash_keeps_its_selection_barred() {
     );
     let row = row_text(&buf, selected, 80);
     assert!(row.contains("credential"), "{shown}");
-    // The range total includes matching built-ins; home has no session commands
-    // (`docs/tui.md:1973-1975`).
-    assert!(shown.contains("of 41"), "{shown}");
+    // The range total counts matching entries (`docs/tui.md:1680-1682,1982`).
+    assert!(shown.contains("of 42"), "{shown}");
 }
 
 /// A git home at 80x24 with two live rows in the launch project and no

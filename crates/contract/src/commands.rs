@@ -128,6 +128,8 @@ pub enum Command {
     Import(ImportArgs),
     /// Answers with every declared tool.
     Tools,
+    /// Answers with every hook and watcher the session registered.
+    Hooks,
     /// Answers with every configured MCP server and its state.
     McpServers,
     /// Runs the OAuth login flow for one MCP server, then starts it.
@@ -584,6 +586,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "pwd",
     "cwd",
     "tools",
+    "hooks",
     "mcp",
     "panel",
     "rail",

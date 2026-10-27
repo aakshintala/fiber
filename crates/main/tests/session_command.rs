@@ -4019,6 +4019,50 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
         "clash",
         "description: Clash template.\nargument-hint: <tag>\ndisable-model-invocation: true\n",
     );
+    // The size and modification time just written: a later turn-start read
+    // that disagrees with them points at a torn read, while a read that
+    // agrees yet reports the old header points at the stale-cache path in
+    // `discover_cached` (`crates/loop/src/skills.rs:176`). Neither
+    // candidate is established as the cause.
+    let clash_skill = setup.workspace().join(".agents/skills/clash/SKILL.md");
+    let clash_written = fs::metadata(&clash_skill)
+        .map(|metadata| {
+            format!(
+                "size={} modified={:?}",
+                metadata.len(),
+                metadata.modified().ok()
+            )
+        })
+        .unwrap_or_else(|error| format!("unreadable: {error}"));
+    let clash_diagnostic = || {
+        let bytes = fs::read(&clash_skill)
+            .map(|bytes| format!("{} bytes: {bytes:?}", bytes.len()))
+            .unwrap_or_else(|error| format!("unreadable: {error}"));
+        let current = fs::metadata(&clash_skill)
+            .map(|metadata| {
+                format!(
+                    "size={} modified={:?}",
+                    metadata.len(),
+                    metadata.modified().ok()
+                )
+            })
+            .unwrap_or_else(|error| format!("unreadable: {error}"));
+        format!(
+            "clash SKILL.md path={} written=[{clash_written}] current=[{current}] bytes=[{bytes}]",
+            clash_skill.display(),
+        )
+    };
+    let turn_notices = |turn: &[Value]| {
+        turn.iter()
+            .filter(|line| line["kind"] == "notice")
+            .map(|line| {
+                format!(
+                    "code={} message={} path={}",
+                    line["payload"]["code"], line["payload"]["message"], line["payload"]["path"]
+                )
+            })
+            .collect::<Vec<_>>()
+    };
     send(
         &client,
         r#"{"id":"c_second","command":"prompt","args":{"content":[{"type":"text","text":"hi again"}]}}"#,
@@ -4026,36 +4070,50 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
     let second_turn = until_session(&client, "the second turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
-    assert!(
-        second_turn.iter().any(|line| {
-            line["kind"] == "notice"
-                && line["payload"]["code"] == "skill_shadowed"
-                && line["payload"]["extension"] == "fiber.test/clashbox"
-        }),
-        "the turn-start refresh forwards the template's shadow notice: {second_turn:?}"
-    );
     send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
     let answered = until_session(&client, "the commands answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
     });
     let result = answered.last().unwrap()["payload"]["result"].clone();
     let rows = result["commands"].as_array().unwrap();
-    assert_eq!(rows.len(), 3, "no row lost and none restored: {result:?}");
+    assert!(
+        second_turn.iter().any(|line| {
+            line["kind"] == "notice"
+                && line["payload"]["code"] == "skill_shadowed"
+                && line["payload"]["extension"] == "fiber.test/clashbox"
+        }),
+        "the turn-start refresh forwards the template's shadow notice: second_turn={second_turn:?} result={result:?} notices={:?} before={before:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
+    );
+    assert_eq!(
+        rows.len(),
+        3,
+        "no row lost and none restored: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
+    );
     assert!(
         rows.contains(&json!({"name": "keep", "description": "Keeps it.", "tag": "skill"})),
-        "the unrelated skill row stands: {result:?}"
+        "the unrelated skill row stands: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
     );
     assert!(
         rows.contains(
             &json!({"name": "other", "description": "Other ext.", "tag": "fiber.test/clashbox", "extension": true})
         ),
-        "the reload's unrelated extension row stands: {result:?}"
+        "the reload's unrelated extension row stands: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
     );
     assert!(
         rows.contains(
             &json!({"name": "clash", "description": "Clash template.", "argument_hint": "<tag>", "tag": "template"})
         ),
-        "the template wins its name: {result:?}"
+        "the template wins its name: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let _tail = until_session_close(&client);
@@ -4065,6 +4123,85 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
     assert!(
         rows.iter()
             .all(|row| row["tag"] != "fiber.test/clashbox" || row["name"] != "clash"),
-        "the shadowed extension row stays out: {result:?}"
+        "the shadowed extension row stays out: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
     );
+}
+
+/// `hooks` answers the session's registered rows with no arguments, and a
+/// reload reports the new snapshot: one declared hook is absent before its
+/// extension loads and present after.
+#[test]
+fn hooks_answers_registered_rows_and_reload_reports_the_new_snapshot() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    install_lua(
+        &setup,
+        "hookbox",
+        "fiber.hook(\"before_tool\", { timeout = 5000, on_failure = \"blocking\", run = function() end })\n\
+         fiber.watch({ \"turn_completed\" }, { timeout = 5000, run = function() end })\n",
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let _sub = recv(&client, "the subscribe acknowledgement");
+    send(&client, r#"{"id":"c_hooks","command":"hooks"}"#);
+    let answered = until_session(&client, "the hooks answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_hooks"
+    });
+    let result = answered.last().unwrap()["payload"]["result"].clone();
+    let rows = result["hooks"].as_array().unwrap().clone();
+    assert!(
+        rows.contains(
+            &json!({"kind": "hook", "extension": "fiber.test/hookbox", "point": "before_tool", "on_failure": "blocking"})
+        ),
+        "the extension hook row stands: {result:?}"
+    );
+    assert!(
+        rows.contains(
+            &json!({"kind": "watcher", "extension": "fiber.test/hookbox", "kinds": ["turn_completed"]})
+        ),
+        "the watcher row stands: {result:?}"
+    );
+    // A reload with a second extension reports the new snapshot without
+    // restarting the session.
+    install_lua(
+        &setup,
+        "second",
+        "fiber.hook(\"after_tool\", { phase = \"sanitize\", timeout = 5000, on_failure = \"non-blocking\", run = function() end })\n",
+    );
+    send(&client, r#"{"id":"c_reload","command":"reload"}"#);
+    until_session(&client, "the reloaded line", |line| {
+        line["kind"] == "reloaded"
+    });
+    send(&client, r#"{"id":"c_hooks2","command":"hooks"}"#);
+    let answered = until_session(&client, "the second hooks answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_hooks2"
+    });
+    let result = answered.last().unwrap()["payload"]["result"].clone();
+    let rows = result["hooks"].as_array().unwrap();
+    assert!(
+        rows.contains(
+            &json!({"kind": "hook", "extension": "fiber.test/second", "point": "after_tool", "on_failure": "non-blocking", "phase": "sanitize"})
+        ),
+        "the reload added the second hook row: {result:?}"
+    );
+    assert!(
+        rows.contains(
+            &json!({"kind": "watcher", "extension": "fiber.test/hookbox", "kinds": ["turn_completed"]})
+        ),
+        "the first watcher row stands: {result:?}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
 }

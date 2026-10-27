@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/completions_tests.rs
-assertion_line: 120
 expression: "screen(&app, 160, 48)"
 ---
 
@@ -45,7 +44,7 @@ expression: "screen(&app, 160, 48)"
                                     credential    Switches the credential label, or opens the credential pi… [<label>] command
                                     scoped-models Chooses which models the model picker shows.                         command
                                     tools         Opens the tools view.                                                command
-                                  1–8 of 58 · ↓ 50 more
+                                  1–8 of 59 · ↓ 51 more
 
                                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

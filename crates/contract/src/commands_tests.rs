@@ -99,6 +99,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "background"}),
         json!({"id": "c", "command": "reload"}),
         json!({"id": "c", "command": "tools"}),
+        json!({"id": "c", "command": "hooks"}),
         json!({"id": "c", "command": "mcp_servers"}),
         json!({"id": "c", "command": "mcp_login", "args": {"server": "linear"}}),
         json!({"id": "c", "command": "mcp_reconnect", "args": {"server": "linear"}}),
@@ -256,6 +257,7 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         ("background", Command::Background),
         ("reload", Command::Reload),
         ("tools", Command::Tools),
+        ("hooks", Command::Hooks),
         ("mcp_servers", Command::McpServers),
         ("commands", Command::Commands),
         ("skills", Command::Skills),
@@ -280,6 +282,8 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         ("skills", Command::Skills),
         ("mcp_servers", Command::McpServers),
         ("credentials", Command::Credentials),
+        ("hooks", Command::Hooks),
+        ("tools", Command::Tools),
     ] {
         let line = CommandLine {
             id: CommandId("c_1".into()),
