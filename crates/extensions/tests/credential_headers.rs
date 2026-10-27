@@ -176,6 +176,10 @@ fn a_refresh_replaces_the_token_and_its_headers_together() {
     );
     // Into the refresh window, still short of expiry. No code under test
     // waits on the clock here; the sign call returned (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(
         Duration::from_secs(3600)
             .checked_sub(REFRESH_BEFORE)
@@ -447,6 +451,10 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
     assert_eq!(unused.expose(), "tok-unused");
     // No code under test waits on the clock here; the token call returned
     // (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(301));
     let asked = clock.now();
     let (done, first) = mpsc::channel();

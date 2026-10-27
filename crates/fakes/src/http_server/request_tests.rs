@@ -515,6 +515,10 @@ fn check_phase(prefix: &[u8], phase: &'static str, progress: &[u8]) {
             .mark_parked(until, Deadline::after(OP))
             .expect("the phase parks on the clock under its budget");
         client.write_all(progress).expect("one byte writes");
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
         assert!(
             clock.await_parked_since(&mark, ack.until, Deadline::after(OP)),
@@ -524,6 +528,10 @@ fn check_phase(prefix: &[u8], phase: &'static str, progress: &[u8]) {
             rx.try_recv().is_err(),
             "one tick before the bound the {phase} is still waiting"
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+        )]
         clock.advance(Duration::from_nanos(1));
         let caught: thread::Result<RequestOutcome> =
             Deadline::after(OP).recv_or_fail(&rx, "the expired read");
