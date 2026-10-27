@@ -370,7 +370,8 @@ fn scripted(setup: &Setup) -> Run {
 /// on its heading and job row, then closes the list, closes the
 /// session and quits.
 fn running_case(command: &str) {
-    // The table and alias rule set this row order (`docs/tui.md:1961,1967`).
+    // The command table and alias rule place `/jobs` after `/delegates`
+    // (`docs/tui.md:1970-1971,1977`).
     let (setup, _server, ready, release) = jobs_setup();
     let mut run = scripted(&setup);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
@@ -390,6 +391,7 @@ fn running_case(command: &str) {
     run.wait_bytes(prefix_input, FRAME_END, "the slash-list frame");
     let view_input = run.output().len();
     run.write(b"\r");
+    // The Jobs card defines this heading and one row per running job (`docs/tui.md:604`).
     let view = run.wait_screen("the jobs list", |grid| {
         grid.contents.contains("Jobs · 1 running")
     });
@@ -430,7 +432,8 @@ fn running_case(command: &str) {
 /// Types `command` with an attached session but no job: the notice
 /// shows and no list opens.
 fn empty_case(command: &str) {
-    // The table and alias rule set this row order (`docs/tui.md:1961,1967`).
+    // The command table and alias rule place `/jobs` after `/delegates`
+    // (`docs/tui.md:1970-1971,1977`).
     let (setup, _server) = empty_setup();
     let mut run = scripted(&setup);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
@@ -498,7 +501,8 @@ fn ps_shows_no_jobs_running_with_no_job_like_jobs() {
 
 #[test]
 fn jobs_on_home_shows_no_session_on_screen() {
-    // The table and alias rule set this row order (`docs/tui.md:1961,1967`).
+    // The command table and alias rule place `/jobs` after `/delegates`
+    // (`docs/tui.md:1970-1971,1977`).
     let command = "/jobs";
     let setup = Setup::new();
     let mut run = terminal(&setup);

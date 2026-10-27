@@ -171,6 +171,7 @@ fn jobs_opens_the_running_jobs_view_as_tasks_and_ps_do() {
         assert_eq!(run(&mut app, command), Effect::None, "{command}");
         let frame = app.session_view_screen(80).expect("the view is open");
         assert_eq!(frame.title, "Running jobs", "{command}");
+        // The Jobs card uses this heading and lists one row per running job (`docs/tui.md:604`).
         assert_eq!(
             frame
                 .rows
@@ -226,6 +227,7 @@ fn enter_on_a_typed_jobs_alias_runs_the_jobs_row() {
     let mut app = attached();
     start_job(&mut app, "j_1");
     type_text(&mut app, "/tasks");
+    // The command row carries its aliases after the name (`docs/tui.md:1971,1977`).
     assert_eq!(
         shown(&app),
         [
@@ -251,7 +253,7 @@ fn an_extension_named_like_jobs_takes_the_row() {
         })
         .collect();
     // Only the extension's row shows the taken names: the built-in
-    // row is gone (`docs/tui.md:1976`).
+    // row is gone (`docs/tui.md:1986`).
     assert_eq!(taken.len(), 1);
     assert_eq!(taken[0].tag, "acme");
     let mut app = attached();
@@ -292,7 +294,7 @@ fn an_extension_named_like_a_jobs_alias_takes_only_that_name() {
             .filter(|row| row.name == taken || row.aliases.iter().any(|alias| alias == taken))
             .collect();
         // Only the extension's row shows the taken alias: the
-        // built-in row drops it (`docs/tui.md:1976`).
+        // built-in row drops it (`docs/tui.md:1986`).
         assert_eq!(claimed.len(), 1, "{taken}");
         assert_eq!(claimed[0].tag, "acme", "{taken}");
         let answer = json!([{"name": taken,
@@ -301,7 +303,7 @@ fn an_extension_named_like_a_jobs_alias_takes_only_that_name() {
         let mut app = attached();
         answer_rows(&mut app, answer.clone());
         let lines = sent(run(&mut app, &format!("/{taken}")));
-        // The taken name runs the extension's command (`docs/tui.md:1976`).
+        // The taken name runs the extension's command (`docs/tui.md:1986`).
         assert_eq!(lines.len(), 1, "{taken}");
         assert_eq!(lines[0]["command"], "command", "{taken}");
         assert_eq!(lines[0]["args"], json!({"name": taken}), "{taken}");
@@ -419,7 +421,7 @@ fn enter_on_a_typed_alias_runs_its_commands_row() {
 fn an_extension_named_like_an_alias_takes_that_name() {
     let rows = slash::rows(&[extension("config")]);
     let settings = rows.iter().find(|row| row.name == "settings").unwrap();
-    // The extension takes this alias from the built-in row (`docs/tui.md:1976`).
+    // The extension takes this alias from the built-in row (`docs/tui.md:1986`).
     assert!(settings.aliases.is_empty());
     assert_eq!(
         settings.line(),
@@ -537,7 +539,7 @@ fn an_extension_named_like_one_keys_alias_keeps_the_other() {
             .filter(|row| row.name == taken || row.aliases.iter().any(|alias| alias == taken))
             .collect();
         // Only the extension's row shows the taken alias: the
-        // built-in row drops it (`docs/tui.md:1976`).
+        // built-in row drops it (`docs/tui.md:1986`).
         assert_eq!(claimed.len(), 1, "{taken}");
         assert_eq!(claimed[0].tag, "acme", "{taken}");
         let mut app = attached();
@@ -547,7 +549,7 @@ fn an_extension_named_like_one_keys_alias_keeps_the_other() {
                 "tag": "acme", "extension": true}]),
         );
         let lines = sent(run(&mut app, &format!("/{taken}")));
-        // The taken name runs the extension's command (`docs/tui.md:1976`).
+        // The taken name runs the extension's command (`docs/tui.md:1986`).
         assert_eq!(lines.len(), 1, "{taken}");
         assert_eq!(lines[0]["command"], "command", "{taken}");
         assert_eq!(lines[0]["args"], json!({"name": taken}), "{taken}");

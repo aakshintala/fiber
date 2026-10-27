@@ -104,8 +104,8 @@ fn row_text(buf: &Buffer, y: u16) -> String {
         .collect()
 }
 
-/// An app with a 58-row `/` list: the built-ins and 17 session skills.
-fn forty() -> App {
+/// An app with a long `/` list: the built-ins and 17 session skills.
+fn slash_list_with_skills() -> App {
     let mut app = attached(160, 48);
     let skills: Vec<String> = (0..17).map(|n| format!("skill{n:02}")).collect();
     let refs: Vec<&str> = skills.iter().map(String::as_str).collect();
@@ -114,16 +114,18 @@ fn forty() -> App {
 }
 
 #[test]
-fn slash_eight_of_forty() {
-    let mut app = forty();
+fn slash_eight_of_long_list() {
+    let mut app = slash_list_with_skills();
     type_text(&mut app, "/");
     insta::assert_snapshot!("slash", screen(&app, 160, 48));
     // Eight entries and the range line, with the first match focused.
     let shown = screen(&app, 160, 48);
-    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+    // The range counts matching built-ins and session commands
+    // (`docs/tui.md:1674-1676,1973-1975`).
     assert!(shown.contains("1–8 of 58 · ↓ 50 more"), "{shown}");
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
+    // The first match is focused (`docs/tui.md:1674`).
     assert_eq!(bars.len(), 1, "{shown}");
     assert!(row_text(&buf, bars[0]).contains("home"), "{shown}");
 }
@@ -202,7 +204,7 @@ fn slash_keys_alias_spans_match_only_the_queried_alias() {
 
 #[test]
 fn a_scrolled_slash_list_counts_both_directions() {
-    let mut app = forty();
+    let mut app = slash_list_with_skills();
     type_text(&mut app, "/");
     let now = fakes::clock::FakeClock::new().now();
     for _ in 0..10 {
@@ -212,7 +214,8 @@ fn a_scrolled_slash_list_counts_both_directions() {
     // The window follows the selection; the total and the count below
     // follow the list.
     assert!(
-        // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+        // The range counts matching built-ins and session commands
+        // (`docs/tui.md:1674-1676,1973-1975`).
         shown.contains("↑ 3 above · 4–11 of 58 · ↓ 47 more"),
         "{shown}"
     );
@@ -394,11 +397,13 @@ fn a_file_error_is_one_dim_row_with_no_bar() {
 
 #[test]
 fn narrow_slash() {
-    let mut app = forty();
+    let mut app = slash_list_with_skills();
     app.set_size(100, 40);
     type_text(&mut app, "/");
+    // The focused match and range line follow the slash-panel rules
+    // (`docs/tui.md:1674-1676,1973-1975`).
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
-    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+    // The range includes matching built-ins and session commands (`docs/tui.md:1973-1975`).
     assert!(screen(&app, 100, 40).contains("1–8 of 58 · ↓ 50 more"));
 }
 
@@ -716,7 +721,7 @@ fn fit_windows_around_the_selection_with_exactly_one_bar() {
 /// barred, counted of the whole list.
 #[test]
 fn short_conversation_slash_keeps_its_selection_barred() {
-    let mut app = forty();
+    let mut app = slash_list_with_skills();
     app.set_size(80, 12);
     type_text(&mut app, "/");
     let now = fakes::clock::FakeClock::new().now();
@@ -726,10 +731,12 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     let buf = buffer(&app, 80, 12);
     let shown = screen(&app, 80, 12);
     let bars = barred(&buf);
+    // The selected match stays focused (`docs/tui.md:1674`).
     assert_eq!(bars.len(), 1, "{shown}");
     // `/mcp` sits after `/tools`: ten downs bar `/quota` now.
     assert!(row_text(&buf, bars[0]).contains("usage"), "{shown}");
-    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+    // The range counts matching built-ins and session commands
+    // (`docs/tui.md:1973-1975`).
     assert!(shown.contains("of 58"), "{shown}");
 }
 
