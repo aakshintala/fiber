@@ -727,8 +727,8 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     let shown = screen(&app, 80, 12);
     let bars = barred(&buf);
     assert_eq!(bars.len(), 1, "{shown}");
-    // `/mcp` sits after `/tools`: ten downs bar `/quota` now.
-    assert!(row_text(&buf, bars[0]).contains("usage"), "{shown}");
+    // `/hooks` sits after `/tools`: ten downs bar `/context` now.
+    assert!(row_text(&buf, bars[0]).contains("context"), "{shown}");
     // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
     assert!(shown.contains("of 58"), "{shown}");
 }

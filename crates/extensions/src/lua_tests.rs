@@ -1401,6 +1401,8 @@ fn ready_hook(point: &str, ms: u64) -> Shared {
             phase: HookPhase::Transform,
             blocking: false,
             timeout: Duration::from_millis(ms),
+            entry: None,
+            phase_explicit: false,
         }],
     );
     shared
@@ -2556,6 +2558,53 @@ fn hook_refusals_name_the_entry_when_given() {
     // The valid entry-carrying hook registered: the label changes only
     // refusals.
     assert_eq!(declared.by_point.get("before_tool").map(Vec::len), Some(1));
+}
+
+/// Declared entry and explicit phase survive the registrar, while an
+/// omitted phase defaults to `transform` without marking itself explicit.
+/// Flipping the explicit flag would list an undeclared phase; dropping the
+/// entry would lose the configuration key. The phase default and its
+/// explicitness follow `docs/extensions.md`, "When several hooks share a
+/// point"; declared `entry` survives only from configuration declarations
+/// (`docs/extensions.md`, "Hooks declared in configuration").
+#[test]
+fn declared_entry_and_explicit_phase_survive_the_registrar() {
+    let init = [
+        "local run = function() end",
+        "fiber.hook(\"after_tool\", { phase = \"sanitize\", timeout = 1, on_failure = \"blocking\", entry = \"audit\", run = run })",
+        "fiber.hook(\"after_tool\", { timeout = 1, on_failure = \"non-blocking\", run = run })",
+        "fiber.hook(\"after_tool\", { phase = \"transform\", timeout = 1, on_failure = \"blocking\", run = run })",
+        "fiber.watch({ \"turn_completed\" }, { timeout = 1, entry = \"ping\", run = run })",
+        "fiber.watch({ \"turn_completed\" }, { timeout = 1, run = run })",
+    ]
+    .join("\n");
+    let dir = extension("declared-metadata", &init);
+    let clock = FakeClock::new();
+    let ext = LuaExtension::new(
+        "ext",
+        dir.path(),
+        PathBuf::from("/nonexistent-fiber-home"),
+        clock,
+    );
+    let declared = ext.hooks().expect("the entry script runs");
+    assert!(declared.problems.is_empty(), "{:?}", declared.problems);
+    let hooks = &declared.by_point["after_tool"];
+    assert_eq!(hooks.len(), 3);
+    assert_eq!(hooks[0].entry.as_deref(), Some("audit"));
+    assert!(hooks[0].phase_explicit);
+    assert_eq!(hooks[0].phase, crate::lua::HookPhase::Sanitize);
+    assert_eq!(hooks[1].entry, None);
+    assert!(!hooks[1].phase_explicit);
+    assert_eq!(hooks[1].phase, crate::lua::HookPhase::Transform);
+    assert_eq!(hooks[2].entry, None);
+    assert!(hooks[2].phase_explicit);
+    assert_eq!(hooks[2].phase, crate::lua::HookPhase::Transform);
+    let watchers = ext.watchers().expect("the entry script runs");
+    assert!(watchers.problems.is_empty(), "{:?}", watchers.problems);
+    assert_eq!(watchers.watchers.len(), 2);
+    assert_eq!(watchers.watchers[0].entry.as_deref(), Some("ping"));
+    assert_eq!(watchers.watchers[0].kinds, ["turn_completed"]);
+    assert_eq!(watchers.watchers[1].entry, None);
 }
 
 /// Test-only wrappers over the hub's probes: each reaches hub state no

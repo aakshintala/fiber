@@ -189,6 +189,8 @@ fn armed_hook() -> (Arc<Hub>, u64, Target, Duration, Instant) {
                     phase: HookPhase::Transform,
                     blocking: false,
                     timeout,
+                    entry: None,
+                    phase_explicit: false,
                 }],
             );
         } else {
@@ -2158,6 +2160,8 @@ fn delegate_rig(
                             phase: HookPhase::Transform,
                             blocking: false,
                             timeout,
+                            entry: None,
+                            phase_explicit: false,
                         }],
                     );
                 }
