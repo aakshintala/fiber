@@ -1352,9 +1352,13 @@ fn slash_name_sends_name_and_clears_the_draft() {
         command_of(&lines[0]),
         ("name".to_owned(), serde_json::json!({"text": ""}))
     );
-    // A word that only starts with it is a prompt like any other.
-    let lines = sent(send(&mut app, "/named", now));
-    assert_eq!(command_of(&lines[0]).0, "steer");
+    // A word that only starts with it is refused, keeping the draft.
+    assert_eq!(send(&mut app, "/named", now), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Unknown command /named. Type / for the list.")
+    );
+    assert_eq!(app.draft(), "/named");
 }
 
 #[test]
