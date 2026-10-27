@@ -593,7 +593,8 @@ a click on it returns too. The views are:
   columns wide, and the input box's hint reads "type into the job", dim.
 - **The running delegates or jobs,** from "N delegates running" or "N jobs
   running" in the narrow layout: two rows for each delegate, or one row for
-  each job, in the order they started. A row opens that item's view.
+  each job, in the order they started. `/jobs` (`/tasks` and `/ps` run the
+  same command) opens the jobs list. A row opens that item's view.
   "Delegates · N running" bold heads the delegates. A delegate's first row is
   "◆ <description> · <elapsed>"; its second, indented two columns, is dim:
   the model, the thinking level, the calls and the session, then its spend,
@@ -1957,6 +1958,7 @@ later release still applies.
 | `/approvals` | Reopens the waiting approvals and questions. |
 | `/?`, `/help` | Opens the key map. |
 | `/delegates`, `/agents` | Opens the delegates view: every delegate of the session on screen, running and finished. |
+| `/jobs`, `/tasks`, `/ps` | Opens the running jobs view: every running job of the session on screen, in the order they started. With no session on screen it shows the notice "No session on screen"; with no jobs running it shows the notice "No jobs running" and opens nothing. Words after the command are ignored. |
 
 The `/` list shows built-in commands in this order.
 
