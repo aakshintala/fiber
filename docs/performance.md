@@ -57,7 +57,7 @@ a 20-thousand-token one fit the same ceiling.
 
 ## Budgets
 
-| Budget | Ceiling | Gated on | Basis | Fast ceiling | Middle ceiling | Slow ceiling | Fast tolerance | Slow tolerance |
+| Budget | Ceiling | Gated on | Basis | Recorded fast ceiling | Recorded middle ceiling | Recorded slow ceiling | Fast tolerance | Slow tolerance |
 |---|---|---|---|---|---|---|---|---|
 | Session, idle, headless | 14,336 KiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |
 | Terminal, idle | 20,088 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
@@ -149,7 +149,7 @@ median. Each tolerance is `100 * (maximum per-file median / minimum per-file
 median - 1)` for the gated model and row, rounded upward to a whole percent:
 fast uses 9V45, slow uses 7763 only, so the advisory 9V74 never widens 7763's
 tolerance. A per-file median under the 1 ms quantum counts as 1 ms,
-so a zero median never divides the tolerance. Middle has no tolerance because no middle model gates. The fast
+so a zero median never divides the tolerance. Middle has no tolerance because no middle model gates. The class cells are recorded ceilings: the gate judges a recorded class ceiling under 2 ms on an effective ceiling of 2 ms, and its base leg allows the head median 1.0 ms absolute over the same-job base median instead of the row's percentage tolerance. Both legs need strictly over to fail: the head median must exceed the effective ceiling and exceed the base median by more than 1 ms. This absolute allowance applies only to rows whose recorded class ceiling is under 2 ms; slower rows keep the percentage path. The fast
 session_list ceiling and tolerance are pinned by a test against the
 plain-number samples of the fast class's stored files
 (`xtask/tests/class_data/9v45-session-list.json`). `scripts/class-data`
@@ -299,7 +299,10 @@ busy peak RSS spans 1.31% and web_fetch peak RSS 6.98%. An ordinary timing gate 
 only when the median is over its class's ceiling and over the base commit's
 median from the same job by more than that tolerance, measured in the same
 job on the same runner, and its author may raise the ceiling as
-above. A model with fewer than 5 stored runs, an unknown CPU model and any row without a comparable same-job base timing stay
+above. On a row whose recorded class ceiling is under 2 ms, the ceiling
+leg reads the effective 2 ms ceiling and the base leg reads the base
+median plus 1.0 ms absolute: the row fails only when the head median is
+strictly over both. A model with fewer than 5 stored runs, an unknown CPU model and any row without a comparable same-job base timing stay
 advisory, and the comment says why. Attaching's warm first-frame row is
 an exception: on eligible fast and slow models, each 1 MiB and 10 MiB
 own-log fixture fails if its median exceeds 50 ms. This hard ceiling holds
