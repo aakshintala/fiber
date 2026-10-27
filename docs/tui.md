@@ -569,7 +569,7 @@ a click on it returns too. The views are:
   cards as the conversation, and the input box sends steering messages to
   that delegate. The breadcrumb is bold. The status card is a `surface`
   slab: "harness <name>", then " · model <model> · <level>" dim; under it,
-  dim, the calls, "elapsed <time>" and "session <id>"; then "■ stop <id>" in
+  dim, the calls, "elapsed <time>" and "session <id>"; then "■ stop <session id>" in
   `error`. The input box's hint reads "steering goes to ◆ <description>",
   dim. A delegate that has not bound its socket yet answers
   `session_not_found`; while its parent lists it running, the terminal asks
@@ -588,7 +588,7 @@ a click on it returns too. The views are:
   attached. Carriage return, line feed, backspace, tab, cursor movement and
   erasing in a line or the display are applied; other escape sequences are
   dropped. Its status row is "job <id> · <command> · running <time>", then
-  " · " dim and "■ stop ends it" in `error`; under it, "live screen · 80
+  " · " dim and "■ stop <job id>" in `error`; under it, "live screen · 80
   columns × 24 rows from attach" dim. The screen sits on a `turn` slab 80
   columns wide, and the input box's hint reads "type into the job", dim.
 - **The running delegates or jobs,** from "N delegates running" or "N jobs
@@ -603,6 +603,13 @@ a click on it returns too. The views are:
   card's does. "Jobs · N running" bold heads the jobs, one row each: "◆
   <command> · <elapsed> · <id>". The last row is "a row opens that item's
   view", dim.
+- **Every delegate,** from `/delegates` (`/agents` runs the same
+  command): running delegates in the order they started first, then
+  finished ones in the order they started, two rows for each delegate
+  in the Delegates card's format. A row opens that item's view; a
+  finished row opens its replay. The top row is `Delegates` with
+  `/delegates` dim; there is no heading row and no count. With no
+  delegates the view says "No delegates".
 - **The model picker:** models by provider with roles marked, a chip for each
   thinking level the model supports, each model's input and output prices,
   and what a switch to it costs to rebuild the prompt cache. Choosing a model
@@ -1307,7 +1314,8 @@ pins it (`docs/tools.md`, "Naming the session"). A name is drawn with each contr
 `/rewind` swaps a view into the conversation area (`docs/events.md`,
 "Rewind").
 
-- Each turn is one row, "before: <prompt>". The chosen turn opens into every
+- Each turn is one row, "before: <prompt>", or "before: rewind summary" for
+  the turn a rewind's summary ran in. The chosen turn opens into every
   step boundary: after the person's message and after each step, with the
   step's summary. The default is the start of the latest turn that is not a rewind's summary.
 - For the chosen point it shows the files Fiber's tools wrote since, the calls
@@ -1926,6 +1934,7 @@ later release still applies.
 | `/status` | Opens the status view ("Swapped views"). |
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
+| `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
@@ -1947,8 +1956,11 @@ later release still applies.
 | `/quit`, `/exit` | Quits ("Quit"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
 | `/?`, `/help` | Opens the key map. |
+| `/delegates`, `/agents` | Opens the delegates view: every delegate of the session on screen, running and finished. |
 
 The `/` list shows built-in commands in this order.
+
+The range line's total counts every entry the query matches: the matching built-in rows plus the matching session commands.
 
 A row's second name, such as `/exit`, is an alias: typing it runs the same
 command, and the `/` list shows it after the name on that command's row,
@@ -1964,6 +1976,12 @@ fills the list from the answer to the latest one it sent; until that answer
 arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's command named like an alias takes that name the same way: its own row shows, and the built-in row drops the alias. An extension's commands run
 with the `command` driver command (`docs/extensions.md`, "Commands and
 screens").
+
+An unrecognised `/name` is refused: the terminal keeps the text in the
+input box and shows the notice `Unknown command /<name>. Type / for the
+list.` A first word with another `/` in it, such as `/usr/bin/env`, is a
+path and is sent as a message. On home, the same rule applies against
+the built-in commands only.
 
 ### Clearing
 

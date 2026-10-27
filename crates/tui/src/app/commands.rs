@@ -56,11 +56,13 @@ pub(crate) fn alias_of(name: &str) -> Option<&'static str> {
     match name {
         "thinking" => Some("effort"),
         "usage" => Some("cost"),
+        "pwd" => Some("cwd"),
         "settings" => Some("config"),
         "keys" => Some("keybindings"),
         "name" => Some("rename"),
         "feedback" => Some("bug"),
         "quit" => Some("exit"),
+        "delegates" => Some("agents"),
         _ => None,
     }
 }
@@ -159,6 +161,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_copy,
     },
     CommandEntry {
+        name: "pwd",
+        description: "Shows the session's workspace; on home, shows the notice 'No session on screen'.",
+        hint: None,
+        run: run_pwd,
+    },
+    CommandEntry {
         name: "panel",
         description: "Shows or hides the panel.",
         hint: None,
@@ -205,6 +213,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         description: "Opens the skills.",
         hint: None,
         run: run_skills,
+    },
+    CommandEntry {
+        name: "rewind",
+        description: "Opens the rewind view.",
+        hint: None,
+        run: run_rewind,
     },
     CommandEntry {
         name: "handoff",
@@ -283,6 +297,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         description: "Opens the key map.",
         hint: None,
         run: run_keymap,
+    },
+    CommandEntry {
+        name: "delegates",
+        description: "Opens the delegates view: every delegate of the session on screen, running and finished.",
+        hint: None,
+        run: run_delegates,
     },
 ];
 
@@ -431,6 +451,16 @@ fn run_skills(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Skills))
 }
 
+fn run_rewind(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::Rewind))
+}
+
+fn run_delegates(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::AllDelegates))
+}
+
 fn run_context(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::Context))
@@ -462,6 +492,26 @@ fn run_diff(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_copy(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.copy_last_reply())
+}
+
+/// Shows the session's recorded workspace root as a notice: the
+/// absolute root `session_started` recorded, which is the worktree when
+/// the session runs in one. On home, with no session on screen, the
+/// `session_not_found` notice. While the attached session's root has
+/// not folded yet, the notice waits for its fold. A lost link still
+/// shows the recorded root, and nothing is ever sent.
+fn run_pwd(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    let Phase::Attached { .. } = &app.phase else {
+        app.push_notice("session_not_found", NO_SESSION.to_owned());
+        return Some(Effect::None);
+    };
+    if let Some(workspace) = app.panel_state.workspace() {
+        app.push_notice("workspace", workspace.to_owned());
+    } else {
+        app.pwd_pending = true;
+    }
+    Some(Effect::None)
 }
 
 fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -674,6 +724,9 @@ impl App {
     /// False without the reset.
     pub(super) fn reset_session(&mut self) -> bool {
         self.draft.clear();
+        // A `/pwd` waiting on the old session's root ends with the
+        // detach: going home forgets the wait with the screen.
+        self.pwd_pending = false;
         self.close_find();
         self.leave_session(self.session().cloned());
         // Leaving the parent closes the item view first, swapping the
@@ -903,11 +956,57 @@ impl App {
         self.completion.commands_answered(accepted);
     }
 
+    /// Whether the draft starts with an unknown slash command: its first
+    /// word starts with `/`, names neither a built-in command nor an entry
+    /// in the session's current `commands` answer, and holds no second
+    /// `/`, so it is no path. Refusing posts the notice and keeps the
+    /// whole draft, image included; `true` means Enter sends nothing.
+    fn refuse_unknown_slash(&mut self) -> bool {
+        // The typed text, without image labels: `expand` draws each
+        // image as `[Image #N]`, which would split the first word.
+        let mut text = String::new();
+        for part in self.draft.content() {
+            if let contract::commands::SentPart::Text { text: run } = part {
+                text.push_str(&run);
+            }
+        }
+        let trimmed = text.trim();
+        let (head, _) = trimmed
+            .split_once(char::is_whitespace)
+            .unwrap_or((trimmed, ""));
+        let Some(name) = head.strip_prefix('/') else {
+            return false;
+        };
+        if name.is_empty() || name.contains('/') {
+            return false;
+        }
+        if slash::is_built_in(name) {
+            return false;
+        }
+        if self
+            .completion
+            .slash_rows
+            .iter()
+            .any(|row| row.name == name || row.alias.as_deref() == Some(name))
+        {
+            return false;
+        }
+        self.push_notice(
+            "unknown_command",
+            format!("Unknown command /{name}. Type / for the list."),
+        );
+        true
+    }
+
     /// Enter sends the draft: `start` with no session, `prompt` when
     /// idle, `steer` during a turn, and `shell` for a `!` command whenever
     /// attached. A draft holding an image sends its content as a prompt
-    /// or `steer`, never as a built-in or a `!` command.
+    /// or `steer`, never as a built-in or a `!` command. An unknown slash
+    /// command is refused before any of that, keeping the draft.
     pub(super) fn on_enter(&mut self) -> Effect {
+        if self.refuse_unknown_slash() {
+            return Effect::None;
+        }
         if let Some(effect) = self.built_in() {
             return effect;
         }

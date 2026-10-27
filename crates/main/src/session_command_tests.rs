@@ -97,6 +97,51 @@ fn effective_answerable_keeps_the_base_only_when_not_supervised() {
     assert!(!effective_answerable(false, true));
 }
 
+#[test]
+fn an_isolated_fork_adopts_before_reading_its_point() {
+    if let Ok(workspace) = std::env::var(CHILD) {
+        let args = crate::cli::SessionArgs {
+            id: "s_0123456789abcdef".into(),
+            workspace: workspace.into(),
+            model: None,
+            overrides: Vec::new(),
+            prompt: Some("check it".into()),
+            resume: false,
+            credential: None,
+            worktree: true,
+            rewound_from: None,
+            continues: None,
+            forked_from: Some("s_aaaaaaaaaaaaaaaa".into()),
+            forked_seq: Some(41),
+            parent: Some("s_aaaaaaaaaaaaaaaa".into()),
+            delegate_id: Some("j_bbbbbbbbbbbbbbbb".into()),
+            depth: Some(1),
+            login_shell: false,
+            supervised: false,
+        };
+        std::process::exit(super::run(
+            args,
+            fakes::clock::FakeClock::new(),
+            Err("not needed".into()),
+        ));
+    }
+    let root = fakes::TempDir::new("fiber-fork-adoption");
+    let workspace = root.path().join("fork");
+    std::fs::create_dir(&workspace).unwrap();
+    // Opening the lock must fail before the missing fork point is read.
+    std::fs::create_dir(root.path().join("fork.lock")).unwrap();
+    let output = fakes::rerun_within(
+        &this("an_isolated_fork_adopts_before_reading_its_point"),
+        &[(CHILD, workspace.to_str().unwrap())],
+        Deadline::after(RERUN_WITHIN),
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("io_failed"), "{stdout}");
+    assert!(stdout.contains("fork.lock"), "{stdout}");
+    assert!(!stdout.contains("session_not_found"), "{stdout}");
+}
+
 /// Installs the signals, records a real SIGTERM to this process when
 /// `signalled`, then reports an `io_failed` failure and exits with what
 /// `report` returns.

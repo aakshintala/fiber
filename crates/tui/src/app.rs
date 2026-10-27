@@ -81,6 +81,7 @@ pub(crate) mod rail;
 mod reconnect;
 pub(crate) mod results;
 mod reviewer_setup;
+mod rewind;
 mod screen;
 mod select;
 mod session_views;
@@ -277,6 +278,9 @@ pub(crate) struct App {
     /// A `/copy` waiting for the opening pass to end (`docs/tui.md`,
     /// "Selection and copy").
     copy_owed: bool,
+    /// A `/pwd` waiting for the attached session's `session_started` to
+    /// fold (`docs/tui.md`, "Slash commands").
+    pwd_pending: bool,
     /// A whole-turn copy waiting on dropped pages (`docs/tui.md`,
     /// "History and paging").
     pending_turn: Option<crate::turn_text::PendingTurn>,
@@ -320,6 +324,8 @@ pub(crate) struct App {
     config_views: config_views::ConfigViews,
     /// The attached session's views (`docs/tui.md`, "Swapped views").
     session_views: session_views::SessionViews,
+    /// The `/rewind` view's state (`docs/tui.md`, "Rewind").
+    rewind: rewind::Rewind,
     /// The open delegate or job view and the per-job fold (`docs/tui.md`,
     /// "Swapped views").
     items: items::Items,
@@ -395,6 +401,7 @@ impl App {
             history: history::History::default(),
             copied: false,
             copy_owed: false,
+            pwd_pending: false,
             pending_turn: None,
             focus: None,
             stops: Vec::new(),
@@ -413,6 +420,7 @@ impl App {
             attention: attention::State::default(),
             config_views: config_views::ConfigViews::default(),
             session_views: session_views::SessionViews::default(),
+            rewind: rewind::Rewind::default(),
             items: items::Items::default(),
             reconnect: reconnect::Reconnect::default(),
             launch_overrides: Vec::new(),
@@ -440,6 +448,9 @@ impl App {
         self.end_overlay();
         // A `/copy` waiting on a pass was for the screen before this one.
         self.copy_owed = false;
+        // A `/pwd` waiting on the old session's root ends with the
+        // switch: the new session's fold answers only its own wait.
+        self.pwd_pending = false;
         self.switch_session(&session);
         // Another session's stale rows end with the attachment; the open
         // session's own notice stands until `stream_reopened` ends it.
@@ -457,6 +468,9 @@ impl App {
             busy: false,
         };
         self.panel_state.attached();
+        // A new attachment folds no old rewind state: the next open
+        // pages the new session's chain from its tip.
+        self.rewind = rewind::Rewind::default();
         // A new session's images start over: a late answer or viewer
         // completion from the last one is dropped.
         self.forget_images();
@@ -1187,6 +1201,7 @@ impl App {
         self.picker_disconnected();
         self.find_lost();
         self.call_view_lost();
+        self.rewind_lost();
         self.abandon_copy();
         self.settle();
     }
@@ -1229,6 +1244,24 @@ impl App {
         match &self.phase {
             Phase::Attached { session, .. } => Some(session),
             Phase::Starting | Phase::Pending { .. } => None,
+        }
+    }
+
+    /// Shows a waiting `/pwd` notice once its session's root folds: the
+    /// session attached before its `session_started` holds the notice
+    /// until that fold, so the notice never reads "no session" for a
+    /// session on screen. Any other line, or no waiting `/pwd`, leaves
+    /// the wait alone.
+    fn pwd_arrived(&mut self, envelope: &Envelope) {
+        if envelope.kind != "session_started" {
+            return;
+        }
+        if !self.pwd_pending {
+            return;
+        }
+        self.pwd_pending = false;
+        if let Some(workspace) = self.panel_state.workspace() {
+            self.push_notice("workspace", workspace.to_owned());
         }
     }
 
@@ -1726,6 +1759,12 @@ impl App {
                     if self.image_rejected(&id, &message) {
                         return Vec::new();
                     }
+                    // A hub-relayed failed new-session start settles
+                    // the sent `rewind` with the start's code, and goes
+                    // no further: no generic notice names it.
+                    if self.rewind_hub_refused(&id, &code, &message) {
+                        return Vec::new();
+                    }
                     self.offer.file_refused(
                         &id,
                         &serde_json::from_value(Value::String(code.clone()))
@@ -1748,6 +1787,12 @@ impl App {
             }
             // The hub holds no subscription for the open session any more:
             // keep what arrived, say so, and leave the retry to a reopen.
+            "stream_reopened" => {
+                // A reopening ends a `history` wait at once: its late
+                // answer folds nowhere.
+                self.rewind_reopened();
+                Vec::new()
+            }
             "stream_closed" => {
                 let closed = hub_string(&hub.payload, "session_id");
                 if closed.as_deref() == self.session().map(|session| session.0.as_str())
@@ -2041,6 +2086,7 @@ impl App {
             return send;
         }
         send.extend(self.panel_line(envelope));
+        self.pwd_arrived(envelope);
         self.reviewer_block(envelope);
         self.items_line(envelope);
         self.output_line(envelope);

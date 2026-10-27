@@ -851,3 +851,358 @@ fn no_color_the_text_stays_dim_while_the_rail_is_focused() {
     }
     assert_eq!(text, 2, "the draft");
 }
+
+/// The attached session every item fixture opens.
+const ITEM_SESSION: &str = "s_aaaaaaaaaaaaaaaa";
+/// One delegate session.
+const ITEM_DELEGATE: &str = "s_dddddddddddddddd";
+
+/// An app on home at 80x24, drawing the default cards.
+fn item_home() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: ["session", "changed_files", "delegates", "jobs", "quota"]
+            .map(str::to_owned)
+            .to_vec(),
+        ..Default::default()
+    });
+    app.set_size(80, 24);
+    app
+}
+
+/// A live `session_status` for `session`, merged over the defaults.
+fn item_live(session: &str, state: serde_json::Value) -> crate::link::Line {
+    let mut payload = serde_json::json!({
+        "name": "fix the parser", "workspace": "/w", "project": "-w",
+        "started": 0, "calls": 0, "since": 0,
+        "spend": {"tokens": {"input": 1, "cache_read": 0,
+            "cache_write": {}, "output": 2},
+            "cost": 0.0, "subscription_cost": 0.0},
+        "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+    });
+    for (key, value) in state.as_object().cloned().unwrap_or_default() {
+        payload[key] = value;
+    }
+    session_line(session, "session_status", payload)
+}
+
+/// Links the app and opens the attached session through home.
+fn item_opened(app: &mut App) {
+    use contract::SessionId;
+    let lines: Vec<serde_json::Value> = app
+        .on_line(crate::link::Line::Hub(contract::HubLine {
+            kind: "hub_hello".to_owned(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            payload: serde_json::Map::new(),
+        }))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    assert_eq!(lines.len(), 2);
+    app.on_line(item_live(
+        ITEM_SESSION,
+        serde_json::json!({"state": "streaming"}),
+    ));
+    let key = app
+        .home_screen()
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect::<Vec<_>>()
+        })
+        .and_then(|keys| keys.into_iter().next())
+        .unwrap_or_else(|| panic!("a row"));
+    let out: Vec<serde_json::Value> = match app
+        .on_click(crate::mouse::TargetId::Home(crate::home::Spot::Entry(key)))
+    {
+        crate::app::Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
+        crate::app::Effect::None
+        | crate::app::Effect::Quit
+        | crate::app::Effect::ListFiles
+        | crate::app::Effect::FindPause { .. }
+        | crate::app::Effect::Search { .. }
+        | crate::app::Effect::Editor { .. }
+        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::Copy(_)
+        | crate::app::Effect::OpenLink(_)
+        | crate::app::Effect::OpenFile(_)
+        | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::Feedback { .. } => panic!("opening sends"),
+    };
+    let id = out
+        .iter()
+        .rfind(|line| line["command"] == "subscribe")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a subscribe"))
+        .to_owned();
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "command_id".to_owned(),
+        serde_json::Value::String(id.clone()),
+    );
+    app.on_line(crate::link::Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: SessionId(ITEM_SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.clone(),
+    }));
+    let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
+    let raise: serde_json::Value =
+        serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
+    let raise_id = raise["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a raise id"))
+        .to_owned();
+    payload.insert("command_id".to_owned(), serde_json::Value::String(raise_id));
+    app.on_line(crate::link::Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: SessionId(ITEM_SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload,
+    }));
+}
+
+/// Folds a Fiber delegate as `j_1`.
+fn fold_delegate(app: &mut App) {
+    app.on_line(session_line(
+        ITEM_SESSION,
+        "job_started",
+        serde_json::json!({"job_id": "j_1", "description": "review the parser",
+            "output_path": "/tmp/out"}),
+    ));
+    app.on_line(session_line(
+        ITEM_SESSION,
+        "delegate_started",
+        serde_json::json!({"job_id": "j_1",
+            "delegate_session_id": ITEM_DELEGATE,
+            "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+    ));
+}
+
+/// Folds a plain job as `j_2`.
+fn fold_job(app: &mut App) {
+    app.on_line(session_line(
+        ITEM_SESSION,
+        "job_started",
+        serde_json::json!({"job_id": "j_2", "description": "build the workspace",
+            "output_path": "/tmp/out"}),
+    ));
+}
+
+/// Opens `j_1`'s delegate view through the panel.
+fn open_delegate(app: &mut App) {
+    use crate::mouse::TargetId;
+    let serial = app
+        .serial_of_job(&contract::JobId("j_1".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    let _ = app.on_click(TargetId::Panel(crate::app::panel::Spot::Delegate(serial)));
+    assert!(app.item_open());
+}
+
+/// Opens `j_2`'s job view through the panel.
+fn open_job(app: &mut App) {
+    use crate::mouse::TargetId;
+    let serial = app
+        .serial_of_job(&contract::JobId("j_2".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    let _ = app.on_click(TargetId::Panel(crate::app::panel::Spot::Job(serial)));
+    assert!(app.item_open());
+}
+
+/// The buffer's row holding `needle`.
+fn hint_row(buf: &Buffer, needle: &str) -> u16 {
+    crate::view::text(buf)
+        .lines()
+        .enumerate()
+        .find_map(|(y, row)| {
+            row.contains(needle)
+                .then(|| u16::try_from(y).unwrap_or(u16::MAX))
+        })
+        .unwrap_or_else(|| panic!("a row with {needle}"))
+}
+
+/// The hint's cells are dim and never cover the caret.
+fn assert_hint(buf: &Buffer, y: u16, hint: &str) {
+    let start = 80u16.saturating_sub(u16::try_from(crate::format::width(hint)).unwrap_or(u16::MAX));
+    let caret = (0..80)
+        .find(|x| buf[(*x, y)].symbol() == "█")
+        .unwrap_or_else(|| panic!("the caret"));
+    assert!(caret < start, "the hint never covers the caret");
+    let mut x = start;
+    for ch in hint.chars() {
+        let wide = u16::try_from(crate::format::width(&ch.to_string())).unwrap_or(1);
+        assert_eq!(buf[(x, y)].symbol(), ch.to_string().as_str(), "cell {x}");
+        assert_eq!(buf[(x, y)].fg, Role::Muted.color(), "dim hint {x}");
+        x = x.saturating_add(wide.max(1));
+    }
+}
+
+#[test]
+fn delegate_view_hints_that_steering_goes_to_the_delegate() {
+    let mut app = item_home();
+    item_opened(&mut app);
+    fold_delegate(&mut app);
+    open_delegate(&mut app);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let hint = "steering goes to ◆ review the parser";
+    let y = hint_row(&buf, hint);
+    // The box's last text row carries the hint at its right end.
+    assert!(
+        crate::view::text(&buf)
+            .lines()
+            .nth(usize::from(y))
+            .unwrap_or_default()
+            .trim_end()
+            .ends_with(hint),
+        "the hint ends the row"
+    );
+    assert_hint(&buf, y, hint);
+}
+
+#[test]
+fn job_view_hints_to_type_into_the_job() {
+    let mut app = item_home();
+    item_opened(&mut app);
+    fold_job(&mut app);
+    open_job(&mut app);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let hint = "type into the job";
+    let y = hint_row(&buf, hint);
+    assert!(
+        crate::view::text(&buf)
+            .lines()
+            .nth(usize::from(y))
+            .unwrap_or_default()
+            .trim_end()
+            .ends_with(hint),
+        "the hint ends the row"
+    );
+    assert_hint(&buf, y, hint);
+}
+
+#[test]
+fn a_non_empty_draft_draws_no_item_hint() {
+    let mut app = item_home();
+    item_opened(&mut app);
+    fold_delegate(&mut app);
+    open_delegate(&mut app);
+    type_draft(&mut app, "hi");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let text = crate::view::text(&buf);
+    assert!(
+        !text.lines().any(|row| row.contains("steering goes to")),
+        "no delegate hint with a draft"
+    );
+    assert!(
+        !text.lines().any(|row| row.contains("type into the job")),
+        "no job hint with a draft"
+    );
+}
+
+#[test]
+fn an_edit_selection_draws_the_editing_hint_in_an_item_view() {
+    let mut app = item_home();
+    item_opened(&mut app);
+    fold_delegate(&mut app);
+    open_delegate(&mut app);
+    app.on_line(session_line(
+        ITEM_SESSION,
+        "steering_queue",
+        serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+        ]}),
+    ));
+    app.select_steering(0);
+    assert!(app.steering_selected().is_some());
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let text = crate::view::text(&buf);
+    assert!(
+        text.lines().any(|row| row.contains("queued message")),
+        "the editing hint wins"
+    );
+    assert!(
+        !text.lines().any(|row| row.contains("steering goes to")),
+        "no item hint while editing"
+    );
+}
+
+#[test]
+fn no_item_view_draws_no_item_hint() {
+    let app = typed(80, 24, "");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let text = crate::view::text(&buf);
+    assert!(
+        !text.lines().any(|row| row.contains("steering goes to")),
+        "no delegate hint outside an item view"
+    );
+    assert!(
+        !text.lines().any(|row| row.contains("type into the job")),
+        "no job hint outside an item view"
+    );
+}
+
+#[test]
+fn steering_selected_hides_the_item_hint_itself() {
+    let mut app = item_home();
+    item_opened(&mut app);
+    fold_delegate(&mut app);
+    open_delegate(&mut app);
+    app.on_line(session_line(
+        ITEM_SESSION,
+        "steering_queue",
+        serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+        ]}),
+    ));
+    app.select_steering(0);
+    assert!(app.steering_selected().is_some());
+    // Selecting loads the row's text, so clear it with Backspace: that
+    // empties the draft while the selection stays, isolating the first
+    // `||`'s steering arm (`!open` false, draft empty).
+    let now = fakes::clock::FakeClock::new().now();
+    while !app.input().expand().is_empty() {
+        app.on_key(Key::Backspace, now);
+    }
+    assert!(
+        app.steering_selected().is_some(),
+        "the selection survives clearing the draft"
+    );
+    assert!(app.input().expand().is_empty(), "the draft is empty");
+    assert!(app.item_open());
+    assert!(app.item_view().is_some());
+    // The first `||` matters alone here: not-open is false, the draft
+    // is empty and the item view exists, so only steering hides the
+    // hint. The draw keeps the editing hint, but the guard itself must
+    // already be `None`.
+    assert_eq!(super::item_hint(&app), None);
+}

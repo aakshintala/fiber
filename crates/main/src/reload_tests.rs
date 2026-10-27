@@ -230,6 +230,7 @@ impl Fixture {
             servers: Arc::new(empty.servers),
             artifacts: rig.workspace.join("artifacts"),
             images: Arc::new(DummyImages),
+            prepare_progress: Mutex::new(Vec::new()),
         });
         Self {
             rig,
@@ -293,13 +294,21 @@ impl Fixture {
         fixture
     }
 
-    /// Runs the reload preparation, dumping every fake MCP server's
-    /// `stderr.log` and `requests.log` into the failure when the wait
-    /// expires or the preparation panics: the failure then shows whether
-    /// the prepare blocked on a server start or past it.
+    /// Runs the reload preparation, dumping the last reached prepare
+    /// checkpoint and every fake MCP server's `stderr.log` and
+    /// `requests.log` into the failure when the prepare wait fails:
+    /// the wait expired, the worker panicked, or the worker thread
+    /// failed to start. The checkpoint record is test-only:
+    /// `prepare_inner` appends each stage boundary it passes, with no
+    /// pause and no branch, because no outside seam reaches those steps:
+    /// the fake servers log a request on arrival, before handling or
+    /// answering it. The record and the logs are read in the failure
+    /// path; when the wait expired instead, `fakes::within` never joins
+    /// its work thread, so both may include later entries.
     #[track_caller]
     fn prepare(&self) -> r#loop::ReloadPrepared {
         let state = self.state.clone();
+        state.clear_prepare_progress();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             fakes::within(
                 "reload prepared",
@@ -320,8 +329,9 @@ impl Fixture {
         match outcome {
             Ok(prepared) => prepared,
             Err(payload) => panic!(
-                "{message}\n{dump}",
+                "{message}\n{progress}\n{dump}",
                 message = panic_text(&payload),
+                progress = self.state.prepare_progress_line(),
                 dump = dump_fake_servers(self.rig.root.path()),
             ),
         }
@@ -346,28 +356,39 @@ fn panic_text(payload: &Box<dyn std::any::Any + Send>) -> String {
 
 /// Every fake server directory under the rig's root, sorted by name: a
 /// directory holding `tools.json` is one `FakeServer` made, whether the
-/// fixture tracks it or a test holds it aside. Each entry shows the
-/// server's stderr and every line it received.
-fn dump_fake_servers(root: &std::path::Path) -> String {
-    let mut names: Vec<String> = Vec::new();
+/// fixture tracks it or a test holds it aside.
+fn fake_server_dirs(root: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+    let mut servers = Vec::new();
     if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
             let dir = entry.path();
-            if dir.join("tools.json").is_file() {
-                names.extend(
-                    dir.file_name()
-                        .map(|name| name.to_string_lossy().into_owned()),
-                );
+            if dir.join("tools.json").is_file()
+                && let Some(name) = dir.file_name()
+            {
+                servers.push((name.to_string_lossy().into_owned(), dir));
             }
         }
     }
-    names.sort();
-    if names.is_empty() {
+    servers.sort();
+    servers
+}
+
+/// Every fake server directory under the rig's root, sorted by name.
+/// Each entry shows the server's stderr and every line it received as
+/// read in the failure path: when the prepare wait expired instead,
+/// `fakes::within` never joins its work thread, so the dump may
+/// include later traffic.
+fn dump_fake_servers(root: &std::path::Path) -> String {
+    let servers = fake_server_dirs(root);
+    if servers.is_empty() {
         return format!("fake MCP servers: none under {}", root.display());
     }
-    let mut dump = String::from("fake MCP servers at the prepare timeout:");
-    for name in &names {
-        dump.push_str(&dump_fake_server(&root.join(name), name));
+    let mut dump = String::from(
+        "fake MCP servers read in the failure path \
+         (when the prepare wait expired, the wait leaves its work thread running, so this may include later traffic):",
+    );
+    for (name, dir) in &servers {
+        dump.push_str(&dump_fake_server(dir, name));
     }
     dump
 }
@@ -1420,6 +1441,7 @@ fn assemble(base: &State, started: mcp::Started) -> State {
         servers: Arc::new(started.servers),
         artifacts: base.artifacts.clone(),
         images: Arc::clone(&base.images),
+        prepare_progress: Mutex::new(Vec::new()),
     }
 }
 
@@ -2617,8 +2639,88 @@ fn a_prepare_timeout_dump_shows_each_fake_servers_stderr_and_requests_log() {
     );
     assert!(!dump.contains("plain"), "skips a non-server: {dump}");
     assert!(!dump.contains("stray"), "skips a file: {dump}");
+    // `fakes::within` never joins its work thread, so when the wait
+    // expired the read may hold lines the prepare wrote later: the
+    // headline must say so, without claiming every failure is a timeout.
+    assert!(
+        dump.contains("may include later traffic"),
+        "the dump names its conditional later read: {dump}"
+    );
+    assert!(
+        dump.contains("read in the failure path"),
+        "the dump names when it was read: {dump}"
+    );
 }
 
+#[test]
+fn describe_prepare_progress_names_the_last_checkpoint_and_its_next_step() {
+    // The empty arm flips when the first checkpoint is renamed: a
+    // failure before anything records must still name where the
+    // prepare would have gone.
+    let line = describe_prepare_progress(&[]);
+    assert!(
+        line.contains("no checkpoint reached"),
+        "silence names itself: {line}"
+    );
+    assert!(
+        line.contains("next expected step is config_loaded"),
+        "silence names the first step: {line}"
+    );
+    // Selection flips when the last entry is ignored: the line must
+    // name the last reached checkpoint, not an earlier one, and the
+    // unfinished step after it.
+    let line = describe_prepare_progress(&["config_loaded", "repository_ready", "model_resolved"]);
+    assert!(
+        line.contains("last reached checkpoint model_resolved"),
+        "names the last reached step: {line}"
+    );
+    assert!(
+        !line.contains("last reached checkpoint config_loaded"),
+        "an earlier step is not the last: {line}"
+    );
+    assert!(
+        line.contains("next expected step is inputs_built"),
+        "names the unfinished step: {line}"
+    );
+    assert!(
+        line.contains("may include later checkpoints"),
+        "the read names its conditional later timing: {line}"
+    );
+    // The final arm flips when the last checkpoint gains a successor:
+    // a completed record says so instead of naming a next step.
+    let line = describe_prepare_progress(PREPARE_CHECKPOINTS);
+    assert!(
+        line.contains("last reached checkpoint prepared"),
+        "a full record ends at prepared: {line}"
+    );
+    assert!(
+        line.contains("final checkpoint"),
+        "no step follows the last one: {line}"
+    );
+}
+
+#[test]
+fn a_successful_prepare_records_every_checkpoint_in_order() {
+    // The hook appends only, with no pause and no branch, so a prepare
+    // that succeeds holds the whole order, ending at `prepared`.
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
+    let prepared = fixture.prepare();
+    assert!(
+        !prepared.tools.is_empty(),
+        "the prepare ran to the end: {:?}",
+        fixture.state.prepare_progress()
+    );
+    assert_eq!(
+        fixture.state.prepare_progress().as_slice(),
+        PREPARE_CHECKPOINTS,
+        "every stage boundary recorded in order"
+    );
+    let line = fixture.state.prepare_progress_line();
+    assert!(
+        line.contains("last reached checkpoint prepared"),
+        "the failure line would name the end: {line}"
+    );
+}
 // debt: one small helper test for the three panic payload forms; upgrade
 // trigger: remove the helper or cover these forms through another focused
 // test.
@@ -2656,6 +2758,14 @@ fn a_failed_prepare_reports_the_fake_servers_logs() {
     assert!(
         text.contains("requests.log:"),
         "carries the requests log: {text}"
+    );
+    assert!(
+        text.contains("prepare progress: no checkpoint reached"),
+        "an invalid config fails before the first checkpoint: {text}"
+    );
+    assert!(
+        text.contains("next expected step is config_loaded"),
+        "the failure names the unfinished step: {text}"
     );
 }
 

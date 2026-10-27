@@ -120,7 +120,8 @@ fn slash_eight_of_forty() {
     insta::assert_snapshot!("slash", screen(&app, 160, 48));
     // Eight entries and the range line, with the first match focused.
     let shown = screen(&app, 160, 48);
-    assert!(shown.contains("1–8 of 53 · ↓ 45 more"), "{shown}");
+    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+    assert!(shown.contains("1–8 of 56 · ↓ 48 more"), "{shown}");
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
     assert_eq!(bars.len(), 1, "{shown}");
@@ -155,7 +156,8 @@ fn a_scrolled_slash_list_counts_both_directions() {
     // The window follows the selection; the total and the count below
     // follow the list.
     assert!(
-        shown.contains("↑ 3 above · 4–11 of 53 · ↓ 42 more"),
+        // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+        shown.contains("↑ 3 above · 4–11 of 56 · ↓ 45 more"),
         "{shown}"
     );
     let buf = buffer(&app, 160, 48);
@@ -340,7 +342,8 @@ fn narrow_slash() {
     app.set_size(100, 40);
     type_text(&mut app, "/");
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
-    assert!(screen(&app, 100, 40).contains("1–8 of 53 · ↓ 45 more"));
+    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+    assert!(screen(&app, 100, 40).contains("1–8 of 56 · ↓ 48 more"));
 }
 
 #[test]
@@ -672,7 +675,8 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     assert_eq!(bars.len(), 1, "{shown}");
     // `/mcp` sits after `/tools`: ten downs bar `/quota` now.
     assert!(row_text(&buf, bars[0]).contains("usage"), "{shown}");
-    assert!(shown.contains("of 53"), "{shown}");
+    // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
+    assert!(shown.contains("of 56"), "{shown}");
 }
 
 /// A short conversation with an `@` list: the third path stays barred,

@@ -1,6 +1,7 @@
 //! Tests for terminal state.
 
 use super::{App, Effect, QUIT_WINDOW};
+use crate::app::testkit::{SESSION as S_A, sent, session_line};
 use crate::keys::{Edit, Key, Parser};
 use crate::link::Line;
 use contract::clock::Clock;
@@ -130,25 +131,6 @@ fn attach(app: &mut App, now: std::time::Instant, session: &str) {
         value.get("session_id").and_then(serde_json::Value::as_str),
         Some(session)
     );
-}
-
-/// One session envelope.
-fn session_line(
-    session: &str,
-    kind: &str,
-    payload: serde_json::Value,
-    action: Option<&str>,
-) -> Line {
-    Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
-        session_id: contract::SessionId(session.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: action.map(|id| contract::ActionId(id.to_owned())),
-        seq: None,
-        payload: payload.as_object().cloned().unwrap_or_default(),
-    })
 }
 
 /// A `turn_started` line with one message.
@@ -845,8 +827,6 @@ fn command_ids_are_c_and_sixteen_fresh_hex_digits() {
     assert_ne!(first, second);
 }
 
-const S_A: &str = "s_aaaaaaaaaaaaaaaa";
-
 /// The `/` panel's rows for `query`, typed into an empty draft and then
 /// cleared.
 fn slash_rows(app: &mut App, query: &str, now: std::time::Instant) -> Vec<String> {
@@ -1093,25 +1073,6 @@ fn a_commands_answer_from_another_session_is_ignored() {
     assert_eq!(slash_rows(&mut app, "td", now), ["no matches"]);
 }
 
-/// Every line an effect sends, parsed.
-fn sent(effect: Effect) -> Vec<serde_json::Value> {
-    match effect {
-        Effect::Send(lines) => lines.iter().map(|line| parse(line)).collect(),
-        Effect::None
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_)
-        | Effect::Quit
-        | Effect::ListFiles
-        | Effect::ReadImage(_)
-        | Effect::Feedback { .. }
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. } => Vec::new(),
-    }
-}
-
 /// A command line's `command` and its `args`.
 fn command_of(line: &serde_json::Value) -> (String, serde_json::Value) {
     (
@@ -1352,9 +1313,13 @@ fn slash_name_sends_name_and_clears_the_draft() {
         command_of(&lines[0]),
         ("name".to_owned(), serde_json::json!({"text": ""}))
     );
-    // A word that only starts with it is a prompt like any other.
-    let lines = sent(send(&mut app, "/named", now));
-    assert_eq!(command_of(&lines[0]).0, "steer");
+    // A word that only starts with it is refused, keeping the draft.
+    assert_eq!(send(&mut app, "/named", now), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Unknown command /named. Type / for the list.")
+    );
+    assert_eq!(app.draft(), "/named");
 }
 
 #[test]

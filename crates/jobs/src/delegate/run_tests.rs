@@ -3212,15 +3212,17 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     // folds it before the report, so the notice is `Completed` whether
     // or not the watcher beat the reap (see #3005).
     let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
-    let shell = format!("printf '%s\\n' '{exit}'");
-    // No gate on the forward: the fake persists every delivered line,
-    // so the reap's synchronous file replay recovers the usage even
-    // when the watcher loses the race, and the take below holds the
-    // Job and the streamed line whichever lands first. A park here
-    // would wait for the report from inside the forward while the
-    // report waits out the same bound under load; on expiry the parked
-    // thread dies holding the only claim and the line never arrives
-    // (see #3051).
+    // The child blocks on a fifo until the watch starts: an instant
+    // child would otherwise let the drive reap and report before its
+    // first launch ever runs, so no watcher would ever forward (see
+    // #3364).
+    let fifo = rig._dir.path().join("watch-started");
+    fakes::fifo(&fifo);
+    let shell = format!("read _ < '{}'; printf '%s\\n' '{exit}'", fifo.display());
+    // The watchdog owns teardown: dropping it kills the child blocked
+    // on the fifo, so a failure before the release leaves nothing
+    // parked.
+    let watchdog = Watchdog::matching(&fifo.to_string_lossy());
     let waited = rig
         .start_timeout(
             &shell,
@@ -3232,6 +3234,13 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
         )
         .0;
     let _waited = waited;
+    // The watch started, so the launch happened and its delivery is
+    // inevitable on the watcher's own thread: release the child. The
+    // watcher's forwards and the runner's reap still race (see #3005),
+    // so the take holds the Job and the streamed line whichever lands
+    // first. Every bound here is liveness only.
+    wait_calls(&rig, 1);
+    release_fifo(&fifo, b"go\n");
     // The well-formed line reaches the tap with the delegate's session id;
     // the malformed one never does, and `fiber_exited` still ends watch.
     // The tap runs before the inbox offer on the same forward, so a
@@ -3242,6 +3251,15 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     assert_eq!(usages[0].0, SessionId("s_child".into()));
     assert_eq!(usages[0].1, "g_1");
     assert_eq!(notice.completed.status, Outcome::Completed);
+    // After `fiber_exited` the runner starts no further watch
+    // (docs/delegates.md, "Lifetime"): the started watcher is the only
+    // call.
+    assert_eq!(
+        rig.script.calls().len(),
+        1,
+        "the started watcher is the only watch"
+    );
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// Runs one watch call against a log file holding `file_seqs` usage

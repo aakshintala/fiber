@@ -988,29 +988,175 @@ fn envelope(seq: u64) -> serde_json::Value {
 }
 
 #[test]
+fn resume_readers_use_the_child_project_even_after_its_worktree_was_removed() {
+    let root = fakes::TempDir::new("dm-child-project");
+    let home = root.path().join("home");
+    let workspace = root.path().join("repository");
+    std::fs::create_dir(&workspace).unwrap();
+    fakes::git::git(&workspace, &["init", "--quiet"]);
+    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    let key_dir = sessions.parent().unwrap();
+    let removed = key_dir.join("worktrees/s_child");
+    let record = contract::shapes::Worktree {
+        path: removed.to_string_lossy().into_owned(),
+        branch: "fiber/child".into(),
+        repository: Some(workspace.to_string_lossy().into_owned()),
+    };
+    let id = SessionId("s_child".into());
+    write_log(
+        &sessions,
+        &id.0,
+        &[
+            json!({"kind":"session_started", "payload": {"workspace": removed, "worktree": record}, "seq":1, "schema_version":contract::SCHEMA_VERSION, "session_id":id, "ts":0}),
+            envelope(7),
+        ],
+    );
+    assert_eq!(super::last_seq_reader(&home)(&removed, &id), Ok(Some(7)));
+    assert_eq!(
+        super::worktree_record_reader(&home)(&removed, &id),
+        Ok(Some(record))
+    );
+    for other in [
+        workspace.clone(),
+        key_dir.join("not-worktrees/s_child"),
+        removed.join("extra"),
+        root.path().join("other/worktrees/s_child"),
+    ] {
+        assert_eq!(
+            super::delegate_sessions(&home, &other, &SessionId("s_unknown".into())).unwrap(),
+            log::sessions_dir(&home, &doors::project(&other))
+        );
+    }
+    assert_eq!(super::last_seq_reader(&home)(&workspace, &id), Ok(Some(7)));
+    assert!(
+        super::worktree_record_reader(&home)(&removed, &SessionId("s_missing".into()))
+            .unwrap_err()
+            .contains("events.jsonl")
+    );
+    write_log(
+        &sessions,
+        &id.0,
+        &[json!({"kind":"session_started", "payload":{"workspace":workspace}, "seq":1})],
+    );
+    assert_eq!(
+        super::worktree_record_reader(&home)(&workspace, &id),
+        Ok(None)
+    );
+    write_log(
+        &sessions,
+        &id.0,
+        &[
+            json!({"kind":"session_started", "payload":{"workspace":workspace, "worktree":null}, "seq":1}),
+        ],
+    );
+    assert!(
+        super::worktree_record_reader(&home)(&workspace, &id)
+            .unwrap_err()
+            .contains("worktree")
+    );
+}
+
+#[test]
+fn missing_git_subworkspace_readers_find_the_logged_project_and_fail_closed() {
+    let root = fakes::TempDir::new("dm-removed-repository");
+    let home = root.path().join("home");
+    let repository = root.path().join("repository");
+    let workspace = repository.join("subworkspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    fakes::git::git(&repository, &["init", "--quiet"]);
+    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    let id = SessionId("s_removed_repository".into());
+    write_log(
+        &sessions,
+        &id.0,
+        &[
+            json!({"kind":"session_started", "payload":{"workspace":workspace}, "seq":1}),
+            envelope(7),
+        ],
+    );
+    std::fs::rename(&repository, repository.with_extension("moved")).unwrap();
+    assert_eq!(super::last_seq_reader(&home)(&workspace, &id), Ok(Some(7)));
+    assert_eq!(
+        super::worktree_record_reader(&home)(&workspace, &id),
+        Ok(None)
+    );
+    write_log(
+        &sessions,
+        &id.0,
+        &[
+            json!({"kind":"session_started", "payload":{"workspace":workspace, "worktree":null}, "seq":1}),
+        ],
+    );
+    assert!(
+        super::worktree_record_reader(&home)(&workspace, &id)
+            .unwrap_err()
+            .contains("malformed worktree record")
+    );
+    // An existing workspace resolves its own project, not a different logged project.
+    std::fs::create_dir_all(&workspace).unwrap();
+    assert_eq!(
+        super::delegate_sessions(&home, &workspace, &id).unwrap(),
+        log::sessions_dir(&home, &doors::project(&workspace))
+    );
+    assert_ne!(
+        super::delegate_sessions(&home, &workspace, &id).unwrap(),
+        sessions
+    );
+}
+
+#[test]
+fn removed_worktree_readers_name_a_worktree_with_no_usable_project_key() {
+    let root = fakes::TempDir::new("dm-bad-key");
+    let home = root.path().join("home");
+    // Shaped like a removed Fiber worktree, but the project slot holds
+    // `..`, so no key survives: `file_name` is `None` past `..`.
+    let workspace = home.join("projects").join("..").join("worktrees/s_child");
+    let shown = workspace.to_string_lossy().into_owned();
+    let id = SessionId("s_child".into());
+    let Err(reason) = super::last_seq_reader(&home)(&workspace, &id) else {
+        panic!("a worktree with no project key reads a boundary");
+    };
+    assert!(
+        reason.contains("not a worktree of a Fiber project"),
+        "{reason}"
+    );
+    assert!(reason.contains(&shown), "{reason}");
+    let Err(reason) = super::worktree_record_reader(&home)(&workspace, &id) else {
+        panic!("a worktree with no project key reads a record");
+    };
+    assert!(
+        reason.contains("not a worktree of a Fiber project"),
+        "{reason}"
+    );
+    assert!(reason.contains(&shown), "{reason}");
+}
+
+#[test]
 fn the_last_seq_seam_reads_the_last_complete_lines_seq() {
     let root = fakes::TempDir::new("dm-seq");
-    let sessions = root.path().join("sessions");
+    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
     write_log(&sessions, "s_seq", &[envelope(1), envelope(7)]);
-    let last = super::last_seq_reader(&sessions)(&SessionId("s_seq".into()));
+    let last = super::last_seq_reader(root.path())(root.path(), &SessionId("s_seq".into()));
     assert_eq!(last, Ok(Some(7)));
 }
 
 #[test]
 fn the_last_seq_seam_reads_an_empty_log_as_none() {
     let root = fakes::TempDir::new("dm-seq");
-    let sessions = root.path().join("sessions");
+    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
     write_log(&sessions, "s_empty", &[]);
-    let last = super::last_seq_reader(&sessions)(&SessionId("s_empty".into()));
+    let last = super::last_seq_reader(root.path())(root.path(), &SessionId("s_empty".into()));
     assert_eq!(last, Ok(None));
 }
 
 #[test]
 fn the_last_seq_seam_names_a_missing_log_in_its_reason() {
     let root = fakes::TempDir::new("dm-seq");
-    let sessions = root.path().join("sessions");
+    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
     std::fs::create_dir_all(&sessions).unwrap();
-    let Err(reason) = super::last_seq_reader(&sessions)(&SessionId("s_missing".into())) else {
+    let Err(reason) =
+        super::last_seq_reader(root.path())(root.path(), &SessionId("s_missing".into()))
+    else {
         panic!("a missing log reads a boundary");
     };
     assert!(
@@ -1059,6 +1205,10 @@ fn the_message_tool_shares_the_spawn_tools_registry_launch_watch_and_depth() {
     assert!(Arc::ptr_eq(&message.watch, &spawned.wiring.watch));
     assert!(Arc::ptr_eq(&message.steer, &delegates.steer));
     assert!(Arc::ptr_eq(&message.last_seq, &delegates.last_seq));
+    assert!(Arc::ptr_eq(
+        &message.worktree_record,
+        &delegates.worktree_record
+    ));
     assert_eq!(message.parent, SessionId("s_parent".into()));
     assert_eq!(message.bound, doors::SHUTDOWN_BOUND);
     assert_eq!(message.cap, super::OUTPUT_CAP);
@@ -1845,7 +1995,7 @@ fn fork_call_log() -> Vec<serde_json::Value> {
 #[test]
 fn the_reader_points_just_before_the_calling_message_with_its_model() {
     let root = fakes::TempDir::new("dm-fork-point");
-    let sessions = root.path().join("sessions");
+    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
     point_log(&sessions, &fork_call_log());
     let forking = read_for(&sessions, Some("a_call")).unwrap();
     assert_eq!(
@@ -1864,7 +2014,7 @@ fn the_reader_points_just_before_the_calling_message_with_its_model() {
 #[test]
 fn the_reader_walks_the_outer_chain_to_its_root_call() {
     let root = fakes::TempDir::new("dm-fork-outer");
-    let sessions = root.path().join("sessions");
+    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
     point_log(
         &sessions,
         &[
@@ -1891,7 +2041,7 @@ fn the_reader_walks_the_outer_chain_to_its_root_call() {
 #[test]
 fn a_command_root_is_refused_as_invalid_arguments() {
     let root = fakes::TempDir::new("dm-fork-command");
-    let sessions = root.path().join("sessions");
+    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
     point_log(
         &sessions,
         &[
@@ -1931,7 +2081,7 @@ fn a_command_root_is_refused_as_invalid_arguments() {
 #[test]
 fn an_unreadable_ancestry_keeps_the_point_and_falls_back() {
     let root = fakes::TempDir::new("dm-fork-ancestry");
-    let sessions = root.path().join("sessions");
+    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
     point_log(
         &sessions,
         &[
@@ -1968,7 +2118,7 @@ fn an_unreadable_ancestry_keeps_the_point_and_falls_back() {
 #[test]
 fn own_log_failures_are_tool_errors() {
     let root = fakes::TempDir::new("dm-fork-own-log");
-    let sessions = root.path().join("sessions");
+    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
     std::fs::create_dir_all(&sessions).unwrap();
     // A missing log.
     let error = read_for(&sessions, Some("a_call")).unwrap_err();
@@ -2012,7 +2162,7 @@ fn own_log_failures_are_tool_errors() {
 #[test]
 fn no_calling_action_reads_the_latest_message_in_the_log() {
     let root = fakes::TempDir::new("dm-fork-no-action");
-    let sessions = root.path().join("sessions");
+    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
     point_log(&sessions, &fork_call_log());
     let forking = read_for(&sessions, None).unwrap();
     assert_eq!(forking.point.seq, contract::Seq(11));

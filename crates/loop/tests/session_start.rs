@@ -526,7 +526,7 @@ fn a_forked_loop_runs_session_start_with_reason_fork() {
     )
     .unwrap()
     .hooks(Arc::clone(&hooks) as Arc<dyn contract::hook::Hooks>);
-    let task = r#loop::fork_task(&SessionId("s_test".into()), 1, "check it");
+    let task = r#loop::fork_task(&SessionId("s_test".into()), 1, "check it", "");
     tx.send(delivery(&task)).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {

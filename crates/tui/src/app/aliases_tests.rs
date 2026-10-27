@@ -1,6 +1,8 @@
 //! Tests for the slash aliases (#3013): each runs its row's command,
 //! rides on that row, and gives way to an extension that takes its name.
 
+use std::path::PathBuf;
+
 use super::commands_testkit::{answer_rows, attached, now, sent, shown, type_text};
 use crate::app::{App, Effect};
 use crate::keys::Key;
@@ -12,11 +14,13 @@ use serde_json::json;
 const ALIASES: &[(&str, &str)] = &[
     ("thinking", "effort"),
     ("usage", "cost"),
+    ("pwd", "cwd"),
     ("settings", "config"),
     ("keys", "keybindings"),
     ("name", "rename"),
     ("feedback", "bug"),
     ("quit", "exit"),
+    ("delegates", "agents"),
 ];
 
 /// Runs `command` through Enter on `app` with the draft set whole, so
@@ -90,6 +94,33 @@ fn config_opens_the_configuration_keys_as_settings_does() {
         let frame = app.config_view_screen().expect("the view is open");
         assert_eq!(frame.title, "Settings", "{command}");
         assert_eq!(frame.command, "/settings", "{command}");
+    }
+}
+
+#[test]
+fn agents_opens_the_all_delegates_view_as_delegates_does() {
+    for command in ["/delegates", "/agents", "/delegates extra words"] {
+        let mut app = attached();
+        assert_eq!(run(&mut app, command), Effect::None, "{command}");
+        let frame = app.session_view_screen(80).expect("the view is open");
+        assert_eq!(frame.title, "Delegates", "{command}");
+        assert_eq!(frame.command, "/delegates", "{command}");
+        assert_eq!(app.draft(), "", "{command}");
+    }
+}
+
+#[test]
+fn delegates_without_a_session_shows_a_notice_and_opens_nothing() {
+    for command in ["/delegates", "/agents"] {
+        let mut app = App::new(PathBuf::from("/w"));
+        app.set_size(80, 24);
+        assert_eq!(run(&mut app, command), Effect::None, "{command}");
+        assert!(!app.session_view_open(), "{command}");
+        assert_eq!(
+            app.notices.newest(),
+            Some("No session on screen."),
+            "{command}"
+        );
     }
 }
 
