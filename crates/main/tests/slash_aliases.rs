@@ -388,6 +388,9 @@ fn running_case(command: &str) {
     });
     run.wait_bytes(esc_input, FRAME_END, "the closed jobs list frame");
     // `/close` returns home and stops the held job: its group empties.
+    // `/close` stops the session's jobs (`docs/tui.md:2120-2121`); a command
+    // ends when its group empties, and stopping sends SIGTERM/SIGKILL
+    // (`docs/tools.md:562-568,575-577`).
     run.write(b"/close\r");
     run.wait_screen("home after /close", |grid| {
         grid.contents.contains("Enter starts a session")

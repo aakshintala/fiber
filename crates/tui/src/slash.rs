@@ -70,14 +70,18 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
             .find(|command| command.name == name && command.extension)
     };
     let built_ins = TABLE.iter().map(|entry| {
+        // An extension row named like an alias takes that
+        // alias only, so only one entry of it shows; the row
+        // keeps its other aliases.
+        let aliases: Vec<String> = aliases_of(entry.name)
+            .iter()
+            .filter(|alias| replacement(alias).is_none())
+            .map(|alias| (*alias).to_owned())
+            .collect();
         if let Some(command) = replacement(entry.name) {
             Row {
                 name: command.name.clone(),
-                aliases: aliases_of(entry.name)
-                    .iter()
-                    .filter(|alias| replacement(alias).is_none())
-                    .map(|alias| (*alias).to_owned())
-                    .collect(),
+                aliases,
                 description: command.description.clone(),
                 hint: command.argument_hint.clone(),
                 tag: command.tag.clone(),
@@ -85,14 +89,7 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
         } else {
             Row {
                 name: entry.name.to_owned(),
-                // An extension row named like an alias takes that
-                // alias only, so only one entry of it shows; the row
-                // keeps its other aliases.
-                aliases: aliases_of(entry.name)
-                    .iter()
-                    .filter(|alias| replacement(alias).is_none())
-                    .map(|alias| (*alias).to_owned())
-                    .collect(),
+                aliases,
                 description: entry.description.to_owned(),
                 hint: entry.hint.map(str::to_owned),
                 tag: COMMAND.to_owned(),
