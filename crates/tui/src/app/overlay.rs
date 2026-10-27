@@ -118,7 +118,7 @@ impl Tail {
         } else if let (Some(first), Some(last)) = (
             self.lines.first().and_then(|line| line.seq),
             older.last().and_then(|line| line.seq),
-        ) && last.0.saturating_add(1) != first.0
+        ) && last.0.checked_add(1) != Some(first.0)
         {
             return Err(());
         }

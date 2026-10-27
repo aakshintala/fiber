@@ -697,10 +697,9 @@ impl App {
             .any(|(held, pass)| held == session && matches!(pass, Pass::Until(_)))
     }
 
-    /// Folds a run slice once into fresh pages, with the last busy the
-    /// fold reported. The tail read refolds the held run into the
-    /// cached preview once per answer, and the install moves that
-    /// object into the screen, so the installed pages fold once.
+    /// Folds the eligible run from fresh pages, with the last busy the
+    /// fold reported. A pre-install rebuild never starts from the prior
+    /// candidate; only the newest candidate is installed.
     fn fold_run(&self, lines: Option<&[Envelope]>) -> overlay::Preview {
         let mut fresh = self.attached_screen().pages().fresh();
         fresh.set_image_ids(self.images.id_allocator.clone());
@@ -716,9 +715,9 @@ impl App {
         overlay::Preview { pages: fresh, busy }
     }
 
-    /// Folds the held visible run once into the cached preview: the
-    /// install moves it into the screen instead of refolding the run.
-    /// No read running folds nothing.
+    /// Rebuilds the pre-install candidate from fresh pages and replaces
+    /// the prior candidate. It runs only while the tail is reading; the
+    /// post-frame count phase never rebuilds the displayed preview.
     fn fold_preview(&mut self) {
         let lines = if let Overlay::Reading(tail) = &self.overlay {
             tail.turn_lines()
@@ -767,8 +766,8 @@ impl App {
 
     /// Folds one tail answer into the open's read: an answer that
     /// leaves a gap, or a line carrying no seq, ends the tail as failed
-    /// with the out-of-order notice. Every answer refolds the cached
-    /// preview once, so the install moves it.
+    /// with the out-of-order notice. A valid answer rebuilds the
+    /// pre-install candidate from fresh pages, replacing the old one.
     pub(crate) fn tail_lines(&mut self, lines: Vec<Envelope>) {
         {
             let Overlay::Reading(tail) = &mut self.overlay else {
@@ -809,25 +808,27 @@ impl App {
         Self::end_read(tail, notice, &mut self.notices);
     }
 
-    /// Installs the open's read tail as the preview: the run the reads
-    /// folded once, moved into the screen, or an empty conversation
-    /// when no held line starts a turn. An empty log installs nothing
+    /// Installs the newest candidate built while reading the open's
+    /// tail, without folding it again. An empty log installs nothing
     /// and shows no history. The screen follows, the overlay shows the
     /// preview, and the screen freezes for the raise. The tail stays
     /// behind as the post-frame count's cursor: older own-segment
     /// windows and ancestors read through it without refolding the
     /// preview.
     pub(crate) fn install_tail(&mut self) {
+        if self.preview.is_none() {
+            self.fold_preview();
+        }
         let Overlay::Reading(tail) = std::mem::replace(&mut self.overlay, Overlay::None) else {
             return;
         };
         let Some(session) = self.opening_session() else {
             return;
         };
-        let preview = self.preview.take().unwrap_or_else(|| {
-            // No cached fold ran: fold what the tail holds, as before.
-            self.fold_run(tail.turn_lines())
-        });
+        let Some(preview) = self.preview.take() else {
+            self.overlay = Overlay::Reading(tail);
+            return;
+        };
         *self.attached_screen_mut().pages_mut() = preview.pages;
         self.attached_screen_mut().follow();
         self.count = Some(tail);

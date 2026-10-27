@@ -2481,8 +2481,62 @@ fn a_failed_read_keeps_whole_turns_or_nothing() {
     );
 }
 
-/// Installing with no cached fold still installs the held run: the
-/// install folds what the tail holds instead of moving a preview.
+/// Rebuilding a longer pre-install run discards the prior candidate.
+#[test]
+fn an_older_window_replaces_the_candidate_from_fresh_pages() {
+    let mut seq = 0;
+    let mut all_lines = roomy_turn(&mut seq, "a_old", "older reply", 300);
+    all_lines.extend(roomy_turn(&mut seq, "a_new", "newer reply", 1));
+    let all = envelopes(&all_lines);
+    let first = doors(&all, &json!({}));
+    assert!(first.len() < all.len(), "the newest window is partial");
+
+    let mut app = reading();
+    app.set_size(80, 40);
+    app.tail_lines(first);
+    let stale = app
+        .preview
+        .as_mut()
+        .unwrap_or_else(|| panic!("the first candidate"));
+    let mut poison_seq = 10_000;
+    for line in envelopes(&roomy_turn(
+        &mut poison_seq,
+        "a_stale",
+        "stale candidate",
+        1,
+    )) {
+        stale.pages.apply(&line);
+    }
+
+    let args = app
+        .tail_next()
+        .unwrap_or_else(|| panic!("the older window is needed"));
+    app.tail_lines(doors(&all, &args));
+    assert!(app.tail_next().is_none(), "the older window reaches root");
+    app.install_tail();
+
+    let rows = row_texts(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("older reply")),
+        "the older turn is installed"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("newer reply")),
+        "the newer turn is installed"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("stale candidate")),
+        "the discarded candidate leaves no rows"
+    );
+    assert_eq!(
+        app.attached_screen().pages().index().total(),
+        folded(&all_lines).index().total(),
+        "the installed page count matches a fresh fold"
+    );
+}
+
+/// Installing with no cached fold still installs the held run: it
+/// prepares a candidate before moving it into the screen.
 #[test]
 fn install_without_a_cached_fold_installs_the_held_run() {
     let mut app = reading();

@@ -4475,6 +4475,79 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
     );
 }
 
+/// A child that cannot fill the display waits through the chain root:
+/// the root completes the preview before the first frame and the `full`
+/// raise.
+#[test]
+fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
+    const ROOT: &str = "s_arrrrrrrrrrrrrr";
+    const CHILD: &str = "s_aaaaaaaaaaaaaaaa";
+    let mut root_seq = 1u64;
+    let mut ancestor = vec![started(ROOT, None)];
+    ancestor.extend(segment_turns(ROOT, "root reply", 100, 4, &mut root_seq));
+    let point = root_seq - 1;
+    let mut child = vec![started(CHILD, Some((ROOT, point)))];
+    child.push(line(
+        "turn_started",
+        Some(1),
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "child prompt"}]}]}),
+    ));
+    let mut size = crate::app::App::new(std::path::PathBuf::from("/w"));
+    size.set_size(60, 12);
+    let height = size.conversation_height();
+    let mut child_pages = crate::window::Pages::new(60);
+    for line in &child {
+        child_pages.apply(line);
+    }
+    assert!(
+        child_pages.index().total() < height,
+        "the child alone cannot fill the display"
+    );
+
+    let open = tail_open(
+        child.clone(),
+        Full::Hung,
+        History::Chain {
+            ancestor: ancestor.clone(),
+        },
+        Vec::new(),
+    );
+    let histories: Vec<serde_json::Value> = open
+        .seen
+        .lock()
+        .map(|held| {
+            held.iter()
+                .filter(|command| command["command"] == "history")
+                .map(|command| command["args"].clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        histories,
+        [json!({}), json!({"session_id": ROOT, "to_seq": point})],
+        "the child window and root answer complete before drawing"
+    );
+    let commands = seen_commands(&open);
+    assert_eq!(
+        commands.last(),
+        Some(&("subscribe".to_owned(), "full".to_owned()))
+    );
+    let frame = frames(&open)
+        .into_iter()
+        .last()
+        .unwrap_or_else(|| panic!("the first frame"));
+    assert!(
+        frame.contains("▣ completed"),
+        "the root supplies the fill: {frame}"
+    );
+    assert!(
+        frame.contains("child prompt"),
+        "the child remains visible: {frame}"
+    );
+}
+
 /// The first frame draws the own-log screen before any ancestor count
 /// request and before the `full` raise: the own window fills the
 /// display, so the frame shows the child's last page without waiting
