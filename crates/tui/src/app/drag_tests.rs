@@ -9,12 +9,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::super::{App, SurfaceId};
+use crate::app::testkit::SESSION;
 use crate::home::Launch;
 use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::layout::Edge;
 use crate::link::Line;
 
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
 const CARDS: [&str; 5] = ["session", "changed_files", "delegates", "jobs", "quota"];
 
