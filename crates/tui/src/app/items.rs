@@ -65,6 +65,10 @@ pub(super) struct JobRecord {
     /// The job's live output since the terminal attached; dropped at
     /// `job_completed` unless the job's view is open.
     output: Option<Output>,
+    /// Whether the job runs under a pseudo-terminal: set once at
+    /// `job_started`, kept after `job_completed` clears the output, so a
+    /// finished tty job still selects the screen slab.
+    tty: bool,
 }
 
 /// The open item: the job and the attached session's screen while a fiber
@@ -96,6 +100,9 @@ pub(crate) struct ItemView {
     pub(crate) harness: String,
     /// The model, or `"—"` when unavailable.
     pub(crate) model: String,
+    /// The delegate's thinking level; `None` with no held status or no
+    /// level, and the card leaves the segment out.
+    pub(crate) level: Option<String>,
     /// The delegate's folded call count; `None` draws `"—"`.
     pub(crate) calls: Option<u64>,
     /// The run's start: the `delegate_started` envelope `ts`, else the
@@ -114,6 +121,11 @@ pub(crate) struct ItemView {
     pub(crate) has_transcript: bool,
     /// The job's output path.
     pub(crate) output_path: String,
+    /// The open job's id: the status row's `job <id>` and stop target.
+    pub(crate) job_id: JobId,
+    /// Whether the job runs under a pseudo-terminal: the body's screen
+    /// slab, kept after the run ends.
+    pub(crate) tty: bool,
 }
 
 /// The attached session's items: the per-job fold, the open item and the
@@ -170,6 +182,7 @@ impl Items {
                     delegate: None,
                     outcome: None,
                     output: None,
+                    tty: false,
                 },
             );
         }
@@ -225,6 +238,11 @@ impl App {
             }
         };
         let running = record.outcome.is_none();
+        let level = record.delegate.as_ref().and_then(|delegate| {
+            self.delegate_row(&delegate.session)
+                .and_then(|row| row.status.as_ref())
+                .and_then(|status| status.thinking.clone())
+        });
         let (kind_glyph, harness, model, calls, started_ts, session_label, has_transcript) =
             match &record.delegate {
                 Some(delegate) if delegate.harness == "fiber" => (
@@ -289,6 +307,7 @@ impl App {
             word,
             harness,
             model,
+            level,
             calls,
             started_ts,
             completed_ts: record.outcome.as_ref().map(|(_, ts)| *ts),
@@ -297,6 +316,8 @@ impl App {
             message: open.message.clone(),
             has_transcript,
             output_path: record.output_path.clone(),
+            job_id: open.job_id.clone(),
+            tty: record.tty,
         })
     }
 
