@@ -342,6 +342,7 @@ fn sample(
         notes.push(note);
     }
     let terminal_ms = took.as_f64().ok_or("the attach timing is not a number")?;
+    trace_attach(ctx, home, id, label, log_bytes)?;
     let mut samples = vec![(
         fixture.metric,
         json!({"fixture": label, "log_bytes": log_bytes, "ms": took}),
@@ -392,6 +393,91 @@ fn sample(
         }
     }
     Ok(samples)
+}
+
+/// One untimed attach with debug diagnostics: it reads the temporary
+/// phase timers after the terminal exits, then restores the fixture config
+/// so the benchmark samples remain at the normal diagnostics level.
+fn trace_attach(
+    ctx: &Ctx<'_>,
+    home: &Home,
+    id: &str,
+    label: &str,
+    log_bytes: u64,
+) -> Result<(), String> {
+    let config_path = home.home().join("config.json");
+    let original = fs::read(&config_path)
+        .map_err(|err| format!("reading {}: {err}", config_path.display()))?;
+    let mut config: Value = serde_json::from_slice(&original)
+        .map_err(|err| format!("parsing {}: {err}", config_path.display()))?;
+    let settings = config
+        .as_object_mut()
+        .ok_or("the fixture config is not an object")?;
+    let diagnostics = settings.entry("diagnostics").or_insert_with(|| json!({}));
+    diagnostics
+        .as_object_mut()
+        .ok_or("fixture diagnostics config is not an object")?
+        .insert("level".to_owned(), json!("debug"));
+    fs::write(&config_path, config.to_string())
+        .map_err(|err| format!("enabling attach trace in {}: {err}", config_path.display()))?;
+    let traced: Result<(), String> = (|| {
+        let terminal = Terminal::spawn(home, &["resume", id], ctx.path.as_deref(), ctx.clock)?;
+        let started = terminal.proc.spawned;
+        let pid = terminal.proc.pid();
+        let shown = terminal.wait_for(ctx.clock, started + READY, ATTACH_TAIL);
+        let total_ms = ms(ctx.clock, started)
+            .as_f64()
+            .ok_or("the diagnostic attach timing is not a number")?;
+        idle::quit(ctx, terminal, &mut Vec::new(), HubExit::Keep)?;
+        shown?;
+        let path = home.home().join("logs").join(format!("tui-{pid}.log"));
+        let contents = fs::read_to_string(&path)
+            .map_err(|err| format!("reading trace {}: {err}", path.display()))?;
+        let mut phases = std::collections::BTreeMap::<String, f64>::new();
+        for line in contents.lines() {
+            let Ok(line) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if line.get("code").and_then(Value::as_str) != Some("op_timing") {
+                continue;
+            }
+            let Some(data) = line.get("data") else {
+                continue;
+            };
+            let Some(tool) = data.get("tool").and_then(Value::as_str) else {
+                continue;
+            };
+            if !tool.starts_with("attach.") {
+                continue;
+            }
+            let Some(ms) = data.get("ms").and_then(Value::as_f64) else {
+                continue;
+            };
+            *phases.entry(tool.to_owned()).or_default() += ms;
+        }
+        if phases.is_empty() {
+            eprintln!(
+                "attach trace: {label} ({log_bytes} bytes): instrumented phase data unavailable (base binary)"
+            );
+            return Ok(());
+        }
+        let internal = phases.values().sum::<f64>();
+        let residual = total_ms - internal;
+        eprintln!(
+            "attach trace ({label}, {log_bytes} bytes; diagnostic run, not a timing sample)\n\
+             | Phase | ms |\n|---|---:|\n\
+             | spawn to first tail frame (bench total proxy) | {total_ms:.1} |\n\
+             | process-start residual (proxy; total minus measured spans) | {residual:.1} |"
+        );
+        for (tool, ms) in phases {
+            eprintln!("| {tool} | {ms:.1} |\n");
+        }
+        Ok(())
+    })();
+    let restored = fs::write(&config_path, original)
+        .map_err(|err| format!("restoring {}: {err}", config_path.display()));
+    traced?;
+    restored
 }
 
 /// The attach's stage rows: the terminal and hub rows always, and the

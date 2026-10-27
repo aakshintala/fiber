@@ -305,6 +305,8 @@ impl Connection {
         tick: &TickThread,
         clock: &dyn Clock,
         frame_deadline: Option<Instant>,
+        diag: Option<&log::diag::Diag>,
+        mut tail_lines_finished: Option<&mut Instant>,
         phase: Phase,
     ) -> Result<(), String> {
         loop {
@@ -317,6 +319,18 @@ impl Connection {
             };
             let id = mint();
             let command = session_command(&id, "history", session, Some(args)).to_string();
+            let history_request = if matches!(phase, Phase::Tail) {
+                diag.and_then(|diag| {
+                    log::diag::timed(
+                        diag,
+                        contract::diag::Op::TuiLogRead,
+                        Some("attach.history_request_receipt"),
+                        Some(clock.now()),
+                    )
+                })
+            } else {
+                None
+            };
             let written = self
                 .hub
                 .as_ref()
@@ -325,10 +339,26 @@ impl Connection {
                 self.lost(app);
                 return Err(LOST.to_owned());
             }
-            match self.answer(rx, &id, app, tick, clock, frame_deadline) {
+            let answer = self.answer(rx, &id, app, tick, clock, frame_deadline);
+            drop(history_request);
+            match answer {
                 Ok(Answer::Lines(lines)) => match phase {
                     Phase::Count => app.tail_count_lines(lines),
-                    Phase::Tail => app.tail_lines(lines),
+                    Phase::Tail => {
+                        let fold = diag.and_then(|diag| {
+                            log::diag::timed(
+                                diag,
+                                contract::diag::Op::TuiTranscript,
+                                Some("attach.tail_lines"),
+                                Some(clock.now()),
+                            )
+                        });
+                        app.tail_lines(lines);
+                        drop(fold);
+                        if let Some(finished) = tail_lines_finished.as_deref_mut() {
+                            *finished = clock.now();
+                        }
+                    }
                 },
                 Ok(Answer::Reopened) => {
                     match phase {

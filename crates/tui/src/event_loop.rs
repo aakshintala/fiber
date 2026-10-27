@@ -17,6 +17,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
+#[cfg(not(test))]
+use std::time::Instant;
 
 use contract::clock::Clock;
 use contract::{ErrorCode, SessionId};
@@ -107,7 +109,7 @@ pub(crate) fn run_with(
     // The first render's span opens at entry: at `info` this is one level
     // check with no clock read. Every pre-draw return below discards it,
     // so a line there never times setup work as a frame that never drew.
-    let timing = crate::timing::Timing::new(diag);
+    let timing = crate::timing::Timing::new(Arc::clone(&diag));
     let first_render = timing.first_render();
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
@@ -272,6 +274,12 @@ pub(crate) fn run_with(
         on_attach,
         clock,
         timing,
+        #[cfg(not(test))]
+        trace_diag: Arc::clone(&diag),
+        #[cfg(not(test))]
+        trace_hub_connect: None,
+        #[cfg(not(test))]
+        trace_tail_frame: None,
         files_out: tx.clone(),
         search: None,
         reader,
@@ -284,6 +292,15 @@ pub(crate) fn run_with(
         shape: osc::Shape::default(),
         tick: crate::tick::TickThread::idle(),
     };
+    #[cfg(not(test))]
+    {
+        terminal.trace_hub_connect = log::diag::timed(
+            &terminal.trace_diag,
+            contract::diag::Op::TuiLogRead,
+            Some("attach.hub_connect_proxy"),
+            Some(terminal.clock.now()),
+        );
+    }
     spawn_hub(
         connect,
         Feed::new(tx.clone(), terminal.hub.credits()).routed(Arc::clone(&router)),
@@ -385,6 +402,15 @@ struct Loop<B: Backend> {
     clock: Arc<dyn Clock>,
     /// The diagnostic writer the timed scopes share.
     timing: crate::timing::Timing,
+    /// Temporary attach-trace writer, removed after #3501's trace run.
+    #[cfg(not(test))]
+    trace_diag: Arc<log::diag::Diag>,
+    /// The hub-connect proxy started when the hub reader is spawned.
+    #[cfg(not(test))]
+    trace_hub_connect: Option<log::diag::Timer>,
+    /// The first tail frame's start, after the preview installs.
+    #[cfg(not(test))]
+    trace_tail_frame: Option<Instant>,
     /// Where workers post their results.
     files_out: Sender<Input>,
     /// The `@` panel's search worker, while the panel is open.
@@ -702,6 +728,8 @@ impl<B: Backend> Loop<B> {
                 self.hub.send(&lines, &mut self.app);
             }
             Input::Connected(stream, hello) => {
+                #[cfg(not(test))]
+                drop(self.trace_hub_connect.take());
                 self.hub.store(stream);
                 // A stream whose write timeout would not set is shut
                 // down, not adopted: the connection failed, as a refused
@@ -845,9 +873,20 @@ impl<B: Backend> Loop<B> {
         // already past the fade expires before arming and never draws
         // twice.
         self.app.sweep_notices(self.clock.now());
+        #[cfg(not(test))]
+        let tail_frame = self.trace_tail_frame.take().map(|started| {
+            log::diag::timed(
+                &self.trace_diag,
+                contract::diag::Op::TuiFirstRender,
+                Some("attach.first_tail_frame"),
+                Some(started),
+            )
+        });
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }
+        #[cfg(not(test))]
+        drop(tail_frame);
         // The retained count reads after the first frame draws and
         // before the `full` raise goes out below, so no ancestor window
         // is asked before the own-segment screen shows.
@@ -1032,6 +1071,11 @@ impl<B: Backend> Loop<B> {
             self.app.install_tail();
             return;
         }
+        let mut tail_lines_finished = self.clock.now();
+        #[cfg(not(test))]
+        let trace_diag = Some(self.trace_diag.as_ref());
+        #[cfg(test)]
+        let trace_diag = None;
         if self
             .hub
             .fetch_history(
@@ -1041,6 +1085,8 @@ impl<B: Backend> Loop<B> {
                 &self.tick,
                 self.clock.as_ref(),
                 self.tick.armed(),
+                trace_diag,
+                Some(&mut tail_lines_finished),
                 hub::Phase::Tail,
             )
             .is_err()
@@ -1052,6 +1098,26 @@ impl<B: Backend> Loop<B> {
         // returns above). No page count is compared: a rebuild can
         // hold the same count, and an empty tail still installs its
         // empty preview.
+        #[cfg(not(test))]
+        {
+            let tail_to_install = log::diag::timed(
+                &self.trace_diag,
+                contract::diag::Op::TuiTranscript,
+                Some("attach.tail_lines_to_install"),
+                Some(tail_lines_finished),
+            );
+            drop(tail_to_install);
+            let install = log::diag::timed(
+                &self.trace_diag,
+                contract::diag::Op::TuiTranscript,
+                Some("attach.install_tail"),
+                Some(self.clock.now()),
+            );
+            self.app.install_tail();
+            drop(install);
+            self.trace_tail_frame = Some(self.clock.now());
+        }
+        #[cfg(test)]
         self.app.install_tail();
     }
 
@@ -1065,6 +1131,10 @@ impl<B: Backend> Loop<B> {
         let Some(session) = self.app.opening_session() else {
             return;
         };
+        #[cfg(not(test))]
+        let trace_diag = Some(self.trace_diag.as_ref());
+        #[cfg(test)]
+        let trace_diag = None;
         if self
             .hub
             .fetch_history(
@@ -1074,6 +1144,8 @@ impl<B: Backend> Loop<B> {
                 &self.tick,
                 self.clock.as_ref(),
                 self.tick.armed(),
+                trace_diag,
+                None,
                 hub::Phase::Count,
             )
             .is_err()
