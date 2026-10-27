@@ -1933,7 +1933,6 @@ later release still applies.
 | `/rules` | Opens the standing rules. |
 | `/reviewer-setup` | Sets up the reviewer's notes with you (`docs/permissions.md`, "Setting up the notes"). |
 | `/settings`, `/config` | Opens the configuration keys. |
-| `/sandbox` | Reserved for the session sandbox toggle; behavior and syntax are part of Part 9 of #3027 (`docs/sandbox.md`, "Toggling it"). |
 | `/theme [<name>]` | Opens the theme picker; with a name, sets the theme at once and saves `tui.theme`. |
 | `/keys`, `/keybindings` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |

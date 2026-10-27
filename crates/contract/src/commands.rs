@@ -585,7 +585,6 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "reviewer-setup",
     "settings",
     "config",
-    "sandbox",
     "theme",
     "keys",
     "keybindings",

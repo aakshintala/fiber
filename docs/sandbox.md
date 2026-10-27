@@ -11,7 +11,8 @@ Vocabulary is `GLOSSARY.md`: sandbox names the feature, confined names a
 call that ran inside it, and nothing else. The rule that judges calls is
 `docs/permissions.md`, "Confinement" and "Fast paths"; the keys are
 `docs/configuration.md`, "Keys"; the escape hatch is `docs/tools.md`,
-"Shell"; the log line is `docs/events.md`, "Declared effects".
+"Shell". Part 5 adds the `confined` event marker under the [surveyor
+ruling](https://github.com/aakshintala/fiber/issues/3027#issuecomment-6425832076).
 
 ## The rule
 
@@ -123,10 +124,12 @@ reviewed.
 ## When the sandbox is unavailable
 
 Failure goes toward review. When the sandbox cannot be applied — no
-Landlock, an old kernel below ABI 2, a missing `sandbox-exec` — calls do
-not declare `confined` and are reviewed as today, and the session says so
+Landlock, an old kernel below ABI 2, a missing `sandbox-exec` — the planned
+event omits `confined`, calls are reviewed as today and the session says so
 once. A call declared `confined` never runs unconfined: if applying the
-sandbox fails at spawn, the call fails.
+sandbox fails at spawn, the call fails. The event wording is the surveyor's
+ruling: `confined: the call runs only inside the sandbox; if the sandbox
+can't be applied at spawn, the call fails and nothing runs.`
 
 ## Toggling it
 

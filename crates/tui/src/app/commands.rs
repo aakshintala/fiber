@@ -196,12 +196,6 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_settings,
     },
     CommandEntry {
-        name: "sandbox",
-        description: "Reserved for the session sandbox toggle; behavior and syntax land in Part 9 of #3027.",
-        hint: None,
-        run: run_sandbox,
-    },
-    CommandEntry {
         name: "theme",
         description: "Opens the theme picker, or sets the named theme.",
         hint: Some("[<name>]"),
@@ -424,13 +418,6 @@ fn run_approvals(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_settings(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Settings))
-}
-
-/// The session toggle lands with the sandbox implementation; until then the
-/// entry only keeps the list, dispatch and doc in sync, so running it is a
-/// no-op.
-fn run_sandbox(_app: &mut App, _rest: &str) -> Option<Effect> {
-    Some(Effect::None)
 }
 
 fn run_theme(app: &mut App, rest: &str) -> Option<Effect> {

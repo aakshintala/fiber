@@ -70,7 +70,6 @@ const DRAWN_ORDER: &[&str] = &[
     "rules",
     "reviewer-setup",
     "settings",
-    "sandbox",
     "theme",
     "keys",
     "skills",
