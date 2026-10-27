@@ -4774,13 +4774,6 @@ fn pinned_gate(data: &str, prefix: &str, label: &str, quantum: bool) {
         max_sample.ceil(),
         "ceiling is the max sample rounded up"
     );
-    // The gate judges the recorded ceiling on an effective 2 ms floor:
-    // no effective class ceiling sits below 2 ms.
-    assert_eq!(
-        2.0f64.max(ceiling),
-        2.0f64.max(max_sample.ceil()),
-        "{label} effective ceiling is the recorded pin on a 2 ms floor"
-    );
     let want = (100.0 * (max_median / min_median - 1.0)).ceil();
     assert_eq!(tolerance, want, "{label} tolerance for the stored medians");
 }
@@ -4804,11 +4797,6 @@ fn session_list_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
     assert_eq!(
         recorded, 1.0,
         "the recorded session_list ceiling stays 1 ms"
-    );
-    assert_eq!(
-        2.0f64.max(recorded),
-        2.0,
-        "the effective session_list ceiling floors at 2 ms"
     );
 }
 
