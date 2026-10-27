@@ -349,11 +349,11 @@ pub(crate) fn check_hook(args: &[Value]) -> Result<ValidHook, String> {
             ));
         }
     };
-    let phase = match spec.get("phase") {
-        None | Some(Value::Null) => HookPhase::Transform,
-        Some(Value::String(phase)) if phase == "sanitize" => HookPhase::Sanitize,
-        Some(Value::String(phase)) if phase == "transform" => HookPhase::Transform,
-        Some(Value::String(phase)) if phase == "check" => HookPhase::Check,
+    let (phase, phase_explicit) = match spec.get("phase") {
+        None | Some(Value::Null) => (HookPhase::Transform, false),
+        Some(Value::String(phase)) if phase == "sanitize" => (HookPhase::Sanitize, true),
+        Some(Value::String(phase)) if phase == "transform" => (HookPhase::Transform, true),
+        Some(Value::String(phase)) if phase == "check" => (HookPhase::Check, true),
         _ => {
             return Err(fail(
                 point,
@@ -375,12 +375,23 @@ pub(crate) fn check_hook(args: &[Value]) -> Result<ValidHook, String> {
     if spec.get("run") != Some(&Value::Bool(true)) {
         return Err(fail(point, "`run` must be a function"));
     }
+    // The declared configuration key rides only the first-party hooks
+    // configuration registrar: an ordinary process registration that
+    // supplies one is refused.
+    if spec
+        .get("entry")
+        .is_some_and(|entry| !matches!(entry, Value::Null))
+    {
+        return Err(fail(point, "`entry` is declared configuration only"));
+    }
     Ok(ValidHook {
         point: point.clone(),
         hook: DeclaredHook {
             phase,
             timeout,
             blocking,
+            entry: None,
+            phase_explicit,
         },
     })
 }
@@ -447,6 +458,18 @@ pub(crate) fn check_watch(args: &[Value], index: usize) -> WatchChecked {
             result: Err(fail("`run` must be a function")),
         };
     }
+    // The declared configuration key rides only the first-party hooks
+    // configuration registrar: an ordinary process registration that
+    // supplies one is refused.
+    if spec
+        .get("entry")
+        .is_some_and(|entry| !matches!(entry, Value::Null))
+    {
+        return WatchChecked {
+            notices: Vec::new(),
+            result: Err(fail("`entry` is declared configuration only")),
+        };
+    }
     let mut wanted = Vec::new();
     let mut notices = Vec::new();
     for kind in &kinds {
@@ -473,6 +496,7 @@ pub(crate) fn check_watch(args: &[Value], index: usize) -> WatchChecked {
             watcher: DeclaredWatcher {
                 kinds: wanted,
                 timeout,
+                entry: None,
             },
         })),
     }

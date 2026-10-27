@@ -326,6 +326,7 @@ struct WatcherRegistration {
     watcher: FunctionRef,
     index: usize,
     kinds: Vec<String>,
+    entry: Option<String>,
 }
 
 impl SessionExtensions {
@@ -959,6 +960,7 @@ impl SessionExtensions {
                             watcher: made,
                             index,
                             kinds: watcher.kinds.clone(),
+                            entry: watcher.entry.clone(),
                         });
                     }
                     if !session.lua.iter().any(|held| Arc::ptr_eq(held, lua)) {
@@ -1470,6 +1472,60 @@ impl SessionExtensions {
         self.any
     }
 
+    /// The hooks and watchers the session registered, hooks first in
+    /// hook-point table order and run order, then watchers in registration
+    /// order (`docs/invocation.md`, "What each command does", `hooks`).
+    pub fn registrations(&self) -> Vec<contract::events::HookInfo> {
+        use contract::events::HookInfo;
+        let hooks_name = config::full_name("hooks");
+        let entry_of = |extension: &str, entry: &Option<String>| {
+            (extension == hooks_name).then(|| entry.clone()).flatten()
+        };
+        let phase_of = |phase: crate::lua::HookPhase, explicit: bool| {
+            explicit.then(|| {
+                match phase {
+                    crate::lua::HookPhase::Sanitize => "sanitize",
+                    crate::lua::HookPhase::Transform => "transform",
+                    crate::lua::HookPhase::Check => "check",
+                }
+                .to_owned()
+            })
+        };
+        let mut out = Vec::new();
+        for chain in [
+            &self.lifecycle.session_start,
+            &self.before_message,
+            &self.lifecycle.turn_start,
+            &self.before_tool,
+            &self.lifecycle.before_model_call,
+            &self.after_tool,
+            &self.lifecycle.turn_end,
+            &self.lifecycle.before_handoff,
+        ] {
+            for entry in chain {
+                out.push(HookInfo::Hook {
+                    extension: entry.extension.clone(),
+                    entry: entry_of(&entry.extension, &entry.entry),
+                    point: entry.point.to_owned(),
+                    on_failure: if entry.blocking {
+                        "blocking".to_owned()
+                    } else {
+                        "non-blocking".to_owned()
+                    },
+                    phase: phase_of(entry.phase, entry.phase_explicit),
+                });
+            }
+        }
+        for watcher in &self.watchers {
+            out.push(HookInfo::Watcher {
+                extension: watcher.name.clone(),
+                entry: entry_of(&watcher.name, &watcher.entry),
+                kinds: watcher.kinds.clone(),
+            });
+        }
+        out
+    }
+
     /// Records `name`'s registrations: a notice per hook that did not
     /// register, and its hooks onto `chain`, each behind the session's
     /// runtime. The caller registered the VM first, so the references mint
@@ -1550,6 +1606,7 @@ impl SessionExtensions {
                 watcher: run.clone(),
                 index,
                 kinds: watcher.kinds.clone(),
+                entry: watcher.entry.clone(),
             });
         }
         true
@@ -1748,6 +1805,10 @@ impl Hooks for SessionExtensions {
         for extension in self.attached_vms() {
             extension.deliver_to(inbox.clone());
         }
+    }
+
+    fn registrations(&self) -> Vec<contract::events::HookInfo> {
+        SessionExtensions::registrations(self)
     }
 }
 

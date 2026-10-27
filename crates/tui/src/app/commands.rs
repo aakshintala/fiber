@@ -117,6 +117,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_tools,
     },
     CommandEntry {
+        name: "hooks",
+        description: "Opens the hooks view.",
+        hint: None,
+        run: run_hooks,
+    },
+    CommandEntry {
         name: "mcp",
         description: "Opens the MCP servers view.",
         hint: None,
@@ -427,6 +433,11 @@ fn run_keys(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_tools(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Tools))
+}
+
+fn run_hooks(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::Hooks))
 }
 
 fn run_mcp(app: &mut App, _rest: &str) -> Option<Effect> {

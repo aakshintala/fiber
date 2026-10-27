@@ -187,7 +187,7 @@ local function hook(point, spec)
   if type(spec.run) ~= "function" then return refuse("`run` must be a function") end
   local list = hooks[point] or {}
   hooks[point] = list
-  list[#list + 1] = { phase = phase, on_failure = spec.on_failure, timeout = spec.timeout, run = spec.run }
+  list[#list + 1] = { phase = spec.phase, on_failure = spec.on_failure, timeout = spec.timeout, run = spec.run, entry = spec.entry }
 end
 
 -- A watcher that does not register leaves a problem for Fiber's notice, and the entry
@@ -221,7 +221,7 @@ local function watch(kinds, spec)
     return refuse("`timeout` must be a whole number of milliseconds above 0")
   end
   if type(spec.run) ~= "function" then return refuse("`run` must be a function") end
-  watchers[#watchers + 1] = { kinds = wanted, timeout = spec.timeout, run = spec.run }
+  watchers[#watchers + 1] = { kinds = wanted, timeout = spec.timeout, run = spec.run, entry = spec.entry }
 end
 
 fiber = {

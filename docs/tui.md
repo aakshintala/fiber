@@ -816,6 +816,12 @@ a click on it returns too. The views are:
   takes the place of the space before the switch, so columns do not move. It
   shows on the focused row only. The last row is "a change rebuilds the
   cache (~84k tokens · $0.31) on reload", dim.
+- **The hooks view,** `/hooks`: one row per hook and watcher the session
+  registered, hooks first in hook-point table order and run order, then
+  watchers in registration order. One row per hook: its source (the declared
+  entry's name, else the extension's name), its point, and `blocking` or
+  `non-blocking`; one row per watcher: its source, its kinds joined with
+  `", "`, and `watcher`. With none registered, it says `No hooks`.
 - **The MCP view,** `/mcp`: one row per configured server: its name, where it
   is declared (`global`, `project` or this repository), its state and its
   tool count. The state is `connecting` for a server never started this
@@ -1920,6 +1926,7 @@ later release still applies.
 | `/credential [<label>]` | With no label, opens the credential picker ("Swapped views"): Enter switches to the chosen label and saves it as the provider's `credential`, Ctrl+S switches for this session only and saves nothing. With a label, switches to it and saves it. The label is saved under the provider the session accepted the switch on. The terminal first says the switch rebuilds the cache, with its size (`docs/model-routing.md`, "Which credential a session uses"). |
 | `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`. Typing filters the list as it does in the picker, Space included in the query. Enter or a click on the mark toggles the focused row's mark, and Ctrl+S, `session_only`'s key, saves the marked list as `scoped_models` instead. Esc clears the query first and closes on the next press, saving nothing. Marks survive a query change. Each row carries its mark between the gutter and the id: `[x]` marked, `[ ]` not, bold on the focused row and dim when unmarked. The count row reads ` {m} of {n} marked ` unfiltered and ` {v} of {n} models · {m} marked ` filtered, with no show-all toggle and no refresh button. The row below each model is its thinking row, dim with nothing to choose. Ctrl+S saves and closes. The footer is "↑↓ move · Enter toggle · Ctrl+S save · Esc close", keys bold. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
 | `/tools` | Opens the tools view. |
+| `/hooks` | Opens the hooks view. |
 | `/mcp` | Opens the MCP servers view. |
 | `/context` | Opens the context breakdown. |
 | `/usage`, `/cost` | Opens the usage view. |

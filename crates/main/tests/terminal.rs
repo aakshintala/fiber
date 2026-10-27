@@ -3369,3 +3369,95 @@ fn unknown_slash_is_refused_while_paths_and_fresh_skills_are_sent() {
     );
     quit_live(run);
 }
+
+/// `/hooks` lists one declared hook, one extension hook and one watcher in
+/// its three columns, and names its empty state with none registered.
+/// The terminal types the command and asserts on the screen, so the
+/// driver's answer reaches the swapped view it opens.
+#[test]
+fn hooks_lists_registered_rows_and_names_its_empty_state() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&setup, &server);
+    let source = setup.root.path().join("hookbox");
+    std::fs::create_dir_all(&source).unwrap();
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": "hookbox", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+    );
+    std::fs::write(
+        source.join("init.lua"),
+        "fiber.hook(\"before_tool\", { timeout = 5000, on_failure = \"blocking\", run = function() end })\n\
+         fiber.watch({ \"turn_completed\" }, { timeout = 5000, run = function() end })\n",
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let second = setup.root.path().join("second");
+    std::fs::create_dir_all(&second).unwrap();
+    write_json(
+        &second.join("extension.json"),
+        &json!({"name": "second", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+    );
+    std::fs::write(
+        second.join("init.lua"),
+        "fiber.hook(\"after_tool\", { phase = \"sanitize\", timeout = 5000, on_failure = \"non-blocking\", run = function() end })\n",
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(second),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.write(b"first marker\r");
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the first turn's request"
+    );
+    run.wait_screen("the first reply", |grid| grid.contents.contains("Hello."));
+    run.write(b"/hooks\r");
+    run.wait_screen("the hooks rows", |grid| {
+        grid.contents.contains("Hooks")
+            && grid.contents.contains("hookbox")
+            && grid.contents.contains("second")
+            && grid.contents.contains("before_tool")
+            && grid.contents.contains("after_tool")
+            && grid.contents.contains("blocking")
+            && grid.contents.contains("non-blocking")
+            && grid.contents.contains("watcher")
+    });
+    quit_live(run);
+    let empty = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&empty, &server);
+    let mut run = terminal(&empty, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.write(b"first marker\r");
+    assert!(
+        server.await_requests(1, empty.deadline),
+        "the empty session's first turn"
+    );
+    run.wait_screen("the first reply", |grid| grid.contents.contains("Hello."));
+    run.write(b"/hooks\r");
+    run.wait_screen("the empty hooks view", |grid| {
+        grid.contents.contains("Hooks") && grid.contents.contains("No hooks")
+    });
+    quit_live(run);
+}

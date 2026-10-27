@@ -63,6 +63,7 @@ mod form;
 #[path = "history.rs"]
 mod history;
 mod home;
+pub(crate) mod hooks_view;
 mod hub_version;
 mod images;
 pub(crate) mod items;

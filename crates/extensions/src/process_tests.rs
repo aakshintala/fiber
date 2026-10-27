@@ -1460,6 +1460,80 @@ fn provider_references_resolve_only_within_their_generation() {
     assert!(runtime.resolve(&new).is_ok());
 }
 
+/// Process hooks keep explicit phase separately from the effective
+/// `transform` default, never acquire `entry`, and refuse one when
+/// supplied. Flipping the flag would list an undeclared phase; keeping the
+/// entry would leak configuration identity through self-registration.
+#[test]
+fn process_hook_phase_explicitness_and_entry_rejection() {
+    let (_dir, mut registry) = test_registry(json!({}));
+    let explicit = register(
+        &mut registry,
+        "c1",
+        "fiber.hook",
+        json!(["turn_end", {
+            "phase": "sanitize", "timeout": 5000,
+            "on_failure": "blocking", "run": true,
+        }]),
+    );
+    assert!(
+        matches!(explicit, RegisterOutcome::Accepted),
+        "{explicit:?}"
+    );
+    let hook = &registry.hooks().by_point["turn_end"][0];
+    assert!(hook.phase_explicit);
+    assert_eq!(hook.phase, HookPhase::Sanitize);
+    assert_eq!(hook.entry, None);
+    let mut omitted = hook_spec();
+    omitted.as_object_mut().unwrap().remove("phase");
+    let accepted = register(
+        &mut registry,
+        "c2",
+        "fiber.hook",
+        json!(["turn_end", omitted]),
+    );
+    assert!(
+        matches!(accepted, RegisterOutcome::Accepted),
+        "{accepted:?}"
+    );
+    let hook = &registry.hooks().by_point["turn_end"][1];
+    assert!(!hook.phase_explicit);
+    assert_eq!(hook.phase, HookPhase::Transform);
+    assert_eq!(hook.entry, None);
+    let mut with_entry = hook_spec();
+    with_entry
+        .as_object_mut()
+        .unwrap()
+        .insert("entry".to_owned(), Value::String("audit".to_owned()));
+    let rejected = register(
+        &mut registry,
+        "c3",
+        "fiber.hook",
+        json!(["turn_end", with_entry]),
+    );
+    let RegisterOutcome::Rejected { message, .. } = rejected else {
+        panic!("an entry-carrying process hook is refused");
+    };
+    assert!(
+        message.contains("`entry` is declared configuration only"),
+        "{message}"
+    );
+    assert_eq!(registry.hooks().by_point["turn_end"].len(), 2);
+    let watch_rejected = register(
+        &mut registry,
+        "c4",
+        "fiber.watch",
+        json!([["turn_completed"], {"timeout": 5000, "run": true, "entry": "ping"}]),
+    );
+    let RegisterOutcome::Rejected { message, .. } = watch_rejected else {
+        panic!("an entry-carrying process watcher is refused");
+    };
+    assert!(
+        message.contains("`entry` is declared configuration only"),
+        "{message}"
+    );
+}
+
 /// A positional reference shares the triple: its key may be `"1"`, and it
 /// resolves only within the generation that minted it.
 #[test]
