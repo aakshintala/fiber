@@ -753,7 +753,15 @@ fn probe_live_holder_is_named() {
         "the funded wait answered while the holder lived"
     );
     drop(stdin);
-    child.wait().expect("the marked shell reaps");
+    fakes::within(
+        "the marked shell to reap",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            let mut child = child;
+            child.wait()
+        },
+    )
+    .expect("the marked shell reaps");
     assert!(
         Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&answer)

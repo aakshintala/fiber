@@ -1567,7 +1567,15 @@ mod tests {
             "the cleanup wait answered while the holder lived"
         );
         drop(stdin);
-        child.wait().expect("the marked shell reaps");
+        fakes::within(
+            "the marked shell to reap",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                let mut child = child;
+                child.wait()
+            },
+        )
+        .expect("the marked shell reaps");
         assert!(
             Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                 .recv(&answer)
@@ -1610,10 +1618,15 @@ mod tests {
         let wait_shared = Arc::clone(&wait_run.shared);
         let wait_group_for_signal = owned_group;
         let hub_signal = hub_path.clone();
-        let handle = thread::spawn(move || wait_run.wait());
-        // The early waits finish with a full budget; the hub wait then
-        // holds at its socket pause. The group empties once the child
-        // is reaped, and the reader ends at end of file.
+        let (finished, result) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| wait_run.wait()));
+            finished.send(outcome).unwrap_or(());
+        });
+        // The group empties once the child is reaped, and the reader ends
+        // at end of file. Keep the socket present while the run passes its
+        // earlier success-path waits and settles at the hub pause.
         fakes::wait_until(
             "the wait to reach its hub pause",
             Deadline::after(fakes::MUST_SUCCEED_WITHIN),
@@ -1627,6 +1640,13 @@ mod tests {
             },
         );
         assert!(hub_path.exists(), "the wait holds at its hub pause");
+        assert!(
+            matches!(
+                Deadline::after(Duration::from_millis(500)).recv(&result),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "the run remains at the held hub pause after its earlier success-path waits"
+        );
         // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
         wait_clock.advance(fakes::deadline::WAITS);
         assert!(
@@ -1634,9 +1654,18 @@ mod tests {
             "the success-path budget is spent before the workspace wait"
         );
         fs::remove_file(&hub_path).expect("the hub pause releases");
-        let exited = handle.join().expect(
-            "the workspace wait uses the cleanup phase, so a spent success-path budget still confirms an absent workspace",
+        let outcome = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&result, "Run::wait to finish its cleanup");
+        let joined = fakes::within(
+            "the Run::wait thread to finish",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || handle.join(),
         );
+        assert!(joined.is_ok(), "the Run::wait thread panicked outside wait");
+        let exited = match outcome {
+            Ok(exited) => exited,
+            Err(payload) => std::panic::resume_unwind(payload),
+        };
         assert_eq!(exited.status.code(), Some(0));
     }
 }
