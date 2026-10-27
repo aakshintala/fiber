@@ -20,7 +20,7 @@ mod support;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc;
 use std::thread;
@@ -813,4 +813,333 @@ fn two_quick_reconnects_spawn_the_server_once() {
         "the failed start plus one restart spawn"
     );
     driver.finish();
+}
+
+/// The session runtime directories under the test home that a stalled
+/// startup may have reached: `run` holds session sockets, `cache/mcp`
+/// holds cached server lists, `logs` holds diagnostic logs. Names only:
+/// nothing here creates or writes.
+struct HomeSnapshot {
+    run: Vec<String>,
+    cache_mcp: Vec<String>,
+    logs: Vec<String>,
+}
+
+/// The first line of the startup-timeout report: the `fiber_started`
+/// phase still awaited, the configured servers, and the child status.
+/// An empty server list names itself, so a server-less stall reads as
+/// one instead of as an empty pair of brackets.
+fn startup_timeout_head(servers: &[String], child: &str) -> String {
+    if servers.is_empty() {
+        format!(
+            "waited until the deadline for fiber_started with no servers configured; child {child}"
+        )
+    } else {
+        format!(
+            "waited until the deadline for fiber_started with servers [{}]; child {child}",
+            servers.join(", ")
+        )
+    }
+}
+
+/// The state the startup wait had observed when it expired: every
+/// stderr line so far, showing the first 30 with the total when there
+/// are more, then the runtime snapshot. An empty stderr names itself,
+/// so silence reads as silence instead of as a missing section.
+fn startup_timeout_sections(stderr: &[String], snap: &HomeSnapshot) -> String {
+    const SHOWN: usize = 30;
+    let mut sections = if stderr.is_empty() {
+        String::from("stderr (0 lines):\n(no stderr received)")
+    } else {
+        let mut section = format!("stderr ({} lines):", stderr.len());
+        for line in stderr.iter().take(SHOWN) {
+            section.push('\n');
+            section.push_str(line);
+        }
+        if stderr.len() > SHOWN {
+            section.push_str(&format!(
+                "\n... (truncated: showing first {SHOWN} of {} lines)",
+                stderr.len()
+            ));
+        }
+        section
+    };
+    for (name, entries) in [
+        ("run", &snap.run),
+        ("cache/mcp", &snap.cache_mcp),
+        ("logs", &snap.logs),
+    ] {
+        sections.push_str(&format!("\n{name}: [{}]", entries.join(", ")));
+    }
+    sections
+}
+
+/// The `fiber_started` timeout's diagnostic: the head plus the state
+/// sections. The Timeout branch panics with this; the Disconnected
+/// branch keeps today's head text and appends the same sections.
+fn startup_timeout_report(
+    servers: &[String],
+    child: &str,
+    stderr: &[String],
+    snap: &HomeSnapshot,
+) -> String {
+    format!(
+        "{}\n{}",
+        startup_timeout_head(servers, child),
+        startup_timeout_sections(stderr, snap)
+    )
+}
+
+/// The configured server names in `home/config.json`: the keys of
+/// `mcp.servers`. Infallible: a missing file, a directory, unreadable
+/// or non-UTF-8 bytes, invalid JSON, or a missing or non-object `mcp`
+/// or `mcp.servers` all read as no servers. Sorted, so the report is
+/// stable whatever order the file lists them in.
+fn configured_servers(home: &Path) -> Vec<String> {
+    let bytes = match fs::read(home.join("config.json")) {
+        Ok(bytes) => bytes,
+        Err(_) => return Vec::new(),
+    };
+    let config: Value = match serde_json::from_slice(&bytes) {
+        Ok(config) => config,
+        Err(_) => return Vec::new(),
+    };
+    let servers = match config
+        .get("mcp")
+        .and_then(|mcp| mcp.get("servers"))
+        .and_then(Value::as_object)
+    {
+        Some(servers) => servers,
+        None => return Vec::new(),
+    };
+    let mut names: Vec<String> = servers.keys().cloned().collect();
+    names.sort();
+    names
+}
+
+/// The sorted entry names under `path`: an unreadable directory lists
+/// as empty, so the report never fails on a missing runtime directory.
+fn dir_names(path: &Path) -> Vec<String> {
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// The runtime snapshot for `home`.
+fn home_snapshot(home: &Path) -> HomeSnapshot {
+    HomeSnapshot {
+        run: dir_names(&home.join("run")),
+        cache_mcp: dir_names(&home.join("cache").join("mcp")),
+        logs: dir_names(&home.join("logs")),
+    }
+}
+
+/// The `fiber_started` startup-timeout diagnostic for #3515: when the
+/// startup wait expires, the panic names the startup state it found —
+/// the configured servers, the child status, stderr so far, and the
+/// runtime directories under the test home — instead of only the
+/// deadline. The Timeout branch itself is not forceable live by
+/// design, so these unit tests pin the builder, the reader, and the
+/// snapshot, and review checks the branch against them.
+#[test]
+fn startup_timeout_report_names_servers_child_stderr_and_snapshot() {
+    let snap = HomeSnapshot {
+        run: vec!["s_00000000000000d1".to_owned()],
+        cache_mcp: Vec::new(),
+        logs: vec!["fiber.log".to_owned()],
+    };
+    let report = startup_timeout_report(
+        &["flaky".to_owned(), "up".to_owned()],
+        "still running",
+        &["a first stderr line".to_owned()],
+        &snap,
+    );
+    assert!(
+        report.contains("waited until the deadline for fiber_started with servers [flaky, up]"),
+        "{report}"
+    );
+    assert!(report.contains("child still running"), "{report}");
+    assert!(report.contains("stderr (1 lines):"), "{report}");
+    assert!(report.contains("a first stderr line"), "{report}");
+    assert!(report.contains("run: [s_00000000000000d1]"), "{report}");
+    assert!(report.contains("cache/mcp: []"), "{report}");
+    assert!(report.contains("logs: [fiber.log]"), "{report}");
+}
+
+#[test]
+fn startup_timeout_report_with_no_servers_or_stderr_names_both() {
+    let snap = HomeSnapshot {
+        run: Vec::new(),
+        cache_mcp: Vec::new(),
+        logs: Vec::new(),
+    };
+    let report = startup_timeout_report(&[], "still running", &[], &snap);
+    assert_eq!(
+        report,
+        "waited until the deadline for fiber_started with no servers configured; child still running\n\
+         stderr (0 lines):\n\
+         (no stderr received)\n\
+         run: []\n\
+         cache/mcp: []\n\
+         logs: []",
+    );
+}
+
+#[test]
+fn startup_timeout_report_names_each_child_status() {
+    let snap = HomeSnapshot {
+        run: Vec::new(),
+        cache_mcp: Vec::new(),
+        logs: Vec::new(),
+    };
+    for (status, fragment) in [
+        ("still running", "child still running"),
+        (
+            "exited with exit status: 1",
+            "child exited with exit status: 1",
+        ),
+        ("unknown", "child unknown"),
+    ] {
+        let report = startup_timeout_report(&["up".to_owned()], status, &[], &snap);
+        assert!(report.contains(fragment), "{report}");
+    }
+}
+
+#[test]
+fn startup_timeout_report_shows_thirty_stderr_lines_whole() {
+    let lines: Vec<String> = (0..30).map(|n| format!("err-{n:02}")).collect();
+    let snap = HomeSnapshot {
+        run: Vec::new(),
+        cache_mcp: Vec::new(),
+        logs: Vec::new(),
+    };
+    let report = startup_timeout_report(&["up".to_owned()], "still running", &lines, &snap);
+    assert!(report.contains("stderr (30 lines):"), "{report}");
+    assert!(report.contains("err-29"), "{report}");
+    assert!(!report.contains("truncated"), "{report}");
+}
+
+#[test]
+fn startup_timeout_report_truncates_the_thirty_first_stderr_line() {
+    let lines: Vec<String> = (0..31).map(|n| format!("err-{n:02}")).collect();
+    let snap = HomeSnapshot {
+        run: Vec::new(),
+        cache_mcp: Vec::new(),
+        logs: Vec::new(),
+    };
+    let report = startup_timeout_report(&["up".to_owned()], "still running", &lines, &snap);
+    assert!(report.contains("stderr (31 lines):"), "{report}");
+    assert!(report.contains("err-29"), "{report}");
+    assert!(!report.contains("err-30"), "{report}");
+    assert!(report.contains("truncated"), "{report}");
+    assert!(report.contains("showing first 30 of 31 lines"), "{report}");
+}
+
+#[test]
+fn startup_timeout_sections_match_the_report_tail() {
+    let snap = HomeSnapshot {
+        run: vec!["s_00000000000000d1".to_owned()],
+        cache_mcp: Vec::new(),
+        logs: Vec::new(),
+    };
+    let stderr = vec!["boom".to_owned()];
+    let report = startup_timeout_report(&["up".to_owned()], "still running", &stderr, &snap);
+    let sections = startup_timeout_sections(&stderr, &snap);
+    assert!(report.ends_with(&sections), "{report}");
+}
+
+#[test]
+fn home_snapshot_lists_sorted_runtime_names() {
+    let root = fakes::TempDir::new("snap-full");
+    let home = root.path();
+    fs::create_dir_all(home.join("run")).unwrap();
+    fs::write(home.join("run").join("b"), "").unwrap();
+    fs::write(home.join("run").join("a"), "").unwrap();
+    fs::create_dir_all(home.join("cache").join("mcp")).unwrap();
+    fs::write(home.join("cache").join("mcp").join("up.json"), "{}").unwrap();
+    fs::create_dir_all(home.join("logs")).unwrap();
+    fs::write(home.join("logs").join("fiber.log"), "").unwrap();
+    let snap = home_snapshot(home);
+    assert_eq!(snap.run, vec!["a".to_owned(), "b".to_owned()]);
+    assert_eq!(snap.cache_mcp, vec!["up.json".to_owned()]);
+    assert_eq!(snap.logs, vec!["fiber.log".to_owned()]);
+}
+
+#[test]
+fn home_snapshot_reads_missing_runtime_dirs_as_empty() {
+    let root = fakes::TempDir::new("snap-missing");
+    let snap = home_snapshot(root.path());
+    assert_eq!(snap.run, Vec::<String>::new());
+    assert_eq!(snap.cache_mcp, Vec::<String>::new());
+    assert_eq!(snap.logs, Vec::<String>::new());
+}
+
+#[test]
+fn dir_names_reads_a_missing_directory_as_empty() {
+    let root = fakes::TempDir::new("snap-nodir");
+    assert_eq!(dir_names(&root.path().join("absent")), Vec::<String>::new());
+}
+
+#[test]
+fn configured_servers_reads_command_and_url_shapes_sorted() {
+    let root = fakes::TempDir::new("servers-valid");
+    write_json(
+        &root.path().join("config.json"),
+        &json!({"model": "fake/m", "mcp": {"servers": {
+            "zeta": {"command": "/bin/true"},
+            "alpha": {"url": "http://127.0.0.1:9/mcp"},
+        }}}),
+    );
+    assert_eq!(
+        configured_servers(root.path()),
+        vec!["alpha".to_owned(), "zeta".to_owned()],
+    );
+}
+
+#[test]
+fn configured_servers_reads_a_missing_file_as_no_servers() {
+    let root = fakes::TempDir::new("servers-missing");
+    assert_eq!(configured_servers(root.path()), Vec::<String>::new());
+}
+
+#[test]
+fn configured_servers_reads_unreadable_configs_as_no_servers() {
+    let root = fakes::TempDir::new("servers-unreadable");
+    fs::write(root.path().join("config.json"), b"not json{").unwrap();
+    assert_eq!(configured_servers(root.path()), Vec::<String>::new());
+    let bytes = fakes::TempDir::new("servers-bytes");
+    fs::write(bytes.path().join("config.json"), [0xff, 0xfe, 0x00]).unwrap();
+    assert_eq!(configured_servers(bytes.path()), Vec::<String>::new());
+    let dir = fakes::TempDir::new("servers-dir");
+    fs::create_dir_all(dir.path().join("config.json")).unwrap();
+    assert_eq!(configured_servers(dir.path()), Vec::<String>::new());
+}
+
+#[test]
+fn configured_servers_reads_shapes_without_object_servers_as_no_servers() {
+    for config in [
+        json!({}),
+        json!({"model": "fake/m"}),
+        json!({"mcp": "servers"}),
+        json!({"mcp": {}}),
+        json!({"mcp": {"servers": ["up"]}}),
+        json!({"mcp": {"servers": "up"}}),
+        json!({"mcp": {"servers": 1}}),
+        json!({"mcp": {"servers": null}}),
+    ] {
+        let root = fakes::TempDir::new("servers-shape");
+        write_json(&root.path().join("config.json"), &config);
+        assert_eq!(
+            configured_servers(root.path()),
+            Vec::<String>::new(),
+            "{config}"
+        );
+    }
 }
