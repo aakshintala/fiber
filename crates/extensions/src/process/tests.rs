@@ -631,6 +631,7 @@ fn minted(table: &Table, ran_by: &str) -> requests::Minted {
 #[test]
 fn minted_ids_are_unique_within_a_generation() {
     let table = Table::new();
+    table.use_fixed_request_nonce("r_fixed");
     let mut ids = std::collections::BTreeSet::new();
     for _ in 0..100 {
         let minted = minted(&table, "tool t");

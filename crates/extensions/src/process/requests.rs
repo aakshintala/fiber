@@ -148,6 +148,8 @@ pub(crate) struct Minted {
 struct Inner {
     /// The current generation: minted ids resolve only here.
     generation: u64,
+    /// The next request sequence, never reset across retirement.
+    next_request_id: u128,
     /// Every pending request by id.
     pending: BTreeMap<RequestId, Pending>,
     /// The stream item waiting for its reply, when one is outstanding.
@@ -161,6 +163,8 @@ pub(crate) struct Table {
     inner: Mutex<Inner>,
     stream_gate: Condvar,
     #[cfg(test)]
+    fixed_request_nonce: Mutex<Option<String>>,
+    #[cfg(test)]
     next_stream_wait: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
@@ -171,13 +175,21 @@ impl Table {
         Self {
             inner: Mutex::new(Inner {
                 generation: 0,
+                next_request_id: 0,
                 pending: BTreeMap::new(),
                 stream_held: None,
             }),
             stream_gate: Condvar::new(),
             #[cfg(test)]
+            fixed_request_nonce: Mutex::new(None),
+            #[cfg(test)]
             next_stream_wait: Mutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn use_fixed_request_nonce(&self, nonce: &str) {
+        *support::lock(&self.fixed_request_nonce) = Some(nonce.to_owned());
     }
 
     #[cfg(test)]
@@ -211,12 +223,17 @@ impl Table {
         credential: Option<crate::lua::CredentialFor>,
     ) -> Minted {
         let mut inner = support::lock(&self.inner);
-        let id = loop {
-            let id = RequestId(support::mint("r_"));
-            if !inner.pending.contains_key(&id) {
-                break id;
-            }
-        };
+        let sequence = inner.next_request_id;
+        inner.next_request_id = sequence
+            .checked_add(1)
+            .expect("process request ID space exhausted");
+        #[cfg(test)]
+        let nonce = support::lock(&self.fixed_request_nonce)
+            .clone()
+            .unwrap_or_else(|| support::mint("r_"));
+        #[cfg(not(test))]
+        let nonce = support::mint("r_");
+        let id = RequestId(format!("{nonce}_{sequence:032x}"));
         let cancel = support::cancel::Token::new();
         let context = CallbackContext::request(
             extension,
