@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::panel::Spot as PanelSpot;
+use crate::app::testkit::{SESSION, attached, now, sent, session_line, session_line_in_turn};
 use crate::app::{App, Effect, SessionView};
 use crate::changed_files_view::{diff_command, ranked};
 use crate::home::Launch;
@@ -12,25 +13,12 @@ use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
 use crate::swapped::Spot as ViewSpot;
-use contract::clock::Clock;
-use contract::{ActionId, SessionId, TurnId};
+use contract::SessionId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
-
-fn now() -> std::time::Instant {
-    fakes::clock::FakeClock::new().now()
-}
-
-fn attached(width: u16, height: u16) -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_size(width, height);
-    app.attach(SessionId(SESSION.to_owned()));
-    app
-}
 
 fn home_attached(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
@@ -48,40 +36,27 @@ fn home_attached(width: u16, height: u16) -> App {
     app
 }
 
-fn session_line(session: &str, kind: &str, turn: Option<&str>, payload: Value) -> Line {
-    Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
-        session_id: SessionId(session.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: turn.map(|id| TurnId(id.to_owned())),
-        action_id: Some(ActionId("a_1".to_owned())),
-        seq: None,
-        payload: payload.as_object().cloned().unwrap_or_default(),
-    })
-}
-
 fn usage_line(session: &str, generation: &str, model: &str, turn: Option<&str>) -> Line {
-    session_line(
-        session,
-        "usage_recorded",
-        turn,
-        json!({
-            "generation_id": generation, "model": model,
-            "tokens": {"input": 12, "cache_read": 3,
-                "cache_write": {"5m": 4}, "output": 5},
-            "input_bytes": 0, "cost": 0.25,
-        }),
-    )
+    let payload = json!({
+        "generation_id": generation, "model": model,
+        "tokens": {"input": 12, "cache_read": 3,
+            "cache_write": {"5m": 4}, "output": 5},
+        "input_bytes": 0, "cost": 0.25,
+    });
+    match turn {
+        Some(turn) => session_line_in_turn(session, "usage_recorded", turn, payload, Some("a_1")),
+        None => session_line(session, "usage_recorded", payload, Some("a_1")),
+    }
 }
 
 fn turn_started(turn: &str) -> Line {
-    session_line(
+    session_line_in_turn(
         SESSION,
         "turn_started",
-        Some(turn),
+        turn,
         json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "work"}]}]}),
+        Some("a_1"),
     )
 }
 
@@ -176,7 +151,6 @@ fn escape_in_the_quit_question_does_not_close_the_view() {
     app.on_line(session_line(
         OTHER,
         "session_status",
-        None,
         json!({
             "name": "other", "workspace": "/w", "project": "-w", "state": "streaming",
             "started": 0, "calls": 0, "since": 0,
@@ -184,6 +158,7 @@ fn escape_in_the_quit_question_does_not_close_the_view() {
                 "cache_write": {}, "output": 2}, "cost": 0.0, "subscription_cost": 0.0},
             "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
         }),
+        Some("a_1"),
     ));
     open_usage(&mut app);
     assert_eq!(app.quit(), Effect::None);
@@ -345,7 +320,6 @@ fn a_session_card_spend_click_opens_usage_and_keeps_the_draft() {
     app.on_line(session_line(
         SESSION,
         "session_status",
-        None,
         json!({
             "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
             "started": 0, "calls": 0, "since": 0,
@@ -353,6 +327,7 @@ fn a_session_card_spend_click_opens_usage_and_keeps_the_draft() {
                 "cache_write": {}, "output": 2}, "cost": 1.25, "subscription_cost": 0.0},
             "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
         }),
+        Some("a_1"),
     ));
     app.on_edit(Edit::Paste("keep this draft".to_owned()));
     let (shown, targets) = screen(&app, 160, 40);
@@ -381,7 +356,6 @@ fn a_panel_click_closes_the_keymap_and_routes_the_next_key_to_usage() {
     app.on_line(session_line(
         SESSION,
         "session_status",
-        None,
         json!({
             "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
             "started": 0, "calls": 0, "since": 0,
@@ -389,6 +363,7 @@ fn a_panel_click_closes_the_keymap_and_routes_the_next_key_to_usage() {
                 "cache_write": {}, "output": 2}, "cost": 1.25, "subscription_cost": 0.0},
             "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
         }),
+        Some("a_1"),
     ));
     app.on_key(Key::F1, now());
     assert!(app.keymap_top().is_some());
@@ -412,7 +387,6 @@ fn the_narrow_status_line_spend_segment_opens_usage() {
     app.on_line(session_line(
         SESSION,
         "session_status",
-        None,
         json!({
             "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
             "started": 0, "calls": 0, "since": 0,
@@ -420,6 +394,7 @@ fn the_narrow_status_line_spend_segment_opens_usage() {
                 "cache_write": {}, "output": 2}, "cost": 1.25, "subscription_cost": 0.0},
             "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
         }),
+        Some("a_1"),
     ));
     app.on_edit(Edit::Paste("keep this draft".to_owned()));
     let (_, targets) = screen(&app, 100, 30);
@@ -451,8 +426,8 @@ fn job_started_line(job: &str, description: &str) -> Line {
     session_line(
         SESSION,
         "job_started",
-        None,
         json!({"job_id": job, "description": description, "output_path": "/tmp/out"}),
+        Some("a_1"),
     )
 }
 
@@ -460,9 +435,9 @@ fn delegate_started_line(job: &str, delegate: &str, model: &str) -> Line {
     session_line(
         SESSION,
         "delegate_started",
-        None,
         json!({"job_id": job, "delegate_session_id": delegate,
             "harness": "fiber", "model": model, "workspace": "/w"}),
+        Some("a_1"),
     )
 }
 
@@ -470,13 +445,13 @@ fn delegated_usage_line(origin: &str, generation: &str, model: &str) -> Line {
     session_line(
         SESSION,
         "usage_recorded",
-        None,
         json!({
             "generation_id": generation, "model": model,
             "tokens": {"input": 12, "cache_read": 0,
                 "cache_write": {"5m": 0}, "output": 5},
             "input_bytes": 0, "cost": 0.25, "origin_session_id": origin,
         }),
+        Some("a_1"),
     )
 }
 
@@ -507,7 +482,6 @@ fn context_preamble() -> Line {
     session_line(
         SESSION,
         "preamble_built",
-        None,
         json!({
             "reason": "start", "model": "model/m", "context_window": 100,
             "trigger_at": 80, "system_prompt": "sys",
@@ -515,6 +489,7 @@ fn context_preamble() -> Line {
                 "definition": {"a": 1}}],
             "tool_choice": "auto", "cache_lifetime": "5m",
         }),
+        Some("a_1"),
     )
 }
 
@@ -522,7 +497,6 @@ fn context_status(tokens: u64, window: u64) -> Line {
     session_line(
         SESSION,
         "session_status",
-        None,
         json!({
             "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
             "started": 0, "calls": 0, "since": 0,
@@ -531,11 +505,12 @@ fn context_status(tokens: u64, window: u64) -> Line {
             "model": "model/m", "delegates": 0, "jobs": 0, "clients": 0,
             "context": {"tokens": tokens, "window": window},
         }),
+        Some("a_1"),
     )
 }
 
 fn context_request_started() -> Line {
-    session_line(SESSION, "assistant_message_started", None, json!({}))
+    session_line(SESSION, "assistant_message_started", json!({}), Some("a_1"))
 }
 
 fn context_usage(input_media: Option<bool>) -> Line {
@@ -547,7 +522,7 @@ fn context_usage(input_media: Option<bool>) -> Line {
     if let Some(input_media) = input_media {
         payload["input_media"] = json!(input_media);
     }
-    session_line(SESSION, "usage_recorded", None, payload)
+    session_line(SESSION, "usage_recorded", payload, Some("a_1"))
 }
 
 fn context_tool(name: &str, result: &str) -> [Line; 2] {
@@ -555,14 +530,14 @@ fn context_tool(name: &str, result: &str) -> [Line; 2] {
         session_line(
             SESSION,
             "tool_call_requested",
-            None,
             json!({"name": name, "arguments": {}}),
+            Some("a_1"),
         ),
         session_line(
             SESSION,
             "tool_call_completed",
-            None,
             json!({"status": "completed", "content": [{"type": "text", "text": result}]}),
+            Some("a_1"),
         ),
     ]
 }
@@ -571,8 +546,8 @@ fn context_handoff() -> Line {
     session_line(
         SESSION,
         "handoff_completed",
-        None,
         json!({"outcome": "completed"}),
+        Some("a_1"),
     )
 }
 
@@ -679,9 +654,9 @@ fn a_fork_counts_its_own_results_and_completed_handoff_clears_them() {
     app.on_line(session_line(
         SESSION,
         "session_started",
-        None,
         json!({"workspace": "/w", "variables": {},
             "forked_from": {"session_id": "s_parent", "seq": 8}}),
+        Some("a_1"),
     ));
     app.on_line(context_preamble());
     app.on_line(context_request_started());
@@ -807,13 +782,13 @@ fn changes_line(entries: &[(&str, u64, u64)]) -> Line {
     session_line(
         SESSION,
         "tool_call_completed",
-        None,
         json!({
             "status": "completed", "content": [],
             "changes": entries.iter().map(|(path, added, removed)| json!({
                 "path": path, "added": added, "removed": removed,
             })).collect::<Vec<_>>(),
         }),
+        Some("a_1"),
     )
 }
 
@@ -846,11 +821,11 @@ fn accepted_diff(id: &str, text: &str) -> Line {
     session_line(
         SESSION,
         "command_accepted",
-        None,
         json!({
             "command_id": id,
             "result": {"output": text, "process": {"exit_code": 1, "timed_out": false}},
         }),
+        Some("a_1"),
     )
 }
 
@@ -858,8 +833,8 @@ fn rejected_diff(session: &str, id: &str, message: &str) -> Line {
     session_line(
         session,
         "command_rejected",
-        None,
         json!({"command_id": id, "code": "duplicate_command", "message": message}),
+        Some("a_1"),
     )
 }
 
@@ -1144,9 +1119,9 @@ fn start_job(app: &mut App, job: &str) {
     app.on_line(session_line(
         SESSION,
         "job_started",
-        None,
         json!({"job_id": job, "description": format!("task {job}"),
             "output_path": "/tmp/out"}),
+        Some("a_1"),
     ));
 }
 
@@ -1156,10 +1131,10 @@ fn start_delegate(app: &mut App, job: &str, delegate: &str) {
     app.on_line(session_line(
         SESSION,
         "delegate_started",
-        None,
         json!({"job_id": job,
             "delegate_session_id": delegate,
             "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+        Some("a_1"),
     ));
 }
 
@@ -1168,8 +1143,8 @@ fn complete_job(app: &mut App, job: &str) {
     app.on_line(session_line(
         SESSION,
         "job_completed",
-        None,
         json!({"job_id": job, "status": "completed"}),
+        Some("a_1"),
     ));
 }
 
@@ -1280,12 +1255,12 @@ fn a_non_row_click_in_a_usage_quota_or_context_view_selects_nothing() {
             app.on_line(session_line(
                 SESSION,
                 "command_accepted",
-                None,
                 json!({"command_id": id,
                     "result": {"quota": [
                         {"provider": "codex", "credential": "default",
                             "windows": [{"name": "weekly", "percent_used": 38.0}]},
                     ], "notice_at": 80.0}}),
+                Some("a_1"),
             ));
         }
         assert_eq!(app.open_session_view(view), Effect::None);
@@ -1434,8 +1409,8 @@ fn clicking_a_finished_row_opens_its_replay() {
     app.on_line(session_line(
         SESSION,
         "job_completed",
-        None,
         json!({"job_id": "j_1", "status": "completed"}),
+        Some("a_1"),
     ));
     open_all_delegates(&mut app);
     let (shown, _) = screen(&app, 80, 24);
@@ -1532,28 +1507,6 @@ fn slash_quota(app: &mut App) -> Effect {
     app.on_key(Key::Enter, now())
 }
 
-/// The command lines an effect sends, parsed.
-fn sent(effect: Effect) -> Vec<Value> {
-    match effect {
-        Effect::Send(lines) => lines
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_default())
-            .collect(),
-        Effect::None
-        | Effect::Quit
-        | Effect::ListFiles
-        | Effect::ReadImage(_)
-        | Effect::Feedback { .. }
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. }
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_) => Vec::new(),
-    }
-}
-
 #[test]
 fn slash_quota_opens_the_view_and_fetches_with_fetch_true() {
     let mut app = attached(80, 24);
@@ -1596,12 +1549,12 @@ fn the_fetch_answer_redraws_the_view_and_clears_fetching() {
     app.on_line(session_line(
         SESSION,
         "command_accepted",
-        None,
         json!({"command_id": id,
             "result": {"quota": [
                 {"provider": "codex", "credential": "default",
                     "windows": [{"name": "weekly", "percent_used": 38.0}]},
             ], "notice_at": 80.0}}),
+        Some("a_1"),
     ));
     let shown = screen(&app, 80, 24).0;
     assert!(!shown.contains("fetching"), "{shown}");
@@ -1620,13 +1573,13 @@ fn the_quota_view_renders_reset_times_against_the_injected_wall_clock() {
     app.on_line(session_line(
         SESSION,
         "command_accepted",
-        None,
         json!({"command_id": id,
             "result": {"quota": [
                 {"provider": "codex", "credential": "default",
                     "windows": [{"name": "weekly", "percent_used": 38.0,
                         "resets_at": WALL_MS + 192 * 60_000}]},
             ], "notice_at": 80.0}}),
+        Some("a_1"),
     ));
     let shown = screen(&app, 80, 24).0;
     assert!(shown.contains("resets in 3h12m"), "{shown}");
@@ -1636,8 +1589,8 @@ fn accepted_hooks(id: &str, hooks: serde_json::Value) -> Line {
     session_line(
         SESSION,
         "command_accepted",
-        None,
         json!({"command_id": id, "result": {"hooks": hooks}}),
+        Some("a_1"),
     )
 }
 
