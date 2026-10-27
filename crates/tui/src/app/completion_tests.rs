@@ -33,6 +33,7 @@ fn typing_filters_prefix_matches_first() {
         shown(&app),
         [
             "/resume  Goes home, focused on the first exited row.  command",
+            "/release-notes  Opens the running version's release notes.  command",
             "/reviewer-setup  Sets up the reviewer's notes with you.  command",
             "/rewind  Opens the rewind view.  command",
             "/name /rename <text>  Names the session.  command",
@@ -144,7 +145,7 @@ fn tab_with_no_panel_and_no_match_does_nothing() {
 #[test]
 fn enter_runs_the_selected_row() {
     let mut app = attached();
-    type_text(&mut app, "/rel");
+    type_text(&mut app, "/relo");
     let lines = sent(app.on_key(Key::Enter, now()));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "reload");
@@ -524,7 +525,7 @@ fn slash_completions_carry_their_window() {
     let completions = app.completions().expect("the panel shows");
     assert_eq!(completions.query, "re");
     // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
-    assert_eq!(completions.total, 7);
+    assert_eq!(completions.total, 8);
     assert_eq!(completions.start, 0);
     assert_eq!(completions.selected, Some(0));
     let names: Vec<&str> = match &completions.rows {
@@ -537,6 +538,7 @@ fn slash_completions_carry_their_window() {
         names,
         [
             "resume",
+            "release-notes",
             "reviewer-setup",
             "rewind",
             "name",
@@ -549,6 +551,7 @@ fn slash_completions_carry_their_window() {
         completions.lines(),
         [
             "/resume  Goes home, focused on the first exited row.  command",
+            "/release-notes  Opens the running version's release notes.  command",
             "/reviewer-setup  Sets up the reviewer's notes with you.  command",
             "/rewind  Opens the rewind view.  command",
             "/name /rename <text>  Names the session.  command",
