@@ -245,6 +245,9 @@ pub fn rewound_from(
         Point {
             session_id: rewound.from_session_id.unwrap_or_else(|| old.clone()),
             seq: rewound.seq,
+            // A rewind continues in its own project; a cross-project parent
+            // arrives through `forked_from.project` on a moved child's start.
+            project: None,
         },
         rewound.summary,
     ))

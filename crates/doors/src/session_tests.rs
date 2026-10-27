@@ -4093,6 +4093,7 @@ fn close_keeps_a_started_rewound_session_with_no_prompt() {
             forked_from: Some(Point {
                 session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".into()),
                 seq: contract::Seq(3),
+                project: None,
             }),
             rewind: Some(Rewind {
                 summary: None,
@@ -4167,6 +4168,7 @@ fn print_ends_at_rewound_while_the_log_is_held() {
             forked_from: Some(Point {
                 session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".into()),
                 seq: contract::Seq(3),
+                project: None,
             }),
             rewind: None,
             worktree: None,

@@ -138,6 +138,7 @@ impl KnownHosts {
             Event::FiberExited(_) => {}
             Event::SessionStarted(_) => {}
             Event::Rewound(_) => {}
+            Event::Moved(_) => {}
             Event::StepStarted(_) => {}
             Event::TurnCompleted(_) => {}
             Event::SteeringQueue(_) => {}

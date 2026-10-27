@@ -62,6 +62,7 @@ fn started(workspace: &str, from: Option<(&str, u64)>) -> Event {
         forked_from: from.map(|(session, seq)| Point {
             session_id: SessionId(session.to_owned()),
             seq: Seq(seq),
+            project: None,
         }),
         rewind: None,
         worktree: None,

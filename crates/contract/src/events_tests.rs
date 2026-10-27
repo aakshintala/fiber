@@ -373,6 +373,10 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"new_session_id": "s2", "seq": 4, "from_session_id": "s1", "summary": "s"}),
         ),
         (
+            "moved",
+            json!({"new_session_id": "s2", "seq": 4, "workspace": "/other"}),
+        ),
+        (
             "turn_started",
             json!({"input": [
             {"type": "message", "content": content, "source": "session",

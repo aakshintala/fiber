@@ -211,6 +211,7 @@ pub(crate) fn run(
             contract::shapes::Point {
                 session_id: SessionId(from),
                 seq: contract::Seq(seq),
+                project: None,
             },
             parent,
             args.depth.unwrap_or(0),

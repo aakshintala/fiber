@@ -45,7 +45,7 @@ pub use offer::{
     OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered, RepositoryCodeResolved,
 };
 pub use session::{
-    Clients, ContextAdded, ContextFill, FiberExited, FiberStarted, FinalMessage, InputItem,
+    Clients, ContextAdded, ContextFill, FiberExited, FiberStarted, FinalMessage, InputItem, Moved,
     NamedBy, Parent, QueuedMessage, Rewind, Rewound, SessionNamed, SessionStarted, SessionState,
     SessionStatus, ShellCommand, SteeringApplied, SteeringQueue, TurnCompleted, TurnOutcome,
     TurnStarted, Variables, VariablesSource, Waiting, WaitingKind,
@@ -189,6 +189,7 @@ kinds! {
     FiberExited(FiberExited) = "fiber_exited", Durable;
     SessionStarted(SessionStarted) = "session_started", Durable;
     Rewound(Rewound) = "rewound", Durable;
+    Moved(Moved) = "moved", Durable;
     TurnStarted(TurnStarted) = "turn_started", Durable;
     StepStarted(Empty) = "step_started", Durable;
     TurnCompleted(TurnCompleted) = "turn_completed", Durable;

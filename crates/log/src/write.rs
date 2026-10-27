@@ -836,6 +836,10 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         // no other line records it. The conversation's own call is recorded
         // by `assistant_message_completed`.
         Event::UsageRecorded(_) => !in_action,
+        // `moved` is the last line the process writes, and the hub starts
+        // the child from it: the write is fsynced before publication, so no
+        // crash leaves a published move without its line.
+        Event::Moved(_) => true,
         // A job and a delegate start inside a tool call, whose two fsyncs
         // bracket the start, and their news reaches the model at a step
         // boundary, ahead of a model request's fsync. The rest record no
