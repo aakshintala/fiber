@@ -90,28 +90,43 @@ fn wheel_until(run: &mut Run, up: bool, what: &str, done: impl Fn(&Grid) -> bool
 
 const FRAME_END: &[u8] = b"\x1b[?2026l";
 
-/// The scripted turns: a `read` of the PNG, its closing text with a
-/// long tail below the image, then the same session's text-only turn.
-fn script(setup: &Setup, inline: bool) {
-    fs::write(setup.workspace().join("pic.png"), PNG).unwrap();
-    let tail = (1..=30)
-        .map(|n| format!("- T{n:04}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    write_json(
-        &setup.workspace().join("s.json"),
-        &json!({"steps": [
-            {"reasoning": "**Doing**",
-             "tool_calls": [{"name": "read", "arguments": {"path": "pic.png"}}]},
-            {"text": ["Seen.", tail]},
-            {"text": ["Second."]},
-        ]}),
-    );
+/// The scripted turns: `reads` distinct PNG reads, each its own step so
+/// the completions land in order, then closing text, then the same
+/// session's text-only turn. With `with_tail` the closing text carries
+/// a long tail below the images: the scroll room the single-image
+/// journeys scroll through. The many-reads journey needs no scroll
+/// room: its group row must stay on screen under the closing text.
+fn script_reads(setup: &Setup, inline: bool, reads: usize, with_tail: bool) {
+    for n in 0..reads {
+        fs::write(setup.workspace().join(format!("pic-{n:03}.png")), PNG).unwrap();
+    }
+    let mut steps: Vec<Value> = (0..reads)
+        .map(|n| {
+            json!({"tool_calls": [{"name": "read", "arguments": {"path": format!("pic-{n:03}.png")}}]})
+        })
+        .collect();
+    if with_tail {
+        let tail = (1..=30)
+            .map(|n| format!("- T{n:04}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        steps.push(json!({"text": ["Seen.", tail]}));
+    } else {
+        steps.push(json!({"text": ["Seen."]}));
+    }
+    steps.push(json!({"text": ["Second."]}));
+    write_json(&setup.workspace().join("s.json"), &json!({"steps": steps}));
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000},
             "tui": {"inline_images": inline}}),
     );
+}
+
+/// The scripted turns: a `read` of one PNG, its closing text with a
+/// long tail below the image, then the same session's text-only turn.
+fn script(setup: &Setup, inline: bool) {
+    script_reads(setup, inline, 1, true);
 }
 
 /// A fake `xdg-open`/`open` first on the child's PATH, recording its
@@ -217,9 +232,10 @@ fn image_size(setup: &Setup, events: &Path) -> (String, u64, u64) {
     logged_image(&text).expect("the logged image")
 }
 
-/// The logged path and size of the first image part in `events`' tool
-/// completions, when one has landed.
-fn logged_image(text: &str) -> Option<(String, u64, u64)> {
+/// The logged path and size of every image part in `events`' tool
+/// completions, in log order.
+fn logged_images(text: &str) -> Vec<(String, u64, u64)> {
+    let mut out = Vec::new();
     for line in support::complete_lines(text) {
         if line.get("kind").and_then(Value::as_str) != Some("tool_call_completed") {
             continue;
@@ -227,8 +243,8 @@ fn logged_image(text: &str) -> Option<(String, u64, u64)> {
         let content = line
             .get("payload")
             .and_then(|payload| payload.get("content"))
-            .and_then(Value::as_array)?;
-        for part in content {
+            .and_then(Value::as_array);
+        for part in content.into_iter().flatten() {
             if part.get("type").and_then(Value::as_str) == Some("image")
                 && let (Some(path), Some(width), Some(height)) = (
                     part.get("path").and_then(Value::as_str),
@@ -236,11 +252,36 @@ fn logged_image(text: &str) -> Option<(String, u64, u64)> {
                     part.get("height").and_then(Value::as_u64),
                 )
             {
-                return Some((path.to_owned(), width, height));
+                out.push((path.to_owned(), width, height));
             }
         }
     }
-    None
+    out
+}
+
+/// The logged path and size of the first image part in `events`' tool
+/// completions, when one has landed.
+fn logged_image(text: &str) -> Option<(String, u64, u64)> {
+    logged_images(text).into_iter().next()
+}
+
+/// The logged path and size of the last of `reads` image parts in
+/// `events`, read under the setup's deadline: the hub logs each read's
+/// image as its tool completes, so the last logged image is the one
+/// that found the registry exhausted.
+fn last_image(setup: &Setup, events: &Path, reads: usize) -> (String, u64, u64) {
+    let events = events.to_owned();
+    let waiting = events.clone();
+    fakes::wait_until("all reads to log their image", setup.deadline, move || {
+        fs::read_to_string(&waiting)
+            .ok()
+            .is_some_and(|text| logged_images(&text).len() >= reads)
+    });
+    let text = fs::read_to_string(events).expect("the session log");
+    logged_images(&text)
+        .into_iter()
+        .last()
+        .expect("the last logged image")
 }
 
 /// The caption the ledger draws for the image at `path`: its file name
@@ -451,4 +492,172 @@ fn the_same_image_stays_one_line_with_the_flag_off() {
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(count(&output.terminal, b"a=t,"), 0, "nothing transmits");
+}
+
+#[test]
+fn image_only_paste_draws_inline_in_its_prompt_bubble() {
+    let setup = Setup::new();
+    script_reads(&setup, true, 0, false);
+    let bin = setup.root.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let (clipboard, body) = if cfg!(target_os = "macos") {
+        let hex: String = PNG.iter().map(|byte| format!("{byte:02X}")).collect();
+        (
+            "osascript",
+            format!("printf '\\302\\253data PNGf{hex}\\302\\273\\n'"),
+        )
+    } else {
+        let octal: String = PNG.iter().map(|byte| format!("\\{byte:03o}")).collect();
+        ("wl-paste", format!("printf '{octal}'"))
+    };
+    fakes::script(&bin, clipboard, &body);
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap()
+    .into_string()
+    .unwrap();
+    let mut env: Vec<(&str, &str)> = vec![("FIBER_TEST_FAKE_KEY", "sk-test"), ("PATH", &path)];
+    if !cfg!(target_os = "macos") {
+        env.push(("WAYLAND_DISPLAY", "fiber-test"));
+    }
+    let mut run = Run::spawn_pixels(&setup, 100, 30, 1000, 600, &[], &env);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.write(&[0x16]);
+    run.wait_screen("the pasted image", |grid| {
+        grid.contents.contains("[Image #1]")
+    });
+    let from = run.output().len();
+    run.write(b"\r");
+    let placeholder = run.wait_bytes(from, PLACEHOLDER, "the image-only prompt grid");
+    run.wait_bytes(placeholder, FRAME_END, "the image-only prompt frame");
+    let grid = run.wait_screen("the image-only prompt bubble", |grid| {
+        grid.contents.contains("120×80") && grid.contents.contains("Seen.")
+    });
+    assert!(
+        grid.rows.iter().any(|row| row.contains('▣')),
+        "the prompt bubble has an image caption"
+    );
+    assert!(
+        count(&run.output()[from..], PLACEHOLDER) > 0,
+        "the image-only prompt draws inline placeholders"
+    );
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+#[test]
+fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
+    // 255 distinct PNG reads: the first 254 fill the kitty placeholder
+    // colours, so the last image is the one past the range. It keeps its
+    // own viewer target without entering the inline display path: a
+    // click opens it, and the click itself transmits nothing
+    // (`docs/tui.md`, "Images").
+    const READS: usize = 255;
+    let setup = Setup::new();
+    script_reads(&setup, true, READS, false);
+    // A standing allow rule for `read`: 255 approval panels would bury
+    // the turn, and the reads need no review.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "read", "prefix": ""})
+        ),
+    )
+    .unwrap();
+    let marker = setup.workspace().join(".viewed");
+    let shim = viewer_shim(&setup, &marker);
+    let marker_value = marker.to_str().unwrap().to_owned();
+    let mut run = terminal(
+        &setup,
+        &[
+            ("PATH", shim.as_str()),
+            ("FIBER_TEST_VIEW_MARKER", marker_value.as_str()),
+        ],
+    );
+    started(&mut run);
+    let sessions = sessions(&setup);
+    assert_eq!(sessions.len(), 1, "one session ran");
+    let (path, width, height) = last_image(&setup, &sessions[0].join("events.jsonl"), READS);
+    let caption = caption_of(&path, width, height);
+
+    // The turn's reads share one group row above the closing text; it
+    // draws without scrolling. Opening it reveals one row per call
+    // with its image's caption, the last carrying the past-range
+    // image, so its caption is clickable without opening its call.
+    // The turn already finished in `started`, so a grid showing the
+    // group row together with the completed paint has nothing left to
+    // render: the group row's position in that grid is final
+    // (`docs/testing/screens.md`, "Screens").
+    let grid = run.wait_screen("the settled reads group", |grid| {
+        grid.contents.contains("completed")
+            && grid.rows.iter().any(|row| row.contains("Read 255 files"))
+    });
+    let from = run.output().len();
+    click_text(&mut run, &grid, "Read 255 files");
+    run.wait_bytes(from, FRAME_END, "the opened group frame");
+    // The opened group settles the same way: the past-range caption
+    // together with the completed paint proves every call row drew and
+    // the caption row's position is final. The click uses this wait's
+    // grid, never a fresh read.
+    let grid = run.wait_screen("the settled past-range caption", |grid| {
+        grid.contents.contains("completed") && grid.rows.iter().any(|row| row.contains(&caption))
+    });
+    // The caption click opens the viewer, never a display fetch: no
+    // transmit may follow it for the past-range image.
+    // The viewer open is the click's signal, so the test waits for
+    // the marker next.
+    click_text(&mut run, &grid, &caption);
+
+    // The click opens the viewer on the private copy, as for an
+    // in-range image: the past-range target resolves.
+    let marker_file = marker.clone();
+    let session = sessions[0]
+        .file_name()
+        .expect("the session directory name")
+        .to_string_lossy();
+    let name = Path::new(&path)
+        .file_name()
+        .expect("the image file name")
+        .to_string_lossy();
+    let expected = setup
+        .home()
+        .join("cache/images")
+        .join(format!("{session}-{name}"))
+        .to_string_lossy()
+        .into_owned();
+    let expected_line = expected.clone();
+    fakes::wait_until("the viewer to open", setup.deadline, move || {
+        fs::read_to_string(&marker_file)
+            .is_ok_and(|opened| opened.lines().any(|line| line == expected_line))
+    });
+    assert_eq!(
+        fs::read_to_string(&marker).unwrap().trim(),
+        expected,
+        "the viewer opened the private image copy"
+    );
+    // The past-range image draws no placeholder grid: the row above
+    // its caption is the previous call's row, never a grid row.
+    let at = grid
+        .rows
+        .iter()
+        .position(|row| row.contains(&caption))
+        .expect("the past-range caption row");
+    assert!(at > 0, "the caption is not the first row");
+    assert!(
+        !grid.rows[at - 1].contains('\u{10EEEE}'),
+        "no placeholder grid above the past-range caption"
+    );
+
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
 }
