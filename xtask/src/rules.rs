@@ -573,6 +573,7 @@ pub(crate) const RAW_ADVANCE_ALLOWANCES: &[RawAdvanceAllowance] = &[
     raw_advance!("crates/tui/src/app/items_tests.rs", "a_pair_refused_session_not_found_retries_while_running", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/app/keyboard_screen_tests.rs", "ctrl_c_twice_within_the_window_quits_with_the_screen_open", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/app/keyboard_screen_tests.rs", "ctrl_c_with_the_notice_overlay_open_still_clears_then_quits", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/tui/src/app/rewind_tests.rs", "history_wait_times_out_as_a_lost_connection", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/app_tests.rs", "ctrl_c_twice_within_the_window_quits", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/app_tests.rs", "ctrl_c_at_the_window_edge_rearms", 1, NO_PARK, "6179406086"),
     raw_advance!("crates/tui/src/event_loop/attach_tests.rs", "an_answer_at_the_deadline_is_stashed_and_lost", 1, NO_PARK, "6179406086"),
