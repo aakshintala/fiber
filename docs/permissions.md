@@ -210,10 +210,10 @@ and
 those tickets' resolutions hold the rationale and the rejected alternatives.
 
 The opt-in Linux sandbox in #3027 is implemented in the current build. It
-is off by default and confines what a shell call can reach at the
-operating-system level under Fiber's own policy: Landlock plus seccomp; no
-srt, no bubblewrap. Calls remain reviewed; this slice adds no reviewer fast
-path. The Linux policy is `docs/sandbox.md`.
+is off by default and confines model-issued shell calls, not a person's own
+driver-shell commands, at the operating-system level under Fiber's own policy:
+Landlock plus seccomp; no srt, no bubblewrap. Calls remain reviewed; this
+slice adds no reviewer fast path. The Linux policy is `docs/sandbox.md`.
 
 A shell call runs with the account's full rights when the sandbox is off.
 Everything on this page decides whether a call runs; when the sandbox is
