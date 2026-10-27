@@ -27,7 +27,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{KillGroup, Socket, first_line, spawn_watched, until, until_close, write_json};
+use support::{KillGroup, Socket, spawn_watched, until, until_close, write_json};
 
 /// A driven session: the child, its socket client and the test setup.
 /// The child's stderr streams over a channel: the login writes its
@@ -82,7 +82,32 @@ impl Driver {
                 }
             }
         });
-        first_line(setup.deadline, &lines);
+        let first = match setup.deadline.recv(&lines) {
+            Ok(first) => first,
+            Err(error) => {
+                let child = match child.try_wait() {
+                    Ok(None) => String::from("still running"),
+                    Ok(Some(status)) => format!("exited with {status}"),
+                    Err(_) => String::from("unknown"),
+                };
+                let stderr: Vec<String> = stderr.try_iter().collect();
+                let snap = home_snapshot(&setup.home());
+                match error {
+                    std::sync::mpsc::RecvTimeoutError::Timeout => {
+                        let servers = configured_servers(&setup.home());
+                        let report = startup_timeout_report(&servers, &child, &stderr, &snap);
+                        panic!("{report}");
+                    }
+                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                        let sections = startup_timeout_sections(&stderr, &snap);
+                        panic!(
+                            "waited until the deadline for fiber_started: Disconnected\n{sections}"
+                        );
+                    }
+                }
+            }
+        };
+        serde_json::from_str::<Value>(&first).unwrap();
         let client = Socket::connect(setup.deadline, &setup.session_socket(id));
         client.send(r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#);
         // The startup wait returns once both `clients` and
