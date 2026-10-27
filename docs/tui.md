@@ -2646,6 +2646,8 @@ from its `tool_call_*` events. No slot sees the terminal's internals. A ledger r
 
 Each slot's input holds exactly what its built-in renderer reads. Every input listed here also carries `flat`, which is true in screen-reader mode when the terminal drops every style.
 
+A replacement owns its rows whole: where the built-in row carries one target over the row, each replacement line keeps it. A target placed on part of a row goes away when the extension owns those rows. A `notice` keeps its notice target on every replacement line and its dismiss target spans those painted lines; an `error_line` keeps its failed-login target on each line. A `steer` replacement drops image-line targets because it owns those lines. A `prompt` keeps the target for a single image on each replacement line and drops targets for several images. A writing `handoff_band` has no target, and `reply`, `turn_card` and `answers` remain without targets.
+
 **`turn_card`** draws a turn's card whole: its prompts, every entry, and its
 ending. A replaced card is drawn whole by the extension, so no nested slot
 runs inside it; `prompt` draws only when the card itself is built in.
@@ -2741,7 +2743,7 @@ An empty `thinking_line` result draws no row and no opened body.
 | `message` | Fiber's own sentence |
 | `provider` | When present, the provider's `name`, optional HTTP `status`, and `message` |
 
-For a failed login, clicking any line an extension returns for this row opens the login view.
+For example, for a failed login, clicking any line an extension returns for this row opens the login view.
 
 **`notice`** draws a notice, in the conversation and on home. The
 terminal's own notices carry the same fields: a configuration or I/O
