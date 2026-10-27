@@ -1,6 +1,7 @@
 //! Tests for terminal state.
 
 use super::{App, Effect, QUIT_WINDOW};
+use crate::app::testkit::{SESSION as S_A, sent, session_line};
 use crate::keys::{Edit, Key, Parser};
 use crate::link::Line;
 use contract::clock::Clock;
@@ -130,25 +131,6 @@ fn attach(app: &mut App, now: std::time::Instant, session: &str) {
         value.get("session_id").and_then(serde_json::Value::as_str),
         Some(session)
     );
-}
-
-/// One session envelope.
-fn session_line(
-    session: &str,
-    kind: &str,
-    payload: serde_json::Value,
-    action: Option<&str>,
-) -> Line {
-    Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
-        session_id: contract::SessionId(session.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: action.map(|id| contract::ActionId(id.to_owned())),
-        seq: None,
-        payload: payload.as_object().cloned().unwrap_or_default(),
-    })
 }
 
 /// A `turn_started` line with one message.
@@ -845,8 +827,6 @@ fn command_ids_are_c_and_sixteen_fresh_hex_digits() {
     assert_ne!(first, second);
 }
 
-const S_A: &str = "s_aaaaaaaaaaaaaaaa";
-
 /// The `/` panel's rows for `query`, typed into an empty draft and then
 /// cleared.
 fn slash_rows(app: &mut App, query: &str, now: std::time::Instant) -> Vec<String> {
@@ -1091,25 +1071,6 @@ fn a_commands_answer_from_another_session_is_ignored() {
     // The foreign answer fills nothing: `/td` finds no row, so the
     // panel holds only its dim row.
     assert_eq!(slash_rows(&mut app, "td", now), ["no matches"]);
-}
-
-/// Every line an effect sends, parsed.
-fn sent(effect: Effect) -> Vec<serde_json::Value> {
-    match effect {
-        Effect::Send(lines) => lines.iter().map(|line| parse(line)).collect(),
-        Effect::None
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_)
-        | Effect::Quit
-        | Effect::ListFiles
-        | Effect::ReadImage(_)
-        | Effect::Feedback { .. }
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. } => Vec::new(),
-    }
 }
 
 /// A command line's `command` and its `args`.
