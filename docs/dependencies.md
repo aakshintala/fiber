@@ -342,13 +342,14 @@ When #3027's Linux sandbox policy lands, the crates are `landlock` and
 2 (Linux 5.19); below it the sandbox reports unavailable and calls are
 reviewed. Their memory cost and the crates they add are measured and recorded
 here in the same pull request that adds the dependencies ("Admitting a
-crate", "Measuring memory"), not in this docs pull request: the Part 3a PR
-adds workloads shaped like Linux policy construction and application in a
-child and seccomp compilation and application, plus the runtime-together
-workload. It records the median-of-5 runs on Linux x86_64 and arm64 and the
-macOS arm64 measurement outcome. Do not pre-label a macOS result as not
-applicable; report what the measurement establishes if a Linux-only workload
-cannot run there. Until that PR, no row above admits these crates.
+crate", "Measuring memory"), not in the docs commit: the implementation
+commits add workloads shaped like Linux policy construction and application
+in a child and seccomp compilation and application, plus the
+runtime-together workload. They record the median-of-5 runs on Linux x86_64
+and arm64 and the macOS arm64 measurement outcome. Do not pre-label a macOS
+result as not applicable; report what the measurement establishes if a
+Linux-only workload cannot run there. Until those rows land, no row above
+admits these crates.
 
 ## Written ourselves
 

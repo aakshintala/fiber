@@ -449,9 +449,9 @@ _Avoid_: capability, permission, risk, category
 
 ### Sandbox
 
-The opt-in operating-system sandbox a shell call runs inside when the
-`sandbox.*` keys turn it on: Seatbelt on macOS, Landlock plus seccomp on
-Linux. Off by default. See `docs/sandbox.md`.
+The opt-in operating-system sandbox a shell call runs inside on Linux when
+the `sandbox.*` keys turn it on: Landlock plus seccomp. Off by default.
+Calls remain reviewed. See `docs/sandbox.md`.
 _Avoid_: container, jail, seatbelt, landlock
 
 ### Confined

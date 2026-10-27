@@ -34,7 +34,7 @@ Before a tool call runs, its tool declares that call's **effects**:
 | `executes` | runs a program |
 | `network` | sends or receives outside this machine |
 
-A call also carries whether it ran **confined**, inside the opt-in OS
+A call also carries whether it ran **confined**, inside the opt-in Linux
 sandbox ([Confinement](#confinement)). The log records it
 (`docs/events.md`, "Declared effects").
 
@@ -110,7 +110,7 @@ no block budget.
 
 ### Fast paths
 
-Five classes of call never reach a reviewer or a person:
+Four classes of call never reach a reviewer or a person:
 
 - every call whose only effect is `reads`, or that declares no effect,
 - a `writes` call whose paths all sit inside the **workspace**, none of them
@@ -119,29 +119,20 @@ Five classes of call never reach a reviewer or a person:
   data directories, `data/<name>/` or `projects/<key>/data/<name>/` in Fiber
   home (`docs/state.md`, "What each part holds"), whichever tool makes it. Paths are
   resolved first, so a path that leads out of a data directory through a link
-  does not qualify,
+  does not qualify, and
 - a call whose only effect is `network` and whose declared hosts are all
   known in the session (`docs/tools.md`, "What a tool declares"). A web
   search declares an empty host list and a web fetch declares its URL's host,
   so a search and a fetch to a known host take this path (`docs/tools.md`,
   "Web fetch and web search"). A call that declares no host list, or names a
-  host that is not known, is reviewed, and
-- a shell call that runs confined inside the opt-in OS sandbox
-  ([Confinement](#confinement)). It is a new fast path after the credential
-  deny and the person's standing deny and ask rules: those still come first
-  and still apply. Before it, a built-in destructive list stays reviewed
-  even when confined: `rm -r`/`rm -rf`, `git reset --hard`, `git clean`,
-  `git checkout --`, `git restore`. The list matches any part of a
-  multi-part command (unlike a standing ask rule, which matches no
-  multi-part command), is checked before the confined fast path, and is best
-  effort by command text.
+  host that is not known, is reviewed.
 
 Memory layers keep their notes and pages as Markdown in extension data
 directories, so saving one costs no model call. The limit to Markdown keeps
 this path off files an extension may load as code or trust as settings, such
 as a Lua file or a JSON index; a write to one is reviewed.
 
-Everything else — unconfined shell execution, other network calls, and any other write
+Everything else — shell execution, other network calls, and any other write
 outside the workspace — is reviewed. A write under `.git/` or `.fiber/` is reviewed too: a hook or
 `.git/config` runs code on the next `git` command, which the reviewer judges
 as `git commit` without seeing the hook, and `.fiber/` holds the repository's
@@ -186,7 +177,7 @@ changed variable needs a restart. A `credential_process` that
 `AWS_CONFIG_FILE`'s profiles name is not covered, nor is gcloud's Windows
 directory.
 
-An unconfined tool runs with the account's full rights ([Confinement](#confinement)), so without this
+A tool call runs with the account's full rights when the sandbox is off ([Confinement](#confinement)), so without this
 deny an agent's file read could retrieve the stored tokens. The macOS Keychain is not an
 alternative protection: any process running as the person can read a keychain
 item the same way Fiber would. Source: the archived tree's
@@ -218,17 +209,15 @@ and
 [permissions: an opt-in OS sandbox, and whether its commands skip the reviewer](https://github.com/aakshintala/fiber/issues/3027);
 those tickets' resolutions hold the rationale and the rejected alternatives.
 
-The opt-in sandbox policy is planned in #3027 and is not implemented in the
-current build. When implemented, it will be off by default and will confine
-what a shell call can reach at the operating-system level under Fiber's own
-policy: Seatbelt on macOS, Landlock plus seccomp on Linux; no srt, no
-bubblewrap. A shell call that runs confined will skip the reviewer, as a new
-fast path after the credential deny and the person's standing deny and ask
-rules. The full per-platform policy is `docs/sandbox.md`.
+The opt-in Linux sandbox in #3027 is implemented in the current build. It
+is off by default and confines what a shell call can reach at the
+operating-system level under Fiber's own policy: Landlock plus seccomp; no
+srt, no bubblewrap. Calls remain reviewed; this slice adds no reviewer fast
+path. The Linux policy is `docs/sandbox.md`.
 
-An unconfined shell call runs with the account's full rights, on every
-platform. Everything on this page decides whether a call
-runs; for an unconfined call, nothing limits what it does once it runs.
+A shell call runs with the account's full rights when the sandbox is off.
+Everything on this page decides whether a call runs; when the sandbox is
+off, nothing limits what it does once it runs.
 
 - Approving an `executes` call grants whatever the account can do. That
   includes Fiber home: an approved command can read `credentials/`, edit

@@ -199,8 +199,8 @@ both written to `artifacts/` and named by path.
 
 ### Declared effects
 
-Four keys, on `tool_call_started`, `permission_requested` and, for a reviewed call's decision that has no request, `permission_resolved`, in the
-vocabulary of `docs/permissions.md`, "Effects":
+Five keys, on `tool_call_started`, `permission_requested` and, for a reviewed call's decision that has no request, `permission_resolved`, in the
+vocabulary of `docs/permissions.md`, "Effects" and "Confinement":
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
@@ -208,6 +208,9 @@ vocabulary of `docs/permissions.md`, "Effects":
 | `reversible` | boolean | yes | whether the call is reversible |
 | `paths` | array of strings | no | the paths the call touches, where the tool declared them |
 | `always_reviewed` | boolean | no | true when the tool declared the call always reviewed (`docs/permissions.md`, "Effects"); omitted when false |
+| `confined` | boolean | no | the call runs only inside the sandbox; if the sandbox can't be applied at spawn, the call fails and nothing runs |
+
+Event order is unchanged: `tool_call_started` remains before execution and carries `confined: true` for a call Fiber will run only inside the sandbox. Read that as "every command this call ran, ran confined". It holds on spawn failure too, because nothing ran. If applying the sandbox fails at spawn, the call ends through the normal `tool_call_*` end event with an error naming the cause; a failed confined call is never rerun unconfined.
 
 ### `tokens`
 
