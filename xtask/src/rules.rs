@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use proc_macro2::{TokenStream, TokenTree};
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
 use crate::select::is_test_file;
 
@@ -625,7 +625,7 @@ pub(crate) fn raw_advance_sites(files: &[RustFile]) -> Vec<String> {
 fn raw_advance_sites_with(files: &[RustFile], allowances: &[RawAdvanceAllowance]) -> Vec<String> {
     let mut remaining: Vec<&RawAdvanceAllowance> = allowances.iter().collect();
     let mut failures = Vec::new();
-    let mut scanned: Vec<(&RustFile, Vec<SourceToken>)> = Vec::new();
+    let mut scanned: Vec<(&RustFile, Vec<TokenTree>)> = Vec::new();
     for file in files {
         if file.path == "crates/fakes" || file.path.starts_with("crates/fakes/") {
             continue;
@@ -637,10 +637,14 @@ fn raw_advance_sites_with(files: &[RustFile], allowances: &[RawAdvanceAllowance]
         {
             continue;
         }
-        match source_tokens(&file.source) {
-            Ok(tokens) => scanned.push((file, tokens)),
-            Err(stalled) => {
-                failures.push(stalled_cursor_diagnostic(file, stalled));
+        match file.source.parse::<TokenStream>() {
+            Ok(stream) => scanned.push((file, stream.into_iter().collect())),
+            Err(error) => {
+                failures.push(format!(
+                    "{}:{}: does not tokenise as Rust: {error}",
+                    file.path,
+                    error.span().start().line
+                ));
                 continue;
             }
         }
@@ -648,7 +652,7 @@ fn raw_advance_sites_with(files: &[RustFile], allowances: &[RawAdvanceAllowance]
     let mut helpers: BTreeMap<String, Vec<Vec<bool>>> = BTreeMap::new();
     let mut same_sets: Vec<Vec<(String, Vec<bool>)>> = Vec::new();
     for (_, tokens) in &scanned {
-        let same = file_helper_returns(tokens);
+        let same = tt_file_helpers(tokens);
         for (name, parts) in &same {
             helpers.entry(name.clone()).or_default().push(parts.clone());
         }
@@ -656,7 +660,7 @@ fn raw_advance_sites_with(files: &[RustFile], allowances: &[RawAdvanceAllowance]
     }
     for ((file, tokens), same) in scanned.iter().zip(same_sets.iter()) {
         let mut seen: BTreeMap<String, u32> = BTreeMap::new();
-        for call in raw_advance_calls(tokens, same, &helpers) {
+        for call in tt_raw_advance_calls(tokens, same, &helpers) {
             let occurrence = seen
                 .entry(call.function.clone())
                 .and_modify(|count| *count += 1)
@@ -730,665 +734,302 @@ fn raw_advance_sites_with(files: &[RustFile], allowances: &[RawAdvanceAllowance]
     failures
 }
 
-/// Whether the tokens from `start` up to `end` name `FakeClock`.
-fn range_mentions_fake_clock(tokens: &[SourceToken], start: usize, end: usize) -> bool {
-    let mut i = start;
-    while i < end && i < tokens.len() {
-        if ident(tokens.get(i), "FakeClock") {
-            return true;
-        }
-        i += 1;
-    }
-    false
+/// A group visits through its nested stream, so argument lists, bodies and
+/// nested expressions never need delimiter-depth loops.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_group_inner(group: &proc_macro2::Group) -> Vec<TokenTree> {
+    group.stream().into_iter().collect()
 }
 
-/// Whether the token opens a bracket group.
-fn is_open(kind: Option<&SourceKind>) -> bool {
-    matches!(
-        kind,
-        Some(SourceKind::Punct('(') | SourceKind::Punct('[') | SourceKind::Punct('{'))
-    )
+/// Whether any nested token names `FakeClock`.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_contains_fake_clock(trees: &[TokenTree]) -> bool {
+    trees.iter().any(|tree| match tree {
+        TokenTree::Ident(ident) => ident == "FakeClock",
+        TokenTree::Group(group) => tt_contains_fake_clock(&tt_group_inner(group)),
+        TokenTree::Punct(_) | TokenTree::Literal(_) => false,
+    })
 }
 
-/// Whether the token closes a bracket group.
-fn is_close(kind: Option<&SourceKind>) -> bool {
-    matches!(
-        kind,
-        Some(SourceKind::Punct(')') | SourceKind::Punct(']') | SourceKind::Punct('}'))
-    )
-}
-
-/// The last identifier before the `:` at `colon`, if any.
-fn last_field_name(tokens: &[SourceToken], start: usize, colon: usize) -> Option<String> {
-    let mut name = None;
-    let mut s = start;
-    while s < colon {
-        if let Some(word) = tokens.get(s).and_then(|token| match &token.kind {
-            SourceKind::Ident(word) => Some(word.clone()),
-            SourceKind::String(_) | SourceKind::Punct(_) => None,
-        }) {
-            name = Some(word);
-        }
-        s += 1;
-    }
-    name
-}
-
-/// Every `struct` the file declares, owners and non-owners alike, so a
-/// proved base resolves to its declared owner and only an (`owner`, `field`)
-/// pair with a `FakeClock` field proves; a proved non-owner base
-/// (`g: G` where `G.clock` is not a `FakeClock`) and an unproved base both
-/// prove nothing (docs/testing.md:254-257).
-fn in_file_structs(tokens: &[SourceToken]) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    let mut i = 0;
-    while i < tokens.len() {
-        if ident(tokens.get(i), "struct") {
-            let mut j = i + 1;
-            while j < tokens.len()
-                && !punct(tokens.get(j), '{')
-                && !punct(tokens.get(j), ';')
-                && !punct(tokens.get(j), '(')
-            {
-                if let Some(word) = tokens.get(j).and_then(|token| match &token.kind {
-                    SourceKind::Ident(word) => Some(word.clone()),
-                    SourceKind::String(_) | SourceKind::Punct(_) => None,
-                }) {
-                    names.insert(word);
-                    break;
-                }
-                j += 1;
-            }
-        }
-        i += 1;
-    }
-    names
-}
-
-/// Whether the `base.field` access proves a `FakeClock`: `field` belongs to
-/// `owner` and `base` proves to be that `owner` (`self` through the enclosing
-/// `impl`, any other base through its tracked struct type). A base whose
-/// type the file does not prove proves nothing, so a same-named field of a
-/// helper return or a cross-file type is never reported
-/// (docs/testing.md:254-257).
-fn field_proves_fake(
-    fields: &BTreeSet<(String, String)>,
-    base: &str,
-    field: &str,
-    structs: &BTreeMap<String, String>,
-    impl_name: Option<&str>,
-) -> bool {
-    if base == "self" {
-        let Some(owner) = impl_name else {
-            return false;
-        };
-        return fields.contains(&(owner.to_owned(), field.to_owned()));
-    }
-    let Some(owner) = structs.get(base) else {
-        return false;
-    };
-    fields.contains(&(owner.clone(), field.to_owned()))
-}
-
-/// The first in-file struct name mentioned from `start` up to `end`, if any.
-fn type_mentions_owner(
-    tokens: &[SourceToken],
-    start: usize,
-    end: usize,
-    known: &BTreeSet<String>,
-) -> Option<String> {
-    let mut i = start;
-    while i < end && i < tokens.len() {
-        if let Some(word) = tokens.get(i).and_then(|token| match &token.kind {
-            SourceKind::Ident(word) => Some(word.as_str()),
-            SourceKind::String(_) | SourceKind::Punct(_) => None,
-        }) && known.contains(word)
-        {
-            return Some(word.to_owned());
-        }
-        i += 1;
-    }
-    None
-}
-
-/// The owning struct a `let` initializer proves for its binding: `Owner::...`
-/// or `Owner { ... }`, or `Self::...` inside an `impl` over an in-file struct.
-fn initializer_owner(
-    tokens: &[SourceToken],
-    start: usize,
-    end: usize,
-    known: &BTreeSet<String>,
-    impl_name: Option<&str>,
-) -> Option<String> {
-    let mut i = start;
-    while i < end && i < tokens.len() {
-        match tokens.get(i).map(|token| &token.kind) {
-            Some(SourceKind::Ident(word)) => {
-                if word == "Self" {
-                    return impl_name
-                        .filter(|name| known.contains(*name))
-                        .map(str::to_owned);
-                }
-                if known.contains(word.as_str()) {
-                    return Some(word.clone());
-                }
-                return None;
-            }
-            Some(SourceKind::Punct('&' | '*' | '(')) => {
-                i += 1;
-                continue;
-            }
-            Some(SourceKind::String(_)) | Some(SourceKind::Punct(_)) => {
-                return None;
-            }
-            None => return None,
-        }
-    }
-    None
-}
-
-/// The `impl` self type at `tokens[at]`: the type after `for` when present,
-/// else the type after `impl`, skipping generics (docs/testing.md:254-257).
-fn impl_self_name(tokens: &[SourceToken], at: usize) -> Option<String> {
-    let mut brace = None;
-    let mut j = at + 1;
-    while j < tokens.len() {
-        if punct(tokens.get(j), '{') {
-            brace = Some(j);
-            break;
-        }
-        j += 1;
-    }
-    let brace = brace?;
-    let mut angle: usize = 0;
-    let mut for_pos = None;
-    let mut k = at + 1;
-    while k < brace {
-        if punct(tokens.get(k), '<') {
-            angle += 1;
-        } else if punct(tokens.get(k), '>') {
-            angle = angle.saturating_sub(1);
-        } else if angle == 0 && ident(tokens.get(k), "for") {
-            for_pos = Some(k);
-            break;
-        }
-        k += 1;
-    }
-    let mut m = for_pos.map_or(at + 1, |pos| pos + 1);
-    let mut inner: usize = 0;
-    while m < brace {
-        if punct(tokens.get(m), '<') {
-            inner += 1;
-        } else if punct(tokens.get(m), '>') {
-            inner = inner.saturating_sub(1);
-        } else if inner == 0
-            && let Some(word) = tokens.get(m).and_then(|token| match &token.kind {
-                SourceKind::Ident(word) => Some(word.as_str()),
-                SourceKind::String(_) | SourceKind::Punct(_) => None,
-            })
-            && word.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-        {
-            return Some(word.to_owned());
-        }
-        m += 1;
-    }
-    None
-}
-
-/// Whether the field type after `colon` names `FakeClock` before its
-/// closing comma or brace.
-fn type_mentions_fake_clock(tokens: &[SourceToken], mut m: usize) -> bool {
-    let mut inner: usize = 0;
-    while m < tokens.len() {
-        let kind = tokens.get(m).map(|token| &token.kind);
-        if is_open(kind) {
-            inner += 1;
-        } else if is_close(kind) {
-            break;
-        } else if inner == 0 {
-            if matches!(kind, Some(SourceKind::Punct(','))) {
-                break;
-            }
-            if matches!(kind, Some(SourceKind::Ident(word)) if word.as_str() == "FakeClock") {
-                return true;
-            }
-        }
-        m += 1;
-    }
-    false
-}
-
-/// (`owner`, `field`) pairs an in-file `struct` declares with a `FakeClock`
-/// type, so a `base.field` receiver with a proved `base` proves only for its
-/// `owner`; an unproved `base` proves nothing
-/// (docs/testing.md:254-257).
-fn fake_clock_fields(tokens: &[SourceToken]) -> BTreeSet<(String, String)> {
-    let mut fields = BTreeSet::new();
-    let mut i = 0;
-    while i < tokens.len() {
-        if ident(tokens.get(i), "struct") {
-            let mut owner = None;
-            let mut s = i + 1;
-            while s < tokens.len()
-                && !punct(tokens.get(s), '{')
-                && !punct(tokens.get(s), ';')
-                && !punct(tokens.get(s), '(')
-            {
-                if let Some(word) = tokens.get(s).and_then(|token| match &token.kind {
-                    SourceKind::Ident(word) => Some(word.clone()),
-                    SourceKind::String(_) | SourceKind::Punct(_) => None,
-                }) && owner.is_none()
-                {
-                    owner = Some(word);
-                }
-                s += 1;
-            }
-            let mut j = i + 1;
-            while j < tokens.len()
-                && !punct(tokens.get(j), '{')
-                && !punct(tokens.get(j), ';')
-                && !punct(tokens.get(j), '(')
-            {
-                j += 1;
-            }
-            if punct(tokens.get(j), '{') {
-                let mut depth: usize = 1;
-                let mut k = j + 1;
-                let mut segment_start = k;
-                while k < tokens.len() && depth > 0 {
-                    let kind = tokens.get(k).map(|token| &token.kind);
-                    if is_open(kind) {
-                        depth += 1;
-                    } else if is_close(kind) {
-                        depth = depth.saturating_sub(1);
-                    }
-                    if depth == 1
-                        && punct(tokens.get(k), ':')
-                        && let Some(name) = last_field_name(tokens, segment_start, k)
-                        && name != "pub"
-                        && type_mentions_fake_clock(tokens, k + 1)
-                        && let Some(owner) = owner.clone()
-                    {
-                        fields.insert((owner, name));
-                    }
-                    if depth == 1 && punct(tokens.get(k), ',') {
-                        segment_start = k + 1;
-                    }
-                    k += 1;
-                }
-                i = k;
-            }
-        }
-        i += 1;
-    }
-    fields
-}
-
-/// The receiver chain before the `.` at `dot`, base first: idents joined by
-/// dots, with `[...]` index groups skipped.
-fn receiver_chain(tokens: &[SourceToken], dot: usize) -> Vec<String> {
-    let mut chain = Vec::new();
-    if dot == 0 {
-        return chain;
-    }
-    let mut j = dot - 1;
-    loop {
-        match tokens.get(j).map(|token| &token.kind) {
-            Some(SourceKind::Ident(name)) => {
-                chain.push(name.clone());
-                let Some(before) = j.checked_sub(1).and_then(|at| tokens.get(at)) else {
-                    break;
-                };
-                if matches!(before.kind, SourceKind::Punct('.')) {
-                    let Some(prev) = j.checked_sub(2) else {
-                        break;
-                    };
-                    j = prev;
-                } else {
-                    break;
-                }
-            }
-            Some(SourceKind::Punct(']')) => {
-                let mut inner: usize = 1;
-                let Some(mut at) = j.checked_sub(1) else {
-                    break;
-                };
-                while inner > 0 {
-                    match tokens.get(at).map(|token| &token.kind) {
-                        Some(SourceKind::Punct(']')) => inner += 1,
-                        Some(SourceKind::Punct('[')) => {
-                            inner = inner.saturating_sub(1);
-                        }
-                        Some(SourceKind::Ident(_))
-                        | Some(SourceKind::String(_))
-                        | Some(SourceKind::Punct(_)) => {}
-                        None => break,
-                    }
-                    if inner == 0 {
-                        break;
-                    }
-                    let Some(prev) = at.checked_sub(1) else {
-                        break;
-                    };
-                    at = prev;
-                }
-                j = at;
-                let Some(before) = j.checked_sub(1).and_then(|at| tokens.get(at)) else {
-                    break;
-                };
-                if matches!(before.kind, SourceKind::Punct('.')) {
-                    let Some(prev) = j.checked_sub(2) else {
-                        break;
-                    };
-                    j = prev;
-                } else {
-                    break;
-                }
-            }
-            Some(SourceKind::String(_)) | Some(SourceKind::Punct(_)) | None => break,
-        }
-    }
-    chain.reverse();
-    chain
-}
-
-struct AdvanceFnFrame {
-    name: String,
-    depth: usize,
-    fake: BTreeSet<String>,
-    fake_undos: Vec<(usize, String, bool)>,
-    structs: BTreeMap<String, String>,
-    struct_undos: Vec<(usize, String, Option<String>)>,
-}
-/// The parameter from `start` up to `end`: its name when its type names
-/// `FakeClock`, `self` included only with its own `FakeClock` type.
-fn param_proves_fake(tokens: &[SourceToken], start: usize, end: usize) -> Option<String> {
-    let mut words = Vec::new();
-    let mut i = start;
-    while i < end {
-        if let Some(word) = tokens.get(i).and_then(|token| match &token.kind {
-            SourceKind::Ident(word) => Some(word.as_str()),
-            SourceKind::String(_) | SourceKind::Punct(_) => None,
-        }) {
-            words.push(word);
-        }
-        i += 1;
-    }
-    if words.first().is_some_and(|word| *word == "mut") {
-        words.remove(0);
-    }
-    let first = words.first().copied()?;
-    let mut colon = false;
-    let mut c = start;
-    while c < end {
-        if matches!(
-            tokens.get(c).map(|token| &token.kind),
-            Some(SourceKind::Punct(':'))
-        ) {
-            colon = true;
-            break;
-        }
-        c += 1;
-    }
-    if !colon || !range_mentions_fake_clock(tokens, start, end) {
-        return None;
-    }
-    if first == "self" {
-        return Some("self".to_owned());
-    }
-    Some(first.to_owned())
-}
-
-/// The `base` variable and owning struct for the parameter from `start` up
-/// to `end`, when its type names an owner of a `FakeClock` field.
-fn param_struct_owner(
-    tokens: &[SourceToken],
-    start: usize,
-    end: usize,
-    known: &BTreeSet<String>,
-) -> Option<(String, String)> {
-    let mut colon = None;
-    let mut c = start;
-    while c < end {
-        if punct(tokens.get(c), ':') {
-            colon = Some(c);
-            break;
-        }
-        c += 1;
-    }
-    let colon = colon?;
-    let mut words = Vec::new();
-    let mut i = start;
-    while i < colon {
-        if let Some(word) = tokens.get(i).and_then(|token| match &token.kind {
-            SourceKind::Ident(word) => Some(word.as_str()),
-            SourceKind::String(_) | SourceKind::Punct(_) => None,
-        }) {
-            words.push(word);
-        }
-        i += 1;
-    }
-    if words.first().is_some_and(|word| *word == "mut") {
-        words.remove(0);
-    }
-    let first = (*words.first()?).to_owned();
-    if first == "self" {
-        return None;
-    }
-    let owner = type_mentions_owner(tokens, colon + 1, end, known)?;
-    Some((first, owner))
-}
-
-/// The `fn` signature at `tokens[at]`: its name, the parameters with a
-/// `FakeClock` type (`self` included when its own type names one), and the
-/// parameters whose type names an in-file struct.
-fn fn_signature(
-    tokens: &[SourceToken],
-    at: usize,
-    known: &BTreeSet<String>,
-) -> Option<(String, BTreeSet<String>, BTreeMap<String, String>)> {
-    let name = tokens.get(at + 1).and_then(|token| match &token.kind {
-        SourceKind::Ident(name) => Some(name.clone()),
-        SourceKind::String(_) | SourceKind::Punct(_) => None,
-    })?;
-    let mut open = None;
-    let mut cursor = at + 2;
-    while cursor < tokens.len() {
-        let kind = tokens.get(cursor).map(|token| &token.kind);
-        if matches!(kind, Some(SourceKind::Punct('('))) {
-            open = Some(cursor);
-            break;
-        }
-        if matches!(kind, Some(SourceKind::Punct('{') | SourceKind::Punct(';'))) {
-            return None;
-        }
-        cursor += 1;
-    }
-    let open = open?;
-    let mut depth: usize = 1;
-    let mut close = None;
-    cursor = open + 1;
-    while cursor < tokens.len() {
-        let kind = tokens.get(cursor).map(|token| &token.kind);
-        if is_open(kind) {
-            depth += 1;
-        } else if is_close(kind) {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                close = Some(cursor);
-                break;
-            }
-        }
-        cursor += 1;
-    }
-    let close = close?;
-    let mut fake = BTreeSet::new();
-    let mut structs = BTreeMap::new();
-    let mut start = open + 1;
-    let mut inner: usize = 0;
-    let mut end = open + 1;
-    while end <= close {
-        let kind = tokens.get(end).map(|token| &token.kind);
-        let is_edge = end == close || (inner == 0 && matches!(kind, Some(SourceKind::Punct(','))));
-        if is_open(kind) {
-            inner += 1;
-        } else if is_close(kind) {
-            inner = inner.saturating_sub(1);
-        }
-        if is_edge {
-            if let Some(param) = param_proves_fake(tokens, start, end) {
-                fake.insert(param);
-            }
-            if let Some((var, owner)) = param_struct_owner(tokens, start, end, known) {
-                structs.insert(var, owner);
-            }
-            start = end + 1;
-        }
-        end += 1;
-    }
-    Some((name, fake, structs))
-}
-
-/// The depth-zero comma-separated spans of `start..end`, so a tuple pattern
-/// and a tuple return type split at the same positions.
-fn split_top_level(tokens: &[SourceToken], start: usize, end: usize) -> Vec<(usize, usize)> {
+/// The top-level comma-separated spans of siblings. Groups hide nested
+/// commas, so no depth tracking is needed.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_split_commas(trees: &[TokenTree]) -> Vec<&[TokenTree]> {
     let mut parts = Vec::new();
-    let mut depth: usize = 0;
-    let mut part_start = start;
-    let mut cursor = start;
-    while cursor < end {
-        let kind = tokens.get(cursor).map(|token| &token.kind);
-        if is_open(kind) {
-            depth += 1;
-        } else if is_close(kind) {
-            depth = depth.saturating_sub(1);
-        } else if depth == 0 && matches!(kind, Some(SourceKind::Punct(','))) {
-            parts.push((part_start, cursor));
-            part_start = cursor + 1;
+    let mut start = 0;
+    for (index, tree) in trees.iter().enumerate() {
+        if is_punct(Some(tree), ',') {
+            parts.push(&trees[start..index]);
+            start = index + 1;
         }
-        cursor += 1;
     }
-    if part_start < end {
-        parts.push((part_start, end));
+    if start < trees.len() {
+        parts.push(&trees[start..]);
     }
     parts
 }
 
-/// A helper's return type as one `FakeClock` flag per top-level tuple part,
-/// or a single flag for a non-tuple return; a missing return type proves
-/// nothing.
-fn helper_return_parts(tokens: &[SourceToken], at: usize) -> Option<(String, Vec<bool>)> {
-    let name = tokens.get(at + 1).and_then(|token| match &token.kind {
-        SourceKind::Ident(name) => Some(name.clone()),
-        SourceKind::String(_) | SourceKind::Punct(_) => None,
-    })?;
-    let mut open = None;
+/// Whether `tree` is a parenthesis group.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_is_paren(tree: &TokenTree) -> bool {
+    matches!(tree, TokenTree::Group(group) if group.delimiter() == Delimiter::Parenthesis)
+}
+
+/// Whether `tree` is a brace group.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_is_brace(tree: &TokenTree) -> bool {
+    matches!(tree, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace)
+}
+
+/// The first single `:` separator, skipping `::` paths.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_single_colon(trees: &[TokenTree]) -> Option<usize> {
+    let mut index = 0;
+    while index < trees.len() {
+        if is_punct(Some(&trees[index]), ':') {
+            let prev_double = index > 0 && is_punct(trees.get(index - 1), ':');
+            let next_double = index + 1 < trees.len() && is_punct(trees.get(index + 1), ':');
+            if !prev_double && !next_double {
+                return Some(index);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+/// The last identifier before `end`, for a field or binding name.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_last_ident(trees: &[TokenTree], end: usize) -> Option<String> {
+    let mut name = None;
+    let mut index = 0;
+    while index < end && index < trees.len() {
+        if let TokenTree::Ident(ident) = &trees[index] {
+            name = Some(ident.to_string());
+        }
+        index += 1;
+    }
+    name
+}
+
+/// The owning struct named in a type, searching nested groups and
+/// `Arc<FakeClock>`-style generic arguments.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_owner_in_type(trees: &[TokenTree], known: &BTreeSet<String>) -> Option<String> {
+    for tree in trees {
+        match tree {
+            TokenTree::Ident(ident) => {
+                let word = ident.to_string();
+                if known.contains(&word) {
+                    return Some(word);
+                }
+            }
+            TokenTree::Group(group) => {
+                if let Some(owner) = tt_owner_in_type(&tt_group_inner(group), known) {
+                    return Some(owner);
+                }
+            }
+            TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+        }
+    }
+    None
+}
+
+/// Every struct name in nested siblings, for owner tracking.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_collect_struct_names(trees: &[TokenTree], names: &mut BTreeSet<String>) {
+    let mut index = 0;
+    while index < trees.len() {
+        if is_ident(trees.get(index), "struct")
+            && let Some(TokenTree::Ident(name)) = trees.get(index + 1)
+        {
+            names.insert(name.to_string());
+        }
+        if let Some(TokenTree::Group(group)) = trees.get(index) {
+            tt_collect_struct_names(&tt_group_inner(group), names);
+        }
+        index += 1;
+    }
+}
+
+/// The (`owner`, `field`) pairs whose field type names `FakeClock`.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "proc-macro2 TokenTree is non-exhaustive"
+)]
+fn tt_collect_fake_fields(trees: &[TokenTree], fields: &mut BTreeSet<(String, String)>) {
+    let mut index = 0;
+    while index < trees.len() {
+        if is_ident(trees.get(index), "struct") {
+            let owner = trees.get(index + 1).and_then(|tree| match tree {
+                TokenTree::Ident(name) => Some(name.to_string()),
+                TokenTree::Group(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => None,
+            });
+            let mut cursor = index + 2;
+            while cursor < trees.len() {
+                if let Some(TokenTree::Group(group)) = trees.get(cursor)
+                    && group.delimiter() == Delimiter::Brace
+                {
+                    if let Some(owner) = owner.clone() {
+                        let inner = tt_group_inner(group);
+                        for field in tt_split_commas(&inner) {
+                            if let Some(colon) = tt_single_colon(field)
+                                && let Some(field_name) = tt_last_ident(field, colon)
+                                && field_name != "pub"
+                                && let Some(ty) = field.get(colon + 1..)
+                                && tt_contains_fake_clock(ty)
+                            {
+                                fields.insert((owner.clone(), field_name));
+                            }
+                        }
+                    }
+                    break;
+                }
+                if let Some(TokenTree::Group(group)) = trees.get(cursor)
+                    && group.delimiter() == Delimiter::Parenthesis
+                {
+                    break;
+                }
+                if is_punct(trees.get(cursor), ';') {
+                    break;
+                }
+                cursor += 1;
+            }
+        }
+        if let Some(TokenTree::Group(group)) = trees.get(index) {
+            tt_collect_fake_fields(&tt_group_inner(group), fields);
+        }
+        index += 1;
+    }
+}
+
+/// A helper return as one flag per top-level tuple part.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_helper_parts_at(trees: &[TokenTree], at: usize) -> Option<(String, Vec<bool>)> {
+    if !is_ident(trees.get(at), "fn") {
+        return None;
+    }
+    let name = match trees.get(at + 1) {
+        Some(TokenTree::Ident(name)) => name.to_string(),
+        _ => return None,
+    };
+    let mut param = None;
     let mut cursor = at + 2;
-    while cursor < tokens.len() {
-        let kind = tokens.get(cursor).map(|token| &token.kind);
-        if matches!(kind, Some(SourceKind::Punct('('))) {
-            open = Some(cursor);
+    while cursor < trees.len() {
+        if tt_is_paren(&trees[cursor]) {
+            param = Some(cursor);
             break;
         }
-        if matches!(kind, Some(SourceKind::Punct('{') | SourceKind::Punct(';'))) {
+        if tt_is_brace(&trees[cursor]) || is_punct(Some(&trees[cursor]), ';') {
             return None;
         }
         cursor += 1;
     }
-    let open = open?;
-    let mut depth: usize = 1;
-    let mut close = None;
-    cursor = open + 1;
-    while cursor < tokens.len() {
-        let kind = tokens.get(cursor).map(|token| &token.kind);
-        if is_open(kind) {
-            depth += 1;
-        } else if is_close(kind) {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                close = Some(cursor);
-                break;
-            }
-        }
-        cursor += 1;
+    let param = param?;
+    let mut has_arrow = false;
+    if param + 2 < trees.len()
+        && is_punct(Some(&trees[param + 1]), '-')
+        && is_punct(Some(&trees[param + 2]), '>')
+    {
+        has_arrow = true;
     }
-    let close = close?;
-    cursor = close + 1;
-    if !(punct(tokens.get(cursor), '-') && punct(tokens.get(cursor + 1), '>')) {
+    if !has_arrow {
         return Some((name, vec![false]));
     }
-    let start = cursor + 2;
-    let mut end = start;
-    let mut inner: usize = 0;
-    while end < tokens.len() {
-        let kind = tokens.get(end).map(|token| &token.kind);
-        // A return type never holds a brace: the body's `{` always ends it,
-        // so a later constructor token cannot leak into the type.
-        if matches!(kind, Some(SourceKind::Punct('{'))) {
-            break;
-        }
-        if is_open(kind) {
-            inner += 1;
-        } else if is_close(kind) {
-            inner = inner.saturating_sub(1);
-        } else if inner == 0 && matches!(kind, Some(SourceKind::Punct(';'))) {
+    let mut end = param + 3;
+    while end < trees.len() {
+        if tt_is_brace(&trees[end]) || is_punct(Some(&trees[end]), ';') {
             break;
         }
         end += 1;
     }
-    if end <= start {
+    let returns = &trees[param + 3..end];
+    if returns.is_empty() {
         return Some((name, vec![false]));
     }
-    if punct(tokens.get(start), '(') {
-        let mut nested: usize = 1;
-        cursor = start + 1;
-        while cursor < end {
-            let kind = tokens.get(cursor).map(|token| &token.kind);
-            if is_open(kind) {
-                nested += 1;
-            } else if is_close(kind) {
-                nested = nested.saturating_sub(1);
-                if nested == 0 {
-                    break;
-                }
-            }
-            cursor += 1;
+    if returns.len() == 1
+        && let TokenTree::Group(group) = &returns[0]
+        && group.delimiter() == Delimiter::Parenthesis
+    {
+        let inner = tt_group_inner(group);
+        if inner.is_empty() {
+            return Some((name, vec![false]));
         }
-        if cursor == end - 1 {
-            let mut parts = Vec::new();
-            for (part_start, part_end) in split_top_level(tokens, start + 1, cursor) {
-                parts.push(range_mentions_fake_clock(tokens, part_start, part_end));
-            }
-            if parts.is_empty() {
-                parts.push(false);
-            }
-            return Some((name, parts));
+        let mut parts = Vec::new();
+        for part in tt_split_commas(&inner) {
+            parts.push(tt_contains_fake_clock(part));
         }
+        if parts.is_empty() {
+            parts.push(false);
+        }
+        return Some((name, parts));
     }
-    Some((name, vec![range_mentions_fake_clock(tokens, start, end)]))
+    Some((name, vec![tt_contains_fake_clock(returns)]))
 }
 
-/// Every `fn` name in the file with its return type's `FakeClock` positions,
-/// so a call proves only what its callee declares.
-fn file_helper_returns(tokens: &[SourceToken]) -> Vec<(String, Vec<bool>)> {
+/// Every helper name with its return-type flags, including nested items.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_file_helpers(trees: &[TokenTree]) -> Vec<(String, Vec<bool>)> {
     let mut found = Vec::new();
-    let mut i = 0;
-    while i < tokens.len() {
-        if ident(tokens.get(i), "fn")
-            && let Some(entry) = helper_return_parts(tokens, i)
+    let mut index = 0;
+    while index < trees.len() {
+        if is_ident(Some(&trees[index]), "fn")
+            && let Some(entry) = tt_helper_parts_at(trees, index)
         {
             found.push(entry);
         }
-        i += 1;
+        if let TokenTree::Group(group) = &trees[index] {
+            found.extend(tt_file_helpers(&tt_group_inner(group)));
+        }
+        index += 1;
     }
     found
 }
 
-/// The return type's `FakeClock` positions for a call to `name`: the same
-/// file's single definition first, else the scanned set's single definition.
-/// Zero or conflicting definitions prove nothing, so a shared helper name
-/// never guesses across files.
-fn helper_proof(
+/// The return flags for `name`: the same file first, else the scanned set
+/// once. Zero or conflicting definitions prove nothing.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_helper_proof(
     name: &str,
     same: &[(String, Vec<bool>)],
     helpers: &BTreeMap<String, Vec<Vec<bool>>>,
@@ -1410,582 +1051,754 @@ fn helper_proof(
     }
 }
 
-/// Whether the receiver atom from `start` up to `end` is proved: a single
-/// proved binding, `self` with a proved receiver, or a `base.field` access
-/// whose owning struct declares the field with a `FakeClock` type and whose
-/// base proves to be that owner.
+/// The `impl` self type in a header, skipping `<...>` generics. `for`
+/// headers resolve past `for`; otherwise the first top-level uppercase
+/// name is the self type.
 #[allow(
-    clippy::too_many_arguments,
-    reason = "one span plus one proof input per source"
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
 )]
-fn atom_proves_fake(
-    tokens: &[SourceToken],
-    start: usize,
-    end: usize,
-    fake: &BTreeSet<String>,
-    fake_fields: &BTreeSet<(String, String)>,
-    structs: &BTreeMap<String, String>,
-    impl_name: Option<&str>,
-    self_fake: bool,
-) -> bool {
-    let mut cursor = start;
-    while cursor < end {
-        let kind = tokens.get(cursor).map(|token| &token.kind);
-        if matches!(kind, Some(SourceKind::Punct('&'))) {
-            cursor += 1;
-            continue;
-        }
-        if matches!(kind, Some(SourceKind::Ident(word)) if word.as_str() == "mut") {
-            cursor += 1;
-            continue;
-        }
-        break;
-    }
-    let mut parts: Vec<String> = Vec::new();
-    let mut current = String::new();
-    while cursor < end {
-        match tokens.get(cursor).map(|token| &token.kind) {
-            Some(SourceKind::Ident(word)) => current.push_str(word.as_str()),
-            Some(SourceKind::Punct('.')) => {
-                parts.push(std::mem::take(&mut current));
-            }
-            Some(SourceKind::Punct('[')) => {
-                let mut inner: usize = 1;
-                cursor += 1;
-                while cursor < end && inner > 0 {
-                    let kind = tokens.get(cursor).map(|token| &token.kind);
-                    if matches!(kind, Some(SourceKind::Punct('['))) {
-                        inner += 1;
-                    } else if matches!(kind, Some(SourceKind::Punct(']'))) {
-                        inner = inner.saturating_sub(1);
+fn tt_impl_self(header: &[TokenTree]) -> Option<String> {
+    let mut depth: usize = 0;
+    let mut cursor = 0;
+    while cursor < header.len() {
+        if is_punct(Some(&header[cursor]), '<') {
+            depth += 1;
+        } else if is_punct(Some(&header[cursor]), '>') {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0 && is_ident(Some(&header[cursor]), "for") {
+            let mut rest = cursor + 1;
+            let mut inner: usize = 0;
+            while rest < header.len() {
+                if is_punct(Some(&header[rest]), '<') {
+                    inner += 1;
+                } else if is_punct(Some(&header[rest]), '>') {
+                    inner = inner.saturating_sub(1);
+                } else if inner == 0
+                    && let TokenTree::Ident(word) = &header[rest]
+                {
+                    let word = word.to_string();
+                    if word.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+                        return Some(word);
                     }
-                    cursor += 1;
                 }
-                continue;
+                rest += 1;
             }
-            Some(SourceKind::String(_)) | Some(SourceKind::Punct(_)) | None => break,
+            return None;
         }
         cursor += 1;
     }
-    parts.push(current);
-    parts.retain(|part| !part.is_empty());
-    if parts.len() == 1 {
-        return parts.first().is_some_and(|only| {
-            fake.contains(only.as_str()) || (only.as_str() == "self" && self_fake)
-        });
+    let mut depth: usize = 0;
+    let mut cursor = 0;
+    while cursor < header.len() {
+        if is_punct(Some(&header[cursor]), '<') {
+            depth += 1;
+        } else if is_punct(Some(&header[cursor]), '>') {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0
+            && let TokenTree::Ident(word) = &header[cursor]
+        {
+            let word = word.to_string();
+            if word.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+                return Some(word);
+            }
+        }
+        cursor += 1;
     }
-    if parts.len() == 2 {
-        let (Some(base), Some(field)) = (parts.first(), parts.last()) else {
-            return false;
-        };
-        return field_proves_fake(fake_fields, base, field, structs, impl_name);
+    None
+}
+
+/// The proof environment a block carries: proved bindings, owner types,
+// the enclosing `impl` and the function under visit.
+struct TtEnv {
+    fake: BTreeSet<String>,
+    owners: BTreeMap<String, String>,
+    impl_name: Option<String>,
+    impl_fake: bool,
+    fn_name: String,
+}
+
+/// The expression without leading borrows, derefs and `mut`.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_stripped(trees: &[TokenTree]) -> &[TokenTree] {
+    let mut start = 0;
+    while start < trees.len()
+        && (is_punct(trees.get(start), '&')
+            || is_punct(trees.get(start), '*')
+            || is_ident(trees.get(start), "mut"))
+    {
+        start += 1;
+    }
+    match trees.get(start..) {
+        Some(rest) => rest,
+        None => &[],
+    }
+}
+
+/// The single binding a stripped slice names, if any.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_single_binding(trees: &[TokenTree]) -> Option<String> {
+    let stripped = tt_stripped(trees);
+    if stripped.len() == 1
+        && let TokenTree::Ident(name) = &stripped[0]
+    {
+        return Some(name.to_string());
+    }
+    None
+}
+
+/// Whether a single binding proves `FakeClock` in this environment.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_binding_proves(name: &str, env: &TtEnv) -> bool {
+    if env.fake.contains(name) {
+        return true;
+    }
+    if name == "self" && (env.impl_fake || env.fake.contains("self")) {
+        return true;
     }
     false
 }
 
-/// The outermost `::`-separated callee path at `start` with its opening
-/// paren, such as `FakeClock::new()` or `wrap(...)`, or None when the span
-/// does not open with a call. The path never reaches into arguments, so a
-/// constructor token inside them proves nothing.
-fn outer_call_path(tokens: &[SourceToken], start: usize) -> Option<(Vec<String>, usize)> {
+/// Whether `base.field` proves: the field belongs to `owner` and the base
+/// proves that owner through a parameter, a `let` owner, or `self`.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_field_proves(
+    fields: &BTreeSet<(String, String)>,
+    base: &str,
+    field: &str,
+    env: &TtEnv,
+) -> bool {
+    if base == "self" {
+        if let Some(owner) = env.impl_name.as_deref() {
+            return fields.contains(&(owner.to_owned(), field.to_owned()));
+        }
+        return false;
+    }
+    if let Some(owner) = env.owners.get(base) {
+        return fields.contains(&(owner.clone(), field.to_owned()));
+    }
+    false
+}
+
+/// The outermost call path and its parenthesised arguments, without reaching
+/// into those arguments. `FakeClock::new()` proves through its path; a
+/// constructor token inside arguments never does.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_outer_call(trees: &[TokenTree]) -> Option<(Vec<String>, Vec<TokenTree>)> {
     let mut path = Vec::new();
-    let mut cursor = start;
+    let mut cursor = 0;
     loop {
-        match tokens.get(cursor).map(|token| &token.kind) {
-            Some(SourceKind::Ident(word)) => {
-                path.push(word.clone());
+        match trees.get(cursor) {
+            Some(TokenTree::Ident(word)) => {
+                path.push(word.to_string());
                 cursor += 1;
             }
             _ => return None,
         }
-        if punct(tokens.get(cursor), ':') && punct(tokens.get(cursor + 1), ':') {
+        if cursor + 1 < trees.len()
+            && is_punct(Some(&trees[cursor]), ':')
+            && is_punct(Some(&trees[cursor + 1]), ':')
+        {
             cursor += 2;
             continue;
         }
         break;
     }
-    if path.is_empty() || !punct(tokens.get(cursor), '(') {
+    if path.is_empty() {
         return None;
     }
-    Some((path, cursor))
-}
-
-/// The binding a tuple-pattern part declares when it is a plain name, such
-/// as `clock` or `mut clock`; anything else (a rest pattern, a nested
-/// pattern) binds nothing here.
-fn simple_pattern_name(tokens: &[SourceToken], start: usize, end: usize) -> Option<String> {
-    let mut cursor = start;
-    if ident(tokens.get(cursor), "mut") {
-        cursor += 1;
+    // The call takes no other siblings: `wrap(args)` is a path plus one
+    // parenthesis group and nothing else.
+    if cursor + 1 != trees.len() {
+        return None;
     }
-    match tokens.get(cursor).map(|token| &token.kind) {
-        Some(SourceKind::Ident(binding)) if cursor + 1 == end => Some(binding.clone()),
+    match trees.get(cursor) {
+        Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis => {
+            Some((path, tt_group_inner(group)))
+        }
         _ => None,
     }
 }
 
-/// Whether the call result receiving `.advance` at `dot` proves a
-/// `FakeClock`: a `FakeClock` constructor result, or a plain helper call
-/// whose single declared return names one. A method result and a qualified
-/// non-`FakeClock` call prove nothing.
+/// Whether an initializer proves `FakeClock`: a single proved binding
+/// (an alias or borrow keeps the proof), `x.clone()`, a `FakeClock`
+/// constructor, a transparent `Arc`/`Box` wrapper around a proved inner, or
+/// a plain helper call whose single declared return names one.
 #[allow(
-    clippy::too_many_arguments,
-    reason = "one span plus one proof input per source"
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
 )]
-fn call_result_proves_fake(
-    tokens: &[SourceToken],
-    dot: usize,
+fn tt_init_proves(
+    init: &[TokenTree],
+    env: &TtEnv,
+    fields: &BTreeSet<(String, String)>,
     same: &[(String, Vec<bool>)],
     helpers: &BTreeMap<String, Vec<Vec<bool>>>,
 ) -> bool {
-    if dot == 0 || !punct(tokens.get(dot - 1), ')') {
+    if let Some(name) = tt_single_binding(init) {
+        return tt_binding_proves(&name, env);
+    }
+    let stripped = tt_stripped(init);
+    if stripped.len() == 4
+        && matches!(stripped.first(), Some(TokenTree::Ident(_)))
+        && is_punct(stripped.get(1), '.')
+        && is_ident(stripped.get(2), "clone")
+        && let TokenTree::Group(group) = &stripped[3]
+        && group.delimiter() == Delimiter::Parenthesis
+        && tt_group_inner(group).is_empty()
+        && let TokenTree::Ident(base) = &stripped[0]
+    {
+        return tt_binding_proves(&base.to_string(), env);
+    }
+    if stripped.len() == 4
+        && matches!(stripped.first(), Some(TokenTree::Ident(_)))
+        && is_punct(stripped.get(1), '.')
+        && is_ident(stripped.get(2), "clone")
+    {
         return false;
     }
-    let mut depth: usize = 0;
-    let mut cursor = dot;
-    while cursor > 0 {
-        cursor -= 1;
-        let kind = tokens.get(cursor).map(|token| &token.kind);
-        if matches!(kind, Some(SourceKind::Punct(')'))) {
-            depth += 1;
-        } else if matches!(kind, Some(SourceKind::Punct('('))) {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                break;
-            }
-        }
-    }
-    if depth != 0 {
+    let Some((path, args)) = tt_outer_call(stripped) else {
+        // A bare `base.field` initializer keeps no proof on its own: the
+        // binding must come from a constructor, a clone, a wrapper or a
+        // typed helper return.
         return false;
-    }
-    let mut path = Vec::new();
-    let mut back = cursor;
-    while let Some(previous) = back.checked_sub(1).and_then(|at| tokens.get(at)) {
-        match &previous.kind {
-            SourceKind::Ident(word) => {
-                path.push(word.clone());
-                back -= 1;
-            }
-            SourceKind::String(_) | SourceKind::Punct(_) => break,
-        }
-        if back >= 2 && punct(tokens.get(back - 1), ':') && punct(tokens.get(back - 2), ':') {
-            back -= 2;
-            continue;
-        }
-        break;
-    }
-    if path.is_empty() {
-        return false;
-    }
-    path.reverse();
-    if back > 0 && punct(tokens.get(back - 1), '.') {
-        return false;
-    }
+    };
     if path.iter().any(|segment| segment == "FakeClock") {
         return true;
     }
+    if path.len() == 2 {
+        let first = path.first().cloned().unwrap_or_default();
+        let second = path.get(1).cloned().unwrap_or_default();
+        let wrapper = (first == "Arc" && (second == "clone" || second == "new"))
+            || (first == "Box" && (second == "new" || second == "leak"));
+        if wrapper {
+            let inner = tt_stripped(&args);
+            if let Some(name) = tt_single_binding(inner)
+                && tt_binding_proves(&name, env)
+            {
+                return true;
+            }
+            if inner.len() == 3
+                && matches!(inner.first(), Some(TokenTree::Ident(_)))
+                && is_punct(inner.get(1), '.')
+                && matches!(inner.get(2), Some(TokenTree::Ident(_)))
+                && let (Some(TokenTree::Ident(base)), Some(TokenTree::Ident(field))) =
+                    (inner.first(), inner.get(2))
+                && tt_field_proves(fields, &base.to_string(), &field.to_string(), env)
+            {
+                return true;
+            }
+            return tt_init_proves(inner, env, fields, same, helpers);
+        }
+    }
     if let [name] = path.as_slice() {
-        return helper_proof(name, same, helpers)
+        return tt_helper_proof(name, same, helpers)
             .is_some_and(|parts| matches!(parts.as_slice(), [true]));
     }
     false
 }
 
-/// Whether the initializer from `start` up to `end` proves a `FakeClock`:
-/// a `FakeClock` constructor in the outermost callee, a clone of an already
-/// proved receiver, or a plain helper call whose single declared return
-/// names one.
+/// Whether a receiver before `.advance` proves `FakeClock`.
 #[allow(
-    clippy::too_many_arguments,
-    reason = "one span plus one proof input per source"
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
 )]
-fn init_proves_fake(
-    tokens: &[SourceToken],
-    start: usize,
-    end: usize,
-    fake: &BTreeSet<String>,
-    fake_fields: &BTreeSet<(String, String)>,
-    structs: &BTreeMap<String, String>,
-    impl_name: Option<&str>,
-    self_fake: bool,
-    same: &[(String, Vec<bool>)],
-    helpers: &BTreeMap<String, Vec<Vec<bool>>>,
+fn tt_receiver_proves(
+    before: &[TokenTree],
+    env: &TtEnv,
+    fields: &BTreeSet<(String, String)>,
 ) -> bool {
-    // `x.clone()`
-    if end.saturating_sub(start) >= 5
-        && matches!(
-            tokens.get(start).map(|token| &token.kind),
-            Some(SourceKind::Ident(_))
-        )
-        && punct(tokens.get(start + 1), '.')
-        && ident(tokens.get(start + 2), "clone")
-        && punct(tokens.get(start + 3), '(')
-        && punct(tokens.get(start + 4), ')')
-    {
-        return atom_proves_fake(
-            tokens,
-            start,
-            start + 1,
-            fake,
-            fake_fields,
-            structs,
-            impl_name,
-            self_fake,
-        );
-    }
-    let Some((path, open)) = outer_call_path(tokens, start) else {
+    let stripped = tt_stripped(before);
+    if stripped.is_empty() {
+        // A direct call result such as `wrap(...).advance`: handled by the
+        // caller through the parenthesis group before the dot.
         return false;
-    };
-    // A `FakeClock` constructor in the outermost callee, however qualified.
-    if path.iter().any(|segment| segment == "FakeClock") {
-        return true;
     }
-    // `Arc::clone(&x)`, `Arc::clone(x)`, `Arc::new(x)`, `Box::new(x)` and
-    // `Box::leak(x)`: standard-library wrappers transparent to their
-    // argument's type, so the inner value proves as it would unwrapped.
-    if path.len() == 2
-        && ((path.first().is_some_and(|first| first == "Arc")
-            && path
-                .last()
-                .is_some_and(|last| last == "clone" || last == "new"))
-            || (path.first().is_some_and(|first| first == "Box")
-                && path
-                    .last()
-                    .is_some_and(|last| last == "new" || last == "leak")))
-    {
-        let mut inner: usize = 1;
-        let mut close = end;
-        let mut cursor = open + 1;
-        while cursor < end {
-            let kind = tokens.get(cursor).map(|token| &token.kind);
-            if is_open(kind) {
-                inner += 1;
-            } else if is_close(kind) {
-                inner = inner.saturating_sub(1);
-                if inner == 0 {
-                    close = cursor;
-                    break;
-                }
-            }
-            cursor += 1;
+    if stripped.len() == 1 {
+        if let TokenTree::Ident(name) = &stripped[0] {
+            return tt_binding_proves(&name.to_string(), env);
         }
-        return atom_proves_fake(
-            tokens,
-            open + 1,
-            close,
-            fake,
-            fake_fields,
-            structs,
-            impl_name,
-            self_fake,
-        ) || init_proves_fake(
-            tokens,
-            open + 1,
-            close,
-            fake,
-            fake_fields,
-            structs,
-            impl_name,
-            self_fake,
-            same,
-            helpers,
-        );
+        return false;
     }
-    // A plain helper call proves its single `FakeClock` return, if any.
-    if let [name] = path.as_slice() {
-        return helper_proof(name, same, helpers)
-            .is_some_and(|parts| matches!(parts.as_slice(), [true]));
+    if stripped.len() == 3
+        && matches!(stripped.first(), Some(TokenTree::Ident(_)))
+        && is_punct(Some(&stripped[1]), '.')
+        && matches!(stripped.get(2), Some(TokenTree::Ident(_)))
+    {
+        if let (Some(TokenTree::Ident(base)), Some(TokenTree::Ident(field))) =
+            (stripped.first(), stripped.get(2))
+        {
+            return tt_field_proves(fields, &base.to_string(), &field.to_string(), env);
+        }
+        return false;
     }
     false
 }
-/// Every `.advance(` or `.advance_marked(` call the scan proves is a
-/// `FakeClock` receiver, in source order: bindings the same file proves,
-/// calls the scanned helpers type, and direct `FakeClock` constructor
-/// results. Bindings are scoped: an inner `let` shadow is undone at its
-/// closing `}` so the outer proof survives.
-fn raw_advance_calls(
-    tokens: &[SourceToken],
+
+/// The proved bindings and owners a parameter list declares.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_fn_param_facts(
+    params: &[TokenTree],
+    known: &BTreeSet<String>,
+) -> (BTreeSet<String>, BTreeMap<String, String>) {
+    let mut fake = BTreeSet::new();
+    let mut owners = BTreeMap::new();
+    for param in tt_split_commas(params) {
+        let Some(colon) = tt_single_colon(param) else {
+            continue;
+        };
+        let Some(name) = tt_last_ident(param, colon) else {
+            continue;
+        };
+        if name == "_" {
+            continue;
+        }
+        let ty = &param[colon + 1..];
+        if tt_contains_fake_clock(ty) {
+            fake.insert(name);
+        } else if let Some(owner) = tt_owner_in_type(ty, known) {
+            owners.insert(name, owner);
+        }
+    }
+    (fake, owners)
+}
+
+/// A function definition at `at`: its name, parameter facts and body group
+/// A function definition's name, parameter facts and body index.
+type TtFnDef = (
+    String,
+    BTreeSet<String>,
+    BTreeMap<String, String>,
+    Option<usize>,
+);
+
+/// index, if it has a body. Declarations without bodies prove nothing.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "proc-macro2 TokenTree is non-exhaustive"
+)]
+fn tt_parse_fn_at(trees: &[TokenTree], at: usize, known: &BTreeSet<String>) -> Option<TtFnDef> {
+    if !is_ident(trees.get(at), "fn") {
+        return None;
+    }
+    let name = match trees.get(at + 1) {
+        Some(TokenTree::Ident(word)) => word.to_string(),
+        _ => return None,
+    };
+    let mut param_idx = None;
+    let mut cursor = at + 2;
+    while cursor < trees.len() {
+        if tt_is_paren(&trees[cursor]) {
+            param_idx = Some(cursor);
+            break;
+        }
+        if tt_is_brace(&trees[cursor]) || is_punct(Some(&trees[cursor]), ';') {
+            return None;
+        }
+        cursor += 1;
+    }
+    let param_idx = param_idx?;
+    let params = match &trees[param_idx] {
+        TokenTree::Group(group) => tt_group_inner(group),
+        _ => return None,
+    };
+    let (fake, owners) = tt_fn_param_facts(&params, known);
+    let mut body = None;
+    let mut cursor = param_idx + 1;
+    while cursor < trees.len() {
+        if tt_is_brace(&trees[cursor]) {
+            body = Some(cursor);
+            break;
+        }
+        if is_punct(Some(&trees[cursor]), ';') {
+            break;
+        }
+        cursor += 1;
+    }
+    Some((name, fake, owners, body))
+}
+
+/// The owning struct an initializer names: `Owner::...`, `Owner { ... }`
+/// or `Self::...` inside an `impl` over a known struct.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_init_owner(
+    init: &[TokenTree],
+    known: &BTreeSet<String>,
+    impl_name: Option<&str>,
+) -> Option<String> {
+    let stripped = tt_stripped(init);
+    if stripped.len() == 2
+        && let (Some(TokenTree::Ident(owner)), Some(TokenTree::Group(group))) =
+            (stripped.first(), stripped.get(1))
+        && group.delimiter() == Delimiter::Brace
+    {
+        let word = owner.to_string();
+        if word == "Self" {
+            return impl_name
+                .filter(|name| known.contains(*name))
+                .map(str::to_owned);
+        }
+        if known.contains(&word) {
+            return Some(word);
+        }
+    }
+    let (path, _) = tt_outer_call(stripped)?;
+    let first = path.first()?.clone();
+    if first == "Self" {
+        return impl_name
+            .filter(|name| known.contains(*name))
+            .map(str::to_owned);
+    }
+    if known.contains(&first) {
+        return Some(first);
+    }
+    None
+}
+
+/// Update the environment for one `let` statement.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_handle_let(
+    pattern: &[TokenTree],
+    init: &[TokenTree],
+    env: &mut TtEnv,
+    fields: &BTreeSet<(String, String)>,
+    known: &BTreeSet<String>,
+    same: &[(String, Vec<bool>)],
+    helpers: &BTreeMap<String, Vec<Vec<bool>>>,
+) {
+    let mut pat = pattern;
+    if let Some(TokenTree::Ident(first)) = pat.first()
+        && first == "mut"
+    {
+        pat = &pat[1..];
+    }
+    if pat.len() == 1
+        && let TokenTree::Group(group) = &pat[0]
+        && group.delimiter() == Delimiter::Parenthesis
+    {
+        let inner = tt_group_inner(group);
+        let parts = tt_split_commas(&inner);
+        let stripped = tt_stripped(init);
+        let proof = tt_outer_call(stripped).and_then(|(path, _)| {
+            if let [name] = path.as_slice() {
+                tt_helper_proof(name, same, helpers)
+            } else {
+                None
+            }
+        });
+        for (index, part) in parts.iter().enumerate() {
+            let Some(binding) = tt_single_binding(part) else {
+                continue;
+            };
+            let proved = proof
+                .as_ref()
+                .is_some_and(|positions| positions.get(index) == Some(&true));
+            if proved {
+                env.fake.insert(binding.clone());
+            } else {
+                env.fake.remove(&binding);
+            }
+            env.owners.remove(&binding);
+        }
+        return;
+    }
+    let (binding, typed_fake, type_owner) = match tt_single_colon(pat) {
+        Some(colon) => {
+            let Some(binding) = tt_last_ident(pat, colon) else {
+                return;
+            };
+            let ty = &pat[colon + 1..];
+            let typed_fake = tt_contains_fake_clock(ty);
+            let type_owner = tt_owner_in_type(ty, known);
+            (binding, typed_fake, type_owner)
+        }
+        None => {
+            let Some(binding) = tt_single_binding(pat) else {
+                return;
+            };
+            (binding, false, None)
+        }
+    };
+    let proved = typed_fake || tt_init_proves(init, env, fields, same, helpers);
+    if proved {
+        env.fake.insert(binding.clone());
+    } else {
+        env.fake.remove(&binding);
+    }
+    let owner = type_owner.or_else(|| tt_init_owner(init, known, env.impl_name.as_deref()));
+    if let Some(owner) = owner {
+        env.owners.insert(binding, owner);
+    } else {
+        env.owners.remove(&binding);
+    }
+}
+
+/// The call path ending at the parenthesis group before a dot, if any.
+/// A `.` before the path marks a method result, which never proves.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_call_before_dot(trees: &[TokenTree], dot: usize) -> Option<(Vec<String>, Vec<TokenTree>)> {
+    let args = match trees.get(dot.checked_sub(1)?) {
+        Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis => {
+            tt_group_inner(group)
+        }
+        _ => return None,
+    };
+    let mut path = Vec::new();
+    let mut cursor = dot.checked_sub(2)?;
+    while let Some(TokenTree::Ident(word)) = trees.get(cursor) {
+        path.push(word.to_string());
+        if cursor >= 2
+            && is_punct(trees.get(cursor - 1), ':')
+            && is_punct(trees.get(cursor - 2), ':')
+        {
+            cursor = cursor.saturating_sub(3);
+        } else {
+            break;
+        }
+    }
+    if path.is_empty() {
+        return None;
+    }
+    path.reverse();
+    let before = cursor.checked_sub(1).and_then(|at| trees.get(at));
+    if is_punct(before, '.') {
+        return None;
+    }
+    Some((path, args))
+}
+
+/// Visit siblings, tracking proved bindings through nested groups. Brace
+/// groups get a fresh child scope so an inner shadow restores at its `}`.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "proc-macro2 TokenTree is non-exhaustive"
+)]
+fn tt_visit_block(
+    trees: &[TokenTree],
+    env: &mut TtEnv,
+    known: &BTreeSet<String>,
+    fields: &BTreeSet<(String, String)>,
+    same: &[(String, Vec<bool>)],
+    helpers: &BTreeMap<String, Vec<Vec<bool>>>,
+    calls: &mut Vec<RawAdvanceCall>,
+) {
+    let mut index = 0;
+    while index < trees.len() {
+        if is_ident(trees.get(index), "impl") {
+            let mut body = None;
+            let mut cursor = index + 1;
+            while cursor < trees.len() {
+                if tt_is_brace(&trees[cursor]) {
+                    body = Some(cursor);
+                    break;
+                }
+                cursor += 1;
+            }
+            if let Some(found) = body {
+                let header = &trees[index + 1..found];
+                let inner = match &trees[found] {
+                    TokenTree::Group(group) => tt_group_inner(group),
+                    _ => Vec::new(),
+                };
+                let mut child = TtEnv {
+                    fake: BTreeSet::new(),
+                    owners: BTreeMap::new(),
+                    impl_name: tt_impl_self(header),
+                    impl_fake: tt_contains_fake_clock(header),
+                    fn_name: String::new(),
+                };
+                tt_visit_block(&inner, &mut child, known, fields, same, helpers, calls);
+                index = found + 1;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        if is_ident(trees.get(index), "fn") {
+            if let Some((name, fake, owners, body)) = tt_parse_fn_at(trees, index, known) {
+                if let Some(found) = body {
+                    let inner = match &trees[found] {
+                        TokenTree::Group(group) => tt_group_inner(group),
+                        _ => Vec::new(),
+                    };
+                    let mut child = TtEnv {
+                        fake,
+                        owners,
+                        impl_name: env.impl_name.clone(),
+                        impl_fake: env.impl_fake,
+                        fn_name: name,
+                    };
+                    tt_visit_block(&inner, &mut child, known, fields, same, helpers, calls);
+                    index = found + 1;
+                    continue;
+                }
+                let mut cursor = index;
+                while cursor < trees.len() && !is_punct(Some(&trees[cursor]), ';') {
+                    cursor += 1;
+                }
+                index = cursor + 1;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        if is_ident(trees.get(index), "let") {
+            let mut equals = None;
+            let mut cursor = index + 1;
+            while cursor < trees.len() {
+                if is_punct(Some(&trees[cursor]), '=') {
+                    equals = Some(cursor);
+                    break;
+                }
+                if is_punct(Some(&trees[cursor]), ';') {
+                    break;
+                }
+                cursor += 1;
+            }
+            let Some(found_eq) = equals else {
+                index += 1;
+                continue;
+            };
+            let mut semi = None;
+            let mut cursor = found_eq + 1;
+            while cursor < trees.len() {
+                if is_punct(Some(&trees[cursor]), ';') {
+                    semi = Some(cursor);
+                    break;
+                }
+                cursor += 1;
+            }
+            let Some(found_semi) = semi else {
+                index += 1;
+                continue;
+            };
+            if let (Some(pattern), Some(init)) = (
+                trees.get(index + 1..found_eq),
+                trees.get(found_eq + 1..found_semi),
+            ) {
+                tt_visit_block(init, env, known, fields, same, helpers, calls);
+                tt_handle_let(pattern, init, env, fields, known, same, helpers);
+            }
+            index = found_semi + 1;
+            continue;
+        }
+        if is_punct(trees.get(index), '.')
+            && index + 2 < trees.len()
+            && (is_ident(trees.get(index + 1), "advance")
+                || is_ident(trees.get(index + 1), "advance_marked"))
+            && tt_is_paren(&trees[index + 2])
+        {
+            let mut proved = false;
+            if let Some(TokenTree::Ident(_)) = trees.get(index.wrapping_sub(1)) {
+                let mut back = index - 1;
+                if back >= 2
+                    && is_punct(trees.get(back - 1), '.')
+                    && matches!(trees.get(back - 2), Some(TokenTree::Ident(_)))
+                {
+                    back -= 2;
+                    let before = &trees[back..index];
+                    proved = tt_receiver_proves(before, env, fields);
+                } else {
+                    let before = &trees[back..index];
+                    proved = tt_receiver_proves(before, env, fields);
+                }
+            } else if let Some((path, _)) = tt_call_before_dot(trees, index) {
+                if path.iter().any(|segment| segment == "FakeClock") {
+                    proved = true;
+                } else if let [name] = path.as_slice() {
+                    proved = tt_helper_proof(name, same, helpers)
+                        .is_some_and(|parts| matches!(parts.as_slice(), [true]));
+                }
+            }
+            if proved {
+                let line = trees[index + 1].span().start().line;
+                calls.push(RawAdvanceCall {
+                    line,
+                    function: env.fn_name.clone(),
+                });
+            }
+            index += 1;
+            continue;
+        }
+        if let TokenTree::Group(group) = &trees[index] {
+            let inner = tt_group_inner(group);
+            if group.delimiter() == Delimiter::Brace {
+                let mut child = TtEnv {
+                    fake: env.fake.clone(),
+                    owners: env.owners.clone(),
+                    impl_name: env.impl_name.clone(),
+                    impl_fake: env.impl_fake,
+                    fn_name: env.fn_name.clone(),
+                };
+                tt_visit_block(&inner, &mut child, known, fields, same, helpers, calls);
+            } else {
+                tt_visit_block(&inner, env, known, fields, same, helpers, calls);
+            }
+            index += 1;
+            continue;
+        }
+        index += 1;
+    }
+}
+
+/// Every proved raw advance in one file, in source order.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "sibling indices stay within the scanned TokenStream"
+)]
+fn tt_raw_advance_calls(
+    trees: &[TokenTree],
     same: &[(String, Vec<bool>)],
     helpers: &BTreeMap<String, Vec<Vec<bool>>>,
 ) -> Vec<RawAdvanceCall> {
-    let fake_fields = fake_clock_fields(tokens);
-    let all_structs = in_file_structs(tokens);
+    let mut known = BTreeSet::new();
+    tt_collect_struct_names(trees, &mut known);
+    let mut fields = BTreeSet::new();
+    tt_collect_fake_fields(trees, &mut fields);
+    let mut env = TtEnv {
+        fake: BTreeSet::new(),
+        owners: BTreeMap::new(),
+        impl_name: None,
+        impl_fake: false,
+        fn_name: String::new(),
+    };
     let mut calls = Vec::new();
-    let mut depth: usize = 0;
-    let mut pending_impl: Option<(bool, Option<String>)> = None;
-    let mut pending_fn: Option<(String, BTreeSet<String>, BTreeMap<String, String>)> = None;
-    let mut impl_frames: Vec<(usize, bool, Option<String>)> = Vec::new();
-    let mut fn_frames: Vec<AdvanceFnFrame> = Vec::new();
-    let mut i = 0;
-    while i < tokens.len() {
-        if ident(tokens.get(i), "impl") {
-            let mut header_fake = false;
-            let mut j = i + 1;
-            while j < tokens.len() && !punct(tokens.get(j), '{') {
-                if ident(tokens.get(j), "FakeClock") {
-                    header_fake = true;
-                }
-                j += 1;
-            }
-            pending_impl = Some((header_fake, impl_self_name(tokens, i)));
-        } else if ident(tokens.get(i), "fn") {
-            if let Some((name, fake, structs)) = fn_signature(tokens, i, &all_structs) {
-                pending_fn = Some((name, fake, structs));
-            }
-        } else if ident(tokens.get(i), "let") && !fn_frames.is_empty() {
-            let (frame_fake, frame_structs, frame_impl_name, frame_self_fake) =
-                fn_frames.last().map_or_else(
-                    || (BTreeSet::new(), BTreeMap::new(), None, false),
-                    |frame| {
-                        let self_fake = impl_frames.last().is_some_and(|(_, fake, _)| *fake)
-                            || frame.fake.contains("self");
-                        (
-                            frame.fake.clone(),
-                            frame.structs.clone(),
-                            impl_frames.last().and_then(|(_, _, name)| name.clone()),
-                            self_fake,
-                        )
-                    },
-                );
-            let impl_name = frame_impl_name.as_deref();
-            let Some(frame) = fn_frames.last_mut() else {
-                i += 1;
-                continue;
-            };
-            let mut j = i + 1;
-            if ident(tokens.get(j), "mut") {
-                j += 1;
-            }
-            if punct(tokens.get(j), '(') {
-                let mut paren: usize = 1;
-                let mut k = j + 1;
-                while k < tokens.len() {
-                    let kind = tokens.get(k).map(|token| &token.kind);
-                    if is_open(kind) {
-                        paren += 1;
-                    } else if is_close(kind) {
-                        paren = paren.saturating_sub(1);
-                        if paren == 0 {
-                            break;
-                        }
-                    }
-                    k += 1;
-                }
-                if paren != 0 || !punct(tokens.get(k + 1), '=') {
-                    i += 1;
-                    continue;
-                }
-                let mut m = k + 2;
-                let mut inner: usize = 0;
-                while m < tokens.len() {
-                    let kind = tokens.get(m).map(|token| &token.kind);
-                    if is_open(kind) {
-                        inner += 1;
-                    } else if is_close(kind) {
-                        inner = inner.saturating_sub(1);
-                    } else if inner == 0 && matches!(kind, Some(SourceKind::Punct(';'))) {
-                        break;
-                    }
-                    m += 1;
-                }
-                let proof = match tokens.get(k + 2).map(|token| &token.kind) {
-                    Some(SourceKind::Ident(callee)) if punct(tokens.get(k + 3), '(') => {
-                        helper_proof(callee, same, helpers)
-                    }
-                    _ => None,
-                };
-                for (index, (part_start, part_end)) in
-                    split_top_level(tokens, j + 1, k).iter().enumerate()
-                {
-                    let Some(binding) = simple_pattern_name(tokens, *part_start, *part_end) else {
-                        continue;
-                    };
-                    let proved = proof
-                        .as_ref()
-                        .is_some_and(|positions| positions.get(index) == Some(&true));
-                    frame
-                        .fake_undos
-                        .push((depth, binding.clone(), frame.fake.contains(&binding)));
-                    if proved {
-                        frame.fake.insert(binding.clone());
-                    } else {
-                        frame.fake.remove(&binding);
-                    }
-                    frame.struct_undos.push((
-                        depth,
-                        binding.clone(),
-                        frame.structs.get(&binding).cloned(),
-                    ));
-                    frame.structs.remove(&binding);
-                }
-            } else if let Some(name) = tokens.get(j).and_then(|token| match &token.kind {
-                SourceKind::Ident(name) => Some(name.clone()),
-                SourceKind::String(_) | SourceKind::Punct(_) => None,
-            }) {
-                let mut k = j + 1;
-                let mut typed_fake = false;
-                let mut type_owner: Option<String> = None;
-                if punct(tokens.get(k), ':') {
-                    let mut m = k + 1;
-                    let mut inner: usize = 0;
-                    while m < tokens.len() {
-                        let kind = tokens.get(m).map(|token| &token.kind);
-                        if is_open(kind) {
-                            inner += 1;
-                        } else if is_close(kind) {
-                            inner = inner.saturating_sub(1);
-                        } else if inner == 0 {
-                            if matches!(kind, Some(SourceKind::Punct('=' | ';'))) {
-                                break;
-                            }
-                            if matches!(kind, Some(SourceKind::Ident(word)) if word.as_str() == "FakeClock")
-                            {
-                                typed_fake = true;
-                            }
-                        }
-                        m += 1;
-                    }
-                    type_owner = type_mentions_owner(tokens, k + 1, m, &all_structs);
-                    k = m;
-                }
-                if punct(tokens.get(k), '=') {
-                    let mut m = k + 1;
-                    let mut inner: usize = 0;
-                    while m < tokens.len() {
-                        let kind = tokens.get(m).map(|token| &token.kind);
-                        if is_open(kind) {
-                            inner += 1;
-                        } else if is_close(kind) {
-                            inner = inner.saturating_sub(1);
-                        } else if inner == 0 && matches!(kind, Some(SourceKind::Punct(';'))) {
-                            break;
-                        }
-                        m += 1;
-                    }
-                    let proved = typed_fake
-                        || init_proves_fake(
-                            tokens,
-                            k + 1,
-                            m,
-                            &frame_fake,
-                            &fake_fields,
-                            &frame_structs,
-                            impl_name,
-                            frame_self_fake,
-                            same,
-                            helpers,
-                        );
-                    let init_owner = initializer_owner(tokens, k + 1, m, &all_structs, impl_name);
-                    let owner = type_owner.or(init_owner);
-                    frame
-                        .fake_undos
-                        .push((depth, name.clone(), frame.fake.contains(&name)));
-                    if proved {
-                        frame.fake.insert(name.clone());
-                    } else {
-                        frame.fake.remove(&name);
-                    }
-                    frame.struct_undos.push((
-                        depth,
-                        name.clone(),
-                        frame.structs.get(&name).cloned(),
-                    ));
-                    if let Some(owner) = owner {
-                        frame.structs.insert(name, owner);
-                    } else {
-                        frame.structs.remove(&name);
-                    }
-                }
-            }
-        } else if punct(tokens.get(i), '.')
-            && tokens.get(i + 1).is_some_and(|token| {
-                matches!(
-                    &token.kind,
-                    SourceKind::Ident(name) if name == "advance" || name == "advance_marked"
-                )
-            })
-            && punct(tokens.get(i + 2), '(')
-        {
-            let chain = receiver_chain(tokens, i);
-            let (self_fake, impl_name) = impl_frames
-                .last()
-                .map_or((false, None), |(_, fake, name)| (*fake, name.as_deref()));
-            let proved = match chain.as_slice() {
-                [] => call_result_proves_fake(tokens, i, same, helpers),
-                [base] if base.as_str() == "self" => {
-                    self_fake
-                        || fn_frames
-                            .last()
-                            .is_some_and(|frame| frame.fake.contains("self"))
-                }
-                [base] => fn_frames
-                    .last()
-                    .is_some_and(|frame| frame.fake.contains(base.as_str())),
-                [base, field] => fn_frames.last().is_some_and(|frame| {
-                    field_proves_fake(&fake_fields, base, field, &frame.structs, impl_name)
-                }),
-                [_, _, ..] => false,
-            };
-            if proved && let Some(dot) = tokens.get(i) {
-                calls.push(RawAdvanceCall {
-                    line: dot.line,
-                    function: fn_frames
-                        .last()
-                        .map_or_else(String::new, |frame| frame.name.clone()),
-                });
-            }
-        } else if punct(tokens.get(i), '{') {
-            depth += 1;
-            if let Some((fake, name)) = pending_impl.take() {
-                impl_frames.push((depth, fake, name));
-            }
-            if let Some((name, fake, structs)) = pending_fn.take() {
-                fn_frames.push(AdvanceFnFrame {
-                    name,
-                    depth,
-                    fake,
-                    fake_undos: Vec::new(),
-                    structs,
-                    struct_undos: Vec::new(),
-                });
-            }
-        } else if punct(tokens.get(i), '}') {
-            depth = depth.saturating_sub(1);
-            impl_frames.retain(|(frame_depth, _, _)| *frame_depth <= depth);
-            for frame in fn_frames.iter_mut() {
-                while frame
-                    .fake_undos
-                    .last()
-                    .is_some_and(|(undo_depth, _, _)| *undo_depth > depth)
-                {
-                    if let Some((_, var, was_present)) = frame.fake_undos.pop() {
-                        if was_present {
-                            frame.fake.insert(var);
-                        } else {
-                            frame.fake.remove(&var);
-                        }
-                    }
-                }
-                while frame
-                    .struct_undos
-                    .last()
-                    .is_some_and(|(undo_depth, _, _)| *undo_depth > depth)
-                {
-                    if let Some((_, var, was_owner)) = frame.struct_undos.pop() {
-                        if let Some(owner) = was_owner {
-                            frame.structs.insert(var, owner);
-                        } else {
-                            frame.structs.remove(&var);
-                        }
-                    }
-                }
-            }
-            fn_frames.retain(|frame| frame.depth <= depth);
-        } else if punct(tokens.get(i), ';') {
-            pending_fn = None;
-        }
-        i += 1;
-    }
+    tt_visit_block(trees, &mut env, &known, &fields, same, helpers, &mut calls);
     calls
 }
 
