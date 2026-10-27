@@ -971,8 +971,13 @@ fn sessions_answer(ids: &[&str]) -> Value {
 
 /// A dry-run answer naming `ids` as the set the delete would remove.
 fn dry_answer(ids: &[&str]) -> Value {
+    dry_answer_with_held(ids, &[])
+}
+
+/// A dry-run answer with an explicit set of busy ids.
+fn dry_answer_with_held(ids: &[&str], held: &[&str]) -> Value {
     json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
-        "payload": {"command_id": "c_delete", "result": {"sessions": ids}}})
+        "payload": {"command_id": "c_delete", "result": {"sessions": ids, "held": held}}})
 }
 
 /// A rejection of `command_id` with `code` and `message`.
@@ -1056,6 +1061,141 @@ fn hub_delete_without_yes_confirms_the_dry_run_set_exactly() {
                 "args": {"session": HUB_ROOT, "cascade": true,
                     "expect": [HUB_ROOT, HUB_FORK]}}),
         ]
+    );
+}
+
+#[test]
+fn hub_delete_refuses_successful_dry_run_with_held_before_asking() {
+    for held in [HUB_ROOT, HUB_FORK] {
+        let (out, err, got, _, sent) = run_delete_listed(
+            &[
+                sessions_answer(&[HUB_ROOT, HUB_FORK]),
+                dry_answer_with_held(&[HUB_ROOT, HUB_FORK], &[held]),
+            ],
+            HUB_ROOT,
+            true,
+            false,
+            true,
+            Unread,
+        );
+        let error = got.unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                CliError::Rejected {
+                    code: ErrorCode::SessionHeld,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("Session `{held}` is held by another process.")
+        );
+        assert_eq!(out, "", "a held dry run prints no preview");
+        assert_eq!(err, "", "a held dry run prints no prompt");
+        assert_eq!(
+            sent,
+            vec![
+                json!({"id": "c_sessions", "command": "sessions", "args": {}}),
+                json!({"id": "c_delete", "command": "delete",
+                    "args": {"session": HUB_ROOT, "cascade": true, "dry_run": true}}),
+            ],
+            "no real delete follows a held dry run"
+        );
+    }
+}
+
+#[test]
+fn hub_delete_malformed_held_answer_fails_before_printing_or_asking() {
+    let malformed = json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_delete", "result": {"sessions": [HUB_ROOT], "held": "bad"}}});
+    let (out, err, got, _, sent) = run_delete_listed(
+        &[sessions_answer(&[HUB_ROOT]), malformed],
+        HUB_ROOT,
+        false,
+        false,
+        true,
+        Unread,
+    );
+    assert!(matches!(got, Err(CliError::SessionsAnswer(_))));
+    assert_eq!(out, "");
+    assert_eq!(err, "");
+    assert_eq!(sent.len(), 2, "only resolve and dry run are sent");
+}
+
+/// A dry-run answer that fails validation prints nothing, asks nothing
+/// and sends nothing after the dry run: the `Unread` input panics if the
+/// question is ever read.
+fn bad_dry_run_is_unusable(result: Value) {
+    let (out, err, got, _, sent) = run_delete_listed(
+        &[sessions_answer(&[HUB_ROOT]), result],
+        HUB_ROOT,
+        true,
+        false,
+        true,
+        Unread,
+    );
+    let error = got.unwrap_err();
+    assert!(matches!(error, CliError::SessionsAnswer(_)), "{error:?}");
+    assert_eq!(out, "", "a bad dry run prints no preview");
+    assert_eq!(err, "", "a bad dry run prints no prompt");
+    assert_eq!(sent.len(), 2, "only resolve and dry run are sent");
+}
+
+#[test]
+fn hub_delete_rejects_dry_run_missing_its_target() {
+    bad_dry_run_is_unusable(dry_answer(&[HUB_FORK]));
+}
+
+#[test]
+fn hub_delete_rejects_empty_dry_run_set() {
+    bad_dry_run_is_unusable(dry_answer(&[]));
+}
+
+#[test]
+fn hub_delete_rejects_duplicate_dry_run_ids() {
+    bad_dry_run_is_unusable(dry_answer(&[HUB_ROOT, HUB_ROOT]));
+}
+
+#[test]
+fn hub_delete_rejects_unminted_dry_run_ids() {
+    for id in [
+        "s_xyz",
+        "s_ABCDEF1234567890",
+        "s_123",
+        "s_11111111111111a1x",
+        "11111111111111a1",
+        "../s_11111111111111a1",
+    ] {
+        bad_dry_run_is_unusable(dry_answer(&[id]));
+    }
+}
+
+#[test]
+fn hub_delete_rejects_held_outside_the_set() {
+    bad_dry_run_is_unusable(dry_answer_with_held(&[HUB_ROOT], &[HUB_FORK]));
+}
+
+#[test]
+fn hub_delete_rejects_duplicate_held_ids() {
+    bad_dry_run_is_unusable(dry_answer_with_held(
+        &[HUB_ROOT, HUB_FORK],
+        &[HUB_FORK, HUB_FORK],
+    ));
+}
+
+#[test]
+fn hub_delete_rejects_unminted_held_ids() {
+    bad_dry_run_is_unusable(dry_answer_with_held(&[HUB_ROOT], &["bogus"]));
+}
+
+#[test]
+fn hub_delete_rejects_dry_run_missing_its_held_field() {
+    bad_dry_run_is_unusable(
+        json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_delete", "result": {"sessions": [HUB_ROOT]}}}),
     );
 }
 
