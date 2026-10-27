@@ -513,18 +513,115 @@ pub struct Handoff {
 }
 
 /// The `args` of `rewind`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RewindArgs {
-    /// The session to rewind; absent means this session.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_session_id: Option<SessionId>,
-    /// The point; absent means the start of the latest turn.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seq: Option<Seq>,
-    /// Whether to summarise the path after the point.
-    #[serde(default)]
-    pub summarise: bool,
+///
+/// The two modes are exclusive: either a point in this session's log or an
+/// ancestor's (`Rewind`), or the log's last line resolved at admission
+/// (`AtEnd`, which `/fork` sends). Only the session's own end is a fork
+/// point, so `at_end` with `seq`, `from_session_id` or `summarise` present,
+/// even `summarise: false`, is `invalid_arguments`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RewindArgs {
+    /// A point in this session's log or an ancestor's.
+    Rewind {
+        /// The session to rewind; absent means this session.
+        from_session_id: Option<SessionId>,
+        /// The point; absent means the start of the latest turn.
+        seq: Option<Seq>,
+        /// Whether to summarise the path after the point.
+        summarise: bool,
+    },
+    /// The log's last line, resolved at admission (`/fork` sends this).
+    AtEnd,
+}
+
+impl Serialize for RewindArgs {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct RewindWire<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            from_session_id: &'a Option<SessionId>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            seq: &'a Option<Seq>,
+            summarise: bool,
+        }
+        #[derive(Serialize)]
+        struct AtEndWire {
+            at_end: bool,
+        }
+        match self {
+            RewindArgs::Rewind {
+                from_session_id,
+                seq,
+                summarise,
+            } => RewindWire {
+                from_session_id,
+                seq,
+                summarise: *summarise,
+            }
+            .serialize(serializer),
+            RewindArgs::AtEnd => AtEndWire { at_end: true }.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RewindArgs {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let map = Map::<String, Value>::deserialize(deserializer)?;
+        for key in map.keys() {
+            if !matches!(
+                key.as_str(),
+                "from_session_id" | "seq" | "summarise" | "at_end"
+            ) {
+                return Err(D::Error::custom(format!("unknown field `{key}`")));
+            }
+        }
+        // An optional key is absent, never `null`: presence counts even
+        // when the value is null, so `seq: null` with `at_end` cannot
+        // bypass the exclusivity check below.
+        if map.values().any(|value| value.is_null()) {
+            return Err(D::Error::custom("an optional key is absent, never null"));
+        }
+        let at_end = match map.get("at_end") {
+            None => false,
+            Some(value) => serde_json::from_value::<bool>(value.clone())
+                .map_err(|_| D::Error::custom("invalid type for `at_end`: expected boolean"))?,
+        };
+        if at_end {
+            if map.contains_key("seq")
+                || map.contains_key("from_session_id")
+                || map.contains_key("summarise")
+            {
+                return Err(D::Error::custom(
+                    "`at_end` takes no `seq`, `from_session_id` or `summarise`",
+                ));
+            }
+            return Ok(RewindArgs::AtEnd);
+        }
+        let from_session_id = match map.get("from_session_id") {
+            None => None,
+            Some(value) => Some(
+                serde_json::from_value::<SessionId>(value.clone())
+                    .map_err(|_| D::Error::custom("invalid type for `from_session_id`"))?,
+            ),
+        };
+        let seq = match map.get("seq") {
+            None => None,
+            Some(value) => Some(
+                serde_json::from_value::<Seq>(value.clone())
+                    .map_err(|_| D::Error::custom("invalid type for `seq`"))?,
+            ),
+        };
+        let summarise = match map.get("summarise") {
+            None => false,
+            Some(value) => serde_json::from_value::<bool>(value.clone())
+                .map_err(|_| D::Error::custom("invalid type for `summarise`: expected boolean"))?,
+        };
+        Ok(RewindArgs::Rewind {
+            from_session_id,
+            seq,
+            summarise,
+        })
+    }
 }
 
 /// The `args` of `shell`.
@@ -599,6 +696,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "keymap",
     "skills",
     "rewind",
+    "fork",
     "handoff",
     "compact",
     "name",

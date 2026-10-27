@@ -104,7 +104,7 @@ fn row_text(buf: &Buffer, y: u16) -> String {
         .collect()
 }
 
-/// An app with a 41-row `/` list: the built-ins and 17 session skills.
+/// An app with a 42-row `/` list: the built-ins and 17 session skills.
 fn forty() -> App {
     let mut app = attached(160, 48);
     let skills: Vec<String> = (0..17).map(|n| format!("skill{n:02}")).collect();
