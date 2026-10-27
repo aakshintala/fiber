@@ -518,10 +518,9 @@ fn pass_end_fails_when_the_thumb_never_arrives() {
         )
         .expect("the tail draws");
     let started = clock.now();
-    let until = started
-        .checked_sub(Duration::from_secs(1))
-        .expect("the deadline is before the fake clock origin");
-    let err = await_pass_end(&terminal, &*clock, started, until).expect_err("no thumb ever shows");
+    // A deadline already reached: the pass cannot end.
+    let err =
+        await_pass_end(&terminal, &*clock, started, started).expect_err("no thumb ever shows");
     assert!(err.contains(ATTACH_PASS), "{err}");
 }
 
@@ -544,12 +543,8 @@ fn pass_end_returns_once_the_thumb_shows() {
             ATTACH_PASS,
         )
         .expect("the thumb draws");
-    let started = clock
-        .now()
-        .checked_sub(Duration::from_secs(1))
-        .expect("the elapsed time is representable");
-    let until = clock
-        .now()
+    let started = clock.now();
+    let until = started
         .checked_add(Duration::from_secs(1))
         .expect("fake deadline is representable");
     let ms = await_pass_end(&terminal, &*clock, started, until).expect("the thumb shows");
