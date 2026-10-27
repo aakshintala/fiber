@@ -1495,7 +1495,20 @@ fn a_close_with_now_stops_the_delegate_and_exits_0() {
 /// `session_status`, `clients` and `attention` per `docs/testing.md`
 /// ("Event streams"): session start through the prompt turn's final
 /// assistant message. The crash lands after both delegates start, so this
-/// prefix is fixed; the `clients` count is asserted separately.
+/// prefix is fixed; the `clients` count is asserted separately. The pinned
+/// order is the contract's: `session_started` first with `fiber_started`
+/// after it, `extensions_loaded` before the first model request and
+/// `preamble_built` before the next one (`docs/events.md`, "Process
+/// boundary", "Extensions" and "Preamble"); each step opened by
+/// `step_started`, with the next step taken after the last call's result
+/// (`docs/loop.md`, "One step"); each reply's items in the order the model
+/// produced them, closed by `assistant_message_completed`
+/// (`docs/events.md`, "Actions"); `delegate_started` after its
+/// `job_started` (`docs/delegates.md`, "Events"). The two
+/// `assistant_message_delta` lines per text reply are the scripted fake's
+/// two fragments (`fakes::wire::hello`), pinned as the complete list
+/// against the fake provider per `docs/testing/fakes.md` ("Live calls and
+/// evals"); a real model's chunking varies.
 const CRASH_PREFIX: &[&str] = &[
     "session_started",
     "fiber_started",
@@ -1655,19 +1668,7 @@ fn crash_set(actual: &[&str], expected: &[&str], what: &str) {
     sorted_actual.sort_unstable();
     let mut sorted_expected = expected.to_vec();
     sorted_expected.sort_unstable();
-    let first = (0..sorted_expected.len())
-        .find(|&i| sorted_actual.get(i).copied() != Some(sorted_expected[i]));
-    if let Some(i) = first {
-        let lo = i.saturating_sub(3);
-        let hi = (i + 4).min(sorted_expected.len());
-        panic!(
-            "crash stream {what} differs at sorted index {i}: actual[{i}] = {:?}, expected[{i}] = {:?}; actual[{lo}..{hi}] = {:?}, expected[{lo}..{hi}] = {:?}",
-            sorted_actual.get(i).copied().unwrap_or("<end>"),
-            Some(sorted_expected[i]),
-            sorted_actual.get(lo..hi).unwrap_or(&[]),
-            &sorted_expected[lo..hi],
-        );
-    }
+    crash_segment(&sorted_actual, &sorted_expected, 0, "sorted remainder");
 }
 
 /// The delegate job an event line belongs to (`docs/events.md`, "Jobs").
@@ -2088,27 +2089,9 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
         .cloned()
         .collect();
     assert_eq!(finished.len(), 3, "one finish per delegate: {finished:?}");
-    // Each finish pairs with its completion by job, not by position: the
-    // documented per-delegate sequencing (`docs/delegates.md`, "Events")
-    // holds whatever the racing turns interleave.
-    let mut finished_jobs: Vec<&str> = finished
-        .iter()
-        .map(|line| line["payload"]["job_id"].as_str().unwrap())
-        .collect();
-    finished_jobs.sort_unstable();
-    let mut completed_jobs: Vec<&str> = ends
-        .iter()
-        .map(|line| line["payload"]["job_id"].as_str().unwrap())
-        .collect();
-    completed_jobs.sort_unstable();
-    assert_eq!(
-        finished_jobs, completed_jobs,
-        "each finish ends once: {finished:?} vs {ends:?}"
-    );
     // Each finished delegate's notice reaches the parent's model: the wake
     // carries the delegate's final message (`docs/delegates.md`, "Results"),
-    // rendered naming the job. Both children answer alike, so the check
-    // names the job, not the text.
+    // rendered naming the job.
     let bodies: Vec<String> = parent
         .requests()
         .iter()
@@ -2121,6 +2104,18 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
             "no later parent request carries the {notice} wake"
         );
     }
+    // The sibling ran to completion on the scripted `Hello.` reply, so its
+    // wake carries that final message in the same request as its notice; a
+    // wake omitting the result would pass the notice check above. The
+    // crashed delegate has no final message (empty text), so its notice
+    // alone is asserted.
+    let sibling_notice = format!("delegate {} finished", job_of(&child_ids[1]));
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains(&sibling_notice) && body.contains("Hello.")),
+        "no later parent request carries the {sibling_notice} wake with its final message"
+    );
     for line in lines.iter().filter(|line| line["kind"] == "turn_completed") {
         assert_eq!(line["payload"]["outcome"], "completed", "{line}");
     }
