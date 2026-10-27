@@ -39,3 +39,4 @@ crates/loop/src/reviewer.rs	542	plan	2026-10-23T13:41:19Z	Amoghs-MacBook-Pro.loc
 crates/loop/tests/reviewer.rs	542	plan	2026-10-23T13:41:19Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-crash-escalation	
 crates/loop/tests/turn.rs	542	plan	2026-10-23T13:41:19Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-crash-escalation	
 crates/tui/src/app/keyboard.rs	lane-2720	grant	2026-10-27T18:36:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/tui/src/app/top.rs	lane-2720	grant	2026-10-27T18:36:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	3496
