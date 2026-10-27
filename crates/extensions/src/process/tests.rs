@@ -706,6 +706,7 @@ fn timeout_does_not_fire_the_cancel_signal() {
 #[test]
 fn retire_cancels_everything_and_bumps_the_generation() {
     let table = Table::new();
+    table.use_fixed_request_nonce("r_fixed");
     let first = minted(&table, "tool a");
     let second = table.mint(RequestKind::Tool, "e", "tool b".into(), None, None, None);
     let before = table.generation();
