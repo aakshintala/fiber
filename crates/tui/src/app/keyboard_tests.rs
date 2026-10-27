@@ -2,28 +2,19 @@
 //! person's bindings reaching every handler.
 
 use std::path::PathBuf;
-use std::time::Instant;
 
 use serde_json::{Value, json};
-
-use contract::clock::Clock;
 
 use super::super::commands::commands_testkit::{
     attached as hub_attached, connected, enter, key, turn_starts, type_any,
 };
 use super::super::{App, Effect, Surface};
+use crate::app::testkit::{SESSION, attached, hello, home_with, live, now};
 use crate::home::{Launch, Spot};
 use crate::keys::{Edit, Key};
 use crate::keyset::Context;
 use crate::link::Line;
 use crate::stroke::{Code, Mods, Stroke};
-
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
-
-/// The injected clock's now.
-fn now() -> Instant {
-    fakes::clock::FakeClock::new().now()
-}
 
 /// The launch description: `/w`, outside git, default shares.
 fn launch() -> Launch {
@@ -46,22 +37,6 @@ fn launch() -> Launch {
     }
 }
 
-/// An app on home at 80x24.
-fn home() -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(launch());
-    app.set_size(80, 24);
-    app
-}
-
-/// An app attached to [`SESSION`] at `width` by `height`, with no home.
-fn attached(width: u16, height: u16) -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_size(width, height);
-    app.attach(contract::SessionId(SESSION.to_owned()));
-    app
-}
-
 /// An app with home state, attached, at `width` by `height`.
 fn homed(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
@@ -69,16 +44,6 @@ fn homed(width: u16, height: u16) -> App {
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.set_size(width, height);
     app
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
 }
 
 /// One session envelope.
@@ -174,36 +139,6 @@ fn type_text(app: &mut App, text: &str) {
     }
 }
 
-/// A live `session_status` for `session`, streaming.
-fn live(session: &str) -> Line {
-    Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
-        session_id: contract::SessionId(session.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: json!({
-            "name": "fix the parser",
-            "workspace": "/w",
-            "project": "-w",
-            "started": 0, "calls": 0, "since": 0,
-            "spend": {"tokens": {"input": 1, "cache_read": 0,
-                "cache_write": {}, "output": 2},
-                "cost": 0.0, "subscription_cost": 0.0},
-            "model": "test/model",
-            "delegates": 0,
-            "jobs": 0,
-            "clients": 0,
-            "state": "streaming",
-        })
-        .as_object()
-        .cloned()
-        .unwrap_or_default(),
-    })
-}
-
 /// An approval request, which opens the approval panel.
 fn approval() -> Line {
     envelope(
@@ -289,7 +224,7 @@ fn exited(name: &str) -> Value {
 
 /// Home with one exited row, its delete question open.
 fn delete_question() -> App {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     app.on_line(accepted(&recent, json!({"sessions": [exited("old work")]})));
     let key = app
@@ -308,7 +243,7 @@ fn delete_question() -> App {
 #[test]
 fn the_quit_question_is_an_overlay_on_its_own() {
     let mut app = homed(80, 24);
-    app.on_line(live("s_bbbbbbbbbbbbbbbb"));
+    app.on_line(live(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned())));
     app.quit();
     assert!(app.quit_open());
     assert!(app.keymap_top().is_none());
@@ -328,7 +263,7 @@ fn the_delete_question_is_an_overlay() {
 
 #[test]
 fn the_workspace_picker_is_an_overlay() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     assert_eq!(app.home_click(Spot::Workspace), Effect::None);
     assert_eq!(app.top_surface(), Surface::WorkspacePicker);
     assert_eq!(app.key_context(), Context::Overlay);
@@ -336,7 +271,7 @@ fn the_workspace_picker_is_an_overlay() {
 
 #[test]
 fn nothing_open_leaves_the_draft_on_top_of_home_and_a_session() {
-    assert_eq!(home().top_surface(), Surface::Draft);
+    assert_eq!(home_with(80, 24, launch()).top_surface(), Surface::Draft);
     assert_eq!(attached(80, 24).top_surface(), Surface::Draft);
 }
 
@@ -438,7 +373,7 @@ fn a_steering_selection_is_steering() {
 #[test]
 fn the_plain_input_box_is_input() {
     assert_eq!(homed(80, 24).key_context(), Context::Input);
-    assert_eq!(home().key_context(), Context::Input);
+    assert_eq!(home_with(80, 24, launch()).key_context(), Context::Input);
 }
 
 #[test]
@@ -453,8 +388,8 @@ fn alt_0_goes_home() {
 #[test]
 fn alt_0_goes_home_on_the_on_screen_sessions_row() {
     let mut app = homed(80, 24);
-    app.on_line(live(SESSION));
-    app.on_line(live("s_bbbbbbbbbbbbbbbb"));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
+    app.on_line(live(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned())));
     type_text(&mut app, "hi");
     assert_eq!(press(&mut app, "alt+0"), Effect::None);
     assert!(app.session().is_none());
@@ -489,7 +424,7 @@ fn left(session: &str) -> Line {
 fn backed() -> App {
     let mut app = homed(80, 24);
     app.on_line(hello());
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     assert_eq!(press(&mut app, "alt+0"), Effect::None);
     assert!(app.session().is_none());
     assert!(app.on_home());
@@ -669,7 +604,7 @@ fn an_open_workspace_picker_keeps_right_and_esc_from_going_back() {
 fn an_open_delete_question_keeps_right_and_esc_from_going_back() {
     let mut app = homed(80, 24);
     let (_, recent) = linked(&mut app);
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     app.on_line(accepted(
         &recent,
         json!({"sessions": [{
@@ -737,7 +672,7 @@ fn an_open_workspace_picker_keeps_go_back_empty() {
 #[test]
 fn a_selected_steering_row_keeps_right_and_esc_from_going_back() {
     let mut app = homed(80, 24);
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     app.on_line(steering_queue());
     app.select_steering(0);
     assert_eq!(press(&mut app, "alt+0"), Effect::None);
@@ -769,7 +704,7 @@ fn back_keys_with_an_exited_came_from_do_nothing() {
 fn back_keys_with_no_came_from_row_do_nothing() {
     let mut app = homed(80, 24);
     app.on_line(hello());
-    app.on_line(live("s_bbbbbbbbbbbbbbbb"));
+    app.on_line(live(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned())));
     assert_eq!(press(&mut app, "alt+0"), Effect::None);
     assert!(app.session().is_none());
     assert!(app.on_home());
@@ -850,7 +785,7 @@ fn an_unbound_back_key_still_answers_right() {
 fn ctrl_n_then_right_returns_to_the_session() {
     let mut app = homed(80, 24);
     app.on_line(hello());
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     app.on_line(steering_queue());
     app.select_steering(0);
     assert_eq!(press(&mut app, "ctrl+n"), Effect::None);
@@ -870,7 +805,7 @@ fn ctrl_n_then_right_returns_to_the_session() {
 fn ctrl_n_then_esc_returns_to_the_session() {
     let mut app = homed(80, 24);
     app.on_line(hello());
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     app.on_line(steering_queue());
     app.select_steering(0);
     assert_eq!(press(&mut app, "ctrl+n"), Effect::None);
@@ -891,7 +826,7 @@ fn ctrl_n_from_a_focused_item_then_right_returns_to_the_session() {
     let mut app = groups(1, 80, 24);
     app.set_home(launch());
     app.on_line(hello());
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     frame(&mut app);
     assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
     assert!(app.focused().is_some());
@@ -972,7 +907,7 @@ fn ctrl_n_from_a_steering_row_lands_on_the_entry_bar() {
 #[test]
 fn ctrl_n_with_the_rail_focused_leaves_nothing_focused() {
     let mut app = homed(80, 24);
-    app.on_line(live(SESSION));
+    app.on_line(live(contract::SessionId(SESSION.to_owned())));
     let key = app
         .home
         .as_ref()
@@ -1279,7 +1214,7 @@ fn the_key_map_shows_the_person_lines_and_pages_them() {
 
 #[test]
 fn the_key_map_over_the_model_picker_is_the_overlay_context() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
     assert!(app.model_picker_open());
     assert_eq!(app.key_context(), Context::Picker);
@@ -1392,7 +1327,7 @@ fn the_open_report_is_an_overlay() {
 /// The draft is byte-identical after.
 #[test]
 fn paste_and_home_arrows_change_neither_the_draft_nor_the_report() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.home.as_mut().expect("home").launch.model = Some("acme/m1".to_owned());
     type_text(&mut app, "ab");
     frame(&mut app);

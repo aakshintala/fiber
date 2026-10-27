@@ -33,7 +33,7 @@ pub use host::{
     CallResult, CommandAccepted, CommandInfo, CommandRejected, CommandResult, CredentialLabels,
     DelegateFinished, DelegateStarted, ExtensionExec, ExtensionLog, ExtensionMessage,
     ExtensionStateSet, ExtensionStateUnset, ExtensionUi, ExtensionsLoaded, FinishedWorktree,
-    JobCompleted, JobDelta, JobLine, JobStarted, JobsPendingNotified, LoadedExtension,
+    HookInfo, JobCompleted, JobDelta, JobLine, JobStarted, JobsPendingNotified, LoadedExtension,
     McpServerFailed, McpServerLayer, McpServerReady, McpServerRow, McpServerState, OnFork,
     PendingReason, QuotaCredit, QuotaInfo, QuotaWindow, ReloadFailure, Reloaded, ReloadedServers,
     ServerFailure, SkillInfo, ToolInfo, ToolSource, ToolState, Ui,
