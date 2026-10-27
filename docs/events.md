@@ -1493,7 +1493,7 @@ earlier point. A person starts one from the terminal, a driver with the
   its history. The pointer is the record: nothing else stores the link, and
   whatever needs it reads B's first line, as deleting a session does to find
   its dependents (`docs/invocation.md`, "Deleting and pruning").
-- **The point is a step boundary:** a point the next line of which starts a turn or a step, with every tool call before it answered, such as the start of a turn, just after the person's input, or just after a batch of tool results.
+- **The point is a step boundary:** a point the next line of which starts a turn or a step, with every tool call before it answered, such as the start of a turn, just after the person's input, or just after a batch of tool results, or the end of the log, when no turn is running and every tool call is answered (`at_end`; `/fork` uses it).
 - **It rewinds the conversation only.** It never restores or touches files.
   Fiber lists, for the person and in a note to the model, the files its own
   tools wrote after the point and the shell calls after it that may have
