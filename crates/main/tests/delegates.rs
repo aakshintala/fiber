@@ -6156,6 +6156,12 @@ fn spawn_scan(name: &str) -> Value {
     )
 }
 
+fn delegates_list_header(grid: &Grid) -> bool {
+    grid.rows
+        .first()
+        .is_some_and(|row| row.contains("Delegates") && row.contains("/delegates"))
+}
+
 #[test]
 fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     let setup = support::Setup::new();
@@ -6230,7 +6236,9 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // child, so each row still spins.
     run.write(b"/delegates\r");
     let grid = run.wait_screen("the running delegates", |grid| {
-        grid.contents.contains("◆ scan one") && grid.contents.contains("◆ scan three")
+        delegates_list_header(grid)
+            && grid.contents.contains("◆ scan one")
+            && grid.contents.contains("◆ scan three")
     });
     assert!(grid.contents.contains("Delegates"), "{}", grid.contents);
     assert!(
@@ -6248,18 +6256,24 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // first row out (docs/tui.md, "Swapped views").
     run.write(b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B");
     let grid = run.wait_screen("the fourth delegate scrolled in", |grid| {
-        grid.contents.contains("scan four") && !grid.contents.contains("scan one")
+        delegates_list_header(grid)
+            && grid.contents.contains("scan four")
+            && !grid.contents.contains("scan one")
     });
     assert!(grid.contents.contains("◆ scan four"), "{}", grid.contents);
     // Enter opens the fourth delegate's live view.
     run.write(b"\r");
     run.wait_screen("the fourth delegate's view", |grid| {
-        grid.contents.contains("› ◆ scan four")
+        grid.rows
+            .first()
+            .is_some_and(|row| row.contains("Delegate") && row.contains("scan four"))
     });
     // Esc returns to the conversation: the breadcrumb is gone.
     run.write(b"\x1b[27u");
     run.wait_screen("the conversation back", |grid| {
-        !grid.contents.contains("› ◆ scan four")
+        grid.rows
+            .first()
+            .is_some_and(|row| !row.contains("Delegate"))
     });
     // Release the gate: dropping the sender answers every held child
     // at once, and each finishes.
@@ -6268,7 +6282,9 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // no count.
     run.write(b"/delegates\r");
     let grid = run.wait_screen("the finished delegates", |grid| {
-        grid.contents.contains("✓ scan one") && grid.contents.contains("✓ scan two")
+        delegates_list_header(grid)
+            && grid.contents.contains("✓ scan one")
+            && grid.contents.contains("✓ scan two")
     });
     assert!(grid.contents.contains("Delegates"), "{}", grid.contents);
     assert!(
@@ -6281,19 +6297,28 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // height: grow the viewport before opening the replay, keeping the
     // small-viewport scroll proof above intact.
     run.resize(120, 32);
-    // Enter on the first finished row opens its replayed transcript.
+    run.wait_screen("the finished delegates at replay size", |grid| {
+        delegates_list_header(grid) && grid.rows.len() == 32
+    });
+    // Enter on the first finished row opens its replay.
     run.write(b"\r");
     run.wait_screen("the replayed transcript", |grid| {
-        grid.contents.contains(CHILD_TEXT)
+        grid.rows
+            .first()
+            .is_some_and(|row| row.contains("Delegate") && row.contains("scan one"))
+            && grid.contents.contains(CHILD_TEXT)
     });
     // Esc returns to the conversation; the alias opens the same view.
     run.write(b"\x1b[27u");
     run.wait_screen("the conversation back again", |grid| {
-        !grid.contents.contains(CHILD_TEXT)
+        grid.rows
+            .first()
+            .is_some_and(|row| !row.contains("Delegate"))
+            && !grid.contents.contains(CHILD_TEXT)
     });
     run.write(b"/agents\r");
     let grid = run.wait_screen("the alias view", |grid| {
-        grid.contents.contains("Delegates") && grid.contents.contains("✓ scan one")
+        delegates_list_header(grid) && grid.contents.contains("✓ scan one")
     });
     assert!(
         !grid.contents.contains("Running delegates"),
