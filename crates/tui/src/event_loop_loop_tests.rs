@@ -2176,14 +2176,25 @@ fn resume_open_replays_the_log_to_the_tail() {
                 .collect()
         })
         .unwrap_or_default();
-    assert_eq!(histories.len(), 6, "{histories:?}");
-    assert_eq!(histories[0]["args"], json!({}));
+    assert_eq!(
+        histories.len(),
+        6,
+        // docs/tui.md:2446-2448 ("History and paging"): after the frame the terminal reads older windows to the chain root for the joint total.
+        "{histories:?}"
+    );
+    assert_eq!(
+        histories[0]["args"],
+        json!({}),
+        // docs/tui.md:2438 ("History and paging"): asks `history` with no `from_seq` for the session's last lines.
+        "the newest window first"
+    );
     assert_eq!(
         histories[1..]
             .iter()
             .map(|command| command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX))
             .collect::<Vec<_>>(),
         [1091, 835, 579, 323, 67],
+        // docs/tui.md:2446-2448 ("History and paging"): after the frame the terminal reads older windows down to the session's `seq 0` for the joint total.
         "older count windows reach seq zero before full"
     );
     // Every turn start the terminal applies asks `commands` again. The

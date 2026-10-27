@@ -223,6 +223,10 @@ pub(crate) struct App {
     /// The tail read the preview left behind: older own-segment windows
     /// and ancestors the post-frame count reads before the raise.
     count: Option<overlay::Tail>,
+    /// The installed candidate's oldest folded line: the count folds
+    /// only ancestor lines strictly older than it, so already-displayed
+    /// preview lines never refold.
+    installed_floor: Option<(SessionId, Seq)>,
     /// History command ids whose late answers are discarded after reopening.
     abandoned_history: BTreeSet<String>,
     /// The launch directory `start` names: none on a remote home, which
@@ -384,6 +388,7 @@ impl App {
             overlay: overlay::Overlay::None,
             preview: None,
             count: None,
+            installed_floor: None,
             abandoned_history: BTreeSet::new(),
             workspace,
             home: None,
@@ -697,10 +702,17 @@ impl App {
             .any(|(held, pass)| held == session && matches!(pass, Pass::Until(_)))
     }
 
-    /// Folds the eligible run from fresh pages, with the last busy the
-    /// fold reported. A pre-install rebuild never starts from the prior
-    /// candidate; only the newest candidate is installed.
-    fn fold_run(&self, lines: Option<&[Envelope]>) -> overlay::Preview {
+    /// Rebuilds the pre-install candidate from fresh pages and replaces
+    /// the prior candidate. A rebuild never starts from the prior
+    /// candidate; only the newest candidate is installed. It runs only
+    /// while the tail is reading; the post-frame count phase never
+    /// rebuilds the displayed preview.
+    fn fold_preview(&mut self) {
+        let lines = if let Overlay::Reading(tail) = &self.overlay {
+            tail.turn_lines()
+        } else {
+            return;
+        };
         let mut fresh = self.attached_screen().pages().fresh();
         fresh.set_image_ids(self.images.id_allocator.clone());
         let mut busy = None;
@@ -712,20 +724,7 @@ impl App {
                 }
             }
         }
-        overlay::Preview { pages: fresh, busy }
-    }
-
-    /// Rebuilds the pre-install candidate from fresh pages and replaces
-    /// the prior candidate. It runs only while the tail is reading; the
-    /// post-frame count phase never rebuilds the displayed preview.
-    fn fold_preview(&mut self) {
-        let lines = if let Overlay::Reading(tail) = &self.overlay {
-            tail.turn_lines()
-        } else {
-            return;
-        };
-        let preview = self.fold_run(lines);
-        self.preview = Some(preview);
+        self.preview = Some(overlay::Preview { pages: fresh, busy });
     }
 
     /// The args of the open's next tail read: none when the walk
@@ -831,6 +830,14 @@ impl App {
         };
         *self.attached_screen_mut().pages_mut() = preview.pages;
         self.attached_screen_mut().follow();
+        // The candidate's oldest folded line bounds the count: lines at
+        // or after it already show, so the count folds only older ones.
+        // An empty candidate leaves no floor, so the count keeps its
+        // old behavior.
+        self.installed_floor = tail
+            .turn_lines()
+            .and_then(|lines| lines.first())
+            .and_then(|line| line.seq.map(|seq| (line.session_id.clone(), seq)));
         self.count = Some(tail);
         self.overlay = Overlay::Shown {
             session,
@@ -846,6 +853,7 @@ impl App {
     pub(crate) fn clear_tail_read(&mut self) {
         self.preview = None;
         self.count = None;
+        self.installed_floor = None;
     }
 
     /// The args of the post-frame count's next read: none once the walk
@@ -901,7 +909,7 @@ impl App {
         };
         let mut grown = self.attached_screen().pages().fresh();
         grown.set_image_ids(self.images.id_allocator.clone());
-        let (prefix, trailer) = tail.count_parts(&opening);
+        let (prefix, trailer) = tail.count_parts(&opening, self.installed_floor.as_ref());
         for line in prefix {
             grown.apply(line);
         }

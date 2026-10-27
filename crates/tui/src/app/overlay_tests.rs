@@ -1938,6 +1938,7 @@ fn an_answer_that_leaves_a_gap_is_refused() {
     duplicate[0].seq = Some(contract::Seq(u64::MAX));
     assert!(
         tail.prepend(duplicate).is_err(),
+        // docs/tui.md:2439-2440 ("History and paging"): the terminal checks each answer for ascending, contiguous sequence numbers.
         "the maximal seq has no contiguous successor"
     );
 }
@@ -1982,6 +1983,7 @@ fn an_answer_disordered_within_itself_is_refused() {
             .unwrap_or_else(|_| panic!("the first answer"));
         assert!(
             tail.prepend(older).is_err(),
+            // docs/tui.md:2439-2440 ("History and paging"): the terminal checks each answer for ascending, contiguous sequence numbers.
             "a disordered answer is refused"
         );
     }
@@ -2531,6 +2533,7 @@ fn an_older_window_replaces_the_candidate_from_fresh_pages() {
     assert_eq!(
         app.attached_screen().pages().index().total(),
         folded(&all_lines).index().total(),
+        // docs/tui.md:2440-2442 ("History and paging"): it folds each eligible whole-turn run into fresh pages, rebuilding from fresh pages when an older answer enlarges the run.
         "the installed page count matches a fresh fold"
     );
 }

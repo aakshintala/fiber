@@ -157,19 +157,45 @@ impl Tail {
     }
 
     /// The held lines the count phase folds: the leading run outside
-    /// the opening session, oldest first, with the line following it as
-    /// the fold's trailer. Older own-segment lines stay for the pass;
-    /// the trailer closes the fold below the ancestors, so the ancestor
-    /// run carries above the preview. The trailer is the prefix's
-    /// immediate successor in the held run, never a refold of the
-    /// preview above it.
-    pub(super) fn count_parts(&self, own: &SessionId) -> (&[Envelope], Option<&Envelope>) {
+    /// the opening session that stays strictly older than the installed
+    /// candidate's oldest folded line, oldest first, with the line
+    /// following it as the fold's trailer when that line is also older
+    /// than the floor. Older own-segment lines stay for the pass; the
+    /// trailer closes the fold below the ancestors, so the ancestor
+    /// run carries above the preview. Lines at or after the floor
+    /// already show, so folding them again would double-count the
+    /// preview the install moved into the screen.
+    pub(super) fn count_parts(
+        &self,
+        own: &SessionId,
+        floor: Option<&(SessionId, Seq)>,
+    ) -> (&[Envelope], Option<&Envelope>) {
         let len = self
             .lines
             .iter()
             .take_while(|line| line.session_id != *own)
             .count();
-        (self.lines.get(..len).unwrap_or(&[]), self.lines.get(len))
+        let (prefix, trailer) = (self.lines.get(..len).unwrap_or(&[]), self.lines.get(len));
+        let Some((floor_session, floor_seq)) = floor else {
+            return (prefix, trailer);
+        };
+        let Some(at) = self
+            .lines
+            .iter()
+            .position(|line| line.session_id == *floor_session && line.seq == Some(*floor_seq))
+        else {
+            return (prefix, trailer);
+        };
+        if at < len {
+            // The floor sits inside the ancestor run: only lines strictly
+            // before it still need folding, and the trailer sits at or
+            // after the floor, so it already shows.
+            return (self.lines.get(..at).unwrap_or(&[]), None);
+        }
+        // The floor sits at or after the trailer: the whole ancestor run
+        // is older than the preview, and the trailer closes the count
+        // fold even when it is the preview's oldest line.
+        (prefix, trailer)
     }
 
     /// Whether the held run reached its segment's first line with a
@@ -295,6 +321,7 @@ impl App {
         self.overlay = Overlay::None;
         self.preview = None;
         self.count = None;
+        self.installed_floor = None;
         self.attached_screen_mut().set_frozen(false);
     }
 
