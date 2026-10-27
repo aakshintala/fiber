@@ -129,7 +129,7 @@ fn rebinding_footer(command: &str, prefix: &str, row: &str, rest: &str) -> Strin
 
 #[test]
 fn keymap_opens_the_rebinding_screen_like_keys() {
-    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1964,1987`).
+    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1974,1997`).
     let keys = rebinding_footer("/keys", "/keys", "keys /keybindings /keymap", "\r");
     let keymap = rebinding_footer("/keymap", "/keymap", "keys /keybindings /keymap", "\r");
     assert_eq!(keymap, keys);
@@ -150,7 +150,7 @@ fn rules_row(command: &str, prefix: &str, row: &str, rest: &str) -> String {
 
 #[test]
 fn permissions_opens_the_standing_rules_like_rules() {
-    // The table and alias rule set this row order (`docs/tui.md:1960,1987`).
+    // The table and alias rule set this row order (`docs/tui.md:1970,1997`).
     let rules = rules_row("/rules", "/rules", "rules /permissions", "\r");
     let permissions = rules_row("/permissions", "/permissions", "rules /permissions", "\r");
     assert_eq!(permissions, rules);
@@ -173,7 +173,7 @@ fn home_notice(command: &str, prefix: &str, row: &str, rest: &str, notice: &str)
 
 #[test]
 fn compact_starts_a_handoff_like_handoff() {
-    // The table and alias rule set this row order (`docs/tui.md:1968,1983`).
+    // The table and alias rule set this row order (`docs/tui.md:1978,1993`).
     let row = "handoff /compact";
     let handoff = home_notice(
         "/handoff",
@@ -194,7 +194,7 @@ fn compact_starts_a_handoff_like_handoff() {
 
 #[test]
 fn stop_asks_to_close_all_like_close() {
-    // The table and alias rule set this row order (`docs/tui.md:1975,1983`).
+    // The table and alias rule set this row order (`docs/tui.md:1985,1993`).
     let row = "close /stop";
     let close = home_notice(
         "/close all",
@@ -346,7 +346,7 @@ fn scripted(setup: &Setup) -> Run {
 /// session and quits.
 fn running_case(command: &str) {
     // The command table and alias rule place `/jobs` after `/delegates`
-    // (`docs/tui.md:1980-1983,1987`).
+    // (`docs/tui.md:1990-1993,1997`).
     let (setup, _server, ready, release) = jobs_setup();
     let mut run = scripted(&setup);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
@@ -388,7 +388,7 @@ fn running_case(command: &str) {
     });
     run.wait_bytes(esc_input, FRAME_END, "the closed jobs list frame");
     // `/close` returns home and stops the held job: its group empties.
-    // `/close` stops the session's jobs (`docs/tui.md:2120-2121`); a command
+    // `/close` stops the session's jobs (`docs/tui.md:2130-2132`); a command
     // ends when its group empties, and stopping sends SIGTERM/SIGKILL
     // (`docs/tools.md:562-568,575-577`).
     run.write(b"/close\r");
@@ -414,7 +414,7 @@ fn running_case(command: &str) {
 /// shows and no list opens.
 fn empty_case(command: &str) {
     // The command table and alias rule place `/jobs` after `/delegates`
-    // (`docs/tui.md:1980-1983,1987`).
+    // (`docs/tui.md:1990-1993,1997`).
     let (setup, _server) = empty_setup();
     let mut run = scripted(&setup);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
@@ -473,7 +473,7 @@ fn jobs_shows_no_jobs_running_with_no_job() {
 #[test]
 fn jobs_on_home_shows_no_session_on_screen() {
     // The command table and alias rule place `/jobs` after `/delegates`
-    // (`docs/tui.md:1980-1983,1987`).
+    // (`docs/tui.md:1990-1993,1997`).
     let command = "/jobs";
     let setup = Setup::new();
     let mut run = terminal(&setup);
