@@ -8254,10 +8254,22 @@ fn assert_command_startup(lines: &[Value], lo: usize, hi: usize) {
     // process start, then extension load. "Command acknowledgements": one
     // acceptance per command, with no order against the replayed prefix.
     // docs/delegates.md, "Events": one job/delegate start per fixture run.
+    // docs/events.md, "extension_ui": ephemeral latest-state, sent to a
+    // client that attaches, so its count is open and the set check sets it
+    // aside.
+    let window = &lines[lo + 1..hi];
+    let mut settled = vec![lines[lo].clone()];
+    settled.extend(
+        window
+            .iter()
+            .filter(|line| line["kind"] != "extension_ui")
+            .cloned(),
+    );
+    settled.push(lines[hi].clone());
     support::assert_set_between(
-        lines,
-        lo,
-        hi,
+        &settled,
+        0,
+        settled.len() - 1,
         &[
             "session_started",
             "fiber_started",
@@ -8265,10 +8277,8 @@ fn assert_command_startup(lines: &[Value], lo: usize, hi: usize) {
             "command_accepted",
             "job_started",
             "delegate_started",
-            "extension_ui",
         ],
     );
-    let window = &lines[lo + 1..hi];
     assert_eq!(answered(window, "c_go")["kind"], "command_accepted");
     let kinds = support::kinds(window);
     let ordered: Vec<_> = kinds
@@ -8288,24 +8298,23 @@ fn assert_command_startup(lines: &[Value], lo: usize, hi: usize) {
         ],
         "startup order: {ordered:?}"
     );
-    // docs/events.md, "extension_ui": ephemeral, sent to a client that
-    // attaches, so it holds no position against the startup lines beyond
-    // following the session start. Exactly one follows it.
+    // docs/events.md, "fiber_started": session_started is always the
+    // log's first line, so each observed extension_ui follows it; zero or
+    // more may appear (docs/events.md, "extension_ui": ephemeral
+    // latest-state, sent to a client that attaches, with no promised
+    // count).
     let session = kinds
         .iter()
         .position(|kind| *kind == "session_started")
         .unwrap();
-    let ui: Vec<_> = kinds
-        .iter()
-        .enumerate()
-        .filter(|(_, kind)| **kind == "extension_ui")
-        .map(|(index, _)| index)
-        .collect();
-    assert_eq!(ui.len(), 1, "one extension_ui in {window:?}");
-    assert!(
-        session < ui[0],
-        "extension_ui follows session_started in {window:?}"
-    );
+    for (index, kind) in kinds.iter().enumerate() {
+        if *kind == "extension_ui" {
+            assert!(
+                session < index,
+                "extension_ui follows session_started in {window:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -8349,8 +8358,10 @@ fn startup_acknowledgement_can_join_the_replayed_prefix() {
             assert!(std::panic::catch_unwind(|| assert_command_startup(&reversed, 0, 8)).is_err());
         }
     }
-    // extension_ui floats after the session start, but it still follows
-    // that start, exactly once.
+    // extension_ui floats after the session start: zero or more may
+    // appear, and each observed one follows that start. The base order
+    // below is the sighted session_started, extension_ui, fiber_started,
+    // extensions_loaded, job_started, delegate_started.
     let mut lines = support::expected(&[
         "session_started",
         "fiber_started",
@@ -8368,6 +8379,16 @@ fn startup_acknowledgement_can_join_the_replayed_prefix() {
         json!({"kind": "command_accepted", "payload": {"command_id": "c_sub"}}),
     );
     lines.push(json!({"kind": "reloaded"}));
+    assert_command_startup(&lines, 0, 8);
+    // Zero extension_ui passes: the count is open.
+    let mut missing = lines.clone();
+    missing.remove(2);
+    assert_command_startup(&missing, 0, 7);
+    // Multiple extension_ui lines pass while each follows the session start.
+    let mut multiple = lines.clone();
+    multiple.insert(3, json!({"kind": "extension_ui"}));
+    assert_command_startup(&multiple, 0, 9);
+    // An extension_ui at or before the session start fails.
     let mut early = lines.clone();
     let ui = early
         .iter()
@@ -8379,12 +8400,18 @@ fn startup_acknowledgement_can_join_the_replayed_prefix() {
         .unwrap();
     early.swap(ui, session);
     assert!(std::panic::catch_unwind(|| assert_command_startup(&early, 0, 8)).is_err());
-    let mut duplicate = lines.clone();
-    duplicate.insert(2, lines[2].clone());
-    assert!(std::panic::catch_unwind(|| assert_command_startup(&duplicate, 0, 9)).is_err());
-    let mut missing = lines.clone();
-    missing.remove(2);
-    assert!(std::panic::catch_unwind(|| assert_command_startup(&missing, 0, 7)).is_err());
+    // A second line before the start fails even when one follows it.
+    let mut mixed = multiple.clone();
+    let ui = mixed
+        .iter()
+        .position(|line| line["kind"] == "extension_ui")
+        .unwrap();
+    let session = mixed
+        .iter()
+        .position(|line| line["kind"] == "session_started")
+        .unwrap();
+    mixed.swap(ui, session);
+    assert!(std::panic::catch_unwind(|| assert_command_startup(&mixed, 0, 9)).is_err());
 }
 
 #[test]
