@@ -239,6 +239,9 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
         reject(conn, Some(line.id), ErrorCode::DuplicateCommand, DUPLICATE);
         return;
     }
+    #[cfg(test)]
+    conn.gate
+        .note(crate::session::tests::Probe::CommandReserved);
     if !conn.subscribed() && line.command != "subscribe" {
         reject(
             conn,

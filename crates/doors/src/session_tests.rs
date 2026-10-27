@@ -163,6 +163,8 @@ pub(crate) enum Probe {
     MessageLocked,
     /// `mark_closed` holds the admission lock while closing.
     CloseLocked,
+    /// A connection reader reserved a command id before dispatch.
+    CommandReserved,
 }
 
 /// What [`Gate::probe`] calls at each [`Probe`] point.
@@ -2796,6 +2798,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
         | Probe::PrinterStopQueued
         | Probe::MessageLocked
         | Probe::CloseLocked
+        | Probe::CommandReserved
         | Probe::WriterParkedAtStop
         | Probe::WriterPastEnd => {}
     }));
@@ -4564,6 +4567,108 @@ fn close_prints_durable_lines_dropped_before_stop() {
     );
 }
 
+/// A prompt the reader takes after close is rejected before dispatch can
+/// leave it in the inbox for the close grace to cut
+/// (`docs/invocation.md`, "What the hub speaks").
+#[test]
+fn a_prompt_read_after_close_is_rejected_closing() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let clock = Arc::clone(&opened.clock);
+    let armed = Arc::new(AtomicBool::new(false));
+    let probe_armed = Arc::clone(&armed);
+    let (reserved_tx, reserved) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    let release = Mutex::new(release);
+    *super::lock(&gate.probe) = Some(Arc::new(move |point| {
+        if point == Probe::CommandReserved && probe_armed.load(Ordering::SeqCst) {
+            if let Ok(()) = reserved_tx.send(()) {}
+            let _ = lock(&release).recv();
+        }
+    }));
+    let socket = opened.socket.clone();
+    let mut prompt_answer = None;
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client.send(&subscribe_line("c_sub", "full")).unwrap();
+            assert_eq!(support::kind(&recv(&client)), "command_accepted");
+            client.send(r#"{"id":"c_close","command":"close"}"#).unwrap();
+            let Delivery::Close(ack) = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("close reaches the inbox")
+            else {
+                panic!("close is delivered as a close");
+            };
+            ack.0(Ok(None));
+            assert_eq!(
+                support::kind(&support::response(&client, "c_close")),
+                "command_accepted"
+            );
+
+            armed.store(true, Ordering::SeqCst);
+            client
+                .send(
+                    r#"{"id":"c_p","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+                )
+                .unwrap();
+            Deadline::after(DEADLINE)
+                .recv(&reserved)
+                .expect("the session reader reserved c_p after close");
+            armed.store(false, Ordering::SeqCst);
+            release_tx.send(()).unwrap();
+            client.send(r#"{"id":"c_seen","command":"tools"}"#).unwrap();
+            let lines = support::until(&client, |line| {
+                support::command_id(line) == Some("c_seen")
+            });
+            let seen = lines
+                .iter()
+                .find(|line| support::command_id(line) == Some("c_seen"))
+                .expect("the reader passed c_p and answered the marker");
+            assert_eq!(support::kind(seen), "command_accepted", "{seen}");
+            prompt_answer = lines
+                .into_iter()
+                .find(|line| support::command_id(line) == Some("c_p"));
+
+            if prompt_answer.is_none() {
+                let until = clock.now() + super::GRACE;
+                thread::scope(|scope| {
+                    let quiescing = scope.spawn(|| opened.session.quiesce());
+                    assert!(
+                        clock.await_parked(until, Deadline::after(DEADLINE)),
+                        "close waits for c_p's answer grace"
+                    );
+                    clock.advance_when_parked(
+                        Some(until),
+                        None,
+                        super::GRACE,
+                        &Deadline::after(DEADLINE),
+                    );
+                    quiescing.join().unwrap();
+                });
+                prompt_answer = Some(support::response(&client, "c_p"));
+            } else {
+                opened.session.quiesce();
+            }
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+    let prompt_answer = prompt_answer.expect("c_p has one answer");
+    assert_eq!(
+        support::kind(&prompt_answer),
+        "command_rejected",
+        "{prompt_answer}"
+    );
+    assert_eq!(
+        support::rejection(&prompt_answer).0,
+        "closing",
+        "{prompt_answer}"
+    );
+}
+
 /// A session message and a close racing for the admission lock, in both
 /// orders: the lock decides which the inbox yields first, and a `Close`
 /// queued before any client admits refuses a message.
@@ -4584,6 +4689,7 @@ fn message_and_close_race_in_both_lock_orders() {
                 released(&release, "the message");
             }
             Probe::CloseLocked => if let Ok(()) = closed_tx.send(()) {},
+            Probe::CommandReserved => {}
             Probe::FirstShellWaitDone
             | Probe::PrinterStopQueued
             | Probe::ShellsWaiting
@@ -4671,6 +4777,7 @@ fn message_and_close_race_in_both_lock_orders() {
                 if let Ok(()) = entered_tx.send(()) {}
                 released(&release, "the close");
             }
+            Probe::CommandReserved => {}
             Probe::MessageLocked
             | Probe::FirstShellWaitDone
             | Probe::PrinterStopQueued
