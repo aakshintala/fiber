@@ -157,7 +157,9 @@ only that crate, in KiB; the empty program is 323 KiB.
 | flate2 | decompressing the release's docs and extensions archives (`docs/releasing.md`, "Installing"), and the test fakes' release archives | 560 | 640 | 592 | 6 | 403 |
 | jiff | the terminal's local time of day under a prompt bubble and on steering (`docs/tui.md`, "Turns"), and a standing rule's `added` time in `/rules`, with daylight saving and `TZ`, which `std` lacks | 536 | 640 | 384 | 2 | 692 |
 | qrcode | the terminal QR code for `hub pair`; default features off | 160 | 256 | 336 | 1 | 360 |
-| all of the above together | | 8,760 | 8,076 | 5,249 | 155 | 8,217 |
+| landlock | the shell tool's Linux Landlock policy: read/write grants at spawn, ABI floor 2 | 152 | 128 | n/a | 10 | 391 |
+| seccompiler | the shell tool's Linux seccomp filter denying sockets and `io_uring_setup` | 160 | 116 | n/a | 2 | 399 |
+| all of the above together | | 9,048 | 7,892 | 5,297 | 155 | 8,290 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
 | lopdf | the image child: counting a PDF's pages and cutting a page range (`docs/tools.md`, "read") | 908 | 704 | 336 | 66 | 1,320 |
 
@@ -221,6 +223,7 @@ Notes:
   of 6,048 and 6,064 KiB against 5,760 and 6,128 KiB in two rounds),
   because its peak is the busiest other workload.
 - jiff is built with default features off and only `std`, `tz-system` and `tzdb-zoneinfo`: it reads `/etc/localtime`, `TZ` and the system's zoneinfo database, and bundles no database. `time`, already in the tree through ratatui-widgets, is not used: its local-offset lookup does not work in a multithreaded process. jiff's figure is reading the system zone and formatting 1,000 times of day. The jiff and together rows were measured on October 8, 2026, on the runners above (run 37809842530); the together row was measured again with jiff linked, so its other crates' figures moved with the run.
+- landlock's figure is building the ABI-2 ruleset shaped like the shell tool's prepare() and applying it in a re-executed child; seccompiler's is compiling the socket-denying filter shaped like the shell tool's compile step and applying it in a re-executed child. The landlock, seccompiler and together rows were measured in [probe run 40499728352](https://github.com/aakshintala/fiber/actions/runs/40499728352) ([Linux x86_64](https://github.com/aakshintala/fiber/actions/runs/40499728352/artifacts/12732239406), [Linux arm64](https://github.com/aakshintala/fiber/actions/runs/40499728352/artifacts/12733290160), [macOS arm64](https://github.com/aakshintala/fiber/actions/runs/40499728352/artifacts/12732254451)), rustc 1.99.1. On macOS arm64 both rows report they do not build on Darwin arm64, recorded as n/a. The together row was re-measured in the same run with both crates linked on Linux, so its other crates' figures moved with the run.
 - `web_fetch` converts a page with html5ever's tokenizer feeding Fiber's own
   single-pass writer (`crates/tools/src/web_fetch/markdown.rs`), not with a
   parser that builds the page's document tree. The smallest maintained crate
@@ -337,19 +340,14 @@ already.
 
 rusqlite carries SQLite's C source.
 
-When #3027's Linux sandbox policy lands, the crates are `landlock` and
+When #3027's Linux sandbox policy landed, the crates are `landlock` and
 `seccompiler`, Linux only; no srt, no bubblewrap. The floor is Landlock ABI
 2 (Linux 5.19); below it the sandbox reports unavailable and calls are
-reviewed. Their memory cost and the crates they add are measured and recorded
-here in the same pull request that adds the dependencies ("Admitting a
-crate", "Measuring memory"), not in the docs commit: the implementation
-commits add workloads shaped like Linux policy construction and application
-in a child and seccomp compilation and application, plus the
-runtime-together workload. They record the median-of-5 runs on Linux x86_64
-and arm64 and the macOS arm64 measurement outcome. Do not pre-label a macOS
-result as not applicable; report what the measurement establishes if a
-Linux-only workload cannot run there. Until those rows land, no row above
-admits these crates.
+reviewed. Their rows above, and the re-measured together row, record
+[probe run 40499728352](https://github.com/aakshintala/fiber/actions/runs/40499728352)
+(October 27, 2026, rustc 1.99.1) on `ubuntu-24.04`, `ubuntu-24.04-arm` and
+`macos-26`. On macOS arm64 both crates report they do not build on Darwin
+arm64, recorded as n/a.
 
 ## Written ourselves
 
