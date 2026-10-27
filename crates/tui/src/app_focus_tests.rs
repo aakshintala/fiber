@@ -3,21 +3,14 @@
 
 use super::super::{App, Effect, Target};
 use crate::app::rail::Spot as RailSpot;
+use crate::app::testkit::{SESSION, attached, now};
 use crate::focus::Regions;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::mouse::{Target as Hit, TargetId};
-use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
-use std::time::Instant;
-
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
-
-fn now() -> Instant {
-    fakes::clock::FakeClock::new().now()
-}
 
 fn envelope(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
@@ -30,13 +23,6 @@ fn envelope(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Lin
         seq: None,
         payload: payload.as_object().cloned().unwrap_or_default(),
     })
-}
-
-fn attached(width: u16, height: u16) -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_size(width, height);
-    app.attach(contract::SessionId(SESSION.to_owned()));
-    app
 }
 
 /// An app with one turn of `count` read groups and their replies, closed:
