@@ -842,6 +842,8 @@ fn delete_accepted_goes_home_with_a_fresh_page() {
         .collect();
     assert!(app.on_home());
     assert!(lines.iter().any(|line| line["command"] == "recent"));
+    // The connection is neither released nor replaced.
+    assert!(app.outbox.is_up());
 }
 
 #[test]
