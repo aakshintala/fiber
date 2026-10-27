@@ -127,6 +127,8 @@ pub(crate) fn launch(
         fiber: None,
         // `terminal` supplies the report writer once it holds Fiber home.
         feedback: None,
+        // `main` gives the report reader once it holds Fiber home.
+        doctor: None,
         // `main` gives the seam once it holds Fiber home.
         configure: None,
         extensions: None,

@@ -760,6 +760,15 @@ a click on it returns too. The views are:
   from its latest `preamble_built` or `model_changed` (`docs/events.md`); a
   value not received yet reads "not known yet", dim. The view redraws as
   they change.
+- **The doctor view,** `/doctor`: the report `fiber doctor` prints
+  (`docs/invocation.md`, "Commands and flags"), captured when the view
+  opens and shown one plain row per line, from the same code that prints
+  it, so the two never differ. The top row reads "Doctor" bold,
+  "  /doctor" dim and "Esc returns" dim, right-aligned. ↑ ↓ and
+  PageUp/PageDown scroll; Esc or a click on the top row returns to the
+  conversation. The report is captured in the terminal's own process, so
+  on a remote terminal it describes the client machine, not the hub.
+  When the capture fails, a notice says so and no view opens.
 - **The context breakdown:** one bar of context by category against the
   handoff point, with the largest tool results. The categories are the
   system prompt, tool definitions, tool results since the handoff in force,
@@ -1952,6 +1961,7 @@ later release still applies.
 | `/usage`, `/cost` | Opens the usage view. |
 | `/quota` | Opens the quota view and fetches every label's quota. |
 | `/status` | Opens the status view ("Swapped views"). |
+| `/doctor` | Opens the doctor report. |
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
 | `/release-notes` | Opens the running version's release notes, or says none are available. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
