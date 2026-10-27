@@ -1113,6 +1113,14 @@ fn rewound(next: &str) -> Event {
     })
 }
 
+fn moved(next: &str) -> Event {
+    Event::Moved(contract::events::Moved {
+        new_session_id: SessionId(next.into()),
+        seq: contract::Seq(1),
+        workspace: "/target".into(),
+    })
+}
+
 fn exited() -> Event {
     Event::FiberExited(contract::events::FiberExited {
         exit_code: 0,
@@ -1157,6 +1165,107 @@ fn a_rewound_creator_keeps_a_clean_worktree() {
             assert!(exists(&path));
             assert!(branch_exists(repo.path(), &format!("fiber/{id}")));
             assert!(!home.path().join("logs").exists(), "no diagnostic line");
+        },
+    );
+}
+
+#[test]
+fn a_moved_creator_keeps_a_clean_worktree() {
+    fakes::within(
+        "a_moved_creator_keeps_a_clean_worktree",
+        Deadline::after(BUDGET),
+        || {
+            let home = fakes::TempDir::new("doors-end-moved-home");
+            let repo = repo("doors-end-moved");
+            let key = key_of(repo.path());
+            let id = "s_0123456789abcdef";
+            let isolation = isolate_now(repo.path(), home.path(), id);
+            let path = isolation.path().to_path_buf();
+            // The creator's log ends `moved`, and its lock is free: `end`
+            // takes it and reads the last line under it.
+            let sessions = home.path().join("projects").join(&key).join("sessions");
+            let holder = held(&sessions, id, path.to_str().unwrap());
+            holder
+                .append(&moved("s_ffffffffffffffff"), None, None)
+                .unwrap();
+            drop(holder);
+            isolation.end();
+            assert!(exists(&path));
+            assert!(branch_exists(repo.path(), &format!("fiber/{id}")));
+            assert!(!home.path().join("logs").exists(), "no diagnostic line");
+        },
+    );
+}
+
+#[test]
+fn a_moved_creator_keeps_the_worktree_in_every_state() {
+    fakes::within(
+        "a moved creator keeps its worktree",
+        Deadline::after(BUDGET),
+        || {
+            for mode in ["clean", "dirty", "advanced", "broken"] {
+                let home = fakes::TempDir::new("doors-end-moved-state-home");
+                let repo = repo("doors-end-moved-state");
+                let key = key_of(repo.path());
+                let id = "s_0123456789abcdef";
+                let isolation = isolate_now(repo.path(), home.path(), id);
+                let path = isolation.path().to_path_buf();
+                let sessions = home.path().join("projects").join(&key).join("sessions");
+                let holder = held(&sessions, id, path.to_str().unwrap());
+                holder
+                    .append(&moved("s_ffffffffffffffff"), None, None)
+                    .unwrap();
+                drop(holder);
+                match mode {
+                    "dirty" => fs::write(path.join("new.txt"), "keep").unwrap(),
+                    "advanced" => {
+                        git(&path, &["commit", "--allow-empty", "-m", "child"]);
+                    }
+                    "broken" => fs::remove_file(path.join(".git")).unwrap(),
+                    _ => {}
+                }
+                isolation.end();
+                assert!(exists(&path), "the {mode} worktree stays");
+                assert!(
+                    branch_exists(repo.path(), &format!("fiber/{id}")),
+                    "the {mode} branch stays"
+                );
+                assert!(
+                    !home.path().join("logs").exists(),
+                    "no diagnostic line in {mode}"
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn another_session_ending_moved_does_not_keep_it() {
+    fakes::within(
+        "another_session_ending_moved_does_not_keep_it",
+        Deadline::after(BUDGET),
+        || {
+            let home = fakes::TempDir::new("doors-end-other-mv-home");
+            let repo = repo("doors-end-other-mv");
+            let key = key_of(repo.path());
+            let id = "s_0123456789abcdef";
+            let isolation = isolate_now(repo.path(), home.path(), id);
+            let path = isolation.path().to_path_buf();
+            let sessions = home.path().join("projects").join(&key).join("sessions");
+            let holder = held(&sessions, id, path.to_str().unwrap());
+            holder.append(&exited(), None, None).unwrap();
+            drop(holder);
+            // Another session in the same worktree ends `moved`: only
+            // the creator's last line keeps it, and the moved child runs
+            // in its target, not as an inherited user of this worktree.
+            let other = held(&sessions, "s_0123456789abcde0", path.to_str().unwrap());
+            other
+                .append(&moved("s_ffffffffffffffff"), None, None)
+                .unwrap();
+            drop(other);
+            isolation.end();
+            assert!(!exists(&path), "the path is gone");
+            assert!(!branch_exists(repo.path(), &format!("fiber/{id}")));
         },
     );
 }

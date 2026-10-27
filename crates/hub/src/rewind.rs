@@ -1,13 +1,14 @@
-//! Starting the session a `rewound` line names (`docs/invocation.md`,
-//! "`rewind` starts a new session process"): the relay starts it when it
-//! carries an accepted `rewind`, and the feed starts it when a followed
-//! session's socket closes on a log ending `rewound`, so a rewind no hub
-//! client relays still starts the new session. Every start goes through
-//! one function and a per-session start lock, never the shared resume
-//! gate: a slow start blocks only the threads starting that same session.
-//! A start that fails writes one diagnostic line with a fixed sentence and
-//! no detail, and the relay answers the rewind with the start's code
-//! instead of the acknowledgement.
+//! Starting the session a `rewound` or `moved` line names
+//! (`docs/invocation.md`, "`rewind` starts a new session process"): the
+//! relay starts it when it carries an accepted `rewind` or
+//! `change_workspace`, and the feed starts it when a followed session's
+//! socket closes on a log ending `rewound` or `moved`, so a transition no
+//! hub client relays still starts the new session. Every start goes
+//! through one function and a per-session start lock, never the shared
+//! resume gate: a slow start blocks only the threads starting that same
+//! session. A start that fails writes one diagnostic line with a fixed
+//! sentence and no detail, and the relay answers the command with the
+//! start's code instead of the acknowledgement.
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -22,16 +23,27 @@ use crate::relay::{attach, valid_session_id};
 use crate::start::{self, Bind};
 
 /// The session `session`'s log continues in: `Some` when its log's last
-/// line is `rewound` naming a minted-shape new session, `None` otherwise,
-/// so a crash or an exit starts nothing.
+/// line is `rewound` or `moved` naming a minted-shape new session, `None`
+/// otherwise, so a crash or an exit starts nothing.
 pub(crate) fn continued(home: &Path, session: &SessionId) -> Option<SessionId> {
     let (_, dir) = crate::recent::lookup_logged(home, session)?;
     continued_in(&dir)
 }
 
-/// The session the log in `dir` continues in, from its last line alone.
+/// The session the log in `dir` continues in, from its last line alone:
+/// the child a `rewound` or `moved` line names. The child starts in the
+/// old session's workspace either way; a moved child moves to its target
+/// itself, so the hub never reads the target workspace here.
 pub(crate) fn continued_in(dir: &Path) -> Option<SessionId> {
     let line = log::last_line(dir)?;
+    if line.kind == "moved" {
+        let moved: contract::events::Moved =
+            serde_json::from_value(Value::Object(line.payload)).ok()?;
+        if !valid_session_id(&moved.new_session_id.0) {
+            return None;
+        }
+        return Some(moved.new_session_id);
+    }
     if line.kind != "rewound" {
         return None;
     }
@@ -44,8 +56,8 @@ pub(crate) fn continued_in(dir: &Path) -> Option<SessionId> {
 }
 
 /// Calls the feed's `on_rewound` with `(from, next)` when the log in
-/// `found`'s directory ends `rewound`: the callback's body, so `feed.rs`
-/// holds only the field and this call.
+/// `found`'s directory ends `rewound` or `moved`: the callback's body, so
+/// `feed.rs` holds only the field and this call.
 pub(crate) fn notify_left(
     callback: &OnceLock<Box<dyn Fn(SessionId, SessionId) + Send + Sync>>,
     from: &str,
@@ -62,9 +74,9 @@ pub(crate) fn notify_left(
     }
 }
 
-/// Connects to `next`'s socket, the session `from`'s `rewound` names:
-/// the running session's, a resumed one's when it has a log, or one
-/// [`crate::Starter::rewind`] starts in the workspace `from`'s log
+/// Connects to `next`'s socket, the session `from`'s `rewound` or `moved`
+/// names: the running session's, a resumed one's when it has a log, or
+/// one [`crate::Starter::rewind`] starts in the workspace `from`'s log
 /// recorded, waiting for its socket. Under `next`'s own lock in
 /// [`Hub::starting`], released before [`crate::resume::resume`], which
 /// waits out an exiting process under the resume gate: no start ever
@@ -248,6 +260,11 @@ pub(crate) fn follow(
     if let Some(at_gate) = at_gate {
         at_gate();
     }
+    #[cfg(test)]
+    let blocked_gate = lock(relays).blocked_gate.take();
+    #[cfg(test)]
+    let _held_gate = crate::connection::lock_gate(&gate, blocked_gate);
+    #[cfg(not(test))]
     let _held_gate = lock(&gate);
     let _opening = {
         let mut held = lock(relays);

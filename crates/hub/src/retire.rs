@@ -354,7 +354,8 @@ type Sent = Vec<(String, Map<String, Value>)>;
 enum End {
     /// The log ends in `fiber_exited`: the session never read them.
     Clean,
-    /// The log ends in `rewound`.
+    /// The log ends in `rewound` or `moved`: the session answered the
+    /// transition already, and nothing it left behind may have run.
     Rewound,
     /// The log ends in neither: a command may have run.
     Crash,
@@ -375,7 +376,7 @@ enum End {
 /// goes through the plain opener instead of the exiting wait: the relay
 /// leaves at once without waiting the shutdown out, and the closing
 /// connection's end hands the command to the resumed session, which
-/// spends its one re-route there. After a `rewound` they are
+/// spends its one re-route there. After a `rewound` or `moved` they are
 /// dropped. After anything else the session may have run them: each is
 /// rejected `indeterminate` and never re-routed. Then everything queued
 /// unsent is passed on. Drops the entry only in the hold that saw the
@@ -462,7 +463,7 @@ fn end(hub: &Hub, session: &str, exiting: bool) -> End {
     }
     match crate::resume::last_kind(&hub.home, &SessionId(session.to_owned())).as_deref() {
         Some("fiber_exited") => End::Clean,
-        Some("rewound") => End::Rewound,
+        Some("rewound" | "moved") => End::Rewound,
         _ => End::Crash,
     }
 }

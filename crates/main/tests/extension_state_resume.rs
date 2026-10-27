@@ -145,6 +145,7 @@ fn resumed_fork_uses_the_parent_value_at_its_point() {
         Some(Point {
             session_id: SessionId(PARENT.into()),
             seq: point,
+            project: None,
         }),
         None,
     ));
@@ -384,6 +385,7 @@ fn fork_latest_reads_the_parent_value_at_its_point() {
         Some(Point {
             session_id: SessionId(PARENT.into()),
             seq: point,
+            project: None,
         }),
         Some(Parent {
             session_id: SessionId(PARENT.into()),

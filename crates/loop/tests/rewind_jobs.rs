@@ -839,6 +839,7 @@ fn a_rewind_to_an_ancestor_point_stops_the_jobs_in_the_old_log() {
         Some(Point {
             session_id: SessionId(A_ID.into()),
             seq: Seq(at),
+            project: None,
         }),
         None,
     );

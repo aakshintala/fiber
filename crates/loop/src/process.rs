@@ -112,8 +112,9 @@ pub struct Summary {
     open_extension: Vec<RequestId>,
     /// Repository offers raised: `preamble_built` ends the wait on each.
     offers: Vec<RequestId>,
-    /// Whether `rewound` was written: it closes the process boundary as
-    /// `fiber_exited` does (`docs/events.md`, "Rewind").
+    /// Whether `rewound` or `moved` was written: either closes the process
+    /// boundary as `fiber_exited` does (`docs/events.md`, "Rewind",
+    /// "Change workspace").
     rewound: bool,
 }
 
@@ -144,7 +145,7 @@ impl Summary {
             // A process that built its preamble no longer waits on an offer.
             self.open
                 .retain(|pending| !self.offers.contains(&pending.0));
-        } else if let Event::Rewound(_) = event {
+        } else if let Event::Rewound(_) | Event::Moved(_) = event {
             self.rewound = true;
         }
         if let Event::TurnStarted(_) = event {
@@ -275,9 +276,10 @@ fn write_exit(
     one_turn: bool,
     signal: Option<i32>,
 ) -> Result<Exited, Error> {
-    // A rewound session's last line is `rewound`, which closes the process
-    // boundary as `fiber_exited` does: nothing more is written, and open
-    // extension asks are left as they are (`docs/events.md`, "Rewind").
+    // A rewound or moved session's last line is `rewound` or `moved`,
+    // which closes the process boundary as `fiber_exited` does: nothing
+    // more is written, and open extension asks are left as they are
+    // (`docs/events.md`, "Rewind", "Change workspace").
     if summary.rewound {
         let error = ran.err();
         return Ok(Exited {

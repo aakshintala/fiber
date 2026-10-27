@@ -385,6 +385,18 @@ One JSON object per line. Its keys follow the rules of `docs/events.md`,
 {"id":"c_7f3a","command":"steer","args":{"content":[{"type":"text","text":"use the other test file"}]}}
 ```
 
+A driver requests a workspace move with `change_workspace`. On a connection to
+one session, the command is:
+
+```json
+{"id":"c_cd","command":"change_workspace","args":{"path":"../other"}}
+```
+
+On a hub connection, the client also sets the top-level `session_id` to the
+session it wants to move. If the resolved path names the current workspace,
+the session answers `command_rejected` without changing state
+(`docs/events.md`, `command_rejected`).
+
 A line that is not a JSON object, has no string `id` or `command`, has
 `args` of the wrong type, or has a key not in this table, is rejected
 `malformed`. A client line longer than the framing cap (64 MiB) closes the
@@ -440,6 +452,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `name` | `text` (string); empty clears the name |
 | `handoff` | `instructions` (string, optional) |
 | `rewind` | `from_session_id` (string, optional), `seq` (integer, optional), `summarise` (boolean, default false), `at_end` (boolean, default false) |
+| `change_workspace` | `path` (string) |
 | `shell` | `command` (string); `send` (boolean, default false) |
 | `propose_notes` | `topic` (string: `source_control`, `internal_hosts`, `internal_tools`, `routine_actions` or `never`), `answer` (string, optional), `earlier` (array of strings, optional) |
 | `command` | `name` (string); `text` (string, optional), what the person typed after the name |
@@ -463,7 +476,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `job_input` | Writes `text` to a running job started with `tty`, as the `jobs` action `write` does for the model (`docs/tools.md`, "Background jobs"), and is accepted once written. The job's output reaches the client on its stream as usual. Rejected `stale_request` if the job is not running, and `invalid_arguments` if it was not started with `tty`. |
 | `background` | Moves every shell call running in the current turn to the background (`docs/tools.md`, "Shell"). Rejected `stale_request` if none is running. |
 | `reload` | Re-reads configuration, restarts changed MCP servers and extensions, and declares the tool set again (`docs/mcp.md`, "Reload"). Rejected `busy` if a turn is running; rejected with the start's code when the reload fails as a start would, changing nothing (`docs/configuration.md`, "When Fiber reads configuration"). |
-| `history` | Answers, in its `command_accepted`, with the session's durable lines from `from_seq` to `to_seq` inclusive, or to the latest when `to_seq` is absent, at most 256 lines. With no `from_seq`, it answers with the last lines up to `to_seq`, or up to the latest, at most 256; on an empty log, with none. With `session_id` naming a session this session's `forked_from` chain passes through, the set `rewind`'s `from_session_id` accepts, `from_seq` and `to_seq` count in that session's log, and the answer stops at the point the chain continues from: its lines up to the `seq` the next session on the chain names in `forked_from`, the lines the model receives (`docs/events.md`, "Rewind"). The session answers from its own read of the chain; the hub resumes no ancestor. A client pages back past this session's first line by reading `forked_from` from its `session_started`, asking `history` with that `session_id` and `to_seq` set to that `seq`, and doing the same for each further ancestor. A client pages for more. This is how every client pages history, the local terminal included: no client reads a session's log from disk (`docs/tui.md`, "History and paging"). Rejected `invalid_arguments` when `from_seq` is past the latest line, or past the point for an ancestor, and when `session_id` names any other session. |
+| `history` | Answers, in its `command_accepted`, with the session's durable lines from `from_seq` to `to_seq` inclusive, or to the latest when `to_seq` is absent, at most 256 lines. With no `from_seq`, it answers with the last lines up to `to_seq`, or up to the latest, at most 256; on an empty log, with none. With `session_id` naming a session this session's `forked_from` chain passes through, the set `rewind`'s `from_session_id` accepts, `from_seq` and `to_seq` count in that session's log, and the answer stops at the point the chain continues from: its lines up to the `seq` the next session on the chain names in `forked_from`, the lines the model receives (`docs/events.md`, "Rewind"). When `forked_from.project` is present, the reader opens that project's session directory directly; when absent, it uses this session's project. A missing parent fails closed. The session answers from its own read of the chain; the hub resumes no ancestor. A client pages back past this session's first line by reading `forked_from` from its `session_started`, asking `history` with that `session_id` and `to_seq` set to that `seq`, and doing the same for each further ancestor. A client pages for more. This is how every client pages history, the local terminal included: no client reads a session's log from disk (`docs/tui.md`, "History and paging"). Rejected `invalid_arguments` when `from_seq` is past the latest line, or past the point for an ancestor, and when `session_id` names any other session. |
 | `artifact_page` | Answers with one page of a file under the session's `artifacts/`, starting at `offset`: at most 64 lines, the page size of history paging (`docs/tui.md`, "History and paging"), and at most 64 KiB, a longer line cut at a character boundary and continued on the next page. A client pages with `next`, so a file is never loaded whole; the terminal's call view reads a cut call's full output this way (`docs/tui.md`, "Swapped views"). The path is resolved as `read_file` resolves it ("A session's files"): outside `artifacts/` it is rejected `invalid_arguments`, and a missing file is `not_found`. An `offset` past the end of the file is rejected `invalid_arguments`. `size` is the file's size when the page is read: a file that grows is paged to that size, and one that shrinks during the read is rejected `io_failed`. `offset` and `next` count bytes; `lines` gives each line's starting byte, so a client maps a byte range to lines without counting `text`; bytes that are not valid UTF-8 become `�` in `text`, and an `offset` inside a character is rejected `invalid_arguments`. |
 | `offered_file` | Reads one file listed by the pending repository offer and answers with its full UTF-8 `text`, with no size cap. The connection's reader answers it at once, even while a turn streams. Rejected `stale_request` when the offer is no longer pending or the session has no repository code; `closing` when its log is gone; `invalid_arguments` when the path is not exactly listed, resolves outside the workspace, is not a regular file, or is not UTF-8 text; and `io_failed` when it cannot be opened or read. A filesystem refusal names the path. |
 | `tools` | Answers with every declared tool: its source, whether it is full, deferred or loaded, and its approximate size (`docs/tools.md`, "Seeing the tools"). |
@@ -480,6 +493,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `name` | Sets the session's name, which pins it against the model's `name_session`. Takes the text; empty text clears the person's name and unpins it. Written as `session_named`. |
 | `handoff` | Starts a handoff: the model's context restarts from a note the model, or an extension's `before_handoff` hook, writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
 | `rewind` | Starts a new session process that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id, or the code the new session's start failed with, when its process could not start. Takes an optional `from_session_id`, default this session: this session or one its `forked_from` chain passes through, the session whose log `seq` counts in, and any other is rejected `invalid_arguments`, since it is rewound through the hub; an optional `seq`, default the start of the latest turn that is not a summary's (`docs/events.md`, `turn_started`, `rewind`); and whether to summarise, which first runs the old session's model in a turn of its own (`docs/events.md`, "Rewind"). With `at_end`, the point is the log's last line, resolved at admission; `at_end` with `seq`, `from_session_id` or `summarise` is refused `invalid_arguments`, and a log with a tool call with no recorded result is refused `not_step_boundary`. Every job still running stops (`docs/events.md`, "Rewind"). Rejected `busy` if a turn is running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, `delegate_session` if it is a delegate, and `summary_failed` if it asked for a summary that could not be made. |
+| `change_workspace` | Starts a new session process as a rewind from this session's tip into another workspace (`docs/events.md`, "Change workspace"). Takes `path`: a relative path resolves at admission against the admitting session's workspace; a bare `~` or leading `~/` resolves against the hub's home. An empty path, an unusable home, or a missing or non-directory path is rejected `invalid_arguments` before anything starts, naming the path as typed. Compare resolved paths: the current workspace is rejected `invalid_arguments`, exactly `already in that folder`, without a log event, session start or prompt-cache miss. Every running job stops before the final `moved` event. The event names the new session, the last durable line before `moved`, and the resolved target workspace. The child continues from that point without a summary; its `session_started.forked_from` names this session and point, with `project` when the parent is in another project. Answers with the child id or its start failure code. A concurrent `change_workspace` or `rewind` is rejected `busy` until `moved` is durable, then `closing`; also rejected `session_held` when another process holds the session, and `delegate_session` for a delegate. |
 | `shell` | Runs a shell command the person typed, as `!` does in the terminal. Takes the command and `send`, default false. Answered when the command ends. Accepted during a turn. |
 | `propose_notes` | Proposes reviewer-note lines for one topic on the session's model, in a request of its own with no conversation, from the evidence `docs/permissions.md` "Setting up the notes" lists, with user names and passwords removed from every URL; answers `evidence`, `proposed` and `error`; when it sends the request, writes one `usage_recorded` with no turn and no action, and no configuration; rejected `busy` while a turn runs or an approval waits, and `closing` after `close`. |
 | `command` | Runs an extension's command by name, with the text after it as arguments, as a person typing `/name args` does (`docs/extensions.md`, "Commands and screens"). Rejected `unknown_command` for a name no extension registers or declares. A first-run start that fails rejects the command `extension_failed` (`docs/extensions.md`, "Commands and screens"). |
@@ -555,6 +569,31 @@ whose `session_started` names, in `forked_from`, the old session or the ancestor
 connected to the old session is sent the new session's id and subscribes to
 it. When the new session's start is refused, the rewind is rejected with the start's code, and no client is moved to the new id. The hub starts it again when the old session's process exits, as it does for a rewind no client relays. Until a start succeeds, a command for that id is rejected `session_not_found` while the new session has no log; once it has one, the command resumes it as for any session ("Lifecycle"). For a session no process holds, the hub starts a session process for it, and
 that process rewinds it.
+
+**`change_workspace` moves the session as a rewind from its tip.** It is a
+separate command, not an option on `rewind`. The path resolves against the
+workspace of the session that admits it. The first admitted `change_workspace`
+or `rewind` wins; while it is in progress, another of either command is
+rejected `busy` until `moved` is durable, then `closing`. A command that reaches the old id after the move resumes that
+session in its recorded workspace, as a session ending `rewound` does; it is
+not forwarded to the child. Clients connected at the move switch to the child.
+
+The old session stops its jobs, writes `moved` with the child id, the last
+durable line before `moved`, and the resolved target workspace, then the hub
+starts the child. When the inbox disconnects with jobs still unfinished, the
+move fails without writing `moved`: buffered ends are still written, no end
+is fabricated, and the acknowledgement is never answered. Its
+`session_started.forked_from` names the old session and
+that point. When the projects differ, `forked_from.project` names the old
+project key; otherwise it is absent. The child starts with no summary and no
+prompt. Each session keeps the workspace recorded in its own
+`session_started`. If child startup fails, the old log stays ended and the hub
+retries the same child id when the old process exits, as for rewind. The
+command answers with the child id or the start failure code. No rollback or
+new child id is made. The new folder's configuration layers, instruction
+files, MCP servers, extensions and repository approval load as they do for any
+new session, and the switch costs one prompt-cache miss. Session grants and
+repository-code answers do not carry over; known hosts and the conversation do.
 
 **The set is a floor, not a proof.** It is what Fiber's settled semantics
 require today. A later ticket may add one. Adding a command is additive and not
@@ -686,7 +725,7 @@ answered by the hub, by how the session ended:
 - A command is delivered once. When the resumed session also ends without
   answering it, or answers it `closing`, the hub rejects it `closing`.
 - A client that disconnected has its commands dropped, never delivered.
-- After a crash (the log ends in neither `fiber_exited` nor `rewound`) the
+- After a crash (the log ends in neither `fiber_exited`, `rewound` nor `moved`) the
   session may have run the command. The hub never delivers it again: it
   rejects it `indeterminate`, and the client decides whether to send it again.
 
@@ -705,7 +744,8 @@ is attached as before, without the check.
 exits with no `turn_started` and no `repository_code_offered` in its log
 deletes its own directory, unless its `session_started` has `forked_from`
 and its process started: a rewind's new session is kept, because the old
-session's `rewound` points at it.
+session's `rewound` points at it, and so is a new session a
+`change_workspace` started, because the old session's `moved` points at it.
 
 **`close` ends the session whoever else is attached.** It accepts no more
 prompts, finishes the turn in flight, then any running jobs (`docs/tools.md`,
@@ -996,7 +1036,7 @@ Every client reaches sessions through the hub, the local terminal included.
   running session and serves each client the latest `session_status` of every
   running or waiting top-level session, across all projects. When a session's
   socket closes, the hub sends `session_left` with `how`: `exited` when the
-  log ends in `fiber_exited` or `rewound`, otherwise `crashed`. A process
+  log ends in `fiber_exited`, `rewound` or `moved`, otherwise `crashed`. A process
   that died cannot add itself to `recent.jsonl`, so the hub appends the
   crashed session's row (`docs/state.md`). A crashed session stays in the
   feed, with its last `session_status`, until it is resumed or a client sends
@@ -1087,7 +1127,7 @@ websocket for everything it does.
   The connection's other sessions are untouched. The hub reads end of file on
   a relayed connection as the session closing it while running only when the
   relay never saw the session exiting, the session's log ends in neither
-  `fiber_exited` nor `rewound`, and `run/<session_id>` still accepts a
+  `fiber_exited`, `rewound` nor `moved`, and `run/<session_id>` still accepts a
   connection. A clean exit removes the socket before it shuts its
   connections, and a crash leaves a socket that refuses, so either one is an
   exit and sends no `stream_closed`. A session that crashes and is resumed by
@@ -1371,13 +1411,16 @@ bare one, and a hub a terminal started inherits that terminal's.
 ## Isolation
 
 Fiber accepts a workspace path, runs in it, and records it on
-`session_started`. Fiber creates a worktree when one is asked for: by a
+`session_started`. A session keeps that workspace for its whole life: moving
+to another folder starts a new session that continues this one
+(`change_workspace` above), and no command changes a running session's
+workspace. Fiber creates a worktree when one is asked for: by a
 delegate's `isolation: worktree` (`docs/delegates.md`), by the terminal's
 "new worktree" switch (`docs/tui.md`, "Home"), or by `fiber ask --worktree`.
 All three use the same rules (`docs/delegates.md`, "Worktrees"): a new branch
 from the workspace's HEAD in a worktree under
 `~/.fiber/projects/<key>/worktrees/<id>`, removed at the end when it holds
-nothing uncommitted and no commits beyond its base, kept otherwise. A session that ends `rewound` keeps its worktree whatever it holds: the session that continues it runs there, records the same `worktree`, and never removes it either; `fiber sessions prune` removes it later. The session a `start` `continues` names keeps its worktree the same way: the new session runs in that worktree, records the same `worktree`, and never removes it either. A resume whose worktree was removed makes it again at the same path and branch from the repository's current HEAD, before `fiber_started`, and ends it by the same rules. When the repository is gone, the resume is rejected the same way. A worktree's lock file, `~/.fiber/projects/<key>/worktrees/<id>.lock`, is held shared by every process that runs in a worktree it did not just create and by a delegate's parent from before it makes the worktree until the child's `session_started` proves it holds its own share. If startup fails before that event, the parent keeps its share through child exit. The file is held exclusively while a resume checks for the worktree and makes it again, and taken exclusively without waiting by an end-of-run removal, which keeps the worktree when another process holds it; the file stays whenever its worktree stays, and goes only when a whole removal succeeds, so a dirty, never-shared worktree keeps one too, and `fiber sessions prune` leaves lock files alone. Prune takes the same exclusive non-waiting hold before inspection and removal, skipping a worktree whose lock is held, even with `--force`. Outside a
+nothing uncommitted and no commits beyond its base, kept otherwise. A session that ends `rewound` keeps its worktree whatever it holds: the session that continues it runs there, records the same `worktree`, and never removes it either; `fiber sessions prune` removes it later. A session that ends `moved` keeps its worktree whatever it holds too: the session that continues it runs in the new workspace, and `fiber sessions prune` removes the old worktree later. The session a `start` `continues` names keeps its worktree the same way: the new session runs in that worktree, records the same `worktree`, and never removes it either. A resume whose worktree was removed makes it again at the same path and branch from the repository's current HEAD, before `fiber_started`, and ends it by the same rules. When the repository is gone, the resume is rejected the same way. A worktree's lock file, `~/.fiber/projects/<key>/worktrees/<id>.lock`, is held shared by every process that runs in a worktree it did not just create and by a delegate's parent from before it makes the worktree until the child's `session_started` proves it holds its own share. If startup fails before that event, the parent keeps its share through child exit. The file is held exclusively while a resume checks for the worktree and makes it again, and taken exclusively without waiting by an end-of-run removal, which keeps the worktree when another process holds it; the file stays whenever its worktree stays, and goes only when a whole removal succeeds, so a dirty, never-shared worktree keeps one too, and `fiber sessions prune` leaves lock files alone. Prune takes the same exclusive non-waiting hold before inspection and removal, skipping a worktree whose lock is held, even with `--force`. Outside a
 git repository a delegate's `isolation: worktree` fails with
 `invalid_arguments`, and `fiber ask --worktree` is a usage error. The session
 records the worktree on `session_started` (`docs/events.md`). The `worktree`
@@ -1414,12 +1457,12 @@ session:
 - **A running session is refused** with `session_held`, as is any session
   whose lock another process holds.
 - **A session that other sessions point at is refused** with
-  `session_has_dependents`, and the message lists them. A fork and a rewind
-  each point at the session they continue (`forked_from` on their
+  `session_has_dependents`, and the message lists them. A fork, a rewind and
+  a workspace move each point at the session they continue (`forked_from` on their
   `session_started`; `docs/delegates.md`, "Forks"; `docs/events.md`,
-  "Rewind"). `--cascade` deletes them too, and whatever points at them; it is
+  "Rewind", "Change workspace"). `--cascade` deletes them too, and whatever points at them; it is
   refused if any of them is held. Finding them reads the first line of each
-  session log.
+  session log and follows `moved.workspace` for a child in another project.
 - **When `expect` is supplied, a cascade removes only the sessions the person confirmed.** A client sends them in `delete`'s `expect` ("The hub"): the session and everything `--cascade` adds. When the sessions the hub would remove differ, such as a fork made while the question was open, the delete is rejected `stale_request`, the message names the sessions it would remove now, and nothing is deleted. `fiber sessions delete --hub` and `fiber sessions prune --hub` without `--yes` send the set their dry run named; otherwise the command line sends no `expect`.
 - **Delete is permanent.** It removes the session's directory: its log and its
   artifacts together. There is no trash. The terminal asks first, naming the
