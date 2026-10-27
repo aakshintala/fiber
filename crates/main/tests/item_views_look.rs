@@ -16,6 +16,7 @@
 mod support;
 
 use std::fs;
+use std::io::Write as _;
 
 use serde_json::json;
 use support::pty::{Colour, Grid, Run};
@@ -117,7 +118,9 @@ fn delegate_setup() -> (Setup, fs::File, fakes::Watchdog) {
 /// answers. No delegate spawns, so releasing the hold finishes the job
 /// alone. The command stays short on purpose: the absolute hold path
 /// would push the status row's stop and outcome under the row's cut.
-fn job_setup() -> (Setup, fs::File, fakes::Watchdog) {
+/// The command returns with the setup: the panel names the job row by
+/// it, so the test clicks only the row that names it.
+fn job_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
     let setup = Setup::new();
     // A shell comment with this process id keeps the watchdog's
     // pattern to this test's `head`: parallel tests hold their own.
@@ -138,7 +141,7 @@ fn job_setup() -> (Setup, fs::File, fakes::Watchdog) {
     );
     write_shared(&setup, &command);
     let (release, guard) = new_hold(&setup, &format!("hold #{}", std::process::id()));
-    (setup, release, guard)
+    (setup, release, guard, command)
 }
 
 /// The binary started at 160x48 and prompted, so the target item starts.
@@ -360,18 +363,21 @@ fn the_delegate_view_matches_the_doc() {
 
 #[test]
 fn the_job_pty_view_matches_the_doc() {
-    let (setup, release, _guard) = job_setup();
+    let (setup, release, _guard, command) = job_setup();
     let mut run = start_run(&setup);
     // The Jobs card starts closed: its title toggles the list, whose
-    // one row is the held job directly below it. The parent's turn
-    // completes before either click, so both rows' positions are final:
-    // the completed footer proves the turn is done, and the job parks
-    // on the test-held FIFO, so no further session event can move rows
-    // before either click. The finished title never emits while an
-    // item is held, so the turn's completion — not `turn_finished` —
-    // is the readiness signal here. No session event lands between the
-    // two clicks, only the first click's own expansion, so the second
-    // click rides the same signal.
+    // one row is the held job directly below it. The row below the
+    // title must name the held command: any non-blank row would do
+    // while the card is still closed, and only the fold that draws this
+    // job's row assigns its click target, so the command names the
+    // ready target. The parent's turn completes before either click, so
+    // both rows' positions are final: the completed footer proves the
+    // turn is done, and the job parks on the test-held FIFO, so no
+    // further session event can move rows before either click. The
+    // finished title never emits while an item is held, so the turn's
+    // completion — not `turn_finished` — is the readiness signal here.
+    // No session event lands between the two clicks, only the first
+    // click's own expansion, so the second click rides the same signal.
     let grid = run.wait_screen("the tty job starts", |grid| {
         grid.contents.contains("Jobs")
             && grid.contents.contains("Done.")
@@ -383,7 +389,11 @@ fn the_job_pty_view_matches_the_doc() {
         grid.rows
             .iter()
             .position(|row| row.contains("Jobs"))
-            .and_then(|title| grid.rows.get(title + 1).filter(|row| row.trim().len() > 2))
+            .and_then(|title| {
+                grid.rows
+                    .get(title + 1)
+                    .filter(|row| row.contains(command.as_str()))
+            })
             .is_some()
     });
     let title = row_with(&grid, "Jobs");
@@ -474,11 +484,15 @@ fn the_job_pty_view_matches_the_doc() {
     finish_and_quit(run, release, "type into the job");
 }
 
-/// Drops `release` so `head` exits and the one held item finishes,
-/// closes the view, quits, and asserts the exit: every wait is a
-/// screen predicate.
-fn finish_and_quit(mut run: Run, release: fs::File, closed_needle: &str) {
-    drop(release);
+/// Writes `release` a line so `head` reads it and exits and the one
+/// held item finishes, closes the view, quits, and asserts the exit:
+/// every wait is a screen predicate. The release is a written line,
+/// never a dropped writer: the test's open end keeps the pipe alive
+/// until the held `head` reads the line, while dropping the last writer
+/// before `head` opens the FIFO strands it there forever
+/// (`docs/testing.md`, "Waits and timeouts").
+fn finish_and_quit(mut run: Run, mut release: fs::File, closed_needle: &str) {
+    release.write_all(b"\n").unwrap();
     run.wait_screen("the finish folds", |grid| {
         !grid.contents.contains("■ stop")
             && (grid.contents.contains("completed") || grid.contents.contains("failed"))
