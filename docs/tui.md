@@ -1343,8 +1343,8 @@ pins it (`docs/tools.md`, "Naming the session"). A name is drawn with each contr
 `/cd <path>` sends `change_workspace` (`docs/invocation.md`, "Driver
 commands", `change_workspace`), and the screen switches to the new session.
 The old session leaves as it does after a rewind: `session_left` has
-`how: exited`. No move-specific text appears. With no path, the command shows
-its usage and sends nothing. When the session refuses the command, a notice
+`how: exited`. No move-specific text appears. With no path, the command notes
+`/cd needs a path.` and sends nothing. When the session refuses the command, a notice
 gives the refusal's code and message, and the screen stays on the session it
 shows.
 
@@ -1965,7 +1965,7 @@ later release still applies.
 | `/keys`, `/keybindings`, `/keymap` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |
 | `/rewind` | Opens the rewind view. |
-| `/cd <path>` | Moves the session to another workspace ("Moving workspace"). With no path, shows the command's usage. If the resolved path is the current workspace, refuses `invalid_arguments`, `already in that folder`. |
+| `/cd <path>` | Moves the session to another workspace ("Moving workspace"). With no path, notes `/cd needs a path.` If the resolved path is the current workspace, refuses `invalid_arguments`, `already in that folder`. |
 | `/handoff [instructions]`, `/compact [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
 | `/name <text>`, `/rename <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |

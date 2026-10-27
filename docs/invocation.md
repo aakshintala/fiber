@@ -394,11 +394,8 @@ one session, the command is:
 
 On a hub connection, the client also sets the top-level `session_id` to the
 session it wants to move. If the resolved path names the current workspace,
-the session answers without changing state:
-
-```json
-{"kind":"command_rejected","session_id":"s_aaaaaaaaaaaaaaaa","ts":0,"schema_version":1,"payload":{"command_id":"c_cd","code":"invalid_arguments","message":"already in that folder"}}
-```
+the session answers `command_rejected` without changing state
+(`docs/events.md`, `command_rejected`).
 
 A line that is not a JSON object, has no string `id` or `command`, has
 `args` of the wrong type, or has a key not in this table, is rejected
@@ -494,7 +491,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `name` | Sets the session's name, which pins it against the model's `name_session`. Takes the text; empty text clears the person's name and unpins it. Written as `session_named`. |
 | `handoff` | Starts a handoff: the model's context restarts from a note the model, or an extension's `before_handoff` hook, writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
 | `rewind` | Starts a new session process that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id, or the code the new session's start failed with, when its process could not start. Takes an optional `from_session_id`, default this session: this session or one its `forked_from` chain passes through, the session whose log `seq` counts in, and any other is rejected `invalid_arguments`, since it is rewound through the hub; an optional `seq`, default the start of the latest turn that is not a summary's (`docs/events.md`, `turn_started`, `rewind`); and whether to summarise, which first runs the old session's model in a turn of its own (`docs/events.md`, "Rewind"). Every job still running stops (`docs/events.md`, "Rewind"). Rejected `busy` if a turn is running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, `delegate_session` if it is a delegate, and `summary_failed` if it asked for a summary that could not be made. |
-| `change_workspace` | Starts a new session process as a rewind from this session's tip into another workspace (`docs/events.md`, "Change workspace"). Takes `path`: a relative path resolves at admission against the admitting session's workspace, and a leading `~/` expands to the hub's home. A missing or non-directory path is rejected `invalid_arguments` before anything starts. Compare resolved paths: the current workspace is rejected `invalid_arguments`, exactly `already in that folder`, without a log event, session start or prompt-cache miss. Every running job stops before the final `moved` event. The event names the new session, the last durable line before `moved`, and the resolved target workspace. The child continues from that point without a summary; its `session_started.forked_from` names this session and point, with `project` when the parent is in another project. Answers with the child id or its start failure code. A concurrent `change_workspace` or `rewind` is rejected `busy`; also rejected `session_held` when another process holds the session, and `delegate_session` for a delegate. |
+| `change_workspace` | Starts a new session process as a rewind from this session's tip into another workspace (`docs/events.md`, "Change workspace"). Takes `path`: a relative path resolves at admission against the admitting session's workspace; a bare `~` or leading `~/` resolves against the hub's home. An empty path, an unusable home, or a missing or non-directory path is rejected `invalid_arguments` before anything starts, naming the path as typed. Compare resolved paths: the current workspace is rejected `invalid_arguments`, exactly `already in that folder`, without a log event, session start or prompt-cache miss. Every running job stops before the final `moved` event. The event names the new session, the last durable line before `moved`, and the resolved target workspace. The child continues from that point without a summary; its `session_started.forked_from` names this session and point, with `project` when the parent is in another project. Answers with the child id or its start failure code. A concurrent `change_workspace` or `rewind` is rejected `busy` until `moved` is durable, then `closing`; also rejected `session_held` when another process holds the session, and `delegate_session` for a delegate. |
 | `shell` | Runs a shell command the person typed, as `!` does in the terminal. Takes the command and `send`, default false. Answered when the command ends. Accepted during a turn. |
 | `propose_notes` | Proposes reviewer-note lines for one topic on the session's model, in a request of its own with no conversation, from the evidence `docs/permissions.md` "Setting up the notes" lists, with user names and passwords removed from every URL; answers `evidence`, `proposed` and `error`; when it sends the request, writes one `usage_recorded` with no turn and no action, and no configuration; rejected `busy` while a turn runs or an approval waits, and `closing` after `close`. |
 | `command` | Runs an extension's command by name, with the text after it as arguments, as a person typing `/name args` does (`docs/extensions.md`, "Commands and screens"). Rejected `unknown_command` for a name no extension registers or declares. A first-run start that fails rejects the command `extension_failed` (`docs/extensions.md`, "Commands and screens"). |
@@ -575,13 +572,15 @@ that process rewinds it.
 separate command, not an option on `rewind`. The path resolves against the
 workspace of the session that admits it. The first admitted `change_workspace`
 or `rewind` wins; while it is in progress, another of either command is
-rejected `busy`. A command that reaches the old id after the move resumes that
+rejected `busy` until `moved` is durable, then `closing`. A command that reaches the old id after the move resumes that
 session in its recorded workspace, as a session ending `rewound` does; it is
 not forwarded to the child. Clients connected at the move switch to the child.
 
 The old session stops its jobs, writes `moved` with the child id, the last
 durable line before `moved`, and the resolved target workspace, then the hub
-starts the child. Its `session_started.forked_from` names the old session and
+starts the child. When the inbox disconnects with jobs still unfinished, the
+session stops and ends those jobs normally before writing `moved`, as a rewind
+does. Its `session_started.forked_from` names the old session and
 that point. When the projects differ, `forked_from.project` names the old
 project key; otherwise it is absent. The child starts with no summary and no
 prompt. Each session keeps the workspace recorded in its own
@@ -590,7 +589,8 @@ retries the same child id when the old process exits, as for rewind. The
 command answers with the child id or the start failure code. No rollback or
 new child id is made. The new folder's configuration layers, instruction
 files, MCP servers, extensions and repository approval load as they do for any
-new session, and the switch costs one prompt-cache miss.
+new session, and the switch costs one prompt-cache miss. Session grants and
+repository-code answers do not carry over; known hosts and the conversation do.
 
 **The set is a floor, not a proof.** It is what Fiber's settled semantics
 require today. A later ticket may add one. Adding a command is additive and not

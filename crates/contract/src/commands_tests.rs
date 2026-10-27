@@ -33,7 +33,7 @@ fn parse(line: &str) -> Result<CommandLine, serde_json::Error> {
 #[test]
 fn the_doc_examples_round_trip_byte_for_byte() {
     let examples = doc_examples();
-    assert_eq!(examples.len(), 2);
+    assert_eq!(examples.len(), 3);
     for line in examples {
         assert_eq!(serde_json::to_string(&parse(line).unwrap()).unwrap(), line);
     }
@@ -41,7 +41,7 @@ fn the_doc_examples_round_trip_byte_for_byte() {
 
 #[test]
 fn the_doc_reply_example_reads_as_an_approval() {
-    let line = parse(doc_examples()[1]).unwrap();
+    let line = parse(doc_examples()[2]).unwrap();
     assert_eq!(line.id, CommandId("c_91be".into()));
     let Command::Reply(reply) = line.command else {
         panic!("not a reply");
@@ -123,6 +123,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "handoff", "args": {}}),
         json!({"id": "c", "command": "rewind", "args": {"from_session_id": "s", "seq": 7,
             "summarise": true}}),
+        json!({"id": "c", "command": "change_workspace", "args": {"path": "../other"}}),
         json!({"id": "c", "command": "shell", "args": {"command": "git status", "send": true}}),
         json!({"id": "c", "command": "propose_notes", "args": {"topic": "routine_actions"}}),
         json!({"id": "c", "command": "propose_notes", "args": {"topic": "routine_actions",

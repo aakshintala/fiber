@@ -175,6 +175,27 @@ fn the_doc_example_turn_reads_as_its_type() {
     assert_eq!(envelope.turn_id, Some(TurnId("t_9a02".into())));
 }
 
+/// The rejection example beside `docs/events.md`, `command_rejected`: moving
+/// to the folder the session is already in answers without changing state.
+fn rejection_example() -> &'static str {
+    let section = DOC.split("#### `command_rejected`").nth(1).unwrap();
+    let section = section.split("\n## ").next().unwrap();
+    let block = section.split("```json\n").nth(1).unwrap();
+    block.split("```").next().unwrap().lines().next().unwrap()
+}
+
+#[test]
+fn the_same_folder_rejection_reads_as_invalid_arguments() {
+    let envelope: Envelope = serde_json::from_str(rejection_example()).unwrap();
+    assert_eq!(envelope.kind, "command_rejected");
+    let Some(Event::CommandRejected(rejected)) = Event::from_envelope(&envelope).unwrap() else {
+        panic!("not a command_rejected");
+    };
+    assert_eq!(rejected.command_id, Some(CommandId("c_cd".into())));
+    assert_eq!(rejected.code, crate::ErrorCode::InvalidArguments);
+    assert_eq!(rejected.message, "already in that folder");
+}
+
 #[test]
 fn every_kind_in_the_doc_is_known_with_its_class() {
     let doc = doc_kinds();

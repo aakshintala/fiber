@@ -1445,6 +1445,12 @@ Every driver command is answered with exactly one of these, echoing its id
 | `code` | string | yes | the rejection code (`docs/invocation.md`, "Driver commands") |
 | `message` | string | yes | Fiber's own sentence |
 
+A workspace move to the folder the session is already in answers:
+
+```json
+{"kind":"command_rejected","session_id":"s_aaaaaaaaaaaaaaaa","ts":0,"schema_version":1,"payload":{"command_id":"c_cd","code":"invalid_arguments","message":"already in that folder"}}
+```
+
 ## Resume
 
 A session is reconstructed from the log and its
@@ -1600,7 +1606,9 @@ there. A person moves with `/cd <path>` in the terminal, a driver with the
   `moved` names the last durable line before that event. Fiber makes `moved`
   durable, then starts the child. `moved` is the last line the process writes
   to that log, and closes the process boundary as `fiber_exited` does. A
-  failure before that durable write does not start the child.
+  failure before `moved` is written does not start the child. Once `moved` is
+  in the log, the hub starts the child when the old process exits, as it does
+  after `rewound`, even if the write's sync failed.
 - **History paging walks the link as after a rewind.** A client pages back
   past the new session's first line by reading `forked_from` from its
   `session_started`, asking `history` with that `session_id` and `to_seq`
