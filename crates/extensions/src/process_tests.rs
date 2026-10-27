@@ -4179,15 +4179,23 @@ fn ready_between_restart_check_and_park_wakes_the_waiter() {
     assert_eq!(owner.drain(), CloseReason::Stopped);
 }
 
-/// Kills the peer and reaps it: KILL its group, stop its pipes, pump
-/// the close and reap the child.
+/// Stops the peer's pipes, KILLs its group, then pumps the close and
+/// reaps the child.
 fn kill_peer(owner: &Harness) {
+    let transport = owner.extension.transport();
+    transport.stop();
+    match transport.signal(rustix::process::Signal::KILL) {
+        Ok(()) | Err(_) => {}
+    }
+}
+
+/// KILLs the peer before stopping its pipes, so end of input cannot let it
+/// exit normally when the test needs to prove the signal caused its death.
+fn kill_peer_before_stopping(owner: &Harness) {
     let transport = owner.extension.transport();
     match transport.signal(rustix::process::Signal::KILL) {
         Ok(()) | Err(_) => {}
     }
-    // EOF lets a waiting fixture exit normally; signal before closing its
-    // pipes when the test needs the signal itself to cause its death.
     transport.stop();
 }
 
@@ -5292,7 +5300,7 @@ fn finish_after_death_reaps_without_signals() {
     owner.pump();
     owner.pump();
     owner.pump();
-    kill_peer(&owner);
+    kill_peer_before_stopping(&owner);
     pump_closed(&owner, "the kill closes the pipe");
     assert_eq!(
         lifecycle_state(&owner),
