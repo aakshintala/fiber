@@ -2,12 +2,12 @@
 source: crates/tui/src/view/item_tests.rs
 expression: "rows.join(\"\\n\")"
 ---
+  Delegate  ◆ task j_1                                               Esc returns
  fix the parser › ◆ task j_1
- ● running · harness claude · model other/model · — · 0s · session s_dd · ■ stop
+ harness claude · model other/model
+ — · elapsed 0s · session s_dddddddddddddddd
+ ■ stop s_dddddddddddddddd
  Output since this terminal attached · /tmp/other.out
-
-
-
 
 
 
@@ -22,7 +22,7 @@ expression: "rows.join(\"\\n\")"
  ● task j_1
    claude · other/model
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- ▌ › █
+ ▌ › █                                               steering goes to ◆ task j_1
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   0 waiting  │  $0.00
   ◆ 1 delegate running
