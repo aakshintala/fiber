@@ -106,7 +106,8 @@ fn bubble_rows_put_each_image_line_under_the_text_right_aligned() {
     let (rows, _) = out.into_parts();
     assert!(!rows.is_empty());
     let (line, target) = rows.last().unwrap_or_else(|| panic!("an image row"));
-    assert_eq!(line.to_string(), "▣ b.png · 1280×800");
+    // "look" wraps to a block 7 wide, so the 19-wide caption is cut.
+    assert_eq!(line.to_string(), "▣ b.pn…");
     assert_eq!(line.alignment, Some(Alignment::Right));
     assert!(matches!(target, Some(Target::Image(_))));
 }
@@ -173,15 +174,114 @@ fn call_rows_draw_the_inline_grid() {
 }
 
 #[test]
-fn bubble_rows_stay_one_line_when_sized_inline() {
+fn bubble_rows_draw_the_shared_grid_right_aligned() {
+    use ratatui::layout::Alignment;
+    // "look" at 60 columns wraps to a block 7 wide. The PNG draws the
+    // shared conversation-width grid under the bubble's three rows,
+    // right-aligned, then its caption cut to the block width.
     let prompt = prompt_of(&session(), &[text("look"), image("artifacts/b.png")]);
     let layout = inline_layout(&["artifacts/b.png"], (10, 20));
     let mut out = Rows::default();
     bubble_rows(&prompt, 60, &layout, &mut out);
-    assert_eq!(
-        texts(out),
-        ["▄▄▄▄▄▄▄", " look ▐", "▀▀▀▀▀▀▀", "▣ b.png · 1280×800"]
+    let (rows, _) = out.into_parts();
+    // Three bubble rows, a 24 by 7 grid, and the caption.
+    assert_eq!(rows.len(), 11);
+    for (at, (line, target)) in rows.iter().enumerate().skip(3).take(7) {
+        assert_eq!(line.spans.len(), 24, "row {at}: one cell per column");
+        assert_eq!(line.alignment, Some(Alignment::Right), "row {at}");
+        assert!(
+            line.spans
+                .iter()
+                .all(|span| span.content.as_ref().starts_with('\u{10EEEE}')),
+            "row {at}: every grid cell is a placeholder"
+        );
+        assert!(matches!(target, Some(Target::Image(_))), "row {at}");
+    }
+    let (caption, target) = &rows[10];
+    assert_eq!(caption.alignment, Some(Alignment::Right));
+    assert!(crate::format::width(&caption.to_string()) <= 7);
+    assert!(matches!(target, Some(Target::Image(_))));
+    // The bubble grid matches the call grid at the same conversation
+    // width: the shared 40%/12/proportion sizing.
+    let mut calls = Rows::default();
+    call_rows(
+        &[crate::image::Part {
+            session: session(),
+            path: "artifacts/b.png".to_owned(),
+            mime_type: "image/png".to_owned(),
+            width: 1280,
+            height: 800,
+        }],
+        60,
+        &layout,
+        &mut calls,
     );
+    let (call_rows, _) = calls.into_parts();
+    assert_eq!(call_rows.len(), 8);
+    for (bubble, call) in rows.iter().skip(3).take(7).zip(call_rows.iter()) {
+        assert_eq!(
+            bubble.0.spans.len() + 1,
+            call.0.spans.len(),
+            "the same grid, without the ledger indent"
+        );
+    }
+}
+
+#[test]
+fn a_short_prompt_caps_its_caption_at_its_bubble_block() {
+    use ratatui::layout::Alignment;
+    // "hi" wraps to a block 5 wide, so the caption ends there even
+    // though the conversation is 60 columns wide.
+    let prompt = prompt_of(&session(), &[text("hi"), image("artifacts/b.png")]);
+    let layout = inline_layout(&["artifacts/b.png"], (10, 20));
+    let mut out = Rows::default();
+    bubble_rows(&prompt, 60, &layout, &mut out);
+    let (rows, _) = out.into_parts();
+    let (caption, target) = rows.last().unwrap_or_else(|| panic!("a caption row"));
+    assert_eq!(caption.alignment, Some(Alignment::Right));
+    assert!(
+        crate::format::width(&caption.to_string()) <= 5,
+        "the caption stays inside the short bubble: {caption:?}"
+    );
+    assert!(matches!(target, Some(Target::Image(_))));
+}
+
+#[test]
+fn bubble_block_width_follows_the_bubble_rows_formula() {
+    // At, just below and just above the bubble cap's edge: a short
+    // prompt takes its widest row plus pads, a 40-wide prompt takes
+    // the cap exactly, and longer prompts stay capped. Below four
+    // columns the width is the columns, and an empty prompt takes no
+    // width at all.
+    assert_eq!(super::bubble_block_width("", 60), None);
+    assert_eq!(super::bubble_block_width("   ", 60), None);
+    assert_eq!(super::bubble_block_width("hi", 0), None);
+    assert_eq!(super::bubble_block_width("hi", 1), Some(1));
+    assert_eq!(super::bubble_block_width("hi", 3), Some(3));
+    assert_eq!(super::bubble_block_width("hi", 60), Some(5));
+    assert_eq!(super::bubble_block_width("look at this", 60), Some(15));
+    assert_eq!(super::bubble_block_width(&"x".repeat(40), 60), Some(43));
+    assert_eq!(super::bubble_block_width(&"x".repeat(41), 60), Some(43));
+    assert_eq!(super::bubble_block_width(&"x".repeat(100), 60), Some(43));
+    assert_eq!(super::bubble_block_width("look", 4), Some(4));
+}
+
+#[test]
+fn bubble_rows_below_four_columns_draws_without_panicking() {
+    // Below four columns the bubble cap's `clamp(4, columns)` cannot
+    // run, so the block width is the columns: the rows still draw.
+    let prompt = prompt_of(&session(), &[text("look"), image("artifacts/b.png")]);
+    let layout = inline_layout(&["artifacts/b.png"], (10, 20));
+    let mut out = Rows::default();
+    bubble_rows(&prompt, 3, &layout, &mut out);
+    let (rows, _) = out.into_parts();
+    assert!(rows.len() > 1, "the bubble and its image draw");
+    let (caption, target) = rows.last().unwrap_or_else(|| panic!("a caption row"));
+    assert!(
+        crate::format::width(&caption.to_string()) <= 3,
+        "the caption stays inside three columns: {caption:?}"
+    );
+    assert!(matches!(target, Some(Target::Image(_))));
 }
 
 #[test]

@@ -97,7 +97,14 @@ fn drawn(label: &str, columns: u16) -> Vec<(String, Option<Target>)> {
     assert!(label.is_empty() || part.label() == label);
     layout.note(&part);
     let mut out = Rows::default();
-    super::rows(&part, &layout, columns, Align::Left { indent: 0 }, &mut out);
+    super::rows(
+        &part,
+        &layout,
+        columns,
+        Align::Left { indent: 0 },
+        None,
+        &mut out,
+    );
     let (rows, _) = out.into_parts();
     rows.into_iter()
         .map(|(line, target)| (line.to_string(), target))
@@ -115,7 +122,14 @@ fn a_long_label_is_cut_to_its_width_and_draws_one_row() {
     let mut layout = Layout::default();
     let id = layout.note(&part);
     let mut out = Rows::default();
-    super::rows(&part, &layout, 40, Align::Left { indent: 0 }, &mut out);
+    super::rows(
+        &part,
+        &layout,
+        40,
+        Align::Left { indent: 0 },
+        None,
+        &mut out,
+    );
     let (rows, _) = out.into_parts();
     assert_eq!(rows.len(), 1);
     let (line, target) = &rows[0];
@@ -183,7 +197,14 @@ fn lines_at_indented(columns: u16, indent: u16) -> Vec<Line<'static>> {
     };
     layout.note(&part);
     let mut out = Rows::default();
-    super::rows(&part, &layout, columns, Align::Left { indent }, &mut out);
+    super::rows(
+        &part,
+        &layout,
+        columns,
+        Align::Left { indent },
+        None,
+        &mut out,
+    );
     let (rows, _) = out.into_parts();
     rows.into_iter().map(|(line, _)| line).collect()
 }
@@ -225,7 +246,7 @@ fn a_right_aligned_line_stays_right_aligned() {
     };
     layout.note(&part);
     let mut out = Rows::default();
-    super::rows(&part, &layout, 60, Align::Right, &mut out);
+    super::rows(&part, &layout, 60, Align::Right, None, &mut out);
     let (rows, _) = out.into_parts();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0.alignment, Some(Alignment::Right));
@@ -248,7 +269,14 @@ fn a_line_names_its_own_paths_id() {
     layout.note(&first);
     layout.note(&second);
     let mut out = Rows::default();
-    super::rows(&second, &layout, 60, Align::Left { indent: 0 }, &mut out);
+    super::rows(
+        &second,
+        &layout,
+        60,
+        Align::Left { indent: 0 },
+        None,
+        &mut out,
+    );
     let (rows, _) = out.into_parts();
     assert!(matches!(rows[0].1, Some(Target::Image(2))));
     assert_eq!(layout.id(&session(), "artifacts/c.png"), None);
@@ -337,23 +365,304 @@ fn a_non_png_stays_its_one_line_when_sized_inline() {
 }
 
 #[test]
-fn the_bubble_and_steering_stay_one_line_when_sized_inline() {
+fn steering_stays_one_line_when_sized_inline() {
+    // Steering draws through `rows` with no bubble width: even sized
+    // inline, a noted PNG stays its one clickable line.
     let part = sized(1280, 800);
     let layout = inline_layout(&part, (10, 20));
-    for align in [Align::Right, Align::Left { indent: 0 }] {
-        let mut out = Rows::default();
-        super::ledger_rows(&part, &layout, 80, align, &mut out);
-        let (rows, _) = out.into_parts();
-        assert_eq!(rows.len(), 1, "the bubble and steering stay one line");
-        assert!(
-            rows[0]
-                .0
-                .spans
-                .iter()
-                .all(|span| !span.content.as_ref().starts_with('\u{10EEEE}')),
-            "no placeholders outside a ledger row"
+    let mut out = Rows::default();
+    super::rows(
+        &part,
+        &layout,
+        80,
+        Align::Left { indent: 0 },
+        None,
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "▣ a.png · 1280×800");
+    assert!(matches!(rows[0].1, Some(Target::Image(1))));
+    assert!(
+        rows[0]
+            .0
+            .spans
+            .iter()
+            .all(|span| !span.content.as_ref().starts_with('\u{10EEEE}')),
+        "no placeholders outside a ledger row"
+    );
+}
+
+#[test]
+fn a_bubble_without_a_text_width_stays_one_line_when_sized_inline() {
+    // No text bubble means no block width: even sized inline, a noted
+    // PNG stays its one clickable line, right-aligned.
+    let part = sized(1280, 800);
+    let layout = inline_layout(&part, (10, 20));
+    let mut out = Rows::default();
+    super::rows(&part, &layout, 80, Align::Right, None, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "▣ a.png · 1280×800");
+    assert_eq!(rows[0].0.alignment, Some(Alignment::Right));
+    assert!(matches!(rows[0].1, Some(Target::Image(1))));
+    assert!(
+        rows[0]
+            .0
+            .spans
+            .iter()
+            .all(|span| !span.content.as_ref().starts_with('\u{10EEEE}')),
+        "no placeholders without a text bubble"
+    );
+}
+
+#[test]
+fn a_bubble_png_draws_the_shared_grid_right_aligned() {
+    use ratatui::style::Color;
+    // 1280 by 800 at 80 columns with a 10 by 20 cell: 32 by 10
+    // placeholders, then the caption cut to the bubble block width.
+    let part = sized(1280, 800);
+    let mut out = Rows::default();
+    super::rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Right,
+        Some(15),
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 11);
+    for (at, (line, target)) in rows.iter().enumerate().take(10) {
+        assert_eq!(line.spans.len(), 32, "row {at}: one cell per column");
+        assert_eq!(line.alignment, Some(Alignment::Right), "row {at}");
+        for span in line.spans.iter() {
+            assert!(
+                span.content.as_ref().starts_with('\u{10EEEE}'),
+                "row {at}: every grid cell is a placeholder"
+            );
+            assert_eq!(span.style.fg, Some(Color::Indexed(1)));
+        }
+        assert!(matches!(target, Some(Target::Image(1))), "row {at}");
+    }
+    let (caption, target) = &rows[10];
+    assert_eq!(caption.alignment, Some(Alignment::Right));
+    assert_eq!(caption.to_string(), "▣ a… · 1280×800");
+    assert_eq!(format::width(&caption.to_string()), 15);
+    assert!(matches!(target, Some(Target::Image(1))));
+    // The bubble grid matches the ledger grid at the same conversation
+    // width: the shared 40%/12/proportion sizing.
+    let mut ledger_out = Rows::default();
+    super::ledger_rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut ledger_out,
+    );
+    let (ledger_rows, _) = ledger_out.into_parts();
+    assert_eq!(ledger_rows.len(), rows.len());
+    for (bubble, ledger) in rows.iter().take(10).zip(ledger_rows.iter()) {
+        assert_eq!(
+            bubble.0.spans.len() + 1,
+            ledger.0.spans.len(),
+            "the same grid, without the ledger indent"
         );
     }
+}
+
+#[test]
+fn a_bubble_caption_shortens_its_name_first() {
+    // The label is 18 columns wide: at the edge it draws whole, a
+    // column under it shortens the name with the dimensions kept, and
+    // wider blocks change nothing. Past the suffix the line is cut
+    // like any other text.
+    let part = sized(1280, 800);
+    let layout = Layout::default();
+    for (block, text) in [
+        (18u16, "▣ a.png · 1280×800"),
+        (17u16, "▣ a.p… · 1280×800"),
+        (19u16, "▣ a.png · 1280×800"),
+        (7u16, "▣ a.pn…"),
+    ] {
+        let mut out = Rows::default();
+        super::rows(&part, &layout, 80, Align::Right, Some(block), &mut out);
+        let (rows, _) = out.into_parts();
+        assert_eq!(rows.len(), 1, "block {block}");
+        assert_eq!(rows[0].0.to_string(), text, "block {block}");
+        assert_eq!(rows[0].0.alignment, Some(Alignment::Right), "block {block}");
+        assert_eq!(
+            format::width(&rows[0].0.to_string()),
+            usize::from(block.min(18)),
+            "block {block}"
+        );
+    }
+}
+
+#[test]
+fn a_bubble_caption_keeps_its_dimensions() {
+    // The dimensions survive a long filename inside a short bubble,
+    // and the line never exceeds its block (`docs/tui.md`, "Images").
+    let long =
+        super::Part::from_content(&session(), &image("artifacts/i_0123456789abcdef.png", 1, 1))
+            .expect("the image is kept");
+    for (part, max, text, link) in [
+        (&sized(1280, 800), 18, "▣ a.png · 1280×800", "▣ a.png"),
+        (&sized(1280, 800), 17, "▣ a.p… · 1280×800", "▣ a.p…"),
+        (&sized(1280, 800), 14, "▣ … · 1280×800", "▣ …"),
+        (&sized(1280, 800), 7, "▣ a.pn…", "▣ a.png"),
+        (&sized(1280, 800), 3, "▣ …", "▣ a.png"),
+        (&long, 15, "▣ i_0123… · 1×1", "▣ i_0123…"),
+    ] {
+        let (caption, name) = super::bubble_caption(part, max);
+        assert_eq!(caption, text, "max {max}");
+        assert_eq!(name, link, "max {max}");
+        assert!(
+            format::width(&caption) <= max,
+            "max {max}: the line stays inside its block"
+        );
+    }
+    let (caption, _) = super::bubble_caption(&long, 15);
+    assert!(
+        caption.contains("· 1×1"),
+        "the dimensions survive a long filename: {caption}"
+    );
+}
+
+#[test]
+fn a_viewer_only_bubble_image_keeps_its_one_line() {
+    // 255 distinct images fill the placeholder colours, so the last
+    // notes a viewer-only id past the range.
+    let allocator = IdAllocator::default();
+    let mut layout = Layout::default();
+    layout.set_allocator(allocator);
+    for at in 0..255 {
+        let part = super::Part::from_content(
+            &session(),
+            &image(&format!("artifacts/b_{at}.png"), 1280, 800),
+        )
+        .expect("the image is kept");
+        layout.note(&part);
+    }
+    let part = super::Part::from_content(&session(), &image("artifacts/b_254.png", 1280, 800))
+        .expect("the image is kept");
+    let id = layout.id(&session(), "artifacts/b_254.png");
+    assert!(matches!(id, Some(id) if id > 255));
+    layout.sizing = super::Sizing::Inline { cell: (10, 20) };
+    let mut out = Rows::default();
+    super::rows(&part, &layout, 80, Align::Right, Some(20), &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1, "no grid past the range");
+    assert_eq!(rows[0].0.to_string(), "▣ b_254.… · 1280×800");
+    assert_eq!(rows[0].0.alignment, Some(Alignment::Right));
+    assert_eq!(rows[0].1, id.map(Target::Image));
+    assert!(
+        rows[0]
+            .0
+            .spans
+            .iter()
+            .all(|span| !span.content.as_ref().starts_with('\u{10EEEE}')),
+        "no placeholders past the range"
+    );
+}
+
+#[test]
+fn a_non_png_bubble_stays_its_one_line() {
+    // Only PNG draws inline (ticket #687 Part 2b): a JPEG in a bubble
+    // stays its one clickable line, cut to the block width.
+    let jpeg = ContentPart::Image {
+        path: "artifacts/a.jpg".to_owned(),
+        mime_type: "image/jpeg".to_owned(),
+        width: 1280,
+        height: 800,
+    };
+    let part = super::Part::from_content(&session(), &jpeg).expect("the jpeg is kept");
+    let mut out = Rows::default();
+    super::rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Right,
+        Some(20),
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "▣ a.jpg · 1280×800");
+    assert_eq!(rows[0].0.alignment, Some(Alignment::Right));
+    assert!(matches!(rows[0].1, Some(Target::Image(1))));
+}
+
+#[test]
+fn a_failed_bubble_stays_its_one_line() {
+    // A failed display falls back to the clickable line: no grid draws
+    // for it, and the line is cut to the block width.
+    let part = sized(1280, 800);
+    let mut layout = inline_layout(&part, (10, 20));
+    layout.fail(&session(), "artifacts/a.png");
+    let mut out = Rows::default();
+    super::rows(&part, &layout, 80, Align::Right, Some(20), &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "▣ a.png · 1280×800");
+    assert!(matches!(rows[0].1, Some(Target::Image(1))));
+    assert!(
+        rows[0]
+            .0
+            .spans
+            .iter()
+            .all(|span| !span.content.as_ref().starts_with('\u{10EEEE}')),
+        "no placeholders for a failed image"
+    );
+}
+
+#[test]
+fn a_flat_bubble_stays_its_one_line() {
+    // A flat page draws every image as its one line, even sized inline
+    // with a block width (`docs/tui.md`, "Screen readers").
+    let part = sized(1280, 800);
+    let ext = crate::ext::Ext {
+        flat: true,
+        ..Default::default()
+    };
+    let mut out = Rows::default().with_seam(ext.bind(
+        crate::ext::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        crate::ext::SessionCtx {
+            session_id: contract::SessionId("s".into()),
+            halves: None,
+        },
+    ));
+    super::rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Right,
+        Some(20),
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "▣ a.png · 1280×800");
+    assert!(matches!(rows[0].1, Some(Target::Image(1))));
+}
+
+#[test]
+fn an_unnoted_bubble_stays_its_one_line_without_a_target() {
+    // No id, no target: the line still draws, cut to the block width.
+    let part = sized(1280, 800);
+    let layout = Layout {
+        sizing: super::Sizing::Inline { cell: (10, 20) },
+        ..Default::default()
+    };
+    let mut out = Rows::default();
+    super::rows(&part, &layout, 80, Align::Right, Some(7), &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "▣ a.pn…");
+    assert_eq!(rows[0].1, None);
 }
 
 #[test]
@@ -650,7 +959,7 @@ fn grid_draws_nothing_without_size_columns_or_cells() {
 
 #[test]
 fn rows_ignores_the_inline_sizing() {
-    // The prompt and steering forms call `rows`: even sized inline, a
+    // Left rows never go inline through `rows`: even sized inline, a
     // noted PNG stays its one line.
     let part = sized(1280, 800);
     let mut out = Rows::default();
@@ -659,6 +968,7 @@ fn rows_ignores_the_inline_sizing() {
         &inline_layout(&part, (10, 20)),
         80,
         Align::Left { indent: 4 },
+        None,
         &mut out,
     );
     let (rows, _) = out.into_parts();
