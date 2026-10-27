@@ -43,6 +43,19 @@ fn repository(name: &str) -> SkillInfo {
     )
 }
 
+/// A skill of `source` at `path`, with `extension` exactly when the
+/// source is an extension.
+fn sourced(name: &str, path: &str, source: SkillSource, extension: Option<&str>) -> SkillInfo {
+    let mut info = skill(name, "Desc.", path, source);
+    info.extension = extension.map(str::to_owned);
+    info
+}
+
+/// The shadowed-source words for a winner shadowing `paths`.
+fn shadowed_by(paths: &[String], infos: &[SkillInfo]) -> Option<Vec<String>> {
+    super::shadow_sources(paths, infos)
+}
+
 fn personal(name: &str) -> SkillInfo {
     skill(
         name,
@@ -217,6 +230,158 @@ fn off_and_shadowed_rows_read_hidden() {
     let shown = rows(&skills, 22);
     assert!(shown[1].contains("hidden"), "{shown:?}");
     assert!(!shown[1].contains("shadowed"), "{shown:?}");
+}
+
+/// Discovery fixtures for the shadow-source resolver: one skill per
+/// source, all named `review`.
+fn shadow_infos() -> Vec<SkillInfo> {
+    vec![
+        sourced(
+            "review",
+            "/fiber/docs/skills/review/SKILL.md",
+            SkillSource::Builtin,
+            None,
+        ),
+        sourced(
+            "review",
+            "/ext/review-kit/skills/review/SKILL.md",
+            SkillSource::Extension,
+            Some("review-kit"),
+        ),
+        sourced(
+            "review",
+            "/home/skills/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+        sourced(
+            "review",
+            "/w/.fiber/skills/review/SKILL.md",
+            SkillSource::Repository,
+            None,
+        ),
+    ]
+}
+
+#[test]
+fn shadow_sources_names_one_source() {
+    let infos = shadow_infos();
+    let paths = vec!["/home/skills/review/SKILL.md".to_owned()];
+    assert_eq!(
+        shadowed_by(&paths, &infos),
+        Some(vec!["personal".to_owned()])
+    );
+}
+
+#[test]
+fn shadow_sources_orders_repo_personal_extensions_then_builtin() {
+    // Shuffled discovery order must not move the words: repo, personal,
+    // extensions by extension name, then built in.
+    let infos = shadow_infos();
+    let paths = vec![
+        "/fiber/docs/skills/review/SKILL.md".to_owned(),
+        "/ext/review-kit/skills/review/SKILL.md".to_owned(),
+        "/home/skills/review/SKILL.md".to_owned(),
+        "/w/.fiber/skills/review/SKILL.md".to_owned(),
+    ];
+    assert_eq!(
+        shadowed_by(&paths, &infos),
+        Some(vec![
+            "repo".to_owned(),
+            "personal".to_owned(),
+            "review-kit".to_owned(),
+            "built in".to_owned(),
+        ])
+    );
+}
+
+#[test]
+fn shadow_sources_orders_extensions_by_name() {
+    let infos = vec![
+        sourced(
+            "review",
+            "/ext/zeta/skills/review/SKILL.md",
+            SkillSource::Extension,
+            Some("zeta"),
+        ),
+        sourced(
+            "review",
+            "/ext/alpha/skills/review/SKILL.md",
+            SkillSource::Extension,
+            Some("alpha"),
+        ),
+    ];
+    let paths = vec![
+        "/ext/zeta/skills/review/SKILL.md".to_owned(),
+        "/ext/alpha/skills/review/SKILL.md".to_owned(),
+    ];
+    assert_eq!(
+        shadowed_by(&paths, &infos),
+        Some(vec!["alpha".to_owned(), "zeta".to_owned()])
+    );
+}
+
+#[test]
+fn shadow_sources_lists_two_paths_from_one_source_once() {
+    let infos = vec![
+        sourced(
+            "review",
+            "/home/skills/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+        sourced(
+            "review",
+            "/home/.agents/skills/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+    ];
+    let paths = vec![
+        "/home/skills/review/SKILL.md".to_owned(),
+        "/home/.agents/skills/review/SKILL.md".to_owned(),
+    ];
+    assert_eq!(
+        shadowed_by(&paths, &infos),
+        Some(vec!["personal".to_owned()])
+    );
+}
+
+#[test]
+fn shadow_sources_omits_the_clause_unless_every_path_resolves() {
+    let infos = shadow_infos();
+    assert_eq!(
+        shadowed_by(&["/nowhere/review/SKILL.md".to_owned()], &infos),
+        None,
+        "an unresolvable path leaves out the whole clause"
+    );
+    assert_eq!(
+        shadowed_by(
+            &[
+                "/home/skills/review/SKILL.md".to_owned(),
+                "/nowhere/review/SKILL.md".to_owned(),
+            ],
+            &infos,
+        ),
+        None,
+        "one unresolvable path drops even a resolvable list"
+    );
+    assert_eq!(shadowed_by(&[], &infos), None, "no shadows, no clause");
+}
+
+#[test]
+fn shadow_sources_treats_a_nameless_extension_as_unresolved() {
+    let infos = vec![sourced(
+        "review",
+        "/ext/nameless/skills/review/SKILL.md",
+        SkillSource::Extension,
+        None,
+    )];
+    assert_eq!(
+        shadowed_by(&["/ext/nameless/skills/review/SKILL.md".to_owned()], &infos),
+        None,
+        "a malformed extension entry drops the whole clause"
+    );
 }
 
 #[test]

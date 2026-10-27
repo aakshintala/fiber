@@ -100,6 +100,37 @@ fn source_cell(info: &SkillInfo) -> String {
     out
 }
 
+/// The shadowed sources a row names, in precedence order: repo, personal,
+/// extensions by extension name, then built in (`docs/tui.md`, "Swapped
+/// views"). Each source appears once, however many shadow paths map to it.
+/// `None` when no path maps, or when any path fails to: a path with no
+/// matching skill entry, or an extension entry with no extension name, is a
+/// data inconsistency, so the row leaves out the whole `shadows` clause
+/// rather than show an invented word or a partial list.
+fn shadow_sources(shadows: &[String], infos: &[SkillInfo]) -> Option<Vec<String>> {
+    if shadows.is_empty() {
+        return None;
+    }
+    let mut seen: Vec<(u8, String, String)> = Vec::new();
+    for path in shadows {
+        let info = infos.iter().find(|info| info.path == *path)?;
+        let (rank, key, word) = match info.source {
+            SkillSource::Repository => (0, String::new(), "repo".to_owned()),
+            SkillSource::Personal => (1, String::new(), "personal".to_owned()),
+            SkillSource::Extension => {
+                let name = info.extension.as_ref()?;
+                (2, name.clone(), name.clone())
+            }
+            SkillSource::Builtin => (3, String::new(), "built in".to_owned()),
+        };
+        if !seen.iter().any(|(_, _, shown)| *shown == word) {
+            seen.push((rank, key, word));
+        }
+    }
+    seen.sort();
+    Some(seen.into_iter().map(|(_, _, word)| word).collect())
+}
+
 /// A skill's text, open in place of the rows.
 #[derive(Debug)]
 struct Text {
