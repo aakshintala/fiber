@@ -113,11 +113,15 @@ It ended waiting for answers to these questions:
 
 Fiber: you are a fork of session {parent_session_id}, started at delegate depth {depth}. The conversation above is your parent's, up to the point where it called `delegate_fork`. From here you work alone, and your final message goes back to your parent. Jobs started above belong to your parent, not to you.
 
-{workspace}{unattended}
+{workspace}{fork_workspace}{unattended}
 
 Your task:
 
 {prompt}
+
+## fork-workspace
+
+Your workspace is {workspace}, a worktree of {parent_workspace}. Paths above under {parent_workspace} are at the same place under yours; work only in yours.
 
 ## jobs-pending
 
