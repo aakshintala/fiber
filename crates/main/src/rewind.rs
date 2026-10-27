@@ -82,6 +82,7 @@ pub(crate) fn session_forked(
     parent: Parent,
     depth: u32,
     prompt: String,
+    inherited: Vec<PathBuf>,
     adopted: Option<contract::shapes::Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
@@ -183,6 +184,7 @@ pub(crate) fn session_forked(
         r#loop::fork_workspace(&workspace.to_string_lossy(), &parent_workspace)
     };
     let task = r#loop::fork_task(&parent.session_id, depth, &prompt, &notice);
+    super::session_command::set_inherited_roots(inherited);
     match super::session_command::run_new(
         new,
         Vec::new(),

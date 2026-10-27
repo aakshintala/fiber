@@ -4439,6 +4439,7 @@ fn completed_actions_skips_a_completion_with_no_action() {
 fn directory_added_renders_the_add_message_and_rebuilds_it_from_the_log() {
     let event = Event::DirectoryAdded(contract::events::DirectoryAdded {
         path: "/shared".into(),
+        inherited: false,
     });
     let mut conversation = Vec::new();
     render(
@@ -4460,6 +4461,19 @@ fn directory_added_renders_the_add_message_and_rebuilds_it_from_the_log() {
 }
 
 #[test]
+fn inherited_directory_added_is_not_a_separate_user_message() {
+    let event = Event::DirectoryAdded(contract::events::DirectoryAdded {
+        path: "/shared".into(),
+        inherited: true,
+    });
+    let rebuilt = super::rebuild(&[line("directory_added", &event, None)], "fake/model-1").unwrap();
+    assert!(
+        rebuilt.is_empty(),
+        "the opening already lists this inherited root"
+    );
+}
+
+#[test]
 fn a_rebuilt_conversation_lists_the_added_folders_and_keeps_the_add_message() {
     let opening = Event::OpeningMessage(OpeningMessage {
         environment: Environment {
@@ -4478,6 +4492,7 @@ fn a_rebuilt_conversation_lists_the_added_folders_and_keeps_the_add_message() {
     });
     let added = Event::DirectoryAdded(contract::events::DirectoryAdded {
         path: "/shared".into(),
+        inherited: false,
     });
     let rebuilt = super::rebuild(
         &[

@@ -28,12 +28,16 @@ thread_local! {
     /// session-path allowance names, while `run_new` keeps the signature
     /// `rewind.rs` calls.
     static OPENED: RefCell<Option<doors::WorktreeOpener>> = RefCell::new(None);
-    /// The fresh delegate's inherited added folders, set by `run` for the
-    /// new session below and taken by its commit: the child records each
-    /// as its own `directory_added` before the opening. Empty for every
-    /// other start, so `run_new` keeps the signature `rewind.rs` and
-    /// `continue_session.rs` call.
+    /// The delegate's launch-time folders, set by `run` for a spawn or
+    /// fork and taken by its session start: a fresh spawn marks them as
+    /// inherited, while a fork records only roots missing from its
+    /// point-based history. Empty for other starts, so `run_new` keeps
+    /// the signature `rewind.rs` and `continue_session.rs` call.
     static INHERITED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn set_inherited_roots(roots: Vec<PathBuf>) {
+    INHERITED.with(|cell| *cell.borrow_mut() = roots);
 }
 
 /// Holds a worktree opener for `run_new`: set on entry, the previous
@@ -221,6 +225,7 @@ pub(crate) fn run(
             parent,
             args.depth.unwrap_or(0),
             prompt,
+            args.added,
             adopted,
             clock,
             &signals,
@@ -742,8 +747,9 @@ pub(crate) fn run_new(
             // delegate opens through `Loop::delegate`, naming its parent.
             let committed = signals.commit(|| {
                 let started = match (rewound, parent) {
-                    (Some(start), _) => Loop::rewound_with_worktree(
-                        r#loop::Session {
+                    (Some(start), _) => {
+                        let is_fork = matches!(&start.how, r#loop::Continuation::Fork { .. });
+                        let session = r#loop::Session {
                             log: Arc::clone(&log),
                             provider,
                             model,
@@ -751,15 +757,21 @@ pub(crate) fn run_new(
                             inbox,
                             tools: r#loop::capped(tools, &caps),
                             permissions,
-                        },
-                        start,
-                        worktree,
-                    ),
-                    // The inherited roots are taken here, after
-                    // `session_started` will be written and before the
-                    // opening is built: the fresh delegate records them
-                    // as its own `directory_added` lines. Any other arm
-                    // leaves the slot alone.
+                        };
+                        if is_fork {
+                            Loop::fork_with_added(
+                                session,
+                                start,
+                                worktree,
+                                INHERITED.with(|cell| cell.take()),
+                            )
+                        } else {
+                            Loop::rewound_with_worktree(session, start, worktree)
+                        }
+                    }
+                    // A fresh spawn records its inherited roots here,
+                    // after `session_started` and before the opening. A
+                    // fork's roots are seeded in its point-continuation arm.
                     (None, Some(parent)) => Loop::delegate_with_added(
                         r#loop::Session {
                             log: Arc::clone(&log),

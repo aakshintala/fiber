@@ -1989,6 +1989,7 @@ fn a_reviewer_kept_after_the_cut_inserts_nothing() {
 fn added_dir(path: &str) -> Event {
     Event::DirectoryAdded(contract::events::DirectoryAdded {
         path: path.to_owned(),
+        inherited: false,
     })
 }
 

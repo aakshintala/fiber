@@ -266,12 +266,17 @@ pub struct QueuedMessage {
     pub sender: Sender,
 }
 
-/// `directory_added`: a folder the session accepted onto its boundary
-/// (`docs/events.md`, "`directory_added`").
+/// `directory_added`: a folder the session accepted onto its boundary,
+/// optionally inherited by a fresh delegate spawn (`docs/events.md`,
+/// "`directory_added`").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DirectoryAdded {
     /// The added folder's resolved path.
     pub path: String,
+    /// True when a fresh delegate inherited the folder at launch. It is
+    /// listed in the opening instead of appended as a separate message.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inherited: bool,
 }
 
 /// `shell_command`: a command the person ran with `send` true.

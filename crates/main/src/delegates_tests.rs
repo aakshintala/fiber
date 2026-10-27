@@ -574,6 +574,7 @@ fn started(workspace: &str, parent: Option<contract::events::Parent>) -> contrac
 fn added_dir(path: &str) -> contract::events::Event {
     contract::events::Event::DirectoryAdded(contract::events::DirectoryAdded {
         path: path.to_owned(),
+        inherited: false,
     })
 }
 
@@ -614,7 +615,7 @@ fn the_reader_folds_additions_after_wiring() {
 }
 
 #[test]
-fn the_reader_folds_a_fork_through_its_selected_point() {
+fn the_reader_folds_a_fork_from_the_launch_tail_not_its_selected_point() {
     let root = fakes::TempDir::new("fiber-inherited-point");
     let delegates = delegates_for(&root, "s_parent");
     let sessions = root.path().join("sessions");
@@ -628,19 +629,14 @@ fn the_reader_folds_a_fork_through_its_selected_point() {
             log_envelope("s_parent", 2, &added_dir("/later")),
         ],
     );
-    // Through the point: the later addition is excluded.
+    // The delegate's conversation point precedes `/later`, but its
+    // boundary is the parent's launch-time state.
     let at = contract::shapes::Point {
         session_id: SessionId("s_parent".into()),
         seq: contract::Seq(1),
     };
-    assert_eq!(inherited(Some(&at)), [std::path::PathBuf::from("/shared")]);
-    // Past the point: both additions fold.
-    let past = contract::shapes::Point {
-        session_id: SessionId("s_parent".into()),
-        seq: contract::Seq(2),
-    };
     assert_eq!(
-        inherited(Some(&past)),
+        inherited(Some(&at)),
         [
             std::path::PathBuf::from("/shared"),
             std::path::PathBuf::from("/later")

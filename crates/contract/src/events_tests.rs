@@ -317,7 +317,8 @@ fn directory_added_round_trips_with_its_resolved_path() {
     assert_eq!(
         event,
         Event::DirectoryAdded(DirectoryAdded {
-            path: "/shared".into()
+            path: "/shared".into(),
+            inherited: false,
         })
     );
     assert_eq!(event.kind(), "directory_added");
@@ -325,6 +326,19 @@ fn directory_added_round_trips_with_its_resolved_path() {
     assert_eq!(
         serde_json::to_value(event.payload().unwrap()).unwrap(),
         json!({"path": "/shared"})
+    );
+    let inherited = read(
+        "directory_added",
+        json!({"path": "/shared", "inherited": true}),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        inherited,
+        Event::DirectoryAdded(DirectoryAdded {
+            path: "/shared".into(),
+            inherited: true,
+        })
     );
 }
 
@@ -413,6 +427,10 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         ("session_named", json!({"name": null, "by": "person"})),
         ("directory_added", json!({"path": "/shared"})),
+        (
+            "directory_added",
+            json!({"path": "/shared", "inherited": true}),
+        ),
         ("clients", json!({"count": 1})),
         (
             "session_status",

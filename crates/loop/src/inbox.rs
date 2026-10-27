@@ -947,6 +947,7 @@ impl Loop {
             Ok(Some(resolved)) => {
                 let event = Event::DirectoryAdded(DirectoryAdded {
                     path: resolved.display().to_string(),
+                    inherited: false,
                 });
                 self.write(&event, None, None)?;
                 self.changes.track_added(&resolved);
@@ -958,18 +959,19 @@ impl Loop {
         Ok(())
     }
 
-    /// Seeds a fresh spawn delegate's loop from its inherited parent
-    /// roots: each root resolves exactly as an `add_directory` path
-    /// does, and each resolved, non-covered root is written as the
-    /// child's own `directory_added` before the opening
-    /// (`docs/delegates.md`, "The tools"). A covered root writes
-    /// nothing, and a root removed since the parent folded it resolves
-    /// to nothing and is skipped: it permits nothing. Every folded root
-    /// is a logged path string, so the lossy render below is exact for
-    /// every root the parent could have folded.
+    /// Seeds a delegate's loop from its inherited parent roots: each
+    /// root resolves exactly as an `add_directory` path does, and each
+    /// resolved, non-covered root is written as the child's own
+    /// `directory_added` before the opening (`docs/delegates.md`, "The
+    /// tools"). A fresh spawn marks these as inherited because its
+    /// opening lists them. A fork marks a root added after its point as
+    /// a normal addition, whose message follows the prefix. A covered
+    /// root writes nothing, and a removed root is skipped. Every folded
+    /// root is a logged path string, so its lossy render is exact.
     pub(crate) fn seed_inherited(
         &mut self,
         inherited: Vec<std::path::PathBuf>,
+        is_fresh_spawn: bool,
     ) -> Result<(), Error> {
         for root in inherited {
             match self.resolve_added(&root.to_string_lossy()) {
@@ -977,6 +979,7 @@ impl Loop {
                 Ok(Some(resolved)) => {
                     let event = Event::DirectoryAdded(DirectoryAdded {
                         path: resolved.display().to_string(),
+                        inherited: is_fresh_spawn,
                     });
                     self.write(&event, None, None)?;
                     self.changes.track_added(&resolved);

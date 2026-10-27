@@ -1203,11 +1203,13 @@ fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
 fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
     let setup = support::Setup::new();
     let _guard = arm(&setup);
-    let shared_holder = fakes::TempDir::new("inherited-shared");
-    let shared = shared_holder.path().join("shared");
-    fs::create_dir(&shared).unwrap();
-    let resolved = fs::canonicalize(&shared).unwrap();
-    let message = format!("Added folder {} to the session.", resolved.display());
+    let parent_holder = fakes::TempDir::new("inherited-parent");
+    let parent_b = parent_holder.path().join("B");
+    let parent_a = parent_holder.path().join("A");
+    fs::create_dir_all(&parent_b).unwrap();
+    fs::create_dir_all(&parent_a).unwrap();
+    let resolved_b = fs::canonicalize(&parent_b).unwrap();
+    let resolved_a = fs::canonicalize(&parent_a).unwrap();
 
     let parent = ProviderServer::start([
         text_reply("ok"),
@@ -1234,12 +1236,14 @@ fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
     });
     let client = running.connect(&setup);
     subscribe(&client);
-    client.send(&format!(
-        "{{\"id\":\"c_add\",\"command\":\"add_directory\",\"args\":{{\"path\":{}}}}}",
-        serde_json::to_string(shared.to_str().unwrap()).unwrap()
-    ));
-    let answer = support::recv_answer(&client, "c_add", "the add_directory acknowledgement");
-    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    for (id, path) in [("c_add_b", &parent_b), ("c_add_a", &parent_a)] {
+        client.send(&format!(
+            "{{\"id\":{id:?},\"command\":\"add_directory\",\"args\":{{\"path\":{}}}}}",
+            serde_json::to_string(path.to_str().unwrap()).unwrap()
+        ));
+        let answer = support::recv_answer(&client, id, "the add_directory acknowledgement");
+        assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    }
     running.wait_line("the first turn's end", |line| {
         line["kind"] == "turn_completed"
     });
@@ -1268,10 +1272,19 @@ fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
     });
     assert!(!child_id.is_empty(), "the run started a delegate");
     assert!(!child_log_path.is_empty(), "the receipt names the log");
-    assert_eq!(child.requests().len(), 1, "the child ran once");
+    let requests = child.requests();
+    assert_eq!(requests.len(), 1, "the child ran once");
+    let first_request = String::from_utf8_lossy(&requests[0].body);
+    assert!(first_request.contains(resolved_b.to_str().unwrap()));
+    assert!(first_request.contains(resolved_a.to_str().unwrap()));
     assert!(
-        String::from_utf8_lossy(&child.requests()[0].body).contains(&message),
-        "the child's first request carries the event-derived add message"
+        first_request.find(resolved_b.to_str().unwrap()).unwrap()
+            < first_request.find(resolved_a.to_str().unwrap()).unwrap(),
+        "the child opening lists folders in parent event order"
+    );
+    assert!(
+        !first_request.contains("Added folder "),
+        "inherited folders do not produce separate folder-added messages: {first_request}"
     );
     // The child's own log records the inherited root after its
     // `session_started`: the fold its resume and its own delegates read.
@@ -1283,15 +1296,26 @@ fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
         .iter()
         .filter(|line| line["kind"] == "directory_added")
         .collect();
-    assert_eq!(added.len(), 1, "the child wrote one inherited event");
-    assert_eq!(added[0]["payload"]["path"], resolved.to_str().unwrap());
+    assert_eq!(added.len(), 2, "the child wrote both inherited events");
+    assert_eq!(
+        added
+            .iter()
+            .map(|line| line["payload"]["path"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [resolved_b.to_str().unwrap(), resolved_a.to_str().unwrap()]
+    );
+    assert!(
+        added
+            .iter()
+            .all(|line| line["payload"]["inherited"] == true)
+    );
     // End the parent: the assertions below run against finished logs.
     close_now(&client);
     let (status, _, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
 
-    // Resuming the child replays the add message from its own log and
-    // writes no duplicate event. The piped stdin stays open for the
+    // Resuming the child restores the roots from its own log and writes
+    // no duplicate event. The piped stdin stays open for the
     // run: it is the delegate's lifeline, and EOF would read as a dead
     // parent and stop the child with 129.
     let workspace = setup.workspace().to_string_lossy().into_owned();
@@ -1317,18 +1341,25 @@ fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
     let _lifeline = stdin;
     let (status, _, stderr) = resumed.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
-    assert_eq!(child.requests().len(), 2, "the resume ran once more");
+    let requests = child.requests();
+    assert_eq!(requests.len(), 2, "the resume ran once more");
+    let resumed_request = String::from_utf8_lossy(&requests[1].body);
     assert!(
-        String::from_utf8_lossy(&child.requests()[1].body).contains(&message),
-        "the resumed request replays the add message"
+        resumed_request.contains(resolved_b.to_str().unwrap())
+            && resumed_request.contains(resolved_a.to_str().unwrap()),
+        "the resumed request keeps both folders in its conversation"
+    );
+    assert!(
+        !resumed_request.contains("Added folder "),
+        "the resume does not reveal inherited roots as separate messages"
     );
     assert_eq!(
         child_log()
             .iter()
             .filter(|line| line["kind"] == "directory_added")
             .count(),
-        1,
-        "the resume wrote no duplicate event"
+        2,
+        "the resume wrote no duplicate events"
     );
 }
 

@@ -587,7 +587,20 @@ impl Loop {
         inherited: Vec<std::path::PathBuf>,
     ) -> Result<Self, Error> {
         let mut looped = Self::delegate(session, parent, worktree)?;
-        looped.seed_inherited(inherited)?;
+        looped.seed_inherited(inherited, true)?;
+        Ok(looped)
+    }
+
+    /// A delegate fork's continuation, then the folders present at the
+    /// parent launch tail but missing from its point-based history.
+    pub fn fork_with_added(
+        session: Session,
+        start: Rewound,
+        worktree: Option<Worktree>,
+        inherited: Vec<std::path::PathBuf>,
+    ) -> Result<Self, Error> {
+        let mut looped = Self::rewound_with_worktree(session, start, worktree)?;
+        looped.seed_inherited(inherited, false)?;
         Ok(looped)
     }
 

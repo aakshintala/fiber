@@ -2328,6 +2328,7 @@ fn resumed_state_restores_added_roots_and_sends_their_files_on_touch() {
     // it from the event, before any call touches the root.
     let added = Event::DirectoryAdded(DirectoryAdded {
         path: shared.display().to_string(),
+        inherited: false,
     });
     let lines = vec![
         envelope(
@@ -2378,6 +2379,7 @@ fn resumed_state_keeps_added_folders_across_a_handoff_opening() {
             "directory_added",
             &Event::DirectoryAdded(DirectoryAdded {
                 path: shared.display().to_string(),
+                inherited: false,
             }),
         ),
         envelope("opening_message", &Event::OpeningMessage(second)),

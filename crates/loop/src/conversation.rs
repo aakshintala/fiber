@@ -280,11 +280,11 @@ impl Rendered {
             // one still without a result gets its fixed one first, before
             // the round's own input. Each is listed, so a new kind does
             // not compile until it is placed.
-            Event::TurnStarted(_)
+            Event::SessionStarted(_)
+            | Event::TurnStarted(_)
             | Event::SteeringApplied(_)
             | Event::ContextAdded(_)
             | Event::OpeningMessage(_)
-            | Event::SessionStarted(_)
             | Event::InstructionFile(_)
             | Event::SkillsChanged(_)
             | Event::DateChanged(_)
@@ -558,10 +558,11 @@ pub(crate) fn render(
         // acknowledgement. It joins neither the handoff's input nor what
         // the reviewer is shown: the handoff opening lists the folded
         // folders itself.
-        Event::DirectoryAdded(added) => conversation.push(Input::User {
+        Event::DirectoryAdded(added) if !added.inherited => conversation.push(Input::User {
             text: format!("Added folder {} to the session.", added.path),
             images: Vec::new(),
         }),
+        Event::DirectoryAdded(_) => {},
         // A rewind's note rides on its `session_started`: one user
         // message, so a live start and a resume render it the same way.
         Event::SessionStarted(started) => {

@@ -738,29 +738,21 @@ fn steerer(home: &Path) -> jobs::Steer {
 }
 
 /// Reads the parent's added folders at launch from its full history
-/// fold: the current tail for a spawn (`None`), the selected point for
-/// a fork (`docs/events.md`, "`directory_added`"). Bound at wiring to
-/// the parent's sessions and id, and read when the child launches, so
-/// an addition between wiring and launch is captured and an addition
-/// past a fork cutoff is excluded. A fold that cannot be read yields no
-/// roots: fewer roots only ever deny, so an unreadable parent log
-/// cannot widen the child.
+/// fold. A delegate fork continues the parent's prompt at a point but
+/// receives the roots current when the child launches; a person fork
+/// remains point-based (`docs/events.md`, "`directory_added`"). Bound
+/// at wiring to the parent's sessions and id, and read when the child
+/// launches, so an addition between wiring and launch is captured. A
+/// fold that cannot be read yields no roots: fewer roots only ever deny,
+/// so an unreadable parent log cannot widen the child.
 pub(crate) fn inherited_roots_reader(sessions: &Path, parent: &SessionId) -> jobs::InheritedRoots {
     let sessions = sessions.to_owned();
     let parent = parent.clone();
-    Arc::new(move |point: Option<&Point>| match point {
-        None => {
-            let dir = log::SessionDir::new(&sessions, &parent);
-            r#loop::resumed(dir.path())
-                .map(|folded| folded.added().to_vec())
-                .unwrap_or_default()
-        }
-        Some(at) => {
-            let dir = log::SessionDir::new(&sessions, &at.session_id);
-            r#loop::forked(dir.path(), at.seq)
-                .map(|folded| folded.added().to_vec())
-                .unwrap_or_default()
-        }
+    Arc::new(move |_| {
+        let dir = log::SessionDir::new(&sessions, &parent);
+        r#loop::resumed(dir.path())
+            .map(|folded| folded.added().to_vec())
+            .unwrap_or_default()
     })
 }
 

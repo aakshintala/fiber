@@ -706,6 +706,28 @@ fn add_directory_adds_an_already_added_folder_only_once() {
 }
 
 #[test]
+fn a_fork_root_missing_from_its_prefix_keeps_the_normal_add_message() {
+    let tree = Tree::new();
+    let shared = tree.root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    let resolved = shared.canonicalize().unwrap();
+    let (mut looped, _) = started(&tree);
+    looped
+        .seed_inherited(vec![shared], false)
+        .expect("the fork records its post-point root");
+    let lines = log::read(&tree.root.join("s_test")).unwrap();
+    let added = lines
+        .iter()
+        .find(|line| line.kind == "directory_added")
+        .unwrap();
+    assert!(added.payload.get("inherited").is_none());
+    let conversation = crate::conversation::rebuild(&lines, "fake/model").unwrap();
+    assert!(conversation.iter().any(|item| {
+        matches!(item, contract::provider::Input::User { text, .. } if text.contains(&resolved.display().to_string()))
+    }));
+}
+
+#[test]
 fn seed_inherited_writes_each_new_root_as_the_loops_own_event() {
     let tree = Tree::new();
     let shared = tree.root.join("shared");
@@ -715,11 +737,14 @@ fn seed_inherited_writes_each_new_root_as_the_loops_own_event() {
     // A covered root writes nothing, and a root removed since the
     // parent folded it is skipped: only the new root becomes an event.
     looped
-        .seed_inherited(vec![tree.top(), tree.root.join("missing"), shared.clone()])
+        .seed_inherited(
+            vec![tree.top(), tree.root.join("missing"), shared.clone()],
+            true,
+        )
         .unwrap();
     assert_eq!(added(&tree), [resolved.display().to_string()]);
     // Seeding again writes nothing more: the loop's own event covers
     // the root now.
-    looped.seed_inherited(vec![shared]).unwrap();
+    looped.seed_inherited(vec![shared], true).unwrap();
     assert_eq!(added(&tree).len(), 1);
 }

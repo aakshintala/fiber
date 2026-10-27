@@ -144,6 +144,7 @@ fn directory_added_is_fsynced_when_appended() {
     log.append(
         &Event::DirectoryAdded(contract::events::DirectoryAdded {
             path: "/shared".into(),
+            inherited: false,
         }),
         None,
         None,
