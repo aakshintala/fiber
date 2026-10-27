@@ -113,6 +113,8 @@ fn reload_rebuilds_renderer_and_installs_an_empty_replacement() {
     );
 }
 
+/// `/hooks` sends the no-argument session command and opens its swapped
+/// view (`docs/invocation.md`, "What each command does").
 #[test]
 fn hooks_opens_its_view_and_queries_with_no_args() {
     let mut app = attached();

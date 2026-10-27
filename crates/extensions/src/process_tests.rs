@@ -1463,7 +1463,10 @@ fn provider_references_resolve_only_within_their_generation() {
 /// Process hooks keep explicit phase separately from the effective
 /// `transform` default, never acquire `entry`, and refuse one when
 /// supplied. Flipping the flag would list an undeclared phase; keeping the
-/// entry would leak configuration identity through self-registration.
+/// entry would leak configuration identity through self-registration. The
+/// phase default and its explicitness follow `docs/extensions.md`, "When
+/// several hooks share a point"; `entry` arrives only from configuration
+/// declarations (`docs/extensions.md`, "Hooks declared in configuration").
 #[test]
 fn process_hook_phase_explicitness_and_entry_rejection() {
     let (_dir, mut registry) = test_registry(json!({}));

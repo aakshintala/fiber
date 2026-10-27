@@ -2563,7 +2563,10 @@ fn hook_refusals_name_the_entry_when_given() {
 /// Declared entry and explicit phase survive the registrar, while an
 /// omitted phase defaults to `transform` without marking itself explicit.
 /// Flipping the explicit flag would list an undeclared phase; dropping the
-/// entry would lose the configuration key.
+/// entry would lose the configuration key. The phase default and its
+/// explicitness follow `docs/extensions.md`, "When several hooks share a
+/// point"; declared `entry` survives only from configuration declarations
+/// (`docs/extensions.md`, "Hooks declared in configuration").
 #[test]
 fn declared_entry_and_explicit_phase_survive_the_registrar() {
     let init = [

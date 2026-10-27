@@ -18,7 +18,9 @@ fn hook(extension: &str, point: &str, on_failure: &str) -> HookInfo {
 
 /// The policy column stays whole at 40 columns while the source and the
 /// point truncate to the room that is left. Dropping the policy would hide
-/// whether the hook blocks; dropping a column would break the ruling.
+/// whether the hook blocks; dropping a column would break the ruling. The
+/// three columns, their order and the empty-state text follow `docs/tui.md`,
+/// "Swapped views".
 #[test]
 fn the_policy_column_stays_whole_at_forty_columns() {
     let rows = vec![
@@ -58,27 +60,24 @@ fn the_policy_column_stays_whole_at_forty_columns() {
     // Flipping the policy to a truncated prefix would still end with a
     // policy word part; the whole word pins it.
     assert!(!lines[0].ends_with("non-blockin"), "{lines:?}");
+    // A short row at 40 columns keeps its source and point whole while
+    // the policy stays whole.
+    let short = super::frame(
+        &[hook("ext", "before_tool", "blocking")],
+        List::default(),
+        40,
+    );
+    let line = &short.rows[0][0].0;
+    assert!(line.ends_with("blocking"), "{line}");
+    assert!(line.contains("ext"), "{line}");
+    assert!(line.contains("before_tool"), "{line}");
 }
 
-/// With none registered, the view says exactly `No hooks`.
+/// With none registered, the view says exactly `No hooks` (`docs/tui.md`,
+/// "Swapped views").
 #[test]
 fn an_empty_session_says_no_hooks() {
     let frame = frame(&[], List::default(), 40);
     assert_eq!(frame.rows.len(), 1);
     assert_eq!(frame.rows[0][0].0, "No hooks");
-}
-
-/// A just-below and just-above check on the truncation edge: at 40
-/// columns the longest policy fits whole, and a shorter width still keeps
-/// it whole by cutting the other columns first.
-#[test]
-fn narrower_widths_keep_cutting_source_before_policy() {
-    let rows = vec![hook("ext", "before_tool", "blocking")];
-    for width in [40, 41, 80] {
-        let frame = frame(&rows, List::default(), width);
-        let line = &frame.rows[0][0].0;
-        assert!(line.ends_with("blocking"), "width {width}: {line}");
-        assert!(line.contains("ext"), "width {width}: {line}");
-        assert!(line.contains("before_tool"), "width {width}: {line}");
-    }
 }

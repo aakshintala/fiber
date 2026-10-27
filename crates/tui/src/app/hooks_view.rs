@@ -10,23 +10,16 @@ use crate::{text, theme::Role};
 /// watcher kinds, and the blocking policy. The policy column stays whole;
 /// the source and the point-or-kinds truncate to the room that is left.
 pub(crate) fn frame(rows: &[HookInfo], list: List, width: u16) -> Frame {
-    if rows.is_empty() {
-        return Frame {
-            title: "Hooks".to_owned(),
-            command: "/hooks".to_owned(),
-            rows: vec![(vec![("No hooks".to_owned(), None, Ink::Muted)])],
-            list,
-            below: Vec::new(),
-            field: None,
-            footer: "Esc close".to_owned(),
-        };
-    }
-    let width = usize::from(width);
-    let out = rows.iter().map(|row| row_cells(row, width)).collect();
+    let body = if rows.is_empty() {
+        vec![(vec![("No hooks".to_owned(), None, Ink::Muted)])]
+    } else {
+        let width = usize::from(width);
+        rows.iter().map(|row| row_cells(row, width)).collect()
+    };
     Frame {
         title: "Hooks".to_owned(),
         command: "/hooks".to_owned(),
-        rows: out,
+        rows: body,
         list,
         below: Vec::new(),
         field: None,
@@ -34,39 +27,36 @@ pub(crate) fn frame(rows: &[HookInfo], list: List, width: u16) -> Frame {
     }
 }
 
-/// The source column: the declared entry's name, else the extension's name.
-fn source_of(row: &HookInfo) -> &str {
+/// One row's source, middle and policy together: the declared entry's name
+/// else the extension's name; the hook's point or the watcher's kinds joined
+/// with `", "`; `blocking`, `non-blocking` or `watcher`, always drawn whole.
+fn columns(row: &HookInfo) -> (&str, String, &'static str) {
     match row {
         HookInfo::Hook {
-            extension, entry, ..
-        } => entry.as_deref().unwrap_or(extension),
-        HookInfo::Watcher {
-            extension, entry, ..
-        } => entry.as_deref().unwrap_or(extension),
-    }
-}
-
-/// The middle column: the hook's point, or the watcher's kinds joined with
-/// `", "`.
-fn middle_of(row: &HookInfo) -> String {
-    match row {
-        HookInfo::Hook { point, .. } => point.clone(),
-        HookInfo::Watcher { kinds, .. } => kinds.join(", "),
-    }
-}
-
-/// The policy column, always drawn whole: `blocking`, `non-blocking` or
-/// `watcher`.
-fn policy_of(row: &HookInfo) -> &'static str {
-    match row {
-        HookInfo::Hook { on_failure, .. } => {
+            extension,
+            entry,
+            point,
+            on_failure,
+            ..
+        } => (
+            entry.as_deref().unwrap_or(extension),
+            point.clone(),
             if on_failure == "blocking" {
                 "blocking"
             } else {
                 "non-blocking"
-            }
-        }
-        HookInfo::Watcher { .. } => "watcher",
+            },
+        ),
+        HookInfo::Watcher {
+            extension,
+            entry,
+            kinds,
+            ..
+        } => (
+            entry.as_deref().unwrap_or(extension),
+            kinds.join(", "),
+            "watcher",
+        ),
     }
 }
 
@@ -81,9 +71,7 @@ fn policy_ink(policy: &str) -> Ink {
 /// One row's cells at `width`: the policy stays whole while the source
 /// and the middle share what is left.
 fn row_cells(row: &HookInfo, width: usize) -> Vec<(String, Option<crate::swapped::Spot>, Ink)> {
-    let source_full = source_of(row);
-    let middle_full = middle_of(row);
-    let policy = policy_of(row);
+    let (source_full, middle_full, policy) = columns(row);
     // The gutter, the two ` · ` separators and the whole policy column.
     let fixed = crate::swapped::GUTTER + policy.len() + 6;
     let room = width.saturating_sub(fixed);

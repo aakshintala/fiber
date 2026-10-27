@@ -4309,7 +4309,10 @@ fn process_package_with_declared_providers_loads_without_a_vm() {
 /// configuration rows and `phase` only when declared. An ordinary
 /// registration that supplies `entry` keeps its hook but loses the key, so
 /// flipping the extension check would leak it and flipping the explicit
-/// flag would list an undeclared phase.
+/// flag would list an undeclared phase. The per-point run order follows
+/// `docs/extensions.md`, "When several hooks share a point"; the
+/// hooks-first list order and the `entry`/`phase` omission rules follow
+/// `docs/events.md`, "`command_accepted`".
 #[test]
 fn registrations_list_hooks_in_point_and_run_order_then_watchers() {
     use contract::events::HookInfo;

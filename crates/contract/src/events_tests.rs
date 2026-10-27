@@ -1681,6 +1681,10 @@ fn an_mcp_servers_result_reads_its_rows_and_omits_absent_keys() {
     }
 }
 
+/// The `hooks` result row order and omitted keys follow `docs/events.md`,
+/// "`command_accepted`": hooks first, then watchers, `entry` only for a
+/// declared entry and `phase` only when declared, and hook keys never on a
+/// watcher row nor watcher keys on a hook row.
 #[test]
 fn a_hooks_result_reads_its_rows_and_omits_absent_keys() {
     let result = result_of(json!({"command_id": "c_1", "result": {"hooks": [
