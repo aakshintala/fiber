@@ -25,9 +25,9 @@ session like any other.
 ### Process
 
 One run of the Fiber binary, from launch to exit. It opens zero or more sessions
-over its life: none when it fails at startup, and two after a rewind.
-In each session it opens, `fiber_started` opens its boundary, and `fiber_exited`
-or `rewound` closes it.
+over its life: none when it fails at startup, and two after a rewind or a
+workspace move. In each session it opens, `fiber_started` opens its boundary,
+and `fiber_exited`, `rewound` or `moved` closes it.
 _Avoid_: run, instance
 
 ### Image child

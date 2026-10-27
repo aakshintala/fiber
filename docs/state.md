@@ -115,10 +115,19 @@ The session directory is unchanged from `docs/events.md`:
 The full output behind a bounded tool result goes in that session's
 `artifacts/`.
 
-A fork's history, and a rewind's, is a pointer into another session's log
-(`docs/delegates.md`, "Forks"; `docs/events.md`, "Rewind"). Deleting a session
-a fork or a rewind points at is refused unless the person asks for those to
-be deleted too (`docs/invocation.md`, "Deleting and pruning"). Nothing deletes
+A fork's, rewind's or workspace move's history follows `forked_from` on the
+child's `session_started` (`docs/delegates.md`, "Forks"; `docs/events.md`,
+"Rewind" and "Change workspace"). When `forked_from.project` is present, it
+names the parent's project key and the reader opens
+`projects/<project>/sessions/<session_id>/` directly. When it is absent, the
+parent is in the child's project. A missing parent fails closed; readers do
+not scan other projects.
+
+Deleting a session a fork, rewind or workspace move points at is refused
+unless the person asks for those sessions to be deleted too
+(`docs/invocation.md`, "Deleting and pruning"). For a cross-project move,
+delete and prune read the parent's final `moved` event: `workspace` resolves
+the child's project key, and `new_session_id` names the child. Nothing deletes
 a session on its own, except a session that never got a prompt, which
 deletes its own directory as it exits (`docs/invocation.md`, "Lifecycle").
 
