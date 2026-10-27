@@ -4068,3 +4068,80 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
         "the shadowed extension row stays out: {result:?}"
     );
 }
+
+/// `hooks` answers the session's registered rows with no arguments, and a
+/// reload reports the new snapshot: one declared hook is absent before its
+/// extension loads and present after.
+#[test]
+fn hooks_answers_registered_rows_and_reload_reports_the_new_snapshot() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    install_lua(
+        &setup,
+        "hookbox",
+        "fiber.hook(\"before_tool\", { timeout = 5000, on_failure = \"blocking\", run = function() end })\n\
+         fiber.watch({ \"turn_completed\" }, { timeout = 5000, run = function() end })\n",
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let _sub = recv(&client, "the subscribe acknowledgement");
+    send(&client, r#"{"id":"c_hooks","command":"hooks"}"#);
+    let answered = until_session(&client, "the hooks answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_hooks"
+    });
+    let result = answered.last().unwrap()["payload"]["result"].clone();
+    let rows = result["hooks"].as_array().unwrap().clone();
+    assert!(
+        rows.contains(
+            &json!({"kind": "hook", "extension": "fiber.test/hookbox", "point": "before_tool", "on_failure": "blocking"})
+        ),
+        "the extension hook row stands: {result:?}"
+    );
+    assert!(
+        rows.contains(
+            &json!({"kind": "watcher", "extension": "fiber.test/hookbox", "kinds": ["turn_completed"]})
+        ),
+        "the watcher row stands: {result:?}"
+    );
+    // A reload with a second extension reports the new snapshot without
+    // restarting the session.
+    install_lua(
+        &setup,
+        "second",
+        "fiber.hook(\"after_tool\", { phase = \"sanitize\", timeout = 5000, on_failure = \"non-blocking\", run = function() end })\n",
+    );
+    send(&client, r#"{"id":"c_reload","command":"reload"}"#);
+    until_session(&client, "the reloaded line", |line| {
+        line["kind"] == "reloaded"
+    });
+    send(&client, r#"{"id":"c_hooks2","command":"hooks"}"#);
+    let answered = until_session(&client, "the second hooks answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_hooks2"
+    });
+    let result = answered.last().unwrap()["payload"]["result"].clone();
+    let rows = result["hooks"].as_array().unwrap();
+    assert!(
+        rows.contains(
+            &json!({"kind": "hook", "extension": "fiber.test/second", "point": "after_tool", "on_failure": "non-blocking", "phase": "sanitize"})
+        ),
+        "the reload added the second hook row: {result:?}"
+    );
+    assert!(
+        rows.contains(
+            &json!({"kind": "watcher", "extension": "fiber.test/hookbox", "kinds": ["turn_completed"]})
+        ),
+        "the first watcher row stands: {result:?}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}

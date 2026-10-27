@@ -1,8 +1,8 @@
 ---
 source: crates/tui/src/view/completions_tests.rs
+assertion_line: 199
 expression: "screen(&app, 160, 48)"
 ---
-
 
 
 
@@ -41,6 +41,7 @@ expression: "screen(&app, 160, 48)"
                                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
                                   › home     Goes home, focused on the session on screen's row.                        command
+                                    hooks    Opens the hooks view.                                                     command
                                     handoff  /compact Starts a handoff. [instructions]                                 command
                                     help     Opens the key map.                                                        command
                                     thinking /effort Sets the thinking level, or opens the model picker on … [<level>] command

@@ -56,6 +56,7 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         | CommandResult::Import { .. }
         | CommandResult::PlaceholderEnv { .. }
         | CommandResult::Call(_)
+        | CommandResult::Hooks { .. }
         | CommandResult::Stop { .. } => None,
     }
 }

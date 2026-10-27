@@ -41,6 +41,8 @@ pub(crate) enum SessionView {
     Call(usize),
     /// `/rewind`.
     Rewind,
+    /// `/hooks`.
+    Hooks,
 }
 
 /// The selected row in an open session view.
@@ -68,6 +70,8 @@ pub(in crate::app) enum Open {
     Call(Box<CallView>),
     /// `/rewind`.
     Rewind(List),
+    /// `/hooks`.
+    Hooks(List),
 }
 
 /// The session views' state, reset for each attachment.
@@ -80,6 +84,8 @@ pub(in crate::app) struct SessionViews {
     request: Option<(String, String)>,
     diff: Option<(String, Diff)>,
     diff_list: List,
+    hooks_request: Option<String>,
+    hooks_rows: Option<Vec<contract::events::HookInfo>>,
 }
 
 impl App {
@@ -146,10 +152,15 @@ impl App {
                 self.session_views.open = Some(Open::Rewind(List::default()));
                 return self.open_rewind();
             }
+            SessionView::Hooks => {
+                self.session_views.open = Some(Open::Hooks(List::default()));
+                return self.open_hooks();
+            }
         });
-        // Opening another view drops the rewind's wait: its late answer
-        // folds nowhere.
+        // Opening another view drops the rewind's wait and the hooks query:
+        // a late answer folds nowhere.
         self.rewind = super::rewind::Rewind::default();
+        self.session_views.hooks_request = None;
         Effect::None
     }
 
@@ -216,7 +227,8 @@ impl App {
             | Open::Quota(list)
             | Open::Context(list)
             | Open::Status(list)
-            | Open::ReleaseNotes(list),
+            | Open::ReleaseNotes(list)
+            | Open::Hooks(list),
         ) = self.session_views.open.as_mut()
         {
             list.key(key, rows, height);
@@ -309,7 +321,8 @@ impl App {
                 | Open::Quota(list)
                 | Open::Context(list)
                 | Open::Status(list)
-                | Open::ReleaseNotes(list),
+                | Open::ReleaseNotes(list)
+                | Open::Hooks(list),
             ) = self.session_views.open.as_mut()
         {
             list.select(at, rows, height);
@@ -333,6 +346,7 @@ impl App {
             | Some(Open::ReleaseNotes(_))
             | Some(Open::Call(_))
             | Some(Open::Rewind(_))
+            | Some(Open::Hooks(_))
             | None => {
                 return Effect::None;
             }
@@ -372,6 +386,7 @@ impl App {
             | Some(Open::ReleaseNotes(_))
             | Some(Open::Call(_))
             | Some(Open::Rewind(_))
+            | Some(Open::Hooks(_))
             | None => Vec::new(),
         }
     }
@@ -469,6 +484,10 @@ impl App {
             Open::Rewind(list) => {
                 let jobs = self.rewind_stopping();
                 Some(super::rewind::frame(&self.rewind, &jobs, *list))
+            }
+            Open::Hooks(list) => {
+                let rows = self.session_views.hooks_rows.as_deref().unwrap_or(&[]);
+                Some(super::hooks_view::frame(rows, *list, width))
             }
         }
     }
@@ -582,6 +601,10 @@ impl App {
                         }
                         return self.rewind_answered(envelope, &accepted);
                     }
+                    if matches!(self.session_views.open, Some(Open::Hooks(_))) {
+                        self.hooks_answered(&accepted);
+                        return Vec::new();
+                    }
                     self.session_views_answered(&accepted);
                 }
             }
@@ -591,6 +614,8 @@ impl App {
                         self.call_view_refused(&rejected);
                     } else if matches!(self.session_views.open, Some(Open::Rewind(_))) {
                         self.rewind_refused(&rejected);
+                    } else if matches!(self.session_views.open, Some(Open::Hooks(_))) {
+                        self.hooks_refused(&rejected);
                     } else {
                         self.session_views_rejected(&rejected);
                     }
@@ -652,6 +677,54 @@ impl App {
         self.rewind = super::rewind::Rewind::default();
     }
 
+    /// Opens the hooks view on the attached session and sends its `hooks`
+    /// query. A late answer after another view replaces it folds nowhere,
+    /// as does an answer to an older query after a newer one.
+    pub(in crate::app) fn open_hooks(&mut self) -> Effect {
+        self.session_views.hooks_request = None;
+        self.session_views.hooks_rows = None;
+        let Some(session) = self.session().cloned() else {
+            return Effect::None;
+        };
+        if !self.connected() {
+            return Effect::None;
+        }
+        let id = super::mint();
+        let line = super::session_command(&id, "hooks", &session, None).to_string();
+        self.session_views.hooks_request = Some(id);
+        Effect::Send(vec![line])
+    }
+
+    /// Folds a `command_accepted` into the open hooks view when it answers
+    /// the pending `hooks` query: a late answer, another view's answer, or
+    /// another command's shape folds nowhere.
+    pub(in crate::app) fn hooks_answered(&mut self, accepted: &CommandAccepted) {
+        let Some(request) = self.session_views.hooks_request.as_ref() else {
+            return;
+        };
+        if request != &accepted.command_id.0 {
+            return;
+        }
+        let Some(contract::events::CommandResult::Hooks { hooks }) = accepted.result.as_ref()
+        else {
+            return;
+        };
+        self.session_views.hooks_request = None;
+        self.session_views.hooks_rows = Some(hooks.clone());
+    }
+
+    /// A `command_rejected` for the pending `hooks` query drops the wait:
+    /// the view keeps showing what it holds, if anything.
+    pub(in crate::app) fn hooks_refused(&mut self, rejected: &CommandRejected) {
+        let Some(id) = rejected.command_id.as_ref() else {
+            return;
+        };
+        if self.session_views.hooks_request.as_deref() != Some(&id.0) {
+            return;
+        }
+        self.session_views.hooks_request = None;
+    }
+
     /// Moves the open rewind view's list to `at`: the fold's selection.
     /// A closed or missing view moves nothing.
     pub(in crate::app) fn rewind_list_to(&mut self, at: usize, rows: usize) {
@@ -674,6 +747,8 @@ impl App {
         self.session_views.request = None;
         self.session_views.diff = None;
         self.session_views.diff_list = List::default();
+        self.session_views.hooks_request = None;
+        self.session_views.hooks_rows = None;
         self.rewind = super::rewind::Rewind::default();
     }
 }
