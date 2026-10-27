@@ -57,7 +57,10 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   worktree delegate defaults to that worktree. Every delegate the session
   starts, forks included, also runs with the session's added folders
   (`docs/events.md`, "`directory_added`"); the delegate tools take no new
-  argument for them.
+  argument for them. A fresh Fiber spawn records inherited folders as
+  `directory_added` events in its own log before its opening. A fork's history
+  folds its parent's events through the chosen point instead of copying them.
+  Both keep the folders in the delegate's history for resume and descendants.
 - `timeout_ms` is optional, with no default. At the deadline, the delegate is
   stopped like any job and ends `failed` with code `timeout`. A delegate has no
   other deadline: a Fiber delegate's shell commands carry their own

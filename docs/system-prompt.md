@@ -247,8 +247,9 @@ loaded from it, and the folders below it are read only through "Subdirectory
 files" above.
 
 When a folder is added, Fiber appends a message naming it. The opening message
-rebuilt at a handoff lists the folded added folders, so a handoff does not
-lose them. The system prompt does not change.
+rebuilt at a handoff lists the folded added folders in first-event order
+(`docs/events.md`, "`directory_added`"), so a handoff does not lose them. The
+system prompt does not change.
 
 ### Skills listing
 

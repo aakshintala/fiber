@@ -431,13 +431,13 @@ session").
 
 #### `directory_added`
 
-Durable. Written when the session accepts an `add_directory` driver command (`docs/invocation.md`, "Driver commands") for a folder outside the current boundary. A folder already inside the workspace or an added folder is accepted with no event written.
+Durable. Written when the session accepts an `add_directory` driver command (`docs/invocation.md`, "Driver commands") for a folder outside the current boundary. A fresh Fiber spawn also writes an event for each inherited folder not already covered by its workspace, before its opening. A fork uses its parent's events through the chosen history point instead of copying them. A folder already inside the workspace or an added folder is accepted with no event written.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `path` | string | yes | the added folder's resolved path |
 
-The fold of every `directory_added` line is the session's added folders, alongside the workspace from `session_started`. A resume rebuilds them from the log, and the opening message rebuilt at a handoff lists them (`docs/system-prompt.md`, "After a handoff"). A fork or a rewind from a point after the event keeps it, and one from a point before it does not.
+The fold adds each resolved path at its first `directory_added` event and keeps it in that position. A later event for the same canonical path does not move it: B, A, B folds to B, A. A resume rebuilds the same order from the log. The opening message rebuilt at a handoff lists the folders in that order (`docs/system-prompt.md`, "After a handoff"). A fork or a rewind from a point after the event keeps it, and one from a point before it does not.
 
 #### `clients`
 

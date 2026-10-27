@@ -240,8 +240,9 @@ The model's other prose and every tool result are stripped before the prompt
 is built. The
 reviewer also gets the call under review, its declared effects, for a shell
 call the commands in it that were not shown read-only (`docs/tools.md`,
-"Shell", "Effects"), the workspace root and the added folders, and the person's own notes about their environment ("What the
-person tells it").
+"Shell", "Effects"), the workspace root and the added folders in first-event
+order (`docs/events.md`, "`directory_added`"), and the person's own notes about
+their environment ("What the person tells it").
 
 This is the load-bearing decision on this page. The reviewer's prompt contains
 no tool output and no text a repository file produced. The only text the agent
