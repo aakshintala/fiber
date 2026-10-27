@@ -581,8 +581,9 @@ not forwarded to the child. Clients connected at the move switch to the child.
 The old session stops its jobs, writes `moved` with the child id, the last
 durable line before `moved`, and the resolved target workspace, then the hub
 starts the child. When the inbox disconnects with jobs still unfinished, the
-session stops and ends those jobs normally before writing `moved`, as a rewind
-does. Its `session_started.forked_from` names the old session and
+move fails without writing `moved`: buffered ends are still written, no end
+is fabricated, and the acknowledgement is never answered. Its
+`session_started.forked_from` names the old session and
 that point. When the projects differ, `forked_from.project` names the old
 project key; otherwise it is absent. The child starts with no summary and no
 prompt. Each session keeps the workspace recorded in its own

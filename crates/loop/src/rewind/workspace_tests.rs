@@ -259,3 +259,18 @@ fn a_symlink_out_of_the_workspace_moves() {
     assert_eq!(resolved, std::fs::canonicalize(outside.path()).unwrap());
     assert!(!is_same_folder(&resolved, &current));
 }
+
+#[test]
+fn a_doubled_slash_after_tilde_stays_beneath_the_hub_home() {
+    let home = workspace();
+    let nested = home.path().join("tmp");
+    std::fs::create_dir_all(&nested).unwrap();
+    let resolved = resolve("~//tmp", &current(&home), Some(home.path())).unwrap();
+    let expected = std::fs::canonicalize(&nested).unwrap();
+    assert_eq!(resolved, expected);
+    assert!(
+        resolved.starts_with(std::fs::canonicalize(home.path()).unwrap()),
+        "a leading ~/ never resolves outside the home: {resolved:?}"
+    );
+    assert_ne!(resolved, std::path::PathBuf::from("/tmp"));
+}

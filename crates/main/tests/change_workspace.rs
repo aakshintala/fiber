@@ -288,8 +288,8 @@ fn a_move_before_any_model_turn_starts_the_child_in_the_target() {
         .to_owned();
     client.send(&subscribe("c_sub", &old));
     until_ack(client, "the subscribe acknowledgement", "c_sub");
-    // The old session was never prompted: its `moved` record survives
-    // only once the no-prompt retention rule keeps ended moves (Task 6).
+    // The old session was never prompted: ended moves are retained even
+    // with no model turn, so its `moved` record is still written.
     let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
     until_child_started(client, &child);
     // The old log ends `moved`, naming the target and the child.
@@ -773,6 +773,62 @@ fn a_rewind_to_a_pre_move_point_reads_across_projects() {
         project_key_of(&layout.repo_a)
     );
     // Resume works on the rewind child, and the leaf deletes clean.
+    hubbed.prompt("c_three", &next, "three");
+    hubbed.close("c_close_next", &next);
+    let log = session_log_path(&setup, &next);
+    let output = delete(&setup, &layout.repo_b, &next);
+    assert!(output.status.success(), "delete the leaf: {output:?}");
+    assert!(!log.exists(), "the leaf's log is gone");
+    hubbed.finish();
+}
+
+#[test]
+fn a_rewind_names_the_ancestor_project_after_its_workspace_moves_away() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    hubbed.prompt("c_two", &old, "two");
+    // The pre-move point: the old session's latest turn start.
+    let point = session_log(&setup, &old)
+        .into_iter()
+        .filter(|line| line["kind"] == "turn_started")
+        .map(|line| line["seq"].as_u64().unwrap())
+        .next_back()
+        .unwrap();
+    // The ancestor's project key, read while its workspace still resolves.
+    let expected = project_key_of(&layout.repo_a);
+    let moved = hubbed.move_to("c_mv", &old, &layout.repo_b);
+    until_child_started(hubbed.client(), &moved);
+    // The recorded workspace moves away, but the ancestor's log stays in
+    // its project: the continuation still names that project.
+    let away = setup.root.path().join("repo-a-away");
+    fs::rename(&layout.repo_a, &away).unwrap();
+    hubbed.client().send(&command(
+        "c_rw",
+        Some(&moved),
+        "rewind",
+        json!({"from_session_id": old, "seq": point}),
+    ));
+    let ack = until_ack(
+        hubbed.client(),
+        "the cross-project rewind after the workspace moved",
+        "c_rw",
+    );
+    let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until_child_started(hubbed.client(), &next);
+    let child_log = session_log(&setup, &next);
+    assert_eq!(child_log[0]["payload"]["forked_from"]["session_id"], old);
+    assert_eq!(child_log[0]["payload"]["forked_from"]["seq"], point);
+    assert_eq!(
+        child_log[0]["payload"]["forked_from"]["project"], expected,
+        "the project comes from the ancestor's directory, not its moved workspace"
+    );
     hubbed.prompt("c_three", &next, "three");
     hubbed.close("c_close_next", &next);
     let log = session_log_path(&setup, &next);

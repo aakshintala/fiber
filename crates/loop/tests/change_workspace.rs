@@ -107,11 +107,14 @@ fn take_inbox(session: &mut Session) -> mpsc::Sender<Delivery> {
 }
 
 /// Jobs a test lists by hand. Each stop sent is reported on `stops`. An
-/// end drops its id from `running` before reaching `inbox`, as the
-/// registry's state reads once the notice is sent.
+/// end is sent through the inbox `deliver_to` installed before its notice
+/// reaches it, and only then drops its id from `running`, as the
+/// registry's contract reads: once a job is gone from `running` its notice
+/// is already waiting in the inbox.
 struct FakeJobs {
     ids: Mutex<Vec<JobId>>,
     stops: Mutex<mpsc::Sender<JobId>>,
+    inbox: Mutex<Option<mpsc::Sender<Delivery>>>,
 }
 
 impl FakeJobs {
@@ -120,20 +123,16 @@ impl FakeJobs {
         let jobs = Arc::new(Self {
             ids: Mutex::new(ids.iter().map(|id| JobId((*id).into())).collect()),
             stops: Mutex::new(tx),
+            inbox: Mutex::new(None),
         });
         (jobs, rx)
     }
 
-    /// Ends `id` as `status`: `running` drops it before its notice
-    /// reaches `inbox`, so a woken loop never sees it still running.
-    fn end(
-        &self,
-        inbox: &mpsc::Sender<Delivery>,
-        id: &str,
-        status: Outcome,
-        error: Option<Failure>,
-    ) {
-        self.ids.lock().unwrap().retain(|listed| listed.0 != id);
+    /// Ends `id` as `status`: the notice is sent through the installed
+    /// inbox before `running` drops it, so a loop that reads an empty
+    /// `running` always finds the notice waiting.
+    fn end(&self, id: &str, status: Outcome, error: Option<Failure>) {
+        let inbox = self.inbox.lock().unwrap().clone().expect("deliver_to ran");
         inbox
             .send(Delivery::Job(JobNotice {
                 completed: JobCompleted {
@@ -149,6 +148,14 @@ impl FakeJobs {
                 delegate: None,
             }))
             .unwrap();
+        self.ids.lock().unwrap().retain(|listed| listed.0 != id);
+    }
+
+    /// Drops the installed inbox sender, closing the inbox once every other
+    /// sender is gone: the loop's wait ends `Disconnected` with these jobs
+    /// still listed as running.
+    fn disconnect(&self) {
+        self.inbox.lock().unwrap().take();
     }
 }
 
@@ -179,7 +186,9 @@ impl Jobs for FakeJobs {
         self.ids.lock().unwrap().clone()
     }
 
-    fn deliver_to(&self, _: mpsc::Sender<Delivery>) {}
+    fn deliver_to(&self, inbox: mpsc::Sender<Delivery>) {
+        *self.inbox.lock().unwrap() = Some(inbox);
+    }
 }
 
 /// A tool that sends `change_workspace` to the inbox from inside a turn,
@@ -406,7 +415,8 @@ fn a_move_with_admitted_job_news_is_busy() {
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let inbox = take_inbox(&mut session);
-    jobs.end(&inbox, "j_1", Outcome::Cancelled, None);
+    jobs.deliver_to(inbox.clone());
+    jobs.end("j_1", Outcome::Cancelled, None);
     target_dir(&session);
     let (mv, answered) = change_workspace("../other");
     inbox.send(mv).unwrap();
@@ -452,6 +462,7 @@ fn a_second_transition_during_the_stop_is_busy_then_the_move_is_terminal() {
     let (rw, rw_answered) = support::rewind(move_args());
     let (mv2, mv2_answered) = change_workspace("../other");
     let inbox = take_inbox(&mut session);
+    jobs.deliver_to(inbox.clone());
     inbox.send(mv).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -492,7 +503,7 @@ fn a_second_transition_during_the_stop_is_busy_then_the_move_is_terminal() {
             .all(|line| line.kind != "moved"),
         "competitors write nothing"
     );
-    jobs.end(&inbox, "j_1", Outcome::Cancelled, None);
+    jobs.end("j_1", Outcome::Cancelled, None);
     drop(inbox);
     let (_looped, outcome) = Deadline::after(DEADLINE)
         .recv(&finished)
@@ -521,6 +532,7 @@ fn job_ends_are_written_before_moved_in_order() {
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let (mv, answered) = change_workspace("../other");
     let inbox = take_inbox(&mut session);
+    jobs.deliver_to(inbox.clone());
     inbox.send(mv).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -537,9 +549,8 @@ fn job_ends_are_written_before_moved_in_order() {
             .expect("a stop arrives");
         stopped += 1;
     }
-    jobs.end(&inbox, "j_1", Outcome::Cancelled, None);
+    jobs.end("j_1", Outcome::Cancelled, None);
     jobs.end(
-        &inbox,
         "j_2",
         Outcome::Failed,
         Some(Failure {
@@ -562,13 +573,14 @@ fn job_ends_are_written_before_moved_in_order() {
         .take(3)
         .map(|line| line.kind.as_str())
         .collect();
+    // docs/events.md:1606: each running job ends before `moved`.
     assert_eq!(tail, ["moved", "job_completed", "job_completed"]);
     let moved = lines.last().unwrap();
     assert_eq!(moved.payload["seq"], (lines.len() - 2) as u64);
 }
 
 #[test]
-fn a_disconnected_inbox_stops_jobs_then_writes_moved_without_fabrication() {
+fn a_disconnected_inbox_fails_the_move_without_moved_or_fabrication() {
     let mut session = Session::new(vec![Scripted::text("Done.")], None);
     let dir = session.dir.clone();
     target_dir(&session);
@@ -579,13 +591,13 @@ fn a_disconnected_inbox_stops_jobs_then_writes_moved_without_fabrication() {
         .take()
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    jobs.deliver_to(tx.clone());
     let (mv, answered) = change_workspace("../other");
     tx.send(mv).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut looped = looped;
-        let outcome = looped.turn().unwrap();
-        done.send(outcome).unwrap();
+        done.send(looped.turn()).unwrap();
     });
     // The stop barrier: the stop was sent before the disconnection.
     assert_eq!(
@@ -596,13 +608,23 @@ fn a_disconnected_inbox_stops_jobs_then_writes_moved_without_fabrication() {
         "j_1"
     );
     drop(tx);
+    jobs.disconnect();
     let outcome = Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("the move ended in time");
-    assert_eq!(outcome, None);
-    accepted(answer_of(answered));
+    assert!(
+        outcome.is_err(),
+        "the move fails while a job is still running"
+    );
+    assert!(
+        answered.try_recv().is_err(),
+        "the acknowledgement is never answered"
+    );
     let lines = log::read(&dir).unwrap();
-    assert_eq!(lines.last().unwrap().kind, "moved");
+    assert!(
+        lines.iter().all(|line| line.kind != "moved"),
+        "no moved hides the unfinished job"
+    );
     assert!(
         lines.iter().all(|line| line.kind != "job_completed"),
         "no end is invented for the job that never ended"

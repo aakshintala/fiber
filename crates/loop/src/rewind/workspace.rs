@@ -150,7 +150,10 @@ pub(crate) fn resolve(
     let candidate = if typed == "~" || typed == "~/" {
         home.ok_or_else(invalid)?.to_path_buf()
     } else if let Some(rest) = typed.strip_prefix("~/") {
-        home.ok_or_else(invalid)?.join(rest)
+        // `rest` may itself start with `/`, and joining an absolute path
+        // would discard the home: strip the slashes so every `~/` string
+        // stays beneath it.
+        home.ok_or_else(invalid)?.join(rest.trim_start_matches('/'))
     } else {
         let path = PathBuf::from(typed);
         if path.is_absolute() {

@@ -132,9 +132,10 @@ impl Loop {
 
     /// Stops every running job and writes each end that arrives, before the
     /// move writes `moved`: the same wait `stop_jobs_for_rewind` runs,
-    /// with the same disconnect behavior, except a competing `rewind` or
-    /// `change_workspace` is refused `busy` until `moved` is durable
-    /// (`docs/events.md`, "Change workspace").
+    /// except a competing `rewind` or `change_workspace` is refused `busy`
+    /// until `moved` is durable, and a closed inbox with jobs still
+    /// running fails without `moved` instead of hiding the unfinished
+    /// jobs (`docs/events.md`, "Change workspace").
     pub(crate) fn stop_jobs_for_move(&mut self) -> Result<(), Error> {
         self.stop_jobs_for_transition(true)
     }
@@ -143,7 +144,10 @@ impl Loop {
     /// `stop` for every running job, again on every pass, and reads with
     /// no extra deadline of its own. When `busy_competitors` a competing
     /// `rewind` or `change_workspace` is refused `busy`; otherwise every
-    /// delivery except a job's end goes through `refuse_after_rewound`.
+    /// delivery except a job's end goes through `refuse_after_rewound`. A
+    /// move never returns success while jobs remain running: on a closed
+    /// inbox it drains what is buffered, then fails without `moved`, and
+    /// no end is fabricated. A rewind keeps the earlier behavior.
     fn stop_jobs_for_transition(&mut self, busy_competitors: bool) -> Result<(), Error> {
         if !self.has_jobs() {
             return Ok(());
@@ -159,6 +163,10 @@ impl Loop {
                 Ok(delivery) => self.stop_one(delivery, busy_competitors)?,
                 // With no deadline the wait never times out: only a
                 // closed inbox ends it.
+                Err(_) if busy_competitors => {
+                    self.drain_waiting(busy_competitors)?;
+                    return Err(Error::InboxClosed);
+                }
                 Err(_) => return Ok(()),
             }
         }

@@ -230,29 +230,36 @@ fn point_dir(old: &Path, sessions: &Path, point: &Point) -> PathBuf {
         .to_path_buf()
 }
 
-/// The project the session in `dir` runs in: its recorded workspace's
-/// project identity. An unreadable first line or a session_started with
-/// no workspace is `log_corrupt`, before any session line is written, as
-/// a fork's missing parent workspace is.
-fn ancestor_project(dir: &Path) -> Result<PathBuf, i32> {
-    let workspace = match log::started_first(dir) {
-        Ok(started) => match started.workspace {
-            Some(workspace) => workspace,
-            None => {
-                return Err(ask_failed(failed(
-                    ErrorCode::LogCorrupt,
-                    "The point's session has no workspace.",
-                )));
-            }
-        },
-        Err(_) => {
-            return Err(ask_failed(failed(
-                ErrorCode::LogCorrupt,
-                format!("Cannot read the point's workspace from {}.", dir.display()),
-            )));
-        }
+/// The project key of the session in `dir`: the key its project-qualified
+/// directory names (`home/projects/<key>/sessions/<id>`), never the
+/// recorded workspace, which may have moved or vanished since the session
+/// ran. A directory outside that layout is `log_corrupt`, before any
+/// session line is written, as a fork's missing parent workspace is.
+fn ancestor_key(dir: &Path) -> Result<String, i32> {
+    let invalid = || {
+        ask_failed(failed(
+            ErrorCode::LogCorrupt,
+            format!("Cannot read the point's project from {}.", dir.display()),
+        ))
     };
-    Ok(doors::project(Path::new(&workspace)))
+    let sessions = dir.parent().ok_or_else(invalid)?;
+    if sessions.file_name().and_then(|name| name.to_str()) != Some("sessions") {
+        return Err(invalid());
+    }
+    let key_dir = sessions.parent().ok_or_else(invalid)?;
+    let key = key_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(invalid)?;
+    if key_dir
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        != Some("projects")
+    {
+        return Err(invalid());
+    }
+    Ok(key.to_owned())
 }
 
 /// The internal session command with `--rewound-from`: starts `new` as the
@@ -289,8 +296,9 @@ pub(crate) fn session_rewound(
     };
     let dir = point_dir(old_dir.path(), sessions, &point);
     // A rewind to a point in another project records the ancestor's
-    // project, so the child reads the point where it lives and its own
-    // history walks there. A point in the child's own project records
+    // project, read off the point's project-qualified directory so a
+    // recorded workspace that has since moved or vanished cannot select
+    // the wrong project. A point in the child's own project records
     // nothing, as before. The child runs where this process started: the
     // hub spawned it in the old session's recorded workspace.
     let child_workspace = match std::env::current_dir() {
@@ -298,9 +306,9 @@ pub(crate) fn session_rewound(
         Err(error) => return ask_failed(failed(ErrorCode::IoFailed, error)),
     };
     let child_key = log::project_key(&doors::project(&child_workspace));
-    match ancestor_project(&dir) {
-        Ok(ancestor) if log::project_key(&ancestor) != child_key => {
-            point.project = Some(log::project_key(&ancestor));
+    match ancestor_key(&dir) {
+        Ok(ancestor) if ancestor != child_key => {
+            point.project = Some(ancestor);
         }
         Ok(_) => {}
         Err(code) => return code,
