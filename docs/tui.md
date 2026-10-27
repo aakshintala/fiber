@@ -274,7 +274,16 @@ adds no rail card, and the row stays under "exited". A ✕ on a live row stops t
 focused live row stops it too, after asking ("Quit"); on an unreadable row it does nothing, and with the link down it opens no question. Backspace never stops a session, whatever the row. Delete on a
 selected exited row deletes that session through the hub, after asking, and
 the question names any session `--cascade` would add (`docs/invocation.md`,
-"Deleting and pruning"). A row whose status this terminal cannot read says CANNOT ATTACH and why: "Cannot attach: this session runs Fiber <v>" when the hub runs another Fiber version or commit than this terminal, since a session runs the binary of the hub that started it, with `<v>` as `fiber --version` writes it; otherwise "Cannot attach: its status did not parse". Opening the row shows the same text as a `session_held` notice.
+"Deleting and pruning"). `/delete` deletes the session on screen instead:
+it asks the hub for the exact sessions the delete would remove, asks the
+person with those sessions named, stops every running one first, then
+deletes that same set, which never changes after the question. Esc, a click
+outside the frame or on its ✕ cancels and deletes nothing. A stop the hub
+refuses deletes nothing and names the session still running; a stop with no
+answer shows `Stop status unknown`. A delete refused because a session is
+running again keeps the attached session with a `Not deleted` notice; any
+other post-stop refusal returns home with its stopped rows and the hub's
+message. A row whose status this terminal cannot read says CANNOT ATTACH and why: "Cannot attach: this session runs Fiber <v>" when the hub runs another Fiber version or commit than this terminal, since a session runs the binary of the hub that started it, with `<v>` as `fiber --version` writes it; otherwise "Cannot attach: its status did not parse". Opening the row shows the same text as a `session_held` notice.
 
 The mouse wheel over the list's rows scrolls the list by three rows,
 leaving the focus where it is.
@@ -1934,7 +1943,7 @@ later release still applies.
 | `/status` | Opens the status view ("Swapped views"). |
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
-| `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
+| `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen.". |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
@@ -1952,7 +1961,7 @@ later release still applies.
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/clear` | Starts a fresh session in place, closing the session on screen ("Clearing"). |
 | `/close [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
-| `/delete` | Deletes the session on screen ("The session list"). |
+| `/delete` | Stops the session on screen, then deletes it permanently ("The session list"). |
 | `/feedback <description>`, `/bug <description>` | Writes a feedback report with the description, version, platform, doctor output and the diagnostics of the session on screen, and prints its path and the issue link. With no session on screen, the diagnostics are the hub's lines only. A session this machine holds no diagnostic lines for, such as one on a remote hub, still gets its id, the instruction to export its log privately and the hub's lines, with a notice that this machine has no diagnostic lines for it. The report is the one `fiber feedback` writes (`docs/invocation.md`, "Commands and flags"). |
 | `/quit`, `/exit` | Quits ("Quit"). |
 | `/approvals` | Reopens the waiting approvals and questions. |

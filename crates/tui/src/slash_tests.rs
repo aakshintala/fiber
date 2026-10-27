@@ -98,6 +98,22 @@ fn the_list_draws_every_drawn_command_once_in_drawn_order() {
     assert_eq!(names, DRAWN_ORDER);
 }
 
+#[test]
+fn delete_draws_after_close_naming_the_stop_first() {
+    let all = rows(&[]);
+    let names: Vec<&str> = all.iter().map(|row| row.name.as_str()).collect();
+    let close = names.iter().position(|name| *name == "close").unwrap();
+    assert_eq!(names[close + 1], "delete");
+    let row = all
+        .iter()
+        .find(|row| row.name == "delete")
+        .unwrap_or_else(|| panic!("no delete row"));
+    assert_eq!(
+        row.description,
+        "Stops, then deletes the session on screen."
+    );
+}
+
 // debt: this parser duplicates crates/contract/src/commands_tests.rs:609;
 // the dependency runs tui -> contract, so contract cannot name tui's
 // DRAWN_ORDER, and inlining the drawn order as a literal in contract
