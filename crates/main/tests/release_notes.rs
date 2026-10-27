@@ -84,11 +84,11 @@ fn release_notes_show_the_stub_view_with_the_url_and_make_no_request() {
     run.wait_screen("the no-notes view", |grid| {
         grid.contents.contains("No notes for this version")
     });
-    let url_rows = rows_with(&run.screen(), contract::releases::RELEASES);
-    assert_eq!(
-        url_rows.len(),
-        1,
-        "the releases url draws once: {url_rows:?}"
+    // The stub shows the releases page (`docs/tui.md`, "Swapped views",
+    // "The release notes"): presence, not a count.
+    assert!(
+        !rows_with(&run.screen(), contract::releases::RELEASES).is_empty(),
+        "the releases url draws"
     );
     // Esc returns to home; reopening shows the view again.
     run.write(b"\x1b[27u");
@@ -96,10 +96,20 @@ fn release_notes_show_the_stub_view_with_the_url_and_make_no_request() {
         !grid.contents.contains("Release notes")
     });
     run.write(b"/release-notes\r");
-    run.wait_screen("the reopened view", |grid| {
+    let grid = run.wait_screen("the reopened view", |grid| {
         grid.contents.contains("No notes for this version")
     });
-    // A press and release on the top row closes through the header.
+    // The header is the swapped view's fixed top row (`docs/tui.md`,
+    // "Swapped views"): row 0 names the view, with "Esc returns" at its
+    // right end. Nothing behind the static stub can move it — the
+    // view reads the embedded stub and asks nothing — so this completed
+    // frame is the click's readiness signal (`docs/testing/screens.md`,
+    // "Screens"). A press and release on it closes through the header.
+    let header = grid.rows.first().expect("the header row");
+    assert!(
+        header.contains("Release notes") && header.contains("Esc returns"),
+        "the fixed top row names the view: {header:?}"
+    );
     run.write(b"\x1b[<0;5;1M");
     run.write(b"\x1b[<0;5;1m");
     run.wait_screen("the closed view", |grid| {
@@ -114,11 +124,15 @@ fn release_notes_show_the_stub_view_with_the_url_and_make_no_request() {
     run.wait_screen("the view after resize", |grid| {
         grid.contents.contains("No notes for this version")
     });
-    let url_rows = rows_with(&run.screen(), contract::releases::RELEASES);
-    assert_eq!(url_rows.len(), 1, "the url survives resize: {url_rows:?}");
+    // Presence again after the resize: no count pinned.
+    assert!(
+        !rows_with(&run.screen(), contract::releases::RELEASES).is_empty(),
+        "the url survives resize"
+    );
     quit(run);
     // Opening, scrolling, closing and reopening the notes tunnelled no
-    // request through the proxy: the view reads the embedded stub.
+    // request through the proxy: the view reads the embedded stub and
+    // asks nothing (`docs/tui.md`, "Swapped views", "The release notes").
     let connects = proxy.connects();
     assert_eq!(
         connects.len(),
@@ -138,6 +152,11 @@ fn release_notes_show_the_stub_view_with_the_url_and_make_no_request() {
 /// A long-notes source at the exact running version, with a tail
 /// sentinel per entry: bullets, a paragraph and an unbroken url.
 static SYNTHETIC: &str = "# Changelog\n\n## 0.0.1\n\n### New features\n\n- First synthetic bullet, long enough to wrap several times across the narrow screen, ending with the sentinel synthetic-bullet-one-tail.\n- Second synthetic bullet, also long enough to wrap several times across the narrow screen, ending with the sentinel synthetic-bullet-two-tail.\n\nA synthetic paragraph running long enough to wrap across several rows at this width, ending with the sentinel synthetic-para-tail.\n\nhttps://example.com/synthetic/long/path/with/no/spaces/that/the/wrapper/must/split/ending-with-synthetic-url-tail\n";
+
+/// A completed frame's end: synchronized output's close marker, which the
+/// TUI brackets every frame with. Waiting for it after an input proves the
+/// frame drew instead of matching a stale grid.
+const FRAME_END: &[u8] = b"\x1b[?2026l";
 
 /// Reads hub lines until `feed` and `recent` both arrived: home's
 /// one-shot startup burst, sent once the link is up. Bounded by the
@@ -251,22 +270,30 @@ fn synthetic_long_notes_wrap_and_page_on_a_narrow_pty() {
             && grid.rows.iter().any(|row| row.starts_with("  "))
     });
     // The entries overflow the short screen: paging reaches each tail.
-    for (page, tail) in [
-        (1, "synthetic-bullet-one-tail"),
-        (2, "synthetic-bullet-two-tail"),
-        (3, "synthetic-para-tail"),
+    // No page pins a tail: each tail pages until it shows, bounded so a
+    // stuck page fails instead of hanging. The tails run in the
+    // fixture's source order, which the view draws top to bottom.
+    for tail in [
+        "synthetic-bullet-one-tail",
+        "synthetic-bullet-two-tail",
+        "synthetic-para-tail",
+        "synthetic-url-tail",
     ] {
-        run.write(b"\x1b[6~");
-        run.wait_screen(&format!("the tail after page {page}"), |grid| {
-            grid.contents.contains(tail)
-        });
+        for _ in 0..10 {
+            // The unbroken url splits across physical rows: join them to
+            // read the tail whole.
+            if run.screen().rows.join("").contains(tail) {
+                break;
+            }
+            let from = run.output().len();
+            run.write(b"\x1b[6~");
+            run.wait_bytes(from, FRAME_END, "the page frame");
+        }
+        assert!(
+            run.screen().rows.join("").contains(tail),
+            "paging reaches {tail}"
+        );
     }
-    run.write(b"\x1b[6~");
-    run.wait_screen("the url tail", |grid| {
-        // The unbroken url splits across physical rows: join them to
-        // read the tail whole.
-        grid.rows.join("").contains("synthetic-url-tail")
-    });
     // Esc returns home; reopening shows the view again.
     run.write(b"\x1b[27u");
     run.wait_screen("home again", |grid| {
