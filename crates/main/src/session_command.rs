@@ -396,7 +396,22 @@ pub(crate) fn run_new(
             let workspace = std::env::current_dir()
                 .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
             let sessions = log::sessions_dir(&home, &doors::project(&workspace));
-            let from = log::SessionDir::new(&sessions, &start.from.session_id);
+            // The point's session lives beside the child, or in the
+            // recorded parent project when the continuation names one: a
+            // workspace move, or a rewind to a point in another project.
+            // The source sessions directory, never the target's.
+            let from_sessions = match &start.from.project {
+                Some(key) => log::sessions_dir_for_key(&home, key).ok_or_else(|| {
+                    failed(
+                        ErrorCode::LogCorrupt,
+                        format!(
+                            "The continuation names a parent project `{key}` that is not one path component."
+                        ),
+                    )
+                })?,
+                None => sessions.clone(),
+            };
+            let from = log::SessionDir::new(&from_sessions, &start.from.session_id);
             let folded =
                 r#loop::forked(from.path(), start.from.seq).map_err(|e| failed(e.code(), e))?;
             let thinking = folded

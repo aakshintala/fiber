@@ -1,0 +1,837 @@
+//! Binary-level tests of a workspace move (`docs/events.md`, "Change
+//! workspace" and `docs/invocation.md`, "Change workspace"): the built
+//! `fiber` runs `hub serve` in its own process group with its own
+//! `FIBER_HOME`, holding an ordinary provider whose base URL is the fake
+//! server. A `change_workspace` closes the old session with `moved`, the
+//! hub starts the named child in the old workspace, and the child process
+//! itself moves to the recorded target before running through the
+//! new-session path there. These run only after the option-B fold lands:
+//! the grant-reset assertions need it, while the startup, loader,
+//! conversation and recovery assertions hold on this task's plumbing.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
+
+mod support;
+
+use std::fs;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+
+use fakes::{ProviderServer, Response};
+use serde_json::{Value, json};
+use support::hello_item_done as hello;
+use support::*;
+
+/// A command for `session` on the hub socket, with its own id.
+fn command(id: &str, session: Option<&str>, command: &str, args: Value) -> String {
+    let mut line = json!({"id": id, "command": command, "args": args});
+    if let Some(session) = session {
+        line["session_id"] = session.into();
+    }
+    serde_json::to_string(&line).unwrap()
+}
+
+fn subscribe(id: &str, session: &str) -> String {
+    command(id, Some(session), "subscribe", json!({"level": "full"}))
+}
+
+fn prompt(id: &str, session: &str, text: &str) -> String {
+    command(
+        id,
+        Some(session),
+        "prompt",
+        json!({"content": [{"type": "text", "text": text}]}),
+    )
+}
+
+fn change_workspace(id: &str, session: &str, path: &str) -> String {
+    command(id, Some(session), "change_workspace", json!({"path": path}))
+}
+
+/// The acknowledgement of command `id`: every line until it, the last
+/// accepted.
+fn until_ack(client: &Socket, what: &str, id: &str) -> Vec<Value> {
+    let lines = until(client, what, |line| {
+        line["payload"].get("command_id").and_then(Value::as_str) == Some(id)
+    });
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
+    lines
+}
+
+/// The rejection of command `id`.
+fn until_rejected(client: &Socket, what: &str, id: &str) -> Value {
+    let lines = until(client, what, |line| {
+        line["kind"] == "command_rejected"
+            && line["payload"].get("command_id").and_then(Value::as_str) == Some(id)
+    });
+    lines.last().unwrap().clone()
+}
+
+/// The log of session `id`, wherever its project is.
+fn session_log(setup: &Setup, id: &str) -> Vec<Value> {
+    fs::read_to_string(session_log_path(setup, id))
+        .map(|text| complete_lines(&text))
+        .unwrap()
+}
+
+fn session_log_path(setup: &Setup, id: &str) -> PathBuf {
+    fs::read_dir(setup.home().join("projects"))
+        .unwrap()
+        .map(|entry| {
+            entry
+                .unwrap()
+                .path()
+                .join("sessions")
+                .join(id)
+                .join("events.jsonl")
+        })
+        .find(|log| log.is_file())
+        .expect("the session's log exists")
+}
+
+/// The project key of `dir`: the git common directory when `dir` is in a
+/// repository, else `dir` itself, canonicalized with slashes replaced, as
+/// `doors::project` plus `log::project_key` compute it.
+fn project_key_of(dir: &Path) -> String {
+    let mut git = Command::new("git");
+    git.arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let path = match git.output() {
+        Ok(out) if out.status.success() => {
+            PathBuf::from(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        }
+        _ => dir.to_path_buf(),
+    };
+    let path = fs::canonicalize(&path).unwrap_or(path);
+    path.to_string_lossy().replace('/', "-")
+}
+
+/// Two folders sharing one git project, plus two unrelated git projects:
+/// every move below stays inside this layout.
+struct Layout {
+    shared_a: PathBuf,
+    shared_b: PathBuf,
+    repo_a: PathBuf,
+    repo_b: PathBuf,
+}
+
+impl Layout {
+    fn new(setup: &Setup) -> Self {
+        let root = setup.root.path();
+        let repo = root.join("shared");
+        fs::create_dir_all(repo.join("a")).unwrap();
+        fs::create_dir_all(repo.join("b")).unwrap();
+        fakes::git::git(&repo, &["init", "--quiet"]);
+        fakes::git::git(&repo, &["add", "."]);
+        let repo_a = root.join("repo-a");
+        fs::create_dir_all(&repo_a).unwrap();
+        fakes::git::git(&repo_a, &["init", "--quiet"]);
+        fakes::git::git(&repo_a, &["add", "."]);
+        let repo_b = root.join("repo-b");
+        fs::create_dir_all(&repo_b).unwrap();
+        fakes::git::git(&repo_b, &["init", "--quiet"]);
+        fakes::git::git(&repo_b, &["add", "."]);
+        Self {
+            shared_a: repo.join("a"),
+            shared_b: repo.join("b"),
+            repo_a,
+            repo_b,
+        }
+    }
+}
+
+/// Starts the hub, one client and a session guard per workspace: the
+/// caller runs the turns in any of the workspaces.
+struct Hubbed {
+    hub: Arc<Mutex<Option<HubProc>>>,
+    client: Option<Socket>,
+    guards: Vec<SessionGuard>,
+}
+
+impl Hubbed {
+    fn new(setup: &Setup, workspaces: &[PathBuf]) -> Self {
+        let hub = Arc::new(Mutex::new(None));
+        let (client, hello) = connect_hub(setup, &hub);
+        assert_eq!(hello["kind"], "hub_hello");
+        let guards = workspaces
+            .iter()
+            .map(|workspace| SessionGuard::arm(setup.deadline, &workspace.to_string_lossy()))
+            .collect();
+        Self {
+            hub,
+            client: Some(client),
+            guards,
+        }
+    }
+
+    fn client(&self) -> &Socket {
+        self.client.as_ref().expect("the client is connected")
+    }
+
+    /// Starts a session in `workspace` with `content` under command `id`,
+    /// subscribes `sub_id` full to it, and waits for its first turn to
+    /// complete.
+    fn start_in(&self, id: &str, sub_id: &str, workspace: &Path, content: &str) -> String {
+        self.client().send(&command(
+            id,
+            None,
+            "start",
+            json!({"workspace": workspace.to_string_lossy(), "content": [{"type": "text", "text": content}]}),
+        ));
+        let ack = until_ack(self.client(), "the start acknowledgement", id);
+        let session = ack.last().unwrap()["payload"]["result"]["session_id"]
+            .as_str()
+            .expect("the start answers with a session id")
+            .to_owned();
+        self.client().send(&subscribe(sub_id, &session));
+        until_ack(self.client(), "the subscribe acknowledgement", sub_id);
+        until(self.client(), "the first turn_completed", |line| {
+            line["kind"] == "turn_completed" && line["session_id"] == session
+        });
+        session
+    }
+
+    /// Prompts `session` with `text` under command `id`, and waits for the
+    /// acknowledgement and the turn to complete.
+    fn prompt(&self, id: &str, session: &str, text: &str) {
+        self.client().send(&prompt(id, session, text));
+        until_ack(self.client(), "the prompt acknowledgement", id);
+        until(self.client(), "the turn_completed", |line| {
+            line["kind"] == "turn_completed" && line["session_id"] == session
+        });
+    }
+
+    /// Moves `session` to `target` under command `id`, and answers with
+    /// the new session id.
+    fn move_to(&self, id: &str, session: &str, target: &Path) -> String {
+        self.client()
+            .send(&change_workspace(id, session, &target.to_string_lossy()));
+        let ack = until_ack(self.client(), "the move acknowledgement", id);
+        ack.last().unwrap()["payload"]["result"]["new_session_id"]
+            .as_str()
+            .expect("the move answers with a session id")
+            .to_owned()
+    }
+
+    /// Closes `session` under command `id`, and waits for its `fiber_exited`.
+    fn close(&self, id: &str, session: &str) {
+        self.client()
+            .send(&command(id, Some(session), "close", json!({})));
+        until(self.client(), "the fiber_exited", |line| {
+            line["kind"] == "fiber_exited" && line["session_id"] == session
+        });
+    }
+
+    fn finish(self) {
+        let Self { hub, guards, .. } = self;
+        for guard in guards {
+            guard.wait_gone();
+        }
+        hub.lock()
+            .unwrap()
+            .take()
+            .expect("the hub ran")
+            .kill_and_wait();
+    }
+}
+
+/// Waits for `child`'s `session_started` on the client: the redirect
+/// replays the new session's lines once it runs.
+fn until_child_started(client: &Socket, child: &str) -> Value {
+    until(client, "the moved child's session_started", |line| {
+        line["session_id"] == child && line["kind"] == "session_started"
+    })
+    .into_iter()
+    .find(|line| line["kind"] == "session_started")
+    .unwrap()
+}
+
+#[test]
+fn a_move_before_any_model_turn_starts_the_child_in_the_target() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    let client = hubbed.client();
+    // No content: the session starts with no model turn.
+    client.send(&command(
+        "c_start",
+        None,
+        "start",
+        json!({"workspace": layout.repo_a}),
+    ));
+    let ack = until_ack(client, "the start acknowledgement", "c_start");
+    let old = ack.last().unwrap()["payload"]["result"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    client.send(&subscribe("c_sub", &old));
+    until_ack(client, "the subscribe acknowledgement", "c_sub");
+    // The old session was never prompted: its `moved` record survives
+    // only once the no-prompt retention rule keeps ended moves (Task 6).
+    let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
+    until_child_started(client, &child);
+    // The old log ends `moved`, naming the target and the child.
+    let old_log = session_log(&setup, &old);
+    let moved = old_log.last().unwrap();
+    assert_eq!(moved["kind"], "moved");
+    assert_eq!(moved["payload"]["new_session_id"], child);
+    let target = fs::canonicalize(&layout.repo_b).unwrap();
+    assert_eq!(
+        moved["payload"]["workspace"],
+        target.to_string_lossy().as_ref()
+    );
+    // The child starts in the target, continuing the old session at its
+    // only durable line, with the parent's project recorded.
+    let child_log = session_log(&setup, &child);
+    let started = &child_log[0];
+    assert_eq!(started["kind"], "session_started");
+    assert_eq!(
+        started["payload"]["workspace"],
+        target.to_string_lossy().as_ref()
+    );
+    assert_eq!(started["payload"]["forked_from"]["session_id"], old);
+    assert_eq!(
+        started["payload"]["forked_from"]["seq"],
+        moved["payload"]["seq"]
+    );
+    assert_eq!(
+        started["payload"]["forked_from"]["project"],
+        project_key_of(&layout.repo_a)
+    );
+    assert!(started["payload"]["rewind"]["summary"].is_null());
+    assert_eq!(started["payload"]["rewind"]["note"], "");
+    assert!(started["payload"].get("worktree").is_none());
+    assert!(
+        child_log.iter().all(|line| line["kind"] != "session_named"),
+        "no name to copy"
+    );
+    assert!(server.requests().is_empty(), "no model call yet");
+    hubbed.close("c_close", &child);
+    hubbed.finish();
+}
+
+#[test]
+fn moving_between_two_folders_of_one_git_project_records_no_project() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, &[layout.shared_a.clone(), layout.shared_b.clone()]);
+    let old = hubbed.start_in("c_start", "c_sub", &layout.shared_a, "one");
+    let child = hubbed.move_to("c_mv", &old, &layout.shared_b);
+    until_child_started(hubbed.client(), &child);
+    let child_log = session_log(&setup, &child);
+    let started = &child_log[0];
+    assert_eq!(started["kind"], "session_started");
+    assert_eq!(started["payload"]["forked_from"]["session_id"], old);
+    assert!(
+        started["payload"]["forked_from"].get("project").is_none(),
+        "same project records nothing: {:?}",
+        started["payload"]["forked_from"]
+    );
+    // Both sessions live under one project key.
+    let key = project_key_of(&layout.shared_a);
+    assert_eq!(key, project_key_of(&layout.shared_b));
+    assert!(
+        session_log_path(&setup, &old)
+            .to_string_lossy()
+            .contains(&key)
+            && session_log_path(&setup, &child)
+                .to_string_lossy()
+                .contains(&key)
+    );
+    hubbed.close("c_close", &child);
+    hubbed.finish();
+}
+
+#[test]
+fn moving_between_two_real_projects_records_the_parent_project() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
+    until_child_started(hubbed.client(), &child);
+    let child_log = session_log(&setup, &child);
+    let started = &child_log[0];
+    assert_eq!(
+        started["payload"]["forked_from"]["project"],
+        project_key_of(&layout.repo_a)
+    );
+    assert!(
+        session_log_path(&setup, &child)
+            .to_string_lossy()
+            .contains(&project_key_of(&layout.repo_b))
+    );
+    hubbed.close("c_close", &child);
+    hubbed.finish();
+}
+
+/// A finished `function_call` for `name_session` with `arguments`.
+fn name_call(call_id: &str, arguments: &Value) -> Value {
+    function_call(call_id, "name_session", arguments)
+}
+
+#[test]
+fn the_moved_child_inherits_the_conversation_without_a_summary() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    let server = ProviderServer::start([
+        stream(&[name_call("c1", &json!({"name": "Fix the parser"}))]),
+        hello(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let old_log = session_log(&setup, &old);
+    let named = old_log
+        .iter()
+        .find(|line| line["kind"] == "session_named")
+        .expect("the first turn names the session");
+    let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
+    until_child_started(hubbed.client(), &child);
+    // The child's record carries the point, no summary, no note, no
+    // worktree, and the copied name right after the start.
+    let child_log = session_log(&setup, &child);
+    let started = &child_log[0];
+    assert_eq!(started["payload"]["forked_from"]["session_id"], old);
+    assert!(started["payload"]["rewind"]["summary"].is_null());
+    assert_eq!(started["payload"]["rewind"]["note"], "");
+    assert!(started["payload"].get("worktree").is_none());
+    assert_eq!(child_log[1]["kind"], "session_named");
+    assert_eq!(child_log[1]["payload"], named["payload"]);
+    // The next prompt's request still carries the parent's conversation.
+    hubbed.prompt("c_two", &child, "two");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    let body: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    assert!(
+        serde_json::to_string(&body).unwrap().contains("one"),
+        "the parent's prompt reaches the child's request"
+    );
+    hubbed.close("c_close", &child);
+    hubbed.finish();
+}
+
+/// The package manifest `name` at `version`.
+fn manifest(name: &str, version: &str) -> Value {
+    json!({"name": name, "version": version, "fiber": "0.1.0", "api": 1})
+}
+
+/// Writes these repository packages into `dir`, which becomes a git
+/// repository: each `(dir, manifest, init.lua text, required)`.
+fn declare(dir: &Path, pkgs: &[(&str, Value, &str, bool)]) {
+    fakes::git::git(dir, &["init", "--quiet"]);
+    let mut declared = Vec::new();
+    for (pkg, manifest, init, required) in pkgs {
+        let root = dir.join(pkg);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("extension.json"), manifest.to_string()).unwrap();
+        fs::write(root.join("init.lua"), init).unwrap();
+        declared.push(json!({"path": pkg, "required": required}));
+    }
+    write_json(
+        &dir.join(".fiber/config.json"),
+        &json!({"repository_extensions": declared}),
+    );
+}
+
+/// `fiber approve --yes` in `dir`.
+fn approve(setup: &Setup, dir: &Path) {
+    let mut command = setup.fiber(&["approve", "--yes"]);
+    command.current_dir(dir);
+    let output = run_to_exit(setup.deadline, "fiber approve", command);
+    assert!(output.status.success(), "fiber approve: {output:?}");
+}
+
+/// The entries of the loaded set the `extensions_loaded` line carries:
+/// each `(name, version)`.
+fn loaded_set(line: &Value) -> Vec<(String, String)> {
+    line["payload"]["extensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            (
+                entry["name"].as_str().unwrap().to_owned(),
+                entry["version"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn target_repository_code_loads_fresh_with_its_own_version() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    declare(
+        &layout.repo_a,
+        &[(
+            "pkg",
+            manifest("fiber.test/pkg", "v1.0.0"),
+            "-- one\n",
+            false,
+        )],
+    );
+    declare(
+        &layout.repo_b,
+        &[(
+            "pkg",
+            manifest("fiber.test/pkg", "v2.0.0"),
+            "-- two\n",
+            false,
+        )],
+    );
+    approve(&setup, &layout.repo_a);
+    approve(&setup, &layout.repo_b);
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let old_loaded = session_log(&setup, &old)
+        .into_iter()
+        .find(|line| line["kind"] == "extensions_loaded")
+        .unwrap();
+    assert!(
+        loaded_set(&old_loaded).contains(&("fiber.test/pkg".to_owned(), "v1.0.0".to_owned())),
+        "{old_loaded:?}"
+    );
+    let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
+    until_child_started(hubbed.client(), &child);
+    until(hubbed.client(), "the moved child's extensions", |line| {
+        line["session_id"] == child && line["kind"] == "extensions_loaded"
+    });
+    // The child loads the target's set fresh: its version, never the
+    // source's, with the target project's own approvals behind it.
+    let child_loaded = session_log(&setup, &child)
+        .into_iter()
+        .find(|line| line["kind"] == "extensions_loaded")
+        .unwrap();
+    let set = loaded_set(&child_loaded);
+    assert!(
+        set.contains(&("fiber.test/pkg".to_owned(), "v2.0.0".to_owned())),
+        "{child_loaded:?}"
+    );
+    assert!(
+        !set.contains(&("fiber.test/pkg".to_owned(), "v1.0.0".to_owned())),
+        "no source pinned copy leaks across: {child_loaded:?}"
+    );
+    for repo in [&layout.repo_a, &layout.repo_b] {
+        let approvals = setup
+            .home()
+            .join("projects")
+            .join(project_key_of(repo))
+            .join("approvals");
+        assert!(
+            fs::read_dir(&approvals).unwrap().count() > 0,
+            "each project holds its own approvals: {approvals:?}"
+        );
+    }
+    hubbed.close("c_close", &child);
+    hubbed.finish();
+}
+
+#[test]
+fn two_successive_target_requests_keep_a_stable_prefix() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
+    until_child_started(hubbed.client(), &child);
+    hubbed.prompt("c_two", &child, "two");
+    hubbed.prompt("c_three", &child, "three");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    let first: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let second: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    assert_eq!(first["instructions"], second["instructions"]);
+    assert_eq!(first["tools"], second["tools"]);
+    hubbed.close("c_close", &child);
+    hubbed.finish();
+}
+
+/// Runs `fiber sessions delete --yes <id>`: stdin null, in `workspace`.
+fn delete(setup: &Setup, workspace: &Path, id: &str) -> std::process::Output {
+    let mut command = setup.fiber(&["sessions", "delete", "--yes", id]);
+    command.current_dir(workspace);
+    run_to_exit(setup.deadline, "fiber sessions delete", command)
+}
+
+#[test]
+fn a_missing_required_extension_fails_the_start_and_a_fixed_target_retries() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    // The target requires a package whose startup fails.
+    declare(
+        &layout.repo_b,
+        &[(
+            "pkg",
+            manifest("fiber.test/pkg", "v1.0.0"),
+            "error(\"boom\")\n",
+            true,
+        )],
+    );
+    approve(&setup, &layout.repo_b);
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let client = hubbed.client();
+    client.send(&change_workspace(
+        "c_mv",
+        &old,
+        &layout.repo_b.to_string_lossy(),
+    ));
+    // The session accepts the move, then the hub answers the start's own
+    // failure instead: the old session stays ended `moved`.
+    let rejected = until_rejected(client, "the start failure", "c_mv");
+    assert_eq!(rejected["payload"]["code"], "extension_required_failed");
+    let old_log = session_log(&setup, &old);
+    let moved = old_log.last().unwrap();
+    assert_eq!(moved["kind"], "moved");
+    let same_child = moved["payload"]["new_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Fix the package and approve its new content. The hub never retries
+    // a recorded child: rerun its recorded start directly, with the same
+    // id, and read its startup off its stdout.
+    fs::write(layout.repo_b.join("pkg/init.lua"), "-- fixed\n").unwrap();
+    approve(&setup, &layout.repo_b);
+    hubbed.finish();
+    fs::remove_file(setup.home().join("run").join(&same_child)).unwrap_or(());
+    let mut rerun = setup.fiber(&[
+        "session",
+        "--workspace",
+        &layout.repo_a.to_string_lossy(),
+        "--id",
+        &same_child,
+        "--rewound-from",
+        &old,
+    ]);
+    rerun.current_dir(&layout.repo_a);
+    let (mut child, _watchdog) = spawn_watched(&mut rerun);
+    let stdout = child.stdout.take().unwrap();
+    let (tx, lines) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if tx.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    let started = first_line(setup.deadline, &lines);
+    assert_eq!(started["kind"], "session_started");
+    assert_eq!(started["payload"]["forked_from"]["session_id"], old);
+    // The retry boots fully before the log is read: startup prints its
+    // lines in order, so the third is the loaded set.
+    assert_eq!(first_line(setup.deadline, &lines)["kind"], "fiber_started");
+    let loaded_line = first_line(setup.deadline, &lines);
+    assert_eq!(loaded_line["kind"], "extensions_loaded");
+    // The fixed package loads on the retry.
+    assert!(
+        loaded_set(&loaded_line).contains(&("fiber.test/pkg".to_owned(), "v1.0.0".to_owned())),
+        "{loaded_line:?}"
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn old_session_commands_resume_the_old_workspace() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
+    until_child_started(hubbed.client(), &child);
+    // The child's startup settles before the snapshot: only then is its
+    // log stable while it idles.
+    until(hubbed.client(), "the moved child's extensions", |line| {
+        line["session_id"] == child && line["kind"] == "extensions_loaded"
+    });
+    let child_len = session_log(&setup, &child).len();
+    // An old-id command resumes the old workspace; nothing redirects it
+    // onto the child, and the child's log gains nothing.
+    hubbed.prompt("c_old_two", &old, "two again");
+    let old_log = session_log(&setup, &old);
+    assert_eq!(old_log.last().unwrap()["kind"], "turn_completed");
+    assert_eq!(old_log.last().unwrap()["session_id"], old);
+    assert_eq!(session_log(&setup, &child).len(), child_len);
+    hubbed.close("c_close_old", &old);
+    hubbed.close("c_close", &child);
+    hubbed.finish();
+}
+
+#[test]
+fn same_workspace_rewind_records_no_project() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, std::slice::from_ref(&layout.repo_a));
+    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    hubbed.prompt("c_two", &old, "two");
+    hubbed
+        .client()
+        .send(&command("c_rw", Some(&old), "rewind", json!({})));
+    let ack = until_ack(hubbed.client(), "the rewind acknowledgement", "c_rw");
+    let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until_child_started(hubbed.client(), &next);
+    let child_log = session_log(&setup, &next);
+    assert!(
+        child_log[0]["payload"]["forked_from"]
+            .get("project")
+            .is_none(),
+        "the rewind control records nothing: {:?}",
+        child_log[0]["payload"]["forked_from"]
+    );
+    hubbed.close("c_close", &next);
+    hubbed.finish();
+}
+
+#[test]
+fn a_rewind_to_a_pre_move_point_reads_across_projects() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    hubbed.prompt("c_two", &old, "two");
+    // The pre-move point: the old session's latest turn start.
+    let point = session_log(&setup, &old)
+        .into_iter()
+        .filter(|line| line["kind"] == "turn_started")
+        .map(|line| line["seq"].as_u64().unwrap())
+        .next_back()
+        .unwrap();
+    let moved = hubbed.move_to("c_mv", &old, &layout.repo_b);
+    until_child_started(hubbed.client(), &moved);
+    // Rewind the moved session to the pre-move point in the old project.
+    hubbed.client().send(&command(
+        "c_rw",
+        Some(&moved),
+        "rewind",
+        json!({"from_session_id": old, "seq": point}),
+    ));
+    let ack = until_ack(hubbed.client(), "the cross-project rewind", "c_rw");
+    let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until_child_started(hubbed.client(), &next);
+    // The rewind child points at the old project with its project key, so
+    // its history walks there.
+    let child_log = session_log(&setup, &next);
+    assert_eq!(child_log[0]["payload"]["forked_from"]["session_id"], old);
+    assert_eq!(child_log[0]["payload"]["forked_from"]["seq"], point);
+    assert_eq!(
+        child_log[0]["payload"]["forked_from"]["project"],
+        project_key_of(&layout.repo_a)
+    );
+    // Resume works on the rewind child, and the leaf deletes clean.
+    hubbed.prompt("c_three", &next, "three");
+    hubbed.close("c_close_next", &next);
+    let log = session_log_path(&setup, &next);
+    let output = delete(&setup, &layout.repo_b, &next);
+    assert!(output.status.success(), "delete the leaf: {output:?}");
+    assert!(!log.exists(), "the leaf's log is gone");
+    hubbed.finish();
+}
+
+/// A tiny page server with one response per fetch below: the start, the
+/// old session's prompt, and the child's prompt after the move.
+fn site(body: &str) -> ProviderServer {
+    let page = || Response {
+        status: 200,
+        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+        body: body.as_bytes().to_vec(),
+        drop_connection: false,
+        stall: false,
+    };
+    ProviderServer::start([page(), page(), page()]).unwrap()
+}
+
+fn fetch_call(url: &str) -> Value {
+    function_call("call_fetch", "web_fetch", &json!({"url": url}))
+}
+
+#[test]
+fn known_hosts_carry_over_the_move() {
+    let setup = Setup::new();
+    let layout = Layout::new(&setup);
+    let site = site("known host page");
+    let url = format!("{}/doc?q=1", site.url());
+    // One fetch turn each: the start, the old session's prompt, and the
+    // child's prompt after the move.
+    let server = ProviderServer::start([
+        stream(&[fetch_call(&url)]),
+        hello(),
+        stream(&[fetch_call(&url)]),
+        hello(),
+        stream(&[fetch_call(&url)]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    // The prompt names the host, so the first fetch takes the fast path
+    // and surfaces the host to the conversation.
+    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, &format!("read {url}"));
+    hubbed.prompt("c_fetch", &old, &format!("read {url}"));
+    let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
+    until_child_started(hubbed.client(), &child);
+    // The next prompt never names the host: the child's fetch takes the
+    // fast path only when the known hosts carried over.
+    hubbed.prompt("c_fetch_again", &child, "fetch it again");
+    let child_log = session_log(&setup, &child);
+    let completed = child_log
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the child's fetch completes");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert!(
+        child_log
+            .iter()
+            .all(|line| line["kind"] != "permission_resolved"),
+        "no permission gate on a known host"
+    );
+    assert_eq!(site.requests().len(), 3);
+    hubbed.close("c_close", &child);
+    hubbed.finish();
+}

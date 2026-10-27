@@ -829,7 +829,8 @@ fn finish(
         .map_err(|e| failed(e.code(), e))
 }
 
-/// Closes state before the final drain, without extending a rewound log.
+/// Closes state before the final drain, without extending a rewound or
+/// moved log: the transition line already closed that process boundary.
 fn write_state_at_exit(
     log: &Log,
     dir: &Path,
@@ -838,7 +839,7 @@ fn write_state_at_exit(
     use contract::hook::Hooks;
     extensions.close_state();
     let lines = extensions.take_state_lines();
-    if log::last_line(dir).is_some_and(|line| line.kind == "rewound") {
+    if log::last_line(dir).is_some_and(|line| line.kind == "rewound" || line.kind == "moved") {
         return Ok(());
     }
     for event in lines {
