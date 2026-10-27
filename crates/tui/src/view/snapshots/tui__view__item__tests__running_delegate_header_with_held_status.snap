@@ -2,11 +2,11 @@
 source: crates/tui/src/view/item_tests.rs
 expression: "rows.join(\"\\n\")"
 ---
+  Delegate  ◆ review the parser                                      Esc returns
  fix the parser › ◆ review the parser
- ⠋ WORKING · harness fiber · model test/model · 0 calls · 1m 01s · sess · ■ stop
-
-
-
+ harness fiber · model test/model · high
+ 0 calls · elapsed 1m 01s · session s_dddddddddddddddd
+ ■ stop s_dddddddddddddddd
 
 
 
@@ -22,7 +22,7 @@ expression: "rows.join(\"\\n\")"
  ⠋ review the parser
    0 calls · 0s
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- ▌ › █
+ ▌ › █                                      steering goes to ◆ review the parser
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   0 waiting  │  $0.00
   ◆ 1 delegate running
