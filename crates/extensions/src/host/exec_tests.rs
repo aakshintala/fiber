@@ -117,6 +117,139 @@ fn step_to_deadline(clock: &FakeClock, deadline: Instant) {
     }
 }
 
+/// Names the park a supervisor observation holds: the grace bound, the
+/// drain bound, or another instant, with the group-empty and EOF state the
+/// supervisor saw. A failed fake-clock wait reports this instead of only
+/// the park mismatch, so the failure shows what the run had seen. This
+/// reports observed state, not a deterministic repro: no pause point
+/// reaches the reader/supervisor order behind the flake.
+fn describe_park_event(
+    event: &super::ExecTestEvent,
+    kill_at: Instant,
+    drain_until: Option<Instant>,
+) -> String {
+    match *event {
+        super::ExecTestEvent::StdoutRead => "the stdout reader kept its first bytes".to_owned(),
+        super::ExecTestEvent::Park {
+            until,
+            group_empty,
+            stdout_eof,
+            stderr_eof,
+        } => {
+            let which = match until {
+                Some(at) if at == kill_at => "kill_at".to_owned(),
+                Some(at) if Some(at) == drain_until => "drain_until".to_owned(),
+                other => format!("{other:?}"),
+            };
+            format!(
+                "park at {which}: group_empty={group_empty}, stdout_eof={stdout_eof}, stderr_eof={stderr_eof}"
+            )
+        }
+    }
+}
+
+#[test]
+fn park_diagnostic_names_state() {
+    use super::ExecTestEvent;
+    let clock = FakeClock::new();
+    let start = clock.now();
+    let kill_at = start + Duration::from_millis(800);
+    let drain_until = start + Duration::from_secs(2);
+    let tick = Duration::from_nanos(1);
+    let park = |until: Option<Instant>, group_empty: bool, stdout_eof: bool, stderr_eof: bool| {
+        ExecTestEvent::Park {
+            until,
+            group_empty,
+            stdout_eof,
+            stderr_eof,
+        }
+    };
+    let text = describe_park_event(
+        &park(Some(kill_at), true, false, true),
+        kill_at,
+        Some(drain_until),
+    );
+    assert!(
+        text.contains("kill_at"),
+        "the grace park names kill_at: {text}"
+    );
+    assert!(
+        !text.contains("drain_until"),
+        "the grace park names no other bound: {text}"
+    );
+    assert!(
+        text.contains("group_empty=true"),
+        "the diagnostic names the group state: {text}"
+    );
+    assert!(
+        text.contains("stdout_eof=false"),
+        "the diagnostic names the stdout state: {text}"
+    );
+    assert!(
+        text.contains("stderr_eof=true"),
+        "the diagnostic names the stderr state: {text}"
+    );
+    let text = describe_park_event(
+        &park(Some(drain_until), false, true, false),
+        kill_at,
+        Some(drain_until),
+    );
+    assert!(
+        text.contains("drain_until"),
+        "the drain park names drain_until: {text}"
+    );
+    assert!(
+        !text.contains("kill_at"),
+        "the drain park names no other bound: {text}"
+    );
+    assert!(
+        text.contains("group_empty=false"),
+        "the diagnostic names the group state: {text}"
+    );
+    assert!(
+        text.contains("stdout_eof=true"),
+        "the diagnostic names the stdout state: {text}"
+    );
+    assert!(
+        text.contains("stderr_eof=false"),
+        "the diagnostic names the stderr state: {text}"
+    );
+    // One tick off a bound names another instant instead of the bound, on
+    // both sides of both bounds.
+    for until in [
+        kill_at - tick,
+        kill_at + tick,
+        drain_until - tick,
+        drain_until + tick,
+    ] {
+        let text = describe_park_event(
+            &park(Some(until), true, true, true),
+            kill_at,
+            Some(drain_until),
+        );
+        assert!(
+            !text.contains("kill_at") && !text.contains("drain_until"),
+            "a park off every bound names another instant: {text}"
+        );
+        assert!(
+            text.contains("group_empty=true")
+                && text.contains("stdout_eof=true")
+                && text.contains("stderr_eof=true"),
+            "an unnamed park still names every state field: {text}"
+        );
+    }
+    let text = describe_park_event(&park(None, false, false, false), kill_at, Some(drain_until));
+    assert!(
+        text.contains("None"),
+        "an unbounded park names its lack of bound: {text}"
+    );
+    let text = describe_park_event(&ExecTestEvent::StdoutRead, kill_at, Some(drain_until));
+    assert!(
+        text.contains("stdout"),
+        "the reader acknowledgement names stdout: {text}"
+    );
+}
+
 #[test]
 fn echo_returns_exit_3_and_both_streams() {
     let (_dir, cwd) = dir("fiber-exec-echo");
