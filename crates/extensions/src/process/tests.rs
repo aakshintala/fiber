@@ -739,6 +739,7 @@ fn stream_items_wait_for_the_last_reply() {
     let waiter = Arc::clone(&table);
     let (done_tx, done_rx) = mpsc::channel();
     let next = table.mint(RequestKind::Stream, "e", "hook b".into(), None, None, None);
+    let stream_waiting = table.observe_next_stream_wait();
     std::thread::spawn(move || {
         let acquired = waiter.acquire_stream(&next.id, waiter.generation());
         match done_tx.send((acquired, next.id.clone())) {
@@ -748,17 +749,19 @@ fn stream_items_wait_for_the_last_reply() {
             waiter.cancel(&next.id);
         }
     });
-    // Tools never take the gate: one mints and settles while the stream waits.
+    // Tools never take the gate: unrelated tool work can settle while
+    // the stream waiter is parked.
     let tool = table.mint(RequestKind::Tool, "e", "tool t".into(), None, None, None);
+    fakes::Deadline::after(WITHIN)
+        .recv(&stream_waiting)
+        .expect("the next stream request reaches the held gate");
+    // Settling unrelated tool work proves the waiter released the table
+    // lock into its gate wait; the held stream request still blocks it.
     assert_eq!(
         table.settle(&tool.id, Outcome::Answered(Answer::Value(json!(true)))),
         Settled::Completed
     );
-    assert!(
-        fakes::Deadline::after(Duration::from_millis(200))
-            .recv(&done_rx)
-            .is_err()
-    );
+    assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
     // The held reply releases the waiter.
     assert_eq!(
         table.settle(&held.id, Outcome::Answered(Answer::Value(json!(null)))),

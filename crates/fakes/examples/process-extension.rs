@@ -9,8 +9,8 @@
 //!   acknowledges release.
 //! - `peer`: runs a bounded test protocol from one JSON action list. Actions
 //!   read and write process-wire lines, hold for an acknowledged release,
-//!   record a marker, or check a bounded silent interval. The parent test
-//!   owns the rest of the deadline and process cleanup.
+//!   or record a marker. The parent test owns the deadline and process
+//!   cleanup.
 //!
 //! Every stdout line is one JSON line, flushed at once. Diagnostics go to
 //! stderr, never stdout. Any other mode exits 2.
@@ -25,7 +25,6 @@ use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::os::fd::AsFd;
 use std::process::{Command, ExitCode, Stdio};
 
 use serde_json::{Map, Value};
@@ -279,7 +278,6 @@ fn run_action(
         }
         "if" => return if_action(config, input, output, variables),
         "hold" => return hold_action(config, input, output, variables),
-        "wait_silent" => wait_silent(config, input)?,
         "spawn_descendant" => spawn_descendant(config)?,
         "linger" => loop {
             std::thread::park();
@@ -497,29 +495,6 @@ fn hold_action(
             std::thread::park();
         },
         mode => Err(format!("unknown hold release mode `{mode}`")),
-    }
-}
-
-fn wait_silent(config: &Value, input: &PeerInput<'_>) -> Result<(), String> {
-    let timeout_ms = config
-        .get("timeout_ms")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "wait_silent needs a non-negative timeout_ms".to_owned())?;
-    let timeout = std::time::Duration::from_millis(timeout_ms);
-    let timeout = rustix::event::Timespec::try_from(timeout)
-        .map_err(|err| format!("convert wait_silent timeout: {err}"))?;
-    if !input.buffer().is_empty() {
-        return Err("stdin already had bytes while waiting for silence".to_owned());
-    }
-    let stdin = std::io::stdin();
-    let mut fds = [rustix::event::PollFd::from_borrowed_fd(
-        stdin.as_fd(),
-        rustix::event::PollFlags::IN,
-    )];
-    match rustix::event::poll(&mut fds, Some(&timeout)) {
-        Ok(0) => Ok(()),
-        Ok(_) => Err("stdin became readable while waiting for silence".to_owned()),
-        Err(err) => Err(format!("wait_silent poll: {err}")),
     }
 }
 

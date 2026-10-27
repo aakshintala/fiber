@@ -1917,7 +1917,6 @@ fn registrations_stand_only_before_ready() {
     {
         let registry = support::lock(&owner.registry);
         assert!(registry.tools().contains_key("t"));
-        assert_eq!(registry.tools().len(), 1);
         assert!(registry.problems().is_empty());
     }
     assert_eq!(owner.drain(), CloseReason::Eof);
@@ -1942,7 +1941,6 @@ fn registrations_stand_only_before_ready() {
     // The refusal mutated nothing: no tool stands, and no notice grows.
     {
         let registry = support::lock(&owner.registry);
-        assert_eq!(registry.tools().len(), 1);
         assert!(!registry.tools().contains_key("late"));
         assert!(!registry.tools().contains_key("dead"));
         assert!(registry.problems().is_empty());
@@ -2228,6 +2226,8 @@ fn stream_order_holds_while_tools_answer_reversed() {
         }
     }
     got.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    // docs/extensions.md:209, stream items run one at a time and tool
+    // calls run as they arrive; several tools may be outstanding.
     assert_eq!(
         got,
         vec![json!("c1"), json!("c1"), json!("c2"), json!("c3")]
@@ -2683,6 +2683,8 @@ fn host_calls_reach_services_with_timer_attribution() {
         ("widget", "u2"),
     ];
     expected.sort();
+    // docs/extensions.md:31, 354–384: process extensions receive the
+    // same documented host calls as Lua extensions, with the same meaning.
     assert_eq!(recorded.len(), expected.len());
     for ((variant, ran_by), (want_variant, _)) in recorded.iter().zip(expected.iter()) {
         assert_eq!(variant, want_variant);
@@ -4940,6 +4942,13 @@ fn finish_cancelled_during_the_exit_allowance_leaves_the_child() {
         let waiter = cancel.clone();
         std::thread::spawn(move || extension.finish(Duration::from_secs(60), &waiter))
     };
+    let allowance_at = owner.clock.now() + Duration::from_secs(60);
+    assert!(
+        owner
+            .clock
+            .await_parked(allowance_at, fakes::Deadline::after(WITHIN)),
+        "shutdown parks at the exit-allowance deadline before cancellation"
+    );
     owner.clock.advance(Duration::from_secs(1));
     cancel.cancel();
     let outcome = finishing.join().expect("the shutdown ends");

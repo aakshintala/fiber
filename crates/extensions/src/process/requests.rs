@@ -160,6 +160,8 @@ struct Inner {
 pub(crate) struct Table {
     inner: Mutex<Inner>,
     stream_gate: Condvar,
+    #[cfg(test)]
+    next_stream_wait: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
@@ -173,7 +175,16 @@ impl Table {
                 stream_held: None,
             }),
             stream_gate: Condvar::new(),
+            #[cfg(test)]
+            next_stream_wait: Mutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_next_stream_wait(&self) -> std::sync::mpsc::Receiver<()> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        *support::lock(&self.next_stream_wait) = Some(sender);
+        receiver
     }
 
     /// The current generation.
@@ -435,6 +446,10 @@ impl Table {
     pub(crate) fn acquire_stream(&self, id: &RequestId, generation: u64) -> bool {
         let mut inner = support::lock(&self.inner);
         while inner.stream_held.is_some() && inner.generation == generation {
+            #[cfg(test)]
+            if let Some(waiting) = support::lock(&self.next_stream_wait).take() {
+                let _sent = waiting.send(());
+            }
             inner = self
                 .stream_gate
                 .wait(inner)
