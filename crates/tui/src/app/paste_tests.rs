@@ -3,26 +3,17 @@
 //! (`docs/tui.md`, "The input box", "Bindings").
 
 use std::path::PathBuf;
-use std::time::Instant;
 
 use serde_json::{Map, Value, json};
 
-use contract::clock::Clock;
-
 use super::{Landed, Paste};
+use crate::app::testkit::{SESSION as S_A, hello, now, session_line};
 use crate::app::{App, Effect};
 use crate::editor::Target;
 use crate::home::{Launch, Spot};
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::stroke::Stroke;
-
-const S_A: &str = "s_aaaaaaaaaaaaaaaa";
-
-/// The injected clock's now.
-fn now() -> Instant {
-    fakes::clock::FakeClock::new().now()
-}
 
 /// The stroke `name` names.
 fn stroke(name: &str) -> Stroke {
@@ -71,30 +62,6 @@ fn home() -> App {
     });
     app.set_size(80, 24);
     app
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
-}
-
-/// A session line of `kind` from `session`.
-fn session_line(session: &str, kind: &str, payload: Value, action: Option<&str>) -> Line {
-    Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
-        session_id: contract::SessionId(session.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: action.map(|id| contract::ActionId(id.to_owned())),
-        seq: None,
-        payload: payload.as_object().cloned().unwrap_or_default(),
-    })
 }
 
 /// An approval request from [`S_A`], opening the approval panel.
