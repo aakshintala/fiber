@@ -1,588 +1,737 @@
-//! Native process registrations (`docs/extensions.md`, "Process extensions"
-//! and "Registering"): the validated registry behind the wire's JSON
-//! registration calls. The checks live in `validate`, with the Lua
-//! registry's exact wording, without running Lua; this owns the state,
-//! mints the references, and inserts.
-//!
-//! Each `fiber.*` call validates exactly as its Lua twin does: a refusal
-//! carries the problem's sentence back in `command_rejected` and records it
-//! for the notice, and the package goes on. Only a provider or replacement
-//! the manifest does not declare, or a registration outside a commands-keyed
-//! package's declared commands, fails the whole package with
-//! `extension_failed`. Every function a call registers is a
-//! [`FunctionRef`][crate::runtime::FunctionRef]: the registering command's
-//! id, the function's key and the owner's generation.
+//! Process-extension lifecycle and runtime entry points behind the package
+//! seam (`docs/extensions.md`, "Process extensions").
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use contract::CommandId;
 use contract::ErrorCode;
 use serde_json::Value;
 
 use crate::Error;
-use crate::lua::{DeclaredHooks, DeclaredTool, DeclaredWatchers};
-use crate::runtime::{FunctionRef, FunctionTarget, ProcessInvoke, Runtime};
+use crate::runtime::{FunctionRef, Runtime};
 
+mod registry;
 mod validate;
+pub(crate) use registry::*;
 
-/// What one registration call answers on the wire: accepted with its
-/// result, rejected with the refusal's sentence, or failing the package.
-#[allow(
-    dead_code,
-    reason = "answered by the transport once processes register in a later part; asserted by tests"
-)]
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum RegisterOutcome {
-    /// The registration stands; the `call` answers `command_accepted`
-    /// with no `value`, as a Lua registration returns nothing
-    /// (`docs/extensions.md`, "Process extensions").
-    Accepted,
-    /// The registration does not stand; the `call` answer carries the
-    /// refusal's code and sentence, and the sentence is recorded for the
-    /// notice.
-    Rejected {
-        /// The refusal's code.
-        code: ErrorCode,
-        /// The refusal's sentence, in the Lua call's words.
-        message: String,
-    },
-    /// The package is out; the `call` answer carries the failure, the
-    /// sentence is recorded for the notice, and no later call registers.
-    FailedPackage {
-        /// The failure's code.
-        code: ErrorCode,
-        /// The failure's sentence.
-        message: String,
-    },
+pub(crate) mod calls;
+pub(crate) mod context;
+pub(crate) mod lifecycle;
+pub(crate) mod oauth;
+pub(crate) mod requests;
+#[cfg(test)]
+mod tests;
+pub(crate) mod transport;
+
+/// One process extension behind the package seam: its child on the pipes,
+/// its registrations, and the requests it answers (`docs/extensions.md`,
+/// "Process extensions").
+///
+/// The owner pumps the child's lines on one thread: registrations answer
+/// through the registry before `ready` and refuse after it, supervised
+/// `call`, `ready` and `reply` parse through `CommandLine`, and ordinary
+/// driver commands go through the `Drive` seam. Requests ride the shared
+/// request table: stream items ordered one at a time, tool calls
+/// concurrent, and one retirement seam for replies, deadlines and cancels.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+pub(crate) struct ProcessExtension {
+    shared: Arc<Shared>,
 }
 
-/// One tool a `fiber.tool` call registered.
-#[derive(Debug, Clone)]
-pub(crate) struct ToolEntry {
-    /// Its declaration, as `fiber.tool` validated it.
-    pub(crate) declared: DeclaredTool,
-    /// Its `run` behind the runtime.
-    pub(crate) run: FunctionRef,
-    /// Its computed `effects` behind the runtime, when it declared a
-    /// function instead of a table.
-    pub(crate) effects: Option<FunctionRef>,
+/// What starting one process extension takes: the program and its
+/// arguments, what the child runs as, and what answers its calls. One
+/// value carries the launch so the start path stays narrow.
+pub(crate) struct Launch {
+    /// The extension's name.
+    pub owner: String,
+    /// The runtime its functions resolve through.
+    pub runtime: Runtime,
+    /// The registry its calls register with, shared with the package.
+    pub registry: Arc<Mutex<Registry>>,
+    /// The program to run.
+    pub program: std::path::PathBuf,
+    /// Its arguments.
+    pub args: Vec<String>,
+    /// What the child runs as: the hello's fields.
+    pub context: context::ProcessContext,
+    /// What answers its driver commands, absent while closing.
+    pub drive: Option<Arc<dyn contract::extension::Drive>>,
+    /// What answers its host and state calls.
+    pub services: Arc<dyn context::ProcessHostServices>,
+    /// Where its refresh provider's stored pair is held.
+    pub oauth: oauth::FileCredential,
+    /// The state store its hook writes join and its calls read.
+    pub state: Arc<crate::host::state::ExtensionState>,
+    /// The clock its timeouts read.
+    pub clock: Arc<dyn contract::clock::Clock>,
+    /// The pipe limits; the tests inject small ones.
+    pub limits: transport::Limits,
 }
 
-/// One command a `fiber.command` call registered.
-#[allow(
-    dead_code,
-    reason = "timeouts are enforced when the command runs in a later part; asserted by tests"
-)]
-#[derive(Debug, Clone)]
-pub(crate) struct CommandEntry {
-    /// Its description, as the session lists it.
-    pub(crate) description: String,
-    /// Its timeout, enforced when the command runs.
-    pub(crate) timeout: Duration,
-    /// Its `run` behind the runtime.
-    pub(crate) run: FunctionRef,
-}
-
-/// One provider a `fiber.provider` call registered.
-#[allow(
-    dead_code,
-    reason = "read by provider dispatch in a later part; asserted by tests"
-)]
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ProviderEntry {
-    /// Each function's timeout, by function name.
-    pub(crate) timeouts: BTreeMap<String, Duration>,
-    /// Each function's `run` behind the runtime, by function name.
-    pub(crate) runs: BTreeMap<String, FunctionRef>,
-}
-
-/// One harness a `fiber.harness` call registered.
-#[allow(
-    dead_code,
-    reason = "read by harness consumption in a later part; asserted by tests"
-)]
-#[derive(Debug, Clone)]
-pub(crate) struct HarnessEntry {
-    /// The timeout every harness function runs under.
-    pub(crate) timeout: Duration,
-    /// The harness's data, carried for the delegate runner.
-    pub(crate) data: BTreeMap<String, Value>,
-    /// Each function's `run` behind the runtime, by function name.
-    pub(crate) runs: BTreeMap<String, FunctionRef>,
-}
-
-/// A process extension's validated registrations: declarations beside the
-/// references that run them.
-#[allow(
-    dead_code,
-    reason = "filled by the transport once processes register in a later part; views asserted by tests"
-)]
-pub(crate) struct Registry {
-    /// The extension that registers, as `extensions_loaded` carries it.
+/// What the owner's threads share: the extension's identity, its runtime
+/// and registry, its request table and pipes, and what answers its calls.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+pub(crate) struct Shared {
     owner: String,
-    /// The runtime minting the references.
     runtime: Runtime,
-    /// The manifest's `commands` key, when it makes the package lazy: only
-    /// these command names may register, and nothing else may.
-    manifest_commands: Option<BTreeMap<String, config::ManifestCommand>>,
-    /// The manifest's declared providers.
-    manifest_providers: Vec<String>,
-    /// The manifest's declared replacements.
-    manifest_replaces: Vec<String>,
-    /// Each tool by name, in registration order.
-    tools: BTreeMap<String, ToolEntry>,
-    /// Each hook by point, in registration order.
-    hooks: DeclaredHooks,
-    /// Each hook's `run` behind the runtime, by point and index.
-    hook_runs: BTreeMap<(String, usize), FunctionRef>,
-    /// Each watcher in registration order.
-    watchers: DeclaredWatchers,
-    /// Each watcher's `run` behind the runtime, by registration index.
-    watcher_runs: BTreeMap<usize, FunctionRef>,
-    /// Each command by registered name.
-    commands: BTreeMap<String, CommandEntry>,
-    /// Each provider by name.
-    providers: BTreeMap<String, ProviderEntry>,
-    /// Each search backend by name, with its timeout.
-    search: BTreeMap<String, (Duration, FunctionRef)>,
-    /// Each harness by name.
-    harness: BTreeMap<String, HarnessEntry>,
-    /// Every refusal but the watch ones, for the notice.
-    problems: Vec<String>,
-    /// Every watch refusal, for the notice.
-    watch_problems: Vec<String>,
-    /// The first package failure, latched: a failed package stays failed,
-    /// and later calls fail with the first failure.
-    failure: Option<(ErrorCode, String)>,
+    registry: Arc<Mutex<Registry>>,
+    pub(crate) table: Arc<requests::Table>,
+    /// The live child behind a lock, so the one restart swaps it while a
+    /// pump holds only its own clone and never blocks a swap.
+    transport: Mutex<Arc<transport::Transport>>,
+    drive: Option<Arc<dyn contract::extension::Drive>>,
+    services: Arc<dyn context::ProcessHostServices>,
+    pub(crate) oauth: oauth::FileCredential,
+    pub(crate) state: Arc<crate::host::state::ExtensionState>,
+    clock: Arc<dyn contract::clock::Clock>,
+    /// What the child runs as, behind a lock so the one restart refolds
+    /// the state before resending the hello.
+    context: Mutex<context::ProcessContext>,
+    /// Whether the child sent `ready`.
+    pub(crate) ready: std::sync::atomic::AtomicBool,
+    /// Bumped on every `ready`: what startup and restart waits park on.
+    pub(crate) ready_park: support::clock::Parker,
+    /// The lifecycle one synchronized transition owns.
+    pub(crate) lifecycle: Mutex<lifecycle::Lifecycle>,
+    /// Wakes waiters on every lifecycle transition.
+    pub(crate) lifecycle_park: support::clock::Parker,
+    /// What respawns the child, as `Transport::spawn_with` takes it.
+    pub(crate) spawn: lifecycle::Spawn,
+    #[cfg(test)]
+    refresh_completion_pause: Mutex<Option<RefreshCompletionPause>>,
 }
 
-#[allow(
-    dead_code,
-    reason = "the register pathway and its views: the transport answers through it in a later part; asserted by tests"
-)]
-impl Registry {
-    /// An empty registry for `owner` on `runtime`, constrained by
-    /// `manifest`: its `commands` key, providers and replacements. The
-    /// owner registers at once, so every minted reference carries
-    /// generation one until a replacement re-registers.
-    pub(crate) fn new(owner: String, runtime: Runtime, manifest: &config::Manifest) -> Self {
-        runtime.register_owner(&owner, None);
-        Self {
+#[cfg(test)]
+struct RefreshCompletionPause {
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+impl Shared {
+    /// Pauses the next refresh after its holder is dropped and before it answers.
+    pub(crate) fn pause_next_refresh_completion(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (entered, reached) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        *support::lock(&self.refresh_completion_pause) = Some(RefreshCompletionPause {
+            entered,
+            release: released,
+        });
+        (reached, release)
+    }
+
+    /// Reaches and waits at the registered refresh completion pause.
+    pub(crate) fn pause_refresh_completion(&self) {
+        let pause = support::lock(&self.refresh_completion_pause).take();
+        if let Some(pause) = pause
+            && pause.entered.send(()).is_ok()
+        {
+            let Ok(()) = pause.release.recv() else {
+                return;
+            };
+        }
+    }
+}
+
+/// What one `pump_once` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+pub(crate) enum Pumped {
+    /// One line handled and answered.
+    Handled,
+    /// The pipe closed; no more lines follow.
+    Closed(transport::CloseReason),
+}
+
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+impl ProcessExtension {
+    /// Starts the launched program for its owner: the child runs in the
+    /// launch's workspace, and `extension_hello` is the first complete
+    /// outbound line. The registry is shared with the package, so the
+    /// session fold reads what the child registers. One value carries
+    /// the launch so the start path stays narrow.
+    pub(crate) fn start(launch: Launch) -> std::io::Result<Self> {
+        let Launch {
             owner,
             runtime,
-            manifest_commands: manifest.commands.clone(),
-            manifest_providers: manifest.providers.keys().cloned().collect(),
-            manifest_replaces: manifest.replaces.clone(),
-            tools: BTreeMap::new(),
-            hooks: DeclaredHooks {
-                by_point: BTreeMap::new(),
-                problems: Vec::new(),
-            },
-            hook_runs: BTreeMap::new(),
-            watchers: DeclaredWatchers {
-                watchers: Vec::new(),
-                problems: Vec::new(),
-            },
-            watcher_runs: BTreeMap::new(),
-            commands: BTreeMap::new(),
-            providers: BTreeMap::new(),
-            search: BTreeMap::new(),
-            harness: BTreeMap::new(),
-            problems: Vec::new(),
-            watch_problems: Vec::new(),
-            failure: None,
-        }
-    }
-
-    /// The extension this registry collects.
-    pub(crate) fn owner(&self) -> &str {
-        &self.owner
-    }
-
-    /// Each tool by name, in registration order.
-    pub(crate) fn tools(&self) -> &BTreeMap<String, ToolEntry> {
-        &self.tools
-    }
-
-    /// Each hook by point, in registration order.
-    pub(crate) fn hooks(&self) -> &DeclaredHooks {
-        &self.hooks
-    }
-
-    /// Each hook's `run` behind the runtime, by point and index.
-    pub(crate) fn hook_runs(&self) -> &BTreeMap<(String, usize), FunctionRef> {
-        &self.hook_runs
-    }
-
-    /// Each watcher in registration order.
-    pub(crate) fn watchers(&self) -> &DeclaredWatchers {
-        &self.watchers
-    }
-
-    /// Each watcher's `run` behind the runtime, by registration index.
-    pub(crate) fn watcher_runs(&self) -> &BTreeMap<usize, FunctionRef> {
-        &self.watcher_runs
-    }
-
-    /// Each command by registered name.
-    pub(crate) fn commands(&self) -> &BTreeMap<String, CommandEntry> {
-        &self.commands
-    }
-
-    /// Each provider by name.
-    pub(crate) fn providers(&self) -> &BTreeMap<String, ProviderEntry> {
-        &self.providers
-    }
-
-    /// Each search backend by name, with its timeout.
-    pub(crate) fn search(&self) -> &BTreeMap<String, (Duration, FunctionRef)> {
-        &self.search
-    }
-
-    /// Each harness by name.
-    pub(crate) fn harness(&self) -> &BTreeMap<String, HarnessEntry> {
-        &self.harness
-    }
-
-    /// Every refusal but the watch ones, for the notice.
-    pub(crate) fn problems(&self) -> &[String] {
-        &self.problems
-    }
-
-    /// Every watch refusal, for the notice.
-    pub(crate) fn watch_problems(&self) -> &[String] {
-        &self.watch_problems
-    }
-
-    /// The first package failure, when one call failed the package.
-    pub(crate) fn failure(&self) -> Option<(ErrorCode, String)> {
-        self.failure.clone()
-    }
-
-    /// Registers one `call` command `command` with `args`: the wire's
-    /// answer to the call. `in_callback` marks a call made while answering
-    /// another, which registers nothing, as in Lua. Unknown calls are not
-    /// registrations and fail `invalid_arguments`.
-    pub(crate) fn register(
-        &mut self,
-        command: CommandId,
-        call: &str,
-        args: &[Value],
-        in_callback: bool,
-    ) -> RegisterOutcome {
-        if let Some((code, message)) = self.failure.clone() {
-            return RegisterOutcome::FailedPackage { code, message };
-        }
-        if in_callback {
-            return RegisterOutcome::Rejected {
-                code: ErrorCode::ExtensionFailed,
-                message: in_callback_message(call),
-            };
-        }
-        let outcome = match call {
-            "fiber.tool" => self.register_tool(command, args),
-            "fiber.hook" => self.register_hook(command, args),
-            "fiber.watch" => self.register_watch(command, args),
-            "fiber.command" => self.register_command(command, args),
-            "fiber.provider" => self.register_provider(command, args),
-            "fiber.search_backend" => self.register_search(command, args),
-            "fiber.harness" => self.register_harness(command, args),
-            _ => RegisterOutcome::Rejected {
-                code: ErrorCode::InvalidArguments,
-                message: format!("unknown call `{call}`"),
-            },
+            registry,
+            program,
+            args,
+            context,
+            drive,
+            services,
+            oauth,
+            state,
+            clock,
+            limits,
+        } = launch;
+        let transport =
+            transport::Transport::spawn_with(&program, &args, &context.workspace, limits)?;
+        let extension = Self {
+            shared: Arc::new(Shared {
+                owner,
+                runtime,
+                registry,
+                table: Arc::new(requests::Table::new()),
+                transport: Mutex::new(Arc::new(transport)),
+                drive,
+                services,
+                oauth,
+                state,
+                clock,
+                context: Mutex::new(context),
+                ready: std::sync::atomic::AtomicBool::new(false),
+                ready_park: support::clock::Parker::new(),
+                lifecycle: Mutex::new(lifecycle::Lifecycle::starting()),
+                lifecycle_park: support::clock::Parker::new(),
+                spawn: lifecycle::Spawn {
+                    program,
+                    args,
+                    limits,
+                },
+                #[cfg(test)]
+                refresh_completion_pause: Mutex::new(None),
+            }),
         };
-        if let RegisterOutcome::FailedPackage { code, message } = &outcome {
-            self.failure = Some((code.clone(), message.clone()));
-        }
-        outcome
+        let hello = extension.hello_line().map_err(std::io::Error::other)?;
+        let live = Arc::clone(&support::lock(&extension.shared.transport));
+        live.send(hello).map_err(|error| {
+            std::io::Error::other(format!("the first hello never sent: {error:?}"))
+        })?;
+        Ok(extension)
     }
 
-    /// Installs `invoke` for the function (`command`, `key`): the test and
-    /// transport stand-in behind the reference the registration minted.
-    /// Re-registering the reference swaps its target under the same
-    /// generation, so the call that registered it keeps working.
-    pub(crate) fn set_handler(
+    /// The extension's name.
+    pub(crate) fn owner(&self) -> &str {
+        &self.shared.owner
+    }
+
+    /// Whether `ready` arrived: registrations stand only before it.
+    pub(crate) fn is_ready(&self) -> bool {
+        self.shared.ready.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Waits for the child's `ready` until `deadline`: the startup wait
+    /// the session owns, bounded and cancellable, killing a wedged child
+    /// instead of leaking it.
+    pub(crate) fn await_ready(
         &self,
-        command: &CommandId,
-        key: &str,
-        invoke: ProcessInvoke,
-    ) -> FunctionRef {
-        self.runtime.register_function(
-            &self.owner,
-            command.clone(),
-            key.to_owned(),
-            FunctionTarget::Process(invoke),
+        deadline: Option<std::time::Instant>,
+        cancel: &dyn contract::tool::Cancel,
+    ) -> Result<(), (contract::ErrorCode, String)> {
+        lifecycle::await_ready(&self.shared, &self.shared.ready, deadline, cancel)
+    }
+
+    /// Shuts the owner down: no new dispatches past this point, the
+    /// in-flight requests drain first, and only then does the
+    /// `exit_timeout` allowance start. The child that exits on its own
+    /// or on TERM returns its status; a child that ignores TERM gets
+    /// KILL after the grace. Cancel ends the wait and leaves the child
+    /// for the caller; the owner stays finishing either way.
+    pub(crate) fn finish(
+        &self,
+        exit_timeout: Duration,
+        cancel: &dyn contract::tool::Cancel,
+    ) -> Result<std::process::ExitStatus, (contract::ErrorCode, String)> {
+        if !lifecycle::begin_finish(&self.shared) {
+            return Err((
+                contract::ErrorCode::Closing,
+                format!(
+                    "{}: the process extension is already finishing",
+                    self.shared.owner
+                ),
+            ));
+        }
+        let clock = self.shared.clock.as_ref();
+        if !self.shared.table.wait_idle(clock, cancel) {
+            return Err((
+                contract::ErrorCode::Cancelled,
+                format!("{}: the shutdown wait was cancelled", self.shared.owner),
+            ));
+        }
+        // The final stream request answered: the allowance starts now,
+        // and the input closes with it.
+        let live = self.transport();
+        live.stop();
+        let term_at = clock.now().checked_add(exit_timeout);
+        if let Some(status) = lifecycle::await_exit(&live, clock, term_at, cancel)? {
+            live.join();
+            return Ok(status);
+        }
+        // A group already gone reports Ok; the reaps below, not the
+        // signal call, decide the outcome.
+        match live.signal(rustix::process::Signal::TERM) {
+            Ok(()) | Err(_) => {}
+        }
+        let kill_at = term_at
+            .and_then(|term| term.checked_add(lifecycle::GRACE))
+            .or(term_at);
+        if let Some(status) = lifecycle::await_exit(&live, clock, kill_at, cancel)? {
+            live.join();
+            return Ok(status);
+        }
+        // A group already gone reports Ok; the reap below decides the
+        // outcome.
+        match live.signal(rustix::process::Signal::KILL) {
+            Ok(()) | Err(_) => {}
+        }
+        let status = live.wait_exit().map_err(|source| {
+            (
+                contract::ErrorCode::IoFailed,
+                format!(
+                    "{}: the shutdown never reaped the child: {source}",
+                    self.shared.owner
+                ),
+            )
+        })?;
+        live.join();
+        Ok(status)
+    }
+
+    /// Retires the generation at the process seam: pending requests end
+    /// stale, and the next request mints under a new generation. Reload
+    /// uses this; death uses the lifecycle, which also counts the child.
+    pub(crate) fn retire(&self) {
+        self.shared.table.retire();
+    }
+
+    /// The request table, for attributing calls and retiring generations.
+    pub(crate) fn table(&self) -> &Arc<requests::Table> {
+        &self.shared.table
+    }
+
+    /// The shared owner, for tests that mint requests, send lines and
+    /// read the stores behind the seam.
+    #[cfg(test)]
+    pub(crate) fn shared(&self) -> &Arc<Shared> {
+        &self.shared
+    }
+
+    /// The live pipes, for stopping, signalling and reaping the child: a
+    /// clone, so a pump holds its own child while a restart swaps the
+    /// live one.
+    pub(crate) fn transport(&self) -> Arc<transport::Transport> {
+        Arc::clone(&support::lock(&self.shared.transport))
+    }
+
+    /// The runtime, resolving generation-keyed references.
+    pub(crate) fn runtime(&self) -> &Runtime {
+        &self.shared.runtime
+    }
+
+    /// Dispatches the stream item behind `func`: hooks, watcher
+    /// deliveries and commands, one at a time in arrival order. Resolves
+    /// the reference first, so a stale generation never runs.
+    pub(crate) fn dispatch_stream(
+        &self,
+        func: &FunctionRef,
+        args: Value,
+        timeout: Duration,
+        state_call: Option<u64>,
+        caller: &dyn contract::tool::Cancel,
+    ) -> Result<Option<Value>, Error> {
+        self.dispatch_stream_after_admission(func, args, timeout, state_call, caller, || {})
+    }
+
+    #[cfg(test)]
+    pub(crate) fn dispatch_stream_with_admission_pause(
+        &self,
+        func: &FunctionRef,
+        args: Value,
+        timeout: Duration,
+        state_call: Option<u64>,
+        caller: &dyn contract::tool::Cancel,
+        after_admission: impl FnOnce(),
+    ) -> Result<Option<Value>, Error> {
+        self.dispatch_stream_after_admission(
+            func,
+            args,
+            timeout,
+            state_call,
+            caller,
+            after_admission,
         )
     }
 
-    /// Fails the package when it declares `commands` and `call` is not a
-    /// command registration: a lazy package registers only commands.
-    fn reject_lazy(&mut self, call: &str) -> Option<RegisterOutcome> {
-        self.manifest_commands.as_ref()?;
-        let message = format!(
-            "`{}` declares `commands`, so a `{call}` registration stops the load",
-            self.owner
-        );
-        self.problems.push(message.clone());
-        Some(RegisterOutcome::FailedPackage {
-            code: ErrorCode::ExtensionFailed,
+    fn dispatch_stream_after_admission(
+        &self,
+        func: &FunctionRef,
+        args: Value,
+        timeout: Duration,
+        state_call: Option<u64>,
+        caller: &dyn contract::tool::Cancel,
+        after_admission: impl FnOnce(),
+    ) -> Result<Option<Value>, Error> {
+        let family = self.resolve_family(func)?;
+        after_admission();
+        match family {
+            // A hook delivery joins its state transaction: the run begins
+            // it, success commits it, and any failure discards it, as the
+            // Lua scheduler does around its hook calls. Watchers and
+            // commands never join a transaction: their `state_call`, if
+            // one arrived, would write into no open call. The committed
+            // lines go to the session fold; the store applies them here.
+            Some(Family::Hook { point }) => {
+                if let Some(call) = state_call {
+                    self.shared.state.begin(call);
+                }
+                let outcome = self.send_request(
+                    requests::Dispatch::stream(
+                        func,
+                        format!("hook {point}"),
+                        args,
+                        timeout,
+                        state_call,
+                    ),
+                    caller,
+                );
+                match (state_call, &outcome) {
+                    (Some(call), Ok(_)) => {
+                        self.shared.state.take_call(call);
+                    }
+                    (Some(call), Err(_)) => {
+                        self.shared.state.discard_call(call);
+                    }
+                    (None, _) => {}
+                }
+                outcome
+            }
+            Some(Family::Watcher { index }) => self.send_request(
+                requests::Dispatch::stream(func, format!("watcher {index}"), args, timeout, None),
+                caller,
+            ),
+            Some(Family::Command { name }) => self.send_request(
+                requests::Dispatch::stream(func, format!("command {name}"), args, timeout, None),
+                caller,
+            ),
+            _ => Err(Error::UnknownCallback {
+                extension: self.shared.owner.clone(),
+                callback: format!(
+                    "`{}` (generation {}): it has since re-registered",
+                    func.key, func.generation
+                ),
+            }),
+        }
+    }
+
+    /// Dispatches the tool behind `func`: tools run as they arrive, so
+    /// several can be outstanding and a long tool never holds up the
+    /// stream. Resolves the reference first, so a stale generation never
+    /// runs.
+    pub(crate) fn dispatch_tool(
+        &self,
+        func: &FunctionRef,
+        args: Value,
+        timeout: Duration,
+        caller: &dyn contract::tool::Cancel,
+    ) -> Result<Option<Value>, Error> {
+        match self.resolve_family(func)? {
+            Some(Family::Tool { name }) => self.send_request(
+                requests::Dispatch::tool(func, format!("tool {name}"), args, timeout),
+                caller,
+            ),
+            _ => Err(Error::UnknownCallback {
+                extension: self.shared.owner.clone(),
+                callback: format!(
+                    "`{}` (generation {}): it has since re-registered",
+                    func.key, func.generation
+                ),
+            }),
+        }
+    }
+
+    /// Sends one `dispatch` and waits for its answer, as the free
+    /// `run_request` does: the stream gate first for stream items, then
+    /// the line, then the reply, the deadline, the cancel or the hang
+    /// guard, whichever is first.
+    fn send_request(
+        &self,
+        dispatch: requests::Dispatch,
+        caller: &dyn contract::tool::Cancel,
+    ) -> Result<Option<Value>, Error> {
+        requests::run_request(&self.shared, dispatch, caller)
+    }
+
+    /// The `extension_hello` line: the session's identity, why it
+    /// started, its workspace, the data directories and the folded state.
+    fn hello_line(&self) -> Result<Vec<u8>, serde_json::Error> {
+        let payload = serde_json::to_value(support::lock(&self.shared.context).hello())?;
+        Ok(envelope_line(
+            &self.shared,
+            "extension_hello",
+            payload.as_object().cloned().unwrap_or_default(),
+        ))
+    }
+
+    /// Answers one command accepted, carrying the call's return: `value`
+    /// absent when the call returns nothing. A result that does not fit
+    /// under the framing cap is answered `too_large` in its place.
+    fn answer_accepted(
+        &self,
+        id: &contract::CommandId,
+        result: Option<contract::events::CommandResult>,
+    ) {
+        let payload = serde_json::to_value(&contract::events::CommandAccepted {
+            command_id: id.clone(),
+            result,
+        })
+        .ok()
+        .and_then(|payload| payload.as_object().cloned())
+        .unwrap_or_default();
+        let line = envelope_line(&self.shared, "command_accepted", payload);
+        if line.len() > support::lock(&self.shared.transport).max_line() {
+            self.answer_rejected(
+                id,
+                ErrorCode::TooLarge,
+                "the result does not fit the 64 MiB wire cap".to_owned(),
+            );
+            return;
+        }
+        // The child may be gone: its answer dies with it, and the
+        // table already settled what the answer would settle.
+        match support::lock(&self.shared.transport).send(line) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+
+    /// Answers one command rejected with its code and message.
+    fn answer_rejected(&self, id: &contract::CommandId, code: ErrorCode, message: String) {
+        let payload = serde_json::to_value(&contract::events::CommandRejected {
+            command_id: Some(id.clone()),
+            code,
             message,
         })
-    }
-}
-
-/// A registration made while answering another call registers nothing, as
-/// in Lua: each call names where registrations run.
-fn in_callback_message(call: &str) -> String {
-    match call {
-        "fiber.tool" => "fiber.tool: registers only while `init.lua` runs",
-        "fiber.command" => "fiber.command: registers only while `init.lua` runs",
-        "fiber.hook" => "fiber.hook: registers only while `init.lua` runs",
-        "fiber.watch" => "fiber.watch: registers only while `init.lua` runs",
-        "fiber.search_backend" => "fiber.search_backend: registers only while `init.lua` runs",
-        "fiber.provider" => "fiber.provider: registers only while its provider file loads",
-        "fiber.harness" => "fiber.harness: registers only while `init.lua` runs",
-        _ => "registers only while `init.lua` runs",
-    }
-    .to_owned()
-}
-
-/// Records `message` for the notice and rejects the call with it.
-fn refuse(problems: &mut Vec<String>, message: String) -> RegisterOutcome {
-    problems.push(message.clone());
-    RegisterOutcome::Rejected {
-        code: ErrorCode::ExtensionFailed,
-        message,
-    }
-}
-
-/// A `fiber.tool` registration: the validated declaration, inserted with
-/// its references. The checks live in `validate`, in `fiber.tool`'s order;
-/// this refuses a duplicate name and mints.
-impl Registry {
-    /// Registers `fiber.tool` from `command` with `args`.
-    fn register_tool(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
-        if let Some(fatal) = self.reject_lazy("fiber.tool") {
-            return fatal;
+        .ok()
+        .and_then(|payload| payload.as_object().cloned())
+        .unwrap_or_default();
+        let line = envelope_line(&self.shared, "command_rejected", payload);
+        // The child may be gone: its answer dies with it, and the
+        // table already settled what the answer would settle.
+        match support::lock(&self.shared.transport).send(line) {
+            Ok(()) | Err(_) => {}
         }
-        let valid = match validate::check_tool(args) {
-            Ok(valid) => valid,
-            Err(why) => return refuse(&mut self.problems, why),
-        };
-        if self.tools.contains_key(&valid.tool.name) {
-            let message = format!("`{}` tool is already registered", valid.tool.name);
-            self.problems.push(message.clone());
-            return RegisterOutcome::Rejected {
-                code: ErrorCode::ExtensionFailed,
-                message,
-            };
-        }
-        let run = self.mint(command.clone(), "run");
-        let effects_reference = valid.effects_fn.then(|| self.mint(command, "effects"));
-        self.tools.insert(
-            valid.tool.name.clone(),
-            ToolEntry {
-                declared: valid.tool,
-                run,
-                effects: effects_reference,
-            },
+    }
+
+    /// Rejects a call or reply naming a request that is no longer
+    /// pending: it ran nothing and changes nothing.
+    fn answer_stale(&self, id: &contract::CommandId) {
+        self.answer_rejected(
+            id,
+            ErrorCode::StaleRequest,
+            "the request is no longer pending".to_owned(),
         );
-        RegisterOutcome::Accepted
     }
 
-    /// Mints the reference for (`command`, `key`): a process function that
-    /// answers nothing until its handler is installed.
-    fn mint(&self, command: CommandId, key: &str) -> FunctionRef {
-        let owner = self.owner.clone();
-        self.runtime.register_function(
-            &self.owner,
-            command,
-            key.to_owned(),
-            FunctionTarget::Process(Arc::new(move |_, _| {
-                Err(Error::Stopped {
-                    extension: owner.clone(),
-                })
-            })),
-        )
-    }
-}
-
-/// A `fiber.hook` registration: the validated point and declaration,
-/// numbered among its point's hooks and inserted with its reference. The
-/// checks live in `validate`, in `fiber.hook`'s order.
-impl Registry {
-    /// Registers `fiber.hook` from `command` with `args`.
-    fn register_hook(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
-        if let Some(fatal) = self.reject_lazy("fiber.hook") {
-            return fatal;
-        }
-        let valid = match validate::check_hook(args) {
-            Ok(valid) => valid,
-            Err(why) => return refuse(&mut self.problems, why),
-        };
-        let index = self
-            .hooks
-            .by_point
-            .get(&valid.point)
-            .map(Vec::len)
-            .unwrap_or(0);
-        let run = self.mint(command, "run");
-        self.hook_runs.insert((valid.point.clone(), index), run);
-        self.hooks
-            .by_point
-            .entry(valid.point)
-            .or_default()
-            .push(valid.hook);
-        RegisterOutcome::Accepted
-    }
-
-    /// Registers `fiber.watch` from `command` with `args`: the validated
-    /// watcher, numbered and inserted with its reference. The checks live
-    /// in `validate`; unknown kinds keep their notices and register
-    /// nothing, as in Lua.
-    fn register_watch(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
-        if let Some(fatal) = self.reject_lazy("fiber.watch") {
-            return fatal;
-        }
-        // The index counts registered watchers, as Lua's `#watchers` does:
-        // a refused call registers nothing and takes no number.
-        let index = self.watchers.watchers.len();
-        let checked = validate::check_watch(args, index);
-        self.watch_problems.extend(checked.notices);
-        match checked.result {
-            Err(why) => refuse(&mut self.watch_problems, why),
-            Ok(None) => RegisterOutcome::Accepted,
-            Ok(Some(valid)) => {
-                let run = self.mint(command, "run");
-                self.watcher_runs.insert(index, run);
-                self.watchers.watchers.push(valid.watcher);
-                RegisterOutcome::Accepted
-            }
-        }
-    }
-
-    /// Registers `fiber.command` from `command` with `args`: the validated
-    /// entry, inserted with its reference. The checks live in `validate`,
-    /// in `fiber.command`'s order; the manifest check follows them, and a
-    /// later call for the same name replaces the first, as in Lua.
-    fn register_command(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
-        let valid = match validate::check_command(args) {
-            Ok(valid) => valid,
-            Err(why) => return refuse(&mut self.problems, why),
-        };
-        if let Some(declared) = &self.manifest_commands
-            && !declared.contains_key(&valid.name)
-        {
-            let message = format!(
-                "Command `{}` is not declared under `commands`; `{}` registers only the commands its manifest declares",
-                valid.name, self.owner
+    /// Sends one ordinary driver command through the `Drive` seam: the
+    /// door runs it elsewhere and answers on the ack, which writes the
+    /// command's answer. With no driver the session is closing, and the
+    /// call raises `closing`.
+    fn drive_command(
+        &self,
+        id: contract::CommandId,
+        command: String,
+        args: serde_json::Map<String, Value>,
+    ) {
+        let Some(driver) = self.shared.drive.clone() else {
+            self.answer_rejected(
+                &id,
+                ErrorCode::Closing,
+                "host.drive: the session is closing".to_owned(),
             );
-            self.problems.push(message.clone());
-            return RegisterOutcome::FailedPackage {
-                code: ErrorCode::ExtensionFailed,
-                message,
-            };
-        }
-        let run = self.mint(command, "run");
-        self.commands.insert(
-            valid.name.clone(),
-            CommandEntry {
-                description: valid.description,
-                timeout: valid.timeout,
-                run,
-            },
-        );
-        RegisterOutcome::Accepted
-    }
-
-    /// Registers `fiber.search_backend` from `command` with `args`: the
-    /// validated backend, inserted with its reference. The checks live in
-    /// `validate`, in `fiber.search_backend`'s order. Unlike commands, a
-    /// backend name need not be plain.
-    fn register_search(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
-        if let Some(fatal) = self.reject_lazy("fiber.search_backend") {
-            return fatal;
-        }
-        let registered: BTreeSet<String> = self.search.keys().cloned().collect();
-        let valid = match validate::check_search(args, &registered) {
-            Ok(valid) => valid,
-            Err(why) => return refuse(&mut self.problems, why),
+            return;
         };
-        let run = self.mint(command, "run");
-        self.search.insert(valid.name.clone(), (valid.timeout, run));
-        RegisterOutcome::Accepted
+        let shared = Arc::clone(&self.shared);
+        let owner = shared.owner.clone();
+        let answer_id = id.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("process drive {owner}"))
+            .spawn(move || {
+                let ack = contract::inbox::Ack(Box::new(move |answer| match answer {
+                    Ok(result) => answer_on(&shared, &answer_id, result),
+                    Err(rejection) => answer_off(&shared, &answer_id, rejection),
+                }));
+                driver.drive(&owner, &command, args, ack);
+            });
+        if spawned.is_err() {
+            self.answer_rejected(
+                &id,
+                ErrorCode::IoFailed,
+                "host.drive: Fiber could not start the driver call".to_owned(),
+            );
+        }
     }
 
-    /// Registers `fiber.provider` from `command` with `args`: the validated
-    /// provider, inserted with one reference per function. The checks live
-    /// in `validate`, in `fiber.provider`'s order, reading the manifest
-    /// and the standing providers as the registry holds them. The provider
-    /// name stands where Lua names the provider file, which a process has
-    /// none of.
-    fn register_provider(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
-        if let Some(fatal) = self.reject_lazy("fiber.provider") {
-            return fatal;
+    /// Resolves `func`'s family before checking its runtime generation.
+    /// The returned family is the call's admission snapshot: a restart
+    /// after the runtime check cannot turn an admitted call stale by
+    /// replacing the registry before dispatch uses it.
+    fn resolve_family(&self, func: &FunctionRef) -> Result<Option<Family>, Error> {
+        let family = self.family_of(func);
+        self.shared.runtime.resolve(func)?;
+        Ok(family)
+    }
+
+    /// Which registered family `func` names, for dispatching it as a
+    /// stream item, a tool or a nested function.
+    fn family_of(&self, func: &FunctionRef) -> Option<Family> {
+        let registry = support::lock(&self.shared.registry);
+        for ((point, _), reference) in registry.hook_runs() {
+            if reference == func {
+                return Some(Family::Hook {
+                    point: point.clone(),
+                });
+            }
         }
-        let registered: BTreeSet<String> = self.providers.keys().cloned().collect();
-        match validate::check_provider(args, &self.owner, &self.manifest_providers, &registered) {
-            validate::Checked::Accept(valid) => {
-                let mut runs = BTreeMap::new();
-                for key in &valid.funcs {
-                    runs.insert(key.clone(), self.mint(command.clone(), key));
+        for (index, reference) in registry.watcher_runs() {
+            if reference == func {
+                return Some(Family::Watcher { index: *index });
+            }
+        }
+        for (name, entry) in registry.commands() {
+            if entry.run == *func {
+                return Some(Family::Command { name: name.clone() });
+            }
+        }
+        for (name, entry) in registry.tools() {
+            if entry.run == *func {
+                return Some(Family::Tool { name: name.clone() });
+            }
+            if entry.effects.as_ref() == Some(func) {
+                return Some(Family::Effects { name: name.clone() });
+            }
+        }
+        for (name, (timeout, reference)) in registry.search() {
+            if reference == func {
+                let _ = timeout;
+                return Some(Family::Search { name: name.clone() });
+            }
+        }
+        for (name, provider) in registry.providers() {
+            for (key, reference) in &provider.runs {
+                if reference == func {
+                    return Some(Family::Provider {
+                        name: name.clone(),
+                        func: key.clone(),
+                    });
                 }
-                self.providers.insert(
-                    valid.name.clone(),
-                    ProviderEntry {
-                        timeouts: valid.timeouts,
-                        runs,
-                    },
-                );
-                RegisterOutcome::Accepted
-            }
-            validate::Checked::Refuse(message) => refuse(&mut self.problems, message),
-            validate::Checked::Fail(code, message) => {
-                self.problems.push(message.clone());
-                RegisterOutcome::FailedPackage { code, message }
             }
         }
+        for (name, harness) in registry.harness() {
+            for (key, reference) in &harness.runs {
+                if reference == func {
+                    return Some(Family::Harness {
+                        name: name.clone(),
+                        func: key.clone(),
+                    });
+                }
+            }
+        }
+        None
     }
+}
 
-    /// Registers `fiber.harness` from `command` with `args`: the validated
-    /// harness, inserted with its references. The checks live in
-    /// `validate`, with the Lua call's naming and timeout rules, since no
-    /// Lua registry exists to mirror. Data keys ride along for the
-    /// delegate runner; only the functions run.
-    fn register_harness(&mut self, command: CommandId, args: &[Value]) -> RegisterOutcome {
-        if let Some(fatal) = self.reject_lazy("fiber.harness") {
-            return fatal;
-        }
-        let valid = match validate::check_harness(args) {
-            Ok(valid) => valid,
-            Err(why) => return refuse(&mut self.problems, why),
-        };
-        if self.harness.contains_key(&valid.name) {
-            let message = format!("`{}` harness is already registered", valid.name);
-            self.problems.push(message.clone());
-            return RegisterOutcome::Rejected {
-                code: ErrorCode::ExtensionFailed,
-                message,
-            };
-        }
-        let mut runs = BTreeMap::new();
-        for key in &valid.funcs {
-            runs.insert(key.clone(), self.mint(command.clone(), key));
-        }
-        self.harness.insert(
-            valid.name.clone(),
-            HarnessEntry {
-                timeout: valid.timeout,
-                data: valid.data,
-                runs,
+/// Which registered family a reference names.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+enum Family {
+    Hook { point: String },
+    Watcher { index: usize },
+    Command { name: String },
+    Tool { name: String },
+    Effects { name: String },
+    Search { name: String },
+    Provider { name: String, func: String },
+    Harness { name: String, func: String },
+}
+
+/// The hang guard one request waits under: the callback's deadline with
+/// slack for the settlement to land, or a backstop without one. This is no
+/// timer call's timeout, only the bound that fails a wedged wait instead
+/// of hanging it: the reply, the deadline or the cancel always ends the
+/// wait first.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+pub(crate) fn hang_guard(
+    clock: &dyn contract::clock::Clock,
+    deadline: Option<std::time::Instant>,
+) -> Duration {
+    deadline
+        .map(|end| end.saturating_duration_since(clock.now()) + Duration::from_secs(300))
+        .unwrap_or_else(|| Duration::from_secs(3600))
+}
+
+/// One wire line: the envelope around `payload`, with the session's id,
+/// the clock's wall time and the build's schema version.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+pub(crate) fn envelope_line(
+    shared: &Shared,
+    kind: &str,
+    payload: serde_json::Map<String, Value>,
+) -> Vec<u8> {
+    let envelope = contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: support::lock(&shared.context).session_id.clone(),
+        ts: contract::clock::wall_ms(shared.clock.wall()),
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload,
+    };
+    serde_json::to_vec(&envelope).unwrap_or_default()
+}
+
+/// Answers a driven command accepted, on the pump's thread.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+pub(crate) fn answer_on(
+    shared: &Shared,
+    id: &contract::CommandId,
+    result: Option<contract::events::CommandResult>,
+) {
+    let payload = serde_json::to_value(&contract::events::CommandAccepted {
+        command_id: id.clone(),
+        result,
+    })
+    .ok()
+    .and_then(|payload| payload.as_object().cloned())
+    .unwrap_or_default();
+    let line = envelope_line(shared, "command_accepted", payload);
+    if line.len() > support::lock(&shared.transport).max_line() {
+        answer_off(
+            shared,
+            id,
+            contract::inbox::Rejection {
+                code: ErrorCode::TooLarge,
+                message: "the result does not fit the 64 MiB wire cap".to_owned(),
             },
         );
-        RegisterOutcome::Accepted
+        return;
+    }
+    // The child may be gone: its answer dies with it, and the
+    // table already settled what the answer would settle.
+    match support::lock(&shared.transport).send(line) {
+        Ok(()) | Err(_) => {}
+    }
+}
+
+/// Answers a driven command rejected, on the pump's thread.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+pub(crate) fn answer_off(
+    shared: &Shared,
+    id: &contract::CommandId,
+    rejection: contract::inbox::Rejection,
+) {
+    let payload = serde_json::to_value(&contract::events::CommandRejected {
+        command_id: Some(id.clone()),
+        code: rejection.code,
+        message: rejection.message,
+    })
+    .ok()
+    .and_then(|payload| payload.as_object().cloned())
+    .unwrap_or_default();
+    // The child may be gone: its answer dies with it.
+    match support::lock(&shared.transport).send(envelope_line(shared, "command_rejected", payload))
+    {
+        Ok(()) | Err(_) => {}
     }
 }

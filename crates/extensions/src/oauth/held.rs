@@ -94,10 +94,45 @@ impl Held {
     /// Whether `stored` needs refreshing: not a usable credential, or one
     /// that expires within [`REFRESH_BEFORE`].
     pub(crate) fn due(&self, stored: &Value) -> bool {
-        let now = self.now();
-        let window = i64::try_from(REFRESH_BEFORE.as_secs()).unwrap_or(i64::MAX);
-        usable(stored).is_none_or(|expires| expires <= now.saturating_add(window))
+        due_at(self.now(), stored)
     }
+}
+
+/// Whether the credential `stored` needs refreshing at `now`, in Unix
+/// seconds: not a usable credential, or one that expires within
+/// [`REFRESH_BEFORE`]. The native refresh continuation judges with this,
+/// as the Lua half judges with [`Held::due`].
+pub(crate) fn due_at(now: i64, stored: &Value) -> bool {
+    let window = i64::try_from(REFRESH_BEFORE.as_secs()).unwrap_or(i64::MAX);
+    usable(stored).is_none_or(|expires| expires <= now.saturating_add(window))
+}
+
+/// The Unix seconds of `wall`, saturating to the far future when the
+/// clock reads before the epoch, as [`Held::now`] does.
+pub(crate) fn unix_seconds(wall: std::time::SystemTime) -> i64 {
+    wall.duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// Checks the fresh credential a refresh function returned, natively:
+/// a table with a `token` string and an `expires_at` whole number of
+/// seconds, and not already expired at `now`. The sentences match the
+/// ones `held:write` raises, so both backends refuse the same values.
+pub(crate) fn check_fresh(now: i64, fresh: &Value) -> Result<(), (contract::ErrorCode, String)> {
+    let Some(expires) = usable(fresh) else {
+        return Err((
+            contract::ErrorCode::InvalidArguments,
+            "host.oauth.refresh: the function must return a table with a `token` string and an `expires_at` whole number of seconds"
+                .to_owned(),
+        ));
+    };
+    if expires <= now {
+        return Err((
+            contract::ErrorCode::AuthenticationFailed,
+            "host.oauth.refresh: the refreshed token has already expired".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// The expiry of a stored credential: an object with a non-empty string
