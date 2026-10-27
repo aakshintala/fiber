@@ -528,15 +528,18 @@ fn delete_after_stop_completion_removes_the_parent_and_its_forks() {
             && line["payload"]["session_id"] == leaving.as_str()
             && line["payload"]["how"] == "exited"
     });
-    let dir_a = session_dir(&setup, &a);
-    let dir_b = session_dir(&setup, b);
-    let dir_c = session_dir(&setup, c);
-    fakes::wait_until("the deleted sessions to go", setup.deadline, move || {
-        !dir_a.exists() && !dir_b.exists() && !dir_c.exists()
-    });
+    // Home only shows after the delete answers, and the hub removes the
+    // directories before answering, so by the time home is empty the
+    // exact set is gone: no polling, no race with a loaded machine.
     run.wait_screen("home after delete", |grid| {
         grid.contents.contains("No sessions yet.")
     });
+    assert!(
+        !session_dir(&setup, &a).exists()
+            && !session_dir(&setup, b).exists()
+            && !session_dir(&setup, c).exists(),
+        "the parent and both forks are gone"
+    );
     drop(feed_watch);
     quit_pty(run, guard);
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
@@ -630,10 +633,12 @@ fn stale_set_refusal_returns_home_with_the_stopped_parent() {
     // fork, which the confirm must not silently drop from its set.
     let output = delete(&setup, &["--yes", b]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
-    let gone_b = session_dir(&setup, b);
-    fakes::wait_until("the removed fork to go", setup.deadline, move || {
-        !gone_b.exists()
-    });
+    // The CLI delete is synchronous: once it exits zero, the fork is
+    // gone.
+    assert!(
+        !session_dir(&setup, b).exists(),
+        "the CLI removed the fork while the question stood"
+    );
     run.write(b"\r");
     let leaving = a.clone();
     until(&feed_watch, "the parent to leave", move |line| {
