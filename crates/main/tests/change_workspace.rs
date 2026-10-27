@@ -899,29 +899,26 @@ fn until_moved(setup: &Setup) -> (String, String) {
 /// early probe goes out, answering it with the old workspace. The
 /// readiness signals are the log gate before this helper (the old
 /// session ends `moved` before the next key goes out) and the screen
-/// naming `target` here; the pause between probes is pacing only, a
-/// short bounded receive on a live but empty channel, never a sleep and
-/// never a second deadline (`docs/testing.md`, "Waits and timeouts").
+/// naming `target` here; between probes it waits on the terminal's own
+/// output through `wait_screen` for either a changed screen or the
+/// target, never a sleep and never a second deadline (`docs/testing.md`,
+/// "Waits and timeouts").
 #[track_caller]
 #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
 fn until_pwd_shows(run: &mut pty::Run, target: &str, deadline: Deadline) {
-    let (_wake, tick) = mpsc::channel::<()>();
     loop {
-        let contents = run.screen().contents.clone();
-        if contents.contains(target) {
+        let before = run.screen().contents.clone();
+        if before.contains(target) {
             return;
         }
         assert!(
             !deadline.left().is_zero(),
-            "waited until the deadline for the target workspace {target} in a notice; screen:\n{contents}"
+            "waited until the deadline for the target workspace {target} in a notice; screen:\n{before}"
         );
         run.write(b"/pwd\r");
-        assert!(
-            Deadline::after(std::time::Duration::from_millis(100))
-                .recv(&tick)
-                .is_err(),
-            "the pacing pause elapses with no signal"
-        );
+        run.wait_screen("the answered `/pwd` notice", |grid| {
+            grid.contents.contains(target) || grid.contents != before
+        });
     }
 }
 
