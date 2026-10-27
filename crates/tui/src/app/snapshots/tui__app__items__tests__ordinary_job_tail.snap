@@ -2,15 +2,15 @@
 source: crates/tui/src/app/items_tests.rs
 expression: "rows.join(\"\\n\")"
 ---
+  Job  ◆ build the workspace                                         Esc returns
  fix the parser › ▸ build the workspace
- ⠋ running · harness — · model — · — · 11s · session — · ■ stop
+ job j_2 · build the workspace · running 11s · ■ stop j_2
+
+
  Output since this terminal attached · /tmp/out
  compiling one
  compiling two
  done
-
-
-
 
 
 ⋮
@@ -22,7 +22,7 @@ expression: "rows.join(\"\\n\")"
 
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- ▌ › █
+ ▌ › █                                                         type into the job
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   0 waiting  │  $0.00
   ⚙ 1 job running

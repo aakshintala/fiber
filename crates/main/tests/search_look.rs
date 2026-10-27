@@ -1092,9 +1092,9 @@ fn the_item_views_top_row_closes_them() {
         (
             "Delegates",
             "review the diff",
-            "› ◆ review the diff".to_owned(),
+            "Delegate  ◆ review the diff".to_owned(),
         ),
-        ("Jobs", "head -n 1", format!("› ▸ {command}")),
+        ("Jobs", "head -n 1", format!("Job  ◆ {command}")),
     ] {
         let grid = run.wait_screen("the running panel card's first item", |grid| {
             support::session_cost_drawn(grid, 100)

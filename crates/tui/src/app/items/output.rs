@@ -51,6 +51,7 @@ impl App {
                         .is_some_and(|action| self.items.tty_marks.remove(action));
                     if let Some(record) = self.items.jobs.get_mut(&started.job_id) {
                         record.output = Some(if tty { Output::tty() } else { Output::plain() });
+                        record.tty = tty;
                     }
                 }
             }

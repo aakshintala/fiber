@@ -65,6 +65,7 @@ const DRAWN_ORDER: &[&str] = &[
     "status",
     "diff",
     "copy",
+    "pwd",
     "panel",
     "rail",
     "rules",
@@ -150,6 +151,7 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         [
             &"effort",
             &"cost",
+            &"cwd",
             &"config",
             &"keybindings",
             &"rename",

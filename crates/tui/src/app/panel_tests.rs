@@ -280,6 +280,23 @@ fn session_started_folds_and_replaces_worktree_state() {
     assert!(!app.panel_state().worktree());
 }
 
+/// Folding `session_started` keeps its exact `workspace`: `/pwd` shows
+/// the recorded root (`docs/tui.md`, "Slash commands").
+#[test]
+fn session_started_keeps_its_exact_workspace() {
+    let mut app = attached();
+    assert_eq!(app.panel_state().workspace(), None);
+    app.on_line(session_line(
+        SESSION,
+        "session_started",
+        serde_json::json!({
+            "workspace": "/worktree/recorded",
+            "variables": {"path": "", "names": [], "source": "inherited"},
+        }),
+    ));
+    assert_eq!(app.panel_state().workspace(), Some("/worktree/recorded"));
+}
+
 #[test]
 fn budget_comes_from_the_latest_preamble_and_absent_clears_it() {
     let mut app = attached();

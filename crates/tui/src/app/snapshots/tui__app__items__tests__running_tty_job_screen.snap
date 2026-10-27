@@ -2,12 +2,12 @@
 source: crates/tui/src/app/items_tests.rs
 expression: "rows.join(\"\\n\")"
 ---
+  Job  ◆ run the editor                                              Esc returns
  fix the parser › ▸ run the editor
- ⠋ running · harness — · model — · — · 11s · session — · ■ stop
- Output since this terminal attached · /tmp/out
+ job j_9 · run the editor · running 11s · ■ stop j_9
+ live screen · 80 columns × 24 rows from attach
+
  $ edit file.txt
-
-
 
 
 
@@ -22,7 +22,7 @@ expression: "rows.join(\"\\n\")"
 
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- ▌ › █
+ ▌ › █                                                         type into the job
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   0 waiting  │  $0.00
   ⚙ 1 job running

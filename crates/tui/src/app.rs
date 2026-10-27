@@ -279,6 +279,9 @@ pub(crate) struct App {
     /// A `/copy` waiting for the opening pass to end (`docs/tui.md`,
     /// "Selection and copy").
     copy_owed: bool,
+    /// A `/pwd` waiting for the attached session's `session_started` to
+    /// fold (`docs/tui.md`, "Slash commands").
+    pwd_pending: bool,
     /// A whole-turn copy waiting on dropped pages (`docs/tui.md`,
     /// "History and paging").
     pending_turn: Option<crate::turn_text::PendingTurn>,
@@ -399,6 +402,7 @@ impl App {
             history: history::History::default(),
             copied: false,
             copy_owed: false,
+            pwd_pending: false,
             pending_turn: None,
             focus: None,
             stops: Vec::new(),
@@ -445,6 +449,9 @@ impl App {
         self.end_overlay();
         // A `/copy` waiting on a pass was for the screen before this one.
         self.copy_owed = false;
+        // A `/pwd` waiting on the old session's root ends with the
+        // switch: the new session's fold answers only its own wait.
+        self.pwd_pending = false;
         self.switch_session(&session);
         // Another session's stale rows end with the attachment; the open
         // session's own notice stands until `stream_reopened` ends it.
@@ -1238,6 +1245,24 @@ impl App {
         match &self.phase {
             Phase::Attached { session, .. } => Some(session),
             Phase::Starting | Phase::Pending { .. } => None,
+        }
+    }
+
+    /// Shows a waiting `/pwd` notice once its session's root folds: the
+    /// session attached before its `session_started` holds the notice
+    /// until that fold, so the notice never reads "no session" for a
+    /// session on screen. Any other line, or no waiting `/pwd`, leaves
+    /// the wait alone.
+    fn pwd_arrived(&mut self, envelope: &Envelope) {
+        if envelope.kind != "session_started" {
+            return;
+        }
+        if !self.pwd_pending {
+            return;
+        }
+        self.pwd_pending = false;
+        if let Some(workspace) = self.panel_state.workspace() {
+            self.push_notice("workspace", workspace.to_owned());
         }
     }
 
@@ -2062,6 +2087,7 @@ impl App {
             return send;
         }
         send.extend(self.panel_line(envelope));
+        self.pwd_arrived(envelope);
         self.reviewer_block(envelope);
         self.items_line(envelope);
         self.output_line(envelope);

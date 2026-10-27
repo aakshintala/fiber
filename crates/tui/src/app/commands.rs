@@ -56,6 +56,7 @@ pub(crate) fn alias_of(name: &str) -> Option<&'static str> {
     match name {
         "thinking" => Some("effort"),
         "usage" => Some("cost"),
+        "pwd" => Some("cwd"),
         "settings" => Some("config"),
         "keys" => Some("keybindings"),
         "name" => Some("rename"),
@@ -163,6 +164,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         description: "Copies the newest reply.",
         hint: None,
         run: run_copy,
+    },
+    CommandEntry {
+        name: "pwd",
+        description: "Shows the session's workspace; on home, shows the notice 'No session on screen'.",
+        hint: None,
+        run: run_pwd,
     },
     CommandEntry {
         name: "panel",
@@ -486,6 +493,26 @@ fn run_copy(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.copy_last_reply())
 }
 
+/// Shows the session's recorded workspace root as a notice: the
+/// absolute root `session_started` recorded, which is the worktree when
+/// the session runs in one. On home, with no session on screen, the
+/// `session_not_found` notice. While the attached session's root has
+/// not folded yet, the notice waits for its fold. A lost link still
+/// shows the recorded root, and nothing is ever sent.
+fn run_pwd(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    let Phase::Attached { .. } = &app.phase else {
+        app.push_notice("session_not_found", NO_SESSION.to_owned());
+        return Some(Effect::None);
+    };
+    if let Some(workspace) = app.panel_state.workspace() {
+        app.push_notice("workspace", workspace.to_owned());
+    } else {
+        app.pwd_pending = true;
+    }
+    Some(Effect::None)
+}
+
 fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Rules))
 }
@@ -696,6 +723,9 @@ impl App {
     /// False without the reset.
     pub(super) fn reset_session(&mut self) -> bool {
         self.draft.clear();
+        // A `/pwd` waiting on the old session's root ends with the
+        // detach: going home forgets the wait with the screen.
+        self.pwd_pending = false;
         self.close_find();
         self.leave_session(self.session().cloned());
         // Leaving the parent closes the item view first, swapping the
