@@ -518,6 +518,13 @@ fn pass_end_fails_when_the_thumb_never_arrives() {
         )
         .expect("the tail draws");
     let started = clock.now();
+    // No code under test waits on the clock here: `wait_for` bounds a
+    // real-time receive and only reads fake time, so the 1 s move only
+    // sets the started/until timestamps (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     let until = clock
         .now()
@@ -547,6 +554,13 @@ fn pass_end_returns_once_the_thumb_shows() {
         )
         .expect("the thumb draws");
     let started = clock.now();
+    // No code under test waits on the clock here: `wait_for` bounds a
+    // real-time receive and only reads fake time, so the 1 s move only
+    // sets the started/until timestamps (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     let until = clock
         .now()
