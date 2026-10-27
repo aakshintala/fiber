@@ -38,6 +38,10 @@ fn timed(
     let identity: Identity = Arc::new(move |path: &Path| {
         calls.fetch_add(1, AtomicOrdering::SeqCst);
         // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
         clock.advance(step);
         for project in ["/b", "/c"] {
             if path.starts_with(project) {

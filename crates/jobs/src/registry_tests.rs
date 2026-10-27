@@ -1247,6 +1247,10 @@ fn seam_write_succeeds_when_the_terminal_drains_before_the_deadline() {
             stop: Stop(Box::new(|| {})),
             lines: false,
             input: Some(contract::jobs::Input(Box::new(move |bytes, _, _| {
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "no code under test waits on the clock (ruling 6179406086)"
+                )]
                 tick.advance(Duration::from_millis(500));
                 Ok(bytes.len())
             }))),

@@ -176,6 +176,10 @@ fn a_tick_behind_a_key_is_acked_before_the_next() {
     // `gate_step_table`'s in-flight row; no quiet wait proves it here.
     assert_eq!(step(&mut lp, Input::Bytes(b"x".to_vec())), None);
     // No code under test waits on the clock here; the ticker is idle on its condvar with tick A unacked (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(240));
     // Stepping tick A acks it. The step re-arms the next boundary, so
     // the frame's re-arm is the only deadline the thread reads: disarm
@@ -337,6 +341,10 @@ fn a_waiting_card_arms_for_ten_seconds_then_stops() {
         origin.checked_add(Duration::from_millis(480))
     );
     // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(9_990));
     assert_eq!(step(&mut lp, Input::Resize), None);
     assert_eq!(
@@ -345,6 +353,10 @@ fn a_waiting_card_arms_for_ten_seconds_then_stops() {
     );
     // At T+10 000 the pulse holds still: nothing arms.
     // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(10));
     assert_eq!(step(&mut lp, Input::Resize), None);
     assert_eq!(lp.tick.armed(), None);

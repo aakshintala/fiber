@@ -59,6 +59,10 @@ fn a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project() {
     };
     log.append(&started("/proj/sub"), None, None).unwrap();
     // No code under test waits on the clock here; it stamps data (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     log.append(
         &event(
@@ -70,16 +74,28 @@ fn a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project() {
     )
     .unwrap();
     // No code under test waits on the clock here; it stamps data (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     let prompt = json!({"input": [{"type": "message", "content": [{"type": "text", "text": "We keep the Retry Budget at 3"}], "source": "driver"}]});
     log.append(&event("turn_started", prompt), None, None)
         .unwrap();
     // No code under test waits on the clock here; it stamps data (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     let call = json!({"name": "shell", "arguments": {"command": "grep -n \"retry budget\""}});
     log.append(&event("tool_call_requested", call), None, None)
         .unwrap();
     // No code under test waits on the clock here; it stamps data (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     let dir = sessions.join("s_past");
     let artifact = dir.join("artifacts").join("call_1.txt");
@@ -93,6 +109,10 @@ fn a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project() {
     let other = Log::create(&sessions, SessionId("s_other".into()), clock.clone()).unwrap();
     other.append(&started("/other/w"), None, None).unwrap();
     // No code under test waits on the clock here; it stamps data (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     other
         .append(
@@ -163,6 +183,10 @@ fn a_search_never_returns_session_search_own_calls_or_results() {
     )
     .unwrap();
     // No code under test waits on the clock here; it stamps data (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     // The tool's own call: its arguments, its output and its artifact all
     // hold the query, and none gives a hit.
@@ -176,6 +200,10 @@ fn a_search_never_returns_session_search_own_calls_or_results() {
     )
     .unwrap();
     // No code under test waits on the clock here; it stamps data (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     let dir = sessions.join("s_mixed");
     fs::write(
@@ -193,6 +221,10 @@ fn a_search_never_returns_session_search_own_calls_or_results() {
     )
     .unwrap();
     // No code under test waits on the clock here; it stamps data (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     // Another tool's call with the same text still hits.
     log.append(
@@ -205,6 +237,10 @@ fn a_search_never_returns_session_search_own_calls_or_results() {
     )
     .unwrap();
     // No code under test waits on the clock here; it stamps data (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(1));
     log.append(
         &event(

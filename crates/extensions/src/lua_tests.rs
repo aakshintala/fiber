@@ -845,6 +845,10 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
     )));
     stop(&hub);
     // No thread of the code under test waits on the clock: the spinning callback reads it in its interrupt and never parks (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_millis(1000));
     assert!(until(&hub, |s| matches!(
         s.calls.get(&spin),

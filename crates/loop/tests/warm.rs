@@ -334,6 +334,10 @@ fn a_refresh_reached_only_at_the_cap_is_not_sent() {
     );
     let late = start + Duration::from_secs(550);
     // Late wake past the 540 s park to 550 s; the park is proven just above (ruling 6261259790).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "late wake: one advance past a park proven at its exact instant just before (ruling 6261259790)"
+    )]
     session
         .clock
         .advance(late.saturating_duration_since(session.clock.now()));
@@ -537,6 +541,10 @@ fn no_refresh_while_a_job_runs_and_one_at_once_when_it_ends_in_time() {
     let expired = start + Duration::from_secs(580);
     parked(&session.clock, next, "the due park before the late wake");
     // Late wake past the 550 s park to 580 s; the park is proven just above (ruling 6261259790).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "late wake: one advance past a park proven at its exact instant just before (ruling 6261259790)"
+    )]
     session
         .clock
         .advance(expired.saturating_duration_since(session.clock.now()));
@@ -702,6 +710,10 @@ impl Provider for Advance {
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             support::assert_no_parked(&self.clock);
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "no code under test waits on the clock (ruling 6179406086)"
+            )]
             self.clock.advance(self.by);
         }
         self.inner.call(request)

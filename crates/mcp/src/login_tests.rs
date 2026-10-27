@@ -185,6 +185,10 @@ fn drive_releasing_on_panic<T>(
         Ok(value) => value,
         Err(payload) => {
             // Failure-path release inside a panic handler that re-raises the original payload; it proves nothing (ruling 6203478697).
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "panic-handler release that re-raises the original payload (ruling 6203478697)"
+            )]
             clock.advance(CALLBACK_WAIT + Duration::from_secs(1));
             std::panic::resume_unwind(payload);
         }
