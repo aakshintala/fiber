@@ -4089,13 +4089,13 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
     assert_eq!(
         rows.len(),
         3,
-        "no row lost and none restored: result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        "no row lost and none restored: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
         turn_notices(&second_turn),
         clash_diagnostic(),
     );
     assert!(
         rows.contains(&json!({"name": "keep", "description": "Keeps it.", "tag": "skill"})),
-        "the unrelated skill row stands: result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        "the unrelated skill row stands: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
         turn_notices(&second_turn),
         clash_diagnostic(),
     );
@@ -4103,7 +4103,7 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
         rows.contains(
             &json!({"name": "other", "description": "Other ext.", "tag": "fiber.test/clashbox", "extension": true})
         ),
-        "the reload's unrelated extension row stands: result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        "the reload's unrelated extension row stands: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
         turn_notices(&second_turn),
         clash_diagnostic(),
     );
@@ -4111,7 +4111,7 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
         rows.contains(
             &json!({"name": "clash", "description": "Clash template.", "argument_hint": "<tag>", "tag": "template"})
         ),
-        "the template wins its name: result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        "the template wins its name: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
         turn_notices(&second_turn),
         clash_diagnostic(),
     );
@@ -4123,7 +4123,7 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
     assert!(
         rows.iter()
             .all(|row| row["tag"] != "fiber.test/clashbox" || row["name"] != "clash"),
-        "the shadowed extension row stays out: result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        "the shadowed extension row stays out: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
         turn_notices(&second_turn),
         clash_diagnostic(),
     );
