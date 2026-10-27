@@ -1029,6 +1029,62 @@ fn enter_lists_every_shadow_path_before_the_text() {
     assert_eq!(frame.rows[31][0].0, "The text.");
 }
 
+#[test]
+fn enter_lists_each_shadow_source_and_path_above_the_text() {
+    // Shadow order is the winner's path order, not precedence order, and
+    // every path gets its own line, including a repeated source.
+    let fake = text_fake("The text.");
+    let mut win = repository("review");
+    win.shadows = vec![
+        "/fiber/docs/skills/review/SKILL.md".to_owned(),
+        "/ext/review-kit/skills/review/SKILL.md".to_owned(),
+        "/home/skills/review/SKILL.md".to_owned(),
+        "/home/other/review/SKILL.md".to_owned(),
+    ];
+    let infos = vec![
+        win,
+        sourced(
+            "review",
+            "/fiber/docs/skills/review/SKILL.md",
+            SkillSource::Builtin,
+            None,
+        ),
+        sourced(
+            "review",
+            "/ext/review-kit/skills/review/SKILL.md",
+            SkillSource::Extension,
+            Some("review-kit"),
+        ),
+        sourced(
+            "review",
+            "/home/skills/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+        sourced(
+            "review",
+            "/home/other/review/SKILL.md",
+            SkillSource::Personal,
+            None,
+        ),
+    ];
+    let skills = entered(&fake, &infos);
+    let frame = skills.frame(80, 22);
+    assert_eq!(frame.rows.len(), 6);
+    let lines: Vec<String> = frame.rows.iter().map(|row| row[0].0.clone()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "shadows built in · /fiber/docs/skills/review/SKILL.md".to_owned(),
+            "shadows review-kit · /ext/review-kit/skills/review/SKILL.md".to_owned(),
+            "shadows personal · /home/skills/review/SKILL.md".to_owned(),
+            "shadows personal · /home/other/review/SKILL.md".to_owned(),
+            String::new(),
+            "The text.".to_owned(),
+        ]
+    );
+}
+
 /// A winner shadowing `n` skills, without opening the view.
 fn shadowed_infos(n: usize) -> Vec<SkillInfo> {
     let mut infos = vec![repository("tdd")];

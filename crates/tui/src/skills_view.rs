@@ -310,7 +310,7 @@ impl Skills {
                 self.text = Some(Text {
                     name: info.name.clone(),
                     path: PathBuf::from(&info.path),
-                    raw: pane_text(&info, &raw),
+                    raw: pane_text(&info, &self.infos, &raw),
                     list: List::default(),
                 });
                 self.said.clear();
@@ -384,7 +384,7 @@ impl Skills {
                         // The frame wraps at the width it draws at, so
                         // the re-read keeps only the unwrapped body.
                         if let Some(text) = &mut self.text {
-                            text.raw = pane_text(info, &raw);
+                            text.raw = pane_text(info, &self.infos, &raw);
                         }
                     }
                 }
@@ -576,14 +576,21 @@ impl Skills {
     }
 }
 
-/// The skill's text with its shadow block first: each `shadows <path>`
-/// and the `shadowed by <path>` line, then a blank line, then the text,
-/// so every shadow path stays reachable.
-fn pane_text(info: &SkillInfo, text: &str) -> String {
+/// The skill's text with its shadow block first: one `shadows <source> ·
+/// <path>` line per shadow path, in path order, then any `shadowed by
+/// <path>` line, a blank line, and the text, so every shadow path stays
+/// reachable. A path with no matching skill entry keeps its path-only
+/// line: no source word can be derived from inconsistent data.
+fn pane_text(info: &SkillInfo, infos: &[SkillInfo], text: &str) -> String {
     let mut block: Vec<String> = info
         .shadows
         .iter()
-        .map(|path| format!("shadows {path}"))
+        .map(
+            |path| match infos.iter().find(|entry| entry.path == *path) {
+                Some(entry) => format!("shadows {} · {path}", source_word(entry)),
+                None => format!("shadows {path}"),
+            },
+        )
         .collect();
     if let Some(path) = &info.shadowed_by {
         block.push(format!("shadowed by {path}"));
