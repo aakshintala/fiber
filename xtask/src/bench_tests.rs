@@ -17,7 +17,8 @@ const DOC: &str = concat!(
     "| Log bytes, 429-call turn | the turn's content plus 2 KiB per tool call | Linux x86_64 | exact | — | — | — | — | — |\n",
     "| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked | 16 ms | 12 ms | 13 ms | 55 % | 9 % |\n",
     "| Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked | 7 ms | 8 ms | 11 ms | 18 % | 8 % |\n",
-    "| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked | 1008 ms | 1101 ms | 1364 ms | 23 % | 4 % |\n",
+    "| Terminal to its first frame, attaching | 50 ms | Linux x86_64 | picked | 50 ms | 50 ms | 50 ms | — | — |\n",
+    "| Terminal attaching, to the end of the opening pass | 841 ms (1 MiB); 5,570 ms (10 MiB) | Linux x86_64 | measured | — | — | — | — | — |\n",
     "| Terminal, attaching a 10 MiB session | 200 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Session, memory kept after the busy turn | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
@@ -68,6 +69,7 @@ fn head() -> Value {
             "sessions_list_ms": [12.1, 12.4, 11.9, 12.0, 12.2],
             "session_list_ms": [1, 1, 1, 1, 1],
             "terminal_attach_ms": attach_metric(),
+            "terminal_attach_pass_ms": attach_pass_metric(),
             "terminal_attach_rss_kib": [51200, 51210, 51190, 51205, 51195],
             "terminal_attach_retained_kib": [48000, 48010, 47990, 48005, 47995],
             "busy_turn_retained_kib": [19000, 19010, 18990, 19005, 18995],
@@ -117,7 +119,7 @@ fn attach_metric() -> Value {
     entries.extend(attach_entries(
         "10 MiB",
         10_492_016,
-        &[88.0, 88.5, 88.2, 87.9, 88.4],
+        &[41.0, 41.4, 40.8, 41.2, 41.1],
     ));
     Value::Array(entries)
 }
@@ -128,6 +130,26 @@ fn attach_base_metric() -> Value {
         "10 MiB",
         10_490_000,
         &[87.0, 87.0, 87.0, 87.0, 87.0],
+    ));
+    Value::Array(entries)
+}
+
+fn attach_pass_metric() -> Value {
+    let mut entries = attach_entries("1 MiB", 1_050_231, &[41.2, 40.8, 41.0, 41.5, 40.9]);
+    entries.extend(attach_entries(
+        "10 MiB",
+        10_492_016,
+        &[98.0, 98.5, 98.2, 97.9, 98.4],
+    ));
+    Value::Array(entries)
+}
+
+fn attach_pass_base_metric() -> Value {
+    let mut entries = attach_entries("1 MiB", 1_050_100, &[40.5, 40.5, 40.5, 40.5, 40.5]);
+    entries.extend(attach_entries(
+        "10 MiB",
+        10_490_000,
+        &[97.0, 97.0, 97.0, 97.0, 97.0],
     ));
     Value::Array(entries)
 }
@@ -153,6 +175,7 @@ fn base() -> Value {
             "sessions_list_ms": [11.5, 11.5, 11.5, 11.5, 11.5],
             "session_list_ms": [1, 1, 1, 1, 1],
             "terminal_attach_ms": attach_base_metric(),
+            "terminal_attach_pass_ms": attach_pass_base_metric(),
             "paging_open_ms": [290.0, 290.0, 290.0, 290.0, 290.0],
             "paging_load_ms": [1.1, 1.1, 1.1, 1.1, 1.1],
             "paging_jump_ms": [2.2, 2.2, 2.2, 2.2, 2.2],
@@ -1236,7 +1259,7 @@ fn the_listing_row_is_an_advisory_timing_of_sessions_list_ms() {
 }
 
 #[test]
-fn the_attaching_ceiling_is_50_ms_plus_10_ms_per_mib_of_each_fixtures_log() {
+fn the_first_frame_row_shows_each_fixtures_median() {
     let mut full = attach_entries("1 MiB", 1_048_576, &[10.0, 10.0, 10.0, 10.0, 10.0]);
     full.extend(attach_entries(
         "10 MiB",
@@ -1245,21 +1268,21 @@ fn the_attaching_ceiling_is_50_ms_plus_10_ms_per_mib_of_each_fixtures_log() {
     ));
     let results = with_metric(head(), "terminal_attach_ms", Value::Array(full));
     let out = judge(&results, Some(&base()), Event::PullRequest);
+    // docs/performance.md:72,184-185,303-307: medians under the flat 50 ms bound pass with five samples per fixture.
     assert_eq!(out.failures, Vec::<String>::new());
     let line = row(&out.comment, "Terminal to its first frame, attaching");
-    // Each fixture's median, not one median across both.
+    // Each fixture's median, not one median across both, and no formula
+    // ceiling: the bound is the flat 50 ms the class cells carry.
+    assert!(line.contains("1 MiB (1,048,576 bytes): 10.0 ms"), "{line}");
     assert!(
-        line.contains("1 MiB (1,048,576 bytes): 10.0 ms of 60.0 ms"),
+        line.contains("10 MiB (10,485,760 bytes): 20.0 ms"),
         "{line}"
     );
-    assert!(
-        line.contains("10 MiB (10,485,760 bytes): 20.0 ms of 150.0 ms"),
-        "{line}"
-    );
+    assert!(!line.contains(" ms of "), "{line}");
     assert!(line.ends_with("| advisory |"), "{line}");
 
-    // A fixture's ceiling follows its largest log: 1.5 MiB is 65.0 ms,
-    // which a `*` for `/`, a `+` for `-` or a swapped constant misses.
+    // The head still shows the largest log's bytes: a second 1 MiB size
+    // lands on the same fixture part with its own byte count.
     let mut mixed = attach_entries("1 MiB", 1_048_576, &[10.0, 10.0, 10.0, 10.0]);
     mixed.extend(attach_entries("1 MiB", 1_572_864, &[10.0]));
     mixed.extend(attach_entries(
@@ -1270,10 +1293,7 @@ fn the_attaching_ceiling_is_50_ms_plus_10_ms_per_mib_of_each_fixtures_log() {
     let results = with_metric(head(), "terminal_attach_ms", Value::Array(mixed));
     let judged = judge(&results, Some(&base()), Event::PullRequest);
     let line = row(&judged.comment, "Terminal to its first frame, attaching");
-    assert!(
-        line.contains("1 MiB (1,572,864 bytes): 10.0 ms of 65.0 ms"),
-        "{line}"
-    );
+    assert!(line.contains("1 MiB (1,572,864 bytes): 10.0 ms"), "{line}");
 }
 
 #[test]
@@ -1282,25 +1302,78 @@ fn an_attaching_median_over_its_ceiling_is_advisory() {
     entries.extend(attach_entries("10 MiB", 10_485_760, &[20.0; 5]));
     let results = with_metric(head(), "terminal_attach_ms", Value::Array(entries));
     let out = judge(&results, Some(&base()), Event::PullRequest);
+    // docs/performance.md:72,308-310: an over-ceiling median on an advisory model stays advisory with no failure.
     assert_eq!(out.failures, Vec::<String>::new());
     let line = row(&out.comment, "Terminal to its first frame, attaching");
-    assert!(line.contains("61.0 ms of 60.0 ms"), "{line}");
+    assert!(line.contains("61.0 ms"), "{line}");
+    assert!(!line.contains(" ms of "), "{line}");
     assert!(line.ends_with("| advisory |"), "{line}");
 }
 
 #[test]
-fn the_attaching_ceiling_text_is_pinned() {
+fn a_dash_first_frame_class_ceiling_is_a_configuration_failure() {
+    // A `—` class ceiling is malformed configuration, never a waived
+    // bound: the flat ceiling lives in every class cell from the start.
+    let doc = doc_with(
+        "| Terminal to its first frame, attaching | 50 ms | Linux x86_64 | picked | 50 ms | 50 ms | 50 ms | — | — |",
+        "| Terminal to its first frame, attaching | 50 ms | Linux x86_64 | picked | 50 ms | 50 ms | — | — | — |",
+    );
+    let (h, b) = attach_pair(&[40.0; 5], &[31.0; 5], &[60.0; 5], &[30.5; 5], SLOW_MODEL);
+    let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+    assert!(
+        has(&out.failures, "Terminal to its first frame, attaching"),
+        "{:?}",
+        out.failures
+    );
+}
+
+#[test]
+fn a_numbered_pass_end_class_cell_fails_the_table_check() {
+    // A number in a pass-end class cell fails loudly instead of staying
+    // silently advisory: the row keeps `—` in every class cell until the
+    // follow-up gates them.
+    let mut head = head();
+    for id in [
+        "terminal_attach_ms",
+        "terminal_attach_pass_ms",
+        "terminal_attach_rss_kib",
+        "terminal_attach_retained_kib",
+    ] {
+        head = without_metric(&head, id);
+    }
+    let doc = doc_with(
+        "| Terminal attaching, to the end of the opening pass | 841 ms (1 MiB); 5,570 ms (10 MiB) | Linux x86_64 | measured | — |",
+        "| Terminal attaching, to the end of the opening pass | 841 ms (1 MiB); 5,570 ms (10 MiB) | Linux x86_64 | measured | 50 ms |",
+    );
+    let out = judge_doc(
+        &doc,
+        &with_skipped(head, &["terminal attach"]),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert!(
+        has(
+            &out.failures,
+            "Terminal attaching, to the end of the opening pass"
+        ),
+        "{:?}",
+        out.failures
+    );
+}
+
+#[test]
+fn the_first_frame_ceiling_text_is_pinned() {
     let out = judge_doc(
         &doc_with(
-            "50 ms plus 10 ms per MiB of session log",
-            "50 ms plus 20 ms per MiB of session log",
+            "| Terminal to its first frame, attaching | 50 ms |",
+            "| Terminal to its first frame, attaching | 51 ms |",
         ),
         &head(),
         Some(&base()),
         Event::PullRequest,
     );
     assert!(
-        has(&out.failures, "xtask/src/bench.rs"),
+        has(&out.failures, "xtask/src/bench/judge.rs"),
         "{:?}",
         out.failures
     );
@@ -1619,23 +1692,25 @@ fn trim_metric(results: &Value, id: &str, n: usize) -> Value {
     out
 }
 
-/// `results` with each `terminal_attach_ms` fixture cut to its first `n`
-/// entries.
+/// `results` with each attach fixture cut to its first `n` entries, for
+/// both the first-frame and the pass-end metric ids.
 fn trim_attach(results: &Value, n: usize) -> Value {
     let mut out = results.clone();
-    let mut kept: Vec<Value> = Vec::new();
-    for fixture in ["1 MiB", "10 MiB"] {
-        kept.extend(
-            out["metrics"]["terminal_attach_ms"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|entry| entry["fixture"] == fixture)
-                .take(n)
-                .cloned(),
-        );
+    for id in ["terminal_attach_ms", "terminal_attach_pass_ms"] {
+        let mut kept: Vec<Value> = Vec::new();
+        for fixture in ["1 MiB", "10 MiB"] {
+            kept.extend(
+                out["metrics"][id]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|entry| entry["fixture"] == fixture)
+                    .take(n)
+                    .cloned(),
+            );
+        }
+        out["metrics"][id] = Value::Array(kept);
     }
-    out["metrics"]["terminal_attach_ms"] = Value::Array(kept);
     out
 }
 
@@ -1693,8 +1768,9 @@ fn a_metric_whose_count_differs_from_its_declared_runs_fails() {
 
 #[test]
 fn a_file_without_metric_runs_expects_runs_for_every_metric() {
-    // Every array cut to its first 3 entries, the attach fixtures to 3
-    // each; `fsyncs` keeps its one pass.
+    // Every non-attach array cut to its first 3 entries; `fsyncs` keeps
+    // its one pass. Attach always takes 5 samples per fixture
+    // (`docs/performance.md:184-185`), so its 3-sample case fails below.
     let mut three = with_counts(head(), 3, 3);
     for id in [
         "session_idle_rss_kib",
@@ -1732,7 +1808,20 @@ fn a_file_without_metric_runs_expects_runs_for_every_metric() {
     three = trim_metric(&three, "turn_log_bytes", 3);
     three = trim_attach(&three, 3);
     let out = judge(&three, Some(&base()), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+    // docs/performance.md:184-185: the attach row already takes 5 samples,
+    // so 3 per fixture fails even when the file declares 3; every other
+    // metric falls back to the file's runs and passes.
+    assert!(
+        has(&out.failures, "terminal_attach_ms"),
+        "{:?}",
+        out.failures
+    );
+    assert!(
+        has(&out.failures, "terminal_attach_pass_ms"),
+        "{:?}",
+        out.failures
+    );
+    assert_eq!(out.failures.len(), 2, "{:?}", out.failures);
 
     // A declared count overrides the file's for its own metric.
     let five = with_metric_runs(head(), &[("turn_log_bytes", 3)]);
@@ -1744,9 +1833,23 @@ fn a_file_without_metric_runs_expects_runs_for_every_metric() {
     assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
     let out = judge(&five, Some(&base()), Event::PullRequest);
     assert!(has(&out.failures, "turn_log_bytes"), "{:?}", out.failures);
-    let attach = with_metric_runs(head(), &[("terminal_attach_ms", 3)]);
+    let attach = with_metric_runs(
+        head(),
+        &[("terminal_attach_ms", 3), ("terminal_attach_pass_ms", 3)],
+    );
     let out = judge(&trim_attach(&attach, 3), Some(&base()), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+    // docs/performance.md:184-185: attach declares five runs, so three
+    // samples per fixture fail even when the declared count matches them.
+    assert!(
+        has(&out.failures, "terminal_attach_ms"),
+        "{:?}",
+        out.failures
+    );
+    assert!(
+        has(&out.failures, "terminal_attach_pass_ms"),
+        "{:?}",
+        out.failures
+    );
     let out = judge(&attach, Some(&base()), Event::PullRequest);
     assert!(
         has(&out.failures, "terminal_attach_ms"),
@@ -2114,11 +2217,13 @@ const HEAD_SKIP_ROWS: &[(&str, &[&str], &[&str])] = &[
         "terminal attach",
         &[
             "Terminal to its first frame, attaching",
+            "Terminal attaching, to the end of the opening pass",
             "Terminal, attaching a 10 MiB session",
             "Terminal, memory kept after attaching a 10 MiB session",
         ],
         &[
             "terminal_attach_ms",
+            "terminal_attach_pass_ms",
             "terminal_attach_rss_kib",
             "terminal_attach_retained_kib",
         ],
@@ -2272,6 +2377,7 @@ fn a_skipped_budget_still_checks_its_table_row() {
     let mut attach_head = head();
     for id in [
         "terminal_attach_ms",
+        "terminal_attach_pass_ms",
         "terminal_attach_rss_kib",
         "terminal_attach_retained_kib",
     ] {
@@ -2304,6 +2410,7 @@ fn a_skipped_budget_still_checks_its_table_row() {
     let mut pin_head = head();
     for id in [
         "terminal_attach_ms",
+        "terminal_attach_pass_ms",
         "terminal_attach_rss_kib",
         "terminal_attach_retained_kib",
     ] {
@@ -2311,8 +2418,8 @@ fn a_skipped_budget_still_checks_its_table_row() {
     }
     let out = judge_doc(
         &doc_with(
-            "50 ms plus 10 ms per MiB of session log",
-            "50 ms plus 11 ms per MiB of session log",
+            "| Terminal to its first frame, attaching | 50 ms |",
+            "| Terminal to its first frame, attaching | 51 ms |",
         ),
         &with_skipped(pin_head, &["terminal attach"]),
         Some(&base()),
@@ -3315,18 +3422,30 @@ fn attach_pair(
 ) -> (Value, Value) {
     let mut head_entries = attach_entries("1 MiB", 1_050_231, one_head);
     head_entries.extend(attach_entries("10 MiB", 10_492_016, ten_head));
+    let mut head_pass = attach_entries("1 MiB", 1_050_231, one_head);
+    head_pass.extend(attach_entries("10 MiB", 10_492_016, ten_head));
     let mut base_entries = attach_entries("1 MiB", 1_050_100, one_base);
     base_entries.extend(attach_entries("10 MiB", 10_490_000, ten_base));
+    let mut base_pass = attach_entries("1 MiB", 1_050_100, one_base);
+    base_pass.extend(attach_entries("10 MiB", 10_490_000, ten_base));
     let h = with_cpu(
         with_metric(
-            neutral_scalars("terminal_attach_ms", head()),
-            "terminal_attach_ms",
-            Value::Array(head_entries),
+            with_metric(
+                neutral_scalars("terminal_attach_ms", head()),
+                "terminal_attach_ms",
+                Value::Array(head_entries),
+            ),
+            "terminal_attach_pass_ms",
+            Value::Array(head_pass),
         ),
         cpu,
     );
     let b = with_cpu(
-        with_metric(base(), "terminal_attach_ms", Value::Array(base_entries)),
+        with_metric(
+            with_metric(base(), "terminal_attach_ms", Value::Array(base_entries)),
+            "terminal_attach_pass_ms",
+            Value::Array(base_pass),
+        ),
         cpu,
     );
     (h, b)
@@ -3354,9 +3473,20 @@ fn class_ceiling_cells_carry_the_ruled_figures() {
         .lines()
         .find(|l| l.starts_with("| Terminal to its first frame, attaching"))
         .unwrap();
-    for want in ["1008 ms", "1101 ms", "1364 ms", "23 %", "4 %"] {
-        assert!(attach.contains(want), "{attach} misses {want}");
-    }
+    assert!(
+        attach.contains("| 50 ms | Linux x86_64 | picked | 50 ms | 50 ms | 50 ms | — | — |"),
+        "{attach}"
+    );
+    let pass = DOC
+        .lines()
+        .find(|l| l.starts_with("| Terminal attaching, to the end of the opening pass"))
+        .unwrap();
+    assert!(
+        pass.contains(
+            "| 841 ms (1 MiB); 5,570 ms (10 MiB) | Linux x86_64 | measured | — | — | — | — | — |"
+        ),
+        "{pass}"
+    );
 }
 
 #[test]
@@ -3863,83 +3993,260 @@ fn three_sample_pr_files_gate_on_stored_evidence_not_sample_count() {
 }
 
 #[test]
-fn only_the_attach_ten_mib_fixture_gates() {
-    // Both legs over on 10 MiB fails, naming the fixture.
+fn both_attach_fixtures_gate_the_absolute_bound() {
+    // docs/performance.md:72,303-310: exactly 50 ms per fixture passes;
+    // over-50 and both-over cases live in the matrix below.
+    for (ten_head, one_head) in [
+        ([50.0; 5], [31.0; 5]),
+        ([31.0; 5], [50.0; 5]),
+        ([50.0; 5], [50.0; 5]),
+    ] {
+        let (h, b) = attach_pair(&ten_head, &one_head, &[60.0; 5], &[60.0; 5], SLOW_MODEL);
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert_eq!(
+            out.failures,
+            Vec::<String>::new(),
+            "{ten_head:?} {one_head:?}: {:?}",
+            out.failures
+        );
+        assert!(
+            row(&out.comment, "Terminal to its first frame, attaching").ends_with("| pass |"),
+            "{}",
+            out.comment
+        );
+    }
+}
+
+#[test]
+fn attach_absolute_bound_does_not_depend_on_base_or_tolerance() {
+    // docs/performance.md:72,303-310: one named failure for each fixture
+    // over 50 ms, for eligible fast/slow models, independent of base.
+    for cpu in [FAST_MODEL, SLOW_MODEL] {
+        for tolerance in ["—", "25 %"] {
+            let doc = doc_with(
+                "| 50 ms | 50 ms | 50 ms | — | — |",
+                &format!("| 50 ms | 50 ms | 50 ms | {tolerance} | {tolerance} |"),
+            );
+            for (ten, one, fixtures) in [
+                (50.1, 50.0, vec!["10 MiB"]),
+                (50.0, 50.1, vec!["1 MiB"]),
+                (50.1, 50.1, vec!["1 MiB", "10 MiB"]),
+                (50.0, 50.0, vec![]),
+            ] {
+                let (h, slower) = attach_pair(&[ten; 5], &[one; 5], &[60.0; 5], &[60.0; 5], cpu);
+                let (_, faster) = attach_pair(&[ten; 5], &[one; 5], &[40.0; 5], &[40.0; 5], cpu);
+                let missing = without_metric(&slower, "terminal_attach_ms");
+                let malformed = with_metric(slower.clone(), "terminal_attach_ms", json!("bad"));
+                let mismatched = with_cpu(slower.clone(), MIDDLE_MODEL);
+                for b in [
+                    None,
+                    Some(failed_base(cpu)),
+                    Some(missing),
+                    Some(malformed),
+                    Some(mismatched),
+                    Some(slower),
+                    Some(faster),
+                ] {
+                    let event = if b.is_some() {
+                        Event::PullRequest
+                    } else {
+                        Event::Push
+                    };
+                    let out = judge_doc(&doc, &h, b.as_ref(), event);
+                    assert_eq!(
+                        out.failures.len(),
+                        fixtures.len(),
+                        "{cpu} {tolerance}: {:?}",
+                        out.failures
+                    );
+                    for fixture in &fixtures {
+                        assert!(
+                            has(&out.failures, &format!("terminal_attach_ms {fixture}")),
+                            "{:?}",
+                            out.failures
+                        );
+                    }
+                    let line = row(&out.comment, "Terminal to its first frame, attaching");
+                    assert_eq!(line.ends_with("| fail |"), !fixtures.is_empty(), "{line}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn attach_numeric_tolerance_keeps_the_relative_leg_below_the_absolute_ceiling() {
+    // docs/performance.md:72,309-314: either leg fails, once per fixture;
+    // dash disables only the relative leg. Numeric tolerance is strict.
+    for cpu in [FAST_MODEL, SLOW_MODEL] {
+        for (ten, one, base, fixtures) in [
+            (39.9, 40.0, 32.0, vec![]),
+            (40.1, 40.0, 32.0, vec!["10 MiB"]),
+            (40.0, 40.1, 32.0, vec!["1 MiB"]),
+            (40.1, 40.1, 32.0, vec!["1 MiB", "10 MiB"]),
+            (0.0, 0.0, 0.0, vec![]),
+            (0.1, 0.0, 0.0, vec!["10 MiB"]),
+        ] {
+            let (h, b) = attach_pair(&[ten; 5], &[one; 5], &[base; 5], &[base; 5], cpu);
+            let doc = doc_with(
+                "| 50 ms | 50 ms | 50 ms | — | — |",
+                "| 50 ms | 50 ms | 50 ms | 25 % | 25 % |",
+            );
+            let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+            assert_eq!(out.failures.len(), fixtures.len(), "{:?}", out.failures);
+            for fixture in fixtures {
+                assert!(
+                    has(&out.failures, &format!("terminal_attach_ms {fixture}")),
+                    "{:?}",
+                    out.failures
+                );
+            }
+            assert!(
+                out.failures.iter().all(|f| f.contains("relative bound")),
+                "{:?}",
+                out.failures
+            );
+            let line = row(&out.comment, "Terminal to its first frame, attaching");
+            assert!(line.contains("+25% over base"), "{line}");
+            assert_eq!(
+                line.ends_with("| fail |"),
+                !out.failures.is_empty(),
+                "{line}"
+            );
+            let dash = judge(&h, Some(&b), Event::PullRequest);
+            assert_eq!(dash.failures, Vec::<String>::new(), "{:?}", dash.failures);
+        }
+    }
+}
+
+#[test]
+fn attach_middle_and_unknown_models_stay_advisory() {
+    // Middle has too few stored runs to gate, and an unknown model has
+    // no class: an over-ceiling head stays advisory with its reason.
     let (h, b) = attach_pair(
-        &[1400.0, 1401.0, 1399.0, 1402.0, 1398.0],
-        &[31.0, 31.2, 30.8, 31.1, 30.9],
-        &[800.0; 5],
-        &[30.5; 5],
-        SLOW_MODEL,
+        &[5000.0; 5],
+        &[5000.0; 5],
+        &[60.0; 5],
+        &[60.0; 5],
+        MIDDLE_MODEL,
     );
     let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
-    assert!(has(&out.failures, "10 MiB"), "{:?}", out.failures);
-    let line = row(&out.comment, "Terminal to its first frame, attaching");
-    assert!(line.ends_with("| fail |"), "{line}");
-    assert!(line.contains("1364.0 ms"), "{line}");
-    assert!(line.contains("#1546"), "{line}");
-    // At either exact boundary passes: head at ceiling, and head at the
-    // relative bound.
-    let (h, b) = attach_pair(
-        &[1364.0; 5],
-        &[31.0; 5],
-        &[800.0; 5],
-        &[30.5; 5],
-        SLOW_MODEL,
-    );
-    let out = judge(&h, Some(&b), Event::PullRequest);
+    // docs/performance.md:308: middle with 2 stored runs stays advisory.
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
-    assert!(
-        row(&out.comment, "Terminal to its first frame, attaching").ends_with("| pass |"),
-        "{}",
-        out.comment
-    );
-    // Above the ceiling but within tolerance passes.
+    let line = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(line.ends_with("| advisory |"), "{line}");
+    assert!(line.contains("2 stored runs"), "{line}");
     let (h, b) = attach_pair(
-        &[1400.0; 5],
-        &[31.0; 5],
-        &[1400.0; 5],
-        &[30.5; 5],
+        &[5000.0; 5],
+        &[5000.0; 5],
+        &[60.0; 5],
+        &[60.0; 5],
         SLOW_MODEL,
     );
-    let out = judge(&h, Some(&b), Event::PullRequest);
+    // docs/performance.md:308: unknown and few-run models stay advisory.
+    for (cpu, reason) in [
+        ("Some Other CPU 1234", "unknown or not recorded"),
+        (SLOW_ADVISORY_MODEL, "4 stored runs"),
+    ] {
+        let advisory = with_cpu(h.clone(), cpu);
+        let out = judge(&advisory, Some(&b), Event::PullRequest);
+        assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+        let line = row(&out.comment, "Terminal to its first frame, attaching");
+        assert!(line.ends_with("| advisory |"), "{line}");
+        assert!(line.contains(reason), "{line}");
+    }
+}
+
+#[test]
+fn pass_end_stays_advisory_while_every_class_cell_is_dash() {
+    // Head and base carry the pass metric: the row never fails on a
+    // sample, however slow, while every class cell reads `—`.
+    // docs/performance.md:73,309-310: the pass-end row stays advisory reference data with no timing gate.
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(
+        &out.comment,
+        "Terminal attaching, to the end of the opening pass",
+    );
+    assert!(line.ends_with("| advisory |"), "{line}");
+    assert!(line.contains("841 ms (1 MiB); 5,570 ms (10 MiB)"), "{line}");
     assert_eq!(
-        out.failures,
-        Vec::<String>::new(),
-        "within 4% of base: {:?}",
-        out.failures
+        line.split('|').nth(4).unwrap().trim(),
+        "1 MiB (1,050,100 bytes): 40.5 ms; 10 MiB (10,490,000 bytes): 97.0 ms"
     );
-    // 1 MiB far over both bounds while 10 MiB passes: no failure and a
-    // positive 1 MiB advisory naming #1546.
-    let (h, b) = attach_pair(
-        &[800.0; 5],
-        &[5000.0; 5],
-        &[800.0; 5],
-        &[30.5; 5],
-        SLOW_MODEL,
+    // A slow pass end stays advisory with no failure.
+    let slow = with_metric(
+        head(),
+        "terminal_attach_pass_ms",
+        Value::Array({
+            let mut entries = attach_entries("1 MiB", 1_050_231, &[5000.0; 5]);
+            entries.extend(attach_entries("10 MiB", 10_492_016, &[9000.0; 5]));
+            entries
+        }),
     );
-    let out = judge(&h, Some(&b), Event::PullRequest);
+    let out = judge(&slow, Some(&base()), Event::PullRequest);
+    // docs/performance.md:73,309-310: a slow pass end stays advisory with no failure.
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
-    let line = row(&out.comment, "Terminal to its first frame, attaching");
-    assert!(line.contains("1 MiB") && line.contains("#1546"), "{line}");
-    assert!(line.ends_with("| pass |"), "{line}");
-    // Both fixtures over: only 10 MiB creates the overage.
-    let (h, b) = attach_pair(
-        &[1400.0; 5],
-        &[5000.0; 5],
-        &[800.0; 5],
-        &[30.5; 5],
-        SLOW_MODEL,
+    let line = row(
+        &out.comment,
+        "Terminal attaching, to the end of the opening pass",
     );
-    let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
-    assert!(has(&out.failures, "10 MiB"), "{:?}", out.failures);
-    assert!(!has(&out.failures, "1 MiB"), "{:?}", out.failures);
+    assert!(line.ends_with("| advisory |"), "{line}");
+    // docs/performance.md:73,184-185,223-227,309-310: five samples per
+    // fixture, and one named failure for each malformed attach metric.
+    // Missing fixture/ms, unknown fixture and wrong run count all fail.
+    for build in [
+        Value::Array(attach_entries("1 MiB", 1_050_231, &[41.0; 5])),
+        Value::Array({
+            let mut entries = attach_entries("1 MiB", 1_050_231, &[41.0; 5]);
+            entries.extend(vec![
+                json!({"fixture": "10 MiB", "log_bytes": 10_492_016});
+                5
+            ]);
+            entries
+        }),
+        Value::Array({
+            let mut entries = attach_entries("1 MiB", 1_050_231, &[41.0; 5]);
+            entries.extend(attach_entries("2 MiB", 2_097_152, &[41.0; 5]));
+            entries
+        }),
+        Value::Array({
+            let mut entries = attach_entries("1 MiB", 1_050_231, &[41.0; 4]);
+            entries.extend(attach_entries("10 MiB", 10_492_016, &[98.0; 5]));
+            entries
+        }),
+    ] {
+        let h = with_cpu(
+            with_metric(
+                neutral_scalars("terminal_attach_ms", head()),
+                "terminal_attach_pass_ms",
+                build,
+            ),
+            SLOW_MODEL,
+        );
+        let (_, b) = attach_pair(&[31.0; 5], &[31.0; 5], &[30.5; 5], &[30.5; 5], SLOW_MODEL);
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert!(
+            has(&out.failures, "terminal_attach_pass_ms"),
+            "{:?}",
+            out.failures
+        );
+        assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    }
+    let missing = without_metric(&base(), "terminal_attach_pass_ms");
+    let out = judge(&head(), Some(&missing), Event::PullRequest);
+    let line = row(
+        &out.comment,
+        "Terminal attaching, to the end of the opening pass",
+    );
+    assert_eq!(line.split('|').nth(4).unwrap().trim(), "unavailable");
+    assert!(line.ends_with("| advisory |"), "{line}");
 }
 
 #[test]
 fn attach_fixture_errors_fail_and_stages_stay_diagnostic() {
+    // docs/performance.md:72,184-185,223-227,303-310: per-fixture medians,
+    // sample counts and one named failure per over-ceiling fixture.
     // Mixed entry ordering still judges per-fixture medians.
     let mut entries = attach_entries("10 MiB", 10_492_016, &[1400.0; 5]);
     entries.extend(attach_entries("1 MiB", 1_050_231, &[31.0; 5]));
@@ -4018,7 +4325,7 @@ fn attach_fixture_errors_fail_and_stages_stay_diagnostic() {
             out.failures
         );
     }
-    // A malformed base fixture stays advisory, never a head overage.
+    // A malformed base fixture cannot waive the head's absolute overage.
     let (h, _) = attach_pair(
         &[1400.0; 5],
         &[31.0; 5],
@@ -4030,9 +4337,12 @@ fn attach_fixture_errors_fail_and_stages_stay_diagnostic() {
     bad_base["metrics"]["terminal_attach_ms"] = json!("slow");
     let bad_base = with_cpu(bad_base, SLOW_MODEL);
     let out = judge(&h, Some(&bad_base), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new());
-    // Attach stages never gate: perturbing them leaves the verdict.
-    let (h, b) = attach_pair(&[800.0; 5], &[31.0; 5], &[800.0; 5], &[30.5; 5], SLOW_MODEL);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(has(&out.failures, "terminal_attach_ms 10 MiB"));
+    assert!(row(&out.comment, "Terminal to its first frame, attaching").ends_with("| fail |"));
+    // Attach stages never gate: perturbing them leaves the verdict. The
+    // tails sit under the absolute bound, so only the stages vary.
+    let (h, b) = attach_pair(&[40.0; 5], &[31.0; 5], &[60.0; 5], &[30.5; 5], SLOW_MODEL);
     let staged = with_metric(
         h,
         "attach_stage_ms",
@@ -4043,7 +4353,8 @@ fn attach_fixture_errors_fail_and_stages_stay_diagnostic() {
     );
     let out = judge(&staged, Some(&b), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
-    // Three declared samples judge three per fixture.
+    // docs/performance.md:184-185: attach always takes five samples per
+    // fixture, so three declared samples fail even when the samples match.
     let declared = with_metric_runs(
         neutral_scalars("terminal_attach_ms", head()),
         &[("terminal_attach_ms", 3)],
@@ -4069,7 +4380,11 @@ fn attach_fixture_errors_fail_and_stages_stay_diagnostic() {
             SLOW_MODEL,
         );
     let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    assert!(
+        has(&out.failures, "terminal_attach_ms"),
+        "{:?}",
+        out.failures
+    );
 }
 
 #[test]
@@ -4113,13 +4428,14 @@ fn the_comment_names_gated_timing_verdicts_and_reasons() {
     assert!(line.contains("2000.0 ms"), "{line}");
     assert!(line.contains("4 stored runs"), "{line}");
     assert!(line.ends_with("| advisory |"), "{line}");
-    // Attach rows show both the active class ceiling and the 1 MiB reason.
-    let (h, b) = attach_pair(&[800.0; 5], &[31.0; 5], &[800.0; 5], &[30.5; 5], SLOW_MODEL);
+    // Attach rows show the flat class ceiling at each fixture.
+    let (h, b) = attach_pair(&[40.0; 5], &[31.0; 5], &[60.0; 5], &[60.0; 5], SLOW_MODEL);
     let out = judge(&h, Some(&b), Event::PullRequest);
+    // docs/performance.md:72,303-310: medians under the flat 50 ms bound pass.
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(&out.comment, "Terminal to its first frame, attaching");
-    assert!(line.contains("slow ceiling 1364.0 ms"), "{line}");
-    assert!(line.contains("#1546"), "{line}");
+    assert!(line.contains("slow ceiling 50.0 ms"), "{line}");
+    assert!(line.contains("1 MiB") && line.contains("10 MiB"), "{line}");
 }
 
 // --- #2039 mutant-killing tests (see #2039) ---
@@ -4183,34 +4499,18 @@ fn attach_ms_of_zero_passes_validation() {
     );
 }
 
-/// An over-ceiling 10 MiB head on `SLOW_MODEL` with a valid but
-/// mismatched-model base: the row stays advisory because the base cannot
-/// establish the same-job premise.
+/// An under-ceiling head with a mismatched-model base: the missing
+/// comparison stays advisory, without an absolute-bound failure.
 fn mismatched_attach_pair() -> (Value, Value) {
-    let (h, _) = attach_pair(
-        &[1400.0; 5],
-        &[31.0; 5],
-        &[800.0; 5],
-        &[30.5; 5],
-        SLOW_MODEL,
-    );
-    let (_, b) = attach_pair(
-        &[1400.0; 5],
-        &[31.0; 5],
-        &[800.0; 5],
-        &[30.5; 5],
-        FAST_MODEL,
-    );
+    let (h, _) = attach_pair(&[40.0; 5], &[31.0; 5], &[40.0; 5], &[30.5; 5], SLOW_MODEL);
+    let (_, b) = attach_pair(&[40.0; 5], &[31.0; 5], &[40.0; 5], &[30.5; 5], FAST_MODEL);
     (h, b)
 }
 
 #[test]
 fn a_mismatched_attach_base_never_forces_the_gate() {
-    // Kills three same-job-base guard mutants, each of which gates on the
-    // mismatched base and fails naming 10 MiB: the guard with `true`; the
-    // second `&&` with `||`, whose (contains && is_ok) side is true for
-    // the mismatched valid base; and the first `&&` with `||`, whose
-    // contains side is true for the mismatched valid base.
+    // docs/performance.md:302-306: missing comparisons stay advisory
+    // when neither fixture breaches the absolute bound.
     let (h, b) = mismatched_attach_pair();
     let out = judge(&h, Some(&b), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
@@ -4232,15 +4532,8 @@ fn failed_base(cpu: &str) -> Value {
 
 #[test]
 fn failed_attach_base_stays_advisory() {
-    // Kills judge.rs:1031's deleted `(Base::Failed(_), _)` arm: the mutant
-    // falls through to gating against 0.0 and fails naming 10 MiB.
-    let (h, _) = attach_pair(
-        &[1400.0; 5],
-        &[31.0; 5],
-        &[800.0; 5],
-        &[30.5; 5],
-        SLOW_MODEL,
-    );
+    // docs/performance.md:302-306: under-ceiling head, failed comparison.
+    let (h, _) = attach_pair(&[40.0; 5], &[31.0; 5], &[40.0; 5], &[30.5; 5], SLOW_MODEL);
     let out = judge(&h, Some(&failed_base(SLOW_MODEL)), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(&out.comment, "Terminal to its first frame, attaching");
@@ -4249,18 +4542,16 @@ fn failed_attach_base_stays_advisory() {
 
 #[test]
 fn failed_attach_base_shows_its_failure() {
-    // Pins judge.rs:1010's failed-base arm (the `!matches!(base,
-    // Base::Failed(_))` guard was redundant: the arm patterns already
-    // exclude a failed base, so replacing the guard with `true` changes
-    // nothing observable and the arm is collapsed without it): the head
-    // cell names the active ceiling and the base failure instead of the
-    // no-comparable-timing reason.
-    let (h, _) = attach_pair(&[800.0; 5], &[31.0; 5], &[800.0; 5], &[30.5; 5], SLOW_MODEL);
+    // docs/performance.md:302-306: an under-ceiling head names the base
+    // failure rather than a generic missing-comparison reason.
+    let (h, _) = attach_pair(&[40.0; 5], &[31.0; 5], &[40.0; 5], &[30.5; 5], SLOW_MODEL);
     let out = judge(&h, Some(&failed_base(SLOW_MODEL)), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(&out.comment, "Terminal to its first frame, attaching");
     assert!(
-        line.contains("slow ceiling 1364.0 ms; base failed: base broke"),
+        line.contains(
+            "10 MiB: 40.0 ms (slow ceiling 50.0 ms, absolute bound); base failed: base broke"
+        ),
         "{line}"
     );
     assert!(
@@ -4271,17 +4562,9 @@ fn failed_attach_base_shows_its_failure() {
 
 #[test]
 fn missing_attach_base_metric_stays_advisory() {
-    // Kills two advisory-arm mutants, each of which gates the 1400 ms
-    // head against 0.0 and fails naming 10 MiB: the guard with `false`,
-    // which skips the advisory arm; and the deleted `!`, which admits
-    // only failed bases to the advisory arm.
-    let (h, _) = attach_pair(
-        &[1400.0; 5],
-        &[31.0; 5],
-        &[800.0; 5],
-        &[30.5; 5],
-        SLOW_MODEL,
-    );
+    // docs/performance.md:302-306: an under-ceiling head stays advisory
+    // with its missing-comparison reason.
+    let (h, _) = attach_pair(&[40.0; 5], &[31.0; 5], &[40.0; 5], &[30.5; 5], SLOW_MODEL);
     let mut missing = base();
     missing["metrics"]
         .as_object_mut()
@@ -4416,11 +4699,7 @@ fn a_head_failure_with_a_missing_base_metric_shows_unavailable() {
     assert!(line.ends_with("| fail |"), "{line}");
 }
 
-// --- #2427 the 9V45 attach class data pins its own ceiling ---
-
-/// Every stored 9V45 file's 10 MiB attach samples: the backstop's `main`
-/// results since October 11, 2026 and the base and head of run 38783449852.
-const FAST_ATTACH_DATA: &str = include_str!("../tests/class_data/9v45-attach-10mib.json");
+// --- #2427 the 9V45 session_list class data pins its own ceiling ---
 const PERFORMANCE_DOC: &str = include_str!("../../docs/performance.md");
 
 /// A gated row's fast ceiling (ms) and fast tolerance (%) in
@@ -4497,16 +4776,6 @@ fn pinned_gate(data: &str, prefix: &str, label: &str, quantum: bool) {
     );
     let want = (100.0 * (max_median / min_median - 1.0)).ceil();
     assert_eq!(tolerance, want, "{label} tolerance for the stored medians");
-}
-
-#[test]
-fn fast_attach_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
-    pinned_gate(
-        FAST_ATTACH_DATA,
-        "| Terminal to its first frame, attaching",
-        "fast attach",
-        false,
-    );
 }
 
 // --- #2668 the 9V45 session_list class data pins its own ceiling ---
@@ -4818,6 +5087,10 @@ fn remeasure_maps_timing_ids_to_their_rows() {
     // The attach row already takes 5 samples and nests samples by fixture,
     // and `session_list` has no row the selector skips: neither remeasures.
     assert_eq!(super::judge::remeasured_row("terminal_attach_ms"), None);
+    assert_eq!(
+        super::judge::remeasured_row("terminal_attach_pass_ms"),
+        None
+    );
     assert_eq!(super::judge::remeasured_row("session_list_ms"), None);
     assert_eq!(super::judge::remeasured_row("no_such_metric"), None);
 }
@@ -4956,6 +5229,22 @@ fn attach_and_session_list_breaches_name_no_remeasure_skip() {
     // its ceiling and base tolerance and nothing else breaches
     // (`docs/performance.md`, "When a budget is exceeded").
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert_eq!(out.remeasure_skip, None);
+    // A slow pass end stays advisory with no remeasure skip: the row
+    // never breaches, however slow the opening pass runs.
+    let (h, b) = attach_pair(&[31.0; 5], &[31.0; 5], &[30.5; 5], &[30.5; 5], SLOW_MODEL);
+    let h = with_metric(
+        h,
+        "terminal_attach_pass_ms",
+        Value::Array({
+            let mut entries = attach_entries("1 MiB", 1_050_231, &[5000.0; 5]);
+            entries.extend(attach_entries("10 MiB", 10_492_016, &[9000.0; 5]));
+            entries
+        }),
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    // docs/performance.md:73,184-185,309-310: the pass-end row already takes 5 samples and never breaches, so no remeasure skip.
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     assert_eq!(out.remeasure_skip, None);
     // `session_list` has no row the selector skips: its breach fails with no skip.
     let mut h = with_counts(neutral_scalars("session_list_ms", head()), 5, 3);
@@ -5433,9 +5722,12 @@ fn is_memory_marks_only_the_memory_checks() {
         pin: "2 per model request, 2 per tool call",
         rule: Rule::Fsyncs("fsyncs"),
     }));
-    assert!(!super::is_memory(Check::PerMib {
-        pin: "50 ms plus 10 ms per MiB of session log",
+    assert!(!super::is_memory(Check::FirstFrame {
+        pin: "50 ms",
         id: "terminal_attach_ms",
+    }));
+    assert!(!super::is_memory(Check::PassEnd {
+        id: "terminal_attach_pass_ms",
     }));
     assert!(!super::is_memory(Check::Ratio {
         pin: "24 times the same run's scale-1 re-count",
