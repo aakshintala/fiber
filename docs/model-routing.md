@@ -231,6 +231,10 @@ Measured on `claude-sonnet-5-5` against api.anthropic.com
   endpoint (`research/reasoning-resume`, September 27, 2026), while `enabled`
   on `claude-sonnet-5-5` returned 400 ("Use thinking.type.adaptive and
   output_config.effort").
+- A replayed `tool_use` block carries `input` as an object: a call whose
+  arguments are not an object is sent back with `input` of `{}`, paired
+  with its failed result quoting what the model sent (`docs/tools.md`,
+  "Before a call runs").
 
 ### Google Generative AI wire facts
 
@@ -517,6 +521,10 @@ signed reasoning block (`research/bedrock-converse-probe`).
   "Recognising an AWS exception"). An unknown model id answered 400
   `ValidationException` "The provided model identifier is invalid.", and a
   model the account may not use 403 `AccessDeniedException`.
+- A replayed `toolUse` block carries `input` as an object: a call whose
+  arguments are not an object is sent back with `input` of `{}`, paired
+  with its failed result quoting what the model sent (`docs/tools.md`,
+  "Before a call runs").
 
 ### The scripted provider
 

@@ -4032,6 +4032,229 @@ fn dropping_a_page_reloads_it_with_identical_rows() {
     assert_eq!(pages.resident(), resident, "every page is resident again");
 }
 
+/// A rewind stop uses a job description carried from an earlier page;
+/// dropping and loading the page keeps the event's rendered name.
+#[test]
+fn reloading_a_rewind_page_keeps_stopped_jobs_from_earlier_pages() {
+    let mut stream = Stream::new(false);
+    stream.turn(0, 30);
+    stream.durable(
+        "job_started",
+        None,
+        json!({"job_id": "j_1", "description": "long-running task", "output_path": "/tmp/out"}),
+    );
+    stream.turn(1, 30);
+    stream.durable(
+        "job_completed",
+        None,
+        json!({"job_id": "j_1", "status": "cancelled"}),
+    );
+    stream.durable(
+        "rewound",
+        None,
+        json!({"new_session_id": "s_ccc", "seq": 12}),
+    );
+    // A later group closes the page for this reload test. The production
+    // stop run itself remains directly before `rewound`.
+    stream.turn(2, 30);
+    let lines = stream.lines;
+    let mut pages = pages_at(&lines, 80);
+    let at = (0..pages.index().pages().len())
+        .find(|&at| {
+            pages.page_text_open(at).is_some_and(|(rows, _)| {
+                texts(&rows)
+                    .iter()
+                    .any(|line| line.contains("jobs stopped:"))
+            })
+        })
+        .expect("a page contains the rewind line");
+    assert!(
+        at + 1 < pages.index().pages().len(),
+        "the rewind page is closed"
+    );
+    let before = pages.page_text_open(at).expect("the page is resident");
+    assert!(
+        texts(&before.0)
+            .iter()
+            .any(|line| line.contains("long-running task")),
+        "the stop line uses the carried description"
+    );
+
+    pages.trim(0, 0);
+    assert!(pages.part(at).is_none(), "the stop page was dropped");
+    reload(&mut pages, &lines);
+    let after = pages.page_text_open(at).expect("the page reloads");
+    assert!(
+        texts(&after.0)
+            .iter()
+            .any(|line| line.contains("long-running task")),
+        "the reloaded stop line keeps the carried description: {after:?}"
+    );
+}
+
+/// An orphaned job whose start is on an earlier page keeps its
+/// description when its page reloads.
+#[test]
+fn reloading_an_orphan_page_keeps_a_carried_description() {
+    let mut stream = Stream::new(false);
+    stream.turn(0, 30);
+    stream.durable(
+        "job_started",
+        None,
+        json!({"job_id": "j_9", "description": "doomed task", "output_path": "/tmp/out"}),
+    );
+    // A forced cut puts the completion on the next page: the start
+    // stays behind, so the reload reads the name from the seed.
+    fill(&mut stream, 70);
+    begun(&mut stream, "next");
+    completed(&mut stream);
+    stream.durable(
+        "job_completed",
+        None,
+        json!({"job_id": "j_9", "status": "failed",
+            "error": {"code": "orphaned", "message": "lost nine"}}),
+    );
+    stream.turn(2, 30);
+    let lines = stream.lines;
+    let started = lines
+        .iter()
+        .find(|line| line.kind == "job_started")
+        .expect("a start")
+        .seq
+        .expect("durable");
+    let done = lines
+        .iter()
+        .find(|line| line.kind == "job_completed")
+        .expect("a completion")
+        .seq
+        .expect("durable");
+    let mut pages = pages_at(&lines, 80);
+    let session = SessionId(SESSION.to_owned());
+    assert!(
+        pages.index().page_of(&session, started) < pages.index().page_of(&session, done),
+        "the start stays on an earlier page"
+    );
+    let at = (0..pages.index().pages().len())
+        .find(|&at| {
+            pages.page_text_open(at).is_some_and(|(rows, _)| {
+                texts(&rows)
+                    .iter()
+                    .any(|line| line.contains("Orphaned jobs:"))
+            })
+        })
+        .expect("a page contains the orphan line");
+    assert!(
+        at + 1 < pages.index().pages().len(),
+        "the orphan page is closed"
+    );
+    let before = pages.page_text_open(at).expect("the page is resident");
+    assert!(
+        texts(&before.0)
+            .iter()
+            .any(|line| line.contains("doomed task")),
+        "the orphan line uses the carried description"
+    );
+
+    pages.trim(0, 0);
+    assert!(pages.part(at).is_none(), "the orphan page was dropped");
+    reload(&mut pages, &lines);
+    let after = pages.page_text_open(at).expect("the page reloads");
+    assert!(
+        texts(&after.0)
+            .iter()
+            .any(|line| line.contains("doomed task")),
+        "the reloaded orphan line keeps the carried description: {after:?}"
+    );
+}
+
+/// A page cut between a stop and `rewound` ends the run on every path:
+/// the reloaded stop line agrees with the live one.
+#[test]
+fn a_cut_between_the_stop_and_rewound_drops_the_stop_on_reload() {
+    let mut stream = Stream::new(false);
+    stream.turn(0, 30);
+    stream.durable(
+        "job_started",
+        None,
+        json!({"job_id": "j_1", "description": "long-running task", "output_path": "/tmp/out"}),
+    );
+    stream.turn(1, 30);
+    stream.durable(
+        "job_completed",
+        None,
+        json!({"job_id": "j_1", "status": "cancelled"}),
+    );
+    // Filler and a new turn force the cut after the stop: the run is
+    // over, so `rewound` stands alone on the next page.
+    fill(&mut stream, 70);
+    begun(&mut stream, "next");
+    completed(&mut stream);
+    stream.durable(
+        "rewound",
+        None,
+        json!({"new_session_id": "s_ccc", "seq": 12}),
+    );
+    stream.turn(2, 30);
+    let lines = stream.lines;
+    let stop = lines
+        .iter()
+        .find(|line| line.kind == "job_completed")
+        .expect("a stop")
+        .seq
+        .expect("durable");
+    let wound = lines
+        .iter()
+        .find(|line| line.kind == "rewound")
+        .expect("a rewound")
+        .seq
+        .expect("durable");
+    let mut pages = pages_at(&lines, 80);
+    let session = SessionId(SESSION.to_owned());
+    assert!(
+        pages.index().page_of(&session, stop) < pages.index().page_of(&session, wound),
+        "the stop is on the page before the rewind line"
+    );
+    let at = (0..pages.index().pages().len())
+        .find(|&at| {
+            pages.page_text_open(at).is_some_and(|(rows, _)| {
+                texts(&rows)
+                    .iter()
+                    .any(|line| line.contains("jobs stopped:"))
+            })
+        })
+        .expect("a page contains the rewind line");
+    assert!(
+        at + 1 < pages.index().pages().len(),
+        "the rewind page is closed"
+    );
+    // The cut broke the run: the live line already drops the earlier
+    // page's job.
+    let before = pages.page_text_open(at).expect("the page is resident");
+    assert!(
+        texts(&before.0)
+            .iter()
+            .any(|line| line.contains("jobs stopped: none")),
+        "the live stop line drops the broken run: {before:?}"
+    );
+
+    pages.trim(0, 0);
+    assert!(pages.part(at).is_none(), "the stop page was dropped");
+    reload(&mut pages, &lines);
+    let after = pages.page_text_open(at).expect("the page reloads");
+    assert!(
+        texts(&after.0)
+            .iter()
+            .any(|line| line.contains("jobs stopped: none")),
+        "the reloaded stop line drops the broken run: {after:?}"
+    );
+    assert!(
+        !texts(&after.0)
+            .iter()
+            .any(|line| line.contains("long-running task")),
+        "the broken run stays dropped: {after:?}"
+    );
+}
+
 /// Installing a renderer recounts every page under its lines, and
 /// replacing it recounts again.
 #[test]

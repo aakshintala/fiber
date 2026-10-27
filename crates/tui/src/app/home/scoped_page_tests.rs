@@ -5,7 +5,8 @@
 //! of the survived mutants in `super` (`crates/tui/src/app/home.rs`).
 
 use super::{App, Effect};
-use crate::home::{ListLine, Spot};
+use crate::app::testkit::{hello, home_with};
+use crate::home::{Launch, ListLine, Spot};
 use crate::keys::Key;
 use crate::link::Line;
 use contract::SessionId;
@@ -13,10 +14,9 @@ use contract::clock::Clock;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-/// An app on home at 80x24.
-fn home() -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(crate::home::Launch {
+/// The launch home opens: local /w with the model chip set.
+fn launch() -> Launch {
+    crate::home::Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),
             project: "-w".to_owned(),
@@ -32,19 +32,7 @@ fn home() -> App {
         panel_share: 21.0,
         panel_cards: Vec::new(),
         ..Default::default()
-    });
-    app.set_size(80, 24);
-    app
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
+    }
 }
 
 /// A hub `command_accepted` for `id` with `result`.
@@ -288,7 +276,7 @@ fn list_shapes(app: &App) -> Vec<String> {
 
 #[test]
 fn a_repeat_status_for_a_known_project_queues_no_scoped_ask() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     // The first status introduces the project: one scoped ask goes out
     // (`docs/tui.md:268`: one ask in flight per project).
@@ -311,7 +299,7 @@ fn a_repeat_status_for_a_known_project_queues_no_scoped_ask() {
 
 #[test]
 fn a_fan_out_for_a_new_project_ignores_an_in_flight_ask_for_another_project() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     // One project on home with its scoped ask still in flight.
     let fanout = answer_value(
@@ -347,7 +335,7 @@ fn a_fan_out_for_a_new_project_ignores_an_in_flight_ask_for_another_project() {
 
 #[test]
 fn more_with_the_link_down_sends_no_scoped_page() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -374,7 +362,7 @@ fn more_with_the_link_down_sends_no_scoped_page() {
 
 #[test]
 fn a_second_page_while_one_is_in_flight_sends_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -405,7 +393,7 @@ fn a_second_page_while_one_is_in_flight_sends_nothing() {
 
 #[test]
 fn page_recent_scopes_to_the_focused_project_not_its_neighbor() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -449,7 +437,7 @@ fn page_recent_scopes_to_the_focused_project_not_its_neighbor() {
 
 #[test]
 fn page_recent_from_the_last_row_with_more_held_scopes_the_page() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -481,7 +469,7 @@ fn page_recent_from_the_last_row_with_more_held_scopes_the_page() {
 
 #[test]
 fn page_recent_off_the_last_row_sends_no_scoped_page() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -513,7 +501,7 @@ fn page_recent_off_the_last_row_sends_no_scoped_page() {
 
 #[test]
 fn page_recent_at_the_total_pages_the_unscoped_cursor() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -543,7 +531,7 @@ fn page_recent_at_the_total_pages_the_unscoped_cursor() {
 
 #[test]
 fn page_recent_below_the_total_pages_the_unscoped_cursor() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,
@@ -579,7 +567,7 @@ fn page_recent_below_the_total_pages_the_unscoped_cursor() {
 
 #[test]
 fn more_text_at_the_total_copies_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let fanout = answer_value(
         &mut app,

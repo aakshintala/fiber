@@ -83,7 +83,10 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   unless it meets the same nullable-union rule that permits dropping its null.
   Repair is the same for
   every protocol, model and tool, built-in, MCP or extension. The model is not
-  told, and its call is sent back to it as written. `tool_call_requested`
+  told, and its call is sent back to it as written, except on the protocols
+  whose tool-call input must be an object (`anthropic-messages` and
+  `bedrock-converse`): there a call whose arguments are not an object is
+  sent back with `input` of `{}`. `tool_call_requested`
   records what was repaired (`docs/events.md`). Arguments a `before_tool` hook
   rewrote are never repaired. The evidence:
   [research/reply-faults](../research/reply-faults/README.md),
@@ -91,7 +94,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 - Arguments are checked against the input schema before the effects function is
   called. A call that fails the check completes as `failed` with code
   `invalid_arguments` and never writes `tool_call_started`, so the log proves
-  it never ran. The model is told what is wrong, one line per bad field.
+  it never ran. The model is told what is wrong, one line per bad field. A
+  call whose arguments are not a JSON object fails the same way, and its
+  failure quotes the arguments as the model sent them.
 - A call naming a tool that does not exist completes as `failed` with code
   `unknown_tool`, never starts, and the model is told which names exist.
 - An effects function that itself errors (for example a bug in an extension)
@@ -100,8 +105,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 - A `before_tool` hook then sees the call and may rewrite its arguments or
   refuse it (`docs/extensions.md`, "Hooks"). Rewritten arguments go through
   the schema check and the effects function again. The model's call is sent
-  back to it as written, and the result's `content` begins with a line giving
-  the arguments that ran.
+  back to it as written (as `{}` on the object-input protocols named above
+  when its arguments are not an object), and the result's `content` begins
+  with a line giving the arguments that ran.
 
 ## What a result carries
 
