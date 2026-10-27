@@ -90,6 +90,89 @@ fn a_failing_session_end_watcher_writes_its_data_directory_and_prints_under_fibe
     );
 }
 
+/// The project's sessions directory, through the canonical workspace,
+/// as the project key names it.
+fn sessions_dir(setup: &Setup) -> std::path::PathBuf {
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    let key = workspace.to_string_lossy().replace('/', "-");
+    setup.home().join("projects").join(key).join("sessions")
+}
+
+/// The marker file's bytes, or its absence: a partially written watcher's
+/// write shows here as fewer bytes than a full run wrote.
+fn marker_state(marker: &std::path::Path) -> String {
+    match fs::read(marker) {
+        Ok(bytes) => format!("present {} bytes: {bytes:?}", bytes.len()),
+        Err(error) => format!("absent ({error})"),
+    }
+}
+
+/// The tail of this test's sole session `events.jsonl`: the isolated
+/// `FIBER_HOME` holds one project and one session, so the sessions
+/// directory lists it. A watcher timeout notice lands in this log, which
+/// tells a timed-out parked run apart from a queued delivery that never
+/// arrived; a missing directory or log is itself the state found.
+fn events_tail(setup: &Setup) -> String {
+    const TAIL_LINES: usize = 20;
+    let dir = sessions_dir(setup);
+    let ids: Vec<String> = match fs::read_dir(&dir) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect(),
+        Err(error) => {
+            return format!("sessions dir {} unreadable ({error})", dir.display());
+        }
+    };
+    let mut tails = Vec::new();
+    for id in &ids {
+        let path = dir.join(id).join("events.jsonl");
+        match fs::read_to_string(&path) {
+            Ok(text) => {
+                let lines: Vec<&str> = text.lines().collect();
+                let start = lines.len().saturating_sub(TAIL_LINES);
+                tails.push(format!(
+                    "session {id}: last {} of {} lines:\n{}",
+                    lines.len() - start,
+                    lines.len(),
+                    lines[start..].join("\n")
+                ));
+            }
+            Err(error) => tails.push(format!(
+                "session {id}: {} unreadable ({error})",
+                path.display()
+            )),
+        }
+    }
+    format!(
+        "sessions dir {} holds {} session(s) [{}]; {}",
+        dir.display(),
+        ids.len(),
+        ids.join(", "),
+        tails.join("\n")
+    )
+}
+
+/// Held and model request counts, marker bytes and the session event-log
+/// tail: every wait failure names the state it found, so the next sighting
+/// tells a timed-out parked run apart from a missing queued delivery. The
+/// held count is a snapshot taken before the held server is dropped; the
+/// model server stays alive, so its count is read fresh.
+fn diagnose(
+    setup: &Setup,
+    marker: &std::path::Path,
+    held_requests: usize,
+    model: &ProviderServer,
+) -> String {
+    format!(
+        "held requests: {held_requests}, model requests: {}, marker {}: {}, {}",
+        model.requests().len(),
+        marker.display(),
+        marker_state(marker),
+        events_tail(setup)
+    )
+}
+
 /// A parked mid-session offer prints nothing and drains nothing: the drain
 /// replays only what the mid-session offer did not already cover, and the
 /// cursor the live offer recorded pins exactly that. The model's second
@@ -152,21 +235,37 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
         let _ignored = done_tx.send(run_to_exit(deadline, "fiber ask to exit", command));
     });
     // The first run parked on the held server; the mid-session run happened
-    // exactly once.
-    assert!(
-        held.await_requests(1, setup.deadline),
-        "waited for the watcher to park mid-session"
+    // exactly once. The wait's bound is the test's deadline; the held
+    // fake's own limit outlasts it, so the fake's 500 never fires first.
+    if !held.await_requests(1, setup.deadline) {
+        panic!(
+            "waited for the watcher to park mid-session; {}",
+            diagnose(&setup, &marker, held.requests().len(), &model)
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(&marker).unwrap(),
+        "run\n",
+        "the watcher parked exactly once; {}",
+        diagnose(&setup, &marker, held.requests().len(), &model)
     );
-    assert_eq!(fs::read_to_string(&marker).unwrap(), "run\n");
     model.release();
     // Freeing the parked run lets the queued second offer execute while the
     // turn waits on it: whichever lands first, both live runs print before
     // the exit, so the drain replays neither.
+    let held_requests_at_release = held.requests().len();
     drop(held);
-    let output = setup
-        .deadline
-        .recv(&done_rx)
-        .expect("waited for `fiber ask` to exit");
+    let output = match setup.deadline.recv(&done_rx) {
+        Ok(output) => output,
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!(
+            "waited until the deadline for `fiber ask` to exit; {}",
+            diagnose(&setup, &marker, held_requests_at_release, &model)
+        ),
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
+            "the sender for `fiber ask` to exit hung up before sending; {}",
+            diagnose(&setup, &marker, held_requests_at_release, &model)
+        ),
+    };
     assert!(output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
@@ -174,7 +273,12 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
         "the drain printed nothing: {stderr:?}"
     );
     // Every live run executed; the drain replayed none.
-    assert_eq!(fs::read_to_string(&marker).unwrap(), "run\nrun\nrun\n");
+    assert_eq!(
+        fs::read_to_string(&marker).unwrap(),
+        "run\nrun\nrun\n",
+        "every live run executed and the drain replayed none; {}",
+        diagnose(&setup, &marker, held_requests_at_release, &model)
+    );
 }
 
 /// An ephemeral kind the turn never appends replays nothing post-exit: the
