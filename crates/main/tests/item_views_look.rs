@@ -16,6 +16,9 @@
 mod support;
 
 use std::fs;
+use std::io::Write as _;
+use std::os::unix::process::CommandExt as _;
+use std::process::{Command, Stdio};
 
 use serde_json::json;
 use support::pty::{Colour, Grid, Run};
@@ -75,15 +78,18 @@ fn write_shared(setup: &Setup, command: &str) {
 }
 
 /// Only the delegate is held: the parent spawns one delegate whose
-/// blocking step runs `head -n 1 <hold>`, then answers. No tty job
-/// starts, so releasing the hold finishes the delegate alone.
+/// blocking step runs `head -n 1 <hold>` in the background, then
+/// answers. The background move is immediate, so the panel row draws
+/// without the foreground's 30-second move wait; the held job still
+/// parks the delegate until the test releases it. No tty job starts,
+/// so releasing the hold finishes the delegate alone.
 fn delegate_setup() -> (Setup, fs::File, fakes::Watchdog) {
     let setup = Setup::new();
     let command = format!("head -n 1 {}", setup.workspace().join("hold").display());
     write_json(
         &setup.workspace().join("d.json"),
         &json!({"steps": [
-            {"tool_calls": [{"name": "shell", "arguments": {"command": command}}]},
+            {"tool_calls": [{"name": "shell", "arguments": {"command": command, "run_in_background": true}}]},
             {"text": ["Reviewed."]},
             {"text": ["Steered."]},
             // The tool result, the steer and the shell's own end each
@@ -117,7 +123,9 @@ fn delegate_setup() -> (Setup, fs::File, fakes::Watchdog) {
 /// answers. No delegate spawns, so releasing the hold finishes the job
 /// alone. The command stays short on purpose: the absolute hold path
 /// would push the status row's stop and outcome under the row's cut.
-fn job_setup() -> (Setup, fs::File, fakes::Watchdog) {
+/// The command returns with the setup: the panel names the job row by
+/// it, so the test clicks only the row that names it.
+fn job_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
     let setup = Setup::new();
     // A shell comment with this process id keeps the watchdog's
     // pattern to this test's `head`: parallel tests hold their own.
@@ -138,7 +146,7 @@ fn job_setup() -> (Setup, fs::File, fakes::Watchdog) {
     );
     write_shared(&setup, &command);
     let (release, guard) = new_hold(&setup, &format!("hold #{}", std::process::id()));
-    (setup, release, guard)
+    (setup, release, guard, command)
 }
 
 /// The binary started at 160x48 and prompted, so the target item starts.
@@ -147,6 +155,11 @@ fn start_run(setup: &Setup) -> Run {
     run.ready();
     run.write(b"go\r");
     run
+}
+
+/// The job row, wherever the panel lays it out, or none before it draws.
+fn job_row_index(rows: &[String], command: &str) -> Option<usize> {
+    rows.iter().position(|row| row.contains(command))
 }
 
 /// The first row containing `needle`, or a panic naming it.
@@ -359,19 +372,64 @@ fn the_delegate_view_matches_the_doc() {
 }
 
 #[test]
+fn job_row_predicate_rejects_the_pre_expansion_grid() {
+    let command = "head -n 1 hold";
+    let pre_expansion = vec![
+        "Jobs                1 running ▸".to_owned(),
+        "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄".to_owned(),
+    ];
+    let old_predicate_accepted = pre_expansion
+        .iter()
+        .position(|row| row.contains("Jobs"))
+        .and_then(|title| pre_expansion.get(title + 1))
+        .is_some_and(|row| !row.trim().is_empty());
+
+    assert!(
+        old_predicate_accepted,
+        "the old predicate accepts this grid"
+    );
+    assert_eq!(job_row_index(&pre_expansion, command), None);
+}
+
+#[test]
+fn fifo_release_written_before_reader_opens_is_read() {
+    let setup = Setup::new();
+    let fifo = setup.workspace().join("hold");
+    fakes::fifo(&fifo);
+    let mut release = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .unwrap();
+
+    // Write the release before the reader opens the FIFO, and keep the
+    // O_RDWR end alive until it reads the line.
+    release.write_all(b"\n").unwrap();
+    let child = Command::new("head")
+        .arg("-n")
+        .arg("1")
+        .arg(&fifo)
+        .stdout(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let output = fakes::wait_output(child, "the FIFO reader to exit");
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"\n");
+}
+
+#[test]
 fn the_job_pty_view_matches_the_doc() {
-    let (setup, release, _guard) = job_setup();
+    let (setup, release, _guard, command) = job_setup();
     let mut run = start_run(&setup);
-    // The Jobs card starts closed: its title toggles the list, whose
-    // one row is the held job directly below it. The parent's turn
-    // completes before either click, so both rows' positions are final:
-    // the completed footer proves the turn is done, and the job parks
-    // on the test-held FIFO, so no further session event can move rows
-    // before either click. The finished title never emits while an
-    // item is held, so the turn's completion — not `turn_finished` —
-    // is the readiness signal here. No session event lands between the
-    // two clicks, only the first click's own expansion, so the second
-    // click rides the same signal.
+    // The Jobs card starts closed; its title toggles the list. The
+    // completed turn is the session-event signal that makes the held
+    // command stable. The later grid predicate identifies that command's
+    // row, rather than accepting any non-blank row below the title. The
+    // finished title never emits while an item is held, so the turn's
+    // completion — not `turn_finished` — is the readiness signal here.
+    // No session event lands between the two clicks; only the first
+    // click's own expansion changes the screen.
     let grid = run.wait_screen("the tty job starts", |grid| {
         grid.contents.contains("Jobs")
             && grid.contents.contains("Done.")
@@ -380,17 +438,11 @@ fn the_job_pty_view_matches_the_doc() {
     let title = row_with(&grid, "Jobs");
     click(&mut run, col_at(&grid, title, "Jobs"), title);
     let grid = run.wait_screen("the job row draws", |grid| {
-        grid.rows
-            .iter()
-            .position(|row| row.contains("Jobs"))
-            .and_then(|title| grid.rows.get(title + 1).filter(|row| row.trim().len() > 2))
-            .is_some()
+        job_row_index(&grid.rows, &command).is_some()
     });
-    let title = row_with(&grid, "Jobs");
-    let title_x = col_at(&grid, title, "Jobs");
-    let job = title + 1;
+    let job = job_row_index(&grid.rows, &command).unwrap() as u16;
     let (width, _) = grid.size();
-    let job_x = (title_x..width)
+    let job_x = (0..width)
         .find(|x| grid.cell(*x, job).symbol != " ")
         .unwrap_or_else(|| panic!("the job row in\n{}", grid.contents));
     click(&mut run, job_x, job);
@@ -474,11 +526,15 @@ fn the_job_pty_view_matches_the_doc() {
     finish_and_quit(run, release, "type into the job");
 }
 
-/// Drops `release` so `head` exits and the one held item finishes,
-/// closes the view, quits, and asserts the exit: every wait is a
-/// screen predicate.
-fn finish_and_quit(mut run: Run, release: fs::File, closed_needle: &str) {
-    drop(release);
+/// Writes `release` a line so `head` reads it and exits and the one
+/// held item finishes, closes the view, quits, and asserts the exit:
+/// every wait is a screen predicate. The release is a written line,
+/// never a dropped writer: the test's open end keeps the pipe alive
+/// until the held `head` reads the line, while dropping the last writer
+/// before `head` opens the FIFO strands it there forever
+/// (`docs/testing.md`, "Waits and timeouts").
+fn finish_and_quit(mut run: Run, mut release: fs::File, closed_needle: &str) {
+    release.write_all(b"\n").unwrap();
     run.wait_screen("the finish folds", |grid| {
         !grid.contents.contains("■ stop")
             && (grid.contents.contains("completed") || grid.contents.contains("failed"))
