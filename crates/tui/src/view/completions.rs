@@ -142,10 +142,7 @@ fn name_spans(name: &str, query: &str, wide: usize) -> Vec<Span<'static>> {
 /// The spans for a row's alias (` /exit`), dim with the query's first
 /// case-folded occurrence bold: the column width stays the primary
 /// names' own, so the alias shifts only its row's description.
-fn alias_spans(alias: Option<&str>, query: &str) -> Vec<Span<'static>> {
-    let Some(alias) = alias else {
-        return Vec::new();
-    };
+fn alias_spans(alias: &str, query: &str) -> Vec<Span<'static>> {
     let dim = Style::new().add_modifier(Modifier::DIM);
     let bold = dim.add_modifier(Modifier::BOLD);
     let shown = format!(" /{alias}");
@@ -174,7 +171,7 @@ fn slash_row(row: &slash::Row, query: &str, name_w: usize, room: usize, focused:
     )];
     spans.extend(name_spans(&row.name, query, name_w));
     for alias in &row.aliases {
-        spans.extend(alias_spans(Some(alias), query));
+        spans.extend(alias_spans(alias, query));
     }
     spans.push(Span::raw(" ".to_owned()));
     let hint = row

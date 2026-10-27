@@ -505,7 +505,7 @@ fn alias_spans_bold_only_the_query() {
     let dim = Style::new().add_modifier(Modifier::DIM);
     let bold = dim.add_modifier(Modifier::BOLD);
     // Past the " /" prefix the query reads bold between dim ends.
-    let spans = alias_spans(Some("exit"), "exi");
+    let spans = alias_spans("exit", "exi");
     assert_eq!(
         spans
             .iter()
@@ -517,11 +517,9 @@ fn alias_spans_bold_only_the_query() {
     assert_eq!(spans[1].style, bold);
     assert_eq!(spans[2].style, dim);
     // No match: one dim span.
-    let spans = alias_spans(Some("exit"), "zzz");
+    let spans = alias_spans("exit", "zzz");
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].style, dim);
-    // No alias: no spans.
-    assert!(alias_spans(None, "exi").is_empty());
 }
 
 #[test]
