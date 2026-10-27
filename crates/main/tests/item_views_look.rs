@@ -17,6 +17,8 @@ mod support;
 
 use std::fs;
 use std::io::Write as _;
+use std::os::unix::process::CommandExt as _;
+use std::process::{Command, Stdio};
 
 use serde_json::json;
 use support::pty::{Colour, Grid, Run};
@@ -153,6 +155,11 @@ fn start_run(setup: &Setup) -> Run {
     run.ready();
     run.write(b"go\r");
     run
+}
+
+/// The job row, wherever the panel lays it out, or none before it draws.
+fn job_row_index(rows: &[String], command: &str) -> Option<usize> {
+    rows.iter().position(|row| row.contains(command))
 }
 
 /// The first row containing `needle`, or a panic naming it.
@@ -365,22 +372,64 @@ fn the_delegate_view_matches_the_doc() {
 }
 
 #[test]
+fn job_row_predicate_rejects_the_pre_expansion_grid() {
+    let command = "head -n 1 hold";
+    let pre_expansion = vec![
+        "Jobs                1 running ▸".to_owned(),
+        "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄".to_owned(),
+    ];
+    let old_predicate_accepted = pre_expansion
+        .iter()
+        .position(|row| row.contains("Jobs"))
+        .and_then(|title| pre_expansion.get(title + 1))
+        .is_some_and(|row| !row.trim().is_empty());
+
+    assert!(
+        old_predicate_accepted,
+        "the old predicate accepts this grid"
+    );
+    assert_eq!(job_row_index(&pre_expansion, command), None);
+}
+
+#[test]
+fn fifo_release_written_before_reader_opens_is_read() {
+    let setup = Setup::new();
+    let fifo = setup.workspace().join("hold");
+    fakes::fifo(&fifo);
+    let mut release = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .unwrap();
+
+    // Write the release before the reader opens the FIFO, and keep the
+    // O_RDWR end alive until it reads the line.
+    release.write_all(b"\n").unwrap();
+    let child = Command::new("head")
+        .arg("-n")
+        .arg("1")
+        .arg(&fifo)
+        .stdout(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let output = fakes::wait_output(child, "the FIFO reader to exit");
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"\n");
+}
+
+#[test]
 fn the_job_pty_view_matches_the_doc() {
     let (setup, release, _guard, command) = job_setup();
     let mut run = start_run(&setup);
-    // The Jobs card starts closed: its title toggles the list, whose
-    // one row is the held job directly below it. The row below the
-    // title must name the held command: any non-blank row would do
-    // while the card is still closed, and only the fold that draws this
-    // job's row assigns its click target, so the command names the
-    // ready target. The parent's turn completes before either click, so
-    // both rows' positions are final: the completed footer proves the
-    // turn is done, and the job parks on the test-held FIFO, so no
-    // further session event can move rows before either click. The
+    // The Jobs card starts closed; its title toggles the list. The
+    // completed turn is the session-event signal that makes the held
+    // command stable. The later grid predicate identifies that command's
+    // row, rather than accepting any non-blank row below the title. The
     // finished title never emits while an item is held, so the turn's
     // completion — not `turn_finished` — is the readiness signal here.
-    // No session event lands between the two clicks, only the first
-    // click's own expansion, so the second click rides the same signal.
+    // No session event lands between the two clicks; only the first
+    // click's own expansion changes the screen.
     let grid = run.wait_screen("the tty job starts", |grid| {
         grid.contents.contains("Jobs")
             && grid.contents.contains("Done.")
@@ -389,21 +438,11 @@ fn the_job_pty_view_matches_the_doc() {
     let title = row_with(&grid, "Jobs");
     click(&mut run, col_at(&grid, title, "Jobs"), title);
     let grid = run.wait_screen("the job row draws", |grid| {
-        grid.rows
-            .iter()
-            .position(|row| row.contains("Jobs"))
-            .and_then(|title| {
-                grid.rows
-                    .get(title + 1)
-                    .filter(|row| row.contains(command.as_str()))
-            })
-            .is_some()
+        job_row_index(&grid.rows, &command).is_some()
     });
-    let title = row_with(&grid, "Jobs");
-    let title_x = col_at(&grid, title, "Jobs");
-    let job = title + 1;
+    let job = job_row_index(&grid.rows, &command).unwrap() as u16;
     let (width, _) = grid.size();
-    let job_x = (title_x..width)
+    let job_x = (0..width)
         .find(|x| grid.cell(*x, job).symbol != " ")
         .unwrap_or_else(|| panic!("the job row in\n{}", grid.contents));
     click(&mut run, job_x, job);
