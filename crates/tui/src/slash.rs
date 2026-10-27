@@ -59,9 +59,10 @@ pub(crate) fn is_built_in(name: &str) -> bool {
 /// `commands`, the session's `commands` answer, in order, each with the
 /// hint and tag it gives. An
 /// extension row (`extension` set) named like a drawn built-in takes that
-/// row's slot, with its own description, hint and tag; one named like an
-/// alias takes only that alias off its row, leaving the row's other
-/// aliases; any other row named like a built-in is left out.
+/// row's slot, with its own description, hint and tag, and keeps its
+/// unclaimed aliases; one named like an alias takes only that alias off
+/// its row, leaving the row's other aliases; any other row named like a
+/// built-in is left out.
 pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
     let replacement = |name: &str| {
         commands
@@ -72,7 +73,11 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
         if let Some(command) = replacement(entry.name) {
             Row {
                 name: command.name.clone(),
-                aliases: Vec::new(),
+                aliases: aliases_of(entry.name)
+                    .iter()
+                    .filter(|alias| replacement(alias).is_none())
+                    .map(|alias| (*alias).to_owned())
+                    .collect(),
                 description: command.description.clone(),
                 hint: command.argument_hint.clone(),
                 tag: command.tag.clone(),

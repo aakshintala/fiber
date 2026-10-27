@@ -255,30 +255,22 @@ fn an_extension_named_like_jobs_takes_the_row() {
     // Only the extension's row shows the taken names: the built-in
     // row is gone (`docs/tui.md:1993`).
     assert_eq!(taken.len(), 1);
+    assert_eq!(taken[0].aliases, ["tasks", "ps"]);
     assert_eq!(taken[0].tag, "acme");
-    let mut app = attached();
-    answer_rows(
-        &mut app,
-        json!([{"name": "jobs", "description": "The jobs extension.",
-            "tag": "acme", "extension": true}]),
-    );
-    let lines = sent(run(&mut app, "/jobs"));
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "command");
-    assert_eq!(lines[0]["args"], json!({"name": "jobs"}));
-    assert!(!app.session_view_open());
-    // The unclaimed aliases still run the built-in command.
-    for command in ["/tasks", "/ps"] {
+    // Taking the canonical name takes its whole row: every alias sends the
+    // extension's command using its canonical name (`docs/tui.md:1993`).
+    for command in ["/jobs", "/tasks", "/ps"] {
         let mut app = attached();
         answer_rows(
             &mut app,
             json!([{"name": "jobs", "description": "The jobs extension.",
                 "tag": "acme", "extension": true}]),
         );
-        start_job(&mut app, "j_1");
-        assert_eq!(run(&mut app, command), Effect::None, "{command}");
-        let frame = app.session_view_screen(80).expect("the view is open");
-        assert_eq!(frame.title, "Running jobs", "{command}");
+        let lines = sent(run(&mut app, command));
+        assert_eq!(lines.len(), 1, "{command}");
+        assert_eq!(lines[0]["command"], "command", "{command}");
+        assert_eq!(lines[0]["args"], json!({"name": "jobs"}), "{command}");
+        assert!(!app.session_view_open(), "{command}");
     }
 }
 
@@ -319,6 +311,35 @@ fn an_extension_named_like_a_jobs_alias_takes_only_that_name() {
             assert_eq!(frame.title, "Running jobs", "{taken} {command}");
         }
     }
+}
+
+#[test]
+fn an_extension_named_like_an_alias_takes_precedence_over_jobs_row_aliases() {
+    let mut app = attached();
+    answer_rows(
+        &mut app,
+        json!([
+            {"name": "jobs", "description": "The jobs extension.",
+                "tag": "acme", "extension": true},
+            {"name": "tasks", "description": "The tasks extension.",
+                "tag": "acme", "extension": true}
+        ]),
+    );
+    let lines = sent(run(&mut app, "/tasks"));
+    assert_eq!(lines[0]["args"], json!({"name": "tasks"}));
+
+    let mut app = attached();
+    answer_rows(
+        &mut app,
+        json!([
+            {"name": "jobs", "description": "The jobs extension.",
+                "tag": "acme", "extension": true},
+            {"name": "tasks", "description": "The tasks extension.",
+                "tag": "acme", "extension": true}
+        ]),
+    );
+    let lines = sent(run(&mut app, "/ps"));
+    assert_eq!(lines[0]["args"], json!({"name": "jobs"}));
 }
 
 #[test]

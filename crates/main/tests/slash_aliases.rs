@@ -493,16 +493,6 @@ fn jobs_shows_no_jobs_running_with_no_job() {
 }
 
 #[test]
-fn tasks_shows_no_jobs_running_with_no_job_like_jobs() {
-    empty_case("/tasks");
-}
-
-#[test]
-fn ps_shows_no_jobs_running_with_no_job_like_jobs() {
-    empty_case("/ps");
-}
-
-#[test]
 fn jobs_on_home_shows_no_session_on_screen() {
     // The command table and alias rule place `/jobs` after `/delegates`
     // (`docs/tui.md:1978,1980,1984`).

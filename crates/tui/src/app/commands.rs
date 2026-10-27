@@ -738,12 +738,26 @@ impl App {
         let draft = draft.trim();
         let (head, rest) = draft.split_once(char::is_whitespace).unwrap_or((draft, ""));
         let name = head.strip_prefix('/')?;
-        if self.completion.extensions.iter().any(|known| known == name) {
+        let extension = self
+            .completion
+            .extensions
+            .iter()
+            .find(|known| known.as_str() == name)
+            .or_else(|| {
+                let entry = TABLE
+                    .iter()
+                    .find(|entry| aliases_of(entry.name).contains(&name))?;
+                self.completion
+                    .extensions
+                    .iter()
+                    .find(|known| known.as_str() == entry.name)
+            });
+        if let Some(extension) = extension {
             let rest = rest.trim();
             let args = if rest.is_empty() {
-                Some(json!({"name": name}))
+                Some(json!({"name": extension}))
             } else {
-                Some(json!({"name": name, "text": rest}))
+                Some(json!({"name": extension, "text": rest}))
             };
             return Some(self.send_command("command", args).0);
         }
