@@ -225,6 +225,10 @@ fn a_reader_past_its_deadline_ends() {
     let clock = Box::leak(Box::new(FakeClock::new()));
     let deadline = Deadline::on(&**clock);
     // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(support::WAITS + Duration::from_secs(1));
     assert!(deadline.left().is_zero());
     let (main, terminal) = pair();
@@ -640,6 +644,10 @@ fn until_hub_exits_with_panics_naming_what_when_the_hub_outlives_the_deadline() 
     let clock = Box::leak(Box::new(FakeClock::new()));
     let deadline = Deadline::on(&**clock);
     // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(
         support::WAITS
             .checked_sub(Duration::from_millis(100))

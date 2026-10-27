@@ -224,7 +224,12 @@ fn park_hang_ends_when_the_clock_reaches_the_deadline() {
         clock.await_parked(deadline, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker parks at its deadline before the advance"
     );
-    clock.advance(Duration::from_millis(100));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(100),
+        &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
+    );
     Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the park ends at its deadline");

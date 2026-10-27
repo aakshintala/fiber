@@ -241,6 +241,10 @@ fn authenticate_updates_last_connected() {
     let (token, _) = setup.pair("phone", 1);
     let before = setup.record("phone");
     // No code under test waits on the clock here; no idle runner or clock waiter exists in this direct API fixture (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     setup.clock.advance(Duration::from_secs(5));
     assert!(
         setup

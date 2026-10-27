@@ -693,6 +693,10 @@ fn an_accept_after_the_exit_claim_gets_eof_without_hello() {
     let timed: Arc<dyn Clock> = timed;
     let hub = crate::testkit::hub(&temp.dir, Arc::new(FakeStarter::hang(&temp.dir)), timed);
     // No code under test waits on the clock here; the move happens before hub.idle_wait runs, which then runs on the test's own thread with no other hub thread (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(IDLE);
     let stop = AtomicBool::new(false);
     assert!(matches!(

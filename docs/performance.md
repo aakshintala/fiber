@@ -69,7 +69,8 @@ a 20-thousand-token one fit the same ceiling.
 | Log bytes, 429-call turn | the turn's content plus 2 KiB per tool call | Linux x86_64 | exact | — | — | — | — | — |
 | Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked | 16 ms | 12 ms | 13 ms | 55 % | 9 % |
 | Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked | 7 ms | 8 ms | 11 ms | 18 % | 8 % |
-| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked | 1008 ms | 1101 ms | 1364 ms | 23 % | 4 % |
+| Terminal to its first frame, attaching | 50 ms | Linux x86_64 | picked | 50 ms | 50 ms | 50 ms | — | — |
+| Terminal attaching, to the end of the opening pass | 841 ms (1 MiB); 5,570 ms (10 MiB) | Linux x86_64 | measured | — | — | — | — | — |
 | Terminal, attaching a 10 MiB session | 45,512 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Session, memory kept after the busy turn | 16,176 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
 | Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |
@@ -124,9 +125,9 @@ Basis says where a number came from:
   benchmark replaces a "from components" or "picked" number with its measured
   one only where the measurement exceeds that number. Every other ceiling stays
   as it is, and a ceiling the measurement does not exceed keeps its basis. A
-  ceiling given as a formula, such as attaching's, stays picked: its benchmark
-  reports each measurement against the formula, and the timing gate for the
-  10 MiB fixture judges against the class ceiling instead.
+  ceiling given as a formula stays picked. Attaching's first-frame ceiling
+  stays at the approved flat 50 ms for both own-log fixtures, independent
+  of base measurements.
 
 The class columns hold the timing gates per runner speed class, keyed by CPU
 model strings matched case-insensitively. A model's class is the slowest
@@ -138,22 +139,17 @@ Platinum 8370C CPU @ 2.80GHz` (2 stored files, advisory); the slow class is
 (1 stored file) has no class, and any other model, an empty string or a missing
 CPU is unknown: all stay advisory, and the comment says why. A model gates
 only with at least 5 stored files; turning another model on later is a pull
-request that adds its rows. The attaching row's class columns judge only the
-10 MiB fixture; the 1 MiB fixture stays advisory until #1546 lands a fix or a
-re-ruled ceiling. Rows that are not absolute timings carry `—` in these
-columns, and the ordinary Ceiling cell stays as advisory reference data.
+request that adds its rows. Rows that are not absolute timings carry `—` in these
+columns, and the ordinary Ceiling cell stays as advisory reference data. A new timing row's class cells carry `—` until a model has at least 5 stored files carrying its metric. A row whose ceiling the owner ruled as a flat number carries that number in every class cell from the start, and its tolerance cells carry `—` until the same 5 files exist.
 
-Each class ceiling is the maximum individual stored sample for that metric
-across every model in the class, rounded upward to the next whole
+Except for owner-ruled flat ceilings, each class ceiling is the maximum stored
+sample for that metric across every model in the class, rounded up to the next whole
 millisecond, so it covers every stored sample as well as every per-file
 median. Each tolerance is `100 * (maximum per-file median / minimum per-file
 median - 1)` for the gated model and row, rounded upward to a whole percent:
 fast uses 9V45, slow uses 7763 only, so the advisory 9V74 never widens 7763's
 tolerance. A per-file median under the 1 ms quantum counts as 1 ms,
 so a zero median never divides the tolerance. Middle has no tolerance because no middle model gates. The fast
-attaching ceiling and tolerance are pinned by a test against the 10 MiB
-samples of the fast class's stored files
-(`xtask/tests/class_data/9v45-attach-10mib.json`). The fast
 session_list ceiling and tolerance are pinned by a test against the
 plain-number samples of the fast class's stored files
 (`xtask/tests/class_data/9v45-session-list.json`). `scripts/class-data`
@@ -225,9 +221,10 @@ frameworks Fiber does not control. Listing with a cold cache is reported,
 never gated. Listing is timed from spawning `fiber sessions --json` in a git
 repository whose project holds 1,000 exited sessions to its output closing,
 with the hub running and one listing before the timed ones. Attaching is timed
-from spawning `fiber resume <id>` in a pseudo-terminal to the session's last
-reply on screen, for a live, idle session whose log is 1 MiB and one whose log
-is 10 MiB, with the hub running. The same run records the attaching terminal's
+twice from spawning `fiber resume <id>` in a pseudo-terminal, for a live, idle session whose log is 1 MiB and one whose log
+is 10 MiB, with the hub running: to the session's last
+reply on screen, which is the first frame, and to the scroll bar, which is the
+pass end. The same run records the attaching terminal's
 peak RSS and its RssAnon 10 s after the last reply appears, for the 10 MiB
 session; the busy turn records its session's RssAnon 10 s after the turn
 completes. The same run splits each attach into stages,
@@ -298,15 +295,24 @@ max/min median spreads range from 3.22% to 55.83%: session start spans 8.47%
 on 7763 and 54.37% on 9V45, listing spans 12.43% and 20.71% respectively, so
 each row carries its own tolerance in the table. Budgeted numeric memory-row
 medians across these files vary by about 1.0% to 7.0% depending on workload:
-busy peak RSS spans 1.31% and web_fetch peak RSS 6.98%. A timing gate fails
+busy peak RSS spans 1.31% and web_fetch peak RSS 6.98%. An ordinary timing gate fails
 only when the median is over its class's ceiling and over the base commit's
 median from the same job by more than that tolerance, measured in the same
 job on the same runner, and its author may raise the ceiling as
-above. A model with fewer than 5 stored runs, an unknown CPU model, the
-attach 1 MiB row and any row without a comparable same-job base timing stay
-advisory, and the comment says why. Attach 1 MiB stays advisory until #1546
-lands a fix or a re-ruled ceiling. A benchmark's
-own self-check failing is a failed run, not a slow sample.
+above. A model with fewer than 5 stored runs, an unknown CPU model and any row without a comparable same-job base timing stay
+advisory, and the comment says why. Attaching's warm first-frame row is
+an exception: on eligible fast and slow models, each 1 MiB and 10 MiB
+own-log fixture fails if its median exceeds 50 ms. This hard ceiling holds
+with no base, a failed base, a missing or malformed base metric, a different
+base CPU, and any faster or slower base median or numeric tolerance.
+Middle, unknown and few-run models stay advisory. The opening-pass-end row
+stays advisory reference data, with no timing gate. Each over-ceiling fixture
+produces one named failure; malformed attach data fails without duplicating errors.
+A numeric first-frame tolerance also fails a fixture whose median exceeds its
+comparable base median by that tolerance, even below 50 ms. Either breach
+fails the fixture once; `—` disables only this relative comparison. Without
+a usable comparable base, only the absolute bound can fail the fixture.
+A benchmark's own self-check failing is a failed run, not a slow sample.
 
 At each release, every ceiling more than twice its measured value drops to
 measured times two. Ceilings never rise at release; only a pull request

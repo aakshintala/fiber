@@ -1705,6 +1705,10 @@ fn a_command_whose_write_to_the_exiting_relay_fails_follows_the_rerouted_one() {
         .expect("the second command is queued");
     release_tx.send(()).unwrap_or(());
     // No code under test waits on the clock here; no reach wait at the move: crates/hub/src/resume.rs:132 is not reached, so the advance is dead (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     temp.clock.advance(HELD_POLL);
     assert_eq!(client.acknowledged("the reply"), "c_1");
     assert_eq!(client.acknowledged("the steer"), "c_2");
