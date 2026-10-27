@@ -55,6 +55,7 @@ mod config_views;
 #[path = "copy.rs"]
 pub(crate) mod copy;
 mod delegates;
+pub(crate) mod doctor_view;
 mod drag;
 mod find;
 #[path = "app_focus.rs"]

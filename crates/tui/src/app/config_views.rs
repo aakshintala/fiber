@@ -14,7 +14,7 @@ use contract::events::{CommandAccepted, CommandRejected, CommandResult};
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
 
-use super::{App, Effect};
+use super::{App, Effect, doctor_view};
 use crate::ThemeSetting;
 use crate::configure::{Configure, ConfigureError, Layer, Saved};
 use crate::keys::{Edit, Key};
@@ -25,7 +25,7 @@ use crate::mcp_view::Mcp;
 use crate::rules_view::Rules;
 use crate::settings_view::{Act, BUILT_IN_THEMES, Ctx, Settings, THEME};
 use crate::skills_view::Skills;
-use crate::swapped::{Frame, Ink, List, Spot};
+use crate::swapped::{Frame, List, Spot};
 use crate::tools_view::Tools;
 
 /// What a view says when the terminal was given no seam.
@@ -76,7 +76,7 @@ enum Open {
     /// `/credential`.
     Credential(credential::Picker),
     /// `/doctor`: the scrolled list and the snapshot lines.
-    Doctor(List, Vec<String>),
+    Doctor(doctor_view::Doctor),
     /// A view with no seam to read through, by its title and the
     /// command that opened it.
     Unavailable(&'static str, &'static str),
@@ -344,10 +344,7 @@ impl App {
             (_, ConfigView::Doctor) => match self.config_views.doctor.clone() {
                 None => Open::Unavailable("Doctor", "/doctor"),
                 Some(reader) => match reader() {
-                    Ok(report) => {
-                        let lines: Vec<String> = report.lines().map(str::to_owned).collect();
-                        Open::Doctor(List::default(), lines)
-                    }
+                    Ok(report) => Open::Doctor(doctor_view::Doctor::open(&report)),
                     Err(text) => {
                         self.push_notice("io_failed", text);
                         return Effect::None;
@@ -520,16 +517,9 @@ impl App {
         }
         // `/doctor` shows a local snapshot through no seam: Esc and
         // scrolling never reach the configure seam or a workspace.
-        if matches!(self.config_views.open, Some(Open::Doctor(..))) {
-            if *key == Key::Esc {
-                return Some(self.config_act(Act::Close));
-            }
-            if let Some(Open::Doctor(list, lines)) = &mut self.config_views.open {
-                let frame = doctor_frame(lines.as_slice(), *list);
-                let shown = crate::swapped::rows_height(&frame, height);
-                list.key(key, frame.rows.len(), shown);
-            }
-            return Some(Effect::None);
+        if let Some(Open::Doctor(doctor)) = &mut self.config_views.open {
+            let act = doctor.key(key, height);
+            return Some(self.config_act(act));
         }
         let act = match self.config_views.seam.clone() {
             Some(seam) => {
@@ -846,7 +836,7 @@ impl App {
             Open::Skills(skills) => skills.frame(self.config_view_height()),
             Open::Mcp(mcp) => mcp.frame(usage),
             Open::Credential(picker) => picker.frame(),
-            Open::Doctor(list, lines) => doctor_frame(lines, *list),
+            Open::Doctor(doctor) => doctor.frame(),
             Open::Rules(rules) => rules.frame(self.config_view_width(), self.motion().wall_ms()),
             Open::Login(_) => return None,
             // `/logout` draws its own overlay, as `/login` does.
@@ -1062,25 +1052,6 @@ impl App {
     }
 }
 
-/// The `/doctor` view's frame: the title and the command that opened
-/// it, one plain row per snapshot line, no lines below, no field, and
-/// no footer keys, like the status view. Each row's target comes from
-/// the shared renderer, and a click on one stays.
-fn doctor_frame(lines: &[String], list: List) -> Frame {
-    Frame {
-        title: "Doctor".to_owned(),
-        command: "/doctor".to_owned(),
-        rows: lines
-            .iter()
-            .map(|line| vec![(line.clone(), None, Ink::Plain)])
-            .collect(),
-        list,
-        below: Vec::new(),
-        field: None,
-        footer: String::new(),
-    }
-}
-
 /// A view with nothing to show closes on Esc and does nothing else.
 fn esc(key: &Key) -> Act {
     if *key == Key::Esc {
@@ -1109,3 +1080,7 @@ mod skills_tests;
 #[cfg(test)]
 #[path = "config_mcp_tests.rs"]
 mod mcp_tests;
+
+#[cfg(test)]
+#[path = "doctor_view_tests.rs"]
+mod doctor_tests;
