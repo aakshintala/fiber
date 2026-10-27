@@ -42,14 +42,6 @@ fn terminal(setup: &Setup) -> Run {
 /// A setup whose `/rules` view lists one standing rule.
 fn rules_setup() -> Setup {
     let setup = Setup::new();
-    write_json(
-        &setup.workspace().join("s.json"),
-        &json!({"steps": [{"text": ["Done."]}]}),
-    );
-    write_json(
-        &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 0}}),
-    );
     fs::write(
         setup.home().join("rules"),
         format!(

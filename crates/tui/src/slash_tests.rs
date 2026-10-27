@@ -145,9 +145,8 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         .iter()
         .filter(|name| !table_names().contains(name))
         .collect();
-    // Membership only: no doc promises this registry order; the page
-    // promises the `/` list's display order (`docs/tui.md:1953`). This
-    // terminal draws `rewind` among the built-in rows.
+    // This terminal draws `rewind` among the built-in rows.
+    // Registry order is internal; compare membership only.
     extra.sort();
     let mut wanted = [
         &"effort",
@@ -164,9 +163,10 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         &"bug",
     ];
     wanted.sort();
+    // The table enumerates the complete alias set (`docs/tui.md:1919–1949,1957`).
     assert_eq!(extra, wanted);
-    // Every alias is a contract name, so an extension or a skill cannot
-    // take it unannounced.
+    // An extension or skill named like an alias cannot take it silently
+    // (`docs/tui.md:1966`).
     for alias in TABLE
         .iter()
         .flat_map(|entry| alias_of(entry.name).iter().copied())
