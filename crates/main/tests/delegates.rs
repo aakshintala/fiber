@@ -4725,136 +4725,185 @@ const STEER_PARENT_DURABLE: &[&str] = &[
 
 #[test]
 fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
-    let setup = support::Setup::new();
-    let _guard = arm(&setup);
-    let parent = ProviderServer::start_responding(answering(
-        support::stream(&[spawn_call("fiber:pb/m")]),
-        text_reply("allow"),
-        "call_message",
-        |job| {
-            support::stream(&[function_call(
-                "call_message",
-                "delegate_message",
-                &json!({"id": job, "message": MARK}),
-            )])
-        },
-        support::hello(),
-    ))
-    .unwrap();
-    parent.hold();
-    let child = ProviderServer::start([text_reply("first"), text_reply("after-steer")]).unwrap();
-    child.hold();
-    providers(&setup, &parent, &child);
-    standing_allow(&setup);
-    slow_idle(&setup);
+    for missing_workspace in [false, true] {
+        let setup = support::Setup::new();
+        let _guard = arm(&setup);
+        let workspace_root = fakes::TempDir::new("live-child");
+        let workspace = workspace_root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let spawn = if missing_workspace {
+            function_call(
+                "call_spawn",
+                "delegate_spawn",
+                &json!({"description":"scan", "prompt":"scan", "model":"fiber:pb/m", "workspace":workspace}),
+            )
+        } else {
+            spawn_call("fiber:pb/m")
+        };
+        let parent = ProviderServer::start_responding(answering(
+            support::stream(&[spawn]),
+            text_reply("allow"),
+            "call_message",
+            |job| {
+                support::stream(&[function_call(
+                    "call_message",
+                    "delegate_message",
+                    &json!({"id": job, "message": MARK}),
+                )])
+            },
+            support::hello(),
+        ))
+        .unwrap();
+        parent.hold();
+        let child =
+            ProviderServer::start([text_reply("first"), text_reply("after-steer")]).unwrap();
+        child.hold();
+        providers(&setup, &parent, &child);
+        standing_allow(&setup);
+        slow_idle(&setup);
 
-    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
-    assert!(
-        parent.await_requests(1, setup.deadline),
-        "the spawn call was requested"
-    );
-    parent.release_one();
-    assert!(
-        parent.await_requests(2, setup.deadline),
-        "the verdict was requested"
-    );
-    parent.release_one();
-    assert!(
-        child.await_requests(1, setup.deadline),
-        "the delegate's first step is in flight"
-    );
-    parent.release();
-    // The delta proves the steer reached the delegate's inbox: the probe
-    // is answered once the delegate's reader queued the message, and the
-    // steer joins at the step boundary after the released reply. A held
-    // stream is no admission point, so the run is released only after it.
-    let mut job = String::new();
-    running.wait_line("the queued delta", |line| {
-        if line["kind"] == "delegate_started" {
-            job = line["payload"]["job_id"].as_str().unwrap().to_owned();
+        let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+        assert!(
+            parent.await_requests(1, setup.deadline),
+            "the spawn call was requested"
+        );
+        parent.release_one();
+        assert!(
+            parent.await_requests(2, setup.deadline),
+            "the verdict was requested"
+        );
+        parent.release_one();
+        assert!(
+            child.await_requests(1, setup.deadline),
+            "the delegate's first step is in flight"
+        );
+        if missing_workspace {
+            fs::rename(&workspace, workspace.with_extension("moved")).unwrap();
         }
-        !job.is_empty()
-            && line["kind"] == "tool_call_delta"
-            && line["payload"]["text"].as_str()
-                == Some(&format!(
-                    "Queued for delegate {job}; it joins at the delegate's next step boundary."
-                ))
-    });
-    child.release_one();
-    assert!(
-        child.await_requests(2, setup.deadline),
-        "the delegate's second model call after the steer"
-    );
-    let mut ended = 0;
-    running.wait_line("the call's and ending notice's turn ends", |line| {
-        ended += usize::from(line["kind"] == "turn_completed");
-        ended == 2
-    });
-    child.release();
-    let (status, lines, stderr) = running.wait();
-    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+        parent.release();
+        // The delta proves the steer reached the delegate's inbox: the probe
+        // is answered once the delegate's reader queued the message, and the
+        // steer joins at the step boundary after the released reply. A held
+        // stream is no admission point, so the run is released only after it.
+        let mut job = String::new();
+        running.wait_line("the queued delta", |line| {
+            if line["kind"] == "delegate_started" {
+                job = line["payload"]["job_id"].as_str().unwrap().to_owned();
+            }
+            !job.is_empty()
+                && line["kind"] == "tool_call_delta"
+                && line["payload"]["text"].as_str()
+                    == Some(&format!(
+                        "Queued for delegate {job}; it joins at the delegate's next step boundary."
+                    ))
+        });
+        if missing_workspace {
+            fs::rename(workspace.with_extension("moved"), &workspace).unwrap();
+        }
+        child.release_one();
+        assert!(
+            child.await_requests(2, setup.deadline),
+            "the delegate's second model call after the steer"
+        );
+        let mut ended = 0;
+        running.wait_line("the call's and ending notice's turn ends", |line| {
+            ended += usize::from(line["kind"] == "turn_completed");
+            ended == 2
+        });
+        child.release();
+        let (status, lines, stderr) = running.wait();
+        assert_eq!(status.code(), Some(0), "stderr: {stderr}");
 
-    assert!(!job.is_empty(), "the run started a delegate");
-    let bodies: Vec<String> = child
-        .requests()
-        .iter()
-        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
-        .collect();
-    assert_eq!(bodies.len(), 2, "{bodies:?}");
-    assert!(
-        !bodies[0].contains(MARK),
-        "the first call predates the steer"
-    );
-    assert!(bodies[1].contains(MARK), "the steer joined the next call");
-    let delegate_id = lines
-        .iter()
-        .find(|line| line["kind"] == "delegate_started")
-        .unwrap()["payload"]["delegate_session_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let child_lines = read_lines(&ask_sessions(&setup).join(&delegate_id).join("events.jsonl"));
-    assert_eq!(durable_kinds(&child_lines), DELEGATE_DURABLE);
-    let applied = one(&child_lines, "steering_applied");
-    assert_eq!(applied["source"], "driver");
-    assert!(
-        serde_json::to_string(&applied["content"])
+        assert!(!job.is_empty(), "the run started a delegate");
+        let bodies: Vec<String> = child
+            .requests()
+            .iter()
+            .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+            .collect();
+        // docs/delegates.md, "Talking to a delegate": steering joins the next step;
+        // docs/loop.md, "One step": each fixture tool reply takes one further request.
+        assert_eq!(bodies.len(), 2, "{bodies:?}");
+        assert!(
+            !bodies[0].contains(MARK),
+            "the first call predates the steer"
+        );
+        assert!(bodies[1].contains(MARK), "the steer joined the next call");
+        let delegate_id = lines
+            .iter()
+            .find(|line| line["kind"] == "delegate_started")
+            .unwrap()["payload"]["delegate_session_id"]
+            .as_str()
             .unwrap()
-            .contains(MARK),
-        "{applied}"
-    );
-    let completed = completed_for(&lines, "delegate_message");
-    assert_eq!(completed["payload"]["status"], "completed");
-    assert_eq!(
-        completed["payload"]["content"][0]["text"],
-        format!("Steered delegate {job}: the message joins its turn at its next step boundary.")
-    );
-    let action = completed["action_id"].as_str().unwrap();
-    let started = lines
-        .iter()
-        .find(|line| line["kind"] == "tool_call_started" && line["action_id"] == action)
-        .unwrap();
-    assert_eq!(started["payload"]["effects"], json!(["executes"]));
-    assert_eq!(started["payload"]["reversible"], false);
-    assert!(
-        started["payload"]
-            .get("always_reviewed")
-            .is_none_or(|flag| flag == &json!(true)),
-        "{started}"
-    );
-    let resolved = lines
-        .iter()
-        .find(|line| line["kind"] == "permission_resolved" && line["action_id"] == action)
-        .unwrap();
-    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
-    for kind in ["job_started", "job_completed"] {
-        let found: Vec<&Value> = lines.iter().filter(|line| line["kind"] == kind).collect();
-        assert_eq!(found.len(), 1, "{kind} wrote {:?}", owned_kinds(&lines));
-        assert_eq!(found[0]["payload"]["job_id"], job.as_str());
+            .to_owned();
+        let sessions = if missing_workspace {
+            log::sessions_dir(&setup.home(), &doors::project(&workspace))
+        } else {
+            ask_sessions(&setup)
+        };
+        let child_lines = read_lines(&sessions.join(&delegate_id).join("events.jsonl"));
+        // docs/events.md, "Kinds", defines these lines; cross-trigger order is open.
+        assert_eq!(
+            durable_kinds(&child_lines)
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            DELEGATE_DURABLE
+                .iter()
+                .map(|kind| (*kind).to_owned())
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        let applied = one(&child_lines, "steering_applied");
+        assert_eq!(applied["source"], "driver");
+        assert!(
+            serde_json::to_string(&applied["content"])
+                .unwrap()
+                .contains(MARK),
+            "{applied}"
+        );
+        let completed = completed_for(&lines, "delegate_message");
+        assert_eq!(completed["payload"]["status"], "completed");
+        assert_eq!(
+            completed["payload"]["content"][0]["text"],
+            format!(
+                "Steered delegate {job}: the message joins its turn at its next step boundary."
+            )
+        );
+        let action = completed["action_id"].as_str().unwrap();
+        let started = lines
+            .iter()
+            .find(|line| line["kind"] == "tool_call_started" && line["action_id"] == action)
+            .unwrap();
+        assert_eq!(started["payload"]["effects"], json!(["executes"]));
+        assert_eq!(started["payload"]["reversible"], false);
+        assert!(
+            started["payload"]
+                .get("always_reviewed")
+                .is_none_or(|flag| flag == &json!(true)),
+            "{started}"
+        );
+        let resolved = lines
+            .iter()
+            .find(|line| line["kind"] == "permission_resolved" && line["action_id"] == action)
+            .unwrap();
+        assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+        for kind in ["job_started", "job_completed"] {
+            let found: Vec<&Value> = lines.iter().filter(|line| line["kind"] == kind).collect();
+            // docs/delegates.md, "Identity and resume": one start/completion per run.
+            assert_eq!(found.len(), 1, "{kind} wrote {:?}", owned_kinds(&lines));
+            assert_eq!(found[0]["payload"]["job_id"], job.as_str());
+        }
+        let finished = one(&lines, "delegate_finished");
+        assert_eq!(finished["text"], "after-steer");
+        // docs/events.md, "Kinds", defines these lines; cross-trigger order is open.
+        assert_eq!(
+            durable_kinds(&without_copies(&lines))
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            STEER_PARENT_DURABLE
+                .iter()
+                .map(|kind| (*kind).to_owned())
+                .collect::<std::collections::BTreeSet<_>>()
+        );
     }
-    let finished = one(&lines, "delegate_finished");
-    assert_eq!(finished["text"], "after-steer");
-    assert_eq!(durable_kinds(&without_copies(&lines)), STEER_PARENT_DURABLE);
 }
 
 /// The resume message carried to the delegate's second run: unique to it,
@@ -4956,6 +5005,210 @@ const RESUME_PARENT_DURABLE: &[&str] = &[
     "turn_completed",
     "fiber_exited",
 ];
+
+#[test]
+fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
+    for mode in [
+        "kept",
+        "removed-clean",
+        "removed-dirty",
+        "missing-repository",
+        "no-record-missing",
+        "no-record-missing-git-subworkspace",
+    ] {
+        let setup = support::Setup::new();
+        let _guard = arm(&setup);
+        support::git(setup.deadline, setup.root.path(), &["init"]);
+        support::git(
+            setup.deadline,
+            setup.root.path(),
+            &["commit", "--allow-empty", "-m", "parent"],
+        );
+        let selected_root = fakes::TempDir::new("selected-project");
+        let repository = selected_root.path().join("repository");
+        fs::create_dir(&repository).unwrap();
+        let isolated = !mode.starts_with("no-record-missing");
+        if isolated || mode == "no-record-missing-git-subworkspace" {
+            support::git(setup.deadline, &repository, &["init"]);
+            support::git(
+                setup.deadline,
+                &repository,
+                &["commit", "--allow-empty", "-m", "child"],
+            );
+        }
+        let workspace = if mode == "no-record-missing-git-subworkspace" {
+            let path = repository.join("subworkspace");
+            fs::create_dir(&path).unwrap();
+            path
+        } else {
+            repository.clone()
+        };
+        let sessions = log::sessions_dir(&setup.home(), &doors::project(&workspace));
+        let worktrees = sessions.parent().unwrap().join("worktrees");
+        let selected = workspace.clone();
+        let selected_repository = repository.clone();
+        let selected_worktrees = worktrees.clone();
+        let deadline = setup.deadline;
+        let parent = ProviderServer::start_responding(move |request: &Request| {
+            let text = String::from_utf8_lossy(&request.body);
+            if !text.contains(r#""name":"delegate_spawn""#) { return text_reply("allow"); }
+            if text.contains("call_resume") { return support::hello(); }
+            if text.contains("run-one-done") {
+                if mode.starts_with("removed") || mode == "missing-repository" {
+                    assert!(!fs::read_dir(&selected_worktrees).unwrap().any(|entry| entry.unwrap().path().is_dir()), "the first clean run removed its worktree");
+                    support::git(deadline, &selected, &["commit", "--allow-empty", "-m", "new HEAD"]);
+                }
+                if mode == "missing-repository" || mode.starts_with("no-record-missing") {
+                    fs::rename(&selected_repository, selected_repository.with_extension("moved")).unwrap();
+                }
+                return support::stream(&[function_call("call_resume", "delegate_message", &json!({"id":job_id(&text), "message":RESUME_MARK}))]);
+            }
+            if text.contains("Started delegate") { return support::hello(); }
+            support::stream(&[function_call("call_spawn", "delegate_spawn", &json!({"description":"scan", "prompt":"scan child", "model":"fiber:pb/m", "workspace":selected, "isolation":if isolated {"worktree"} else {"none"}}))])
+        }).unwrap();
+        let child_worktrees = worktrees.clone();
+        let child_repository = workspace;
+        let child = ProviderServer::start_responding(move |request: &Request| {
+            let resumed = String::from_utf8_lossy(&request.body).contains(RESUME_MARK);
+            let path = if isolated {
+                fs::read_dir(&child_worktrees)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .find(|path| path.is_dir())
+                    .unwrap()
+            } else {
+                child_repository.clone()
+            };
+            if mode == "kept"
+                || mode.starts_with("no-record-missing")
+                || (resumed && mode == "removed-dirty")
+            {
+                fs::write(path.join("kept.txt"), "dirty fixture").unwrap();
+            }
+            if resumed && mode.starts_with("removed") {
+                assert_eq!(
+                    support::git(deadline, &path, &["rev-parse", "HEAD"]),
+                    support::git(deadline, &child_repository, &["rev-parse", "HEAD"])
+                );
+            }
+            text_reply(if resumed {
+                "run-two-done"
+            } else {
+                "run-one-done"
+            })
+        })
+        .unwrap();
+        child.hold();
+        providers(&setup, &parent, &child);
+        standing_allow(&setup);
+        slow_idle(&setup);
+        let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+        let mut ended = 0;
+        running.wait_line("initial parent turns finish", |line| {
+            ended += usize::from(line["kind"] == "turn_completed");
+            ended == 2
+        });
+        child.release_one();
+        let fails = mode == "missing-repository" || mode.starts_with("no-record-missing");
+        let requested = fails || child.await_requests(2, setup.deadline);
+        child.release();
+        assert!(requested, "{mode}: the resumed child's request");
+        let (status, lines, stderr) = running.wait();
+        assert_eq!(status.code(), Some(0), "{mode}: {stderr}");
+        let started = &lines
+            .iter()
+            .find(|line| line["kind"] == "delegate_started")
+            .unwrap()["payload"];
+        let child_id = started["delegate_session_id"].as_str().unwrap();
+        let path = PathBuf::from(started["workspace"].as_str().unwrap());
+        let child_lines = read_lines(&sessions.join(child_id).join("events.jsonl"));
+        let completed = completed_for(&lines, "delegate_message");
+        if fails {
+            assert_eq!(
+                completed["payload"]["error"]["code"], "io_failed",
+                "{mode}: {completed}"
+            );
+            assert!(
+                completed["payload"]["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains(path.to_str().unwrap())
+            );
+            if mode == "missing-repository" {
+                assert!(
+                    completed["payload"]["error"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains(repository.join(".git").to_str().unwrap())
+                );
+            }
+            // docs/delegates.md, "Worktrees": missing workspace fails before launch;
+            // docs/events.md, "fiber_started": one line per process, not per message.
+            assert_eq!(child.requests().len(), 1);
+            assert_eq!(
+                child_lines
+                    .iter()
+                    .filter(|line| line["kind"] == "fiber_started")
+                    .count(),
+                1
+            );
+        } else {
+            assert_eq!(
+                completed["payload"]["status"], "completed",
+                "{mode}: {completed}"
+            );
+            // docs/delegates.md, "Identity and resume": resume continues the session;
+            // docs/loop.md, "One step": each text-only fixture reply ends its run.
+            assert_eq!(child.requests().len(), 2);
+            let process_starts: Vec<_> = child_lines
+                .iter()
+                .filter(|line| line["kind"] == "fiber_started")
+                .collect();
+            // docs/events.md, "fiber_started": one per process; resume starts a new run
+            // (docs/delegates.md, "Identity and resume" and "Lifetime").
+            assert_eq!(process_starts.len(), 2, "{mode}");
+            assert_eq!(
+                one(&child_lines, "session_started")["workspace"],
+                started["workspace"]
+            );
+            let seqs: Vec<_> = child_lines
+                .iter()
+                .map(|line| line["seq"].as_u64().unwrap())
+                .collect();
+            // docs/events.md, "The envelope": seq is contiguous, never reset or reused.
+            assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]), "{seqs:?}");
+            for kind in [
+                "job_started",
+                "delegate_started",
+                "job_completed",
+                "delegate_finished",
+            ] {
+                let records: Vec<_> = lines.iter().filter(|line| line["kind"] == kind).collect();
+                // docs/delegates.md, "Identity and resume" and "Events": one pair
+                // of job/delegate start and finish lines per run.
+                assert_eq!(records.len(), 2, "{mode}: {kind}");
+                assert!(
+                    records
+                        .iter()
+                        .all(|record| record["payload"]["job_id"] == started["job_id"])
+                );
+            }
+            assert_eq!(
+                path.exists(),
+                mode != "removed-clean",
+                "{mode}: cleanup follows session rules"
+            );
+            let finishes: Vec<_> = lines
+                .iter()
+                .filter(|line| line["kind"] == "delegate_finished")
+                .collect();
+            assert_eq!(
+                finishes[1]["payload"]["worktree"]["path"],
+                started["worktree"]["path"]
+            );
+        }
+    }
+}
 
 #[test]
 fn delegate_message_resumes_a_finished_delegate_as_a_second_run_of_the_same_job() {
@@ -6146,13 +6399,13 @@ fn a_finished_delegate_opens_its_replayed_view_from_a_click_and_from_enter() {
     });
     quit(run);
 }
-/// A `delegate_spawn` call starting scan `name`: one per delegate, each
-/// with its own call id and description.
-fn spawn_scan(name: &str) -> Value {
+/// A `delegate_spawn` call starting scan `name` on `model`: one per
+/// delegate, each with its own call id and description.
+fn spawn_scan(name: &str, model: &str) -> Value {
     function_call(
         &format!("call_{name}"),
         "delegate_spawn",
-        &json!({"description": format!("scan {name}"), "prompt": format!("run scan {name}"), "model": "fiber:pb/m"}),
+        &json!({"description": format!("scan {name}"), "prompt": format!("run scan {name}"), "model": model}),
     )
 }
 
@@ -6166,17 +6419,27 @@ fn delegates_list_header(grid: &Grid) -> bool {
 fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     let setup = support::Setup::new();
     let _guard = arm(&setup);
-    // The gate holds every child's first model answer until the test
-    // releases it: nothing can finish before the running assertions run,
-    // and every wait below still ends on a grid predicate with its own
-    // deadline, never on this gate.
-    // The test owns the release sender: dropping it releases every held
-    // child at once, and a failure before the release drops it too, so
-    // the server can always shut down instead of hanging a responder
-    // (docs/testing.md, "Waits and timeouts").
-    let (release, release_rx) = mpsc::channel::<()>();
-    let release_rx = Arc::new(Mutex::new(release_rx));
-    let child_gate = Arc::clone(&release_rx);
+    // A gate per child model: every child holds its model answer until
+    // the test releases that model's gate, so nothing finishes before the
+    // running assertions run, and the test can finish the early pair
+    // while still holding the late one. Every wait below still ends on a
+    // grid predicate with its own deadline, never on a gate.
+    // The test owns both release senders: dropping one releases every
+    // holder on its gate at once, and a failure before a release drops
+    // them too, so the servers can always shut down instead of hanging a
+    // responder (docs/testing.md, "Waits and timeouts").
+    let (release_early, release_early_rx) = mpsc::channel::<()>();
+    let release_early_rx = Arc::new(Mutex::new(release_early_rx));
+    let early_gate = Arc::clone(&release_early_rx);
+    let (release_late, release_late_rx) = mpsc::channel::<()>();
+    let release_late_rx = Arc::new(Mutex::new(release_late_rx));
+    let late_gate = Arc::clone(&release_late_rx);
+    // A late arrival announces itself: the test drops the early gate only
+    // after one late child request reaches its server, while that server's
+    // gate stays shut. Arrival plus a shut gate proves the late pair
+    // cannot finish before the early pair does; no signal claims a parked
+    // state (docs/code-quality.md, "What a reviewer checks").
+    let (arrived_tx, arrived_rx) = mpsc::channel::<()>();
     // The parent spawns four delegates from one reply, exactly once: a
     // later request echoing the calls answers over, never respawns.
     let spawned = Arc::new(AtomicBool::new(false));
@@ -6192,23 +6455,47 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
             return support::hello();
         }
         support::stream(&[
-            spawn_scan("one"),
-            spawn_scan("two"),
-            spawn_scan("three"),
-            spawn_scan("four"),
+            spawn_scan("one", "fiber:pb/m"),
+            spawn_scan("two", "fiber:pb/m"),
+            spawn_scan("three", "fiber:pc/m"),
+            spawn_scan("four", "fiber:pc/m"),
         ])
     })
     .unwrap();
-    let child = ProviderServer::start_responding(move |_: &Request| {
-        // Held until the test drops the release sender: no deadline of
+    // The early pair answers once its gate drops; the late pair holds
+    // until its own gate drops, announcing each arrival first. The
+    // responder runs under its server's lock, so the first late arrival
+    // announces while the other late child still runs, queued behind that
+    // lock; the wait below reads the arrival as arrival, never as parked.
+    let child_early = ProviderServer::start_responding(move |_: &Request| {
+        // Held until the test drops the early sender: no deadline of
         // its own. The grid waits below bound the test, and the dropped
         // sender releases every holder at once.
-        let gate = child_gate.lock().unwrap();
+        let gate = early_gate.lock().unwrap();
         let _released = gate.recv();
         text_reply(CHILD_TEXT)
     })
     .unwrap();
-    providers(&setup, &parent, &child);
+    let child_late = ProviderServer::start_responding(move |_: &Request| {
+        // Arrival, announced after the state it names: serve() records the
+        // request before the responder runs, and the shut gate below is
+        // what holds the late pair. The receiver outlives the servers, so
+        // this never fails: a failure is the test's, as the module header
+        // allows.
+        arrived_tx.send(()).unwrap();
+        let gate = late_gate.lock().unwrap();
+        let _released = gate.recv();
+        text_reply(CHILD_TEXT)
+    })
+    .unwrap();
+    providers(&setup, &parent, &child_early);
+    install_url(
+        &setup,
+        "pc",
+        &child_late.url(),
+        "openai-responses",
+        &json!({}),
+    );
     standing_allow(&setup);
     // The hub exits a second after its last client leaves, so the run's
     // wait sees it go; the session itself keeps its 30-minute default.
@@ -6232,7 +6519,7 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     run.wait_screen("the four spawned delegates", |grid| {
         grid.contents.contains("Started 4 delegates") && grid.contents.contains("completed ·")
     });
-    // The view opens over four running delegates: the gate holds every
+    // The view opens over four running delegates: the gates hold every
     // child, so each row still spins.
     run.write(b"/delegates\r");
     let grid = run.wait_screen("the running delegates", |grid| {
@@ -6275,16 +6562,78 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
             .first()
             .is_some_and(|row| !row.contains("Delegate"))
     });
-    // Release the gate: dropping the sender answers every held child
-    // at once, and each finishes.
-    drop(release);
-    // The reopened view morphs to finished rows: done words, no heading,
-    // no count.
+    // A late child reached its model server while that gate stays shut:
+    // the partial completion below is forced, not raced. The late pair
+    // cannot finish before its release, which waits further below.
+    Deadline::after(Duration::from_secs(20))
+        .recv_or_fail(&arrived_rx, "a late delegate reached its model call");
+    // Release the early pair: scans one and two finish while three and
+    // four still run.
+    drop(release_early);
+    // The reopened view lists the running scan first: running delegates
+    // precede finished ones in start order (docs/tui.md, "Every
+    // delegate"). The old wait stopped here and pressed Enter, opening
+    // the running scan's live view instead of a replay (#3490). The
+    // small viewport shows three delegates, so this wait pins only a
+    // running late row with no early row still running, plus a finished
+    // one; the all-four wait below runs at replay size.
     run.write(b"/delegates\r");
+    // Either late scan may sort first and either early scan may finish
+    // first: running sorts in start order, never spawn-call order, so the
+    // wait names no scan. Both early scans finished leaves no early row
+    // still running, so the first running row below is observed, then
+    // checked against the late pair.
+    let grid = run.wait_screen("the partial delegates list", |grid| {
+        delegates_list_header(grid)
+            && (grid.contents.contains("◆ scan three") || grid.contents.contains("◆ scan four"))
+            && !grid.contents.contains("◆ scan one")
+            && !grid.contents.contains("◆ scan two")
+            && grid.contents.contains("✓ scan")
+    });
+    // An unfinished late scan stays first while the finished rows sit
+    // below it: Enter here would open the running scan, not the first
+    // replay. Rows match by containment: a clipped viewport marks its
+    // first column with an overflow glyph, so the marker is not always
+    // first.
+    let running = grid.rows.iter().position(|row| row.contains("◆ scan"));
+    let finished = grid.rows.iter().position(|row| row.contains("✓ scan"));
+    let (Some(running), Some(finished)) = (running, finished) else {
+        panic!("a running scan above finished ones in\n{}", grid.contents);
+    };
+    assert!(
+        running < finished,
+        "a running scan above finished ones in\n{}",
+        grid.contents
+    );
+    // The observed first running row is a late scan: with no early row
+    // still running, only three or four can run, and only one or two can
+    // sit finished below.
+    let running_row = &grid.rows[running];
+    assert!(
+        running_row.contains("scan three") || running_row.contains("scan four"),
+        "a late scan above finished ones in\n{}",
+        grid.contents
+    );
+    // Release the late pair: every delegate now runs to completion.
+    drop(release_late);
+    // The taller delegate header leaves no transcript row at this
+    // height: grow the viewport before opening the replay, keeping the
+    // small-viewport scroll proof above intact.
+    run.resize(120, 32);
+    run.wait_screen("the finished delegates at replay size", |grid| {
+        delegates_list_header(grid) && grid.rows.len() == 32
+    });
+    // The open view morphs to finished rows: done words, no heading, no
+    // count. Enter waits until all four finished rows show with no
+    // running row left: a running delegate would sort first and take
+    // the Enter instead of the first replay (#3490).
     let grid = run.wait_screen("the finished delegates", |grid| {
         delegates_list_header(grid)
             && grid.contents.contains("✓ scan one")
             && grid.contents.contains("✓ scan two")
+            && grid.contents.contains("✓ scan three")
+            && grid.contents.contains("✓ scan four")
+            && !grid.contents.contains("◆ scan")
     });
     assert!(grid.contents.contains("Delegates"), "{}", grid.contents);
     assert!(
@@ -6293,13 +6642,6 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
         grid.contents
     );
     assert!(grid.contents.contains("done"), "{}", grid.contents);
-    // The taller delegate header leaves no transcript row at this
-    // height: grow the viewport before opening the replay, keeping the
-    // small-viewport scroll proof above intact.
-    run.resize(120, 32);
-    run.wait_screen("the finished delegates at replay size", |grid| {
-        delegates_list_header(grid) && grid.rows.len() == 32
-    });
     // Enter on the first finished row opens its replay.
     run.write(b"\r");
     run.wait_screen("the replayed transcript", |grid| {
@@ -6318,7 +6660,11 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     });
     run.write(b"/agents\r");
     let grid = run.wait_screen("the alias view", |grid| {
-        delegates_list_header(grid) && grid.contents.contains("✓ scan one")
+        delegates_list_header(grid)
+            && grid.contents.contains("✓ scan one")
+            && grid.contents.contains("✓ scan two")
+            && grid.contents.contains("✓ scan three")
+            && grid.contents.contains("✓ scan four")
     });
     assert!(
         !grid.contents.contains("Running delegates"),
@@ -6568,6 +6914,10 @@ fn a_delegate_fork_starts_a_fork_of_the_calling_turn() {
     let task = new_content.last().unwrap();
     assert_eq!(task["role"], json!("user"));
     let text = task["content"].as_str().unwrap().to_owned();
+    assert!(
+        !text.contains("Your workspace is"),
+        "equal workspaces add no notice: {text}"
+    );
     for part in [
         format!("you are a fork of session {parent_id}"),
         "started at delegate depth 1".to_owned(),
@@ -6578,6 +6928,143 @@ fn a_delegate_fork_starts_a_fork_of_the_calling_turn() {
             "the fork-task carries {part:?}: {text}"
         );
     }
+}
+
+#[test]
+fn an_isolated_fork_records_and_holds_its_own_worktree_and_explains_its_workspace() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    support::git(setup.deadline, setup.root.path(), &["init"]);
+    support::git(
+        setup.deadline,
+        setup.root.path(),
+        &["commit", "--allow-empty", "-m", "fixture"],
+    );
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    let reply = tree_answering(
+        support::stream(&[function_call(
+            "call_fork",
+            "delegate_fork",
+            &json!({
+                "description": "scan", "prompt": "say hello", "isolation": "worktree"
+            }),
+        )]),
+        text_reply("allow"),
+        support::hello(),
+        support::hello(),
+        support::hello(),
+    );
+    let server = ProviderServer::start_responding(move |request| {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        if body.to_string().contains("you are a fork of session") {
+            entered_tx.send(()).unwrap();
+            let _released =
+                Deadline::after(Duration::from_secs(20)).recv(&release_rx.lock().unwrap());
+        }
+        reply(request)
+    })
+    .unwrap();
+    // Drop the release before the server on failure, so its held request can exit.
+    let release_tx = release_tx;
+    fork_providers(&setup, &server);
+    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let starts = running.wait_line("the parent records the isolated fork", |line| {
+        line["kind"] == "delegate_started"
+    });
+    let started = one(&starts, "delegate_started");
+    let fork_id = started["delegate_session_id"].as_str().unwrap();
+    let worktree = &started["worktree"];
+    let path = PathBuf::from(worktree["path"].as_str().unwrap());
+    let fork_log = log::session_dir(
+        &setup.home(),
+        &log::project_key(&doors::project(setup.root.path())),
+        &contract::SessionId(fork_id.into()),
+    )
+    .join("events.jsonl");
+    if Deadline::after(Duration::from_secs(20))
+        .recv(&entered_rx)
+        .is_err()
+    {
+        drop(release_tx);
+        let (status, lines, stderr) = running.wait();
+        panic!(
+            "the fork never requested: {status:?}; {stderr}; finish {:?}; child {:?}",
+            one(&lines, "delegate_finished"),
+            read_lines(&fork_log)
+        );
+    }
+    let fork_started = one(&read_lines(&fork_log), "session_started");
+    assert_eq!(fork_started["worktree"]["path"], worktree["path"]);
+    assert_eq!(fork_started["worktree"]["branch"], worktree["branch"]);
+    assert_eq!(fork_started["workspace"], worktree["path"]);
+    assert_ne!(path, setup.root.path());
+    assert_eq!(
+        support::git(setup.deadline, &path, &["branch", "--show-current"]),
+        worktree["branch"].as_str().unwrap()
+    );
+    let probe = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path.with_extension("lock"))
+        .unwrap();
+    assert!(
+        matches!(probe.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        "the fork owns a share after session_started"
+    );
+    drop(probe);
+    let pruned = support::run_to_exit(
+        setup.deadline,
+        "prune skips the live isolated fork",
+        setup.fiber(&["sessions", "prune", "--force", "--yes"]),
+    );
+    assert_eq!(
+        pruned.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&pruned.stderr)
+    );
+    assert!(path.is_dir(), "even forced prune preserves the live fork");
+    assert_eq!(
+        support::git(setup.deadline, &path, &["branch", "--show-current"]),
+        worktree["branch"].as_str().unwrap()
+    );
+    release_tx.send(()).unwrap();
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    let parent_id = lines[0]["session_id"].as_str().unwrap();
+    let fork_lines = read_lines(&fork_log);
+    // docs/events.md, "Kinds", defines these lines; cross-trigger order is open.
+    assert_eq!(
+        durable_kinds(&fork_lines)
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        FORK_DURABLE
+            .iter()
+            .map(|kind| (*kind).to_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+    );
+    let parent_body = fork_call_request(&server, "scan the tree");
+    let fork_body = fork_first(&server);
+    let (parent_input, fork_input) = assert_continues(&parent_body, &fork_body, parent_id);
+    let task = fork_input[parent_input.len()..].last().unwrap()["content"]
+        .as_str()
+        .unwrap();
+    let parent_workspace = fs::canonicalize(setup.root.path()).unwrap();
+    let notice = format!(
+        "Your workspace is {}, a worktree of {}. Paths above under {} are at the same place under yours; work only in yours.",
+        path.display(),
+        parent_workspace.display(),
+        parent_workspace.display()
+    );
+    assert!(
+        task.contains(&format!("{notice}\n\nNobody is present")),
+        "{task}"
+    );
+    let finished = one(&lines, "delegate_finished");
+    assert_eq!(finished["worktree"]["path"], worktree["path"]);
+    assert!(!path.exists(), "the clean fork worktree is removed");
 }
 
 /// A depth-1 delegate's `delegate_fork` call starts a depth-2 fork whose
