@@ -208,7 +208,7 @@ fn group_alive_sees_a_killed_child_until_it_is_reaped() {
     let answer = group_answer(group);
     let waited = guard.0.as_mut().unwrap().try_wait();
     assert!(
-        answer.is_ok(),
+        lives(answer),
         "an unreaped zombie's group must read as alive (probe {answer:?}, child {waited:?})"
     );
     let child = guard.0.take().unwrap();
