@@ -23,7 +23,7 @@ pub(crate) mod run;
 pub use models::{DelegateModels, Resolve};
 pub(crate) mod message;
 
-pub use message::{DelegateMessage, LastSeq, Steer, Steered};
+pub use message::{DelegateMessage, LastSeq, Steer, Steered, WorktreeRecord};
 pub use run::{
     CreateWorktree, EndWorktree, FinishWorktree, Fresh, Launch, Launched, Start, Watch, Watched,
     WorktreeGuard,
@@ -349,12 +349,7 @@ impl DelegateSpawn {
             }
         }
         let (description, prompt, timeout) = check_effects_arguments(arguments)?;
-        let isolated = match arguments.get("isolation") {
-            None => false,
-            Some(Value::String(value)) if value == "none" => false,
-            Some(Value::String(value)) if value == "worktree" => true,
-            Some(_) => return Err(JobsError::IsolationUnknown),
-        };
+        let isolated = parse_isolation(arguments)?;
         let workspace = match arguments.get("workspace") {
             None => self.wiring.workspace.clone(),
             Some(Value::String(value)) => PathBuf::from(value),
@@ -646,6 +641,7 @@ impl DelegateFork {
             return Err(error);
         }
         let (description, prompt, timeout) = check_effects_arguments(arguments)?;
+        let isolated = parse_isolation(arguments)?;
         // Read after the argument check and before admission: a bad call
         // never resolves a point, and a point failure starts nothing.
         let from =
@@ -657,9 +653,22 @@ impl DelegateFork {
             prompt,
             timeout,
             None,
-            false,
+            isolated,
             self.wiring.workspace.clone(),
         )
+    }
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
+fn parse_isolation(arguments: &Map<String, Value>) -> Result<bool, JobsError> {
+    match arguments.get("isolation") {
+        None => Ok(false),
+        Some(Value::String(value)) if value == "none" => Ok(false),
+        Some(Value::String(value)) if value == "worktree" => Ok(true),
+        Some(_) => Err(JobsError::IsolationUnknown),
     }
 }
 
