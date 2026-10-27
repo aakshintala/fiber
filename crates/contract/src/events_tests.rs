@@ -889,6 +889,14 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "command_accepted",
+            json!({"command_id": "c", "result": {"hooks": [
+            {"kind": "hook", "extension": "e", "point": "before_tool", "on_failure": "blocking"},
+            {"kind": "hook", "extension": "hooks", "entry": "audit", "point": "after_tool", "on_failure": "non-blocking", "phase": "sanitize"},
+            {"kind": "watcher", "extension": "e", "kinds": ["turn_completed"]},
+            {"kind": "watcher", "extension": "hooks", "entry": "ping", "kinds": ["turn_completed", "turn_started"]}]}}),
+        ),
+        (
+            "command_accepted",
             json!({"command_id": "c", "result": {"output": "o",
             "artifact": "artifacts/o", "process": process}}),
         ),
@@ -1729,6 +1737,75 @@ fn an_mcp_servers_result_reads_its_rows_and_omits_absent_keys() {
             )
             .is_err(),
             "{servers}"
+        );
+    }
+}
+
+/// The `hooks` result row order and omitted keys follow `docs/events.md`,
+/// "`command_accepted`": hooks first, then watchers, `entry` only for a
+/// declared entry and `phase` only when declared, and hook keys never on a
+/// watcher row nor watcher keys on a hook row.
+#[test]
+fn a_hooks_result_reads_its_rows_and_omits_absent_keys() {
+    let result = result_of(json!({"command_id": "c_1", "result": {"hooks": [
+        {"kind": "hook", "extension": "e", "point": "before_tool", "on_failure": "blocking"},
+        {"kind": "hook", "extension": "hooks", "entry": "audit", "point": "after_tool", "on_failure": "non-blocking", "phase": "sanitize"},
+        {"kind": "watcher", "extension": "e", "kinds": ["turn_completed"]},
+        {"kind": "watcher", "extension": "hooks", "entry": "ping", "kinds": ["turn_completed", "turn_started"]}]}}));
+    assert_eq!(
+        result,
+        CommandResult::Hooks {
+            hooks: vec![
+                HookInfo::Hook {
+                    extension: "e".into(),
+                    entry: None,
+                    point: "before_tool".into(),
+                    on_failure: "blocking".into(),
+                    phase: None,
+                },
+                HookInfo::Hook {
+                    extension: "hooks".into(),
+                    entry: Some("audit".into()),
+                    point: "after_tool".into(),
+                    on_failure: "non-blocking".into(),
+                    phase: Some("sanitize".into()),
+                },
+                HookInfo::Watcher {
+                    extension: "e".into(),
+                    entry: None,
+                    kinds: vec!["turn_completed".into()],
+                },
+                HookInfo::Watcher {
+                    extension: "hooks".into(),
+                    entry: Some("ping".into()),
+                    kinds: vec!["turn_completed".into(), "turn_started".into()],
+                },
+            ]
+        }
+    );
+    let written = serde_json::to_value(&result).unwrap();
+    let rows = written["hooks"].as_array().unwrap();
+    assert!(rows[0].get("entry").is_none(), "{written}");
+    assert!(rows[0].get("phase").is_none(), "{written}");
+    assert!(rows[2].get("entry").is_none(), "{written}");
+    assert!(rows[2].get("point").is_none(), "{written}");
+    assert!(rows[2].get("on_failure").is_none(), "{written}");
+    // A watcher never carries hook keys, and a hook never carries watcher
+    // keys: overloading either is refused.
+    for hooks in [
+        json!([{"kind": "hook", "extension": "e", "point": "before_tool", "on_failure": "blocking", "kinds": ["turn_completed"]}]),
+        json!([{"kind": "watcher", "extension": "e", "kinds": ["turn_completed"], "point": "before_tool"}]),
+        json!([{"kind": "watcher", "extension": "e", "kinds": ["turn_completed"], "on_failure": "blocking"}]),
+        json!([{"kind": "hook", "extension": "e", "on_failure": "blocking"}]),
+        json!([{"kind": "hook", "extension": "e", "point": "before_tool"}]),
+    ] {
+        assert!(
+            read(
+                "command_accepted",
+                json!({"command_id": "c_1", "result": {"hooks": hooks}})
+            )
+            .is_err(),
+            "{hooks}"
         );
     }
 }
