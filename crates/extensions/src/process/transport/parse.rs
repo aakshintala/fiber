@@ -98,6 +98,7 @@ pub(crate) fn parse_line(line: &[u8]) -> ParsedLine {
         | contract::commands::Command::Reload
         | contract::commands::Command::Import(_)
         | contract::commands::Command::Tools
+        | contract::commands::Command::Hooks
         | contract::commands::Command::McpServers
         | contract::commands::Command::McpLogin(_)
         | contract::commands::Command::McpReconnect(_)

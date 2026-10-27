@@ -148,6 +148,18 @@ fn ready_parses() {
 }
 
 #[test]
+fn hooks_driver_command_is_forwarded() {
+    assert_eq!(
+        transport::parse_line(br#"{"id":"h1","command":"hooks"}"#),
+        ParsedLine::Forward {
+            id: contract::CommandId("h1".into()),
+            command: "hooks".to_owned(),
+            args: Map::new(),
+        }
+    );
+}
+
+#[test]
 fn reply_value_and_failure_parse() {
     let value = transport::parse_line(
         br#"{"id":"p1","command":"reply","args":{"request_id":"r_1","result":42}}"#,
