@@ -729,6 +729,10 @@ fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
             "waited for {command} to park at its deadline"
         );
         // Late wake past the asked + 50 ms park, reached at 50 ms + GRACE.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "late wake: one advance past a park proven at its exact instant just before (ruling 6261259790)"
+        )]
         clock.advance(Duration::from_millis(50) + GRACE);
         let err = Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&result)

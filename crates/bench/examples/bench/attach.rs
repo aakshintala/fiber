@@ -1,16 +1,17 @@
 //! The attach workload (`docs/performance.md`, "Budgets"): the terminal to
-//! its first frame attaching, for a live, idle session whose log is 1 MiB
-//! and one whose log is 10 MiB. Each fixture's log is grown to its band:
-//! two probe sessions measure one turn's log and each further turn's, then
-//! the fixture takes whole turns to its band. The terminal attaches once
-//! untimed and `runs` times timed, from just before spawning
-//! `fiber resume <id>` to the session's last reply on screen.
+//! its first frame attaching, and to the end of the opening pass, for a
+//! live, idle session whose log is 1 MiB and one whose log is 10 MiB. Each
+//! fixture's log is grown to its band: two probe sessions measure one
+//! turn's log and each further turn's, then the fixture takes whole turns
+//! to its band. The terminal attaches once untimed and `runs` times timed,
+//! from just before spawning `fiber resume <id>` to the session's last
+//! reply on screen, then to the scroll-bar thumb the pass end shows.
 
 use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use serde_json::{Value, json};
@@ -32,6 +33,10 @@ pub(crate) const SAMPLED: [Workload; 1] = [Workload {
 /// The last reply's text, which no other screen shows: the attach ends when
 /// the terminal holds it.
 pub(crate) const ATTACH_TAIL: &str = "quokkas";
+
+/// The scroll-bar thumb, which the screen holds only once the opening
+/// pass ends: the pass end is the first screen holding it.
+pub(crate) const ATTACH_PASS: &str = "┃";
 
 /// The in-process replay draws at the pty's size: 60 columns by 12 rows
 /// (`pty.rs` sizes its terminal the same).
@@ -310,8 +315,33 @@ pub(crate) fn memory_rows(label: &str, peak: u64, retained: u64) -> Samples {
     }
 }
 
-/// One timed attach: the log's size just before the spawn, then spawn to the
-/// tail on screen.
+/// Until `until` for the scroll-bar thumb: the opening pass ends when the
+/// screen first holds it. Returns the spawn-to-thumb milliseconds,
+/// computed exactly as [`hub_replay`] computes its duration. A pass that
+/// never shows the bar fails the sample, like a missing tail.
+fn await_pass_end(
+    terminal: &Terminal,
+    clock: &dyn Clock,
+    started: Instant,
+    until: Instant,
+) -> Result<f64, String> {
+    terminal.wait_for(clock, until, ATTACH_PASS)?;
+    Ok(clock.now().saturating_duration_since(started).as_secs_f64() * 1000.0)
+}
+
+/// One fixture's pass-end entry: the spawn-to-thumb time with the same
+/// `fixture`, `log_bytes` and `ms` keys as the first-frame entry, one per
+/// fixture per run.
+fn pass_entry(label: &str, log_bytes: u64, pass_ms: f64) -> (&'static str, Value) {
+    (
+        "terminal_attach_pass_ms",
+        json!({"fixture": label, "log_bytes": log_bytes, "ms": pass_ms}),
+    )
+}
+
+/// One timed attach: the log's size just before the spawn, then spawn to
+/// the tail on screen for the first frame and spawn to the scroll-bar
+/// thumb for the pass end.
 fn sample(
     ctx: &Ctx<'_>,
     home: &Home,
@@ -326,10 +356,13 @@ fn sample(
     let pid = terminal.proc.pid();
     let shown = terminal.wait_for(ctx.clock, started + READY, ATTACH_TAIL);
     let took = ms(ctx.clock, started);
+    let pass = await_pass_end(&terminal, ctx.clock, started, started + READY);
     // The attach's terminal memory, read while it still runs: the peak,
     // then the retained anon RSS once freed pages settle. A failed attach
-    // reads nothing and keeps only its error.
-    let memory: Result<(u64, u64), String> = shown.clone().and_then(|()| {
+    // reads nothing and keeps only its error. The pass-end timestamp is
+    // taken above, before the settle, so the settle never leaks into the
+    // pass time.
+    let memory: Result<(u64, u64), String> = shown.clone().and(pass.clone()).and_then(|_| {
         linux::peak_rss_kib(pid).and_then(|peak| {
             busy::retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait))
                 .map(|retained| (peak, retained))
@@ -337,6 +370,7 @@ fn sample(
     });
     idle::quit(ctx, terminal, notes, HubExit::Keep)?;
     shown?;
+    let pass_ms = pass?;
     let (peak, retained) = memory?;
     if let Some(note) = size_note(label, log_bytes) {
         notes.push(note);
@@ -346,6 +380,7 @@ fn sample(
         fixture.metric,
         json!({"fixture": label, "log_bytes": log_bytes, "ms": took}),
     )];
+    samples.push(pass_entry(label, log_bytes, pass_ms));
     samples.extend(memory_rows(label, peak, retained));
     let hub_ms = hub_replay(ctx, home, id)?;
     if ctx.paging.is_none() {

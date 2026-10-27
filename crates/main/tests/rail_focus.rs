@@ -559,6 +559,10 @@ fn hint_lift_reports_which_condition_was_false_on_a_spent_deadline() {
     let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
     let deadline = support::Deadline::on(&**clock);
     // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(support::WAITS);
     assert!(
         deadline.left().is_zero(),
@@ -627,6 +631,10 @@ fn hint_lift_reports_which_condition_was_false_on_a_spent_deadline() {
     terminal_side.write_all(HINT_MIDDLE.as_bytes()).unwrap();
     run.wait_bytes(from, HINT_MIDDLE.as_bytes(), "the fed hint");
     // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(support::WAITS);
     assert!(
         deadline.left().is_zero(),
@@ -694,6 +702,10 @@ fn spent_wait_message_with_a_painted_first_card(raised: &Colour, flat: &Colour) 
         .unwrap();
     run.wait_bytes(from, b"first live\x1b[0m", "the fed card");
     // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(support::WAITS);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         wait_hint_lifted(&mut run, raised, flat)

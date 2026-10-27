@@ -676,6 +676,10 @@ fn history_wait_times_out_as_a_lost_connection() {
     // test advances past.
     // A `history` wait ends as a lost connection after 10 s (`docs/tui.md`, "History and paging").
     assert_eq!(app.take_wake(), Some(sent_at + Duration::from_secs(10)));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(11));
     app.set_now(clock.now(), contract::clock::wall_ms(clock.wall()));
     // A `history` wait ends as a lost connection after 10 s (`docs/tui.md`, "History and paging").

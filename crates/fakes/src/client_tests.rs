@@ -240,6 +240,10 @@ fn send_by_does_not_renew_its_deadline_across_partial_writes() {
     let end = clock.origin() + Duration::from_secs(300);
     let reader_clock = Arc::clone(&clock);
     // Each read is the signal that the sender has made progress.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
+    )]
     let read = drain(server, move || {
         reader_clock.advance(Duration::from_secs(100))
     });

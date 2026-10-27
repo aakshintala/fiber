@@ -1822,6 +1822,10 @@ fn a_clock_move_delivers_cancelled_and_nothing_before() {
             .recv(&entered_rx)
             .expect("the receiver is blocked");
         // No code under test waits on the clock here: the session blocks on its inbox, woken by the clock subscription rather than parked in wait_until, and the move fires the wake under test (ruling 6179406086).
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
         clock.advance(Duration::from_millis(1));
     });
     opened

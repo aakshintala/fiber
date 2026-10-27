@@ -439,6 +439,10 @@ fn a_stall_shifts_one_sample_not_a_side() {
         calls += 1;
         log.push((side, workload.name, run, clock.now()));
         // One sample costs STEP; the second call stalls the runner.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
         clock.advance(if calls == 2 { STALL } else { STEP });
         Ok(vec![("stall_ms", json!(1.0))])
     });

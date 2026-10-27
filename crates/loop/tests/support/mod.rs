@@ -899,6 +899,10 @@ impl ModelCall for AdvanceCall {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
         if self.first {
             assert_no_parked(&self.clock);
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "no code under test waits on the clock (ruling 6179406086)"
+            )]
             self.clock.advance(self.by);
         }
         self.inner.run(sink)

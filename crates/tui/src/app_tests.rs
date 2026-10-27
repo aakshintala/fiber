@@ -371,6 +371,10 @@ fn ctrl_c_twice_within_the_window_quits() {
     assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
     assert!(app.hint());
     // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(
         QUIT_WINDOW
             .checked_sub(Duration::from_millis(1))
@@ -385,6 +389,10 @@ fn ctrl_c_at_the_window_edge_rearms() {
     let mut app = app();
     assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
     // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(QUIT_WINDOW);
     assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
     assert!(app.hint());
