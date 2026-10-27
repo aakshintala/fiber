@@ -6475,7 +6475,9 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     })
     .unwrap();
     let child_late = ProviderServer::start_responding(move |_: &Request| {
-        let _ = held_tx.send(());
+        // The receiver outlives the servers, so this never fails: a
+        // failure is the test's, as the module header allows.
+        held_tx.send(()).unwrap();
         let gate = late_gate.lock().unwrap();
         let _released = gate.recv();
         text_reply(CHILD_TEXT)
