@@ -769,10 +769,45 @@ fn question_reply_to_a_hub_started_session_is_allowed() {
 #[test]
 fn session_message_to_itself_is_delivered() {
     let setup = Setup::new();
-    let server = fakes::ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    // The first turn asks a question and parks on its answer, so the
+    // self-message below lands mid-turn on every run instead of racing
+    // the first turn's end: an interaction wait reads the inbox, and the
+    // queued message joins the turn at its next step boundary
+    // (`docs/architecture.md`, "One inbox").
+    let asked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen_self = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server = fakes::ProviderServer::start_responding({
+        let asked = Arc::clone(&asked);
+        let seen_self = Arc::clone(&seen_self);
+        move |request: &fakes::Request| {
+            if String::from_utf8_lossy(&request.body).contains("to myself") {
+                seen_self.store(true, std::sync::atomic::Ordering::SeqCst);
+                return hello();
+            }
+            if asked.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return hello();
+            }
+            stream(&[function_call(
+                "call_ask",
+                "ask_user",
+                &json!({"questions": [
+                    {"header": "Pick", "question": "Which one?",
+                     "options": [{"label": "a"}, {"label": "b"}]},
+                ]}),
+            )])
+        }
+    })
+    .unwrap();
     let probe = write_probe(&setup);
     let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
     let (hub, client, guard, session) = start_hub_and_session(&setup, &server, "hello");
+    let asked_lines = until(&client, "the question was asked", |line| {
+        line["kind"] == "interaction_requested" && line["session_id"] == session
+    });
+    let request_id = asked_lines.last().expect("the question arrived")["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let answer = probe_answer(
         &client,
         &session,
@@ -786,9 +821,42 @@ fn session_message_to_itself_is_delivered() {
         }),
     );
     assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    // The hold releases before the wait below: the answered question lets
+    // the turn continue, and its next model call carries the queued
+    // message. Judging while still held would fail with the message
+    // accepted and no turn started.
+    client.send(
+        &json!({
+            "id": "c_answer_ask",
+            "session_id": session,
+            "command": "reply",
+            "args": {"request_id": request_id, "answers": [{"labels": ["a"], "text": ""}]},
+        })
+        .to_string(),
+    );
+    let answered = recv_answer(&client, "c_answer_ask", "the question answer");
+    assert_eq!(answered["kind"], "command_accepted", "{answered}");
+    let resolved = until(&client, "the question resolved", |line| {
+        line["kind"] == "interaction_resolved" && line["session_id"] == session
+    });
+    assert_eq!(
+        resolved.last().expect("the resolution arrived")["payload"]["request_id"],
+        request_id.as_str(),
+        "{resolved:?}"
+    );
+    // Both requests are promised (`docs/loop.md`, "Starting a turn" and "One
+    // step"): the opening message starts a turn whose first step sends one
+    // request — the asked question proves that — and answering it lets the
+    // turn continue, so its next step carries the queued message and sends
+    // the second. Like every success-path wait, this one shares the test's
+    // deadline.
     assert!(
         server.await_requests(2, setup.deadline),
         "the message starts a turn"
+    );
+    assert!(
+        seen_self.load(std::sync::atomic::Ordering::SeqCst),
+        "the self-message reaches the model's next request"
     );
     finish(hub, client, guard, &[&session]);
 }
