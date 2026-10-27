@@ -6,10 +6,7 @@ use super::{arg, object_arg};
 
 /// The `host.tool` name: any string, as the Lua half checks. The runner
 /// refuses an unknown name as an ordinary return.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn tool_name(args: &[Value]) -> Result<String, (ErrorCode, String)> {
     match arg(args, 0) {
         Value::String(name) => Ok(name.clone()),
@@ -28,10 +25,7 @@ pub(super) fn tool_name(args: &[Value]) -> Result<String, (ErrorCode, String)> {
 /// refuses it `invalid_arguments` as an ordinary return. Anything else
 /// is the caller's error. Past 125 nested containers the parse the Lua
 /// half replays would refuse, so deeper values fail naming the limit.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn tool_arguments(args: &[Value]) -> Result<Value, (ErrorCode, String)> {
     const TOOL_DEPTH: usize = 125;
     let arguments = match arg(args, 1) {
@@ -56,10 +50,7 @@ pub(super) fn tool_arguments(args: &[Value]) -> Result<Value, (ErrorCode, String
 }
 
 /// How deeply `value` nests: a leaf reads 0, and each container adds one.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn depth(value: &Value) -> usize {
     match value {
         Value::Array(items) => items.iter().map(depth).max().unwrap_or(0) + 1,
@@ -71,10 +62,7 @@ pub(super) fn depth(value: &Value) -> usize {
 /// The `host.model` request: the model reference with a slash, the
 /// optional system string, the non-empty messages and the positive
 /// token limit, with the same sentences as the Lua half.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn model_request(
     args: &[Value],
 ) -> Result<contract::model::HostModelRequest, (ErrorCode, String)> {
@@ -145,10 +133,7 @@ pub(super) fn model_request(
     })
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn model_message(
     message: &Value,
 ) -> Result<contract::model::HostMessage, (ErrorCode, String)> {
@@ -175,10 +160,7 @@ pub(super) fn model_message(
     Ok(contract::model::HostMessage { role, content })
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn model_content(
     content: &Value,
 ) -> Result<Vec<contract::shapes::ContentPart>, (ErrorCode, String)> {
@@ -200,10 +182,7 @@ pub(super) fn model_content(
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn model_part(
     part: &Value,
 ) -> Result<contract::shapes::ContentPart, (ErrorCode, String)> {
@@ -244,18 +223,12 @@ pub(super) fn model_part(
 
 /// The `host.delegate` call's parts: the spec arguments as a table with
 /// the per-call timeout and the `run` function marker.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) type DelegateParts = (Map<String, Value>, std::time::Duration, bool);
 
 /// The `host.delegate` call: the spec arguments as a table with the
 /// per-call timeout and the `run` function marker.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn delegate_request(args: &[Value]) -> Result<DelegateParts, (ErrorCode, String)> {
     const CALL: &str = "host.delegate";
     // The Lua half snapshots the spec table: an empty table reads as `{}`,
@@ -316,10 +289,7 @@ pub(super) fn delegate_request(args: &[Value]) -> Result<DelegateParts, (ErrorCo
 }
 
 /// The `host.ask` interaction: the closed kind with its spec.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn ask_interaction(
     args: &[Value],
 ) -> Result<contract::events::Interaction, (ErrorCode, String)> {

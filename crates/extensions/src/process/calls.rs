@@ -11,10 +11,7 @@ use serde_json::{Map, Value};
 
 /// Where one `call` routes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum Route {
     /// A registration call, answered through the registry.
     Register {
@@ -43,10 +40,7 @@ pub(crate) enum Route {
 
 /// What reading a `host.drive` call's arguments refuses with: the Lua
 /// call's exact sentence, carried as `invalid_arguments`.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn drive_error(message: &str) -> (contract::ErrorCode, String) {
     (contract::ErrorCode::InvalidArguments, message.to_owned())
 }
@@ -54,10 +48,7 @@ fn drive_error(message: &str) -> (contract::ErrorCode, String) {
 /// Routes one `call` with `args`: `fiber.*` registers, `host.drive`
 /// drives, and every other name dispatches as a host or state call. A
 /// misshapen `host.drive` refuses with the Lua call's sentence.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn route_call(
     call: &str,
     args: Vec<Value>,
@@ -85,10 +76,7 @@ pub(crate) fn route_call(
 /// arguments as a JSON object. A missing argument reads as no arguments,
 /// as an empty Lua table does; anything else refuses, as `host.drive`
 /// does in Lua.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn drive_request(
     args: &[Value],
 ) -> Result<(String, Map<String, Value>), (contract::ErrorCode, String)> {
@@ -110,10 +98,7 @@ fn drive_request(
 /// every `true` the wire carries becomes a request Fiber sends. A table
 /// `effects` runs no function, and a provider or harness installs one
 /// handler per function its spec enables.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn handler_keys(call: &str, args: &[Value]) -> Vec<String> {
     let spec = args.get(1);
     match call {

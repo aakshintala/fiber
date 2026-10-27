@@ -8,10 +8,7 @@ use super::{ParsedLine, ReplyAnswer};
 /// `command` is malformed, or ignored when no id names the answer; a
 /// full parse failure answers `unknown_command` for an unbuilt name and
 /// `invalid_arguments` for a built one.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn parse_line(line: &[u8]) -> ParsedLine {
     let value: serde_json::Value = match std::str::from_utf8(line)
         .ok()
@@ -128,10 +125,7 @@ pub(crate) fn parse_line(line: &[u8]) -> ParsedLine {
 }
 
 /// One command line, as `classify` reads it: the doors' shared shape.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 struct Classified {
     id: CommandId,
     command: String,
@@ -141,10 +135,7 @@ struct Classified {
 /// only `id`, `command` and `args` keys with `args` absent or an object:
 /// the shape the doors classify before parsing. `None` reads as no
 /// command, answered `malformed` when an id names the answer.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn classify(map: &serde_json::Map<String, serde_json::Value>, id: CommandId) -> Option<Classified> {
     if map
         .keys()
@@ -169,10 +160,7 @@ fn classify(map: &serde_json::Map<String, serde_json::Value>, id: CommandId) -> 
 /// replays the name with empty arguments: a name the wire does not build
 /// parses to `Unknown`, while a built name either parses or refuses for
 /// want of its arguments — either way the name is built.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn unbuilt_or_unfit(classified: Classified) -> ParsedLine {
     let probe = serde_json::json!({
         "id": "probe",

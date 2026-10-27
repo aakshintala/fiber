@@ -15,10 +15,7 @@ use self::{filesystem::*, http_exec::*, model::*, oauth::*};
 
 /// One decoded process host or state call: through the services, held
 /// as a question, or minted as a nested function first.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum DecodedCall {
     /// Runs through the services.
     Service(HostOperation),
@@ -32,19 +29,13 @@ pub(crate) enum DecodedCall {
 /// The `index`th argument, or null when the call passed nothing there:
 /// a missing argument reads as null, so the type sentence for its
 /// position names it, as in Lua.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn arg(args: &[Value], index: usize) -> &Value {
     args.get(index).unwrap_or(&Value::Null)
 }
 
 /// One required string argument in text.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn text_arg(
     call: &str,
     args: &[Value],
@@ -64,10 +55,7 @@ fn text_arg(
 
 /// One bytes-position argument: a base64 string, rejected naming the
 /// call and the argument when it is not.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn bytes_arg(
     call: &str,
     args: &[Value],
@@ -86,10 +74,7 @@ fn bytes_arg(
 }
 
 /// One required object argument.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn object_arg(
     call: &str,
     args: &[Value],
@@ -111,10 +96,7 @@ fn object_arg(
 /// half's validation and sentences. Byte positions read base64; every
 /// other string reads text. A missing argument reads as null, so the
 /// type sentence for its position names it, as in Lua.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn decode_host(call: &str, args: &[Value]) -> Result<DecodedCall, (ErrorCode, String)> {
     use DecodedCall::{Ask as Held, Refresh, Service};
     let op = match call {

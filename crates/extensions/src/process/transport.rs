@@ -33,35 +33,23 @@ use support::group::{self, Listing};
 /// How many outbound lines wait for the writer thread. A full queue means
 /// the child stopped reading while calls keep coming: the child counts as
 /// gone, as an MCP server's does.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) const WRITER_QUEUE: usize = 64;
 
 /// How much of the child's stderr is kept, the tail: a flood cannot grow
 /// memory without bound, and the end of the log names the failure.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) const STDERR_TAIL: usize = 64 * 1024;
 
 /// How many received bytes may wait for the owner before the child counts
 /// as flooding: backpressure when the owner stops draining, bounding the
 /// queue the reader posts to without blocking the reader.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) const MAX_QUEUED_BYTES: usize = 16 << 20;
 
 /// The limits a test injects; production uses the defaults above.
 #[derive(Debug, Clone, Copy)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct Limits {
     /// The most bytes one line may hold before its line feed.
     pub max_line: usize,
@@ -84,10 +72,7 @@ impl Default for Limits {
 /// One line the reader posts, or how the reader ended. The reader posts
 /// exactly one terminal `Closed`.
 #[derive(Debug)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum Incoming {
     /// One complete line, without its line-feed bytes.
     Line(Vec<u8>),
@@ -97,10 +82,7 @@ pub(crate) enum Incoming {
 
 /// How the reader ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum CloseReason {
     /// End of input with nothing unread.
     Eof,
@@ -117,10 +99,7 @@ pub(crate) enum CloseReason {
 
 /// What `send` refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum SendError {
     /// The line does not fit under the cap: it is answered `too_large` in
     /// place of the result, never queued.
@@ -134,10 +113,7 @@ pub(crate) enum SendError {
 /// ignored, as on the sibling child-pipe transports: without an id no
 /// answer can name it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum ParsedLine {
     /// A `call`: a registration, a `host` call or a `state` call.
     Call {
@@ -206,10 +182,7 @@ pub(crate) enum ParsedLine {
 
 /// A callback reply's answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum ReplyAnswer {
     /// What the Lua function returns; any JSON value, null included.
     Value(serde_json::Value),
@@ -224,19 +197,13 @@ pub(crate) enum ReplyAnswer {
 
 /// The sentence a line that reads as no command is rejected with,
 /// shared with the doors: it names the line's shape, never its bytes.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) const MALFORMED: &str =
     "A command is one JSON object per line, with a string `id` and `command`.";
 
 /// The sentence a command whose arguments do not fit is rejected with,
 /// shared with the doors.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) const UNFIT: &str = "The arguments do not fit this command.";
 
 mod parse;
@@ -245,18 +212,12 @@ pub(crate) use parse::parse_line;
 /// Ends a blocked pipe read on demand: closing the wake pipe's write end
 /// makes its read end ready on every later poll. The pipe is never read
 /// from and never written to.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 struct PipeStop {
     wake: Mutex<Option<io::PipeWriter>>,
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl PipeStop {
     fn pipe() -> io::Result<(io::PipeReader, Self)> {
         let (read, write) = io::pipe()?;
@@ -278,10 +239,7 @@ impl PipeStop {
 /// flood bound, a read failure or the stop, posting each line and exactly
 /// one terminal `Closed`. A partial line at end of input posts before the
 /// `Eof`, so a child that exits without a final line feed loses nothing.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn read_loop(
     stdout: ChildStdout,
     max_line: usize,
@@ -385,10 +343,7 @@ fn read_loop(
 }
 
 /// Strips trailing carriage returns, so a CRLF line reads as its text.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn strip_trailing_cr(line: &mut Vec<u8>) {
     while line.last().is_some_and(|byte| *byte == b'\r') {
         line.pop();
@@ -398,10 +353,7 @@ fn strip_trailing_cr(line: &mut Vec<u8>) {
 /// Writes queued lines to the child's stdin in queue order, then closes
 /// it, so the child sees end of input. A write that never finishes blocks
 /// only this thread: killing the child fails it, and the thread ends.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn write_loop(mut stdin: ChildStdin, rx: mpsc::Receiver<Vec<u8>>) {
     for mut line in rx {
         line.push(b'\n');
@@ -413,10 +365,7 @@ fn write_loop(mut stdin: ChildStdin, rx: mpsc::Receiver<Vec<u8>>) {
 
 /// Keeps the tail of the child's stderr, so a child that logs cannot block
 /// and a flood cannot grow memory without bound.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn stderr_loop(mut stderr: ChildStderr, tail: Arc<Mutex<Vec<u8>>>, woken: io::PipeReader) {
     let mut chunk = [0_u8; 8 * 1024];
     loop {
@@ -453,10 +402,7 @@ fn stderr_loop(mut stderr: ChildStderr, tail: Arc<Mutex<Vec<u8>>>, woken: io::Pi
 
 /// One process extension's pipes: its child in its own listed group, one
 /// ordered writer, one line reader and one stderr drain.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct Transport {
     writer: Mutex<Option<mpsc::SyncSender<Vec<u8>>>>,
     incoming: Mutex<mpsc::Receiver<Incoming>>,
@@ -481,10 +427,7 @@ pub(crate) struct Transport {
     stopped: std::sync::atomic::AtomicBool,
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl Transport {
     /// Starts `program` with `args` in `cwd` and wires its pipes, with the
     /// default limits. The child runs in its own listed process group.

@@ -6,10 +6,7 @@ use super::{arg, decode_bytes};
 
 /// The `host.http` options table. The Lua half checks the table and its
 /// `url` together, so a non-table reads as the missing URL.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn http_opts(args: &[Value]) -> Result<Map<String, Value>, (ErrorCode, String)> {
     match arg(args, 0) {
         Value::Object(opts) => Ok(opts.clone()),
@@ -22,10 +19,7 @@ pub(super) fn http_opts(args: &[Value]) -> Result<Map<String, Value>, (ErrorCode
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn http_method(opts: &Map<String, Value>) -> Result<String, (ErrorCode, String)> {
     match opts.get("method").unwrap_or(&Value::Null) {
         Value::Null => Ok("GET".to_owned()),
@@ -37,10 +31,7 @@ pub(super) fn http_method(opts: &Map<String, Value>) -> Result<String, (ErrorCod
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn http_url(opts: &Map<String, Value>) -> Result<String, (ErrorCode, String)> {
     match opts.get("url").unwrap_or(&Value::Null) {
         Value::String(url) => Ok(url.clone()),
@@ -56,10 +47,7 @@ pub(super) fn http_url(opts: &Map<String, Value>) -> Result<String, (ErrorCode, 
 /// The `host.http` headers: a table of strings, as the Lua half reads
 /// them. Anything else names the table; a non-string value names what the
 /// table must hold.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn http_headers(
     opts: &Map<String, Value>,
 ) -> Result<Vec<(String, String)>, (ErrorCode, String)> {
@@ -97,10 +85,7 @@ pub(super) fn http_headers(
         .collect()
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn http_body(opts: &Map<String, Value>) -> Result<Option<Vec<u8>>, (ErrorCode, String)> {
     match opts.get("body").unwrap_or(&Value::Null) {
         Value::Null => Ok(None),
@@ -115,10 +100,7 @@ pub(super) fn http_body(opts: &Map<String, Value>) -> Result<Option<Vec<u8>>, (E
 /// The `host.exec` program: any string, as the Lua half checks. A bare
 /// name or an absolute path runs unchanged, anything else resolves
 /// against the workspace at run time.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn exec_program(args: &[Value]) -> Result<String, (ErrorCode, String)> {
     match arg(args, 0) {
         Value::String(program) => Ok(program.clone()),
@@ -133,10 +115,7 @@ pub(super) fn exec_program(args: &[Value]) -> Result<String, (ErrorCode, String)
 
 /// The `host.exec` arguments: every element a string, as the Lua half
 /// checks each list element. Absent or null arguments are none.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn exec_args(args: &[Value]) -> Result<Vec<String>, (ErrorCode, String)> {
     match arg(args, 1) {
         Value::Null => Ok(Vec::new()),
@@ -164,10 +143,7 @@ pub(super) fn exec_args(args: &[Value]) -> Result<Vec<String>, (ErrorCode, Strin
 /// The `host.exec` options: absent or null reads as none, as the Lua
 /// half fills in. Anything else must be a table holding the `cwd`,
 /// `env` and `input` the decoders below read.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn exec_opts(args: &[Value]) -> Result<Map<String, Value>, (ErrorCode, String)> {
     match arg(args, 2) {
         Value::Null => Ok(Map::new()),
@@ -181,10 +157,7 @@ pub(super) fn exec_opts(args: &[Value]) -> Result<Map<String, Value>, (ErrorCode
 
 /// The `host.exec` working directory: absent or null reads as the
 /// workspace, as the decoder resolves it at run time.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn exec_cwd(
     opts: &Map<String, Value>,
 ) -> Result<std::path::PathBuf, (ErrorCode, String)> {
@@ -201,10 +174,7 @@ pub(super) fn exec_cwd(
 /// The `host.exec` extra environment: absent or null adds nothing. The
 /// Lua half refuses empty names and the `=` and NUL bytes a spawn cannot
 /// carry, and values carrying NUL, with the same sentences.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn exec_env(
     opts: &Map<String, Value>,
 ) -> Result<std::collections::BTreeMap<String, String>, (ErrorCode, String)> {
@@ -249,10 +219,7 @@ pub(super) fn exec_env(
 /// The `host.exec` standard input: absent or null reads as today's null
 /// stdin. A string carries bytes as base64, since the wire has no raw
 /// byte string; anything else is the caller's error.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn exec_input(
     opts: &Map<String, Value>,
 ) -> Result<Option<Vec<u8>>, (ErrorCode, String)> {

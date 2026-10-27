@@ -6,10 +6,7 @@ use super::{arg, decode_bytes};
 
 /// One `host.fs.*` path in text: the message names the call without
 /// backticks, as the Lua half's shared sentence does.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn fs_path(
     call: &str,
     args: &[Value],
@@ -28,10 +25,7 @@ pub(super) fn fs_path(
 
 /// The `host.fs.write` contents: a string carrying bytes as base64,
 /// since the wire has no raw byte string.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn fs_contents(args: &[Value]) -> Result<Vec<u8>, (ErrorCode, String)> {
     match arg(args, 1) {
         Value::String(text) => decode_bytes("host.fs.write", "data", text),
@@ -47,10 +41,7 @@ pub(super) fn fs_contents(args: &[Value]) -> Result<Vec<u8>, (ErrorCode, String)
 /// The lock option of a mutating `host.fs` call: absent or missing is
 /// no lock, and a boolean is itself, as the Lua half reads. Anything
 /// else is the caller's error; a non-table names the options.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn fs_lock(args: &[Value], index: usize) -> Result<bool, (ErrorCode, String)> {
     match arg(args, index) {
         Value::Null => Ok(false),
@@ -71,10 +62,7 @@ pub(super) fn fs_lock(args: &[Value], index: usize) -> Result<bool, (ErrorCode, 
 
 /// One `host.config.*` dotted key in text. The message names the call,
 /// as the Lua half's shared sentence does.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn config_key(call: &str, args: &[Value]) -> Result<String, (ErrorCode, String)> {
     match arg(args, 0) {
         Value::String(key) => Ok(key.clone()),
@@ -89,10 +77,7 @@ pub(super) fn config_key(call: &str, args: &[Value]) -> Result<String, (ErrorCod
 
 /// The `host.config.set` value: any JSON but null, since null is no
 /// value, as the Lua half refuses nil.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn config_value(args: &[Value]) -> Result<Value, (ErrorCode, String)> {
     let value = arg(args, 1);
     if value.is_null() {
@@ -106,10 +91,7 @@ pub(super) fn config_value(args: &[Value]) -> Result<Value, (ErrorCode, String)>
 
 /// The `host.config.set` scope: `machine` or `project`, as the Lua
 /// half reads.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn config_scope(
     args: &[Value],
 ) -> Result<crate::process::context::ConfigScope, (ErrorCode, String)> {
@@ -131,10 +113,7 @@ pub(super) fn config_scope(
 
 /// The `host.secret` name: any string, as the Lua half checks. The
 /// service refuses a name the manifest does not declare.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn secret_name(args: &[Value]) -> Result<String, (ErrorCode, String)> {
     match arg(args, 0) {
         Value::String(name) => Ok(name.clone()),
@@ -149,10 +128,7 @@ pub(super) fn secret_name(args: &[Value]) -> Result<String, (ErrorCode, String)>
 
 /// The `host.data_dir` scope: `machine` or `project`, as the Lua half
 /// reads.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn data_dir_scope(
     args: &[Value],
 ) -> Result<crate::process::context::DataScope, (ErrorCode, String)> {
@@ -174,10 +150,7 @@ pub(super) fn data_dir_scope(
 
 /// The `host.widget` lines: a list of strings, as the Lua half checks
 /// each line.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn widget_lines(args: &[Value]) -> Result<Vec<String>, (ErrorCode, String)> {
     match arg(args, 1) {
         Value::Array(lines) => lines
@@ -205,10 +178,7 @@ pub(super) fn widget_lines(args: &[Value]) -> Result<Vec<String>, (ErrorCode, St
 
 /// The `host.log` message: a number logs as its text, as the Lua half
 /// converts, and anything else must be a string.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn log_message(args: &[Value]) -> Result<String, (ErrorCode, String)> {
     match arg(args, 0) {
         Value::String(message) => Ok(message.clone()),
@@ -222,10 +192,7 @@ pub(super) fn log_message(args: &[Value]) -> Result<String, (ErrorCode, String)>
 
 /// One `state.*` key in text: the message names `state`, as the Lua
 /// half's shared sentence does.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn state_key(args: &[Value]) -> Result<String, (ErrorCode, String)> {
     match arg(args, 0) {
         Value::String(key) => Ok(key.clone()),
@@ -241,10 +208,7 @@ pub(super) fn state_key(args: &[Value]) -> Result<String, (ErrorCode, String)> {
 /// The `state.set` value with its fork rule: null is no value, as the
 /// Lua half refuses nil, and the rule defaults to the point the call
 /// runs at, as the Lua half does.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn state_set(
     args: &[Value],
 ) -> Result<(String, Value, contract::events::OnFork), (ErrorCode, String)> {

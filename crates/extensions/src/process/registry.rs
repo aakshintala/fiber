@@ -20,7 +20,7 @@ use super::validate;
 /// result, rejected with the refusal's sentence, or failing the package.
 #[allow(
     dead_code,
-    reason = "answered by the transport once processes register in a later part; asserted by tests"
+    reason = "answered by the transport once processes register; asserted by tests"
 )]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum RegisterOutcome {
@@ -62,7 +62,7 @@ pub(crate) struct ToolEntry {
 /// One command a `fiber.command` call registered.
 #[allow(
     dead_code,
-    reason = "timeouts are enforced when the command runs in a later part; asserted by tests"
+    reason = "timeouts are enforced when the command runs; asserted by tests"
 )]
 #[derive(Debug, Clone)]
 pub(crate) struct CommandEntry {
@@ -75,10 +75,7 @@ pub(crate) struct CommandEntry {
 }
 
 /// One provider a `fiber.provider` call registered.
-#[allow(
-    dead_code,
-    reason = "read by provider dispatch in a later part; asserted by tests"
-)]
+#[allow(dead_code, reason = "read by provider dispatch; asserted by tests")]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ProviderEntry {
     /// Each function's timeout, by function name.
@@ -88,10 +85,7 @@ pub(crate) struct ProviderEntry {
 }
 
 /// One harness a `fiber.harness` call registered.
-#[allow(
-    dead_code,
-    reason = "read by harness consumption in a later part; asserted by tests"
-)]
+#[allow(dead_code, reason = "read by harness consumption; asserted by tests")]
 #[derive(Debug, Clone)]
 pub(crate) struct HarnessEntry {
     /// The timeout every harness function runs under.
@@ -106,7 +100,7 @@ pub(crate) struct HarnessEntry {
 /// references that run them.
 #[allow(
     dead_code,
-    reason = "filled by the transport once processes register in a later part; views asserted by tests"
+    reason = "filled by the transport once processes register; views asserted by tests"
 )]
 pub(crate) struct Registry {
     /// The extension that registers, as `extensions_loaded` carries it.
@@ -149,7 +143,7 @@ pub(crate) struct Registry {
 
 #[allow(
     dead_code,
-    reason = "the register pathway and its views: the transport answers through it in a later part; asserted by tests"
+    reason = "the register pathway and its views: the transport answers through it; asserted by tests"
 )]
 impl Registry {
     /// An empty registry for `owner` on `runtime`, constrained by

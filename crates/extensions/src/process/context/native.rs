@@ -248,8 +248,8 @@ impl NativeHostServices {
 
     /// Starts `host.delegate`: the job under the session's gate, binding
     /// its id. Without a delegate service the session is closing. The
-    /// chunk-local `run` handle is the session's: Part C starts the job,
-    /// and routing its end belongs to Part D.
+    /// caller owns the chunk-local `run` handle's end: this step starts
+    /// the job and returns its id, leaving end routing to the caller.
     fn delegate(
         &self,
         context: &ProcessContext,
@@ -276,9 +276,9 @@ impl NativeHostServices {
         Ok(Some(Value::String(id.0.clone())))
     }
 
-    /// Reads `host.config.get`: the session's config has no process half
-    /// in Part C, so the call fails naming the missing session, exactly
-    /// as the Lua half fails without one.
+    /// Reads `host.config.get`: without a session there is no config to
+    /// read, so the call fails naming the missing session, exactly as
+    /// the Lua half fails without one.
     fn config_get(&self, key: &str) -> Result<Option<Value>, (contract::ErrorCode, String)> {
         let _ = key;
         Err((

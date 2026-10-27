@@ -1709,8 +1709,7 @@ impl Harness {
         } else {
             plan = json!({"actions": plan, "args": args});
         }
-        let process = fakes::ProcessFixture::command("peer", Some(&plan));
-        let (program, argv) = process.into_parts();
+        let (program, argv) = fakes::ProcessFixture::command("peer", Some(&plan));
         let launch_clock: Arc<dyn contract::clock::Clock> = clock.clone();
         // One standalone store behind both the launch and the services,
         // as the package seam's, before the session folds it.
@@ -1858,6 +1857,7 @@ fn hello_is_first_with_the_documented_fields() {
     assert_eq!(owner.drain(), CloseReason::Eof);
     let line = std::fs::read_to_string(&out_path).expect("the peer writes the first line");
     let envelope: Value = serde_json::from_str(&line).expect("the hello is one JSON line");
+    // docs/extensions.md:211, "`extension_hello` is the first line Fiber sends".
     assert_eq!(envelope["kind"], json!("extension_hello"));
     assert_eq!(envelope["session_id"], json!("s_test"));
     assert_eq!(envelope["schema_version"], json!(1));
@@ -1922,6 +1922,7 @@ fn registrations_stand_only_before_ready() {
     }
     assert_eq!(owner.drain(), CloseReason::Eof);
     let answers = read_json_file(&out_path, "the registration answers");
+    // docs/invocation.md:368, every command gets exactly one acknowledgement.
     assert_eq!(answers.as_array().unwrap().len(), 5);
     for (id, index) in [("c1", 0), ("c2", 1), ("c3", 2)] {
         let answer = &answers[index];
@@ -2456,6 +2457,7 @@ fn malformed_unknown_and_forwarded_lines() {
     }
     assert_eq!(owner.drain(), CloseReason::Eof);
     let answers = read_json_file(&out_path, "the wire answers");
+    // docs/invocation.md:368, every command gets exactly one acknowledgement.
     assert_eq!(answers.as_array().unwrap().len(), 4);
     assert_eq!(answers[0]["kind"], json!("command_rejected"));
     assert_eq!(answers[0]["payload"]["code"], json!("unknown_command"));
@@ -2609,6 +2611,7 @@ fn host_calls_reach_services_with_timer_attribution() {
         .collect();
     assert!(answers.remove("ready").is_some());
     let answers = Value::Object(answers);
+    // docs/invocation.md:368, every command gets exactly one acknowledgement.
     assert_eq!(answers.as_object().unwrap().len(), calls.len());
     for (id, _, _) in &calls {
         let answer = &answers[id];
@@ -3462,7 +3465,7 @@ fn refresh_retired_mid_wait_answers_nothing() {
     let script = &refresh_plan(json!([
         {"read": {"as": "nested", "expect": {"kind": "extension_request"}}},
         {"write_file": {"path": {"$ref": "args.1"}, "value": {"nested": true}}},
-        {"wait_silent": {"timeout_ms": 3000}},
+        {"hold": {"release_on": "line", "release_line": {"kind": "release"}}},
         {"write_file": {"path": {"$ref": "args.0"}, "value": {"saw": "silent"}}}
     ]))
     .to_string();
@@ -3484,9 +3487,15 @@ fn refresh_retired_mid_wait_answers_nothing() {
     );
     owner.pump();
     // The nested line reached the child, so the refresh waits on its
-    // function: retiring ends that wait with no answer.
+    // function: retiring ends that wait with no answer. The hold keeps
+    // the peer parked until the test releases it, so no clock moves.
     read_json_file(&nested_path, "the nested request");
     owner.extension.shared().table.retire();
+    owner
+        .extension
+        .transport()
+        .send(br#"{"kind":"release"}"#.to_vec())
+        .expect("release the peer after retiring");
     let seen = read_json_file(&out_path, "the retired refresh");
     assert_eq!(seen, json!({"saw": "silent"}));
     // The worker released the lock on its way out.

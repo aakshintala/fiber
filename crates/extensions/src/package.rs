@@ -104,7 +104,7 @@ impl Package {
     /// `PackageOptions` stays `{ dir, clock }`: no session activation.
     #[allow(
         dead_code,
-        reason = "asserted by tests; session activation lands in Part D"
+        reason = "asserted by tests; the package seam keeps it for process owners"
     )]
     pub(crate) fn load_process_with(
         options: PackageOptions,
@@ -130,10 +130,9 @@ impl Package {
         } else {
             dir.join(program)
         };
-        // Refresh resolves stored pairs from the home credential files;
-        // the session wires its account choice in Part D. State opens on
-        // a standalone store; the session folds its state into the store
-        // in Part D.
+        // Refresh resolves stored pairs from the home credential files.
+        // State opens on a standalone store; the session folds its state
+        // into the store.
         let home = context.home.clone();
         let extension = super::process::ProcessExtension::start(super::process::Launch {
             owner: package.manifest.name.clone(),
@@ -191,7 +190,7 @@ impl Package {
     /// to a package without a registry is not a registration.
     #[allow(
         dead_code,
-        reason = "answered by the transport once processes register in a later part; asserted by tests"
+        reason = "answered by the transport once processes register; asserted by tests"
     )]
     pub(crate) fn register(
         &self,
@@ -216,12 +215,9 @@ impl Package {
     }
 
     /// The started process owner, when the package started one behind
-    /// the seam. The package tests pump it; the session owns it in
-    /// Part D.
-    #[allow(
-        dead_code,
-        reason = "asserted by tests; production use lands in a later part"
-    )]
+    /// the seam. The package tests pump it; the session owns it when
+    /// wired.
+    #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
     pub(crate) fn extension(&self) -> Option<&super::process::ProcessExtension> {
         self.extension.as_ref()
     }

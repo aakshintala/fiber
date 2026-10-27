@@ -19,10 +19,7 @@ use crate::lua::CredentialFor;
 
 /// Where an admitted call runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum CallbackKind {
     /// While the entry script runs, before `ready`.
     Entry,
@@ -43,10 +40,7 @@ pub(crate) enum CallbackKind {
 /// I/O or callback waits; the context owns the deadline and the cancel
 /// signal the wait reads instead.
 #[derive(Clone)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct CallbackContext {
     /// The extension making the call.
     pub extension: String,
@@ -67,10 +61,7 @@ pub(crate) struct CallbackContext {
     pub credential: Option<CredentialFor>,
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl CallbackContext {
     /// A call made while the entry script runs, before `ready`.
     pub(crate) fn entry(extension: &str) -> Self {
@@ -163,10 +154,7 @@ impl CallbackContext {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl std::fmt::Debug for CallbackContext {
     /// Names the extension, the kind, the deadline and the hook
     /// transaction: the cancel signal has no `Debug`, and neither prints.
@@ -184,10 +172,7 @@ impl std::fmt::Debug for CallbackContext {
 /// an inner call. Every other callback, and no callback at all, refuses
 /// `host.tool` with the Lua sentence, starting no tool work.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum ToolAnchor {
     /// Inside a tool request, judged by that tool's `executes`.
     Tool(String),
@@ -198,10 +183,7 @@ pub(crate) enum ToolAnchor {
 
 /// The inner call `host.tool` may run under: a tool or command request
 /// anchors it. The `ran_by` is the request's, or `None` outside one.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn tool_anchor(ran_by: Option<&str>) -> Option<ToolAnchor> {
     let ran_by = ran_by?;
     if let Some(name) = ran_by.strip_prefix("tool ") {
@@ -224,10 +206,7 @@ pub(crate) fn tool_anchor(ran_by: Option<&str>) -> Option<ToolAnchor> {
 /// Whether `host.model` may run under `ran_by`: everywhere but an
 /// effects, provider or search-backend request, as in Lua. `None` is a
 /// timer, which may call the session's model.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn model_permitted(ran_by: Option<&str>) -> bool {
     let Some(ran_by) = ran_by else {
         return true;
@@ -244,10 +223,7 @@ pub(crate) fn model_permitted(ran_by: Option<&str>) -> bool {
 /// Whether `host.delegate` may run under `ran_by`: everywhere but a
 /// provider, watcher, search-backend or effects request, as in Lua.
 /// `None` is a timer, which may start a delegate.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn delegate_permitted(ran_by: Option<&str>) -> bool {
     let Some(ran_by) = ran_by else {
         return true;
@@ -267,10 +243,7 @@ pub(crate) fn delegate_permitted(ran_by: Option<&str>) -> bool {
 /// Whether a finished `host.exec` run is logged as `extension_exec`:
 /// every run but one inside a tool request, whose effects the tool's
 /// own run already judged.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn exec_logged(ran_by: Option<&str>) -> bool {
     !matches!(tool_anchor(ran_by), Some(ToolAnchor::Tool(_)))
 }
@@ -278,10 +251,7 @@ pub(crate) fn exec_logged(ran_by: Option<&str>) -> bool {
 /// The entry-script refusal for `call`: the sentence and code the Lua
 /// half raises before it yields. `None` runs in the entry script as it
 /// does anywhere else.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn entry_refusal(call: &str) -> Option<(ErrorCode, String)> {
     let string = |message: &str| Some((ErrorCode::InvalidArguments, message.to_owned()));
     let closing = |message: &str| Some((ErrorCode::Closing, message.to_owned()));
@@ -308,10 +278,7 @@ pub(crate) fn entry_refusal(call: &str) -> Option<(ErrorCode, String)> {
 /// The lock failure `host.oauth.refresh` raises without a provider
 /// credential: the sentence names the callback, as in Lua. `None` is a
 /// timer, which holds no credential either.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn lock_arg_error(call: &str, ran_by: Option<&str>) -> String {
     let kind = match ran_by {
         None => "a timer",
@@ -344,10 +311,7 @@ pub(crate) fn lock_arg_error(call: &str, ran_by: Option<&str>) -> String {
 /// Decodes a bytes position carried as standard base64, both ways. Invalid
 /// base64 is rejected `invalid_arguments`, naming the call and the
 /// argument.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn decode_bytes(
     call: &str,
     arg: &str,
@@ -362,10 +326,7 @@ pub(crate) fn decode_bytes(
 }
 
 /// Encodes bytes for a base64 position, standard base64.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn encode_bytes(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
 }

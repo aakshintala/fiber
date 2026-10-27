@@ -463,10 +463,7 @@ fn kill_gone(shared: &Shared) {
 /// blind sleep, and cancel ends it with the child left for the caller.
 /// `Some` carries the exit when the child ends; `None` means the bound
 /// passed and the shutdown moves to its next signal.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn await_exit(
     live: &transport::Transport,
     clock: &dyn contract::clock::Clock,

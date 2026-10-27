@@ -21,10 +21,7 @@ use crate::host::admission::CallbackContext;
 /// What one process extension runs as: the first `extension_hello` line's
 /// payload, and the context every native host call reads.
 #[derive(Debug, Clone)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct ProcessContext {
     /// The session's id, as `extension_hello` carries it.
     pub session_id: contract::SessionId,
@@ -42,10 +39,7 @@ pub(crate) struct ProcessContext {
     pub home: PathBuf,
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl ProcessContext {
     /// The `extension_hello` payload: the session's identity, why it
     /// started, its workspace, the extension's data directories and its
@@ -70,10 +64,7 @@ impl ProcessContext {
 /// One decoded process host or state call: the family and its arguments
 /// as native values, with the Lua half's validation already applied.
 /// Byte positions carry bytes, every other string carries text.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum HostOperation {
     /// `host.http`: the method, URL, headers and optional body bytes.
     Http {
@@ -227,8 +218,8 @@ pub(crate) enum HostOperation {
         arguments: Map<String, Value>,
         /// The per-call timeout.
         timeout: Duration,
-        /// Whether the call passed its `run` function: Part D routes that
-        /// end, and Part C only starts the job.
+        /// Whether the call passed its `run` function: the caller owns
+        /// that end, and this step only starts the job.
         run: bool,
     },
     /// `host.oauth.callback`: serve one request on this localhost port.
@@ -294,10 +285,7 @@ pub(crate) enum HostOperation {
 
 /// The scope a `host.config.set` writes to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum ConfigScope {
     /// The machine scope.
     Machine,
@@ -307,10 +295,7 @@ pub(crate) enum ConfigScope {
 
 /// The scope a `host.data_dir` reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum DataScope {
     /// The machine directory.
     Machine,
@@ -321,10 +306,7 @@ pub(crate) enum DataScope {
 /// One inner tool call: what the runner service runs, inheriting the
 /// outer callback's attribution, deadline and cancellation.
 #[derive(Debug, Clone)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct ToolCall {
     /// The extension whose tool runs.
     pub extension: String,
@@ -339,12 +321,9 @@ pub(crate) struct ToolCall {
 }
 
 /// Runs one inner tool call to completion, as the runner behind
-/// `host.tool` does in Lua. Tests stand a stub behind this trait; Part D
-/// wires the session's runner.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+/// `host.tool` does in Lua. Tests stand a stub behind this trait; the
+/// session wires its runner when connected.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) trait ToolRunner: Send + Sync {
     /// Runs `call`'s tool, stopped by `cancel`. The error is raised as
     /// the calling code's string, as in Lua.
@@ -358,10 +337,7 @@ pub(crate) trait ToolRunner: Send + Sync {
 /// The services one process host or state call runs through: the decoded
 /// operation runs under `callback` in `context`, stopped by `cancel`.
 /// `None` answers nothing, `{}`; `Some` answers `{ value }`.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) trait ProcessHostServices: Send + Sync {
     /// Runs `operation`, answering its value or the code and message the
     /// Lua call raises.
@@ -378,10 +354,7 @@ pub(crate) trait ProcessHostServices: Send + Sync {
 /// trait, with the session's services present only when the session
 /// wired them. Without a session, service-backed calls fail exactly as
 /// the Lua half fails without one.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct NativeHostServices {
     /// Emits the session-visible lines: exec, status, widget, message,
     /// log and state events.

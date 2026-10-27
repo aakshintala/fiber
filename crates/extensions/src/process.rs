@@ -33,10 +33,7 @@ pub(crate) mod transport;
 /// driver commands go through the `Drive` seam. Requests ride the shared
 /// request table: stream items ordered one at a time, tool calls
 /// concurrent, and one retirement seam for replies, deadlines and cancels.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct ProcessExtension {
     shared: Arc<Shared>,
 }
@@ -73,10 +70,7 @@ pub(crate) struct Launch {
 
 /// What the owner's threads share: the extension's identity, its runtime
 /// and registry, its request table and pipes, and what answers its calls.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct Shared {
     owner: String,
     runtime: Runtime,
@@ -107,10 +101,7 @@ pub(crate) struct Shared {
 
 /// What one `pump_once` did.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum Pumped {
     /// One line handled and answered.
     Handled,
@@ -118,10 +109,7 @@ pub(crate) enum Pumped {
     Closed(transport::CloseReason),
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl ProcessExtension {
     /// Starts the launched program for its owner: the child runs in the
     /// launch's workspace, and `extension_hello` is the first complete
@@ -313,8 +301,7 @@ impl ProcessExtension {
             // Lua scheduler does around its hook calls. Watchers and
             // commands never join a transaction: their `state_call`, if
             // one arrived, would write into no open call. The committed
-            // lines go to the session fold in Part D; the store applies
-            // them here.
+            // lines go to the session fold; the store applies them here.
             Some(Family::Hook { point }) => {
                 if let Some(call) = state_call {
                     self.shared.state.begin(call);
@@ -566,10 +553,7 @@ impl ProcessExtension {
 }
 
 /// Which registered family a reference names.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 enum Family {
     Hook { point: String },
     Watcher { index: usize },
@@ -586,10 +570,7 @@ enum Family {
 /// timer call's timeout, only the bound that fails a wedged wait instead
 /// of hanging it: the reply, the deadline or the cancel always ends the
 /// wait first.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn hang_guard(
     clock: &dyn contract::clock::Clock,
     deadline: Option<std::time::Instant>,
@@ -601,10 +582,7 @@ pub(crate) fn hang_guard(
 
 /// One wire line: the envelope around `payload`, with the session's id,
 /// the clock's wall time and the build's schema version.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn envelope_line(
     shared: &Shared,
     kind: &str,
@@ -624,10 +602,7 @@ pub(crate) fn envelope_line(
 }
 
 /// Answers a driven command accepted, on the pump's thread.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn answer_on(
     shared: &Shared,
     id: &contract::CommandId,
@@ -660,10 +635,7 @@ pub(crate) fn answer_on(
 }
 
 /// Answers a driven command rejected, on the pump's thread.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn answer_off(
     shared: &Shared,
     id: &contract::CommandId,

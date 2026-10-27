@@ -6,10 +6,7 @@ use super::{arg, decode_bytes};
 
 /// One `host.oauth.*` URL in text: `open` names the bare URL, `poll`
 /// the backticked one, as their Lua halves do.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn oauth_url(args: &[Value], message: &str) -> Result<String, (ErrorCode, String)> {
     match arg(args, 0) {
         Value::String(url) => Ok(url.clone()),
@@ -22,10 +19,7 @@ pub(super) fn oauth_url(args: &[Value], message: &str) -> Result<String, (ErrorC
 /// The `host.oauth.callback` port: a whole number from 1 to 65535, as
 /// the Lua half checks. A float reads as no integer, like `math.type`
 /// rejecting it.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn oauth_port(args: &[Value]) -> Result<u16, (ErrorCode, String)> {
     let fail = || {
         (
@@ -41,10 +35,7 @@ pub(super) fn oauth_port(args: &[Value]) -> Result<u16, (ErrorCode, String)> {
 
 /// The `host.oauth.callback` path: absent or null reads as none, as the
 /// Lua half does; a string must start with `/`.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn oauth_path(args: &[Value]) -> Result<Option<String>, (ErrorCode, String)> {
     match arg(args, 1) {
         Value::Null => Ok(None),
@@ -62,10 +53,7 @@ pub(super) fn oauth_path(args: &[Value]) -> Result<Option<String>, (ErrorCode, S
 
 /// The `host.oauth.show` URL with its device code: both are required
 /// strings, and the one sentence names both, as the Lua half does.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn oauth_show(args: &[Value]) -> Result<(String, String), (ErrorCode, String)> {
     let (Value::String(url), Value::String(code)) = (arg(args, 0), arg(args, 1)) else {
         return Err((
@@ -79,10 +67,7 @@ pub(super) fn oauth_show(args: &[Value]) -> Result<(String, String), (ErrorCode,
 /// The `host.oauth.poll` method: absent or null posts, as the Lua half
 /// defaults. Anything set must be a string, which the poll hands to
 /// `host.http` unchecked, as the Lua half does.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn oauth_method(args: &[Value]) -> Result<String, (ErrorCode, String)> {
     match arg(args, 1) {
         Value::Null => Ok("POST".to_owned()),
@@ -96,10 +81,7 @@ pub(super) fn oauth_method(args: &[Value]) -> Result<String, (ErrorCode, String)
 
 /// The `host.oauth.poll` headers: a table of strings, handed to
 /// `host.http` unchecked, as the Lua half passes them through.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn oauth_headers(args: &[Value]) -> Result<Vec<(String, String)>, (ErrorCode, String)> {
     let table = || {
         (
@@ -132,10 +114,7 @@ pub(super) fn oauth_headers(args: &[Value]) -> Result<Vec<(String, String)>, (Er
 
 /// The `host.oauth.poll` body: absent or null sends none. A string
 /// carries bytes as base64, since the wire has no raw byte string.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn oauth_body(args: &[Value]) -> Result<Option<Vec<u8>>, (ErrorCode, String)> {
     match arg(args, 3) {
         Value::Null => Ok(None),
@@ -151,10 +130,7 @@ pub(super) fn oauth_body(args: &[Value]) -> Result<Option<Vec<u8>>, (ErrorCode, 
 /// device flow's pending reply, as the Lua half does with no list. A
 /// list holds whole-number statuses from 100 to 599; JSON lists carry
 /// their own 1-based order, so only the values are checked.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn oauth_pending(args: &[Value]) -> Result<Option<Vec<u16>>, (ErrorCode, String)> {
     let fail = || {
         (
@@ -182,10 +158,7 @@ pub(super) fn oauth_pending(args: &[Value]) -> Result<Option<Vec<u16>>, (ErrorCo
 /// The `host.oauth.poll` seconds between polls: absent or null waits
 /// five, as the Lua half defaults. A shorter wait reads as one second,
 /// as the Lua half clamps; longer than an hour fails.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn oauth_interval(args: &[Value]) -> Result<u64, (ErrorCode, String)> {
     const MAX_INTERVAL: u64 = 3600;
     let fail = || {
@@ -208,10 +181,7 @@ pub(super) fn oauth_interval(args: &[Value]) -> Result<u64, (ErrorCode, String)>
 /// The `host.oauth.refresh` function marker: the program passes `true`
 /// where the Lua half takes the function, since the nested call's body
 /// arrives as its own request, not as a value on the wire.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(super) fn refresh_function(args: &[Value]) -> Result<(), (ErrorCode, String)> {
     if !matches!(arg(args, 0), Value::Bool(true)) {
         return Err((

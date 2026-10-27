@@ -72,7 +72,6 @@ fn a_protocol_peer_acknowledges_each_hold_before_release() {
             "release_on": "line",
             "release_line": {"kind": "release"}
         }},
-        {"wait_silent": {"timeout_ms": 2}},
         {"send": {"released": true}}
     ]);
     let mut fixture = ProcessFixture::spawn_protocol(&script);

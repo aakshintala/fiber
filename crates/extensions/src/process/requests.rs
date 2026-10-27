@@ -33,10 +33,7 @@ use super::super::host::admission::CallbackContext;
 
 /// What one pending request asks the child to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum RequestKind {
     /// One stream item: ordered behind the stream gate.
     Stream,
@@ -49,10 +46,7 @@ pub(crate) enum RequestKind {
 
 /// How one request ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum Outcome {
     /// The child's answer, as the Lua function would return it.
     Answered(Answer),
@@ -66,10 +60,7 @@ pub(crate) enum Outcome {
 
 /// The child's answer to one request.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum Answer {
     /// What the Lua function returns; any JSON value, null included.
     Value(serde_json::Value),
@@ -84,10 +75,7 @@ pub(crate) enum Answer {
 
 /// What settling a request reports: whether this settler won.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum Settled {
     /// This settler completed the request; the outcome is delivered.
     Completed,
@@ -98,10 +86,7 @@ pub(crate) enum Settled {
 
 /// One pending request: its kind, its callback context, its cancel signal
 /// and its waiter.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 struct Pending {
     kind: RequestKind,
     context: CallbackContext,
@@ -132,19 +117,13 @@ impl WaitCell {
 
 /// Fires one request's cancel when its dispatching caller cancels: the
 /// dispatching callback ended, so its request ends with it.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 struct Fire {
     table: std::sync::Weak<Table>,
     id: RequestId,
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl support::clock::Wake for Fire {
     fn wake(&self) {
         if let Some(table) = self.table.upgrade() {
@@ -154,10 +133,7 @@ impl support::clock::Wake for Fire {
 }
 
 /// What minting one request hands back.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct Minted {
     /// The request's id, unique within the generation.
     pub id: RequestId,
@@ -168,10 +144,7 @@ pub(crate) struct Minted {
 }
 
 /// One generation of pending requests, with the stream gate.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 struct Inner {
     /// The current generation: minted ids resolve only here.
     generation: u64,
@@ -183,19 +156,13 @@ struct Inner {
 
 /// The request table: one generation of pending requests and the stream
 /// gate. The lock is a leaf: no callback runs under it.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct Table {
     inner: Mutex<Inner>,
     stream_gate: Condvar,
 }
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl Table {
     /// An empty table at its first generation.
     pub(crate) fn new() -> Self {
@@ -536,10 +503,7 @@ impl Table {
 /// exactly once on every path, releasing the stream gate. A free function
 /// over the shared owner, so installed handlers own it beside the
 /// dispatches.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn run_request(
     shared: &Shared,
     dispatch: Dispatch,
@@ -711,10 +675,7 @@ impl Dispatch {
 /// The arguments the Lua function receives, as a JSON array: a function
 /// taking one value receives it alone, and an array value spreads, so a
 /// multi-argument function receives each element.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn wire_args(value: Value) -> Vec<Value> {
     match value {
         Value::Array(items) => items,

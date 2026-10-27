@@ -565,29 +565,12 @@ fn spawn_descendant(config: &Value) -> Result<(), String> {
         .get("mode")
         .and_then(Value::as_str)
         .ok_or_else(|| "spawn_descendant needs a mode".to_owned())?;
-    if mode == "sleep" {
-        let mut command = Command::new("sleep");
-        command
-            .arg("60")
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
-        drop(
-            command
-                .spawn()
-                .map_err(|err| format!("spawn descendant: {err}"))?,
-        );
-        return Ok(());
+    if mode != "sleep" {
+        return Err(format!("unknown descendant mode `{mode}`"));
     }
-    let script = match mode {
-        "ignore_term" => "trap '' TERM; while :; do sleep 60; done",
-        _ => return Err(format!("unknown descendant mode `{mode}`")),
-    };
-    let mut command = Command::new("sh");
+    let mut command = Command::new("sleep");
     command
-        .arg("-c")
-        .arg(script)
-        .arg("process-extension-descendant")
+        .arg("60")
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());

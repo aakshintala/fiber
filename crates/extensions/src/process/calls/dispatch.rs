@@ -10,10 +10,7 @@ use crate::process::{
     oauth, requests, transport,
 };
 
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl ProcessExtension {
     /// Handles one line or close from the child, answering it. A close
     /// records the death once per child spawn, retiring the generation
@@ -466,10 +463,7 @@ impl ProcessExtension {
 
 /// The sentence a command this Fiber does not build is rejected with,
 /// shared with the doors' `not_built`: it names the line's own command.
-#[allow(
-    dead_code,
-    reason = "asserted by tests; production use lands in a later part"
-)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 fn not_built(command: &str) -> String {
     format!("`{command}` is not built in this Fiber yet.")
 }
