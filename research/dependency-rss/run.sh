@@ -57,7 +57,11 @@ hl_row() {
 }
 
 build() {
-  cargo build --release -q --target-dir "target/$1" ${2:+--features "$2"}
+  # The explicit return keeps a caller's `if bin=$(build ...)` honest:
+  # inside an if-condition the shell ignores `set -e`, so without it a
+  # failed cargo would fall through to the echo and report success with a
+  # binary that was never built.
+  cargo build --release -q --target-dir "target/$1" ${2:+--features "$2"} || return 1
   echo "target/$1/release/dependency-rss"
 }
 
