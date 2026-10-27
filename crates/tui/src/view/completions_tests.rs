@@ -147,8 +147,8 @@ fn slash_exit_alias() {
 #[test]
 fn slash_keys_aliases_render_and_filter_independently() {
     // Each alias, whole or in part, finds exactly the keys row, which
-    // carries both aliases on it, with no range line. The row shows
-    // `/keybindings` before `/keymap` (`docs/tui.md:1937,1957`).
+    // carries both aliases on it, with no range line (`docs/tui.md:1955`).
+    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1937,1957`).
     for query in ["keymap", "keybindings", "keyma", "keybind"] {
         let mut app = attached(160, 48);
         type_text(&mut app, &format!("/{query}"));

@@ -19,6 +19,10 @@ use serde_json::json;
 use support::pty::Run;
 use support::{Setup, write_json};
 
+/// The terminal emits this synchronized-output marker after each frame
+/// (`docs/tui.md`, "Performance").
+const FRAME_END: &[u8] = b"\x1b[?2026l";
+
 /// The terminal on home: an offline model keeps boot free of the
 /// network, and the hub exits at once after its last client leaves, so
 /// `wait` never outlasts the test's deadline.
@@ -57,9 +61,9 @@ fn rules_setup() -> Setup {
 /// Quits from home after Ctrl+C clears any remaining input, then checks
 /// the restored terminal and a clean exit.
 fn quit(mut run: Run, command: &str) {
-    // The caller's complete post-command frame is the input-ready signal.
-    // Ctrl+C then `/quit` is one ordered cleanup sequence.
+    let input = run.output().len();
     run.write(b"\x03");
+    run.wait_bytes(input, FRAME_END, "the cleared home-input frame");
     run.write(b"/quit\r");
     run.wait_screen("the restored terminal", |grid| {
         !grid.alternate_screen && !grid.hide_cursor
@@ -77,37 +81,51 @@ fn row_with(grid: &support::pty::Grid, needle: &str, command: &str) -> String {
         .clone()
 }
 
-/// Types `prefix`, waits for the slash-list row naming the canonical
-/// command beside its alias, types `rest`, runs, and returns the grid.
-fn run_slash(run: &mut Run, prefix: &str, row: &str, rest: &str, command: &str) {
+/// Types `prefix`, waits for the slash-list row and its frame to finish,
+/// types `rest`, and returns the output offset before `rest`.
+fn run_slash(run: &mut Run, prefix: &str, row: &str, rest: &str, command: &str) -> usize {
+    let prefix_input = run.output().len();
     run.write(prefix.as_bytes());
     let what = format!("the slash-list row for {command}");
     run.wait_screen(&what, |grid| grid.contents.contains(row));
-    // This whole frame shows the prefix was handled and the input loop
-    // is ready for `rest`.
+    run.wait_bytes(prefix_input, FRAME_END, "the slash-list frame");
+    let rest_input = run.output().len();
     run.write(rest.as_bytes());
+    rest_input
+}
+
+/// Opens a command's view, returns the row containing `marker`, then
+/// closes the view and quits.
+fn view_row(
+    setup: &Setup,
+    command: &str,
+    prefix: &str,
+    row: &str,
+    rest: &str,
+    marker: &str,
+) -> String {
+    let mut run = terminal(setup);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    let rest_input = run_slash(&mut run, prefix, row, rest, command);
+    let view = run.wait_screen("the command view", |grid| grid.contents.contains(marker));
+    run.wait_bytes(rest_input, FRAME_END, "the command view frame");
+    let found = row_with(&view, marker, command);
+
+    let close_input = run.output().len();
+    run.write(b"\x1b[27u"); // Kitty-protocol Esc
+    run.wait_screen("the closed command view", |grid| {
+        !grid.contents.contains(marker)
+    });
+    run.wait_bytes(close_input, FRAME_END, "the closed command view frame");
+    quit(run, command);
+    found
 }
 
 /// The rebinding screen's footer line after running `command` through
 /// `prefix` plus `rest`, for the row `row`.
 fn rebinding_footer(command: &str, prefix: &str, row: &str, rest: &str) -> String {
-    let setup = Setup::new();
-    let mut run = terminal(&setup);
-    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
-    run.ready();
-    run_slash(&mut run, prefix, row, rest, command);
-    let grid = run.wait_screen("the rebinding screen", |grid| {
-        grid.contents.contains("Enter rebind")
-    });
-    let footer = row_with(&grid, "Enter rebind", command);
-    // This whole frame shows the rebinding screen is ready for Esc.
-    run.write(b"\x1b[27u"); // Kitty-protocol Esc
-    // Confirm Esc closed the view before sending the cleanup command.
-    run.wait_screen("the closed rebinding screen", |grid| {
-        !grid.contents.contains("Enter rebind")
-    });
-    quit(run, command);
-    footer
+    view_row(&Setup::new(), command, prefix, row, rest, "Enter rebind")
 }
 
 #[test]
@@ -121,23 +139,14 @@ fn keymap_opens_the_rebinding_screen_like_keys() {
 /// The standing-rules row after running `command` through `prefix`
 /// plus `rest`, for the row `row`.
 fn rules_row(command: &str, prefix: &str, row: &str, rest: &str) -> String {
-    let setup = rules_setup();
-    let mut run = terminal(&setup);
-    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
-    run.ready();
-    run_slash(&mut run, prefix, row, rest, command);
-    let grid = run.wait_screen("the rules rows", |grid| {
-        grid.contents.contains("allow shell:git status")
-    });
-    let found = row_with(&grid, "allow shell:git status", command);
-    // This whole frame shows the rules screen is ready for Esc.
-    run.write(b"\x1b[27u"); // Kitty-protocol Esc
-    // Confirm Esc closed the view before sending the cleanup command.
-    run.wait_screen("the closed rules view", |grid| {
-        !grid.contents.contains("allow shell:git status")
-    });
-    quit(run, command);
-    found
+    view_row(
+        &rules_setup(),
+        command,
+        prefix,
+        row,
+        rest,
+        "allow shell:git status",
+    )
 }
 
 #[test]
@@ -155,8 +164,9 @@ fn home_notice(command: &str, prefix: &str, row: &str, rest: &str, notice: &str)
     let mut run = terminal(&setup);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
-    run_slash(&mut run, prefix, row, rest, command);
+    let rest_input = run_slash(&mut run, prefix, row, rest, command);
     let grid = run.wait_screen("the home notice", |grid| grid.contents.contains(notice));
+    run.wait_bytes(rest_input, FRAME_END, "the home notice frame");
     let found = row_with(&grid, notice, command);
     quit(run, command);
     found

@@ -141,14 +141,12 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
             "{name} drawn but not in the contract list"
         );
     }
-    let mut extra: Vec<&&str> = BUILT_IN_COMMANDS
+    let extra: Vec<&&str> = BUILT_IN_COMMANDS
         .iter()
         .filter(|name| !table_names().contains(name))
         .collect();
     // This terminal draws `rewind` among the built-in rows.
-    // Registry order is internal; compare membership only.
-    extra.sort();
-    let mut wanted = [
+    let wanted = [
         &"effort",
         &"cost",
         &"cwd",
@@ -162,7 +160,6 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         &"exit",
         &"bug",
     ];
-    wanted.sort();
     // The table enumerates the complete alias set (`docs/tui.md:1919–1949,1957`).
     assert_eq!(extra, wanted);
     // An extension or skill named like an alias cannot take it silently
