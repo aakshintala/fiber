@@ -1009,6 +1009,15 @@ impl Run {
         }
     }
 
+    /// The workspace-holder cleanup wait's own deadline: the journey
+    /// consumed the success-path budget confirming the child, the group,
+    /// the reader and the hub, so confirming the killed sessions are
+    /// gone draws on the cleanup phase instead, the way the watchdog
+    /// stand-downs already do.
+    fn session_cleanup_deadline(&self) -> Deadline {
+        self.deadline.cleanup_phase()
+    }
+
     /// Restores the drain when stalled, keeping the shared state (the
     /// parser, the query tail) and the writer. Then waits for the child
     /// to exit and reaps it, checks its group empties, waits for the
@@ -1067,7 +1076,8 @@ impl Run {
             if let Err(err) = fakes::kill_matching(&workspace) {
                 panic!("killing the sessions in the workspace: {err}");
             }
-            if let Err(err) = fakes::try_matching_exits(&workspace, self.deadline) {
+            if let Err(err) = fakes::try_matching_exits(&workspace, self.session_cleanup_deadline())
+            {
                 panic!(
                     "waited until the deadline for every process holding the workspace path to exit: {err}"
                 );
@@ -1462,5 +1472,97 @@ mod tests {
             "the working status line alone does not satisfy the reply wait"
         );
         assert!(!shows_row(&grid, "idle"), "absent text does not match");
+    }
+
+    /// The workspace-holder cleanup wait draws on the cleanup phase,
+    /// not the journey's spent success-path budget (#3500): a fake
+    /// clock advanced past WAITS leaves the shared wait with nothing,
+    /// while the cleanup phase still holds CLEANUP minus WAITS. The
+    /// spent shared wait fails exactly the way the flaky exit wait
+    /// did, with no holder named; the run's cleanup deadline on the
+    /// same absent path succeeds; and a live holder under it is named
+    /// with its pid and command line.
+    #[test]
+    fn workspace_cleanup_wait_uses_the_cleanup_phase() {
+        use std::os::unix::process::CommandExt as _;
+
+        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+        let deadline = Deadline::on(&**clock);
+        let terminal = open(80, 24);
+        let main = fs::File::from(terminal.main);
+        let run = Run::attach(main, 80, 24, deadline);
+        // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+        clock.advance(fakes::deadline::WAITS);
+        assert!(deadline.left().is_zero(), "the shared wait budget is spent");
+        assert_eq!(
+            run.session_cleanup_deadline().left(),
+            fakes::deadline::CLEANUP.saturating_sub(fakes::deadline::WAITS),
+            "the cleanup wait keeps its own budget"
+        );
+        let stem = format!("fiber-3500-{}", std::process::id());
+        let absent = std::env::temp_dir()
+            .join(format!("{stem}-absent"))
+            .to_string_lossy()
+            .into_owned();
+        // The spent shared wait fails exactly the way the flaky exit
+        // wait did: nothing holds the path, yet the expiry names no
+        // holder, because no listing runs before the deadline.
+        let err = fakes::try_matching_exits(&absent, deadline)
+            .expect_err("a spent budget waits on nothing, so it fails");
+        assert_eq!(
+            err.to_string(),
+            "deadline expired waiting for exit",
+            "a spent budget names no holder"
+        );
+        // The run's cleanup deadline on the same absent path succeeds:
+        // absence alone never fails the wait.
+        fakes::try_matching_exits(&absent, run.session_cleanup_deadline())
+            .expect("nothing holds the path, so the cleanup wait succeeds");
+        // A live holder under the cleanup deadline is named with its
+        // pid and command line, so a leaked session could never
+        // produce the flake's holder-free message.
+        let marker = std::env::temp_dir()
+            .join(format!("{stem}-holder"))
+            .to_string_lossy()
+            .into_owned();
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 30 & echo $!; wait", &marker])
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the marked shell starts");
+        let id = child.id();
+        fakes::wait_until(
+            "the marked shell to list",
+            Deadline::after(Duration::from_secs(10)),
+            {
+                let marker = marker.clone();
+                move || fakes::matching(&marker).is_ok_and(|pids| pids.contains(&id))
+            },
+        );
+        let err = fakes::try_matching_exits(&marker, run.session_cleanup_deadline())
+            .expect_err("the holder outlives the cleanup wait, so it fails");
+        let message = err.to_string();
+        fakes::kill_group(id, "KILL").expect("the marked shell's group dies");
+        fakes::kill_pid(id, "KILL").expect("the marked shell dies");
+        assert!(
+            fakes::within(
+                "the marked shell to reap",
+                Deadline::after(Duration::from_secs(10)),
+                move || child.wait(),
+            )
+            .is_ok(),
+            "the marked shell reaps"
+        );
+        assert!(
+            message.contains(&id.to_string()),
+            "the expiry names the holder pid: {message}"
+        );
+        assert!(
+            message.contains(&marker),
+            "the expiry names the holder command line: {message}"
+        );
     }
 }

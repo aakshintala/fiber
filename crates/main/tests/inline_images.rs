@@ -18,7 +18,11 @@ mod support;
 
 use serde_json::{Value, json};
 use std::fs;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Duration;
+use support::Deadline;
 use support::pty::{Grid, Run};
 use support::{Setup, TRUECOLOUR, write_json};
 
@@ -660,4 +664,78 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
     });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
+}
+
+/// Probe for #3500: an exhausted wait budget fails exactly the way the
+/// flaky exit wait did, with no process holding the path. The marker
+/// names a path nothing ever references, and the zero budget leaves no
+/// time for even the first listing, so the expiry names no holder.
+#[test]
+fn probe_exhausted_budget_names_no_holder() {
+    let setup = Setup::new();
+    let absent = setup
+        .workspace()
+        .join("probe-absent")
+        .to_string_lossy()
+        .into_owned();
+    let err = fakes::try_matching_exits(&absent, Deadline::after(Duration::ZERO))
+        .expect_err("an exhausted budget waits on nothing, so it fails");
+    assert_eq!(
+        err.to_string(),
+        "deadline expired waiting for exit",
+        "an exhausted budget names no holder"
+    );
+    // The funded control: nothing holds the path, so the same listing
+    // succeeds. Absence alone never fails the wait.
+    fakes::try_matching_exits(&absent, Deadline::after(Duration::from_secs(10)))
+        .expect("nothing holds the path, so a funded wait succeeds");
+}
+
+/// Probe for #3500: a process that really holds the path is always
+/// named. A shell whose command line carries the marker outlives a
+/// funded wait, and the expiry names its pid and command line, so a
+/// leaked viewer or session could never produce the flake's
+/// holder-free message.
+#[test]
+fn probe_live_holder_is_named() {
+    let setup = Setup::new();
+    let marker = setup
+        .workspace()
+        .join("probe-holder")
+        .to_string_lossy()
+        .into_owned();
+    let mut child = Command::new("sh")
+        .args(["-c", "sleep 30 & echo $!; wait", &marker])
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the marked shell starts");
+    let id = child.id();
+    // The shell is listed before the wait runs: the listing proves its
+    // command line carries the marker.
+    fakes::wait_until("the marked shell to list", setup.deadline, {
+        let marker = marker.clone();
+        move || fakes::matching(&marker).is_ok_and(|pids| pids.contains(&id))
+    });
+    // A funded wait outlives the holder and names it. The message is
+    // captured first and asserted after the reap, so no path leaves
+    // the shell behind.
+    let err = fakes::try_matching_exits(&marker, Deadline::after(Duration::from_secs(10)))
+        .expect_err("the holder outlives the funded wait, so it fails");
+    let message = err.to_string();
+    fakes::kill_group(id, "KILL").expect("the marked shell's group dies");
+    fakes::kill_pid(id, "KILL").expect("the marked shell dies");
+    child.wait().expect("the marked shell reaps");
+    fakes::try_matching_exits(&marker, Deadline::after(Duration::from_secs(10)))
+        .expect("the reaped holder is gone, so the wait succeeds");
+    assert!(
+        message.contains(&id.to_string()),
+        "the expiry names the holder pid: {message}"
+    );
+    assert!(
+        message.contains(&marker),
+        "the expiry names the holder command line: {message}"
+    );
 }
