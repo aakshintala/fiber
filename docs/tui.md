@@ -1298,6 +1298,7 @@ and an expiry wakes the loop even with no input.
 | `model_invalid` | event | Fades 10 s after it shows. |
 | `model_unconfigured` | event | Fades 10 s after it shows. |
 | `models_loading` | condition | The model list arrives. |
+| `no_jobs_running` | event | Fades 10 s after it shows. |
 | `no_model` | event | Fades 10 s after it shows. |
 | `notes_unchanged` | event | Fades 10 s after it shows. |
 | `repository_code_skipped` | event | Fades 10 s after it shows. |
@@ -1964,7 +1965,8 @@ later release still applies.
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
 | `/release-notes` | Opens the running version's release notes, or says none are available. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
-| `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice "No session on screen". |
+| `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice `No session on screen.` |
+| `/jobs`, `/tasks`, `/ps` | Opens the running-jobs list; with no running jobs, shows the notice `No jobs running`. With no session on screen, shows `No session on screen.` instead. |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules`, `/permissions` | Opens the standing rules. |
