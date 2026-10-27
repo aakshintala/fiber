@@ -249,7 +249,7 @@ that signal. A test advances a fake clock to a named park only through
 a poll driver that is the clock's only mover uses
 `fakes::clock::FakeClock::try_advance_when_parked` instead. Raw
 `FakeClock::advance` and `advance_marked` calls are banned outside
-`crates/fakes` by `cargo xtask raw-advance-sites`; the clock's own
+`crates/fakes` by `clippy.toml` `disallowed-methods`; the clock's own
 `support::clock` implementation and self-tests are exempt, as are
 `CaseClock` calls in `crates/main/src/case`. Each kept raw site carries
 its own

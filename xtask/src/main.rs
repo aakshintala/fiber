@@ -41,7 +41,7 @@
 //! - `models-dev [--from FILE]`: regenerates the first-party model lists
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
-//! - `line-cap`, `unsafe-table`, `signal-sites`, `raw-advance-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `preserve-order`, `check-docs`, `ci-needs`: the checks
+//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `preserve-order`, `check-docs`, `ci-needs`: the checks
 //! - `flake-report-events`: reads one JSON object on stdin carrying the
 //!   flake titles and the complete open and closed exact-title issue
 //!   lookups with their completeness, and prints the unique closed issue
@@ -289,11 +289,6 @@ fn run(args: &[String]) -> Result<bool, String> {
         "signal-sites" => report(
             "signal-sites",
             &rules::signal_sites(&rust_files(&workspace_members()?)?),
-            "ok",
-        ),
-        "raw-advance-sites" => report(
-            "raw-advance-sites",
-            &rules::raw_advance_sites(&rust_files(&workspace_members()?)?),
             "ok",
         ),
         "session-paths" => report(
