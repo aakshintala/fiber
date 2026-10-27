@@ -2693,6 +2693,73 @@ parts, note?, ts?}` (`outcome` is `given` or `declined`; each part its
 
 An empty `thinking_line` result draws no row and no opened body.
 
+**`group_line`** draws a tool group's summary line.
+
+| Field | What it holds |
+|---|---|
+| `running` | Whether the turn runs and this is its open group |
+| `calls` | The group's calls in order, each with the call fields a card's group entry carries |
+| `streaming` | The calls the model is still emitting, each with its message, position, name and raw text |
+| `thoughts` | The group's thinking blocks, each with its text, when it ran and whether it is open |
+| `failed` | The retried model calls, each with its code and attempt |
+| `first` | The earliest timestamp the group spans |
+| `last` | The latest timestamp the group spans |
+| `open` | Whether the group's ledger is open |
+| `flat` | Whether the screen reader drops every style |
+
+**`steer`** draws a steering message.
+
+| Field | What it holds |
+|---|---|
+| `text` | The message's text |
+| `images` | Its images in order, each `path`, `width` and `height` in pixels, never the log's type |
+| `ts` | When it landed |
+| `flat` | Whether the screen reader drops every style |
+
+**`answers`** draws what a form left: the answers or the decline.
+
+| Field | What it holds |
+|---|---|
+| `outcome` | `given` or `declined` |
+| `parts` | Each question's part, in field order: its `header`, `text`, and whether `skipped` |
+| `note` | The note on the whole form, when one was left |
+| `ts` | When the form was resolved; absent when declined |
+| `flat` | Whether the screen reader drops every style |
+
+**`handoff_band`** draws a handoff's band, without its note.
+
+| Field | What it holds |
+|---|---|
+| `trigger` | What the handoff runs at |
+| `ts` | The band's timestamp |
+| `state` | `writing`, `done`, or `unchanged` with `cancelled` |
+| `sizes` | The context sizes, `before` (and `after`, once the first request after it returns); only once the handoff is done |
+| `flat` | Whether the screen reader drops every style |
+
+**`error_line`** draws a turn's failure line.
+
+| Field | What it holds |
+|---|---|
+| `code` | The failure's code |
+| `message` | Fiber's own sentence |
+| `provider` | The provider's name, HTTP status and message, when a provider failed |
+| `flat` | Whether the screen reader drops every style |
+
+The failed-login row keeps its login target on every replacement line.
+
+**`notice`** draws a notice, in the conversation and on home. The
+terminal's own notices carry the same fields: a configuration or I/O
+failure raises the same input an extension draws.
+
+| Field | What it holds |
+|---|---|
+| `code` | The notice's registry code |
+| `text` | The notice's message |
+| `flat` | Whether the screen reader drops every style |
+
+The `extension_failed` switched-off notice always draws built-in: a
+notice extension cannot hide its own switch-off failure.
+
 `layout` places regions and never draws them. It receives the screen's size
 and returns a rectangle for each region it shows. A region it leaves out is not
 shown. A layout does its own narrow layout and shedding. The "Fiber needs
@@ -2791,6 +2858,11 @@ built-in rather than drawing the row again.
   version until `/reload`; omission counts as `not loaded`. The notice names
   the TUI version and the session-half version, or `not loaded`.
   A client half with no session half, such as a layout or a ledger row for a built-in tool, draws for every session.
+- **Home has no session.** Its notices reach extensions without one: the
+  input carries no `session_id` key (Lua reads nil), never another
+  session's id and never an empty one. A client-only half draws for every
+  home notice; a range-bound half stays inert without notice until the
+  session's first `extensions_loaded`, as on a session it has not seen.
 
 Measured in the prototype on macOS arm64, on a session of 1,047 tool calls
 ([research/tui-prototype/SEAMS.md](../research/tui-prototype/SEAMS.md)): a
