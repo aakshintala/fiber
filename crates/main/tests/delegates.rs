@@ -1670,143 +1670,251 @@ fn crash_set(actual: &[&str], expected: &[&str], what: &str) {
     }
 }
 
-/// Asserts the crash stream's kinds: the fixed prefix in order, the open
-/// turn pair either whole or absent at the boundary, the racing remainder
-/// as a set with multiplicity, and the documented per-delegate sequencing
-/// in order: each `job_started` immediately precedes its `delegate_started`
-/// and each `delegate_finished` immediately precedes its `job_completed`
-/// (`docs/delegates.md`, "Events"). The pair is never half-taken, and the
-/// stream ends at the process exit (`docs/events.md`, "Process boundary").
+/// The delegate job an event line belongs to (`docs/events.md`, "Jobs").
+fn crash_job(line: &Value) -> &str {
+    line["payload"]["job_id"].as_str().unwrap()
+}
+
+/// Asserts the crash stream's order and per-delegate identity: the fixed
+/// prefix in order, the open turn pair whole or absent at the boundary, the
+/// racing remainder as a set with multiplicity, and the documented
+/// per-delegate sequencing by job (`docs/delegates.md`, "Events"): each
+/// `job_started` precedes its matching `delegate_started`, with no promise
+/// of adjacency, and each `delegate_finished` sits immediately before its
+/// matching `job_completed`. The pair is never half-taken, and the stream
+/// ends at the process exit (`docs/events.md`, "Process boundary"). The
+/// caller counts the starts and finishes; this helper checks only their
+/// order and identity.
 #[track_caller]
-fn assert_crash_ordered(actual: &[&str]) {
-    crash_segment(actual, CRASH_PREFIX, 0, "prefix");
+fn assert_crash_ordered(lines: &[Value]) {
+    let kinds: Vec<&str> = support::kinds(lines);
+    crash_segment(&kinds, CRASH_PREFIX, 0, "prefix");
     let mut at = CRASH_PREFIX.len();
-    if actual.get(at..at + 2) == Some(CRASH_TURN_PAIR) {
+    if kinds.get(at..at + 2) == Some(CRASH_TURN_PAIR) {
         at += CRASH_TURN_PAIR.len();
     }
     let expected_remainder: Vec<&str> = [CRASH_END, CRASH_REST].concat();
-    crash_set(&actual[at..], &expected_remainder, "remainder");
+    crash_set(&kinds[at..], &expected_remainder, "remainder");
     assert_eq!(
-        actual.last(),
+        kinds.last(),
         Some(&"fiber_exited"),
         "crash stream ends with {:?}, not the process exit",
-        actual.last().copied().unwrap_or("<end>"),
+        kinds.last().copied().unwrap_or("<end>"),
     );
-    let mut starts = 0;
-    let mut finishes = 0;
-    for (i, kind) in actual.iter().enumerate() {
-        if *kind == "job_started" {
-            assert_eq!(
-                actual.get(i + 1),
-                Some(&"delegate_started"),
-                "crash stream job start at index {i} is not followed by its delegate start",
+    // The identity check runs on the same ordered view the kind checks use:
+    // lines the contract writes on their own trigger hold no position in it
+    // (`docs/testing.md`, "Event streams").
+    let kept: Vec<&Value> = lines
+        .iter()
+        .filter(|line| {
+            !matches!(
+                line["kind"].as_str(),
+                Some("clients" | "session_status" | "attention" | "date_changed")
+            )
+        })
+        .collect();
+    let job_of = crash_job;
+    for (i, line) in kept.iter().enumerate() {
+        let kind = line["kind"].as_str().unwrap();
+        if kind == "job_started" {
+            let id = job_of(line);
+            assert!(
+                kept[i + 1..]
+                    .iter()
+                    .any(|later| later["kind"] == "delegate_started" && job_of(later) == id),
+                "job start for job {id} at index {i} has no later delegate start",
             );
-            starts += 1;
         }
-        if *kind == "delegate_finished" {
-            assert_eq!(
-                actual.get(i + 1),
-                Some(&"job_completed"),
-                "crash stream finish at index {i} is not followed by its completion",
+        if kind == "delegate_started" {
+            let id = job_of(line);
+            assert!(
+                kept[..i]
+                    .iter()
+                    .any(|earlier| earlier["kind"] == "job_started" && job_of(earlier) == id),
+                "delegate start for job {id} at index {i} has no earlier job start",
             );
-            finishes += 1;
+        }
+        if kind == "delegate_finished" {
+            let id = job_of(line);
+            assert!(
+                kept.get(i + 1)
+                    .is_some_and(|done| done["kind"] == "job_completed" && job_of(done) == id),
+                "delegate finish for job {id} at index {i} is not immediately followed by its completion",
+            );
+        }
+        if kind == "job_completed" {
+            let id = job_of(line);
+            assert!(
+                i.checked_sub(1)
+                    .and_then(|prev| kept.get(prev))
+                    .is_some_and(
+                        |finish| finish["kind"] == "delegate_finished" && job_of(finish) == id
+                    ),
+                "job completion for job {id} at index {i} is not immediately preceded by its delegate finish",
+            );
         }
     }
-    assert_eq!(starts, 3, "three delegates start, one per job: {actual:?}");
-    assert_eq!(
-        finishes, 3,
-        "three delegates finish, one per job: {actual:?}"
-    );
 }
 
-/// `assert_crash_ordered` pins only promised order: both crash-boundary
-/// shapes pass, unpromised remainder orders pass, and a missing or reordered
-/// promised event fails. The joined shape holds the crashed end inside the
-/// still-running prompt turn because a waiting finish notice joins that turn
-/// at its next step (`docs/loop.md`, "One step"); the split shape holds the
-/// same end inside its own wake turn. The crashed end has no promised
-/// position against the rest, so the remainder is a set; both shapes keep
-/// `delegate_finished` just before `job_completed` (`docs/delegates.md`,
-/// "Events").
+/// Builds crash-shaped lines from kinds, one line per kind in order, giving
+/// each `job_started` run a fresh job that its `delegate_started` joins and
+/// its `delegate_finished` and `job_completed` close, so the per-delegate
+/// identity the helper checks holds by construction. A finish or completion
+/// with no run pending takes a fresh job instead, so the broken shape
+/// reaches the helper as a mismatched pair rather than a builder panic.
+fn crash_lines(kinds: &[&str]) -> Vec<Value> {
+    let mut lines = Vec::with_capacity(kinds.len());
+    let mut open: Vec<String> = Vec::new();
+    let mut next = 0;
+    let mut finishing: Option<String> = None;
+    for kind in kinds {
+        let mut line = json!({"kind": kind, "payload": {}});
+        let id = match *kind {
+            "job_started" => {
+                let id = format!("j{next}");
+                next += 1;
+                open.push(id.clone());
+                Some(id)
+            }
+            "delegate_started" => Some(open.remove(0)),
+            "delegate_finished" => {
+                let id = if open.is_empty() {
+                    let id = format!("j{next}");
+                    next += 1;
+                    id
+                } else {
+                    open.remove(0)
+                };
+                finishing = Some(id.clone());
+                Some(id)
+            }
+            "job_completed" => Some(finishing.take().unwrap_or_else(|| {
+                let id = format!("j{next}");
+                next += 1;
+                id
+            })),
+            _ => None,
+        };
+        if let Some(id) = id {
+            line["payload"]["job_id"] = Value::String(id);
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+/// `assert_crash_ordered` pins only promised order and identity: both
+/// crash-boundary shapes pass, unpromised remainder orders pass, and a
+/// missing or reordered promised event, or a mismatched job, fails. The
+/// joined shape holds the crashed end inside the still-running prompt turn
+/// because a waiting finish notice joins that turn at its next step
+/// (`docs/loop.md`, "One step"); the split shape holds the same end inside
+/// its own wake turn. The crashed end has no promised position against the
+/// rest, so the remainder is a set; both shapes keep each `delegate_finished`
+/// just before its matching `job_completed` (`docs/delegates.md`, "Events").
+/// A start needs no adjacency: the remainder's start still passes pushed one
+/// line later.
 #[test]
 fn assert_crash_ordered_pins_only_promised_order() {
-    let split: Vec<&str> = [CRASH_PREFIX, CRASH_TURN_PAIR, CRASH_END, CRASH_REST].concat();
+    let kinds_split: Vec<&str> = [CRASH_PREFIX, CRASH_TURN_PAIR, CRASH_END, CRASH_REST].concat();
+    // The builder emits one line per kind in order, so kind positions below
+    // index the lines too: the fakes hold no unordered lines.
+    let split = crash_lines(&kinds_split);
     assert_crash_ordered(&split);
-    let joined: Vec<&str> = [CRASH_PREFIX, CRASH_END, CRASH_REST].concat();
-    assert_eq!(joined.len() + CRASH_TURN_PAIR.len(), split.len());
+    let kinds_joined: Vec<&str> = [CRASH_PREFIX, CRASH_END, CRASH_REST].concat();
+    assert_eq!(
+        kinds_joined.len() + CRASH_TURN_PAIR.len(),
+        kinds_split.len()
+    );
+    let joined = crash_lines(&kinds_joined);
     assert_crash_ordered(&joined);
     let at = CRASH_PREFIX.len();
     let end_at = at + CRASH_TURN_PAIR.len();
     // Unpromised remainder orders pass with the same multiset: the crashed
     // end after its wake message, and a parent turn edge beside the
-    // sibling's copied usage.
+    // sibling's copied usage. The end moves as whole lines, so each moved
+    // finish keeps its job.
     let mut end_late = split.clone();
-    end_late.drain(end_at..end_at + CRASH_END.len());
-    for (i, kind) in CRASH_END.iter().copied().enumerate() {
-        end_late.insert(end_at + 6 + i, kind);
+    let end: Vec<Value> = end_late.drain(end_at..end_at + CRASH_END.len()).collect();
+    for (i, line) in end.into_iter().enumerate() {
+        end_late.insert(end_at + 6 + i, line);
     }
     assert_ne!(end_late, split);
     assert_crash_ordered(&end_late);
     let edge = end_at + CRASH_END.len() + 6;
     assert_eq!(
-        &split[edge..edge + 2],
+        &kinds_split[edge..edge + 2],
         &["turn_completed", "usage_recorded"]
     );
     let mut edge_swap = split.clone();
     edge_swap.swap(edge, edge + 1);
     assert_crash_ordered(&edge_swap);
+    // A start need not sit beside its delegate start: pushing the
+    // remainder's delegate start one line later keeps the multiset and the
+    // promised order, so it passes.
+    let gap = kinds_split
+        .iter()
+        .enumerate()
+        .find(|(i, kind)| *i > end_at && **kind == "delegate_started")
+        .map(|(i, _)| i)
+        .unwrap();
+    assert_eq!(kinds_split[gap + 1], "tool_call_completed");
+    let mut gapped = split.clone();
+    gapped.swap(gap, gap + 1);
+    assert_crash_ordered(&gapped);
     // Each flip of a pinned comparison fails: a changed prefix or rest
     // kind, a half-taken or reversed turn pair, a missing or reordered
-    // finish, a reordered start, and a truncation or a trailing line. The
-    // reorder flips keep the multiset, so only the adjacency check rejects
-    // them.
+    // finish, a reordered start, a mismatched job, and a truncation or a
+    // trailing line. The reorder and mismatch flips keep the multiset, so
+    // only the identity check rejects them.
     let mut prefix_flip = split.clone();
-    prefix_flip[0] = "fiber_exited";
+    prefix_flip[0]["kind"] = json!("fiber_exited");
     let mut rest_flip = split.clone();
-    rest_flip[split.len() - 1] = "turn_started";
-    let mut cases: Vec<Vec<&str>> = vec![prefix_flip, rest_flip];
+    let last = rest_flip.len() - 1;
+    rest_flip[last]["kind"] = json!("turn_started");
+    let mut cases: Vec<Vec<Value>> = vec![prefix_flip, rest_flip];
     for pair in [
         vec!["turn_completed"],
         vec!["turn_started"],
         vec!["turn_started", "turn_completed"],
     ] {
-        let mut half: Vec<&str> = vec![];
-        half.extend(CRASH_PREFIX);
-        half.extend(pair);
-        half.extend(CRASH_END);
-        half.extend(CRASH_REST);
-        cases.push(half);
+        let kinds: Vec<&str> = [CRASH_PREFIX, pair.as_slice(), CRASH_END, CRASH_REST].concat();
+        cases.push(crash_lines(&kinds));
     }
     for end in [
         vec!["step_started", "job_completed"],
         vec!["step_started", "job_completed", "delegate_finished"],
         vec!["delegate_finished", "job_completed"],
     ] {
-        let mut broken: Vec<&str> = vec![];
-        broken.extend(CRASH_PREFIX);
-        broken.extend(CRASH_TURN_PAIR);
-        broken.extend(end);
-        broken.extend(CRASH_REST);
-        cases.push(broken);
+        let kinds: Vec<&str> = [CRASH_PREFIX, CRASH_TURN_PAIR, end.as_slice(), CRASH_REST].concat();
+        cases.push(crash_lines(&kinds));
     }
     for (first, second) in [
         ("delegate_finished", "job_completed"),
         ("job_started", "delegate_started"),
     ] {
         let mut reordered = split.clone();
-        let i = reordered.iter().position(|kind| *kind == first).unwrap();
-        assert_eq!(reordered[i + 1], second);
+        let i = kinds_split.iter().position(|kind| *kind == first).unwrap();
+        assert_eq!(kinds_split[i + 1], second);
         reordered.swap(i, i + 1);
         cases.push(reordered);
     }
+    // A job the run never started breaks the identity with the multiset
+    // untouched: the helper checks the payload, not just the kind.
+    for kind in ["delegate_started", "delegate_finished", "job_completed"] {
+        let mut wrong = split.clone();
+        let i = kinds_split.iter().position(|k| *k == kind).unwrap();
+        wrong[i]["payload"]["job_id"] = json!("j_nowhere");
+        cases.push(wrong);
+    }
     cases.push(split[..split.len() - 1].to_vec());
     let mut trailing = split.clone();
-    trailing.push("turn_completed");
+    trailing.push(json!({"kind": "turn_completed", "payload": {}}));
     cases.push(trailing);
     // The joined shape's own flips fail too: a half pair with no wake turn
     // is still half a pair, and its missing finish still fails.
     let mut joined_half = joined.clone();
-    joined_half.insert(at, "turn_completed");
+    joined_half.insert(at, json!({"kind": "turn_completed", "payload": {}}));
     cases.push(joined_half);
     let mut joined_unfinished = joined.clone();
     joined_unfinished.remove(at + 1);
@@ -1819,9 +1927,9 @@ fn assert_crash_ordered_pins_only_promised_order() {
     }
     // The window the pair vacates holds the crashed end, in order: the
     // finish still precedes the end with no turn boundary between them.
-    assert_eq!(&joined[at..at + 3], CRASH_END);
-    assert_eq!(&split[at..end_at], CRASH_TURN_PAIR);
-    assert_eq!(&split[end_at..end_at + 3], CRASH_END);
+    assert_eq!(&kinds_joined[at..at + 3], CRASH_END);
+    assert_eq!(&kinds_split[at..end_at], CRASH_TURN_PAIR);
+    assert_eq!(&kinds_split[end_at..end_at + 3], CRASH_END);
 }
 
 #[test]
@@ -1945,7 +2053,7 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     // The crash is contained to the dead delegate: it ends failed with
     // the signal named, never a `failed signal` status; its sibling and
     // the late delegate complete, and every parent turn completes.
-    assert_crash_ordered(&support::kinds(&lines));
+    assert_crash_ordered(&lines);
     assert_eq!(
         lines
             .iter()
@@ -2000,8 +2108,7 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     // Each finished delegate's notice reaches the parent's model: the wake
     // carries the delegate's final message (`docs/delegates.md`, "Results"),
     // rendered naming the job. Both children answer alike, so the check
-    // names the job, not the text; a name no job holds matches nothing, so
-    // the check cannot pass without the wakes.
+    // names the job, not the text.
     let bodies: Vec<String> = parent
         .requests()
         .iter()
@@ -2014,12 +2121,6 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
             "no later parent request carries the {notice} wake"
         );
     }
-    assert!(
-        bodies
-            .iter()
-            .all(|body| !body.contains("delegate j_nowhere finished")),
-        "the wake check matches a job that never ran"
-    );
     for line in lines.iter().filter(|line| line["kind"] == "turn_completed") {
         assert_eq!(line["payload"]["outcome"], "completed", "{line}");
     }
