@@ -796,7 +796,8 @@ fn tt_is_brace(tree: &TokenTree) -> bool {
     matches!(tree, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace)
 }
 
-/// The first single `:` separator, skipping `::` paths.
+/// The first `:` separator in a pattern or field. Patterns name a single
+/// binding, so the first colon always separates the name from its type.
 #[allow(
     clippy::indexing_slicing,
     reason = "sibling indices stay within the scanned TokenStream"
@@ -804,12 +805,8 @@ fn tt_is_brace(tree: &TokenTree) -> bool {
 fn tt_single_colon(trees: &[TokenTree]) -> Option<usize> {
     let mut index = 0;
     while index < trees.len() {
-        if is_punct(Some(&trees[index]), ':') {
-            let prev_double = index > 0 && is_punct(trees.get(index - 1), ':');
-            let next_double = index + 1 < trees.len() && is_punct(trees.get(index + 1), ':');
-            if !prev_double && !next_double {
-                return Some(index);
-            }
+        if is_punct(trees.get(index), ':') {
+            return Some(index);
         }
         index += 1;
     }

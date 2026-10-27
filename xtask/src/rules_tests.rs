@@ -3281,3 +3281,129 @@ fn raw_advance_rejects_a_mismatched_allowance_pair() {
     assert_eq!(failures.len(), 1, "{failures:?}");
     assert!(failures[0].contains("invalid"), "{failures:?}");
 }
+
+#[test]
+fn raw_advance_proves_a_plain_alias() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t(clock: &FakeClock) { let alias = clock; alias.advance(D); }\n",
+    )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance"):
+    // a local alias preserves the proof, so the advance reports.
+    assert_eq!(raw_advance_sites_with(&files, &[]).len(), 1);
+}
+
+#[test]
+fn raw_advance_proves_a_borrowed_alias() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t(clock: &FakeClock) { let alias = &clock; alias.advance(D); }\n",
+    )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance"):
+    // a borrow of a proved receiver keeps the proof.
+    assert_eq!(raw_advance_sites_with(&files, &[]).len(), 1);
+}
+
+#[test]
+fn raw_advance_proves_a_mut_borrowed_alias() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t(clock: &FakeClock) { let alias = &mut clock; alias.advance(D); }\n",
+    )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance"):
+    // a mutable borrow keeps the proof like a shared one.
+    assert_eq!(raw_advance_sites_with(&files, &[]).len(), 1);
+}
+
+#[test]
+fn raw_advance_proves_a_typed_local_without_init_proof() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn helper() {}\nfn t() { let clock: FakeClock = helper(); clock.advance(D); }\n",
+    )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance"):
+    // the declared type proves even when the initializer does not.
+    assert_eq!(raw_advance_sites_with(&files, &[]).len(), 1);
+}
+
+#[test]
+fn raw_advance_prefers_same_file_helper_return() {
+    let files = [
+        raw_file(
+            "crates/hub/src/a.rs",
+            "struct GateClock; fn wrap() -> GateClock { GateClock }\n",
+        ),
+        raw_file(
+            "crates/hub/src/b_tests.rs",
+            "fn wrap() -> FakeClock { FakeClock::new() }\nfn t() { let c = wrap(); c.advance(D); }\n",
+        ),
+    ];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): the same file's single definition wins over a sole
+    // cross-file definition of another type.
+    assert_eq!(
+        raw_advance_sites_with(&files, &[]),
+        [
+            "crates/hub/src/b_tests.rs:2: raw FakeClock advance without an allowance (function t, occurrence 1)"
+        ]
+    );
+}
+
+#[test]
+fn raw_advance_reports_malformed_token_stream() {
+    let files = [raw_file("crates/hub/src/x_tests.rs", "fn t( {\n")];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): a file that does not tokenise fails closed with its path
+    // and line rather than silently passing.
+    let failures = raw_advance_sites_with(&files, &[]);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].contains("crates/hub/src/x_tests.rs:1:"),
+        "{failures:?}"
+    );
+    assert!(failures[0].contains("does not tokenise"), "{failures:?}");
+}
+
+#[test]
+fn raw_advance_clears_a_reassigned_binding_in_place() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t(clock: &FakeClock) { let alias = clock; let alias = 1; alias.advance(D); }\n",
+    )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance"):
+    // a new binding from an unrelated receiver clears the proof.
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn raw_advance_keeps_inner_proof_inside_its_block() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t() { { let clock = FakeClock::new(); } clock.advance(D); }\n",
+    )];
+    // docs/testing.md:254-257 ("Each kept raw site carries its own allowance"):
+    // a binding proved only inside a nested block does not leak out.
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn raw_advance_ignores_a_clone_with_arguments() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn t(clock: &FakeClock) { let c = clock.clone(other); c.advance(D); }\n",
+    )];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): only the zero-argument `x.clone()` carries the proof.
+    assert_eq!(raw_advance_sites_with(&files, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn raw_advance_proves_a_tuple_binding_with_outer_mut() {
+    let files = [raw_file(
+        "crates/hub/src/x_tests.rs",
+        "fn stream() -> (Arc<FakeClock>, u64) { (FakeClock::new(), 0) }\nfn t() { let mut (clock, ..) = stream(); clock.advance(D); }\n",
+    )];
+    // docs/testing.md ("Raw `FakeClock::advance` and `advance_marked` calls
+    // are banned"): an outer `mut` does not shift tuple positions.
+    assert_eq!(raw_advance_sites_with(&files, &[]).len(), 1);
+}
