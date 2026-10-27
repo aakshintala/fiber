@@ -24,9 +24,25 @@ use serde_json::{Value, json};
 use super::*;
 
 #[test]
+fn fork_workspace_is_the_exact_paragraph_and_does_not_refill_paths() {
+    assert_eq!(
+        fork_workspace("/fork/{parent_workspace}", "/parent/{workspace}"),
+        "Your workspace is /fork/{parent_workspace}, a worktree of /parent/{workspace}. Paths above under /parent/{workspace} are at the same place under yours; work only in yours."
+    );
+    let notice = fork_workspace("/fork", "/parent");
+    let task = fork_task(&SessionId("s_parent".into()), 1, "check it", &notice);
+    assert!(
+        task.contains(&format!("\n\n{notice}\n\nNobody is present")),
+        "{task}"
+    );
+    assert!(task.ends_with("Your task:\n\ncheck it"));
+    assert_eq!(task.matches(&notice).count(), 1);
+}
+
+#[test]
 fn fork_task_is_the_ruled_message_with_the_unattended_paragraph() {
     assert_eq!(
-        fork_task(&SessionId("s_parent00000001".into()), 1, "check it"),
+        fork_task(&SessionId("s_parent00000001".into()), 1, "check it", ""),
         "Fiber: you are a fork of session s_parent00000001, started at delegate depth 1. The conversation above is your parent's, up to the point where it called `delegate_fork`. From here you work alone, and your final message goes back to your parent. Jobs started above belong to your parent, not to you.\n\nNobody is present to answer questions in this session. Work through to the end on your own judgment, and state every assumption you made in your final reply. Ask with `ask_user` only when you cannot go on without an answer: asking ends the run, and the caller answers by resuming the session.\n\nYour task:\n\ncheck it"
     );
 }
@@ -34,7 +50,7 @@ fn fork_task_is_the_ruled_message_with_the_unattended_paragraph() {
 #[test]
 fn fork_task_names_its_depth() {
     assert!(
-        fork_task(&SessionId("s_parent".into()), 2, "check it")
+        fork_task(&SessionId("s_parent".into()), 2, "check it", "")
             .contains("started at delegate depth 2.")
     );
 }
@@ -45,6 +61,7 @@ fn fork_task_leaves_braces_in_the_prompt_alone() {
         &SessionId("s_parent".into()),
         1,
         "use {depth} and {unattended} and {prompt}",
+        "",
     );
     assert!(text.ends_with("Your task:\n\nuse {depth} and {unattended} and {prompt}"));
     assert_eq!(text.matches("Your task:").count(), 1);

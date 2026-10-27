@@ -575,6 +575,8 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "status",
     "diff",
     "release-notes",
+    "delegates",
+    "agents",
     "copy",
     "pwd",
     "cwd",

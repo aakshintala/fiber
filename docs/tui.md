@@ -603,6 +603,13 @@ a click on it returns too. The views are:
   card's does. "Jobs · N running" bold heads the jobs, one row each: "◆
   <command> · <elapsed> · <id>". The last row is "a row opens that item's
   view", dim.
+- **Every delegate,** from `/delegates` (`/agents` runs the same
+  command): running delegates in the order they started first, then
+  finished ones in the order they started, two rows for each delegate
+  in the Delegates card's format. A row opens that item's view; a
+  finished row opens its replay. The top row is `Delegates` with
+  `/delegates` dim; there is no heading row and no count. With no
+  delegates the view says "No delegates".
 - **The model picker:** models by provider with roles marked, a chip for each
   thinking level the model supports, each model's input and output prices,
   and what a switch to it costs to rebuild the prompt cache. Choosing a model
@@ -1959,6 +1966,7 @@ later release still applies.
 | `/quit`, `/exit` | Quits ("Quit"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
 | `/?`, `/help` | Opens the key map. |
+| `/delegates`, `/agents` | Opens the delegates view: every delegate of the session on screen, running and finished. |
 
 The `/` list shows built-in commands in this order.
 

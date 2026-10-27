@@ -248,6 +248,7 @@ impl Fixture {
             launch,
             watch,
             steer: Arc::new(|_, _, _, _, _| panic!("no steer on this path")),
+            worktree_record: Arc::new(|_, _| Ok(None)),
             last_seq,
         }
     }
@@ -607,7 +608,7 @@ fn a_resumed_delegate_times_the_new_run() {
     let marker = "fiber-p10-resumerun";
     let _watchdog = Watchdog::matching(marker);
     let (launch, reached, release) = hold_launch(marker);
-    let tool = Arc::new(fixture.messenger(launch, refused_watch(), Arc::new(|_| Ok(None))));
+    let tool = Arc::new(fixture.messenger(launch, refused_watch(), Arc::new(|_, _| Ok(None))));
     let attempt_rx = resume_async(tool, started.job_id.0.clone(), CancelToken::new());
     through_launch(&fixture.clock, Duration::from_millis(9), &reached, &release);
     let attempt = deadline.recv_or_fail(&attempt_rx, "the resumed receipt");
@@ -704,7 +705,7 @@ fn refused_and_failed_starts_write_nothing() {
         let tool = fixture.messenger(
             block_launch(": fiber-p10-resumecancel; read line"),
             refused_watch(),
-            Arc::new(|_| Ok(None)),
+            Arc::new(|_, _| Ok(None)),
         );
         let cancel = CancelToken::new();
         cancel.cancel();
@@ -738,7 +739,7 @@ fn refused_and_failed_starts_write_nothing() {
         let tool = fixture.messenger(
             block_launch(": fiber-p10-resumeunknown; read line"),
             refused_watch(),
-            Arc::new(|_| Ok(None)),
+            Arc::new(|_, _| Ok(None)),
         );
         let attempt = tool.resume_now("j_unknown", "again", &None, &CancelToken::new());
         let output = done(attempt);
@@ -776,12 +777,14 @@ fn refused_and_failed_starts_write_nothing() {
     for (name, last_seq, launch) in [
         (
             "a failed boundary read",
-            Arc::new(|_: &SessionId| Err("its log could not be read: /gone".to_owned())) as LastSeq,
+            Arc::new(|_: &std::path::Path, _: &SessionId| {
+                Err("its log could not be read: /gone".to_owned())
+            }) as LastSeq,
             block_launch(": fiber-p10-resumeboundary; read line"),
         ),
         (
             "a resume spawn failure",
-            Arc::new(|_: &SessionId| Ok(None)) as LastSeq,
+            Arc::new(|_: &std::path::Path, _: &SessionId| Ok(None)) as LastSeq,
             Arc::new(|_: &Launched| Command::new("/nonexistent/fiber-p10-launch")) as Launch,
         ),
     ] {

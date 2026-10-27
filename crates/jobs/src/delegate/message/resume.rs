@@ -4,7 +4,7 @@
 //! closing wait and answer) stays in the parent module.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::Arc;
 use std::thread;
@@ -26,13 +26,21 @@ use support::group::Listing;
 /// `Resolve`'s lookup answers today, because `jobs` cannot name
 /// `log::Error` (`docs/architecture.md`, "The call rules"). `Ok(None)`
 /// only for a regular, empty log.
-pub type LastSeq = Arc<dyn Fn(&SessionId) -> Result<Option<u64>, String> + Send + Sync>;
+pub type LastSeq = Arc<dyn Fn(&Path, &SessionId) -> Result<Option<u64>, String> + Send + Sync>;
+
+/// Reads the delegate's durable worktree record in its workspace's project.
+/// `None` means the session recorded no worktree; a read error fails closed.
+pub type WorktreeRecord = Arc<
+    dyn Fn(&Path, &SessionId) -> Result<Option<contract::shapes::Worktree>, String> + Send + Sync,
+>;
 
 /// Why starting the resumed run failed: nothing was started, nothing
 /// queued.
 pub(crate) enum StartFailed {
-    /// The log's last line could not be read; the reason names its path.
+    /// The log's worktree record or last line could not be read; the reason names its path.
     Boundary(String),
+    /// Neither the workspace nor a recorded repository is available.
+    Workspace(String),
     /// The child could not be spawned.
     Spawn(io::Error),
 }
@@ -96,6 +104,17 @@ impl DelegateMessage {
                 }
                 .output(true),
             ),
+            Err(Resume::Start(StartFailed::Workspace(message))) => Attempt::Done(
+                JobsError::DelegateWorktree {
+                    failure: contract::shapes::Failure {
+                        code: contract::ErrorCode::IoFailed,
+                        message,
+                        retry_after_ms: None,
+                        provider: None,
+                    },
+                }
+                .output(true),
+            ),
             Err(Resume::Start(StartFailed::Spawn(source))) => {
                 Attempt::Done(JobsError::ResumeSpawn { source }.output(true))
             }
@@ -126,7 +145,32 @@ impl DelegateMessage {
         self.registry.resume(&id, action, |resumable| {
             // Inside the resume gate, after the "ended" check: no other
             // run can start between the read and the spawn.
-            let after = match last_seq(&resumable.delegate.delegate_session_id) {
+            let workspace = Path::new(&resumable.delegate.workspace);
+            let recorded =
+                (self.worktree_record)(workspace, &resumable.delegate.delegate_session_id)
+                    .map_err(StartFailed::Boundary)?;
+            let repository = recorded
+                .as_ref()
+                .and_then(|record| record.repository.as_deref())
+                .map(Path::new);
+            let launch_workspace = if workspace.is_dir() {
+                workspace.to_path_buf()
+            } else if let Some(repository) = repository.filter(|repository| repository.is_dir()) {
+                repository.to_path_buf()
+            } else {
+                let reason = match repository {
+                    Some(repository) => format!(
+                        "recorded repository `{}` is unavailable",
+                        repository.display()
+                    ),
+                    None => "there is no recorded repository".to_owned(),
+                };
+                return Err(StartFailed::Workspace(format!(
+                    "Cannot resume delegate in missing workspace `{}`; {reason}.",
+                    workspace.display()
+                )));
+            };
+            let after = match last_seq(workspace, &resumable.delegate.delegate_session_id) {
                 Ok(after) => after,
                 Err(reason) => return Err(StartFailed::Boundary(reason)),
             };
@@ -136,7 +180,7 @@ impl DelegateMessage {
                 job_id: JobId(id.clone()),
                 parent: parent.clone(),
                 prompt: message.clone(),
-                workspace: PathBuf::from(&resumable.delegate.workspace),
+                workspace: launch_workspace,
                 worktree: None,
                 start: Start::Resume,
             };
@@ -156,7 +200,7 @@ impl DelegateMessage {
                 None,
                 Some(self.registry.usage_forward()),
             );
-            let runner = runner.with_worktree(resumable.delegate.worktree.as_ref().map(|record| {
+            let runner = runner.with_worktree(recorded.as_ref().map(|record| {
                 super::super::run::WorktreeRun {
                     end: super::super::EndWorktree {
                         path: PathBuf::from(&record.path),

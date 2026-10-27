@@ -1,6 +1,6 @@
 //! A Fiber fork as a tool: `delegate_fork` (`docs/delegates.md`, "Forks").
-//! The schema is exactly `description`, `prompt` and `timeout_ms`: a fork
-//! takes no model, isolation or thinking level. The run order is the
+//! The schema is `description`, `prompt`, `isolation` and `timeout_ms`: a fork
+//! takes no model or thinking level. The run order is the
 //! depth check, then the argument check, then the point read, then the
 //! start it shares with spawn.
 
@@ -36,6 +36,7 @@ impl Tool for DelegateFork {
                         "type": "string",
                         "description": "What the child session runs."
                     },
+                    "isolation": { "type": "string", "enum": ["none", "worktree"] },
                     "timeout_ms": {
                         "type": "integer",
                         "minimum": 1,
