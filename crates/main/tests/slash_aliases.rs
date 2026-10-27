@@ -20,12 +20,12 @@ use support::pty::Run;
 use support::{Setup, write_json};
 
 /// The terminal on home: an offline model keeps boot free of the
-/// network, and an idle hub exits a second after its last client
+/// network, and an idle hub exits at once after its last client
 /// leaves, so `wait` never outlasts the test's deadline.
 fn terminal(setup: &Setup) -> Run {
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}}),
+        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 0}}),
     );
     Run::spawn(
         setup,
@@ -48,7 +48,7 @@ fn rules_setup() -> Setup {
     );
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 0}}),
     );
     fs::write(
         setup.home().join("rules"),
