@@ -185,6 +185,10 @@ fn drive_releasing_on_panic<T>(
         Ok(value) => value,
         Err(payload) => {
             // Failure-path release inside a panic handler that re-raises the original payload; it proves nothing (ruling 6203478697).
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "panic-handler release that re-raises the original payload (ruling 6203478697)"
+            )]
             clock.advance(CALLBACK_WAIT + Duration::from_secs(1));
             std::panic::resume_unwind(payload);
         }
@@ -2336,7 +2340,14 @@ fn a_reset_in_the_drain_breaks_the_drain() {
         answerer.join().unwrap();
         // No code under test waits on the clock here; the answering thread is joined, so this zero-length move only snapshots the parks (ruling 6179406086).
         assert_eq!(
-            clock.advance_marked(Duration::ZERO),
+            {
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "no code under test waits on the clock (ruling 6179406086)"
+                )]
+                let actual = clock.advance_marked(Duration::ZERO);
+                actual
+            },
             mark,
             "the drain parked after the reset instead of breaking"
         );

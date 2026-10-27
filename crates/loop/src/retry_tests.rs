@@ -576,6 +576,10 @@ impl Clock for AdvanceOnScheduledClock {
         self.poll_scheduled();
         if self.scheduled.load(Ordering::SeqCst) && !self.advanced.swap(true, Ordering::SeqCst) {
             // No code under test waits on the clock here: the advance runs on the loop's own thread inside `now()`, before the retry wait starts, and a helper would wait for a park of the thread that calls it (ruling 6179406086).
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "no code under test waits on the clock (ruling 6179406086)"
+            )]
             self.inner.advance(self.advance);
         }
         self.inner.now()

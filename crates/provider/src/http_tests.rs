@@ -2390,6 +2390,10 @@ fn an_observed_open_with_timing_times_one_connector_scope() {
     );
     assert_eq!(text, "ok", "the observed body reads unchanged");
     // No code under test waits on the clock here; the observed call has returned, so this move only proves later moves add no scope (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(std::time::Duration::from_millis(50));
     assert_eq!(
         net.calls(),
@@ -2463,6 +2467,10 @@ fn an_observed_run_with_timing_times_one_scope_and_reads_the_reply() {
         "the timing changes no reply"
     );
     // No code under test waits on the clock here; the observed call has returned, so this move only proves later moves add no scope (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(std::time::Duration::from_millis(50));
     assert_eq!(net.calls(), 1, "decoding and later advances add no scope");
     assert_eq!(net.drops(), 1, "the scope drops once");
@@ -2908,6 +2916,10 @@ fn the_net_scope_ends_while_the_response_is_held() {
         "the net scope is already complete while headers stay blocked"
     );
     // No code under test waits on the clock here; the call is blocked in the held socket read, and this move is the elapsed time the line records (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(std::time::Duration::from_millis(50));
     server.release();
     let reply =

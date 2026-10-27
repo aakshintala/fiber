@@ -83,6 +83,10 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
     let mut advances = Some(case.clock);
     for (index, step) in case.steps.into_iter().enumerate() {
         for advance in step.clock {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "CaseClock scripted advance; excluded from the FakeClock ban (rulings 6253642596, 6261178927)"
+            )]
             case_clock.advance(Duration::from_millis(advance.advance_ms));
         }
         match step.operation {

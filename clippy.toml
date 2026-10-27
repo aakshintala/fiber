@@ -10,4 +10,6 @@ disallowed-methods = [
     { path = "std::time::SystemTime::now", reason = "read time from an injected contract::clock::Clock" },
     { path = "std::time::Instant::elapsed", reason = "read time from an injected contract::clock::Clock" },
     { path = "std::time::SystemTime::elapsed", reason = "read time from an injected contract::clock::Clock" },
+    { path = "support::clock::Manual::advance", reason = "advance to a named park through advance_when_parked (docs/testing.md, \"Waits and timeouts\")" },
+    { path = "support::clock::Manual::advance_marked", reason = "advance to a named park through advance_when_parked (docs/testing.md, \"Waits and timeouts\")" },
 ]
