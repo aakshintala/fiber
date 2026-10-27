@@ -2538,6 +2538,143 @@ fn an_older_window_replaces_the_candidate_from_fresh_pages() {
     );
 }
 
+/// A fresh read drops the old candidate and cursor: installing one run
+/// and starting the next never installs or counts the old run's lines.
+#[test]
+fn a_fresh_read_drops_the_old_candidate_and_cursor() {
+    let mut seq = 0;
+    let mut all_lines = roomy_turn(&mut seq, "a_old", "older reply", 300);
+    all_lines.extend(roomy_turn(&mut seq, "a_new", "newer reply", 1));
+    let all = envelopes(&all_lines);
+    let first = doors(&all, &json!({}));
+    assert!(first.len() < all.len(), "the newest window is partial");
+
+    let mut app = reading();
+    app.set_size(80, 40);
+    app.tail_lines(first);
+    app.install_tail();
+    assert!(app.count.is_some(), "the install leaves the count cursor");
+    assert!(
+        app.installed_floor.is_some(),
+        "the install records the candidate floor"
+    );
+    app.clear_tail_read();
+    assert!(app.count.is_none(), "the fresh read drops the cursor");
+    assert!(
+        app.installed_floor.is_none(),
+        "the fresh read drops the floor"
+    );
+}
+
+/// An ended tail reports and asks nothing more: a failed read ends the
+/// tail with its notice instead of reading on.
+#[test]
+fn an_ended_tail_reports_and_asks_nothing_more() {
+    let mut app = reading();
+    app.tail_lines(plain(200).drain(100..).collect());
+    assert_eq!(app.notice(), None);
+    app.tail_ended(Some("gone"));
+    assert_eq!(
+        app.notice(),
+        Some("Could not load history: gone"),
+        // docs/tui.md:2474-2475 ("History and paging"): a failed read ends the pass too.
+        "the ended tail reports"
+    );
+    assert!(
+        app.tail_next().is_none(),
+        // docs/tui.md:2474-2475 ("History and paging"): a failed read ends the pass too.
+        "an ended read asks nothing more"
+    );
+}
+
+/// An ended count reports and keeps the preview: a failed count ends
+/// the retained read with its notice while the installed preview stays.
+#[test]
+fn an_ended_count_reports_and_keeps_the_preview() {
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..3 {
+        lines.extend(roomy_turn(
+            &mut seq,
+            &format!("a_m{n}"),
+            &format!("reply {n}"),
+            1,
+        ));
+    }
+    let all = envelopes(&lines);
+    let mut app = reading();
+    install_preview(&mut app, &all);
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    app.tail_count_ended(Some("boom"));
+    assert_eq!(
+        app.notice(),
+        Some("Could not load history: boom"),
+        // docs/tui.md:2474-2475 ("History and paging"): a failed read ends the pass too.
+        "the ended count reports"
+    );
+    assert!(
+        app.tail_count_next().is_none(),
+        // docs/tui.md:2474-2475 ("History and paging"): a failed read ends the pass too.
+        "an ended count asks nothing more"
+    );
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
+        "the preview stays"
+    );
+}
+
+/// The count folds only lines strictly older than the installed floor:
+/// a floor at the chain root folds nothing, a floor inside the ancestor
+/// run folds the older prefix, and a floor in the own segment keeps the
+/// whole ancestor run with its trailer.
+#[test]
+fn the_count_folds_only_lines_older_than_the_installed_floor() {
+    use crate::app::overlay::Tail;
+    let root = segment_lines(ANCESTOR, 12, None);
+    let child = segment_lines(SESSION, 12, Some((ANCESTOR, 11)));
+    let mut tail = Tail::new();
+    tail.prepend(doors(&child, &json!({})))
+        .unwrap_or_else(|_| panic!("the child window"));
+    tail.prepend(doors(&root, &json!({"session_id": ANCESTOR, "to_seq": 11})))
+        .unwrap_or_else(|_| panic!("the ancestor window"));
+    let own = id(SESSION);
+    let ancestor = id(ANCESTOR);
+    let (prefix, trailer) = tail.count_parts(&own, None);
+    assert_eq!(
+        prefix.len(),
+        12,
+        // docs/tui.md:2446-2448 ("History and paging"): after the frame the terminal reads older windows to the chain root, carrying ancestor runs above the preview for the joint total.
+        "no floor keeps the whole ancestor run"
+    );
+    assert!(trailer.is_some(), "no floor keeps the trailer");
+    let (prefix, trailer) = tail.count_parts(&own, Some(&(ancestor.clone(), contract::Seq(0))));
+    assert!(
+        prefix.is_empty() && trailer.is_none(),
+        // docs/tui.md:2449-2450 ("History and paging"): a run that reaches `seq 0` short of the display crosses into its ancestors before the first frame instead.
+        "a floor at the chain root folds nothing"
+    );
+    let (prefix, trailer) = tail.count_parts(&own, Some(&(ancestor.clone(), contract::Seq(5))));
+    assert_eq!(
+        prefix.len(),
+        5,
+        // docs/tui.md:2446-2448 ("History and paging"): after the frame the terminal reads older windows to the chain root, carrying ancestor runs above the preview for the joint total.
+        "a floor inside the ancestor run folds the older prefix"
+    );
+    assert!(trailer.is_none(), "the trailer already shows");
+    let (prefix, trailer) = tail.count_parts(&own, Some(&(id(SESSION), contract::Seq(0))));
+    assert_eq!(
+        prefix.len(),
+        12,
+        // docs/tui.md:2446-2448 ("History and paging"): after the frame the terminal reads older windows to the chain root, carrying ancestor runs above the preview for the joint total.
+        "a floor in the own segment keeps the whole ancestor run"
+    );
+    assert!(trailer.is_some(), "the trailer closes the count fold");
+}
+
 /// Installing with no cached fold still installs the held run: it
 /// prepares a candidate before moving it into the screen.
 #[test]
