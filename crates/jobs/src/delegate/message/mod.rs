@@ -571,6 +571,7 @@ impl DelegateMessage {
             | ErrorCode::ModelUnconfigured
             | ErrorCode::ModelsLoading
             | ErrorCode::NamePinned
+            | ErrorCode::NoJobsRunning
             | ErrorCode::NoMatch
             | ErrorCode::NoModel
             | ErrorCode::NonzeroExit

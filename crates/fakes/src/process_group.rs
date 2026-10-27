@@ -394,16 +394,23 @@ fn alive(pid: u32) -> bool {
     }
 }
 
-/// Whether process group `group` has a member: kill(-group, 0), starting no
-/// process. Only `ESRCH` reads empty, through [`lives`]. Panics when
-/// `group` is 1 or less.
+/// The raw answer to probing process group `group` with kill(-group, 0),
+/// starting no process: `Ok` when the kernel accepts the probe, the errno
+/// otherwise. Panics when `group` is 1 or less.
 #[allow(
     clippy::expect_used,
     reason = "a probe of an id past the pid range panics, like a refused id"
 )]
-fn group_lives(group: u32) -> bool {
+fn group_answer(group: u32) -> rustix::io::Result<()> {
     let id = checked(group, "process group").expect("a group past the pid range is never live");
-    lives(rustix::process::test_kill_process_group(id))
+    rustix::process::test_kill_process_group(id)
+}
+
+/// Whether process group `group` has a member: the [`group_answer`] probe
+/// read through [`lives`], so only `ESRCH` reads empty. Panics when `group`
+/// is 1 or less.
+fn group_lives(group: u32) -> bool {
+    lives(group_answer(group))
 }
 
 /// How long each liveness wait holds between probes: one bounded wait
