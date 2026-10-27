@@ -47,7 +47,7 @@ fn template_row(name: &str) -> CommandInfo {
 }
 
 /// The `/` list's built-in order, as drawn: the table keeps this order,
-/// and `docs/tui.md`'s "Slash commands" table matches it.
+/// and the "Slash commands" table (`docs/tui.md:1990-1993`) matches it.
 const DRAWN_ORDER: &[&str] = &[
     "home",
     "new",
@@ -63,6 +63,7 @@ const DRAWN_ORDER: &[&str] = &[
     "usage",
     "quota",
     "status",
+    "doctor",
     "diff",
     "release-notes",
     "copy",
@@ -91,6 +92,7 @@ const DRAWN_ORDER: &[&str] = &[
     "?",
     "help",
     "delegates",
+    "jobs",
 ];
 
 #[test]
@@ -154,6 +156,8 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         &"effort",
         &"cost",
         &"agents",
+        &"tasks",
+        &"ps",
         &"cwd",
         &"permissions",
         &"config",
@@ -165,10 +169,10 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         &"exit",
         &"bug",
     ];
-    // The table enumerates the complete alias set (`docs/tui.md:1920–1959,1965`).
+    // The table enumerates built-in names and aliases (`docs/tui.md:1940-1997`).
     assert_eq!(extra, wanted);
     // An extension or skill named like an alias cannot take it silently
-    // (`docs/tui.md:1974`).
+    // (`docs/tui.md:2006`).
     for alias in TABLE
         .iter()
         .flat_map(|entry| aliases_of(entry.name).iter().copied())
@@ -182,6 +186,9 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
     assert!(is_built_in("rewind"));
     assert!(is_built_in("delegates"));
     assert!(is_built_in("agents"));
+    assert!(is_built_in("jobs"));
+    assert!(is_built_in("tasks"));
+    assert!(is_built_in("ps"));
     assert!(!is_built_in("tdd"));
 }
 
@@ -302,7 +309,7 @@ fn an_empty_query_shows_every_row() {
 fn prefix_matches_come_before_contains_matches() {
     let all = rows(&[skill("prereview"), skill("Review")]);
     // `re`: prefix matches first, each group in the `/` list's drawn
-    // order (`docs/tui.md:1971`): resume, release-notes, reviewer-setup,
+    // order (`docs/tui.md:1940-1993`): resume, release-notes, reviewer-setup,
     // rewind, name by its alias `rename`, reload, and the skill `Review`
     // (case ignored); then the contains matches, credential and
     // `prereview`.
@@ -328,7 +335,7 @@ fn prefix_matches_come_before_contains_matches() {
 
 #[test]
 fn a_row_draws_name_hint_description_and_tag() {
-    // The table orders `/compact` after `/handoff` (`docs/tui.md:1947,1965`).
+    // The table orders `/compact` after `/handoff` (`docs/tui.md:1978,1993`).
     let all = rows(&[]);
     let handoff = all.iter().find(|row| row.name == "handoff");
     assert_eq!(
@@ -449,4 +456,17 @@ fn quota_opens_the_view_from_the_list() {
         quota.line(),
         "/quota  Opens the quota view and fetches every label's quota.  command"
     );
+}
+
+#[test]
+fn doctor_opens_the_report_from_the_list() {
+    let all = rows(&[]);
+    let doctor = all.iter().find(|row| row.name == "doctor").unwrap();
+    assert_eq!(doctor.line(), "/doctor  Opens the doctor report.  command");
+    let names: Vec<&str> = all.iter().map(|row| row.name.as_str()).collect();
+    let (status, doctor) = (
+        names.iter().position(|name| *name == "status").unwrap(),
+        names.iter().position(|name| *name == "doctor").unwrap(),
+    );
+    assert_eq!(doctor, status + 1);
 }

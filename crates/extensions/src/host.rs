@@ -22,12 +22,13 @@ use ureq::Agent;
 
 use crate::oauth::{self, Browser, Holder};
 
+pub(crate) mod admission;
 mod ask;
 mod delegate;
 mod drive;
 pub(crate) mod exec;
 pub(crate) mod failure;
-mod fs;
+pub(crate) mod fs;
 mod log;
 pub(crate) mod model;
 pub(crate) mod script;
@@ -145,6 +146,40 @@ end
 /// Deeper tables, including cycles, fail rather than overflowing the stack.
 const MAX_DEPTH: usize = 127 - 2;
 
+/// A `host.secret` failure: a wrong name is an error in the calling
+/// code, raised as a string, while a read failure carries its code.
+pub(crate) enum SecretFailure {
+    /// The name is undeclared or unreadable as a name: raised as a string.
+    String(String),
+    /// Reading the stored secret failed with this code and message.
+    Coded(contract::ErrorCode, String),
+}
+
+/// Reads a declared secret: the manifest's `secrets` must list `name`
+/// before any file opens, and the stored secret reads trimmed. Shared
+/// by the Lua closure and the process adapter.
+pub(crate) fn read_secret(
+    home: &std::path::Path,
+    secrets: &[String],
+    name: &str,
+) -> Result<Option<String>, SecretFailure> {
+    use SecretFailure::{Coded, String as Text};
+    // An undeclared name is refused before any file is opened, so a
+    // stored secret the manifest does not list is never read.
+    if !secrets.iter().any(|declared| *declared == *name) {
+        return Err(Text(format!(
+            "host.secret: `{name}` is not in the manifest's `secrets`"
+        )));
+    }
+    match config::read_secret(home, name) {
+        Ok(secret) => Ok(secret.map(|secret| secret.expose().trim().to_owned())),
+        Err(source) if matches!(source, config::ConfigError::SecretName { .. }) => {
+            Err(Text(source.to_string()))
+        }
+        Err(source) => Err(Coded(source.code(), source.to_string())),
+    }
+}
+
 /// Sets the `host` and `json` globals. The returned tag is what the host
 /// calls yield, so the scheduler can tell that yield from any other; the
 /// returned table holds the timers' functions by id, which each firing runs.
@@ -182,28 +217,17 @@ pub(crate) fn install(
         let Ok(name) = name.to_str() else {
             return failure::raw_string(lua, "host.secret: name must be a string".to_owned());
         };
-        // An undeclared name is refused before any file is opened, so a
-        // stored secret the manifest does not list is never read.
-        if !secrets.iter().any(|declared| *declared == *name) {
-            return failure::raw_string(
-                lua,
-                format!("host.secret: `{name}` is not in the manifest's `secrets`"),
-            );
-        }
-        match config::read_secret(&secret_home, &name) {
-            Ok(secret) => Ok(match secret.map(|s| s.expose().trim().to_owned()) {
+        // A coded failure returns `(nil, code, message)` for the Lua half
+        // to raise as the table; a wrong name stays a string error.
+        match read_secret(&secret_home, &secrets, &name) {
+            Ok(secret) => Ok(match secret {
                 Some(secret) => {
                     MultiValue::from_vec(vec![LuaValue::String(lua.create_string(secret)?)])
                 }
                 None => MultiValue::from_vec(vec![LuaValue::Nil]),
             }),
-            Err(source) if matches!(source, config::ConfigError::SecretName { .. }) => {
-                failure::raw_string(lua, source.to_string())
-            }
-            Err(source) => {
-                let (code, message) = (source.code(), source.to_string());
-                failure::raw_failure(lua, &code, message)
-            }
+            Err(SecretFailure::String(message)) => failure::raw_string(lua, message),
+            Err(SecretFailure::Coded(code, message)) => failure::raw_failure(lua, &code, message),
         }
     })?;
     host.set("secret", failure::wrap(lua, secret_raw, &failure)?)?;

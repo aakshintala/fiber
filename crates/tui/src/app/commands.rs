@@ -67,6 +67,7 @@ pub(crate) fn aliases_of(name: &str) -> &'static [&'static str] {
         "feedback" => &["bug"],
         "quit" => &["exit"],
         "delegates" => &["agents"],
+        "jobs" => &["tasks", "ps"],
         _ => &[],
     }
 }
@@ -157,6 +158,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         description: "Opens the status view.",
         hint: None,
         run: run_status,
+    },
+    CommandEntry {
+        name: "doctor",
+        description: "Opens the doctor report.",
+        hint: None,
+        run: run_doctor,
     },
     CommandEntry {
         name: "diff",
@@ -325,6 +332,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         description: "Opens the delegates view: every delegate of the session on screen, running and finished.",
         hint: None,
         run: run_delegates,
+    },
+    CommandEntry {
+        name: "jobs",
+        description: "Opens the running jobs view: every running job of the session on screen, in the order they started.",
+        hint: None,
+        run: run_jobs,
     },
 ];
 
@@ -497,6 +510,25 @@ fn run_delegates(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_session_view(super::SessionView::AllDelegates))
 }
 
+/// `/jobs` (`/tasks` and `/ps` run the same command): the running jobs
+/// list, the same list the panel's Jobs card opens. An attached session
+/// with no running job gets the `No jobs running` notice and no view;
+/// with no session the shared no-session notice answers instead. Words
+/// after the command are ignored, as `/delegates` ignores them.
+fn run_jobs(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    // No session first: the shared no-session notice path answers, and
+    // the empty-jobs check only judges an attached session.
+    if app.session().is_none() {
+        return Some(app.open_session_view(super::SessionView::Jobs));
+    }
+    if app.panel_state().running_jobs().is_empty() {
+        app.push_notice("no_jobs_running", "No jobs running".to_owned());
+        return Some(Effect::None);
+    }
+    Some(app.open_session_view(super::SessionView::Jobs))
+}
+
 fn run_context(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::Context))
@@ -519,6 +551,11 @@ fn run_quota(app: &mut App, _rest: &str) -> Option<Effect> {
 fn run_status(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::Status))
+}
+
+fn run_doctor(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_config_view(super::ConfigView::Doctor))
 }
 
 fn run_diff(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -727,12 +764,26 @@ impl App {
         let draft = draft.trim();
         let (head, rest) = draft.split_once(char::is_whitespace).unwrap_or((draft, ""));
         let name = head.strip_prefix('/')?;
-        if self.completion.extensions.iter().any(|known| known == name) {
+        let extension = self
+            .completion
+            .extensions
+            .iter()
+            .find(|known| known.as_str() == name)
+            .or_else(|| {
+                let entry = TABLE
+                    .iter()
+                    .find(|entry| aliases_of(entry.name).contains(&name))?;
+                self.completion
+                    .extensions
+                    .iter()
+                    .find(|known| known.as_str() == entry.name)
+            });
+        if let Some(extension) = extension {
             let rest = rest.trim();
             let args = if rest.is_empty() {
-                Some(json!({"name": name}))
+                Some(json!({"name": extension}))
             } else {
-                Some(json!({"name": name, "text": rest}))
+                Some(json!({"name": extension, "text": rest}))
             };
             return Some(self.send_command("command", args).0);
         }

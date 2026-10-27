@@ -14,7 +14,7 @@ use contract::events::{CommandAccepted, CommandRejected, CommandResult};
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
 
-use super::{App, Effect};
+use super::{App, Effect, doctor_view};
 use crate::ThemeSetting;
 use crate::configure::{Configure, ConfigureError, Layer, Saved};
 use crate::keys::{Edit, Key};
@@ -52,6 +52,8 @@ pub(crate) enum ConfigView {
     Mcp,
     /// `/credential`.
     Credential,
+    /// `/doctor`: the report `fiber doctor` prints.
+    Doctor,
 }
 
 /// The open view.
@@ -73,6 +75,8 @@ enum Open {
     Mcp(Mcp),
     /// `/credential`.
     Credential(credential::Picker),
+    /// `/doctor`: the scrolled list and the snapshot lines.
+    Doctor(doctor_view::Doctor),
     /// A view with no seam to read through, by its title and the
     /// command that opened it.
     Unavailable(&'static str, &'static str),
@@ -87,8 +91,9 @@ impl Open {
             Open::Skills(skills) => skills.rejected(id, message),
             Open::Mcp(mcp) => mcp.rejected(id, message),
             Open::Credential(picker) => picker.rejected(id, message),
-            // `/logout` sends nothing: it never waits on an answer.
-            Open::Logout(_) => {}
+            // `/logout` and `/doctor` send nothing: neither waits on
+            // an answer.
+            Open::Logout(_) | Open::Doctor(..) => {}
             Open::Settings(_) | Open::Rules(_) | Open::Login(_) | Open::Unavailable(..) => {}
         }
     }
@@ -122,6 +127,9 @@ pub(in crate::app) struct ConfigViews {
     /// The feedback report writer `main` injected: the loop thread
     /// writes through it, and none writes nothing.
     feedback: Option<crate::WriteFeedback>,
+    /// The doctor report reader `main` injected: the `/doctor` view
+    /// shows its snapshot, and none opens the Unavailable shape.
+    doctor: Option<contract::feedback::ReadDoctor>,
     /// The sole owner of an outstanding hub editor copy.
     copy: Option<crate::remote::RemoteCopy>,
     /// The open view.
@@ -155,6 +163,11 @@ impl App {
     /// Sets the feedback report writer the loop writes through.
     pub(crate) fn set_feedback(&mut self, writer: Option<crate::WriteFeedback>) {
         self.config_views.feedback = writer;
+    }
+
+    /// Sets the doctor report reader the `/doctor` view shows.
+    pub(crate) fn set_doctor(&mut self, reader: Option<contract::feedback::ReadDoctor>) {
+        self.config_views.doctor = reader;
     }
 
     /// The feedback report writer, absent with nothing to write through.
@@ -325,6 +338,19 @@ impl App {
         self.close_session_view();
         self.config_views.open = None;
         let open = match (self.config_views.seam.clone(), view) {
+            // `/doctor` reads a local snapshot through no seam: with no
+            // reader the view says it is not available, and a capture
+            // failure keeps a notice and opens nothing.
+            (_, ConfigView::Doctor) => match self.config_views.doctor.clone() {
+                None => Open::Unavailable("Doctor", "/doctor"),
+                Some(reader) => match reader() {
+                    Ok(report) => Open::Doctor(doctor_view::Doctor::open(&report)),
+                    Err(text) => {
+                        self.push_notice("io_failed", text);
+                        return Effect::None;
+                    }
+                },
+            },
             (_, ConfigView::Credential) => {
                 let Some((id, line)) = self.send_config_command("credentials", None) else {
                     return Effect::None;
@@ -489,6 +515,12 @@ impl App {
             let pick = picker.key(key, height);
             return Some(self.credential_pick(pick));
         }
+        // `/doctor` shows a local snapshot through no seam: Esc and
+        // scrolling never reach the configure seam or a workspace.
+        if let Some(Open::Doctor(doctor)) = &mut self.config_views.open {
+            let act = doctor.key(key, height);
+            return Some(self.config_act(act));
+        }
         let act = match self.config_views.seam.clone() {
             Some(seam) => {
                 let Some(workspace) = self.view_workspace() else {
@@ -503,6 +535,9 @@ impl App {
                     Some(Open::Rules(rules)) => rules.key(key, &ctx),
                     Some(Open::Login(login)) => login.key(key, &ctx),
                     Some(Open::Logout(logout)) => logout.key(key, &ctx),
+                    // The early route above keeps `/doctor` out of the
+                    // seam match: named here for exhaustiveness.
+                    Some(Open::Doctor(..)) => esc(key),
                     Some(Open::Credential(_) | Open::Unavailable(..)) | None => esc(key),
                 }
             }
@@ -515,6 +550,10 @@ impl App {
     /// open.
     pub(in crate::app) fn config_view_edit(&mut self, edit: &Edit) -> Option<Effect> {
         self.config_views.open.as_ref()?;
+        // `/doctor` has no field: edits change nothing, through no seam.
+        if matches!(self.config_views.open, Some(Open::Doctor(..))) {
+            return Some(Effect::None);
+        }
         let act = match self.config_views.seam.clone() {
             Some(seam) => {
                 let Some(workspace) = self.view_workspace() else {
@@ -542,6 +581,9 @@ impl App {
                     }
                     // `/logout` has no field: nothing takes an edit.
                     Some(Open::Logout(_)) => Act::Stay,
+                    // The early route above keeps `/doctor` out of the
+                    // seam match: named here for exhaustiveness.
+                    Some(Open::Doctor(..)) => Act::Stay,
                     Some(Open::Credential(_) | Open::Unavailable(..)) | None => Act::Stay,
                 }
             }
@@ -556,6 +598,17 @@ impl App {
         if let Some(Open::Credential(picker)) = &mut self.config_views.open {
             let pick = picker.click(spot, height);
             return self.credential_pick(pick);
+        }
+        // `/doctor` shows a local snapshot through no seam: a report
+        // row takes no action without reaching the configure seam or a
+        // workspace. The top-row close below stays shared.
+        if matches!(self.config_views.open, Some(Open::Doctor(..)))
+            && matches!(
+                spot,
+                Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)
+            )
+        {
+            return self.config_act(Act::Stay);
         }
         let act = match (self.config_views.seam.clone(), spot) {
             // The picker's `x` cancels like Esc: with the theme choices
@@ -584,6 +637,9 @@ impl App {
                     Some(Open::Rules(rules)) => rules.click(spot, &ctx),
                     Some(Open::Login(login)) => login.click(spot, &ctx),
                     Some(Open::Logout(logout)) => logout.click(spot, &ctx),
+                    // The early route above keeps `/doctor` out of the
+                    // seam match: named here for exhaustiveness.
+                    Some(Open::Doctor(..)) => Act::Stay,
                     Some(Open::Credential(_) | Open::Unavailable(..)) | None => Act::Stay,
                 }
             }
@@ -782,6 +838,7 @@ impl App {
             }
             Open::Mcp(mcp) => mcp.frame(usage),
             Open::Credential(picker) => picker.frame(),
+            Open::Doctor(doctor) => doctor.frame(),
             Open::Rules(rules) => rules.frame(self.config_view_width(), self.motion().wall_ms()),
             Open::Login(_) => return None,
             // `/logout` draws its own overlay, as `/login` does.
@@ -869,8 +926,9 @@ impl App {
                 Some(Open::Settings(settings)) => settings.reread(&ctx),
                 Some(Open::Rules(rules)) => rules.reread(&ctx),
                 Some(Open::Skills(skills)) => skills.reread(&ctx),
-                // `/logout` writes no file an editor could return from.
-                Some(Open::Logout(_)) => {}
+                // `/logout` and `/doctor` open no file an editor could
+                // return from: the snapshot never rereads.
+                Some(Open::Logout(_) | Open::Doctor(..)) => {}
                 Some(
                     Open::Credential(_)
                     | Open::Tools(_)
@@ -935,9 +993,9 @@ impl App {
                                 }
                             }
                         },
-                        // `/logout` waits on no command: no line folds
-                        // into it.
-                        Some(Open::Logout(_)) => {}
+                        // `/logout` and `/doctor` wait on no command: no
+                        // line folds into them.
+                        Some(Open::Logout(_) | Open::Doctor(..)) => {}
                         Some(
                             Open::Credential(_)
                             | Open::Settings(_)
@@ -1024,3 +1082,7 @@ mod skills_tests;
 #[cfg(test)]
 #[path = "config_mcp_tests.rs"]
 mod mcp_tests;
+
+#[cfg(test)]
+#[path = "doctor_view_tests.rs"]
+mod doctor_tests;
