@@ -108,7 +108,7 @@ fn a_failing_child_is_its_stderr() {
     let script = fakes::script(
         dir.path(),
         "convert",
-        "echo -n 'no such thing' >&2; exit 1\n",
+        "printf 'no such thing' >&2; exit 1\n",
     );
     let (out, rx) = mpsc::channel();
     spawn(
