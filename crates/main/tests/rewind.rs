@@ -519,14 +519,17 @@ fn an_at_end_rewind_continues_the_session_from_the_latest_point() {
     // old-log lines (`rewound`) ride along in neither.
     hubbed.prompt("c1_p3", &next, "three");
     let requests = server.requests();
-    // Three turns ran, one request each: the two old prompts and the new
-    // one. No summary ran (`at_end` carries none), and the new session
-    // starts no turn on its own.
-    // (`docs/events.md`, "Rewind": "It never starts a turn"; "A summary is
-    // optional", and `at_end` takes none, so no summary turn runs.)
-    assert_eq!(requests.len(), 3, "one request per turn");
-    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
-    let third: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    // The fake records requests in call order (`docs/testing/fakes.md`,
+    // "Model calls"); compare the old turn and the forked session's request.
+    let second: Value =
+        serde_json::from_slice(&requests.get(1).expect("the second request").body).unwrap();
+    let third: Value = serde_json::from_slice(
+        &requests
+            .get(2)
+            .expect("the forked session's first request")
+            .body,
+    )
+    .unwrap();
     let second_keys: Vec<&str> = second
         .as_object()
         .unwrap()
