@@ -572,6 +572,160 @@ fn mcp_servers_answers_the_installed_snapshot_rows() {
     opened.close();
 }
 
+/// The installed hooks seam answers `hooks` with its rows through the
+/// client dispatch: without the seam the command is unknown, so replacing
+/// the gate lookup with `None` would refuse it, and the rows it returns
+/// are the seam's.
+struct RowsHooks;
+
+impl contract::hook::Hooks for RowsHooks {
+    fn after_tool(
+        &self,
+        _call: &contract::hook::AfterToolCall<'_>,
+    ) -> contract::hook::AfterToolAnswer {
+        contract::hook::AfterToolAnswer {
+            outcome: contract::hook::AfterToolOutcome::Unchanged,
+            changed_by: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_tool(
+        &self,
+        _call: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::BeforeToolAnswer {
+        contract::hook::BeforeToolAnswer {
+            outcome: contract::hook::BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(
+        &self,
+        _call: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(
+        &self,
+        _message: &contract::hook::BeforeMessage<'_>,
+    ) -> contract::hook::BeforeMessageAnswer {
+        contract::hook::BeforeMessageAnswer {
+            outcome: contract::hook::BeforeMessageOutcome::Passed {
+                replaced: None,
+                context: Vec::new(),
+            },
+            notices: Vec::new(),
+        }
+    }
+
+    fn session_start(
+        &self,
+        _start: &contract::hook::SessionStart<'_>,
+    ) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_start(&self, _turn: &contract::hook::TurnStart<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_model_call(
+        &self,
+        _call: &contract::hook::BeforeModelCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_end(&self, _end: &contract::hook::TurnEnd<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+
+    fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<contract::inbox::Delivery>) {}
+
+    fn registrations(&self) -> Vec<contract::events::HookInfo> {
+        vec![
+            contract::events::HookInfo::Hook {
+                extension: "ext".into(),
+                entry: None,
+                point: "before_tool".into(),
+                on_failure: "blocking".into(),
+                phase: None,
+            },
+            contract::events::HookInfo::Watcher {
+                extension: "ext".into(),
+                entry: None,
+                kinds: vec!["turn_completed".into()],
+            },
+        ]
+    }
+}
+
+#[test]
+fn hooks_answers_the_installed_seam_rows() {
+    use fakes::Client;
+    use std::sync::Arc;
+    use support::{Opened, response, send};
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    opened.session.hooks(Arc::new(RowsHooks));
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            send(
+                &client,
+                r#"{"id":"sub","command":"subscribe","args":{"level":"summary"}}"#,
+            );
+            send(&client, r#"{"id":"list","command":"hooks"}"#);
+            let line = response(&client, "list");
+            assert_eq!(support::kind(&line), "command_accepted");
+            // The `hooks` result shape follows (`docs/events.md`, "`command_accepted`").
+            assert_eq!(
+                line["payload"]["result"]["hooks"],
+                serde_json::json!([
+                    {
+                        "kind": "hook",
+                        "extension": "ext",
+                        "point": "before_tool",
+                        "on_failure": "blocking",
+                    },
+                    {
+                        "kind": "watcher",
+                        "extension": "ext",
+                        "kinds": ["turn_completed"],
+                    },
+                ])
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
 #[test]
 fn mcp_login_answers_on_its_thread_without_holding_the_reader() {
     use fakes::Client;

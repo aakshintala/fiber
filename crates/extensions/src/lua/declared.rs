@@ -101,6 +101,11 @@ pub(crate) struct DeclaredHook {
     pub(crate) blocking: bool,
     /// Its timeout, or the configured override.
     pub(crate) timeout: Duration,
+    /// The declared configuration key, only for a declared entry through
+    /// the first-party hooks configuration registrar.
+    pub(crate) entry: Option<String>,
+    /// Whether the registration named its phase.
+    pub(crate) phase_explicit: bool,
 }
 
 /// The hooks the entry script registered, by point in registration order,
@@ -120,16 +125,22 @@ impl DeclaredHooks {
             let list = list
                 .sequence_values::<Table>()
                 .flatten()
-                .map(|spec| DeclaredHook {
-                    phase: match spec.get::<String>("phase").as_deref() {
-                        Ok("sanitize") => HookPhase::Sanitize,
-                        Ok("check") => HookPhase::Check,
-                        _ => HookPhase::Transform,
-                    },
-                    blocking: spec
-                        .get::<String>("on_failure")
-                        .is_ok_and(|failure| failure == "blocking"),
-                    timeout: Duration::from_millis(spec.get::<u64>("timeout").unwrap_or(0)),
+                .map(|spec| {
+                    let (phase, phase_explicit) = match spec.get::<String>("phase").as_deref() {
+                        Ok("sanitize") => (HookPhase::Sanitize, true),
+                        Ok("check") => (HookPhase::Check, true),
+                        Ok("transform") => (HookPhase::Transform, true),
+                        _ => (HookPhase::Transform, false),
+                    };
+                    DeclaredHook {
+                        phase,
+                        blocking: spec
+                            .get::<String>("on_failure")
+                            .is_ok_and(|failure| failure == "blocking"),
+                        timeout: Duration::from_millis(spec.get::<u64>("timeout").unwrap_or(0)),
+                        entry: spec.get::<String>("entry").ok(),
+                        phase_explicit,
+                    }
                 })
                 .collect();
             declared.by_point.insert(point, list);
@@ -146,6 +157,9 @@ pub(crate) struct DeclaredWatcher {
     pub(crate) kinds: Vec<String>,
     /// Its timeout.
     pub(crate) timeout: Duration,
+    /// The declared configuration key, only for a declared entry through
+    /// the first-party hooks configuration registrar.
+    pub(crate) entry: Option<String>,
 }
 
 /// The watchers the entry script registered, in registration order, and a
@@ -189,7 +203,11 @@ impl DeclaredWatchers {
             if kinds.is_empty() {
                 continue;
             }
-            declared.watchers.push(DeclaredWatcher { kinds, timeout });
+            declared.watchers.push(DeclaredWatcher {
+                kinds,
+                timeout,
+                entry: spec.get::<String>("entry").ok(),
+            });
         }
         for problem in problems.sequence_values::<String>().flatten() {
             if is_watch_problem(&problem) {
@@ -243,6 +261,8 @@ mod tests {
                             phase: HookPhase::Transform,
                             blocking: false,
                             timeout: Duration::from_millis(1000),
+                            entry: None,
+                            phase_explicit: false,
                         }],
                     )]),
                     problems: Vec::new(),
@@ -251,6 +271,7 @@ mod tests {
                     watchers: vec![DeclaredWatcher {
                         kinds: vec!["turn_completed".to_owned()],
                         timeout: Duration::from_millis(2000),
+                        entry: None,
                     }],
                     problems: Vec::new(),
                 },

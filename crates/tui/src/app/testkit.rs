@@ -48,6 +48,36 @@ pub(crate) fn attached(width: u16, height: u16) -> App {
     app
 }
 
+/// A live `session_status` for `session`, streaming.
+pub(crate) fn live(session: contract::SessionId) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: session,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({
+            "name": "fix the parser",
+            "workspace": "/w",
+            "project": "-w",
+            "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model",
+            "delegates": 0,
+            "jobs": 0,
+            "clients": 0,
+            "state": "streaming",
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
 /// One session envelope.
 pub(crate) fn session_line(
     session: &str,
