@@ -216,10 +216,9 @@ pub(crate) struct App {
     passes: Vec<(SessionId, Pass)>,
     /// What an open holds over the attached screen.
     overlay: overlay::Overlay,
-    /// The rows of the accumulated visible run, each newly included
-    /// line counted once: the fill check reads it without refolding
-    /// the run, and the install folds the run once.
-    tail_rows: usize,
+    /// The visible run folded once while the tail read fills: the
+    /// install moves it into the screen instead of refolding the run.
+    preview: Option<overlay::Preview>,
     /// The tail read the preview left behind: older own-segment windows
     /// and ancestors the post-frame count reads before the raise.
     count: Option<overlay::Tail>,
@@ -377,7 +376,7 @@ impl App {
         let mut app = Self {
             passes: Vec::new(),
             overlay: overlay::Overlay::None,
-            tail_rows: 0,
+            preview: None,
             count: None,
             abandoned_history: BTreeSet::new(),
             workspace,
@@ -685,9 +684,9 @@ impl App {
     }
 
     /// Folds a run slice once into fresh pages, with the last busy the
-    /// fold reported: the counter folds each newly included prefix once
-    /// and discards it, and the install folds the full run once and
-    /// moves it, so the accumulated run never refolds.
+    /// fold reported. The tail read refolds the held run into the
+    /// cached preview once per answer, and the install moves that
+    /// object into the screen, so the installed pages fold once.
     fn fold_run(&self, lines: Option<&[Envelope]>) -> overlay::Preview {
         let mut fresh = self.attached_screen().pages().fresh();
         fresh.set_image_ids(self.images.id_allocator.clone());
@@ -703,6 +702,19 @@ impl App {
         overlay::Preview { pages: fresh, busy }
     }
 
+    /// Folds the held visible run once into the cached preview: the
+    /// install moves it into the screen instead of refolding the run.
+    /// No read running folds nothing.
+    fn fold_preview(&mut self) {
+        let lines = if let Overlay::Reading(tail) = &self.overlay {
+            tail.turn_lines()
+        } else {
+            return;
+        };
+        let preview = self.fold_run(lines);
+        self.preview = Some(preview);
+    }
+
     /// The args of the open's next tail read: none when the walk
     /// reached the chain root or ended, when no read runs, or when the
     /// display filled on the held run's own segment. Past a crossed seam
@@ -711,18 +723,8 @@ impl App {
     /// counts the lines above a filled display, so the open holds only
     /// the filled run plus each seam crossing.
     pub(crate) fn tail_next(&mut self) -> Option<Value> {
-        // A read installed without counting (tests set the overlay
-        // directly) folds its held run once into the row count here.
-        if self.tail_rows == 0 {
-            let rows = if let Overlay::Reading(tail) = &self.overlay {
-                tail.turn_lines()
-                    .map(|held| self.fold_run(Some(held)).pages.index().total())
-            } else {
-                None
-            };
-            if let Some(rows) = rows {
-                self.tail_rows = rows;
-            }
+        if self.preview.is_none() {
+            self.fold_preview();
         }
         let Overlay::Reading(tail) = &self.overlay else {
             return None;
@@ -730,11 +732,14 @@ impl App {
         if tail.chain_done() {
             return None;
         }
+        let preview = self.preview.as_ref()?;
         let height = self.conversation_height();
         // Rows past the display stop pre-frame reads; merely reaching
         // the segment's start does not. A run that reaches `seq 0`
         // short of the display crosses the seam before the first frame.
-        let full = tail.turn_lines().is_some_and(|_| self.tail_rows >= height);
+        let full = tail
+            .turn_lines()
+            .is_some_and(|_| preview.pages.index().total() >= height);
         // A fill on the own segment stops pre-frame reads even with a
         // parent still to read: older windows and ancestors belong to
         // the post-frame count. A fill past a crossed seam keeps going
@@ -748,13 +753,9 @@ impl App {
 
     /// Folds one tail answer into the open's read: an answer that
     /// leaves a gap, or a line carrying no seq, ends the tail as failed
-    /// with the out-of-order notice. Each newly included line counts
-    /// once toward the fill, so the accumulated run never refolds.
+    /// with the out-of-order notice. Every answer refolds the cached
+    /// preview once, so the install moves it.
     pub(crate) fn tail_lines(&mut self, lines: Vec<Envelope>) {
-        let Overlay::Reading(tail) = &self.overlay else {
-            return;
-        };
-        let old_len = tail.turn_lines().map(|held| held.len()).unwrap_or(0);
         {
             let Overlay::Reading(tail) = &mut self.overlay else {
                 return;
@@ -768,19 +769,7 @@ impl App {
                 return;
             }
         }
-        // The newly included prefix before the previously held run: it
-        // starts at a turn start and ends at one, so its rows add to the
-        // held total without touching the old fold.
-        let Overlay::Reading(tail) = &self.overlay else {
-            return;
-        };
-        let Some(held) = tail.turn_lines() else {
-            return;
-        };
-        let prefix_len = held.len().saturating_sub(old_len);
-        let prefix = held.get(..prefix_len).unwrap_or(&[]);
-        let rows = self.fold_run(Some(prefix)).pages.index().total();
-        self.tail_rows = self.tail_rows.saturating_add(rows);
+        self.fold_preview();
     }
 
     /// Ends one tail read over its cursor: failed with the notice,
@@ -806,13 +795,14 @@ impl App {
         Self::end_read(tail, notice, &mut self.notices);
     }
 
-    /// Installs the open's read tail as the preview: the held run folded
-    /// once and moved into the screen, or an empty conversation when no
-    /// held line starts a turn. An empty log installs nothing and shows
-    /// no history. The screen follows, the overlay shows the preview,
-    /// and the screen freezes for the raise. The tail stays behind as
-    /// the post-frame count's cursor: older own-segment windows and
-    /// ancestors read through it without refolding the preview.
+    /// Installs the open's read tail as the preview: the run the reads
+    /// folded once, moved into the screen, or an empty conversation
+    /// when no held line starts a turn. An empty log installs nothing
+    /// and shows no history. The screen follows, the overlay shows the
+    /// preview, and the screen freezes for the raise. The tail stays
+    /// behind as the post-frame count's cursor: older own-segment
+    /// windows and ancestors read through it without refolding the
+    /// preview.
     pub(crate) fn install_tail(&mut self) {
         let Overlay::Reading(tail) = std::mem::replace(&mut self.overlay, Overlay::None) else {
             return;
@@ -820,7 +810,10 @@ impl App {
         let Some(session) = self.opening_session() else {
             return;
         };
-        let preview = self.fold_run(tail.turn_lines());
+        let preview = self.preview.take().unwrap_or_else(|| {
+            // No cached fold ran: fold what the tail holds, as before.
+            self.fold_run(tail.turn_lines())
+        });
         *self.attached_screen_mut().pages_mut() = preview.pages;
         self.attached_screen_mut().follow();
         self.count = Some(tail);
@@ -832,11 +825,11 @@ impl App {
         self.attached_screen_mut().set_frozen(true);
     }
 
-    /// Drops a fresh tail read's leftover row count and count cursor:
-    /// the next read counts its own. The loop calls it when the tail
+    /// Drops a fresh tail read's leftover preview and count cursor:
+    /// the next read folds its own. The loop calls it when the tail
     /// read starts, so a new open never installs or counts the old run.
     pub(crate) fn clear_tail_read(&mut self) {
-        self.tail_rows = 0;
+        self.preview = None;
         self.count = None;
     }
 

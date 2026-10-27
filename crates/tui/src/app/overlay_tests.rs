@@ -2270,6 +2270,7 @@ fn a_fill_past_a_crossed_seam_keeps_going_to_the_chain_root() {
     assert_eq!(
         args,
         json!({"session_id": MID, "to_seq": mpoint}),
+        // docs/tui.md:2470-2480 ("History and paging"): the chain reads as one history across the seam.
         "the middle segment under its session"
     );
     // The middle window fills the display at its own segment start,
@@ -2283,6 +2284,7 @@ fn a_fill_past_a_crossed_seam_keeps_going_to_the_chain_root() {
     assert_eq!(
         args,
         json!({"session_id": ANCESTOR, "to_seq": rpoint}),
+        // docs/tui.md:2470-2480 ("History and paging"): ancestor windows under their session.
         "the root under its session"
     );
     app.tail_lines(doors(&root, &args));
@@ -2461,6 +2463,24 @@ fn a_failed_read_keeps_whole_turns_or_nothing() {
     assert_eq!(
         app.attached_screen().pages().index().total(),
         0,
+        "an empty conversation"
+    );
+}
+
+/// Installing with no cached fold still installs the held run: the
+/// install folds what the tail holds instead of moving a preview.
+#[test]
+fn install_without_a_cached_fold_installs_the_held_run() {
+    let mut app = reading();
+    app.install_tail();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    assert_eq!(
+        app.attached_screen().pages().index().total(),
+        0,
+        // docs/tui.md:2442-2445 ("History and paging"): an empty log means the first frame draws no history.
         "an empty conversation"
     );
 }

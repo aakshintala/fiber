@@ -289,11 +289,11 @@ pub(super) struct Preview {
 impl App {
     /// Ends the overlay on every path: the fold drops, a landed pass can
     /// no longer fire, and the screen unfreezes, applying one stored
-    /// resize. The row count and any retained count go with it, so no
-    /// later open installs or counts the old run.
+    /// resize. The cached preview and any retained count go with it, so
+    /// no later open installs or counts the old run.
     pub(super) fn end_overlay(&mut self) {
         self.overlay = Overlay::None;
-        self.tail_rows = 0;
+        self.preview = None;
         self.count = None;
         self.attached_screen_mut().set_frozen(false);
     }
