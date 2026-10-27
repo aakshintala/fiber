@@ -19,7 +19,7 @@ use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 
 use super::ExecRequest;
 use super::resolve_in_package;
-use support::group::{self, DRAIN, GROUP_POLL};
+use support::group::{self, DRAIN, GRACE, GROUP_POLL};
 /// How long a test waits on the run before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -1781,13 +1781,18 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
     let (_dir, cwd) = dir("fiber-exec-stdin-holder");
     let clock = FakeClock::new();
     let ready = ready_in(&cwd);
+    // The background holder keeps fd 3, duplicated from stdin before the
+    // fork: dash gives a background job `/dev/null` stdin otherwise, and
+    // the holder would prove nothing about the run's input pipe.
     let script = format!(
-        "(exec sleep 1000) &\necho $$ > '{}'\nexit 0\n",
+        "exec 3<&0\n(exec sleep 1000 <&3) &\necho $$ > '{}'\nexit 0\n",
         ready.path().display()
     );
     let deadline = clock.now() + Duration::from_millis(500);
     let mut req = sh(&script, cwd, CAP);
     req.input = Some(vec![b'y'; 1 << 18]);
+    let (stdout_read_tx, stdout_read_rx) = mpsc::channel();
+    req.stdout_read = Some(stdout_read_tx);
     let (_cancel, done) = spawn(req, Arc::clone(&clock), Some(deadline));
     let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
@@ -1795,12 +1800,45 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
     // dropped its cancel; the group signal frees the parked writer.
     step_to_deadline(&clock, deadline);
     let kill_at = clock.now() + Duration::from_millis(800);
-    clock.advance_when_parked(
-        Some(kill_at),
-        None,
-        Duration::from_millis(800),
-        &Deadline::after(DEADLINE),
-    );
+    // This test alone moves the fake clock. A miss reports the state the
+    // run had reached instead of only the park mismatch, not a
+    // deterministic repro: no pause point reaches the reader/supervisor
+    // order behind the flake.
+    if let Err(miss) = clock.try_advance_when_parked(Some(kill_at), None, GRACE, DEADLINE) {
+        let events: Vec<super::ExecTestEvent> = stdout_read_rx.try_iter().collect();
+        let parks: Vec<&super::ExecTestEvent> = events
+            .iter()
+            .filter(|event| matches!(event, super::ExecTestEvent::Park { .. }))
+            .collect();
+        let watched = match &miss {
+            fakes::clock::Miss::Mismatch {
+                watched: (_, until),
+                ..
+            } => Some(*until),
+            fakes::clock::Miss::NoPark => None,
+        };
+        let observed = match watched {
+            Some(at) => parks
+                .iter()
+                .rev()
+                .find(|event| {
+                    matches!(
+                        event,
+                        super::ExecTestEvent::Park { until, .. } if *until == at
+                    )
+                })
+                .or_else(|| parks.last())
+                .copied(),
+            None => parks.last().copied(),
+        };
+        let state = match observed {
+            Some(event) => describe_park_event(event, kill_at, None),
+            None => "no park observation arrived".to_owned(),
+        };
+        panic!(
+            "the stdin-holder run missed its grace park at kill_at ({kill_at:?}): {miss}; {state}"
+        );
+    }
     let ran = Deadline::after(DEADLINE)
         .recv(&done)
         .expect("waited {DEADLINE:?} for the stdin-holder run")
