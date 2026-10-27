@@ -666,10 +666,9 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
     assert_eq!(output.status.code(), Some(0));
 }
 
-/// Probe for #3500: an exhausted wait budget fails exactly the way the
-/// flaky exit wait did, with no process holding the path. The marker
-/// names a path nothing ever references, and the zero budget leaves no
-/// time for even the first listing, so the expiry names no holder.
+/// An exhausted wait budget fails naming no holder: the marker names
+/// a path nothing ever references, and the zero budget leaves no time
+/// for even the first listing, so the expiry names no holder.
 #[test]
 fn probe_exhausted_budget_names_no_holder() {
     let setup = Setup::new();
@@ -691,11 +690,9 @@ fn probe_exhausted_budget_names_no_holder() {
         .expect("nothing holds the path, so a funded wait succeeds");
 }
 
-/// Probe for #3500: a process that really holds the path is always
-/// named. A shell whose command line carries the marker outlives a
-/// funded wait, and the expiry names its pid and command line, so a
-/// leaked viewer or session could never produce the flake's
-/// holder-free message.
+/// A process that really holds the path is always named: a held shell
+/// whose command line carries the marker blocks on a stdin pipe the
+/// test owns, and the expiry names its pid and command line.
 #[test]
 fn probe_live_holder_is_named() {
     let setup = Setup::new();
@@ -704,32 +701,29 @@ fn probe_live_holder_is_named() {
         .join("probe-holder")
         .to_string_lossy()
         .into_owned();
+    // Controlled hold: the shell blocks reading a stdin pipe the test
+    // holds open, and its command line carries the marker as its name.
     let mut child = Command::new("sh")
-        .args(["-c", "sleep 30 & echo $!; wait", &marker])
+        .args(["-c", "read line", &marker])
         .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("the marked shell starts");
     let id = child.id();
+    let stdin = child.stdin.take().expect("the marked shell holds stdin");
     // The shell is listed before the wait runs: the listing proves its
     // command line carries the marker.
     fakes::wait_until("the marked shell to list", setup.deadline, {
         let marker = marker.clone();
         move || fakes::matching(&marker).is_ok_and(|pids| pids.contains(&id))
     });
-    // A funded wait outlives the holder and names it. The message is
-    // captured first and asserted after the reap, so no path leaves
-    // the shell behind.
-    let err = fakes::try_matching_exits(&marker, Deadline::after(Duration::from_secs(10)))
-        .expect_err("the holder outlives the funded wait, so it fails");
+    // A short expiry names the live holder without waiting out a funded
+    // wait: the listing already ran, so the expiry names the holder.
+    let err = fakes::try_matching_exits(&marker, Deadline::after(Duration::from_millis(200)))
+        .expect_err("the holder outlives the short wait, so it fails");
     let message = err.to_string();
-    fakes::kill_group(id, "KILL").expect("the marked shell's group dies");
-    fakes::kill_pid(id, "KILL").expect("the marked shell dies");
-    child.wait().expect("the marked shell reaps");
-    fakes::try_matching_exits(&marker, Deadline::after(Duration::from_secs(10)))
-        .expect("the reaped holder is gone, so the wait succeeds");
     assert!(
         message.contains(&id.to_string()),
         "the expiry names the holder pid: {message}"
@@ -737,5 +731,33 @@ fn probe_live_holder_is_named() {
     assert!(
         message.contains(&marker),
         "the expiry names the holder command line: {message}"
+    );
+    // A funded wait stays pending while the holder lives: it runs on a
+    // thread, and a bounded receive must time out, a bound of several
+    // of the wait's own probe intervals. Releasing the pipe ends the
+    // shell, and the same wait then succeeds.
+    let marker_text = marker.clone();
+    let (answered, answer) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        answered
+            .send(fakes::try_matching_exits(
+                &marker_text,
+                Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            ))
+            .unwrap_or(());
+    });
+    assert!(
+        Deadline::after(Duration::from_millis(500))
+            .recv(&answer)
+            .is_err(),
+        "the funded wait answered while the holder lived"
+    );
+    drop(stdin);
+    child.wait().expect("the marked shell reaps");
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&answer)
+            .is_ok_and(|result| result.is_ok()),
+        "the funded wait succeeds once the holder exits"
     );
 }
