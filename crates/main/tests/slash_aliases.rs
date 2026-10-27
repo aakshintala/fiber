@@ -13,11 +13,8 @@
 
 mod support;
 
-use std::fs;
-use std::sync::mpsc;
-use std::thread;
-
 use serde_json::json;
+use std::fs;
 use support::pty::Run;
 use support::{Deadline, Setup, write_json};
 
@@ -328,27 +325,12 @@ fn empty_setup() -> (Setup, fakes::ProviderServer) {
 /// passes the cleanup phase.
 fn until_no_sessions(deadline: Deadline, setup: &Setup, what: &str) {
     let run = setup.home().join("run");
-    let (done, reached) = mpsc::channel();
-    thread::spawn(move || {
-        loop {
-            let live = fs::read_dir(&run)
-                .map(|entries| {
-                    entries
-                        .flatten()
-                        .any(|entry| entry.file_name().to_string_lossy() != "hub")
-                })
-                .unwrap_or(false);
-            if !live {
-                break;
-            }
-            thread::yield_now();
-        }
-        done.send(()).unwrap_or(());
+    fakes::wait_until(what, deadline, move || {
+        fs::read_dir(&run)
+            .unwrap_or_else(|error| panic!("reading {}: {error}", run.display()))
+            .map(|entry| entry.unwrap_or_else(|error| panic!("reading {}: {error}", run.display())))
+            .all(|entry| entry.file_name().to_string_lossy() == "hub")
     });
-    assert!(
-        deadline.recv(&reached).is_ok(),
-        "waited until the deadline for {what}"
-    );
 }
 
 /// The scripted run: spawns after the scripted `config.json` lands,

@@ -47,7 +47,7 @@ fn template_row(name: &str) -> CommandInfo {
 }
 
 /// The `/` list's built-in order, as drawn: the table keeps this order,
-/// and `docs/tui.md`'s "Slash commands" table matches it.
+/// and the "Slash commands" table (`docs/tui.md:1977-1980`) matches it.
 const DRAWN_ORDER: &[&str] = &[
     "home",
     "new",
