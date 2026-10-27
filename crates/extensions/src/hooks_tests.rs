@@ -4313,6 +4313,152 @@ fn process_package_with_declared_providers_loads_without_a_vm() {
     );
 }
 
+/// Registrations list hooks in hook-point table order and run order, then
+/// watchers in registration order, with `entry` only for declared
+/// configuration rows and `phase` only when declared. An ordinary
+/// registration that supplies `entry` keeps its hook but loses the key, so
+/// flipping the extension check would leak it and flipping the explicit
+/// flag would list an undeclared phase. The per-point run order follows
+/// `docs/extensions.md`, "When several hooks share a point"; the
+/// hooks-first list order and the `entry`/`phase` omission rules follow
+/// `docs/events.md`, "`command_accepted`".
+#[test]
+fn registrations_list_hooks_in_point_and_run_order_then_watchers() {
+    use contract::events::HookInfo;
+    let home = Home::new();
+    home.install(
+        "a",
+        Some(
+            "fiber.hook(\"after_tool\", { timeout = 1, on_failure = \"non-blocking\", run = function() end })\n\
+             fiber.hook(\"before_tool\", { phase = \"sanitize\", timeout = 1, on_failure = \"blocking\", run = function() end })\n\
+             fiber.hook(\"after_tool\", { timeout = 1, on_failure = \"blocking\", entry = \"evil\", run = function() end })\n\
+             fiber.watch({ \"turn_completed\" }, { timeout = 1, run = function() end })",
+        ),
+        &[],
+    );
+    home.install(
+        "b",
+        Some(
+            "fiber.hook(\"after_tool\", { timeout = 1, on_failure = \"blocking\", run = function() end })\n\
+             fiber.watch({ \"turn_completed\", \"turn_started\" }, { timeout = 1, run = function() end })",
+        ),
+        &[],
+    );
+    install_hooks(&home, include_str!("../../../extensions/hooks/init.lua"));
+    let entries = r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking","phase":"sanitize"}}"#;
+    let session = load_with_hooks(&home, entries);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let rows = session.registrations();
+    let qualified = config::full_name("hooks");
+    for row in &rows {
+        match row {
+            HookInfo::Hook {
+                extension,
+                entry: Some(_),
+                ..
+            }
+            | HookInfo::Watcher {
+                extension,
+                entry: Some(_),
+                ..
+            } => {
+                assert_eq!(
+                    extension, "hooks",
+                    "a declared row uses `hooks`, not its qualified name: {row:?}"
+                );
+                assert_ne!(
+                    extension, &qualified,
+                    "a declared row exposes its qualified name: {row:?}"
+                );
+            }
+            HookInfo::Hook { .. } | HookInfo::Watcher { .. } => {}
+        }
+    }
+    let first_watcher = rows
+        .iter()
+        .position(|row| matches!(row, HookInfo::Watcher { .. }))
+        .expect("a watcher registers");
+    assert!(first_watcher >= 4, "{rows:?}");
+    for row in &rows[..first_watcher] {
+        assert!(matches!(row, HookInfo::Hook { .. }), "{row:?}");
+    }
+    let points: Vec<&str> = rows
+        .iter()
+        .filter_map(|row| match row {
+            HookInfo::Hook { point, .. } => Some(point.as_str()),
+            HookInfo::Watcher { .. } => None,
+        })
+        .collect();
+    let table = [
+        "session_start",
+        "before_message",
+        "turn_start",
+        "before_tool",
+        "before_model_call",
+        "after_tool",
+        "turn_end",
+        "before_handoff",
+    ];
+    let mut last = 0;
+    for point in &points {
+        let at = table.iter().position(|name| name == point).unwrap();
+        assert!(at >= last, "point order breaks at {point}: {points:?}");
+        last = at;
+    }
+    let declared = rows
+        .iter()
+        .find_map(|row| match row {
+            HookInfo::Hook {
+                extension,
+                entry,
+                point,
+                on_failure,
+                phase,
+            } if extension == "hooks" && point == "after_tool" => {
+                Some((entry, point, on_failure, phase))
+            }
+            HookInfo::Hook { .. } | HookInfo::Watcher { .. } => None,
+        })
+        .expect("a declared hook registers");
+    assert_eq!(declared.0.as_deref(), Some("audit"));
+    assert_eq!(declared.1, "after_tool");
+    assert_eq!(declared.2, "blocking");
+    assert_eq!(declared.3.as_deref(), Some("sanitize"));
+    for row in &rows {
+        match row {
+            HookInfo::Hook {
+                extension, entry, ..
+            } if extension != "hooks" => {
+                assert_eq!(entry, &None, "ordinary hook carries no entry: {row:?}");
+            }
+            HookInfo::Watcher {
+                extension, entry, ..
+            } if extension != "hooks" => {
+                assert_eq!(entry, &None, "ordinary watcher carries no entry: {row:?}");
+            }
+            HookInfo::Hook { .. } | HookInfo::Watcher { .. } => {}
+        }
+    }
+    let watchers: Vec<(&str, Vec<String>)> = rows
+        .iter()
+        .filter_map(|row| match row {
+            HookInfo::Watcher {
+                extension, kinds, ..
+            } => Some((extension.as_str(), kinds.clone())),
+            HookInfo::Hook { .. } => None,
+        })
+        .collect();
+    assert_eq!(watchers.len(), 2, "{rows:?}");
+    assert_eq!(watchers[0].0, "fiber.test/a");
+    assert_eq!(watchers[0].1, ["turn_completed"]);
+    assert_eq!(watchers[1].0, "fiber.test/b");
+    // The door answers through the trait forward, so it serves the same
+    // rows: replacing the forward with an empty list would empty the
+    // `hooks` command.
+    let seam: std::sync::Arc<dyn contract::hook::Hooks> = session.clone();
+    assert_eq!(seam.registrations(), rows, "{rows:?}");
+}
+
 /// Starting a process extension's provider fails without starting a VM:
 /// nothing registered the provider, and no Lua runs it.
 #[test]

@@ -43,12 +43,22 @@ pub(super) struct Entry {
     /// Whether it is a `check` hook: it refuses or lets it pass, without
     /// changing it.
     pub(super) check: bool,
+    /// The extension that registered it.
+    pub(super) extension: String,
+    /// The declared configuration key, only for a declared entry.
+    pub(super) entry: Option<String>,
+    /// The hook point's name.
+    pub(super) point: &'static str,
+    /// The effective phase, defaulting to `transform`.
+    pub(super) phase: HookPhase,
+    /// Whether the registration named its phase.
+    pub(super) phase_explicit: bool,
 }
 
 /// Each point's hooks across extensions, in load order, before they run.
 #[derive(Default)]
 pub(super) struct Builder {
-    entries: BTreeMap<&'static str, Vec<(HookPhase, String, Entry)>>,
+    entries: BTreeMap<&'static str, Vec<Entry>>,
 }
 
 /// The `session_start`, `turn_start`, `before_model_call`, `turn_end` and
@@ -99,15 +109,16 @@ impl Builder {
                 let Some(run) = runs.get(&(point.to_owned(), index)) else {
                     continue;
                 };
-                self.entries.entry(point).or_default().push((
-                    hook.phase,
-                    name.to_owned(),
-                    Entry {
-                        hook: run.clone(),
-                        blocking: hook.blocking,
-                        check: hook.phase == HookPhase::Check,
-                    },
-                ));
+                self.entries.entry(point).or_default().push(Entry {
+                    hook: run.clone(),
+                    blocking: hook.blocking,
+                    check: hook.phase == HookPhase::Check,
+                    extension: name.to_owned(),
+                    entry: hook.entry.clone(),
+                    point,
+                    phase: hook.phase,
+                    phase_explicit: hook.phase_explicit,
+                });
             }
         }
     }
@@ -151,15 +162,16 @@ impl Builder {
                         },
                     }),
                 );
-                self.entries.entry(point).or_default().push((
-                    hook.phase,
-                    name.to_owned(),
-                    Entry {
-                        hook: made,
-                        blocking: hook.blocking,
-                        check: hook.phase == HookPhase::Check,
-                    },
-                ));
+                self.entries.entry(point).or_default().push(Entry {
+                    hook: made,
+                    blocking: hook.blocking,
+                    check: hook.phase == HookPhase::Check,
+                    extension: name.to_owned(),
+                    entry: hook.entry.clone(),
+                    point,
+                    phase: hook.phase,
+                    phase_explicit: hook.phase_explicit,
+                });
             }
         }
     }
@@ -186,11 +198,7 @@ impl Builder {
 /// Sorts `entries` for `point`: within a phase, the extensions
 /// `hooks.order` names, in its order, then the rest by name; one
 /// extension's hooks in registration order.
-fn sorted(
-    config: &Config,
-    point: &str,
-    entries: Option<Vec<(HookPhase, String, Entry)>>,
-) -> Vec<Entry> {
+fn sorted(config: &Config, point: &str, entries: Option<Vec<Entry>>) -> Vec<Entry> {
     let order: Vec<String> = config
         .get(&format!("hooks.order.{point}"), None)
         .and_then(|(value, _)| serde_json::from_value(value).ok())
@@ -201,12 +209,12 @@ fn sorted(
     let mut entries = entries.unwrap_or_default();
     // The sort is stable, so one extension's hooks keep registration order:
     // each entry carries its own reference, and no index is compared.
-    entries.sort_by_key(|(phase, name, _): &(HookPhase, String, Entry)| {
+    entries.sort_by_key(|entry: &Entry| {
         (
-            *phase,
-            rank(name).map_or((1, 0), |at| (0, at)),
-            name.clone(),
+            entry.phase,
+            rank(&entry.extension).map_or((1, 0), |at| (0, at)),
+            entry.extension.clone(),
         )
     });
-    entries.into_iter().map(|(_, _, entry)| entry).collect()
+    entries
 }

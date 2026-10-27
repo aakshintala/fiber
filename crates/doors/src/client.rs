@@ -325,6 +325,14 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let skills = conn.gate.skills();
             accept(conn, id, Some(CommandResult::Skills { skills }));
         }
+        Command::Hooks => {
+            let Some(hooks) = conn.gate.hooks() else {
+                unknown(conn, id, name);
+                return;
+            };
+            let hooks = hooks.registrations();
+            accept(conn, id, Some(CommandResult::Hooks { hooks }));
+        }
         Command::Quota(args) => {
             let (quota, notice_at) = conn.gate.quota(args.fetch);
             accept(conn, id, Some(CommandResult::Quota { quota, notice_at }));
@@ -1198,6 +1206,7 @@ pub(crate) fn session_command_refusal(
         | Command::Reload
         | Command::Import(_)
         | Command::Tools
+        | Command::Hooks
         | Command::McpServers
         | Command::McpLogin(_)
         | Command::McpReconnect(_)
