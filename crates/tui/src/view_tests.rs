@@ -520,7 +520,7 @@ fn conversation_slots_replace_through_the_seam() {
     assert!(!shown.contains("asked 2 questions"), "{shown}");
     assert!(!shown.contains("⠋ read"), "{shown}");
     assert!(shown.contains("completed · 2 calls"), "{shown}");
-    insta::assert_snapshot!("conversation_slots_replaced", shown);
+    insta::assert_snapshot!("extension_slot_replaces_row", shown);
 }
 
 #[test]
