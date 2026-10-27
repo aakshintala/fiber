@@ -1273,6 +1273,8 @@ fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
     assert!(!child_id.is_empty(), "the run started a delegate");
     assert!(!child_log_path.is_empty(), "the receipt names the log");
     let requests = child.requests();
+    // One scripted response per request, in order (`docs/testing/fakes.md`,
+    // "Model calls"): a single request proves the single initial run.
     assert_eq!(requests.len(), 1, "the child ran once");
     let first_request = String::from_utf8_lossy(&requests[0].body);
     assert!(first_request.contains(resolved_b.to_str().unwrap()));
@@ -1346,6 +1348,8 @@ fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
     let (status, _, stderr) = resumed.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
     let requests = child.requests();
+    // One scripted response per request, in order (`docs/testing/fakes.md`,
+    // "Model calls"): two requests prove the initial run plus one resume run.
     assert_eq!(requests.len(), 2, "the resume ran once more");
     let resumed_request = String::from_utf8_lossy(&requests[1].body);
     assert!(

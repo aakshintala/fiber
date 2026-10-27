@@ -983,10 +983,8 @@ impl Loop {
         is_fresh_spawn: bool,
     ) -> Result<(), Error> {
         for root in inherited {
-            match self.resolve_added(&root) {
-                Ok(None) => {}
-                Ok(Some(resolved)) => self.record_added(&resolved, is_fresh_spawn)?,
-                Err(_) => {}
+            if let Ok(Some(resolved)) = self.resolve_added(&root) {
+                self.record_added(&resolved, is_fresh_spawn)?;
             }
         }
         Ok(())
