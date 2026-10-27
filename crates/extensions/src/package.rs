@@ -28,10 +28,13 @@ pub struct PackageOptions {
 
 /// One package `Package::load` read: its manifest, and its process
 /// registry when its manifest declares a process. A Lua package loads
-/// for its metadata; its registrations run in its VM, never here.
+/// for its metadata; its registrations run in its VM, never here. A
+/// process package started behind the seam also holds its owner, whose
+/// registry is the same one the child registers through.
 pub struct Package {
     manifest: config::Manifest,
-    registry: Option<Mutex<Registry>>,
+    registry: Option<Arc<Mutex<Registry>>>,
+    extension: Option<super::process::ProcessExtension>,
 }
 
 impl Package {
@@ -58,7 +61,7 @@ impl Package {
                 api: manifest.api,
             });
         }
-        let registry = if manifest.process.is_some() {
+        let registry: Option<Arc<Mutex<Registry>>> = if manifest.process.is_some() {
             // A process extension loads without a VM, and its `.lua`
             // files never run: only its data providers need declaring, as
             // for a Lua extension. A provider file the manifest does not
@@ -79,15 +82,91 @@ impl Package {
                     provider: unclaimed.to_owned(),
                 });
             }
-            Some(Mutex::new(Registry::new(
+            Some(Arc::new(Mutex::new(Registry::new(
                 manifest.name.clone(),
                 runtime,
                 &manifest,
-            )))
+            ))))
         } else {
             None
         };
-        Ok(Arc::new(Package { manifest, registry }))
+        Ok(Arc::new(Package {
+            manifest,
+            registry,
+            extension: None,
+        }))
+    }
+
+    /// Starts the manifest-declared process behind the seam: the same
+    /// manifest checks as [`Package::load`], then the child runs with
+    /// `context` as its hello and answers through `services`. A manifest
+    /// with no process loads with no owner, as `load` does.
+    /// `PackageOptions` stays `{ dir, clock }`: no session activation.
+    #[allow(
+        dead_code,
+        reason = "asserted by tests; the package seam keeps it for process owners"
+    )]
+    pub(crate) fn load_process_with(
+        options: PackageOptions,
+        runtime: Runtime,
+        context: super::process::context::ProcessContext,
+        services: Arc<dyn super::process::context::ProcessHostServices>,
+    ) -> Result<Arc<Package>, Error> {
+        let clock = Arc::clone(&options.clock);
+        let dir = options.dir.clone();
+        let package = Self::load_with_runtime(options, runtime.clone())?;
+        let Some(process) = package.manifest.process.clone() else {
+            return Ok(package);
+        };
+        let Some(registry) = package.registry.clone() else {
+            return Ok(package);
+        };
+        // A bare name runs on `PATH` and an absolute path as written;
+        // anything else joins onto the package directory, as the
+        // extension's own files do.
+        let program = std::path::Path::new(&process.program);
+        let program = if program.is_absolute() || program.components().count() == 1 {
+            program.to_path_buf()
+        } else {
+            dir.join(program)
+        };
+        // Refresh resolves stored pairs from the home credential files.
+        // State opens on a standalone store; the session folds its state
+        // into the store.
+        let home = context.home.clone();
+        let extension = super::process::ProcessExtension::start(super::process::Launch {
+            owner: package.manifest.name.clone(),
+            runtime,
+            registry,
+            program,
+            args: process.args.clone(),
+            context,
+            drive: None,
+            services,
+            oauth: super::process::oauth::FileCredential::new(home),
+            state: super::host::state::StateRegistry::standalone().store(&package.manifest.name),
+            clock,
+            limits: super::process::transport::Limits::default(),
+        });
+        // A missing program leaves an optional extension out, with no
+        // owner for the session to start; a required one fails the
+        // package, as a required MCP server does.
+        let extension = match extension {
+            Ok(extension) => Some(extension),
+            Err(_source) if !process.required => {
+                return Ok(Arc::new(Package {
+                    manifest: package.manifest.clone(),
+                    registry: package.registry.clone(),
+                    extension: None,
+                }));
+            }
+            Err(source) => return Err(Error::Io { path: dir, source }),
+        };
+        Ok(Arc::new(Package {
+            manifest: package.manifest.clone(),
+            registry: package.registry.clone(),
+            extension,
+        }))
     }
 
     /// The manifest's extension name.
@@ -111,7 +190,7 @@ impl Package {
     /// to a package without a registry is not a registration.
     #[allow(
         dead_code,
-        reason = "answered by the transport once processes register in a later part; asserted by tests"
+        reason = "answered by the transport once processes register; asserted by tests"
     )]
     pub(crate) fn register(
         &self,
@@ -133,5 +212,13 @@ impl Package {
         self.registry
             .as_ref()
             .map(|registry| support::lock(registry))
+    }
+
+    /// The started process owner, when the package started one behind
+    /// the seam. The package tests pump it; the session owns it when
+    /// wired.
+    #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+    pub(crate) fn extension(&self) -> Option<&super::process::ProcessExtension> {
+        self.extension.as_ref()
     }
 }

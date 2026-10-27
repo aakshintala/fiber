@@ -6,22 +6,14 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::super::{App, Effect};
 use crate::Configure;
+use crate::app::testkit::{SESSION, now, sent, session_line};
 use crate::configure::{Shown, WriteScope};
 use crate::configure_fake::{Fake, row};
 use crate::home::Launch;
 use crate::keys::Key;
-use crate::link::Line;
-
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
-
-/// The injected clock's now.
-fn now() -> Instant {
-    contract::clock::Clock::now(fakes::clock::FakeClock::new().as_ref())
-}
 
 /// A seam over two rows.
 fn fake() -> Arc<Fake> {
@@ -78,28 +70,6 @@ fn slash_mcp(app: &mut App) -> Effect {
     app.on_key(Key::Enter, now())
 }
 
-/// The command lines an effect sends, parsed.
-fn sent(effect: Effect) -> Vec<serde_json::Value> {
-    match effect {
-        Effect::Send(lines) => lines
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_default())
-            .collect(),
-        Effect::None
-        | Effect::Quit
-        | Effect::ListFiles
-        | Effect::ReadImage(_)
-        | Effect::Feedback { .. }
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. }
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_) => Vec::new(),
-    }
-}
-
 /// The command lines an `on_line` answer sends, parsed.
 fn sent_lines(lines: Vec<String>) -> Vec<serde_json::Value> {
     lines
@@ -128,25 +98,13 @@ fn servers_answer() -> serde_json::Value {
          "tools": 0, "approved": true, "auth_url": null}]})
 }
 
-/// A session line of `kind` on [`SESSION`].
-fn session_line(kind: &str, payload: serde_json::Value) -> Line {
-    Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
-        session_id: contract::SessionId(SESSION.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: Some(contract::ActionId("a_1".to_owned())),
-        seq: None,
-        payload: payload.as_object().cloned().unwrap_or_default(),
-    })
-}
-
 /// Answers the view's `mcp_servers` command `id`.
 fn answer_servers(app: &mut App, id: &str) {
     app.on_line(session_line(
+        SESSION,
         "command_accepted",
         serde_json::json!({"command_id": id, "result": servers_answer()}),
+        Some("a_1"),
     ));
 }
 
@@ -213,8 +171,10 @@ fn enter_on_failed_sends_mcp_reconnect_and_its_answer_requeries() {
     // The reconnect's answer carries no result: its id clears the wait
     // and the rows query again.
     let lines = sent_lines(app.on_line(session_line(
+        SESSION,
         "command_accepted",
         serde_json::json!({"command_id": reconnect}),
+        Some("a_1"),
     )));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "mcp_servers");
@@ -231,13 +191,16 @@ fn the_requery_after_a_reconnect_refills_the_rows() {
     assert_eq!(lines.len(), 1);
     let reconnect = lines[0]["id"].as_str().unwrap_or_default().to_owned();
     let lines = sent_lines(app.on_line(session_line(
+        SESSION,
         "command_accepted",
         serde_json::json!({"command_id": reconnect}),
+        Some("a_1"),
     )));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "mcp_servers");
     let requery = lines[0]["id"].as_str().unwrap_or_default().to_owned();
     app.on_line(session_line(
+        SESSION,
         "command_accepted",
         serde_json::json!({"command_id": requery, "result": serde_json::json!({"servers": [
             {"name": "down", "layer": "project", "state": "ready",
@@ -245,6 +208,7 @@ fn the_requery_after_a_reconnect_refills_the_rows() {
             {"name": "remote", "layer": "global", "state": "needs-login",
              "reason": "The MCP server 'remote' failed to start: HTTP 401.",
              "tools": 0, "approved": true, "auth_url": null}]})}),
+        Some("a_1"),
     ));
     let frame = app.config_view_screen().expect("the view is open");
     let texts: Vec<String> = frame
@@ -274,8 +238,10 @@ fn enter_on_needs_login_sends_mcp_login_and_a_rejection_says() {
     assert_eq!(lines[0]["args"]["server"], "remote");
     let login = lines[0]["id"].as_str().unwrap_or_default().to_owned();
     app.on_line(session_line(
+        SESSION,
         "command_rejected",
         serde_json::json!({"command_id": login, "code": "busy", "message": "busy"}),
+        Some("a_1"),
     ));
     let frame = app.config_view_screen().expect("the view is open");
     assert_eq!(frame.below, vec!["busy".to_owned()]);
@@ -287,15 +253,19 @@ fn a_server_event_requeries_while_quiet_but_not_mid_answer() {
     let id = open_mcp(&mut app);
     // The answer is still in flight: the event changes nothing.
     let lines = sent_lines(app.on_line(session_line(
+        SESSION,
         "mcp_server_ready",
         serde_json::json!({"server": "down"}),
+        Some("a_1"),
     )));
     assert!(lines.is_empty());
     answer_servers(&mut app, &id);
     // Quiet now: the same event queries again.
     let lines = sent_lines(app.on_line(session_line(
+        SESSION,
         "mcp_server_ready",
         serde_json::json!({"server": "down"}),
+        Some("a_1"),
     )));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "mcp_servers");
@@ -306,11 +276,13 @@ fn enter_on_unapproved_says_approve_and_sends_nothing() {
     let mut app = connected(Some(fake()));
     let id = open_mcp(&mut app);
     app.on_line(session_line(
+        SESSION,
         "command_accepted",
         serde_json::json!({"command_id": id, "result": {"servers": [
             {"name": "repo", "layer": "repository", "state": "failed",
              "reason": "The MCP server 'repo' is not approved.",
              "tools": 0, "approved": false, "auth_url": null}]}}),
+        Some("a_1"),
     ));
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     let frame = app.config_view_screen().expect("the view is open");

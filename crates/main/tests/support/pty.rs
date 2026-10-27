@@ -1067,17 +1067,35 @@ impl Run {
             if let Err(err) = fakes::kill_matching(&workspace) {
                 panic!("killing the sessions in the workspace: {err}");
             }
-            if let Err(err) = fakes::try_matching_exits(&workspace, self.deadline) {
-                panic!(
-                    "waited until the deadline for every process holding the workspace path to exit: {err}"
-                );
-            }
+            wait_for_workspace_holders(
+                &workspace,
+                self.deadline.cleanup_phase(),
+                fakes::try_matching_exits,
+            );
             sessions.stand_down(self.deadline.cleanup_phase());
         }
         Exited {
             status: output.status,
             terminal: self.shared.lock().unwrap().output(),
         }
+    }
+}
+
+/// The one workspace-holder cleanup wait: confirms no process still
+/// holds the workspace path under the cleanup-phase deadline it is
+/// given, so a spent success-path budget cannot starve it. The wait
+/// itself is injected, so the constant-check test pins the budget
+/// without a process wait.
+#[track_caller]
+fn wait_for_workspace_holders(
+    workspace: &str,
+    deadline: Deadline,
+    wait: impl FnOnce(&str, Deadline) -> io::Result<()>,
+) {
+    if let Err(err) = wait(workspace, deadline) {
+        panic!(
+            "waited until the deadline for every process holding the workspace path to exit: {err}"
+        );
     }
 }
 
@@ -1470,5 +1488,36 @@ mod tests {
             "the working status line alone does not satisfy the reply wait"
         );
         assert!(!shows_row(&grid, "idle"), "absent text does not match");
+    }
+
+    /// The workspace-holder cleanup wait draws on the cleanup phase,
+    /// not the journey's spent success-path budget: a fake clock
+    /// advanced past WAITS leaves the shared wait with nothing, while
+    /// the cleanup phase still holds CLEANUP minus WAITS. The extracted
+    /// wait forwards the cleanup-phase deadline it is given. A constant
+    /// check only: no pty run, no real-clock hold, no process wait, so
+    /// this test compiles into every main test binary that includes
+    /// this support module.
+    #[test]
+    fn workspace_cleanup_wait_uses_the_cleanup_phase() {
+        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+        let deadline = Deadline::on(&**clock);
+        // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+        clock.advance(fakes::deadline::WAITS);
+        assert!(deadline.left().is_zero(), "the shared wait budget is spent");
+        let cleanup = deadline.cleanup_phase();
+        assert_eq!(
+            cleanup.left(),
+            fakes::deadline::CLEANUP.saturating_sub(fakes::deadline::WAITS),
+            "the cleanup wait keeps its own budget after WAITS is spent"
+        );
+        wait_for_workspace_holders("fiber-cleanup-absent", cleanup, |_, received| {
+            assert_eq!(
+                received.left(),
+                fakes::deadline::CLEANUP.saturating_sub(fakes::deadline::WAITS),
+                "the wait receives the full cleanup budget"
+            );
+            Ok(())
+        });
     }
 }
