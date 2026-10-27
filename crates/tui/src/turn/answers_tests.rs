@@ -972,3 +972,137 @@ fn the_answers_entry_carries_given_or_declined() {
     let declined = super::Answered::Declined;
     assert!(matches!(declined.turn_entry(), TurnAnswers::Declined));
 }
+
+/// An answered form's rows through a seam drawing `fake`.
+fn seamed(
+    answered: &super::Answered,
+    width: u16,
+    fake: &std::rc::Rc<crate::ext::tests::SlotRenderer>,
+    flat: bool,
+) -> Vec<crate::turn::Row> {
+    let mut out =
+        crate::rows::Rows::default().with_seam(crate::ext::tests::seam(fake, "s", 0, flat));
+    answered.rows(width, &jiff::tz::TimeZone::UTC, &mut out);
+    out.into_parts().0
+}
+
+fn replaced() -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    std::rc::Rc::new(SlotRenderer::filling(
+        &["answers"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    ))
+}
+
+#[test]
+fn an_answers_replacement_draws_instead_of_the_form() {
+    let fake = replaced();
+    let rows = seamed(&answered_at(1_000), 40, &fake, false);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow()[0].1, "answers");
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|row| row.contains("you answered")),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn a_declined_replacement_draws_instead_of_the_dim_row() {
+    let fake = replaced();
+    let rows = seamed(&super::Answered::Declined, 40, &fake, false);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|row| row.contains("declined")),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn an_answers_decorator_draws_the_built_in_form_under_its_badge() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["answers"],
+        SlotScript::Decorate {
+            badge: vec![vec![raw("BADGE")]],
+            trim: 5,
+        },
+    ));
+    let rows = seamed(&answered_at(1_000), 40, &fake, false);
+    assert_eq!(fake.builtins.borrow().as_slice(), &[35]);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("BADGE")),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|row| row.contains("you answered")),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn an_answers_error_falls_back_with_one_failure() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["answers"],
+        SlotScript::Fail {
+            kind: FailureKind::HookFailed,
+            message: "boom".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    for _ in 0..2 {
+        let mut out = crate::rows::Rows::default().with_seam(bound.clone());
+        answered_at(1_000).rows(40, &jiff::tz::TimeZone::UTC, &mut out);
+        let shown: Vec<String> = out
+            .into_parts()
+            .0
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect();
+        assert!(
+            shown.iter().any(|row| row.contains("you answered")),
+            "{shown:?}"
+        );
+    }
+    assert_eq!(
+        fake.calls.borrow().len(),
+        1,
+        "the failure calls nothing again"
+    );
+    let listed = bound.cache.take_failures();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "answers");
+    assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
+}
+
+#[test]
+fn a_flat_answers_replacement_drops_every_style() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use ratatui::style::Style;
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["answers"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "custom".into(),
+            bold: true,
+            fg: Some("accent".into()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let rows = seamed(&answered_at(1_000), 40, &fake, true);
+    assert_eq!(rows.len(), 1);
+    for span in &rows[0].0.spans {
+        assert_eq!(span.style, Style::default(), "{span:?}");
+    }
+}

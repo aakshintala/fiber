@@ -28,7 +28,7 @@ pub(crate) struct SessionRenderer {
     pub(crate) label: String,
     pub(crate) gated: bool,
     pub(crate) failure: Option<FailureKind>,
-    pub(crate) calls: RefCell<Vec<String>>,
+    pub(crate) calls: RefCell<Vec<Option<String>>>,
     pending: RefCell<Vec<(String, String)>>,
     reported: Cell<bool>,
 }
@@ -92,7 +92,9 @@ impl Renderer for SessionRenderer {
         _: u16,
         _: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> Decision {
-        self.calls.borrow_mut().push(ctx.session_id.0.clone());
+        self.calls
+            .borrow_mut()
+            .push(ctx.session_id.clone().map(|id| id.0));
         if let Some(kind) = self.failure {
             return Decision::Fail(Failure {
                 kind,
@@ -745,7 +747,7 @@ pub(crate) struct SlotRenderer {
     /// The slots it fills.
     pub(crate) fills: RefCell<Vec<String>>,
     /// The session, slot and width of every render call, in order.
-    pub(crate) calls: RefCell<Vec<(String, String, u16)>>,
+    pub(crate) calls: RefCell<Vec<(Option<String>, String, u16)>>,
     /// The width of every built-in call, in order.
     pub(crate) builtins: RefCell<Vec<u16>>,
     /// What it answers.
@@ -782,9 +784,11 @@ impl Renderer for SlotRenderer {
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> Decision {
         decide(self.name(), || -> Result<Vec<Vec<RawSpan>>, Failure> {
-            self.calls
-                .borrow_mut()
-                .push((ctx.session_id.0.clone(), slot.to_owned(), width));
+            self.calls.borrow_mut().push((
+                ctx.session_id.clone().map(|id| id.0),
+                slot.to_owned(),
+                width,
+            ));
             match self.script.borrow().clone() {
                 SlotScript::Replace(lines) => Ok(lines),
                 SlotScript::Fail { kind, message } => Err(Failure {
@@ -826,7 +830,7 @@ pub(crate) fn seam(
             index,
         },
         SessionCtx {
-            session_id: contract::SessionId(session.into()),
+            session_id: Some(contract::SessionId(session.into())),
             halves: None,
         },
     )
@@ -1462,4 +1466,439 @@ fn the_ending_and_usage_are_in_the_key() {
     let mut varied = card();
     varied.usage.subscription_cost = 1.0;
     assert_ne!(one, card_key(&varied));
+}
+
+/// A group line with no nested rows: the key tests flip each scalar
+/// and add one nested row each.
+fn group_line(running: bool) -> super::GroupLine<'static> {
+    super::GroupLine {
+        running,
+        calls: Vec::new(),
+        streaming: Vec::new(),
+        thoughts: Vec::new(),
+        failed: Vec::new(),
+        first: 1,
+        last: 2,
+        open: false,
+        flat: false,
+    }
+}
+
+fn group_call(name: &'static str) -> super::TurnCall<'static> {
+    super::TurnCall {
+        name,
+        arguments: &serde_json::Value::Null,
+        status: Status::Completed,
+        exit: None,
+        duration_ms: None,
+        lines: 0,
+        changes: &[],
+        error: None,
+        output: "",
+        headline: "",
+        content: "",
+        answer: None,
+        images: Vec::new(),
+        open: false,
+        asking: false,
+    }
+}
+
+#[test]
+fn every_group_line_field_is_in_the_key() {
+    use super::{TurnFailed, TurnStreaming, TurnThought};
+    let one = group_line(false).key("group_line");
+    assert_ne!(one, group_line(false).key("ledger_row"));
+    assert_ne!(one, group_line(true).key("group_line"));
+    for (index, varied) in [
+        super::GroupLine {
+            first: 2,
+            ..group_line(false)
+        },
+        super::GroupLine {
+            last: 3,
+            ..group_line(false)
+        },
+        super::GroupLine {
+            open: true,
+            ..group_line(false)
+        },
+        super::GroupLine {
+            flat: true,
+            ..group_line(false)
+        },
+        super::GroupLine {
+            calls: vec![group_call("read")],
+            ..group_line(false)
+        },
+        super::GroupLine {
+            streaming: vec![TurnStreaming {
+                message: "m",
+                index: 0,
+                name: None,
+                text: "arg",
+            }],
+            ..group_line(false)
+        },
+        super::GroupLine {
+            thoughts: vec![TurnThought {
+                text: "plan",
+                started: 1,
+                ended: Some(2),
+                open: false,
+            }],
+            ..group_line(false)
+        },
+        super::GroupLine {
+            failed: vec![TurnFailed {
+                code: "rate_limited",
+                attempt: 1,
+            }],
+            ..group_line(false)
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_ne!(one, varied.key("group_line"), "case {index}");
+    }
+    // One nested row's fields flip it too.
+    let mut varied = group_line(false);
+    varied.calls = vec![group_call("read"), group_call("shell")];
+    assert_ne!(one, varied.key("group_line"));
+    let mut varied = group_line(false);
+    varied.streaming = vec![TurnStreaming {
+        message: "m",
+        index: 1,
+        name: None,
+        text: "arg",
+    }];
+    assert_ne!(one, varied.key("group_line"));
+    let mut varied = group_line(false);
+    varied.thoughts = vec![TurnThought {
+        text: "plan",
+        started: 1,
+        ended: Some(2),
+        open: true,
+    }];
+    assert_ne!(one, varied.key("group_line"));
+    let mut varied = group_line(false);
+    varied.failed = vec![TurnFailed {
+        code: "rate_limited",
+        attempt: 2,
+    }];
+    assert_ne!(one, varied.key("group_line"));
+}
+
+#[test]
+fn every_steer_field_is_in_the_key() {
+    use super::Steer;
+    let one = Steer {
+        text: "wait",
+        images: Vec::new(),
+        ts: 1,
+        flat: false,
+    }
+    .key("steer");
+    assert_ne!(
+        one,
+        Steer {
+            text: "wait",
+            images: Vec::new(),
+            ts: 1,
+            flat: false,
+        }
+        .key("reply")
+    );
+    for (index, varied) in [
+        Steer {
+            text: "stop",
+            images: Vec::new(),
+            ts: 1,
+            flat: false,
+        },
+        Steer {
+            text: "wait",
+            images: vec![PromptImage {
+                path: "b.png",
+                width: 10,
+                height: 8,
+            }],
+            ts: 1,
+            flat: false,
+        },
+        Steer {
+            text: "wait",
+            images: Vec::new(),
+            ts: 2,
+            flat: false,
+        },
+        Steer {
+            text: "wait",
+            images: Vec::new(),
+            ts: 1,
+            flat: true,
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_ne!(one, varied.key("steer"), "case {index}");
+    }
+}
+
+#[test]
+fn every_answers_field_is_in_the_key() {
+    use super::{Answers, TurnAnswerPart};
+    let given = || Answers {
+        outcome: "given",
+        parts: vec![TurnAnswerPart {
+            header: "Base",
+            text: "main",
+            skipped: false,
+        }],
+        note: Some("go"),
+        ts: Some(1),
+        flat: false,
+    };
+    let one = given().key("answers");
+    assert_ne!(one, given().key("reply"));
+    let declined = Answers {
+        outcome: "declined",
+        parts: Vec::new(),
+        note: None,
+        ts: None,
+        flat: false,
+    };
+    assert_ne!(one, declined.key("answers"));
+    for (index, varied) in [
+        Answers {
+            outcome: "other",
+            ..given()
+        },
+        Answers {
+            parts: vec![
+                TurnAnswerPart {
+                    header: "Base",
+                    text: "main",
+                    skipped: false,
+                },
+                TurnAnswerPart {
+                    header: "Name",
+                    text: "skipped",
+                    skipped: true,
+                },
+            ],
+            ..given()
+        },
+        Answers {
+            parts: vec![TurnAnswerPart {
+                header: "Changed",
+                text: "main",
+                skipped: false,
+            }],
+            ..given()
+        },
+        Answers {
+            parts: vec![TurnAnswerPart {
+                header: "Base",
+                text: "changed",
+                skipped: false,
+            }],
+            ..given()
+        },
+        Answers {
+            parts: vec![TurnAnswerPart {
+                header: "Base",
+                text: "main",
+                skipped: true,
+            }],
+            ..given()
+        },
+        Answers {
+            note: None,
+            ..given()
+        },
+        Answers {
+            ts: None,
+            ..given()
+        },
+        Answers {
+            flat: true,
+            ..given()
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_ne!(one, varied.key("answers"), "case {index}");
+    }
+}
+
+#[test]
+fn every_handoff_band_field_is_in_the_key() {
+    use super::{HandoffBand, TurnBandState, TurnSizes};
+    let band = || HandoffBand {
+        trigger: "the model handed off",
+        ts: 1,
+        state: TurnBandState::Done,
+        sizes: Some(TurnSizes {
+            before: 1,
+            after: Some(2),
+        }),
+        flat: false,
+    };
+    let one = band().key("handoff_band");
+    assert_ne!(one, band().key("reply"));
+    for (index, varied) in [
+        HandoffBand {
+            trigger: "automatic",
+            ..band()
+        },
+        HandoffBand { ts: 2, ..band() },
+        HandoffBand {
+            state: TurnBandState::Writing,
+            sizes: None,
+            ..band()
+        },
+        HandoffBand {
+            state: TurnBandState::Unchanged { cancelled: false },
+            sizes: None,
+            ..band()
+        },
+        HandoffBand {
+            state: TurnBandState::Unchanged { cancelled: true },
+            sizes: None,
+            ..band()
+        },
+        HandoffBand {
+            sizes: None,
+            ..band()
+        },
+        HandoffBand {
+            sizes: Some(TurnSizes {
+                before: 2,
+                after: Some(2),
+            }),
+            ..band()
+        },
+        HandoffBand {
+            sizes: Some(TurnSizes {
+                before: 1,
+                after: None,
+            }),
+            ..band()
+        },
+        HandoffBand {
+            flat: true,
+            ..band()
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_ne!(one, varied.key("handoff_band"), "case {index}");
+    }
+}
+
+#[test]
+fn every_error_line_field_is_in_the_key() {
+    use super::ErrorLine;
+    // One leaked provider per case: the key only reads the fields.
+    let failure = |name: &str, status: Option<u16>, message: &str| {
+        &*Box::leak(Box::new(contract::shapes::ProviderFailure {
+            name: name.to_owned(),
+            status,
+            message: message.to_owned(),
+        }))
+    };
+    let line = || ErrorLine {
+        code: contract::ErrorCode::IoFailed,
+        message: "read failed",
+        provider: Some(failure("fake", Some(401), "bad key")),
+        flat: false,
+    };
+    let one = line().key("error_line");
+    assert_ne!(one, line().key("reply"));
+    for (index, varied) in [
+        ErrorLine {
+            code: contract::ErrorCode::AuthenticationFailed,
+            ..line()
+        },
+        ErrorLine {
+            message: "changed",
+            ..line()
+        },
+        ErrorLine {
+            provider: None,
+            ..line()
+        },
+        ErrorLine {
+            flat: true,
+            ..line()
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_ne!(one, varied.key("error_line"), "case {index}");
+    }
+    // The provider's every field flips it.
+    for (index, provider) in [
+        failure("other", Some(401), "bad key"),
+        failure("fake", Some(500), "bad key"),
+        failure("fake", None, "bad key"),
+        failure("fake", Some(401), "other"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let varied = ErrorLine {
+            provider: Some(provider),
+            ..line()
+        };
+        assert_ne!(one, varied.key("error_line"), "provider case {index}");
+    }
+}
+
+#[test]
+fn every_notice_field_is_in_the_key() {
+    use super::Notice;
+    let one = Notice {
+        code: "io_failed",
+        text: "read failed",
+        flat: false,
+    }
+    .key("notice");
+    assert_ne!(
+        one,
+        Notice {
+            code: "io_failed",
+            text: "read failed",
+            flat: false,
+        }
+        .key("reply")
+    );
+    for (index, varied) in [
+        Notice {
+            code: "hook_failed",
+            text: "read failed",
+            flat: false,
+        },
+        Notice {
+            code: "io_failed",
+            text: "changed",
+            flat: false,
+        },
+        Notice {
+            code: "io_failed",
+            text: "read failed",
+            flat: true,
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_ne!(one, varied.key("notice"), "case {index}");
+    }
 }

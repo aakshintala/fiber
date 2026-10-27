@@ -17,6 +17,7 @@ use ratatui::text::{Line, Span};
 use super::group::Call;
 use super::{Entry, Turn};
 use crate::app::read;
+use crate::ext::Input;
 use crate::format::{self, answer_parts};
 use crate::local_time::time_of_day;
 use crate::rows::{RowText, Rows};
@@ -121,8 +122,67 @@ impl Answered {
     /// The card's rows at `width` columns in `zone`: the rule like a
     /// steering message's, then one row per question with its header in
     /// `accent` and the answer bold or `skipped` dim, then the note; or
-    /// the one dim declined row.
+    /// the one dim declined row. A bound `answers` renderer replaces the
+    /// rule and the rows it covers: no replacement line carries a target.
     pub(crate) fn rows(&self, width: u16, zone: &TimeZone, out: &mut Rows) {
+        let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
+        let input = crate::ext::Answers {
+            outcome: match self {
+                Self::Given { .. } => "given",
+                Self::Declined => "declined",
+            },
+            parts: match self {
+                Self::Given { parts, .. } => parts
+                    .iter()
+                    .map(|part| crate::ext::TurnAnswerPart {
+                        header: &part.header,
+                        text: &part.text,
+                        skipped: part.skipped,
+                    })
+                    .collect(),
+                Self::Declined => Vec::new(),
+            },
+            note: match self {
+                Self::Given { note, .. } => note.as_deref(),
+                Self::Declined => None,
+            },
+            ts: match self {
+                Self::Given { ts, .. } => Some(*ts),
+                Self::Declined => None,
+            },
+            flat,
+        };
+        let wrapped = Input::Answers(input);
+        let builtin = |input: &Input<'_>, w: u16| {
+            if !matches!(input, Input::Answers(_)) {
+                return Vec::new();
+            }
+            let mut scratch = Rows::default();
+            self.builtin_rows(w, zone, &mut scratch);
+            let (rows, _) = scratch.into_parts();
+            rows.into_iter()
+                .map(|(line, _)| crate::ext::spans::from_ratatui(&line.spans))
+                .collect()
+        };
+        let rendered = match out.fills_for("answers") {
+            crate::ext::SlotSelection::Draw { extension } => {
+                out.ext_lines("answers", &extension, &wrapped, width, &builtin)
+            }
+            crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => None,
+        };
+        match rendered {
+            Some(fitted) => {
+                for line in fitted.iter() {
+                    out.push_fitted(line, None);
+                }
+            }
+            None => self.builtin_rows(width, zone, out),
+        }
+    }
+
+    /// The rule with the resolution's time, the question rows and the
+    /// note; or the one dim declined row, as above.
+    fn builtin_rows(&self, width: u16, zone: &TimeZone, out: &mut Rows) {
         match self {
             Self::Given { parts, note, ts } => {
                 let middle = match time_of_day(*ts, zone) {

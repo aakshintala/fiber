@@ -1153,3 +1153,74 @@ fn kind_table() -> std::collections::BTreeMap<&'static str, &'static str> {
 fn the_docs_class_every_notice_code_as_the_code_table_does() {
     assert_eq!(doc_classes(), kind_table());
 }
+
+/// A seam whose renderer hides every notice it sees.
+fn hiding() -> (
+    std::rc::Rc<crate::ext::tests::SlotRenderer>,
+    crate::ext::Bound,
+) {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["notice"],
+        SlotScript::Replace(Vec::new()),
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    (fake, bound)
+}
+
+#[test]
+fn hidden_notices_leave_no_rows_counts_or_overlays() {
+    // Four stacked past the cap of three, all hidden: no rows, no
+    // "+N more", a zero count, and nothing for the overlay to open.
+    let (fake, bound) = hiding();
+    let notices = stack("io_failed", &["a", "b", "c", "d"]);
+    assert!(notices.visible_lines(&bound, 40).is_empty());
+    assert_eq!(notices.visible_drawn(&bound, 40), 0);
+    let mut notices = notices;
+    notices.open_all();
+    assert_eq!(
+        notices.visible_overlay_entries(&bound, 40),
+        Some(NoticeOverlay {
+            all: true,
+            entries: Vec::new(),
+        })
+    );
+    // One cached visibility result serves rows, counts and overlays:
+    // each distinct notice calls the renderer once.
+    assert_eq!(fake.calls.borrow().len(), 4);
+}
+
+#[test]
+fn an_extension_failed_notice_always_shows_built_in() {
+    // A notice extension cannot hide its own switch-off failure: the
+    // empty replacement hides the I/O notice but never the
+    // `extension_failed` row beside it.
+    let (_, bound) = hiding();
+    let mut notices = stack("extension_failed", &["off"]);
+    notices.push("io_failed", "a read failed".to_owned());
+    let lines = notices.visible_lines(&bound, 40);
+    assert_eq!(ids(&lines), ["notice 0"]);
+    assert_eq!(notices.visible_drawn(&bound, 40), 1);
+}
+
+#[test]
+fn visible_views_pass_through_without_a_notice_renderer() {
+    // Nothing fills the slot: every shown notice draws built-in, and
+    // the visible views match the unfiltered ones.
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let fake = std::rc::Rc::new(SlotRenderer::filling(&[], SlotScript::Replace(Vec::new())));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    let notices = stack("io_failed", &["a", "b", "c", "d"]);
+    assert_eq!(
+        ids(&notices.visible_lines(&bound, 40)),
+        ["notice 0", "notice 1", "notice 2", "more 1"]
+    );
+    assert_eq!(notices.visible_drawn(&bound, 40), 4);
+    let mut notices = notices;
+    notices.open_all();
+    assert_eq!(
+        notices.visible_overlay_entries(&bound, 40),
+        notices.overlay_entries()
+    );
+    assert!(fake.calls.borrow().is_empty());
+}

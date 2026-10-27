@@ -303,11 +303,13 @@ impl Renderer for Composite {
                 .map(|line| line.into_iter().map(to_vm).collect())
                 .collect()
         };
-        match candidate
-            .vm
-            .borrow_mut()
-            .call(slot, &ctx.session_id.0, &value, width, &built)
-        {
+        match candidate.vm.borrow_mut().call(
+            slot,
+            ctx.session_id.as_ref().map(|id| id.0.as_str()),
+            &value,
+            width,
+            &built,
+        ) {
             Ok(lines) => Decision::Draw {
                 extension,
                 lines: lines
@@ -346,7 +348,67 @@ fn input_value(input: &Input<'_>) -> Value {
         Input::ThinkingLine(line) => {
             json!({"text": line.text, "started": line.started, "ended": line.ended, "open": line.open, "flat": line.flat})
         }
+        Input::GroupLine(line) => json!({
+            "running": line.running,
+            "calls": line.calls.iter().map(call_value).collect::<Vec<_>>(),
+            "streaming": line.streaming.iter().map(streaming_value).collect::<Vec<_>>(),
+            "thoughts": line.thoughts.iter().map(thought_value).collect::<Vec<_>>(),
+            "failed": line.failed.iter().map(failed_value).collect::<Vec<_>>(),
+            "first": line.first,
+            "last": line.last,
+            "open": line.open,
+            "flat": line.flat,
+        }),
+        Input::Steer(steer) => {
+            json!({"text": steer.text, "images": images_value(&steer.images), "ts": steer.ts, "flat": steer.flat})
+        }
+        Input::Answers(answers) => json!({
+            "outcome": answers.outcome,
+            "parts": answers.parts.iter().map(|part| json!({"header": part.header, "text": part.text, "skipped": part.skipped})).collect::<Vec<_>>(),
+            "note": answers.note,
+            "ts": answers.ts,
+            "flat": answers.flat,
+        }),
+        Input::HandoffBand(band) => {
+            let (kind, cancelled) = match band.state {
+                tui::ext::TurnBandState::Writing => ("writing", Value::Null),
+                tui::ext::TurnBandState::Done => ("done", Value::Null),
+                tui::ext::TurnBandState::Unchanged { cancelled } => ("unchanged", json!(cancelled)),
+            };
+            json!({
+                "trigger": band.trigger,
+                "ts": band.ts,
+                "state": {"kind": kind, "cancelled": cancelled},
+                "sizes": band.sizes.map(|sizes| json!({"before": sizes.before, "after": sizes.after})).unwrap_or(Value::Null),
+                "flat": band.flat,
+            })
+        }
+        Input::ErrorLine(line) => json!({
+            "code": code_value(&line.code),
+            "message": line.message,
+            "provider": line.provider.map(|provider| json!({"name": provider.name, "status": provider.status, "message": provider.message})).unwrap_or(Value::Null),
+            "flat": line.flat,
+        }),
+        Input::Notice(notice) => {
+            json!({"code": notice.code, "text": notice.text, "flat": notice.flat})
+        }
     }
+}
+
+fn code_value(code: &contract::ErrorCode) -> Value {
+    serde_json::to_value(code).unwrap_or(Value::Null)
+}
+
+fn streaming_value(streaming: &tui::ext::TurnStreaming<'_>) -> Value {
+    json!({"message": streaming.message, "index": streaming.index, "name": streaming.name, "text": streaming.text})
+}
+
+fn thought_value(thought: &tui::ext::TurnThought<'_>) -> Value {
+    json!({"text": thought.text, "started": thought.started, "ended": thought.ended, "open": thought.open})
+}
+
+fn failed_value(failed: &tui::ext::TurnFailed<'_>) -> Value {
+    json!({"code": failed.code, "attempt": failed.attempt})
 }
 
 fn ledger_value(row: &tui::ext::LedgerRow<'_>) -> Value {
@@ -380,7 +442,7 @@ fn turn_card_value(card: &tui::ext::TurnCard<'_>) -> Value {
             "outcome": ended.outcome,
             "ended_ts": ended.ended_ts,
             "error": ended.error.as_ref().map(|error| json!({
-                "code": serde_json::to_value(&error.code).unwrap_or(Value::Null),
+                "code": code_value(&error.code),
                 "message": error.message,
             })).unwrap_or(Value::Null),
         })).unwrap_or(Value::Null),
@@ -404,11 +466,11 @@ fn entry_value(entry: &tui::ext::TurnEntry<'_>) -> Value {
             "cut": group.cut,
             "sections": group.sections.iter().map(|section| json!({
                 "step": section.step,
-                "thoughts": section.thoughts.iter().map(|thought| json!({"text": thought.text, "started": thought.started, "ended": thought.ended, "open": thought.open})).collect::<Vec<_>>(),
+                "thoughts": section.thoughts.iter().map(thought_value).collect::<Vec<_>>(),
                 "calls": section.calls.iter().map(call_value).collect::<Vec<_>>(),
-                "failed": section.failed.iter().map(|failed| json!({"code": failed.code, "attempt": failed.attempt})).collect::<Vec<_>>(),
+                "failed": section.failed.iter().map(failed_value).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
-            "streaming": group.streaming.iter().map(|streaming| json!({"message": streaming.message, "index": streaming.index, "name": streaming.name, "text": streaming.text})).collect::<Vec<_>>(),
+            "streaming": group.streaming.iter().map(streaming_value).collect::<Vec<_>>(),
         }),
         tui::ext::TurnEntry::Aside(aside) => aside_value(aside),
         tui::ext::TurnEntry::Band(band) => {

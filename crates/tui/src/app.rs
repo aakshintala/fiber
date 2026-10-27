@@ -1607,8 +1607,14 @@ impl App {
         );
         let under = input + self.steering_below() + usize::from(self.working_row_shown());
         // The notice rows draw above the working line, so their room is
-        // what is left above it; the badge and hint draw above them.
-        let notices = self.notices.drawn().min(room.saturating_sub(under));
+        // what is left above it; the badge and hint draw above them. The
+        // count runs through the same seam the draw will, so hidden
+        // notices take no room.
+        let bound = crate::view::notice_rows::frame_bound(self);
+        let notices = self
+            .notices
+            .visible_drawn(&bound, self.column_width())
+            .min(room.saturating_sub(under));
         under + notices + usize::from(self.badge().is_some()) + usize::from(self.hint())
     }
 

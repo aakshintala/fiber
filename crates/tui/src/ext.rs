@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use contract::ErrorCode;
 use contract::events::FileChange;
-use contract::shapes::Usage;
+use contract::shapes::{ProviderFailure, Usage};
 
 pub(crate) mod cache;
 
@@ -72,8 +72,10 @@ impl Ext {
 /// The drawn session and its latest complete session-half map.
 #[derive(Debug, Clone)]
 pub struct SessionCtx {
-    /// The session receiving the callback.
-    pub session_id: contract::SessionId,
+    /// The session receiving the callback; none on home, which has no
+    /// session, so no previous session's identity is reused and no
+    /// empty or synthetic id is sent.
+    pub session_id: Option<contract::SessionId>,
     /// None until `extensions_loaded` has been observed.
     pub halves: Option<BTreeMap<String, String>>,
 }
@@ -198,6 +200,18 @@ pub enum Input<'a> {
     Reply(ReplyText<'a>),
     /// One thinking line.
     ThinkingLine(ThinkingLine<'a>),
+    /// A tool group's summary line.
+    GroupLine(GroupLine<'a>),
+    /// A steering message where it landed, and when.
+    Steer(Steer<'a>),
+    /// What a form left: the answers or the decline.
+    Answers(Answers<'a>),
+    /// A handoff's band without its note.
+    HandoffBand(HandoffBand<'a>),
+    /// A turn's failure line.
+    ErrorLine(ErrorLine<'a>),
+    /// One notice, wherever the built-in draws one.
+    Notice(Notice<'a>),
 }
 
 /// One prompt image as its one line reads it: the file's name and its
@@ -505,6 +519,100 @@ pub struct TurnError<'a> {
     pub code: ErrorCode,
     /// Fiber's own sentence.
     pub message: &'a str,
+}
+
+/// A tool group's summary line: the aggregates its built-in reads,
+/// flattened across the group's sections.
+#[derive(Debug, Clone)]
+pub struct GroupLine<'a> {
+    /// Whether the turn runs and this is its open group.
+    pub running: bool,
+    /// The group's calls, in section order, as the card's group entries
+    /// carry them.
+    pub calls: Vec<TurnCall<'a>>,
+    /// The calls the model is still emitting.
+    pub streaming: Vec<TurnStreaming<'a>>,
+    /// The group's thinking blocks, in order.
+    pub thoughts: Vec<TurnThought<'a>>,
+    /// Its retried model calls, in order.
+    pub failed: Vec<TurnFailed<'a>>,
+    /// The earliest timestamp the group spans.
+    pub first: u64,
+    /// The latest timestamp the group spans.
+    pub last: u64,
+    /// Whether the group's ledger is open.
+    pub open: bool,
+    /// The screen reader drops every style from the returned spans.
+    pub flat: bool,
+}
+
+/// A steering message: its text with its images, and when it landed.
+#[derive(Debug, Clone)]
+pub struct Steer<'a> {
+    /// The message's text.
+    pub text: &'a str,
+    /// Its images, in order.
+    pub images: Vec<PromptImage<'a>>,
+    /// When it landed.
+    pub ts: u64,
+    /// The screen reader drops every style from the returned spans.
+    pub flat: bool,
+}
+
+/// What a form left: the answers with the resolution's time, or the
+/// decline.
+#[derive(Debug, Clone)]
+pub struct Answers<'a> {
+    /// `given` or `declined`.
+    pub outcome: &'a str,
+    /// Each question's part, in field order; empty when declined.
+    pub parts: Vec<TurnAnswerPart<'a>>,
+    /// The note on the whole form, when one was left.
+    pub note: Option<&'a str>,
+    /// When the form was resolved; none when declined.
+    pub ts: Option<u64>,
+    /// The screen reader drops every style from the returned spans.
+    pub flat: bool,
+}
+
+/// A handoff's band without its note: what the band row reads.
+#[derive(Debug, Clone)]
+pub struct HandoffBand<'a> {
+    /// What the handoff runs at.
+    pub trigger: &'a str,
+    /// The band's timestamp.
+    pub ts: u64,
+    /// What the band is doing, or how it ended.
+    pub state: TurnBandState,
+    /// The context sizes, only once the handoff is done.
+    pub sizes: Option<TurnSizes>,
+    /// The screen reader drops every style from the returned spans.
+    pub flat: bool,
+}
+
+/// A turn's failure line: the code and message the ✗ line draws, with
+/// the provider's words when one failed.
+#[derive(Debug, Clone)]
+pub struct ErrorLine<'a> {
+    /// A stable label a consumer switches on.
+    pub code: ErrorCode,
+    /// Fiber's own sentence.
+    pub message: &'a str,
+    /// The provider's name, HTTP status and message, when one failed.
+    pub provider: Option<&'a ProviderFailure>,
+    /// The screen reader drops every style from the returned spans.
+    pub flat: bool,
+}
+
+/// One notice: its registry code and message.
+#[derive(Debug, Clone)]
+pub struct Notice<'a> {
+    /// Its registry code.
+    pub code: &'a str,
+    /// Its message.
+    pub text: &'a str,
+    /// The screen reader drops every style from the returned spans.
+    pub flat: bool,
 }
 
 /// A turn's card whole: its prompts, every entry, and its ending.
@@ -928,6 +1036,121 @@ impl<'a> TurnCard<'a> {
             }
         }
         self.running.hash(&mut key);
+        self.flat.hash(&mut key);
+        key.finish()
+    }
+}
+
+impl<'a> GroupLine<'a> {
+    /// The cache key over the slot and every field, nested fields
+    /// element-wise.
+    pub(crate) fn key(&self, slot: &str) -> u64 {
+        let mut key = DefaultHasher::new();
+        slot.hash(&mut key);
+        self.running.hash(&mut key);
+        self.calls.len().hash(&mut key);
+        for call in &self.calls {
+            call.hash_key(&mut key);
+        }
+        self.streaming.len().hash(&mut key);
+        for streaming in &self.streaming {
+            streaming.hash_key(&mut key);
+        }
+        self.thoughts.len().hash(&mut key);
+        for thought in &self.thoughts {
+            thought.hash_key(&mut key);
+        }
+        self.failed.len().hash(&mut key);
+        for failed in &self.failed {
+            failed.hash_key(&mut key);
+        }
+        self.first.hash(&mut key);
+        self.last.hash(&mut key);
+        self.open.hash(&mut key);
+        self.flat.hash(&mut key);
+        key.finish()
+    }
+}
+
+impl<'a> Steer<'a> {
+    /// The cache key over the slot and every field.
+    pub(crate) fn key(&self, slot: &str) -> u64 {
+        let mut key = DefaultHasher::new();
+        slot.hash(&mut key);
+        self.text.hash(&mut key);
+        hash_images(&self.images, &mut key);
+        self.ts.hash(&mut key);
+        self.flat.hash(&mut key);
+        key.finish()
+    }
+}
+
+impl<'a> Answers<'a> {
+    /// The cache key over the slot and every field.
+    pub(crate) fn key(&self, slot: &str) -> u64 {
+        let mut key = DefaultHasher::new();
+        slot.hash(&mut key);
+        self.outcome.hash(&mut key);
+        self.parts.len().hash(&mut key);
+        for part in &self.parts {
+            part.header.hash(&mut key);
+            part.text.hash(&mut key);
+            part.skipped.hash(&mut key);
+        }
+        self.note.hash(&mut key);
+        self.ts.hash(&mut key);
+        self.flat.hash(&mut key);
+        key.finish()
+    }
+}
+
+impl<'a> HandoffBand<'a> {
+    /// The cache key over the slot and every field.
+    pub(crate) fn key(&self, slot: &str) -> u64 {
+        let mut key = DefaultHasher::new();
+        slot.hash(&mut key);
+        self.trigger.hash(&mut key);
+        self.ts.hash(&mut key);
+        match self.state {
+            TurnBandState::Writing => 0u8.hash(&mut key),
+            TurnBandState::Done => 1u8.hash(&mut key),
+            TurnBandState::Unchanged { cancelled } => {
+                2u8.hash(&mut key);
+                cancelled.hash(&mut key);
+            }
+        }
+        self.sizes.map(|sizes| sizes.before).hash(&mut key);
+        self.sizes.and_then(|sizes| sizes.after).hash(&mut key);
+        self.flat.hash(&mut key);
+        key.finish()
+    }
+}
+
+impl<'a> ErrorLine<'a> {
+    /// The cache key over the slot and every field.
+    pub(crate) fn key(&self, slot: &str) -> u64 {
+        let mut key = DefaultHasher::new();
+        slot.hash(&mut key);
+        crate::format::code(&self.code).hash(&mut key);
+        self.message.hash(&mut key);
+        self.provider.is_some().hash(&mut key);
+        if let Some(provider) = self.provider {
+            provider.name.hash(&mut key);
+            provider.status.hash(&mut key);
+            provider.message.hash(&mut key);
+        }
+        self.flat.hash(&mut key);
+        key.finish()
+    }
+}
+
+impl<'a> Notice<'a> {
+    /// The cache key over the slot and every field.
+    pub(crate) fn key(&self, slot: &str) -> u64 {
+        let mut key = DefaultHasher::new();
+        slot.hash(&mut key);
+        self.code.hash(&mut key);
+        self.text.hash(&mut key);
         self.flat.hash(&mut key);
         key.finish()
     }

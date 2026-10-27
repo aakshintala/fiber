@@ -13,6 +13,24 @@ fn page(index: usize) -> PageKey {
         index,
     }
 }
+
+#[test]
+fn home_key_never_equals_a_real_page_key() {
+    let home = PageKey::home();
+    for key in [
+        page(0),
+        PageKey {
+            session: contract::SessionId(String::new()),
+            index: 0,
+        },
+        PageKey {
+            session: contract::SessionId("s".into()),
+            index: usize::MAX,
+        },
+    ] {
+        assert_ne!(home, key);
+    }
+}
 fn decision(call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>) -> Decision {
     match call() {
         Ok(lines) => Decision::Draw {
@@ -464,7 +482,7 @@ mod context_regressions {
         let row = input(&args);
         for version in ["v1", "v2"] {
             let ctx = SessionCtx {
-                session_id: contract::SessionId("s".into()),
+                session_id: Some(contract::SessionId("s".into())),
                 halves: Some(
                     [("other".to_owned(), version.to_owned())]
                         .into_iter()
@@ -774,6 +792,73 @@ fn card_input(running: bool) -> Input<'static> {
     Input::TurnCard(card(running))
 }
 
+fn group_line_input(running: bool) -> Input<'static> {
+    Input::GroupLine(crate::ext::GroupLine {
+        running,
+        calls: Vec::new(),
+        streaming: Vec::new(),
+        thoughts: Vec::new(),
+        failed: Vec::new(),
+        first: 1,
+        last: 2,
+        open: false,
+        flat: false,
+    })
+}
+
+fn steer_input(text: &'static str) -> Input<'static> {
+    Input::Steer(crate::ext::Steer {
+        text,
+        images: Vec::new(),
+        ts: 1,
+        flat: false,
+    })
+}
+
+fn answers_input(note: Option<&'static str>) -> Input<'static> {
+    Input::Answers(crate::ext::Answers {
+        outcome: "given",
+        parts: vec![crate::ext::TurnAnswerPart {
+            header: "Base",
+            text: "main",
+            skipped: false,
+        }],
+        note,
+        ts: Some(1),
+        flat: false,
+    })
+}
+
+fn handoff_input(trigger: &'static str) -> Input<'static> {
+    Input::HandoffBand(crate::ext::HandoffBand {
+        trigger,
+        ts: 1,
+        state: crate::ext::TurnBandState::Done,
+        sizes: Some(crate::ext::TurnSizes {
+            before: 1,
+            after: Some(2),
+        }),
+        flat: false,
+    })
+}
+
+fn error_input(message: &'static str) -> Input<'static> {
+    Input::ErrorLine(crate::ext::ErrorLine {
+        code: contract::ErrorCode::IoFailed,
+        message,
+        provider: None,
+        flat: false,
+    })
+}
+
+fn notice_input(text: &'static str) -> Input<'static> {
+    Input::Notice(crate::ext::Notice {
+        code: "io_failed",
+        text,
+        flat: false,
+    })
+}
+
 /// Draws `row` at `width`, counting renderer calls.
 fn draw_counted<'a>(
     cache: &Cache,
@@ -811,6 +896,20 @@ fn each_new_slot_caches_by_input_and_width() {
             thought_input("plan", true),
         ),
         ("turn_card", card_input(false), card_input(true)),
+        (
+            "group_line",
+            group_line_input(false),
+            group_line_input(true),
+        ),
+        ("steer", steer_input("wait"), steer_input("stop")),
+        ("answers", answers_input(Some("go")), answers_input(None)),
+        (
+            "handoff_band",
+            handoff_input("automatic"),
+            handoff_input("the model handed off"),
+        ),
+        ("error_line", error_input("down"), error_input("up")),
+        ("notice", notice_input("down"), notice_input("up")),
     ];
     for (slot, first, second) in &cases {
         let before = calls.get();
@@ -846,6 +945,12 @@ fn each_new_slot_failure_holds_without_width() {
         ("reply", reply_input("ok")),
         ("thinking_line", thought_input("plan", false)),
         ("turn_card", card_input(false)),
+        ("group_line", group_line_input(false)),
+        ("steer", steer_input("wait")),
+        ("answers", answers_input(Some("go"))),
+        ("handoff_band", handoff_input("automatic")),
+        ("error_line", error_input("down")),
+        ("notice", notice_input("down")),
     ];
     for (slot, row) in &cases {
         let before = calls.get();

@@ -14,6 +14,17 @@ pub(crate) struct PageKey {
     pub(crate) index: usize,
 }
 
+impl PageKey {
+    /// The home notice key: the empty session with an index no page
+    /// takes, so it never equals a real page key.
+    pub(crate) fn home() -> Self {
+        Self {
+            session: contract::SessionId(String::new()),
+            index: usize::MAX,
+        }
+    }
+}
+
 type FailKey = (PageKey, String, u64, String, Option<String>);
 type EntryKey = (FailKey, u16);
 
@@ -80,6 +91,12 @@ impl Cache {
             Input::Prompt(prompt) => (prompt.key(slot), prompt.flat),
             Input::Reply(reply) => (reply.key(slot), reply.flat),
             Input::ThinkingLine(line) => (line.key(slot), line.flat),
+            Input::GroupLine(line) => (line.key(slot), line.flat),
+            Input::Steer(steer) => (steer.key(slot), steer.flat),
+            Input::Answers(answers) => (answers.key(slot), answers.flat),
+            Input::HandoffBand(band) => (band.key(slot), band.flat),
+            Input::ErrorLine(line) => (line.key(slot), line.flat),
+            Input::Notice(notice) => (notice.key(slot), notice.flat),
         };
         let key = (page, slot.to_owned(), input_key, extension.to_owned(), half);
         if support::lock(&self.failed).contains(&key) {

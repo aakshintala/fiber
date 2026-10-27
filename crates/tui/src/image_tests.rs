@@ -1084,7 +1084,7 @@ fn a_flat_seam_draws_the_one_line() {
             index: 0,
         },
         crate::ext::SessionCtx {
-            session_id: contract::SessionId("s".into()),
+            session_id: Some(contract::SessionId("s".into())),
             halves: None,
         },
     ));

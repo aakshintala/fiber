@@ -1665,7 +1665,7 @@ fn seam(fake: &Rc<Fake>, flat: bool) -> Bound {
             index: 0,
         },
         ctx: crate::ext::SessionCtx {
-            session_id: contract::SessionId("s".into()),
+            session_id: Some(contract::SessionId("s".into())),
             halves: None,
         },
         flat,

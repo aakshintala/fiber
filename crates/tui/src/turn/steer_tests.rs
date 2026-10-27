@@ -241,3 +241,123 @@ fn the_steer_entry_carries_text_images_and_ts() {
     assert_eq!(images[0].path, "artifacts/a.png");
     assert_eq!((images[0].width, images[0].height), (10, 8));
 }
+
+/// A steering message's rows through a seam drawing `fake`.
+fn seamed(
+    steered: &Steered,
+    width: u16,
+    fake: &std::rc::Rc<crate::ext::tests::SlotRenderer>,
+    flat: bool,
+) -> Vec<crate::turn::Row> {
+    use crate::local_time::new_york;
+    let mut out =
+        crate::rows::Rows::default().with_seam(crate::ext::tests::seam(fake, "s", 0, flat));
+    steered.rows(
+        width,
+        &new_york(),
+        &crate::image::Layout::default(),
+        &mut out,
+    );
+    out.into_parts().0
+}
+
+fn replaced() -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    std::rc::Rc::new(SlotRenderer::filling(
+        &["steer"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    ))
+}
+
+#[test]
+fn a_steer_replacement_draws_instead_of_the_rule() {
+    let steered = Steered::new("wait".to_owned(), 7);
+    let fake = replaced();
+    let rows = seamed(&steered, 40, &fake, false);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow()[0].1, "steer");
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    assert!(!shown.iter().any(|row| row.contains("wait")), "{shown:?}");
+}
+
+#[test]
+fn a_steer_decorator_draws_the_built_in_rule_under_its_badge() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let steered = Steered::new("wait".to_owned(), 7);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["steer"],
+        SlotScript::Decorate {
+            badge: vec![vec![raw("BADGE")]],
+            trim: 5,
+        },
+    ));
+    let rows = seamed(&steered, 40, &fake, false);
+    assert_eq!(fake.builtins.borrow().as_slice(), &[35]);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("BADGE")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|row| row.contains("steer")), "{shown:?}");
+}
+
+#[test]
+fn a_steer_error_falls_back_with_one_failure() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let steered = Steered::new("wait".to_owned(), 7);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["steer"],
+        SlotScript::Fail {
+            kind: FailureKind::HookFailed,
+            message: "boom".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    for _ in 0..2 {
+        use crate::local_time::new_york;
+        let mut out = crate::rows::Rows::default().with_seam(bound.clone());
+        steered.rows(40, &new_york(), &crate::image::Layout::default(), &mut out);
+        let shown: Vec<String> = out
+            .into_parts()
+            .0
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect();
+        assert!(shown.iter().any(|row| row.contains("wait")), "{shown:?}");
+    }
+    assert_eq!(
+        fake.calls.borrow().len(),
+        1,
+        "the failure calls nothing again"
+    );
+    let listed = bound.cache.take_failures();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "steer");
+    assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
+}
+
+#[test]
+fn a_flat_steer_replacement_drops_every_style() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use ratatui::style::Style;
+    let steered = Steered::new("wait".to_owned(), 7);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["steer"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "custom".into(),
+            bold: true,
+            fg: Some("accent".into()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let rows = seamed(&steered, 40, &fake, true);
+    assert_eq!(rows.len(), 1);
+    for span in &rows[0].0.spans {
+        assert_eq!(span.style, Style::default(), "{span:?}");
+    }
+}

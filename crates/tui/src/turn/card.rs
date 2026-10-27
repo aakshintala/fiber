@@ -310,7 +310,7 @@ impl Turn {
                 let head = match done {
                     Some(done) => {
                         if let (TurnOutcome::Failed, Some(error)) = (done.outcome, &done.error) {
-                            format::failure(error, out);
+                            format::failure(error, inner, out);
                         }
                         match done.outcome {
                             TurnOutcome::Completed => "▣ completed",

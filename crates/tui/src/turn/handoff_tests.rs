@@ -854,6 +854,168 @@ fn a_streamed_note_joins_each_parts_deltas() {
     );
 }
 
+/// A band's rows through a seam drawing `fake`.
+fn seamed(
+    band: &super::Band,
+    width: u16,
+    fake: &std::rc::Rc<crate::ext::tests::SlotRenderer>,
+    flat: bool,
+) -> (Vec<crate::turn::Row>, Vec<crate::rows::RowText>) {
+    let mut out =
+        crate::rows::Rows::default().with_seam(crate::ext::tests::seam(fake, "s", 0, flat));
+    band.rows(width, &jiff::tz::TimeZone::UTC, &mut out);
+    out.into_parts()
+}
+
+fn replaced() -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    std::rc::Rc::new(SlotRenderer::filling(
+        &["handoff_band"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    ))
+}
+
+/// A done band with its note open, for the band-row-only tests.
+fn done_with_note() -> super::Band {
+    let mut band = super::Band::new(1, "the model handed off".to_owned(), TEA);
+    band.completed("a_1", "the plan".to_owned());
+    band.state = super::State::Done {
+        before: 1,
+        after: Some(2),
+    };
+    band.open = true;
+    band
+}
+
+#[test]
+fn a_handoff_band_replacement_draws_instead_of_the_band_row() {
+    let band = super::Band::new(1, "automatic".to_owned(), TEA);
+    let fake = replaced();
+    let (rows, _) = seamed(&band, 40, &fake, false);
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow()[0].1, "handoff_band");
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    assert!(!shown.iter().any(|row| row.contains('⇄')), "{shown:?}");
+}
+
+#[test]
+fn a_handoff_band_replacement_keeps_the_note_below() {
+    // The seam replaces the band row only: the note toggle and body stay
+    // the terminal's, with the note's own target.
+    let band = done_with_note();
+    let fake = replaced();
+    let (rows, _) = seamed(&band, 40, &fake, false);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|row| row.contains("▸ note")), "{shown:?}");
+    assert!(
+        shown.iter().any(|row| row.contains("the plan")),
+        "{shown:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|(line, target)| line.to_string().contains("▸ note")
+                && *target == Some(Target::Note(1))),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn a_handoff_band_decorator_draws_the_built_in_row_under_its_badge() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let band = super::Band::new(1, "automatic".to_owned(), TEA);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["handoff_band"],
+        SlotScript::Decorate {
+            badge: vec![vec![raw("BADGE")]],
+            trim: 5,
+        },
+    ));
+    let (rows, _) = seamed(&band, 40, &fake, false);
+    assert_eq!(fake.builtins.borrow().as_slice(), &[35]);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("BADGE")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|row| row.contains('⇄')), "{shown:?}");
+}
+
+#[test]
+fn a_handoff_band_error_falls_back_with_one_failure() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let band = super::Band::new(1, "automatic".to_owned(), TEA);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["handoff_band"],
+        SlotScript::Fail {
+            kind: FailureKind::HookFailed,
+            message: "boom".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    for _ in 0..2 {
+        let mut out = crate::rows::Rows::default().with_seam(bound.clone());
+        band.rows(40, &jiff::tz::TimeZone::UTC, &mut out);
+        let shown: Vec<String> = out
+            .into_parts()
+            .0
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect();
+        assert!(shown.iter().any(|row| row.contains('⇄')), "{shown:?}");
+    }
+    assert_eq!(
+        fake.calls.borrow().len(),
+        1,
+        "the failure calls nothing again"
+    );
+    let listed = bound.cache.take_failures();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "handoff_band");
+    assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
+}
+
+#[test]
+fn a_flat_handoff_band_replacement_drops_every_style() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use ratatui::style::Style;
+    let band = super::Band::new(1, "automatic".to_owned(), TEA);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["handoff_band"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "custom".into(),
+            bold: true,
+            fg: Some("accent".into()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let (rows, _) = seamed(&band, 40, &fake, true);
+    assert_eq!(rows.len(), 1);
+    for span in &rows[0].0.spans {
+        assert_eq!(span.style, Style::default(), "{span:?}");
+    }
+}
+
+#[test]
+fn a_writing_handoff_band_replacement_spins_but_a_done_one_does_not() {
+    let writing = super::Band::new(1, "automatic".to_owned(), TEA);
+    let fake = replaced();
+    let (_, texts) = seamed(&writing, 40, &fake, false);
+    assert_eq!(texts[0].spin, Some(0));
+    let done = done_with_note();
+    let fake = replaced();
+    let (_, texts) = seamed(&done, 40, &fake, false);
+    assert!(texts.iter().all(|text| text.spin.is_none()), "{texts:?}");
+}
+
 #[test]
 fn set_open_reports_whether_the_note_matched() {
     let mut band = super::Band::new(3, "the model handed off".to_owned(), TEA);

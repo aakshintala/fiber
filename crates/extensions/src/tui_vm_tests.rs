@@ -57,7 +57,7 @@ fn none(_: &Value, _: u16) -> Vec<Vec<Span>> {
 }
 
 fn call(vm: &mut TuiVm, input: &Value) -> Result<Vec<Vec<Span>>, Error> {
-    vm.call("notice", "s1", input, 80, &none)
+    vm.call("notice", Some("s1"), input, 80, &none)
 }
 
 /// Calls `notice`, moving the clock by `by` from inside `builtin`: the
@@ -71,7 +71,7 @@ fn call_advancing(
         clock.advance(by);
         Vec::new()
     };
-    vm.call("notice", "s1", &json!({}), 80, &advance)
+    vm.call("notice", Some("s1"), &json!({}), 80, &advance)
 }
 
 fn text(lines: &[Vec<Span>]) -> String {
@@ -281,15 +281,15 @@ fn require_is_a_lua_error() {
 fn off_wins_over_no_slot_and_no_slot_over_shape() {
     let (clock, mut vm) = notice("builtin() while true do end");
     // An absent slot with a non-object input: no slot comes before shape.
-    let missing = vm.call("home", "s1", &json!([1]), 80, &none);
+    let missing = vm.call("home", Some("s1"), &json!([1]), 80, &none);
     assert!(matches!(missing, Err(Error::TuiNoSlot(name)) if name == "home"));
     // A registered slot with a non-object input: shape.
-    let shape = vm.call("notice", "s1", &json!([1]), 80, &none);
+    let shape = vm.call("notice", Some("s1"), &json!([1]), 80, &none);
     assert!(matches!(shape, Err(Error::TuiShape(_))), "{shape:?}");
     let timed_out = call_advancing(&mut vm, &clock, 100 * MS);
     assert!(matches!(timed_out, Err(Error::TuiTimeout)));
     // Off now answers first, for an absent slot and a non-object input.
-    let off = vm.call("home", "s1", &json!([1]), 80, &none);
+    let off = vm.call("home", Some("s1"), &json!([1]), 80, &none);
     assert!(matches!(off, Err(Error::TuiOff)), "{off:?}");
 }
 
@@ -452,7 +452,7 @@ fn the_session_id_reaches_the_render_and_overrides_the_input() {
     let lines = vm
         .call(
             "notice",
-            "s1",
+            Some("s1"),
             &json!({ "n": 2, "session_id": "mine" }),
             80,
             &none,
@@ -464,7 +464,9 @@ fn the_session_id_reaches_the_render_and_overrides_the_input() {
 #[test]
 fn the_render_receives_the_width() {
     let (_, mut vm) = notice("return { { { text = tostring(width) } } }");
-    let lines = vm.call("notice", "s1", &json!({}), 37, &none).unwrap();
+    let lines = vm
+        .call("notice", Some("s1"), &json!({}), 37, &none)
+        .unwrap();
     assert_eq!(text(&lines), "37");
 }
 
@@ -482,7 +484,9 @@ fn builtin_returns_the_supplied_lines() {
         ]]
     };
     let (_, mut vm) = notice("return builtin(input, width)");
-    let lines = vm.call("notice", "s1", &json!({}), 80, &builtin).unwrap();
+    let lines = vm
+        .call("notice", Some("s1"), &json!({}), 80, &builtin)
+        .unwrap();
     assert_eq!(
         lines,
         vec![vec![
@@ -506,12 +510,14 @@ fn builtin_gets_the_original_input_and_the_width_the_render_passes() {
     };
     let (_, mut vm) = notice("return builtin({ changed = true }, width - 6)");
     let input = json!({ "name": "shell" });
-    vm.call("notice", "s1", &input, 80, &builtin).unwrap();
+    vm.call("notice", Some("s1"), &input, 80, &builtin).unwrap();
     // The table the render passed is ignored, and so is the injected
     // `session_id`; the width it passed is used.
     assert_eq!(*seen.borrow(), vec![(input.clone(), 74)]);
     let (_, mut plain) = notice("return builtin()");
-    plain.call("notice", "s1", &input, 80, &builtin).unwrap();
+    plain
+        .call("notice", Some("s1"), &input, 80, &builtin)
+        .unwrap();
     assert_eq!(seen.borrow().last(), Some(&(input, 80)));
 }
 
@@ -522,15 +528,16 @@ fn builtin_expires_when_the_call_ends() {
          fiber.slot('home', { timeout = 100, render = function() \
          return { { { text = tostring(pcall(kept)) } } } end })",
     );
-    vm.call("notice", "s1", &json!({}), 80, &none).unwrap();
-    let lines = vm.call("home", "s1", &json!({}), 80, &none).unwrap();
+    vm.call("notice", Some("s1"), &json!({}), 80, &none)
+        .unwrap();
+    let lines = vm.call("home", Some("s1"), &json!({}), 80, &none).unwrap();
     assert_eq!(text(&lines), "false");
 }
 
 #[test]
 fn an_unregistered_slot_has_no_slot() {
     let (_, mut vm) = notice("return {}");
-    let result = vm.call("reply", "s1", &json!({}), 80, &none);
+    let result = vm.call("reply", Some("s1"), &json!({}), 80, &none);
     assert!(matches!(result, Err(Error::TuiNoSlot(name)) if name == "reply"));
 }
 
@@ -581,12 +588,20 @@ fn the_slot_table_in_the_doc_is_the_slot_set_in_the_code() {
         .expect("docs/tui.md has a `The slots` section");
     let mut fixed = BTreeSet::new();
     let mut prefixed = BTreeSet::new();
-    for row in table.lines().filter(|line| line.starts_with("| `")) {
-        let name = row[3..].split('`').next().expect("a backticked slot name");
-        match name.split_once('<') {
-            Some((prefix, _)) => prefixed.insert(prefix.to_owned()),
-            None => fixed.insert(name.to_owned()),
-        };
+    // Only the slot table: the per-slot field tables below it share the
+    // row shape, so stop at the first line past the slot table.
+    let mut past_slots = false;
+    for line in table.lines() {
+        if let Some(row) = line.strip_prefix("| `") {
+            past_slots = true;
+            let name = row.split('`').next().expect("a backticked slot name");
+            match name.split_once('<') {
+                Some((prefix, _)) => prefixed.insert(prefix.to_owned()),
+                None => fixed.insert(name.to_owned()),
+            };
+        } else if past_slots {
+            break;
+        }
     }
     let own_fixed: BTreeSet<String> = SLOT_NAMES.iter().map(|name| (*name).to_owned()).collect();
     let own_prefixed: BTreeSet<String> = SLOT_PREFIXES
@@ -603,7 +618,8 @@ fn a_renderer_failure_is_hook_failed_and_the_rest_are_extension_failed() {
     let failed = [
         TuiVm::load("test", "error('x')", FakeClock::new()).unwrap_err(),
         TuiVm::load("test", "fiber.slot('banner', {})", FakeClock::new()).unwrap_err(),
-        vm.call("home", "s1", &json!({}), 80, &none).unwrap_err(),
+        vm.call("home", Some("s1"), &json!({}), 80, &none)
+            .unwrap_err(),
         call_advancing(&mut vm, &clock, 100 * MS).unwrap_err(),
         call(&mut vm, &json!({})).unwrap_err(),
     ];
@@ -632,4 +648,17 @@ fn debug_names_the_extension_and_its_slots() {
     let shown = format!("{vm:?}");
     assert!(shown.contains("acme-badge"), "{shown}");
     assert!(shown.contains("notice"), "{shown}");
+}
+
+#[test]
+fn a_sessionless_call_sends_no_session_id_key() {
+    let (_, mut vm) = notice(
+        "if input.session_id == nil then return {{{text='none'}}} else return {{{text=input.session_id}}} end",
+    );
+    let lines = vm.call("notice", None, &json!({}), 80, &none).unwrap();
+    assert_eq!(text(&lines), "none");
+    let lines = vm
+        .call("notice", Some("s1"), &json!({}), 80, &none)
+        .unwrap();
+    assert_eq!(text(&lines), "s1");
 }

@@ -96,7 +96,7 @@ fn reload_rebuilds_renderer_and_installs_an_empty_replacement() {
     assert!(matches!(
         app.handle.get().unwrap().fills_for(
             &crate::ext::SessionCtx {
-                session_id: contract::SessionId(SESSION.into()),
+                session_id: Some(contract::SessionId(SESSION.into())),
                 halves: None
             },
             "ledger_row"

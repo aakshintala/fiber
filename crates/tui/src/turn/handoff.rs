@@ -17,6 +17,7 @@ use super::crash::{self, Aside};
 use super::group::{dim_span, fit, spans_width};
 use super::{Entry, Fold, Turn, open};
 use crate::app::{Target, read};
+use crate::ext::Input;
 use crate::format;
 use crate::rows::{RowText, Rows};
 use crate::theme::{Role, style};
@@ -168,23 +169,74 @@ impl Band {
     /// once there is a note, and the note under it when open. The band
     /// row is one row on the `handoff` tint with half-block edges; the
     /// note rows sit under its lower edge on the same tint with no
-    /// edges (`docs/tui.md`, "Handoff", "Look").
+    /// edges (`docs/tui.md`, "Handoff", "Look"). A bound `handoff_band`
+    /// renderer replaces the band row only: the note toggle and body
+    /// stay the terminal's, with the note's own target. A replacement
+    /// of a band still being written spins like the built-in row; its
+    /// lines carry no target.
     pub(crate) fn rows(&self, width: u16, zone: &jiff::tz::TimeZone, out: &mut Rows) {
         let max = usize::from(width);
         if max == 0 {
+            // An empty band row, as before: no seam draws into a row
+            // with no cells.
             out.push((Line::default(), None));
-        } else {
-            let (row, spin) = self.band_row(max, zone);
-            out.push_text(
-                (Line::from(row), None),
-                RowText {
-                    spin,
-                    ..RowText::plain()
-                },
-            );
+            let band_at = out.len().saturating_sub(1);
+            out.on_surface(band_at, width, Role::Handoff, crate::surface::Edges::BOTH);
+            return;
         }
-        let band_at = out.len().saturating_sub(1);
-        out.on_surface(band_at, width, Role::Handoff, crate::surface::Edges::BOTH);
+        let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
+        let entry = self.turn_entry();
+        let input = crate::ext::HandoffBand {
+            trigger: entry.trigger,
+            ts: entry.ts,
+            state: entry.state,
+            sizes: entry.sizes,
+            flat,
+        };
+        let wrapped = Input::HandoffBand(input);
+        let builtin = |input: &Input<'_>, w: u16| {
+            if !matches!(input, Input::HandoffBand(_)) {
+                return Vec::new();
+            }
+            let (row, _) = self.band_row(usize::from(w), zone);
+            vec![crate::ext::spans::from_ratatui(&row)]
+        };
+        let writing = matches!(self.state, State::Writing);
+        let rendered = match out.fills_for("handoff_band") {
+            crate::ext::SlotSelection::Draw { extension } => {
+                out.ext_lines("handoff_band", &extension, &wrapped, width, &builtin)
+            }
+            crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => None,
+        };
+        match rendered {
+            Some(fitted) => {
+                // The replacement owns the band row whole, tint and
+                // edges included; the note below keeps its own.
+                for line in fitted.iter() {
+                    out.push_text(
+                        (line.line.clone(), None),
+                        RowText {
+                            tail: line.pad,
+                            links: line.links.clone(),
+                            spin: writing.then_some(0),
+                            ..RowText::plain()
+                        },
+                    );
+                }
+            }
+            None => {
+                let (row, spin) = self.band_row(max, zone);
+                out.push_text(
+                    (Line::from(row), None),
+                    RowText {
+                        spin,
+                        ..RowText::plain()
+                    },
+                );
+                let band_at = out.len().saturating_sub(1);
+                out.on_surface(band_at, width, Role::Handoff, crate::surface::Edges::BOTH);
+            }
+        }
         let note = self.note();
         if matches!(self.state, State::Writing) || note.is_empty() {
             return;

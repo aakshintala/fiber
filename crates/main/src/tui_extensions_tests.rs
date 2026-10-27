@@ -36,7 +36,7 @@ fn package(
 const SCRIPT: &str = "fiber.slot('ledger_row', {timeout=100, render=function(input,width) return {{{text='custom'}}} end})";
 fn ctx(half: Option<Vec<(&str, &str)>>) -> SessionCtx {
     SessionCtx {
-        session_id: contract::SessionId("s".into()),
+        session_id: Some(contract::SessionId("s".into())),
         halves: half.map(|pairs| {
             pairs
                 .into_iter()
@@ -84,7 +84,7 @@ fn client_only_receives_each_session_and_reload_rereads_source() {
     assert!(notices.is_empty());
     for session in ["parent", "delegate"] {
         let mut ctx = ctx(Some(vec![]));
-        ctx.session_id = contract::SessionId(session.into());
+        ctx.session_id = Some(contract::SessionId(session.into()));
         let Decision::Draw { lines, .. } = render(&*renderer, &ctx) else {
             panic!("client-only draws")
         };
@@ -821,4 +821,212 @@ fn the_turn_card_group_entry_lists_sections_streaming_and_failed() {
             "streaming": [{"message": "m", "index": 0, "name": "shell", "text": "arg"}],
         }),
     );
+}
+
+/// The 4b tables reach Lua with the doc's keys: a steer renderer reads
+/// the text, the first image's path and the landing time, never the
+/// log's type.
+#[test]
+fn the_steer_table_holds_text_images_ts_and_flat() {
+    let input = Input::Steer(tui::ext::Steer {
+        text: "wait",
+        images: vec![tui::ext::PromptImage {
+            path: "a.png",
+            width: 10,
+            height: 8,
+        }],
+        ts: 1,
+        flat: false,
+    });
+    assert_eq!(
+        input_value(&input),
+        json!({"text": "wait", "images": [{"path": "a.png", "width": 10, "height": 8}], "ts": 1, "flat": false}),
+    );
+    let table = input_value(&input);
+    assert!(table.get("mime_type").is_none());
+    for image in table["images"].as_array().expect("images") {
+        assert!(image.get("mime_type").is_none());
+    }
+}
+
+#[test]
+fn the_answers_table_holds_outcome_parts_note_and_ts() {
+    let given = Input::Answers(tui::ext::Answers {
+        outcome: "given",
+        parts: vec![tui::ext::TurnAnswerPart {
+            header: "Base",
+            text: "main",
+            skipped: false,
+        }],
+        note: Some("go"),
+        ts: Some(1),
+        flat: false,
+    });
+    assert_eq!(
+        input_value(&given),
+        json!({"outcome": "given", "parts": [{"header": "Base", "text": "main", "skipped": false}], "note": "go", "ts": 1, "flat": false}),
+    );
+    let declined = Input::Answers(tui::ext::Answers {
+        outcome: "declined",
+        parts: Vec::new(),
+        note: None,
+        ts: None,
+        flat: false,
+    });
+    assert_eq!(
+        input_value(&declined),
+        json!({"outcome": "declined", "parts": [], "note": null, "ts": null, "flat": false}),
+    );
+}
+
+#[test]
+fn the_group_line_table_holds_running_and_aggregates() {
+    let input = Input::GroupLine(tui::ext::GroupLine {
+        running: true,
+        calls: Vec::new(),
+        streaming: Vec::new(),
+        thoughts: Vec::new(),
+        failed: Vec::new(),
+        first: 1,
+        last: 2,
+        open: false,
+        flat: false,
+    });
+    assert_eq!(
+        input_value(&input),
+        json!({"running": true, "calls": [], "streaming": [], "thoughts": [], "failed": [], "first": 1, "last": 2, "open": false, "flat": false}),
+    );
+}
+
+#[test]
+fn the_handoff_band_table_holds_trigger_ts_state_and_sizes() {
+    use tui::ext::{HandoffBand, TurnBandState, TurnSizes};
+    let band = |state: TurnBandState, sizes: Option<TurnSizes>| {
+        Input::HandoffBand(HandoffBand {
+            trigger: "the model handed off",
+            ts: 1,
+            state,
+            sizes,
+            flat: false,
+        })
+    };
+    assert_eq!(
+        input_value(&band(TurnBandState::Writing, None)),
+        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "writing", "cancelled": null}, "sizes": null, "flat": false}),
+    );
+    assert_eq!(
+        input_value(&band(
+            TurnBandState::Done,
+            Some(TurnSizes {
+                before: 1,
+                after: Some(2),
+            })
+        )),
+        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "done", "cancelled": null}, "sizes": {"before": 1, "after": 2}, "flat": false}),
+    );
+    assert_eq!(
+        input_value(&band(TurnBandState::Unchanged { cancelled: true }, None)),
+        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "unchanged", "cancelled": true}, "sizes": null, "flat": false}),
+    );
+    // The band row reads no note and no open flag.
+    let table = input_value(&band(TurnBandState::Done, None));
+    assert!(table.get("open").is_none());
+    assert!(table.get("note").is_none());
+}
+
+#[test]
+fn the_error_line_table_holds_code_message_and_provider() {
+    let table = {
+        let provider = contract::shapes::ProviderFailure {
+            name: "fake".to_owned(),
+            status: Some(401),
+            message: "bad key".to_owned(),
+        };
+        let failed = Input::ErrorLine(tui::ext::ErrorLine {
+            code: contract::ErrorCode::AuthenticationFailed,
+            message: "sign in",
+            provider: Some(&provider),
+            flat: false,
+        });
+        input_value(&failed)
+    };
+    assert_eq!(
+        table,
+        json!({"code": "authentication_failed", "message": "sign in", "provider": {"name": "fake", "status": 401, "message": "bad key"}, "flat": false}),
+    );
+    let plain = Input::ErrorLine(tui::ext::ErrorLine {
+        code: contract::ErrorCode::IoFailed,
+        message: "read failed",
+        provider: None,
+        flat: false,
+    });
+    assert_eq!(
+        input_value(&plain),
+        json!({"code": "io_failed", "message": "read failed", "provider": null, "flat": false}),
+    );
+}
+
+#[test]
+fn the_notice_table_holds_code_and_text() {
+    let input = Input::Notice(tui::ext::Notice {
+        code: "io_failed",
+        text: "read failed",
+        flat: false,
+    });
+    assert_eq!(
+        input_value(&input),
+        json!({"code": "io_failed", "text": "read failed", "flat": false}),
+    );
+}
+
+/// A notice input for the sessionless adapter tests.
+fn notice_input() -> Input<'static> {
+    Input::Notice(tui::ext::Notice {
+        code: "io_failed",
+        text: "read failed",
+        flat: false,
+    })
+}
+
+#[test]
+fn a_sessionless_adapter_sends_no_session_id_key() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('notice',{timeout=100,render=function(input) if input.session_id == nil then return {{{text='none'}}} else return {{{text=input.session_id}}} end end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    // Home binds no session: the client-only renderer draws and Lua
+    // reads nil, never a reused, empty or synthetic id.
+    let ctx = SessionCtx {
+        session_id: None,
+        halves: None,
+    };
+    let Decision::Draw { lines, .. } = render_slot(&*renderer, &ctx, "notice", &notice_input())
+    else {
+        panic!("a client-only renderer draws sessionless")
+    };
+    assert_eq!(lines[0][0].text, "none");
+}
+
+#[test]
+fn a_sessionless_range_bound_renderer_stays_inert_without_notice() {
+    let (_dir, loader) = fixture();
+    package(&loader, "a", Some(json!({"min": "v1.0.0"})), Some(SCRIPT));
+    let (renderer, _) = loader.load();
+    // No session half has been seen on home: the contender stays inert
+    // without an incompatibility notice.
+    let ctx = SessionCtx {
+        session_id: None,
+        halves: None,
+    };
+    assert_eq!(
+        renderer.fills_for(&ctx, "ledger_row"),
+        SlotSelection::Absent
+    );
+    assert!(renderer.take_pending().is_empty());
 }
