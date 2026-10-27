@@ -174,6 +174,7 @@ fn the_credential_deny_runs_before_a_standing_allow() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -203,6 +204,7 @@ fn a_standing_deny_beats_an_allow_a_grant_and_a_fast_path() {
         &grants,
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -234,6 +236,7 @@ fn a_standing_ask_beats_a_fast_path_and_an_allow() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -256,6 +259,7 @@ fn a_fast_path_beats_a_grant_and_an_allow() {
         &grants,
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -287,6 +291,7 @@ fn a_markdown_write_in_the_memory_data_directories_takes_the_fast_path() {
             &[],
             &crate::known_hosts::KnownHosts::default(),
             &workspace,
+            &[],
             &home,
             &credentials,
             &[],
@@ -308,6 +313,7 @@ fn a_standing_deny_beats_the_data_directory_fast_path() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -335,6 +341,7 @@ fn a_standing_ask_beats_the_data_directory_fast_path() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -363,6 +370,7 @@ fn the_credential_deny_beats_the_data_directory_fast_path() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -390,6 +398,7 @@ fn the_credential_deny_beats_the_data_directory_fast_path() {
             &[],
             &crate::known_hosts::KnownHosts::default(),
             &workspace,
+            &[],
             &home,
             &credentials,
             &[],
@@ -418,6 +427,7 @@ fn a_data_directory_markdown_write_takes_the_fast_path_before_a_grant_and_an_all
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -436,6 +446,7 @@ fn a_data_directory_markdown_write_takes_the_fast_path_before_a_grant_and_an_all
         &grants,
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -461,6 +472,7 @@ fn a_session_grant_beats_a_standing_allow() {
         &grants,
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -482,6 +494,7 @@ fn a_grant_added_by_an_answer_matches_the_next_call_judged() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -506,6 +519,7 @@ fn a_grant_added_by_an_answer_matches_the_next_call_judged() {
         &grants,
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -539,6 +553,7 @@ fn a_grant_matches_only_its_tool_and_prefix() {
             &[grant],
             &crate::known_hosts::KnownHosts::default(),
             &workspace,
+            &[],
             &home,
             &credentials,
             &[],
@@ -557,6 +572,7 @@ fn no_match_on_an_executes_call_is_review() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -578,6 +594,7 @@ fn a_call_no_rule_can_match_matches_no_deny() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -599,6 +616,7 @@ fn at_the_same_step_the_project_rule_is_used() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -623,6 +641,7 @@ fn a_global_deny_beats_a_project_allow() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -660,6 +679,7 @@ fn credential_paths_match_inside_the_directory_and_fail_closed() {
             &[],
             &crate::known_hosts::KnownHosts::default(),
             &workspace,
+            &[],
             &home,
             &credentials,
             &[],
@@ -783,6 +803,7 @@ fn a_read_of_fiber_home_is_denied_before_the_read_fast_path() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -822,6 +843,7 @@ fn an_unreadable_rules_file_denies_at_step_two() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -851,6 +873,7 @@ fn a_credential_path_is_denied_even_when_the_rules_are_unreadable() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -981,6 +1004,7 @@ fn an_always_reviewed_call_skips_a_session_grant() {
         &grants,
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -996,6 +1020,7 @@ fn an_always_reviewed_call_skips_a_session_grant() {
         &grants,
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1018,6 +1043,7 @@ fn an_always_reviewed_call_skips_a_standing_allow() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1033,6 +1059,7 @@ fn an_always_reviewed_call_skips_a_standing_allow() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1052,6 +1079,7 @@ fn an_always_reviewed_markdown_write_skips_the_data_directory_fast_path() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1064,6 +1092,7 @@ fn an_always_reviewed_markdown_write_skips_the_data_directory_fast_path() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1082,6 +1111,7 @@ fn an_always_reviewed_read_skips_the_read_fast_path() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1094,6 +1124,7 @@ fn an_always_reviewed_read_skips_the_read_fast_path() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1115,6 +1146,7 @@ fn an_always_reviewed_call_still_meets_the_credential_deny() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1133,6 +1165,7 @@ fn an_always_reviewed_call_still_meets_the_credential_deny() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1161,6 +1194,7 @@ fn an_always_reviewed_call_still_meets_a_standing_deny() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1179,6 +1213,7 @@ fn an_always_reviewed_call_still_meets_a_standing_deny() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1207,6 +1242,7 @@ fn an_always_reviewed_call_still_meets_a_standing_ask() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1219,6 +1255,7 @@ fn an_always_reviewed_call_still_meets_a_standing_ask() {
         &[],
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         &home,
         &credentials,
         &[],
@@ -1245,6 +1282,7 @@ fn permission_known_network_fast_path_respects_declared_hosts_and_prior_steps() 
             &[],
             &known,
             &workspace,
+            &[],
             &home,
             &credentials,
             &[],
@@ -1314,4 +1352,69 @@ fn permission_known_network_fast_path_respects_declared_hosts_and_prior_steps() 
             Verdict::Review
         ));
     }
+}
+
+#[test]
+fn writes_in_an_added_folder_take_the_fast_path_with_per_root_exclusions() {
+    let (root, workspace, home, credentials) = dirs();
+    let shared = root.path().join("shared");
+    std::fs::create_dir_all(shared.join("sub")).unwrap();
+    let shared = shared.canonicalize().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let added = [shared.clone()];
+    let writes = |paths: &[&str]| {
+        judge(
+            "write",
+            &call(
+                vec![Effect::Reads, Effect::Writes],
+                Some(paths.to_vec()),
+                Some(""),
+            ),
+            &empty_rules(),
+            &[],
+            &crate::known_hosts::KnownHosts::default(),
+            &workspace,
+            &added,
+            &home,
+            &credentials,
+            &[],
+        )
+    };
+    // At the root, just below it and deeper: all fast.
+    for inside in [
+        shared.display().to_string(),
+        shared.join("new.rs").display().to_string(),
+        shared.join("sub/file.rs").display().to_string(),
+    ] {
+        assert!(
+            matches!(writes(&[&inside]), Verdict::Allow(None)),
+            "{inside}"
+        );
+    }
+    // Beside the root, holding no credentials: reviewed.
+    for outside in [
+        root.join("sibling/x").display().to_string(),
+        root.join("other/x").display().to_string(),
+    ] {
+        assert!(matches!(writes(&[&outside]), Verdict::Review), "{outside}");
+    }
+    // The root itself holds the credentials directory, so the credential
+    // deny refuses it before any fast path.
+    assert!(matches!(
+        writes(&[&root.display().to_string()]),
+        Verdict::Deny { .. }
+    ));
+    // The exclusions apply below the added root too.
+    for excluded in [
+        shared.join(".git/config").display().to_string(),
+        shared.join("sub/.fiber/x").display().to_string(),
+    ] {
+        assert!(
+            matches!(writes(&[&excluded]), Verdict::Review),
+            "{excluded}"
+        );
+    }
+    // The exclusions still apply below the workspace with roots present.
+    let workspace_git = workspace.join(".git/config").display().to_string();
+    assert!(matches!(writes(&[&workspace_git]), Verdict::Review));
 }

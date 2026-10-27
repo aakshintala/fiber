@@ -63,6 +63,7 @@ pub(crate) fn judge(
     grants: &[Grant],
     known: &crate::known_hosts::KnownHosts,
     workspace: &Path,
+    added: &[PathBuf],
     home: &Path,
     credentials: &Path,
     files: &[PathBuf],
@@ -78,7 +79,7 @@ pub(crate) fn judge(
     if effects.always_reviewed {
         return Verdict::Review;
     }
-    if fast_path(&effects.declared, workspace, home) || known_network(effects, known) {
+    if fast_path(&effects.declared, workspace, added, home) || known_network(effects, known) {
         return Verdict::Allow(None);
     }
     if grants
@@ -201,9 +202,15 @@ pub(crate) fn resolved(path: PathBuf) -> PathBuf {
 
 /// Whether a call with `declared` effects takes a fast path
 /// (`docs/permissions.md`, "Fast paths"): it only reads, or it writes only
-/// inside `workspace` and outside `.git/` and `.fiber/`, or it writes only
+/// inside the workspace or an added folder and outside the `.git/` and
+/// `.fiber/` directories below the root it sits under, or it writes only
 /// Markdown files inside extension data directories in Fiber `home`.
-pub(crate) fn fast_path(declared: &DeclaredEffects, workspace: &Path, home: &Path) -> bool {
+pub(crate) fn fast_path(
+    declared: &DeclaredEffects,
+    workspace: &Path,
+    added: &[PathBuf],
+    home: &Path,
+) -> bool {
     let only = |allowed: &[Effect]| declared.effects.iter().all(|e| allowed.contains(e));
     if only(&[Effect::Reads]) {
         return true;
@@ -211,22 +218,35 @@ pub(crate) fn fast_path(declared: &DeclaredEffects, workspace: &Path, home: &Pat
     only(&[Effect::Reads, Effect::Writes])
         && declared.paths.as_ref().is_some_and(|paths| {
             !paths.is_empty()
-                && (paths.iter().all(|p| inside(&workspace.join(p), workspace))
+                && (paths
+                    .iter()
+                    .all(|p| inside(&workspace.join(p), workspace, added))
                     || paths.iter().all(|p| in_data(&workspace.join(p), home)))
         })
 }
 
-/// Whether `path`, symlinks resolved, sits in `workspace` and under no
-/// `.git` or `.fiber` directory.
-fn inside(path: &Path, workspace: &Path) -> bool {
-    super::calls::resolve(path)
-        .as_deref()
-        .and_then(|p| p.strip_prefix(workspace).ok())
-        .is_some_and(|rest| {
-            !rest
-                .components()
-                .any(|c| c.as_os_str() == ".git" || c.as_os_str() == ".fiber")
-        })
+/// Whether `path`, symlinks resolved, sits in the workspace or an added
+/// folder and under no `.git` or `.fiber` directory below the root it
+/// sits under. Every root but the workspace is resolved, as the loop
+/// holds them; the workspace resolves with the path.
+fn inside(path: &Path, workspace: &Path, added: &[PathBuf]) -> bool {
+    let Some(resolved) = super::calls::resolve(path) else {
+        return false;
+    };
+    if under_root(&resolved, workspace) {
+        return true;
+    }
+    added.iter().any(|root| under_root(&resolved, root))
+}
+
+/// Whether `resolved` sits under `root` with no `.git` or `.fiber`
+/// directory on the way down.
+fn under_root(resolved: &Path, root: &Path) -> bool {
+    resolved.strip_prefix(root).is_ok_and(|rest| {
+        !rest
+            .components()
+            .any(|c| c.as_os_str() == ".git" || c.as_os_str() == ".fiber")
+    })
 }
 
 /// Whether `path`, symlinks resolved, is a Markdown file strictly inside an

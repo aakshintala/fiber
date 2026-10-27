@@ -569,6 +569,7 @@ impl Loop {
             &self.grants,
             &self.known_hosts,
             &self.workspace,
+            &self.added,
             &self.prompt.home,
             &self.credentials,
             &self.credential_files,
@@ -963,7 +964,12 @@ impl Loop {
             }
             // The first stage asked for more: pre-send the second stage,
             // re-asking once when unreadable.
-            let item = under_item(prepared, &entry.call.name, &self.workspace_label);
+            let item = under_item(
+                prepared,
+                &entry.call.name,
+                &self.workspace_label,
+                &self.added,
+            );
             let reply = self.send_stage2(endpoint, prompt, &item, staged.cut, None);
             let second = match reply {
                 reply @ Err(_) => StagedSecond {
