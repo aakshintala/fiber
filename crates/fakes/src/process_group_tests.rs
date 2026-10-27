@@ -1070,7 +1070,7 @@ fn listed_exit_reports_expiry_with_no_listing_yet() {
     // published, so the error names no holder.
     let (never, unanswered) = mpsc::channel::<()>();
     let err = listed_exit(
-        move || match Deadline::after(MUST_SUCCEED_WITHIN).recv(&unanswered) {
+        move || match unanswered.recv() {
             Ok(()) | Err(_) => Err::<Vec<u32>, _>(io::Error::other("the listing never answered")),
         },
         Duration::from_millis(200),
@@ -1083,6 +1083,57 @@ fn listed_exit_reports_expiry_with_no_listing_yet() {
         "{err}"
     );
     drop(never);
+}
+
+#[test]
+fn listed_exit_names_a_held_holder_when_the_exit_budget_is_spent() {
+    // A spent exit budget still leaves the holder listing its own
+    // budget: the first listing blocks on a test-owned channel, and the
+    // wait must stay pending past a bound shorter than that budget.
+    let mut child = held();
+    let pid = child.id();
+    let stdin = child.stdin.take().unwrap();
+    let (release, released) = mpsc::channel::<()>();
+    let (answered, answer) = mpsc::channel();
+    thread::spawn(move || {
+        let mut calls = 0;
+        let result = listed_exit(
+            move || {
+                calls += 1;
+                if calls == 1 {
+                    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&released) {
+                        Ok(()) => Ok(vec![pid]),
+                        Err(_) => Err(io::Error::other("the listing was never released")),
+                    }
+                } else {
+                    Ok(vec![pid])
+                }
+            },
+            Duration::ZERO,
+        );
+        match answered.send(result) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    assert!(
+        Deadline::after(Duration::from_millis(500))
+            .recv(&answer)
+            .is_err(),
+        "a spent exit budget must still wait for the holder listing"
+    );
+    match release.send(()) {
+        Ok(()) | Err(_) => {}
+    }
+    let err = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&answer) {
+        Ok(result) => result.expect_err("the holder outlives the spent budget, so it fails"),
+        Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for listed_exit to name the held holder"),
+    };
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    let text = err.to_string();
+    assert!(text.contains("deadline expired waiting for exit"), "{text}");
+    assert!(text.contains(&pid.to_string()), "{text}");
+    drop(stdin);
+    reaped(child, "the held child to exit once its stdin closed");
 }
 
 #[test]
