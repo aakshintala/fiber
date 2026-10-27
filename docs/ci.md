@@ -40,10 +40,8 @@ the pull request is marked ready, which starts the full run.
 
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report and gate nothing:
-`backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`, `stress`. They run outside the verdict, so their
-result never decides `CI`. The `stress` job is a pilot exemption: its
-result never decides `CI`, and it joins the `ci` job's `needs` when the
-owner makes it required. The docs check fails when any other job is
+`backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`. They run outside the verdict, so their
+result never decides `CI`. The docs check fails when any other job is
 missing from `needs`, so a new job, such as a new shard, cannot run
 without gating the merge.
 
@@ -91,7 +89,7 @@ A pull request runs only what its diff can affect.
   `docs/invocation.md` runs `contract`, whose tests check
   the code against them. A change to `docs/extensions.md` runs `extensions`,
   whose tests check its hook keys table against the code. A change to `docs/tui.md` runs `contract` and
-  `tui`. A change to `docs/ci.md` or `docs/performance.md` runs `xtask`, whose tests pin the fast attaching ceiling to the 9V45 class data in `xtask/tests/class_data/`, recomputed from it by the `docs/performance.md` rule. A change to a built-in skill under `docs/skills/` runs `loop`, whose
+  `tui`. A change to `docs/ci.md` or `docs/performance.md` runs `xtask`, whose tests pin the fast session_list ceiling to the 9V45 class data in `xtask/tests/class_data/`, recomputed from it by the `docs/performance.md` rule. A change to a built-in skill under `docs/skills/` runs `loop`, whose
   tests check it parses, and `main`, whose tests install it. The selector lists these files. The gate fails when
   the list and the source disagree, or when an include's argument is not a
   string literal. Tests read a repository file only by compiling it in,
@@ -189,15 +187,13 @@ profile, which never retries; 100 times when the pull request fixes a
 flaky test. One failure fails the run. The retry above applies only to
 tests the pull request did not touch.
 
-Pending owner ruling (#3190): the number of copies run at once.
-
 The `stress` job runs on a ready pull request on Linux x86_64 beside the
 test jobs and builds from the same restored cache. The tests it runs are
 the test functions the diff adds or changes, found by
 `cargo xtask stress-plan` with the same test-file rules as the red-commit
 check, and a diff that touches no test function skips the run. The count
-is read from the linked issue's labels. The job is not in `ci`'s `needs`,
-so a failure there stops no merge during the pilot. It writes its wall
+is read from the linked issue's labels. The job is in `ci`'s `needs`, so
+one failure stops the merge. It writes its wall
 time, runner minutes and selected tests to its job summary. A touched
 test still gets nextest's one retry but a pass on that retry fails the
 test job (`cargo xtask touched-retries`).
@@ -533,8 +529,7 @@ workflow file is on `main`.
   one artifact: `perf.data`, the folded stacks and flamegraph SVGs for every
   process and for the fiber processes alone, the fiber processes' self time per
   function (`fiber-symbols.txt`), and the harness's JSON. Its timings run under perf,
-  so they are not budget evidence: the 60 and 150 ms attach ceilings are judged
-  by the Release job's "Print the attach stages" only.
+  so they are not budget evidence.
 
 ## Job time limits
 

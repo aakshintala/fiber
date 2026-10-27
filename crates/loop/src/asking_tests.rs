@@ -519,6 +519,10 @@ fn a_changed_suspendable_request_restarts_the_idle_deadline() {
     // The answer ends the old ask and the call asks again, with no pass
     // of the loop in between: the step suspends on the new request.
     // No code under test waits on the clock here: wait_step runs on the test thread with until = now, which records no park (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(50));
     stream
         .asking()
@@ -528,6 +532,10 @@ fn a_changed_suspendable_request_restarts_the_idle_deadline() {
     // Past the old request's deadline, still before the new one's: the
     // step waits on, rather than suspending with the stale deadline.
     // No code under test waits on the clock here: wait_step runs on the test thread with until = now, which records no park (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     clock.advance(Duration::from_secs(20));
     assert!(
         !wait(&mut looped, &mut suspend),

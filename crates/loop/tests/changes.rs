@@ -1151,6 +1151,10 @@ fn a_later_date_appends_one_line() {
     assert_eq!(kinds(&session.lines()), first_text_turn());
     // The fake clock reads 2023-11-14T22:13:20Z: two hours on is the 15th.
     // No code under test waits on the clock here: the first turn's thread joined, so nothing runs; the advance moves the date the next turn stamps (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     session.clock.advance(Duration::from_secs(2 * 3_600));
     session.inbox.send(delivery("again")).unwrap();
     session.turn();

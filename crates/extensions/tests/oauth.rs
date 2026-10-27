@@ -996,6 +996,10 @@ fn poll_that_times_out_while_sleeping_is_a_timeout() {
     );
     // Late wake past the 5 s poll park to the 60 s deadline; the park is
     // proven just above (ruling 6261259790).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "late wake: one advance past a park proven at its exact instant just before (ruling 6261259790)"
+    )]
     env.clock.advance(TIMEOUT);
     assert!(matches!(
         finish(&rx, &Deadline::after(WAIT)),

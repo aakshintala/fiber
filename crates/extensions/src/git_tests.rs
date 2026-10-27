@@ -211,6 +211,10 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
     // At the git deadline the run stops: it parks for the grace, or
     // answers at once when the stall dies on SIGTERM with no grace park.
     // Crosses only poll pauses to the git deadline; the run is proven parked at its poll (ruling 6260728504).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline (ruling 6260728504)"
+    )]
     clock.advance(GIT_DEADLINE);
     let kill_at = clock.now() + GRACE;
     let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);

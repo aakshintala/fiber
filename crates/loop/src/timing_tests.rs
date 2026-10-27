@@ -2302,6 +2302,10 @@ fn a_warming_refresh_runs_but_adds_no_turn_scope() {
         .warm_stop(start)
         .expect("the session warms");
     // No code under test waits on the clock here; the refresh compares its due point only (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     world.clock.advance(Duration::from_secs(3575));
     let refreshed = world.loop_mut().refresh(stop).unwrap();
     assert!(matches!(refreshed, crate::warm::Refreshed::Sent));

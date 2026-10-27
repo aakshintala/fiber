@@ -197,6 +197,12 @@ fn an_expired_end_with_no_stop_finishes_the_partial_round() {
             .await_parked(end, fakes::Deadline::after(DEADLINE)),
         "the loop waits for the close"
     );
+    // Late wake past the end park to SESSIONS_STOP_WITHIN + 1 s; the park
+    // is proven just above (ruling 6261259790).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "late wake: one advance past a park proven at its exact instant just before (ruling 6261259790)"
+    )]
     temp.clock
         .advance(SESSIONS_STOP_WITHIN + Duration::from_secs(1));
     let outcome = join(rx);
@@ -774,6 +780,10 @@ fn a_dead_peer_abandons_the_write_as_gone() {
     // Advancing past the bound turns a blind wait into unconfirmed
     // instead of a hang.
     let outcome = thread::spawn(move || write_line_bounded(&writer, &line, &hub, end));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     temp.clock
         .advance(SESSIONS_STOP_WITHIN + Duration::from_secs(1));
     assert!(
@@ -803,6 +813,10 @@ fn a_newline_terminated_ack_answers_without_a_close() {
     // The socket stays open: no end of input follows the line.
     let end = temp.clock.origin() + SESSIONS_STOP_WITHIN;
     let answer = thread::spawn(move || read_ack(&mut read, &stream, &hub, "c_open", end));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     temp.clock
         .advance(SESSIONS_STOP_WITHIN + Duration::from_secs(1));
     assert!(
@@ -956,6 +970,10 @@ fn buffered_events_plus_the_acknowledgement_answer_at_once() {
     (&session).write_all(&all).unwrap();
     let worker = Arc::clone(&hub);
     let answer = thread::spawn(move || read_ack(&mut read, &stream, &worker, "c_mine", end));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     temp.clock
         .advance(SESSIONS_STOP_WITHIN + Duration::from_secs(1));
     assert!(
@@ -1027,6 +1045,10 @@ fn an_unconnected_socket_is_gone_not_waited_on() {
     let mut read = BufReader::new(unix);
     let end = temp.clock.origin() + SESSIONS_STOP_WITHIN;
     let answer = thread::spawn(move || read_ack(&mut read, &stream, &hub, "c_dead", end));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
     temp.clock
         .advance(SESSIONS_STOP_WITHIN + Duration::from_secs(1));
     assert!(

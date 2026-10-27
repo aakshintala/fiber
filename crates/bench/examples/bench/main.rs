@@ -33,6 +33,8 @@ mod resume;
 mod run;
 mod screen;
 mod session_list;
+#[cfg(test)]
+mod test_support;
 mod wheel;
 
 use std::collections::BTreeMap;
