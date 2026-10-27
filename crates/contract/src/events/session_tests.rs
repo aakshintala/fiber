@@ -4,7 +4,8 @@ use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 
-use super::{InputItem, Rewound, Variables, VariablesSource};
+use super::{InputItem, Moved, Point, Rewound, Variables, VariablesSource};
+use crate::{Seq, SessionId};
 
 #[test]
 fn rewind_input_round_trips() {
@@ -25,6 +26,50 @@ fn rewound_without_summary_has_no_summary_key() {
     let value = serde_json::json!({"new_session_id": "s_new", "seq": 7});
     let item: Rewound = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(serde_json::to_value(item).unwrap(), value);
+}
+
+#[test]
+fn moved_round_trips() {
+    let value =
+        serde_json::json!({"new_session_id": "s_new", "seq": 7, "workspace": "/work/other"});
+    let item: Moved = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(item.new_session_id, SessionId("s_new".into()));
+    assert_eq!(item.seq, Seq(7));
+    assert_eq!(item.workspace, "/work/other");
+    assert_eq!(serde_json::to_value(item).unwrap(), value);
+}
+
+#[test]
+fn moved_requires_all_three_fields_with_their_types() {
+    for value in [
+        serde_json::json!({"seq": 7, "workspace": "/w"}),
+        serde_json::json!({"new_session_id": "s", "workspace": "/w"}),
+        serde_json::json!({"new_session_id": "s", "seq": 7}),
+        serde_json::json!({"new_session_id": 7, "seq": 7, "workspace": "/w"}),
+        serde_json::json!({"new_session_id": "s", "seq": "7", "workspace": "/w"}),
+        serde_json::json!({"new_session_id": "s", "seq": 7, "workspace": 7}),
+    ] {
+        assert!(
+            serde_json::from_value::<Moved>(value.clone()).is_err(),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn point_without_project_writes_no_project_key() {
+    let value = serde_json::json!({"session_id": "s", "seq": 3});
+    let point: Point = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(point.project, None);
+    assert_eq!(serde_json::to_value(point).unwrap(), value);
+}
+
+#[test]
+fn point_with_project_round_trips() {
+    let value = serde_json::json!({"session_id": "s", "seq": 3, "project": "-work-old"});
+    let point: Point = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(point.project.as_deref(), Some("-work-old"));
+    assert_eq!(serde_json::to_value(point).unwrap(), value);
 }
 
 #[test]

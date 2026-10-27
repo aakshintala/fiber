@@ -8,8 +8,9 @@
 //! is told to every connection's attention listener.
 //!
 //! The hub rescans `run/` every [`RUN_SCAN`] on its clock. On a summary
-//! connection's end it reads the session log's last line: `fiber_exited` or
-//! `rewound` is `exited`, anything else `crashed`, and it appends a crashed
+//! connection's end it reads the session log's last line: `fiber_exited`,
+//! `rewound` or `moved` is `exited`, anything else `crashed`, and it
+//! appends a crashed
 //! session's `recent.jsonl` row, since a process that died cannot. A
 //! crashed session stays until resumed or dismissed; one that exited
 //! waiting on a person stays until resumed. A delegate, whose status names
@@ -75,8 +76,9 @@ pub(crate) struct Feed {
     /// scanner.
     _wake: Arc<dyn Wake>,
     scanner: Mutex<Option<JoinHandle<()>>>,
-    /// Starts the session a `rewound` last line names, set once by the hub
-    /// serving it, so a rewind no client relays still starts it.
+    /// Starts the session a `rewound` or `moved` last line names, set once
+    /// by the hub serving it, so a transition no client relays still
+    /// starts it.
     pub(crate) on_rewound: OnceLock<Box<dyn Fn(SessionId, SessionId) + Send + Sync>>,
     /// Called at the end of every scan of `run/` with the names it found,
     /// set once by the hub serving it: the rejoin sweep collects resumed
@@ -589,7 +591,7 @@ impl Feed {
                     let scanned = log::lines_from(dir, *from, |line| {
                         if matches!(
                             log::kind_of(line).as_deref(),
-                            Some("fiber_exited" | "rewound")
+                            Some("fiber_exited" | "rewound" | "moved")
                         ) {
                             exited = true;
                         }
@@ -734,10 +736,10 @@ pub(crate) fn answer(
 }
 
 /// How a session whose directory is `dir` left: `exited` when its log's
-/// last line is `fiber_exited` or `rewound`, otherwise `crashed`.
+/// last line is `fiber_exited`, `rewound` or `moved`, otherwise `crashed`.
 fn how_left(dir: &Path) -> Left {
     match log::last_kind(dir).as_deref() {
-        Some("fiber_exited" | "rewound") => Left::Exited,
+        Some("fiber_exited" | "rewound" | "moved") => Left::Exited,
         _ => Left::Crashed,
     }
 }

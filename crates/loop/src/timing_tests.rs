@@ -1214,6 +1214,7 @@ fn a_rewound_loop_reuses_its_logged_preamble_silently() {
             from: contract::shapes::Point {
                 session_id: SessionId("s_test".into()),
                 seq: contract::Seq(1),
+                project: None,
             },
             worktree: None,
             how: crate::Continuation::Rewind {

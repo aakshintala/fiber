@@ -219,6 +219,8 @@ impl Loop {
 
 /// Refuses `delivery` once `rewound` is set: every acknowledgement is
 /// answered `closing`, everything else is dropped, and nothing is written.
+/// A `moved` ending sets the same guard, so a move's late deliveries are
+/// refused the same way (`docs/events.md`, "Change workspace").
 pub(crate) fn refuse_after_rewound(delivery: Delivery) {
     match delivery {
         Delivery::Prompt(_, ack)
@@ -237,6 +239,11 @@ pub(crate) fn refuse_after_rewound(delivery: Delivery) {
         | Delivery::Resolved(_, ack)
         | Delivery::Message(_, ack)
         | Delivery::Rewind(_, _, ack) => reject(ack, ErrorCode::Closing, REWOUND_CLOSING),
+        Delivery::ChangeWorkspace(_, _, ack) => reject(
+            ack,
+            ErrorCode::Closing,
+            crate::rewind::workspace::MOVED_CLOSING,
+        ),
         Delivery::Job(_)
         | Delivery::JobLine(_)
         | Delivery::ExtensionExec(_)

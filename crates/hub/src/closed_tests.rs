@@ -90,6 +90,11 @@ fn rewound(id: &str, next: &str) -> Value {
         "payload": {"new_session_id": next, "seq": 3, "jobs": []}})
 }
 
+fn moved(id: &str, next: &str) -> Value {
+    json!({"kind": "moved", "session_id": id, "ts": 3, "schema_version": 1,
+        "payload": {"new_session_id": next, "seq": 3, "workspace": "/target"}})
+}
+
 /// What one relay under test owns: its hub, its connection's relays, the
 /// client writer, its epoch and its shared unacknowledged commands.
 struct Rig {
@@ -521,6 +526,42 @@ fn a_log_ending_rewound_keeps_the_level() {
         lock(&rig.relays).subscription(SID),
         Some(subscribe("c_sub", "full")),
         "the rewound session keeps its level"
+    );
+    drop(bound);
+}
+
+#[test]
+fn a_log_ending_moved_keeps_the_level() {
+    let fixture = Fixture::new("cs10");
+    let bound = FakeSession::bind(&fixture.home, SID);
+    write_log(&fixture.home, SID, "/w", None, &[moved(SID, NEXT)]);
+    let (rig, client_peer, mut session_peer, reader, _park) = rig(
+        &fixture.home,
+        FakeStarter::bind_and_hold(&fixture.home),
+        SID,
+        false,
+    );
+    lock(&rig.relays)
+        .subscribed
+        .push((SID.to_owned(), subscribe("c_sub", "full")));
+    let first = durable(1, "idle");
+    let second = durable(2, "streaming");
+    let thread = spawn(&rig, SID, reader);
+    session_peer.write_all(first.as_bytes()).unwrap();
+    session_peer.write_all(second.as_bytes()).unwrap();
+    session_peer.flush().unwrap();
+    drop(session_peer);
+    let mut seen = 0;
+    let lines = collect_until(client_peer, "the two relayed lines", |_| {
+        seen += 1;
+        seen == 2
+    });
+    assert_eq!(lines, [first, second], "only the two lines arrive");
+    join(thread, "the relay thread to end");
+    assert_eq!(
+        lock(&rig.relays).subscription(SID),
+        Some(subscribe("c_sub", "full")),
+        "the moved session keeps its level"
     );
     drop(bound);
 }

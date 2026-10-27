@@ -45,6 +45,10 @@ pub(crate) struct Relays {
     /// blocking on the gate.
     #[cfg(test)]
     pub(crate) at_gate: Option<Box<dyn FnOnce() + Send>>,
+    /// Tests only: a one-shot signal when `try_lock` sees another opener
+    /// holding the gate, before this opener blocks on it.
+    #[cfg(test)]
+    pub(crate) blocked_gate: Option<Box<dyn FnOnce() + Send>>,
     /// Tests only: a one-shot pause in `closed::on_end` after the decision
     /// and before the drop, taken under the relays lock and called with no
     /// lock held.

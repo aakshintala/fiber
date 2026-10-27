@@ -1,6 +1,8 @@
 //! A session's history across the sessions it continues
-//! (`docs/events.md`, "Rewind"): the chain of logs, root first, that
-//! `session_started.forked_from` links. Only `log` opens the session
+//! (`docs/events.md`, "Rewind", "Change workspace"): the chain of logs,
+//! root first, that `session_started.forked_from` links. Each ancestor
+//! resolves in its recorded project, never the child's
+//! (`docs/state.md`, "Projects"). Only `log` opens the session
 //! directories here (`docs/architecture.md`, "The call rules").
 
 use std::collections::HashSet;
@@ -15,7 +17,7 @@ use crate::{EVENTS, Error, io_at};
 /// last line of it the history holds. The last segment's is `None`: the
 /// whole own log. Any other segment's is the child's `forked_from.seq`,
 /// inclusive: the history holds the lines with `seq <= to`.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Segment {
     /// The session, from its directory name.
     pub session_id: SessionId,
@@ -25,10 +27,18 @@ pub struct Segment {
     pub to: Option<Seq>,
 }
 
+/// Whether `value` names one plain path component, so joining it under a
+/// directory cannot leave that directory.
+fn single_component(value: &str) -> bool {
+    let mut parts = Path::new(value).components();
+    matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
+}
+
 /// The chain of logs `dir`'s session continues, root first and its own log
-/// last with `to: None`. A missing parent log is [`Error::NotFound`]; a
-/// pointer cycle, or a first line that is not `session_started`, is
-/// [`Error::Pointer`].
+/// last with `to: None`. A missing parent log, in the child's project or
+/// in a recorded one, is [`Error::NotFound`]; a pointer cycle, a first
+/// line that is not `session_started`, or a recorded parent session or
+/// project that is not one path component, is [`Error::Pointer`].
 pub fn history(dir: &Path) -> Result<Vec<Segment>, Error> {
     let mut segments = Vec::new();
     let mut seen = HashSet::new();
@@ -56,18 +66,69 @@ pub fn history(dir: &Path) -> Result<Vec<Segment>, Error> {
             dir: at.clone(),
             to,
         });
-        let Some((parent, seq)) = forked else {
+        let Some((parent, seq, project)) = forked else {
             break;
         };
-        // The parent lives beside the child, in the same `sessions/`
-        // directory: a rewind continues in the old session's workspace.
-        let Some(sessions) = at.parent() else {
+        // A recorded link is one component naming the parent session, and
+        // one naming its project: anything else cannot name a session
+        // directory, so the walk fails closed before touching the disk.
+        if !single_component(&parent.0) {
             return Err(Error::Pointer {
                 path: at.join(EVENTS),
-                reason: "the session directory has no parent".to_owned(),
+                reason: "the recorded parent session is not one path component".to_owned(),
             });
+        }
+        at = match project {
+            // The parent lives beside the child, in the same `sessions/`
+            // directory: a rewind continues in the old session's
+            // workspace, and a move without a project does too.
+            None => {
+                let Some(sessions) = at.parent() else {
+                    return Err(Error::Pointer {
+                        path: at.join(EVENTS),
+                        reason: "the session directory has no parent".to_owned(),
+                    });
+                };
+                sessions.join(&parent.0)
+            }
+            // The parent lives in its recorded project: the reader opens
+            // `projects/<project>/sessions/<session_id>/` directly, never
+            // the child's, and never scans other projects
+            // (`docs/state.md`, "Projects"). Every step climbs stored
+            // directories only: no git, no environment.
+            Some(key) => {
+                // The session directory, its `sessions/`, its project key
+                // and `projects/`: the next ancestor is the home. The
+                // projects layer is required by name, so a flat layout
+                // cannot climb into system directories.
+                let mut up = at.ancestors();
+                up.next();
+                let home = match (up.next(), up.next(), up.next(), up.next()) {
+                    (Some(_), Some(_), Some(projects), Some(home))
+                        if projects.file_name().and_then(|name| name.to_str())
+                            == Some("projects") =>
+                    {
+                        home
+                    }
+                    _ => {
+                        return Err(Error::Pointer {
+                            path: at.join(EVENTS),
+                            reason: "the session directory is not under projects".to_owned(),
+                        });
+                    }
+                };
+                match crate::sessions_dir_for_key(home, &key) {
+                    Some(sessions) => sessions.join(&parent.0),
+                    None => {
+                        return Err(Error::Pointer {
+                            path: at.join(EVENTS),
+                            reason: "the recorded parent project is not one path component"
+                                .to_owned(),
+                        });
+                    }
+                }
+            }
         };
-        at = sessions.join(&parent.0);
         to = Some(seq);
     }
     segments.reverse();
@@ -177,16 +238,25 @@ pub fn last_line(dir: &Path) -> Option<Envelope> {
     serde_json::from_slice(&line).ok()
 }
 
-/// What `dir`'s first line forks from: the parent session and the last
-/// line taken from it. `None` for a root session. A missing log is
-/// [`Error::NotFound`]; anything else that is not a `session_started`
-/// first line is [`Error::Pointer`}.
-fn first_fork(dir: &Path) -> Result<Option<(SessionId, Seq)>, Error> {
+/// What `dir`'s first line forks from: the parent session, the last line
+/// taken from it, and the parent's project key when it differs from the
+/// child's (`docs/state.md`, "Projects"). `None` for a root session. A
+/// missing or empty log is [`Error::NotFound`], as if it were never
+/// written; anything else that is not a `session_started` first line is
+/// [`Error::Pointer`}.
+fn first_fork(dir: &Path) -> Result<Option<(SessionId, Seq, Option<String>)>, Error> {
+    let path = dir.join(EVENTS);
+    // A crash between the session directory's creation and its first
+    // write leaves an empty log: there is no history to follow, so it
+    // reads as missing.
+    if std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(1) == 0 {
+        return Err(Error::NotFound(dir.to_path_buf()));
+    }
     crate::scan::first_line(dir)?
         .fork_point()
         .map_err(|_| Error::Pointer {
             path: dir.join(EVENTS),
-            reason: "the log's forked_from is not a session and a seq".to_owned(),
+            reason: "the log's forked_from is not a session, a seq and a project".to_owned(),
         })
 }
 

@@ -1136,11 +1136,17 @@ impl Session {
 /// or a `repository_code_offered`, read one line at a time up to the first:
 /// a session that exits on its first offer is kept, so the offer is raised
 /// again on resume. A session that continues another is kept once its
-/// process started, even with no prompt yet: the old log's `rewound`
-/// points at it (`docs/invocation.md`, "Lifecycle"). A log that cannot be
+/// process started, even with no prompt yet: the old log's `rewound` or
+/// `moved` points at it (`docs/invocation.md`, "Lifecycle"). A log ending
+/// `moved` is kept even with no prompt and no fork: the hub starts the
+/// same child on old-process exit from that line, and dependents name the
+/// old session through it. A log that cannot be
 /// read, or a line that does not parse before the first, keeps the session,
 /// so nothing is deleted on a guess.
 fn prompted(dir: &Path) -> bool {
+    if log::last_line(dir).is_some_and(|line| line.kind == "moved") {
+        return true;
+    }
     log::lines(dir).map_or(true, |mut lines| {
         let mut forked = false;
         lines.any(|line| {
@@ -1175,13 +1181,13 @@ fn prompt_message(prompt: String) -> Message {
     }
 }
 
-/// Copies every event to `out`, one JSON line each, until `fiber_exited`
-/// or `rewound`, or the end of the log. Durable lines serialize as the log
-/// wrote them, so stdout filtered to them is `events.jsonl` byte for byte
-/// (`docs/invocation.md`, "What a caller gets back"). `rewound` closes
-/// the process boundary as `fiber_exited` does: nothing follows it, so the
-/// copy ends there even while the log itself is still held
-/// (`docs/events.md`, "Rewind").
+/// Copies every event to `out`, one JSON line each, until `fiber_exited`,
+/// `rewound` or `moved`, or the end of the log. Durable lines serialize as
+/// the log wrote them, so stdout filtered to them is `events.jsonl` byte
+/// for byte (`docs/invocation.md`, "What a caller gets back"). `rewound`
+/// and `moved` close the process boundary as `fiber_exited` does: nothing
+/// follows them, so the copy ends there even while the log itself is still
+/// held (`docs/events.md`, "Rewind", "Change workspace").
 fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
     while let Ok(Some(line)) = watcher.recv() {
         if line.kind == client::STOP {
@@ -1195,14 +1201,14 @@ fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
 }
 
 /// Writes `line`, reporting whether printing stops after it: a failed
-/// write, `fiber_exited` or `rewound` (`docs/invocation.md`, "What a
-/// caller gets back"). A reader that went away, or a line that cannot be
-/// written, stops the copy, never the session.
+/// write, `fiber_exited`, `rewound` or `moved` (`docs/invocation.md`,
+/// "What a caller gets back"). A reader that went away, or a line that
+/// cannot be written, stops the copy, never the session.
 fn write_until_stop(out: &mut dyn Write, line: &contract::Envelope) -> bool {
     if client::write_line(out, line).is_err() {
         return true;
     }
-    line.kind == "fiber_exited" || line.kind == "rewound"
+    line.kind == "fiber_exited" || line.kind == "rewound" || line.kind == "moved"
 }
 
 /// Prints what `print` has not yet reached once its `STOP` arrived: the

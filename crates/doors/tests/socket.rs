@@ -236,6 +236,9 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
         | Delivery::DelegateUsage { .. } => {
             panic!("no job runs here")
         }
+        Delivery::ChangeWorkspace(..) => {
+            panic!("no job runs here")
+        }
     }
 }
 
@@ -1674,6 +1677,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::McpReconnect(..)
                 | Delivery::Reply(..)
                 | Delivery::Rewind(..)
+                | Delivery::ChangeWorkspace(..)
                 | Delivery::Close(_)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)
@@ -1718,6 +1722,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::McpReconnect(..)
                 | Delivery::Reply(..)
                 | Delivery::Rewind(..)
+                | Delivery::ChangeWorkspace(..)
                 | Delivery::Close(_)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)
@@ -1814,6 +1819,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::McpReconnect(..)
                 | Delivery::Reply(..)
                 | Delivery::Rewind(..)
+                | Delivery::ChangeWorkspace(..)
                 | Delivery::Close(_)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)
@@ -1934,6 +1940,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::ExtensionUsage(_)
                 | Delivery::DelegateUsage { .. }
                 | Delivery::Shell(..)
+                | Delivery::ChangeWorkspace(..)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
             let accepted = until(&sender, |line| command_id(line) == Some("c_r1"));
@@ -1989,6 +1996,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::ExtensionUsage(_)
                 | Delivery::DelegateUsage { .. }
                 | Delivery::Shell(..)
+                | Delivery::ChangeWorkspace(..)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
             let rejected_lines = until(&sender, |line| command_id(line) == Some("c_r2"));
@@ -6251,6 +6259,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 | Delivery::McpReconnect(..)
                 | Delivery::Reply(..)
                 | Delivery::Rewind(..)
+                | Delivery::ChangeWorkspace(..)
                 | Delivery::Close(_)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)

@@ -122,7 +122,7 @@ fn slash_eight_of_long_list() {
     let shown = screen(&app, 160, 48);
     // The range counts matching entries, not just visible rows
     // (`docs/tui.md:1682-1685,1995`).
-    assert!(shown.contains("1–8 of 61 · ↓ 53 more"), "{shown}");
+    assert!(shown.contains("1–8 of 62 · ↓ 54 more"), "{shown}");
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
     // The first match is focused (`docs/tui.md:1682`).
@@ -216,7 +216,7 @@ fn a_scrolled_slash_list_counts_both_directions() {
     assert!(
         // The range counts matching entries, not just visible rows
         // (`docs/tui.md:1682-1685,1995`).
-        shown.contains("↑ 3 above · 4–11 of 61 · ↓ 50 more"),
+        shown.contains("↑ 3 above · 4–11 of 62 · ↓ 51 more"),
         "{shown}"
     );
     let buf = buffer(&app, 160, 48);
@@ -405,7 +405,7 @@ fn narrow_slash() {
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
     // The range counts matching entries, not just visible rows
     // (`docs/tui.md:1682-1685,1995`).
-    assert!(screen(&app, 100, 40).contains("1–8 of 61 · ↓ 53 more"));
+    assert!(screen(&app, 100, 40).contains("1–8 of 62 · ↓ 54 more"));
 }
 
 #[test]
@@ -738,7 +738,7 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     assert!(row_text(&buf, bars[0]).contains("context"), "{shown}");
     // The range counts matching entries, not just visible rows
     // (`docs/tui.md:1682-1685,1995`).
-    assert!(shown.contains("of 61"), "{shown}");
+    assert!(shown.contains("of 62"), "{shown}");
 }
 
 /// A short conversation with an `@` list: the third path stays barred,

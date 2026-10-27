@@ -481,6 +481,7 @@ fn continuing_child(
             forked_from: Some(Point {
                 session_id: parent.clone(),
                 seq: point,
+                project: None,
             }),
             rewind: (!delegate).then(|| Rewind {
                 summary: None,

@@ -8,16 +8,16 @@
 //!
 //! A relay thread that reads end of file from its session treats it as the
 //! session closing the connection while running only when the relay never
-//! saw the exited window, the session's log ends in neither `fiber_exited`
-//! nor `rewound`, and `run/<session_id>` still accepts a connection. A
-//! clean exit unlinks the socket before shutting connections, so the probe
-//! is refused; a crash leaves a socket file that refuses; a rewind leaves
-//! a log ending `rewound`; only a session that keeps running while shutting
-//! one connection still accepts. By the time the client reads
-//! `stream_closed` for a session, the connection keeps no subscription for
-//! it: the drop runs before the send, both before the queue is passed on,
-//! so a racing command is answered after the line and never carries a
-//! replayed `subscribe`.
+//! saw the exited window, the session's log ends in none of `fiber_exited`,
+//! `rewound` or `moved`, and `run/<session_id>` still accepts a connection.
+//! A clean exit unlinks the socket before shutting connections, so the
+//! probe is refused; a crash leaves a socket file that refuses; a rewind
+//! or a move leaves a log ending `rewound` or `moved`; only a session that
+//! keeps running while shutting one connection still accepts. By the time
+//! the client reads `stream_closed` for a session, the connection keeps no
+//! subscription for it: the drop runs before the send, both before the
+//! queue is passed on, so a racing command is answered after the line and
+//! never carries a replayed `subscribe`.
 
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,10 +68,10 @@ pub(crate) fn on_end(
     crate::connection::send(writer, hub, "stream_closed", payload(session));
 }
 
-/// Whether `session` looks like a running session: its log ends in
-/// neither `fiber_exited` nor `rewound`, and `run/<session>` accepts a
+/// Whether `session` looks like a running session: its log ends in none
+/// of `fiber_exited`, `rewound` or `moved`, and `run/<session>` accepts a
 /// connection, dropped at once without a line. File checks first, so no
-/// connection is opened for an exited or rewound session.
+/// connection is opened for an exited, rewound or moved session.
 fn running(hub: &Hub, session: &str) -> bool {
     let id = SessionId(session.to_owned());
     !crate::resume::exited(&hub.home, &id)

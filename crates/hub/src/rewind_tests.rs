@@ -36,11 +36,6 @@ use fakes::Deadline;
 /// before it.
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// How long the negative wait in `race_openers` holds the second opener's
-/// pause unreached: the same 200 ms bound the fakes hold tests use for
-/// the same kind of wait.
-const GATE_QUIET: Duration = Duration::from_millis(200);
-
 struct Temp {
     dir: PathBuf,
     #[expect(dead_code, reason = "Drop removes the directory")]
@@ -1716,13 +1711,13 @@ fn spawn_opener(job: impl FnOnce() + Send + 'static, name: &str) -> mpsc::Receiv
     done
 }
 
-/// Parks the first opener in the open hook, then the second in the
-/// re-armed hook, releases them, and joins both: the two opener orders
-/// share this choreography. Without the gate both wait past their checks,
-/// each about to publish; with it the second queues behind the first on
-/// the gate instead of pausing, and the wait below times out. When the
-/// waiter is the redirect it pauses in the hook once the gate frees it;
-/// when it is the command it takes the existing relay outright.
+/// Parks the first opener in the open hook, then confirms the second
+/// failed `try_lock` while the first still holds the gate. Releasing the
+/// first lets both finish: the two opener orders share this choreography.
+/// Without the gate the second never signals contention, and the test
+/// fails after releasing both open hooks. When the waiter is the redirect
+/// it pauses in the hook once the gate frees it; when it is the command it
+/// takes the existing relay outright.
 #[track_caller]
 fn race_openers(
     hub: &Arc<Hub>,
@@ -1739,87 +1734,59 @@ fn race_openers(
             .is_ok(),
         "the first opener parked after its opening"
     );
-    // Arm the gate seam now: the first opener already passed it (it is
-    // parked past the gate), so only the contender signals.
-    let (reached_tx, reached) = mpsc::channel();
-    lock(relays).at_gate = Some(Box::new(move || {
-        reached_tx.send(()).unwrap_or(());
+    // Arm the blocked-gate seam now: the first opener already holds the
+    // gate, so only the contender's failed `try_lock` signals.
+    let (blocked_tx, blocked) = mpsc::channel();
+    lock(relays).blocked_gate = Some(Box::new(move || {
+        blocked_tx.send(()).unwrap_or(());
     }));
     let (paused_second, release_second) = arm_before_open(hub);
     let done_second = spawn_opener(second, "race-second");
-    // The first opener stays parked until the contender reached the
-    // gate: releasing it on a thread start alone could release it
-    // before any contention.
-    assert!(
-        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-            .recv(&reached)
-            .is_ok(),
-        "the second opener reached the gate"
-    );
-    // The second opener queues behind the first on the gate instead of
-    // pausing: the 200 ms bound holds the pause unreached with no signal,
-    // and a late signal only takes the gated branch, where the test still
-    // fails on the two relays it then finds.
-    if Deadline::after(GATE_QUIET).recv(&paused_second).is_err() {
+    // A failed try_lock proves the second opener reached the blocking
+    // point while the first holds the gate. If it did not, release both
+    // hooks before failing so neither worker is stranded.
+    if Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&blocked)
+        .is_err()
+    {
         drop(release_first);
+        drop(release_second);
         assert!(
             Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                 .recv(&done_first)
                 .is_ok(),
             "the first opener finished"
         );
-        if second_is_follow {
-            assert!(
-                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-                    .recv(&paused_second)
-                    .is_ok(),
-                "the waiter parked after the first published"
-            );
-            drop(release_second);
-        }
         assert!(
             Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                 .recv(&done_second)
                 .is_ok(),
             "the second opener finished"
         );
-    } else {
-        // No gate: both openers are parked before publishing. Release
-        // the redirect first: it is still before its check in one order
-        // and publishes while the command is still parked; the command
-        // is already past its check, so it publishes too.
-        if second_is_follow {
-            drop(release_second);
-            assert!(
-                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-                    .recv(&done_second)
-                    .is_ok(),
-                "the second opener finished"
-            );
-            drop(release_first);
-            assert!(
-                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-                    .recv(&done_first)
-                    .is_ok(),
-                "the first opener finished"
-            );
-        } else {
-            drop(release_first);
-            assert!(
-                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-                    .recv(&done_first)
-                    .is_ok(),
-                "the first opener finished"
-            );
-            drop(release_second);
-            assert!(
-                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-                    .recv(&done_second)
-                    .is_ok(),
-                "the second opener finished"
-            );
-        }
+        panic!("the second opener did not block on the gate");
     }
+    drop(release_first);
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&done_first)
+            .is_ok(),
+        "the first opener finished"
+    );
+    if second_is_follow {
+        assert!(
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv(&paused_second)
+                .is_ok(),
+            "the waiter parked after the first published"
+        );
+        drop(release_second);
+    }
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&done_second)
+            .is_ok(),
+        "the second opener finished"
+    );
 }
 
 /// The client command for `next` as a worker job: a `tools` command, so
@@ -1984,4 +1951,555 @@ fn follow_paused_in_before_open_shares_one_relay_with_route() {
     );
     assert_single_relay(&relays, &session, &next, &level);
     session.close();
+}
+
+/// A workspace move's hub plumbing: `continued_in` reads a `moved` last
+/// line, an accepted kept `change_workspace` starts the child through the
+/// same reach a rewind uses, and the redirect follows the recorded child.
+/// `reach` itself never reads the last line's kind: the child starts in
+/// the old session's workspace, and the child process moves to the
+/// target. The `moved.seq` is below the envelope's, as `rewound`'s is.
+fn moved_line(old: &str, next: &str, workspace: &str) -> Value {
+    json!({
+        "kind": "moved", "session_id": old, "ts": 2, "schema_version": 1, "seq": 5,
+        "payload": {"new_session_id": next, "seq": 3, "workspace": workspace},
+    })
+}
+
+#[test]
+fn continued_names_a_moved_session() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let old = id(1);
+    let next = id(2);
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[moved_line(&old, &next, &target.to_string_lossy())],
+    );
+    assert_eq!(continued(&temp.dir, &SessionId(old)), Some(SessionId(next)));
+}
+
+#[test]
+fn continued_ignores_a_malformed_moved_line() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    for (name, payload) in [
+        ("no child", json!({"seq": 3, "workspace": "/target"})),
+        (
+            "numeric child",
+            json!({"new_session_id": 7, "seq": 3, "workspace": "/target"}),
+        ),
+        (
+            "unminted child",
+            json!({"new_session_id": "nope", "seq": 3, "workspace": "/target"}),
+        ),
+        (
+            "no point",
+            json!({"new_session_id": id(2), "workspace": "/target"}),
+        ),
+        ("no workspace", json!({"new_session_id": id(2), "seq": 3})),
+    ] {
+        let old = id(1);
+        write_log(
+            &temp.dir,
+            &old,
+            &workspace,
+            None,
+            &[json!({
+                "kind": "moved", "session_id": old, "ts": 2, "schema_version": 1, "seq": 5,
+                "payload": payload,
+            })],
+        );
+        assert_eq!(
+            continued(&temp.dir, &SessionId(old.clone())),
+            None,
+            "{name} starts nothing"
+        );
+    }
+}
+
+#[test]
+fn a_moved_child_starts_in_the_source_workspace() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let from = id(1);
+    let next = id(2);
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    write_log(
+        &temp.dir,
+        &from,
+        &workspace,
+        None,
+        &[moved_line(&from, &next, &target.to_string_lossy())],
+    );
+    assert!(reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).is_ok());
+    assert_eq!(
+        starter.rewound(),
+        vec![(
+            SessionId(next.clone()),
+            PathBuf::from(workspace),
+            SessionId(from)
+        )],
+        "started once, in the old session's workspace, for its move"
+    );
+    assert!(
+        UnixStream::connect(temp.dir.join("run").join(&next)).is_ok(),
+        "the new session's socket accepts"
+    );
+}
+
+#[test]
+fn reach_without_a_logged_source_is_io_failed() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let refused = reach(&hub, &SessionId(id(1)), &SessionId(id(2))).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    assert_eq!(refused.message, "The new session could not start.");
+    assert!(
+        starter.rewound().is_empty(),
+        "no start without a source workspace"
+    );
+}
+
+#[test]
+fn two_starts_of_one_moved_child_start_once() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let from = id(1);
+    let next = id(2);
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    write_log(
+        &temp.dir,
+        &from,
+        &workspace,
+        None,
+        &[moved_line(&from, &next, &target.to_string_lossy())],
+    );
+    let other = thread::Builder::new()
+        .name("second-start".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let (from, next) = (from.clone(), next.clone());
+            move || reach(&hub, &SessionId(from), &SessionId(next))
+        })
+        .unwrap();
+    assert!(reach(&hub, &SessionId(from), &SessionId(next)).is_ok());
+    assert!(other.join().unwrap().is_ok());
+    assert_eq!(starter.rewound().len(), 1, "one starter call");
+}
+
+#[test]
+fn a_moved_start_resumes_a_next_session_with_a_log() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let from = id(1);
+    let next = id(2);
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    write_log(
+        &temp.dir,
+        &from,
+        &workspace,
+        None,
+        &[moved_line(&from, &next, &target.to_string_lossy())],
+    );
+    write_log(&temp.dir, &next, &workspace, None, &[exited_line(&next)]);
+    assert!(reach(&hub, &SessionId(from), &SessionId(next.clone())).is_ok());
+    assert!(starter.rewound().is_empty(), "a logged session is resumed");
+    assert_eq!(
+        starter.resumed(),
+        vec![(SessionId(next), PathBuf::from(workspace))],
+        "resumed in the workspace its own log recorded"
+    );
+}
+
+#[test]
+fn a_moved_start_the_new_process_refuses_is_refused_with_its_own_code() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let from = id(1);
+    let next = id(2);
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    write_log(
+        &temp.dir,
+        &from,
+        &workspace,
+        None,
+        &[moved_line(&from, &next, &target.to_string_lossy())],
+    );
+    let _held = hold_old_lock(&temp, &from);
+    let starter = FakeStarter::exit_with(
+        &temp.dir,
+        failure(
+            ErrorCode::ExtensionRequiredFailed,
+            "the new process refused.",
+        ),
+    );
+    let hub = temp.hub(starter.clone());
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::ExtensionRequiredFailed);
+    assert_eq!(refused.message, "the new process refused.");
+    assert_eq!(starter.rewound().len(), 1, "the start was attempted once");
+}
+
+#[test]
+fn a_moved_start_that_never_binds_is_refused_io_failed() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let from = id(1);
+    let next = id(2);
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    write_log(
+        &temp.dir,
+        &from,
+        &workspace,
+        None,
+        &[moved_line(&from, &next, &target.to_string_lossy())],
+    );
+    let _held = hold_old_lock(&temp, &from);
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    assert_eq!(refused.message, "The new session could not start.");
+    assert!(
+        temp.clock.now() >= temp.clock.origin() + START_DEADLINE,
+        "the wait lasts the whole deadline"
+    );
+}
+
+/// Serves one old session ending moved: answers `subscribe`, writes the
+/// `moved` line naming `next`, then answers `change_workspace` naming
+/// `next`, then holds the socket open until `release` before closing, as
+/// a session closing with `moved` does.
+fn serve_old_moved(
+    listener: UnixListener,
+    old: String,
+    next: String,
+    workspace: String,
+    release: mpsc::Receiver<()>,
+) -> thread::JoinHandle<()> {
+    thread::Builder::new()
+        .name("old-session".to_owned())
+        .spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut read = BufReader::new(stream.try_clone().unwrap());
+            let mut write = stream;
+            let mut buf = String::new();
+            read.read_line(&mut buf).unwrap();
+            let id: Value = serde_json::from_str(&buf).unwrap();
+            accept(&mut write, &id);
+            buf.clear();
+            read.read_line(&mut buf).unwrap();
+            let moving: Value = serde_json::from_str(&buf).unwrap();
+            let id = moving.get("id").cloned().unwrap();
+            let event = moved_line(&old, &next, &workspace);
+            let mut bytes = serde_json::to_vec(&event).unwrap();
+            bytes.push(b'\n');
+            write.write_all(&bytes).unwrap();
+            write.flush().unwrap();
+            let ack = json!({
+                "kind": "command_accepted", "ts": 1, "schema_version": 1,
+                "payload": {"command_id": id, "result": {"new_session_id": next}},
+            });
+            let mut bytes = serde_json::to_vec(&ack).unwrap();
+            bytes.push(b'\n');
+            write.write_all(&bytes).unwrap();
+            write.flush().unwrap();
+            // Hold the socket open: the client commands the new session
+            // while this relay still waits for EOF.
+            release.recv().unwrap_or(());
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_relayed_change_workspace_starts_and_redirects_before_the_next_command() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    let starter = FakeStarter::with_handshake(
+        &temp.dir,
+        Handshake {
+            accept: true,
+            code: String::new(),
+            message: String::new(),
+        },
+    );
+    let hub = temp.hub(starter.clone());
+    let old = id(1);
+    let next = id(2);
+    // The old session's log already ends `moved`: the redirect reads it
+    // once the old socket closes.
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[moved_line(&old, &next, &target.to_string_lossy())],
+    );
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let listener = UnixListener::bind(temp.dir.join("run").join(&old)).unwrap();
+    let (release_tx, release) = mpsc::channel::<()>();
+    let old_session = serve_old_moved(
+        listener,
+        old.clone(),
+        next.clone(),
+        target.to_string_lossy().into_owned(),
+        release,
+    );
+    let mut client = Client::connect(&hub);
+    assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
+    client.send(&json!({
+        "id": "c_sub1", "session_id": old, "command": "subscribe", "args": {"level": "full"},
+    }));
+    let subscribed = client.next("the subscribe acknowledgement");
+    assert_eq!(subscribed["kind"], "command_accepted");
+    client.send(&json!({
+        "id": "c_mv1", "session_id": old, "command": "change_workspace", "args": {"path": "elsewhere"},
+    }));
+    let event = client.next("the old session's moved event");
+    assert_eq!(event["kind"], "moved");
+    assert_eq!(event["payload"]["new_session_id"], next);
+    let accepted = client.next("the move acknowledgement");
+    assert_eq!(accepted["kind"], "command_accepted");
+    assert_eq!(
+        accepted["payload"]["result"]["new_session_id"], next,
+        "the client learns the new session"
+    );
+    assert_eq!(
+        starter.rewound(),
+        vec![(
+            SessionId(next.clone()),
+            PathBuf::from(workspace),
+            SessionId(old.clone())
+        )],
+        "started once, in the old workspace, for its move"
+    );
+    drop(release_tx);
+    old_session.join().unwrap();
+    // The old socket closed: the connection is subscribed to the new
+    // session at its kept level, under a hub-minted id it never sees.
+    client.send(&json!({
+        "id": "c_p1", "session_id": next, "command": "prompt",
+        "args": {"content": [{"type": "text", "text": "three"}]},
+    }));
+    let prompted = client.next("the prompt acknowledgement");
+    assert_eq!(prompted["kind"], "command_accepted");
+    assert_eq!(prompted["payload"]["command_id"], "c_p1");
+}
+
+#[test]
+fn a_relayed_change_workspace_names_the_accepted_child_despite_a_mismatched_log_line() {
+    // The relay trusts the correlated acknowledgement, not the old log:
+    // the log's `moved` names another session, and the accepted result
+    // names the child to start.
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let old = id(1);
+    let logged = id(9);
+    let next = id(2);
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[moved_line(&old, &logged, &target.to_string_lossy())],
+    );
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let listener = UnixListener::bind(temp.dir.join("run").join(&old)).unwrap();
+    let (release_tx, release) = mpsc::channel::<()>();
+    let old_session = serve_old_moved(
+        listener,
+        old.clone(),
+        next.clone(),
+        target.to_string_lossy().into_owned(),
+        release,
+    );
+    let mut client = Client::connect(&hub);
+    assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
+    client.send(&json!({
+        "id": "c_sub1", "session_id": old, "command": "subscribe", "args": {"level": "full"},
+    }));
+    assert_eq!(
+        client.next("the subscribe acknowledgement")["kind"],
+        "command_accepted"
+    );
+    client.send(&json!({
+        "id": "c_mv1", "session_id": old, "command": "change_workspace", "args": {"path": "elsewhere"},
+    }));
+    assert_eq!(
+        client.next("the old session's moved event")["kind"],
+        "moved"
+    );
+    assert_eq!(
+        client.next("the move acknowledgement")["payload"]["result"]["new_session_id"],
+        next
+    );
+    assert_eq!(
+        starter.rewound(),
+        vec![(
+            SessionId(next.clone()),
+            PathBuf::from(workspace),
+            SessionId(old.clone())
+        )],
+        "the accepted child starts, not the logged one"
+    );
+    drop(release_tx);
+    old_session.join().unwrap();
+}
+
+#[test]
+fn an_unrelated_accepted_object_with_a_new_session_id_starts_nothing() {
+    // An accepted command that is not a kept rewind or change_workspace
+    // starts nothing, even when its result names a new session.
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let old = id(1);
+    write_log(&temp.dir, &old, &workspace, None, &[]);
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let listener = UnixListener::bind(temp.dir.join("run").join(&old)).unwrap();
+    let (release_tx, release) = mpsc::channel::<()>();
+    let old_session = thread::Builder::new()
+        .name("old-session".to_owned())
+        .spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut read = BufReader::new(stream.try_clone().unwrap());
+            let mut write = stream;
+            let mut buf = String::new();
+            read.read_line(&mut buf).unwrap();
+            let subscribed: Value = serde_json::from_str(&buf).unwrap();
+            let sub_id = subscribed.get("id").cloned().unwrap();
+            let ack = json!({
+                "kind": "command_accepted", "ts": 1, "schema_version": 1,
+                "payload": {"command_id": sub_id, "result": {"new_session_id": id(2)}},
+            });
+            let mut bytes = serde_json::to_vec(&ack).unwrap();
+            bytes.push(b'\n');
+            write.write_all(&bytes).unwrap();
+            write.flush().unwrap();
+            release.recv().unwrap_or(());
+        })
+        .unwrap();
+    let mut client = Client::connect(&hub);
+    assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
+    client.send(&json!({
+        "id": "c_sub1", "session_id": old, "command": "subscribe", "args": {"level": "full"},
+    }));
+    let accepted = client.next("the subscribe acknowledgement");
+    assert_eq!(accepted["kind"], "command_accepted");
+    assert!(
+        starter.rewound().is_empty(),
+        "no start for an unrelated acknowledgement"
+    );
+    drop(release_tx);
+    old_session.join().unwrap();
+}
+
+#[test]
+fn follow_moves_the_kept_level_to_the_moved_child() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let old = id(1);
+    let next = id(2);
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[moved_line(&old, &next, &target.to_string_lossy())],
+    );
+    // The new session's socket, bound before the test: the transfer
+    // writes to the relay's connection, never the starter.
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let listener = UnixListener::bind(temp.dir.join("run").join(&next)).unwrap();
+    let (heard_tx, heard) = mpsc::channel();
+    thread::Builder::new()
+        .name("next-session".to_owned())
+        .spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(DEADLINE)).unwrap();
+            let mut read = BufReader::new(stream);
+            let mut line = String::new();
+            let got = read.read_line(&mut line).unwrap_or(0);
+            heard_tx.send((got, line)).unwrap_or(());
+        })
+        .unwrap();
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let relays: Arc<Mutex<crate::relay::Relays>> =
+        Arc::new(Mutex::new(crate::relay::Relays::default()));
+    {
+        let mut held = lock(&relays);
+        held.subscribed.push((old.clone(), level.clone()));
+        // The interleaving: the client commanded the new session while the
+        // old relay still waited for EOF, so this relay is unsubscribed.
+        let writer = UnixStream::connect(temp.dir.join("run").join(&next)).unwrap();
+        let epoch = held.mint();
+        held.entries.push(crate::relay::Relay {
+            session: next.clone(),
+            epoch,
+            writer,
+            kept: crate::relay::Kept::default(),
+            replayed: crate::relay::Replayed::default(),
+            thread: None,
+            retiring: None,
+            target: crate::relay::RelayTarget::LiveUnreadable,
+        });
+    }
+    let (write, _) = UnixStream::pair().unwrap();
+    follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
+    let held = lock(&relays);
+    assert_eq!(held.entries.len(), 1, "no second relay");
+    assert_eq!(
+        held.subscription(&next),
+        Some(level.clone()),
+        "the level is kept for the new session"
+    );
+    assert!(
+        starter.rewound().is_empty(),
+        "no start for a running session"
+    );
+    let (got, line) = Deadline::after(DEADLINE)
+        .recv(&heard)
+        .expect("the transfer sends the level");
+    assert!(got > 0, "the relay's connection carries it");
+    let sent: Value = serde_json::from_str(line.trim_end()).unwrap();
+    assert_eq!(sent["command"], "subscribe");
+    assert_eq!(sent["args"], json!({"level": "full"}));
+    let minted = sent["id"].as_str().unwrap().to_owned();
+    assert_ne!(minted, "c_sub1", "under a hub-minted id");
+    assert_eq!(
+        lock(&held.entries.first().unwrap().replayed).clone(),
+        vec![minted],
+        "the relay thread drops its acknowledgement"
+    );
 }
