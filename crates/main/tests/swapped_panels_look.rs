@@ -583,11 +583,7 @@ fn skills_ready(grid: &Grid) -> bool {
     let Some(footer) = find_row(grid, "Enter shows the text · Ctrl+G opens its file") else {
         return false;
     };
-    is_dim(
-        &grid,
-        footer,
-        "Enter shows the text · Ctrl+G opens its file",
-    )
+    is_dim(grid, footer, "Enter shows the text · Ctrl+G opens its file")
 }
 
 #[test]
