@@ -757,6 +757,26 @@ fn verdict_passes_and_fails_by_exit_code() {
 }
 
 #[test]
+fn verdict_counts_stress_like_every_gating_job() {
+    let dir = TempDir::new("xtask-verdict-stress");
+    let skipped = r#"{"select":{"result":"success","outputs":{}},"stress":{"result":"skipped"}}"#;
+    let unselected = [("NEEDS", skipped), ("JOBS", r#"{"stress":false}"#)];
+    assert_eq!(
+        xtask(&dir, &["verdict"], &unselected, ""),
+        (
+            0,
+            "verdict: every selected job passed and every other job was skipped\n".to_owned()
+        )
+    );
+    let failed = r#"{"select":{"result":"success","outputs":{}},"stress":{"result":"failure"}}"#;
+    let selected = [("NEEDS", failed), ("JOBS", r#"{"stress":true}"#)];
+    assert_eq!(
+        xtask(&dir, &["verdict"], &selected, ""),
+        (1, "verdict: stress: selected, but failure\n".to_owned())
+    );
+}
+
+#[test]
 fn ticket_reads_the_body_on_stdin() {
     let dir = TempDir::new("xtask-ticket");
     assert_eq!(
@@ -1137,8 +1157,8 @@ fn docs_only_reports_whether_the_files_are_docs() {
 
 #[test]
 fn ci_needs_passes_fails_and_errors() {
-    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  flake_decide:\n    runs-on: ubuntu-24.04\n  flake_report:\n    runs-on: ubuntu-24.04\n  stress:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint]\n    runs-on: ubuntu-24.04\n";
-    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`, `stress`. Done.\n";
+    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  flake_decide:\n    runs-on: ubuntu-24.04\n  flake_report:\n    runs-on: ubuntu-24.04\n  stress:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint, stress]\n    runs-on: ubuntu-24.04\n";
+    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`. Done.\n";
     const FAILURE: &str = "ci-needs: .github/workflows/ci.yml: job lint is not in the ci job's needs, so CI passes without it; add it to needs, or, if it reports and gates nothing, add it to REPORT_JOBS in xtask/src/ci_needs.rs and to docs/ci.md, \"The merge gate\"\n";
     let dir = workspace();
     dir.write(".github/workflows/ci.yml", WORKFLOW);
@@ -1152,7 +1172,7 @@ fn ci_needs_passes_fails_and_errors() {
     );
     dir.write(
         ".github/workflows/ci.yml",
-        &WORKFLOW.replace("needs: [select, lint]", "needs: [select]"),
+        &WORKFLOW.replace("needs: [select, lint, stress]", "needs: [select, stress]"),
     );
     assert_eq!(xtask(&dir, &["ci-needs"], &[], ""), (1, FAILURE.to_owned()));
     std::fs::remove_file(dir.path().join("docs/ci.md")).unwrap();
