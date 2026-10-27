@@ -2308,6 +2308,7 @@ fn a_workspace_change_clears_grants_and_offers_only_without_a_parent() {
         .unwrap();
         assert_eq!(folded.grants.len(), grants);
         assert_eq!(folded.offers.counts(), offers);
+        assert_eq!(folded.workspace, workspace);
     }
 
     check("guard-same-workspace", "/a", None, 1, (1, 0));
