@@ -156,17 +156,33 @@ impl World {
         support::complete_lines(&text)
     }
 
-    /// Closes the session if it runs, as the last step of a test: a session
-    /// the hub started outlives the hub, and exits on its own only when
-    /// idle for `session.idle_exit_ms`.
-    fn end_session(&self) {
+    /// Closes the session through the hub and waits for the exit the close
+    /// caused, before the hub goes away: a session the hub started outlives
+    /// the hub, and an idle session never hears a close the dead hub never
+    /// relayed. The subscribe fold replays earlier exits, so only an exit
+    /// after the close's answer belongs to this close; waiting for any exit
+    /// can return on a replayed one while the session still runs.
+    fn close_and_wait_exit(&self) {
         let last = self.client();
-        subscribe(&last, "c_sub_end", &self.id);
-        last.send(&close(&self.id));
-        until(&last, "fiber_exited", |line| line["kind"] == "fiber_exited");
+        subscribe(&last, "c_finish_sub", &self.id);
+        last.send(&close_as("c_finish", &self.id));
+        // Consumed in order, so nothing before the close's answer is kept:
+        // the fold's replayed exits stay behind, and the exit waited for
+        // follows the close.
+        let mut closed = until(&last, "the close acknowledgement", |line| {
+            is_answer(line, "c_finish")
+        });
+        let ack = closed.pop().expect("the acknowledgement ends the wait");
+        assert_eq!(ack["kind"], "command_accepted", "{ack}");
+        until(&last, "the session's exit after the close", |line| {
+            line["kind"] == "fiber_exited"
+        });
     }
 
     fn finish(mut self) {
+        if self.guard.is_some() {
+            self.close_and_wait_exit();
+        }
         let hub = self.hub.lock().unwrap().take();
         if let Some(hub) = hub {
             hub.kill_and_wait();
@@ -176,14 +192,22 @@ impl World {
         }
     }
 
-    /// `finish`, keeping a `wait_gone` failure's message and appending what
-    /// the logs say about the session's exit: a lingering process means the
+    /// `finish`, keeping a wait failure's message and appending what the
+    /// logs say about the session's exit: a lingering process means the
     /// session never reached its exit, so the next sighting needs the
     /// session log's started/exited lines and the hub log's tail. Only the
-    /// workspace-exit wait runs inside the catch: the hub kill runs first,
-    /// outside it, so its own failure stays its own.
+    /// close wait and the workspace-exit wait run inside the catch: the hub
+    /// kill runs between them, outside it, so its own failure stays its own.
     fn finish_with_exit_diagnostics(mut self) {
         let diagnostics = exit_wait_diagnostics(&self);
+        if self.guard.is_some() {
+            let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.close_and_wait_exit();
+            }));
+            if let Err(payload) = closed {
+                panic!("{}", with_exit_diagnostics(payload, &diagnostics));
+            }
+        }
         let hub = self.hub.lock().unwrap().take();
         if let Some(hub) = hub {
             hub.kill_and_wait();
@@ -245,6 +269,13 @@ fn prompt(id: &str, session: &str, text: &str) -> String {
 
 fn close(session: &str) -> String {
     json!({"id": "c_close", "session_id": session, "command": "close"}).to_string()
+}
+
+/// A close with the test's own id: the session saw `c_close` from an
+/// earlier connection, so the final close answers under an id no earlier
+/// answer can match.
+fn close_as(id: &str, session: &str) -> String {
+    json!({"id": id, "session_id": session, "command": "close"}).to_string()
 }
 
 fn is_answer(line: &Value, id: &str) -> bool {
@@ -513,7 +544,6 @@ fn a_command_released_inside_the_close_grace_is_accepted_before_fiber_exited() {
         "the ask, the held run and the run c_after resumed"
     );
     assert_eq!(started[2]["payload"]["resumed"], true);
-    world.end_session();
     drop((first, second));
     world.finish();
 }
@@ -565,7 +595,6 @@ fn a_crash_with_a_sent_unanswered_command_rejects_it_indeterminate_and_never_run
         .filter(|line| line["kind"] == "turn_started")
         .count();
     assert_eq!(turns, 1, "the crashed prompt runs no turn: {log:?}");
-    world.end_session();
     drop(first);
     world.finish_with_exit_diagnostics();
 }
@@ -660,7 +689,6 @@ fn a_command_rerouted_once_is_rejected_closing_when_the_resumed_run_also_ends() 
         4,
         "the ask, the held run, the re-routed run, and c_after's run"
     );
-    world.end_session();
     drop((first, second, third));
     world.finish();
 }
@@ -692,6 +720,10 @@ fn a_client_that_disconnects_in_the_window_has_nothing_rerouted() {
     let third = world.client();
     subscribe(&third, "c_sub3", &id);
     third.send(&close(&id));
+    // Read the close's answer: it proves the session heard this close
+    // before `finish` sends its own, so the two never race.
+    let closing = support::recv_answer(&third, "c_close", "the closing command");
+    assert_eq!(closing["kind"], "command_accepted", "{closing}");
     until(&third, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
@@ -750,8 +782,39 @@ fn a_command_held_past_the_close_grace_is_rejected_indeterminate_once_and_not_re
         3,
         "the ask, the held run and the run c_after resumed: {log:?}"
     );
-    world.end_session();
     drop((first, second));
+    world.finish();
+}
+
+#[test]
+fn a_finish_without_a_close_leaves_no_session_running() {
+    // The session runs idle with the ask run's exit already in its log: a
+    // fresh subscribe replays that exit while the session lives, so an exit
+    // on the stream does not mean the session is gone. Finishing must still
+    // close the session before the hub goes away: an idle session never
+    // hears a close the dead hub never relayed, and `wait_gone` times out.
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe(&first, "c_sub", &id);
+    // Resume the session so it runs idle past the ask run's exit.
+    first.send(&command("c_after", &id, "tools", &json!({})));
+    until(&first, "c_after's acknowledgement", |line| {
+        is_answer(line, "c_after")
+    });
+    // A fresh subscribe replays the ask run's exit at once, while the
+    // session still runs.
+    let probe = world.client();
+    subscribe(&probe, "c_probe_sub", &id);
+    let replayed = until(&probe, "the replayed exit", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    assert!(
+        !world.session_pids().is_empty(),
+        "the session still runs past the replayed exit: {replayed:?}"
+    );
+    drop(probe);
+    drop(first);
     world.finish();
 }
 
