@@ -116,6 +116,7 @@ fn rebinding_footer(command: &str, prefix: &str, row: &str, rest: &str) -> Strin
 
 #[test]
 fn keymap_opens_the_rebinding_screen_like_keys() {
+    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1952,1954`).
     let keys = rebinding_footer("/keys", "/keys", "keys /keybindings /keymap", "\r");
     let keymap = rebinding_footer("/keymap", "/keymap", "keys /keybindings /keymap", "\r");
     assert_eq!(keymap, keys);

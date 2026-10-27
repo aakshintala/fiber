@@ -66,13 +66,13 @@ fn each_alias_rides_on_its_commands_row_and_has_no_row_of_its_own() {
         .map(|(name, aliases)| (*name, aliases.to_vec()))
         .collect();
     // The `/` list draws built-ins in this order with each alias
-    // after its row's name, never as a row (`docs/tui.md:1951,1953`).
+    // after its row's name, never as a row (`docs/tui.md:1952,1954`).
     assert_eq!(carried, wanted);
     for (_, alias) in pairs() {
-        // Aliases never draw as rows of their own (`docs/tui.md:1953`).
+        // Aliases never draw as rows of their own (`docs/tui.md:1954`).
         assert!(all.iter().all(|row| row.name != alias), "/{alias}");
     }
-    // Aliases draw after the name, in order (`docs/tui.md:1953`).
+    // Aliases draw after the name, in order (`docs/tui.md:1954`).
     let name = all.iter().find(|row| row.name == "name").unwrap();
     assert_eq!(
         name.line(),
@@ -93,7 +93,7 @@ fn typing_an_alias_finds_only_its_commands_row() {
             .iter()
             .map(|row| row.name.as_str())
             .collect();
-        // Typing an alias runs its row's command (`docs/tui.md:1953`).
+        // Typing an alias runs its row's command (`docs/tui.md:1954`).
         assert_eq!(found, [name], "/{alias}");
     }
 }
@@ -232,7 +232,7 @@ fn compact_starts_a_handoff_with_instructions_as_handoff_does() {
     for command in ["/handoff take over", "/compact take over"] {
         let mut app = attached();
         let lines = sent(run(&mut app, command));
-        // Typing the alias runs the same one command (`docs/tui.md:1953`).
+        // Typing the alias runs the same one command (`docs/tui.md:1954`).
         assert_eq!(lines.len(), 1, "{command}");
         assert_eq!(lines[0]["command"], "handoff", "{command}");
         assert_eq!(
@@ -268,7 +268,7 @@ fn stop_stops_the_session_as_close_does() {
     for command in ["/close", "/stop"] {
         let mut app = attached();
         let lines = sent(run(&mut app, command));
-        // Typing the alias runs the same one command (`docs/tui.md:1953`).
+        // Typing the alias runs the same one command (`docs/tui.md:1954`).
         assert_eq!(lines.len(), 1, "{command}");
         assert_eq!(lines[0]["command"], "close", "{command}");
         assert_eq!(lines[0]["args"], json!({"now": true}), "{command}");
@@ -305,7 +305,7 @@ fn an_extension_named_like_one_keys_alias_keeps_the_other() {
             .filter(|row| row.name == taken || row.aliases.iter().any(|alias| alias == taken))
             .collect();
         // Only the extension's row shows the taken alias: the
-        // built-in row drops it (`docs/tui.md:1962`).
+        // built-in row drops it (`docs/tui.md:1963`).
         assert_eq!(claimed.len(), 1, "{taken}");
         assert_eq!(claimed[0].tag, "acme", "{taken}");
         let mut app = attached();
@@ -315,7 +315,7 @@ fn an_extension_named_like_one_keys_alias_keeps_the_other() {
                 "tag": "acme", "extension": true}]),
         );
         let lines = sent(run(&mut app, &format!("/{taken}")));
-        // The taken name runs the extension's command (`docs/tui.md:1962`).
+        // The taken name runs the extension's command (`docs/tui.md:1963`).
         assert_eq!(lines.len(), 1, "{taken}");
         assert_eq!(lines[0]["command"], "command", "{taken}");
         assert_eq!(lines[0]["args"], json!({"name": taken}), "{taken}");

@@ -949,7 +949,7 @@ impl App {
             .completion
             .slash_rows
             .iter()
-            .any(|row| row.name == name || row.alias.as_deref() == Some(name))
+            .any(|row| row.name == name || row.aliases.iter().any(|alias| alias == name))
         {
             return false;
         }
