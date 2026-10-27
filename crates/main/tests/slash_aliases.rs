@@ -300,19 +300,12 @@ fn empty_setup() -> (Setup, fakes::ProviderServer) {
             {"text": ["Done."]},
         ]}),
     );
-    write_json(
-        &setup.workspace().join("r.json"),
-        &json!({"steps": [
-            {"text": ["allow"]},
-        ]}),
-    );
     let server = fakes::ProviderServer::start([]).unwrap();
     setup.provider(&server);
     write_json(
         &setup.home().join("config.json"),
         &json!({
             "model": "scripted/s.json",
-            "reviewer": {"model": "scripted/r.json"},
             "hub": {"idle_exit_ms": 200},
         }),
     );
@@ -376,7 +369,7 @@ fn running_case(command: &str) {
     run.wait_bytes(prefix_input, FRAME_END, "the slash-list frame");
     let view_input = run.output().len();
     run.write(b"\r");
-    // The Jobs card has this heading and one row per job (`docs/tui.md:427-428,594`).
+    // The Jobs card has this heading and one row per job (`docs/tui.md:604`).
     let view = run.wait_screen("the jobs list", |grid| {
         grid.contents.contains("Jobs · 1 running")
     });

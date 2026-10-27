@@ -227,7 +227,7 @@ fn enter_on_a_typed_jobs_alias_runs_the_jobs_row() {
     let mut app = attached();
     start_job(&mut app, "j_1");
     type_text(&mut app, "/tasks");
-    // The command row carries its aliases after the name (`docs/tui.md:1978,1980,1984`).
+    // The command row carries its aliases after the name (`docs/tui.md:1981,1987`).
     assert_eq!(
         shown(&app),
         [
@@ -253,12 +253,12 @@ fn an_extension_named_like_jobs_takes_the_row() {
         })
         .collect();
     // Only the extension's row shows the taken names: the built-in
-    // row is gone (`docs/tui.md:1993`).
+    // row is gone (`docs/tui.md:1996`).
     assert_eq!(taken.len(), 1);
     assert_eq!(taken[0].aliases, ["tasks", "ps"]);
     assert_eq!(taken[0].tag, "acme");
     // Taking the canonical name takes its whole row: every alias sends the
-    // extension's command using its canonical name (`docs/tui.md:1993`).
+    // extension's command using its canonical name (`docs/tui.md:1996`).
     for command in ["/jobs", "/tasks", "/ps"] {
         let mut app = attached();
         answer_rows(
@@ -286,7 +286,7 @@ fn an_extension_named_like_a_jobs_alias_takes_only_that_name() {
             .filter(|row| row.name == taken || row.aliases.iter().any(|alias| alias == taken))
             .collect();
         // Only the extension's row shows the taken alias: the
-        // built-in row drops it (`docs/tui.md:1993`).
+        // built-in row drops it (`docs/tui.md:1996`).
         assert_eq!(claimed.len(), 1, "{taken}");
         assert_eq!(claimed[0].tag, "acme", "{taken}");
         let answer = json!([{"name": taken,
@@ -295,7 +295,7 @@ fn an_extension_named_like_a_jobs_alias_takes_only_that_name() {
         let mut app = attached();
         answer_rows(&mut app, answer.clone());
         let lines = sent(run(&mut app, &format!("/{taken}")));
-        // The taken name runs the extension's command (`docs/tui.md:1993`).
+        // The taken name runs the extension's command (`docs/tui.md:1996`).
         assert_eq!(lines.len(), 1, "{taken}");
         assert_eq!(lines[0]["command"], "command", "{taken}");
         assert_eq!(lines[0]["args"], json!({"name": taken}), "{taken}");

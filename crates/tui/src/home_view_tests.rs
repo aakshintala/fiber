@@ -2823,7 +2823,7 @@ fn short_home_slash_keeps_its_selection_barred() {
     let row = row_text(&buf, selected, 80);
     assert!(row.contains("credential"), "{shown}");
     // The range counts matching entries, including every built-in
-    // (`docs/tui.md`, "Slash commands").
+    // (`docs/tui.md:1682-1685,1985`).
     assert!(shown.contains("of 43"), "{shown}");
 }
 

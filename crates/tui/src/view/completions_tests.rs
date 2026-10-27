@@ -120,8 +120,8 @@ fn slash_eight_of_long_list() {
     insta::assert_snapshot!("slash", screen(&app, 160, 48));
     // Eight entries and the range line, with the first match focused.
     let shown = screen(&app, 160, 48);
-    // The range counts matching entries, not just the visible window
-    // (`docs/tui.md`, "Slash commands").
+    // The range counts matching entries, not just visible rows
+    // (`docs/tui.md:1682-1685,1985`).
     assert!(shown.contains("1–8 of 60 · ↓ 52 more"), "{shown}");
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
@@ -214,8 +214,8 @@ fn a_scrolled_slash_list_counts_both_directions() {
     // The window follows the selection; the total and the count below
     // follow the list.
     assert!(
-        // The range counts matching entries, not just the visible window
-        // (`docs/tui.md`, "Slash commands").
+        // The range counts matching entries, not just visible rows
+        // (`docs/tui.md:1682-1685,1985`).
         shown.contains("↑ 3 above · 4–11 of 60 · ↓ 49 more"),
         "{shown}"
     );
@@ -401,10 +401,10 @@ fn narrow_slash() {
     app.set_size(100, 40);
     type_text(&mut app, "/");
     // The focused match and range line follow the slash-panel rules
-    // (`docs/tui.md:1682-1684,1985`).
+    // (`docs/tui.md:1682-1685,1985`).
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
-    // The range counts matching entries, not just the visible window
-    // (`docs/tui.md`, "Slash commands").
+    // The range counts matching entries, not just visible rows
+    // (`docs/tui.md:1682-1685,1985`).
     assert!(screen(&app, 100, 40).contains("1–8 of 60 · ↓ 52 more"));
 }
 
@@ -736,8 +736,8 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     assert_eq!(bars.len(), 1, "{shown}");
     // `/hooks` follows `/tools` (`docs/tui.md:1947-1948,1983`): ten downs bar `/context`.
     assert!(row_text(&buf, bars[0]).contains("context"), "{shown}");
-    // The range counts matching entries, not just the visible window
-    // (`docs/tui.md`, "Slash commands").
+    // The range counts matching entries, not just visible rows
+    // (`docs/tui.md:1682-1685,1985`).
     assert!(shown.contains("of 60"), "{shown}");
 }
 
