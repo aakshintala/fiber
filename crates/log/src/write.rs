@@ -223,6 +223,18 @@ impl Log {
                 line.seq = Some(Seq(inner.next));
                 let mut bytes = serde_json::to_vec(&line)?;
                 bytes.push(b'\n');
+                // `moved` is the last line: the job-ending records before
+                // it are made durable before it is written, so no crash
+                // leaves a `moved` line without its ends. A barrier
+                // failure writes nothing: the log stops as after a failed
+                // write, and the child never starts from an unpublished
+                // move.
+                if matches!(event, Event::Moved(_))
+                    && let Err(e) = inner.sync_file(installed, &mut spans)
+                {
+                    inner.stop(&e);
+                    return Err(e);
+                }
                 if let Err(e) = inner.write(&bytes, sync, installed, &mut spans) {
                     inner.stop(&e);
                     return Err(e);
@@ -633,30 +645,38 @@ impl Inner {
         self.offsets
             .push(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
         if sync {
-            #[cfg(test)]
-            BEFORE_SYNC.with(|cell| {
-                if let Some(hook) = cell.borrow().as_ref() {
-                    hook();
-                }
-            });
-            // The pause point above stays outside the fsync scope.
-            spans.fsync = diag.and_then(|diag| timed(diag, Op::LogFsync, None, None));
-            self.fsyncs += 1;
-            let synced = self.events.sync_data().map_err(io_at(&path));
-            #[cfg(test)]
-            let synced = AFTER_SYNC.with(|cell| {
-                let replacement = cell.borrow().as_ref().and_then(|hook| hook());
-                match replacement {
-                    Some(error) => Err(io_at(&path)(error)),
-                    None => synced,
-                }
-            });
-            if let Some(timer) = spans.fsync.as_mut() {
-                timer.stop();
-            }
-            synced?;
+            self.sync_file(diag, spans)?;
         }
         Ok(())
+    }
+
+    /// Fsyncs the events file, counting the fsync and running the test
+    /// sync hooks: the pause point stays outside the fsync scope, and a
+    /// hook failure replaces the sync result.
+    fn sync_file(&mut self, diag: Option<&Diag>, spans: &mut Spans) -> Result<(), Error> {
+        let path = self.dir.join(EVENTS);
+        #[cfg(test)]
+        BEFORE_SYNC.with(|cell| {
+            if let Some(hook) = cell.borrow().as_ref() {
+                hook();
+            }
+        });
+        // The pause point above stays outside the fsync scope.
+        spans.fsync = diag.and_then(|diag| timed(diag, Op::LogFsync, None, None));
+        self.fsyncs += 1;
+        let synced = self.events.sync_data().map_err(io_at(&path));
+        #[cfg(test)]
+        let synced = AFTER_SYNC.with(|cell| {
+            let replacement = cell.borrow().as_ref().and_then(|hook| hook());
+            match replacement {
+                Some(error) => Err(io_at(&path)(error)),
+                None => synced,
+            }
+        });
+        if let Some(timer) = spans.fsync.as_mut() {
+            timer.stop();
+        }
+        synced
     }
 
     /// Stops the log after `error`, and ends every watcher with it.

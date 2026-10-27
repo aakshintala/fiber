@@ -364,6 +364,7 @@ impl Loop {
                 | Delivery::McpReconnect(..)
                 | Delivery::Credential(..)
                 | Delivery::Rewind(..)
+                | Delivery::ChangeWorkspace(..)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)
                 | Delivery::ProposeNotes(..)

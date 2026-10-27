@@ -234,9 +234,9 @@ pub struct Loop {
     /// `close` has been taken. No further turn starts
     /// (`docs/invocation.md`, "Lifecycle").
     closing: bool,
-    /// `rewound` has been written: the session takes no more commands and
-    /// the process ends once the drain is refused (`docs/events.md`,
-    /// "Rewind").
+    /// `rewound` or `moved` has been written: the session takes no more
+    /// commands and the process ends once the drain is refused
+    /// (`docs/events.md`, "Rewind", "Change workspace").
     rewound: bool,
     /// A turn cut short on a pending approval, folded at resume: the next
     /// `turn` finishes it before starting any new one.

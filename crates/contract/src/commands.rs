@@ -157,6 +157,8 @@ pub enum Command {
     Handoff(Handoff),
     /// Starts a new session that continues a session from an earlier point.
     Rewind(RewindArgs),
+    /// Starts a new session that continues this session in another workspace.
+    ChangeWorkspace(ChangeWorkspaceArgs),
     /// Runs a shell command the person typed.
     Shell(Shell),
     /// Proposes reviewer-note lines for one topic, without conversation.
@@ -525,6 +527,17 @@ pub struct RewindArgs {
     pub summarise: bool,
 }
 
+/// The `args` of `change_workspace`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChangeWorkspaceArgs {
+    /// The workspace to move to: a relative path resolves at admission
+    /// against the admitting session's workspace, and a bare `~` or leading
+    /// `~/` resolves against the hub's home (`docs/events.md`, "Change
+    /// workspace").
+    pub path: String,
+}
+
 /// The `args` of `shell`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -618,3 +631,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
 #[cfg(test)]
 #[path = "commands_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "workspace_command_tests.rs"]
+mod workspace_command_tests;
