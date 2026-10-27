@@ -9,7 +9,7 @@ use super::super::commands::commands_testkit::{
     attached as hub_attached, connected, enter, key, turn_starts, type_any,
 };
 use super::super::{App, Effect, Surface};
-use crate::app::testkit::{SESSION, hello, live, now};
+use crate::app::testkit::{SESSION, attached, hello, home_with, live, now};
 use crate::home::{Launch, Spot};
 use crate::keys::{Edit, Key};
 use crate::keyset::Context;
@@ -35,22 +35,6 @@ fn launch() -> Launch {
         panel_cards: Vec::new(),
         ..Default::default()
     }
-}
-
-/// An app on home at 80x24.
-fn home() -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(launch());
-    app.set_size(80, 24);
-    app
-}
-
-/// An app attached to [`SESSION`] at `width` by `height`, with no home.
-fn attached(width: u16, height: u16) -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_size(width, height);
-    app.attach(contract::SessionId(SESSION.to_owned()));
-    app
 }
 
 /// An app with home state, attached, at `width` by `height`.
@@ -240,7 +224,7 @@ fn exited(name: &str) -> Value {
 
 /// Home with one exited row, its delete question open.
 fn delete_question() -> App {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     app.on_line(accepted(&recent, json!({"sessions": [exited("old work")]})));
     let key = app
@@ -279,7 +263,7 @@ fn the_delete_question_is_an_overlay() {
 
 #[test]
 fn the_workspace_picker_is_an_overlay() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     assert_eq!(app.home_click(Spot::Workspace), Effect::None);
     assert_eq!(app.top_surface(), Surface::WorkspacePicker);
     assert_eq!(app.key_context(), Context::Overlay);
@@ -287,7 +271,7 @@ fn the_workspace_picker_is_an_overlay() {
 
 #[test]
 fn nothing_open_leaves_the_draft_on_top_of_home_and_a_session() {
-    assert_eq!(home().top_surface(), Surface::Draft);
+    assert_eq!(home_with(80, 24, launch()).top_surface(), Surface::Draft);
     assert_eq!(attached(80, 24).top_surface(), Surface::Draft);
 }
 
@@ -389,7 +373,7 @@ fn a_steering_selection_is_steering() {
 #[test]
 fn the_plain_input_box_is_input() {
     assert_eq!(homed(80, 24).key_context(), Context::Input);
-    assert_eq!(home().key_context(), Context::Input);
+    assert_eq!(home_with(80, 24, launch()).key_context(), Context::Input);
 }
 
 #[test]
@@ -1230,7 +1214,7 @@ fn the_key_map_shows_the_person_lines_and_pages_them() {
 
 #[test]
 fn the_key_map_over_the_model_picker_is_the_overlay_context() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
     assert!(app.model_picker_open());
     assert_eq!(app.key_context(), Context::Picker);
@@ -1343,7 +1327,7 @@ fn the_open_report_is_an_overlay() {
 /// The draft is byte-identical after.
 #[test]
 fn paste_and_home_arrows_change_neither_the_draft_nor_the_report() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     app.home.as_mut().expect("home").launch.model = Some("acme/m1".to_owned());
     type_text(&mut app, "ab");
     frame(&mut app);
