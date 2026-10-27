@@ -107,7 +107,8 @@ fn take_inbox(session: &mut Session) -> mpsc::Sender<Delivery> {
 }
 
 /// Jobs a test lists by hand. Each stop sent is reported on `stops`. An
-/// end is sent under the lock `running` reads, as the registry sends it.
+/// end drops its id from `running` before reaching `inbox`, as the
+/// registry's state reads once the notice is sent.
 struct FakeJobs {
     ids: Mutex<Vec<JobId>>,
     stops: Mutex<mpsc::Sender<JobId>>,
@@ -123,8 +124,8 @@ impl FakeJobs {
         (jobs, rx)
     }
 
-    /// Ends `id` as `status`: its notice reaches `inbox`, then `running`
-    /// drops it.
+    /// Ends `id` as `status`: `running` drops it before its notice
+    /// reaches `inbox`, so a woken loop never sees it still running.
     fn end(
         &self,
         inbox: &mpsc::Sender<Delivery>,
@@ -132,7 +133,7 @@ impl FakeJobs {
         status: Outcome,
         error: Option<Failure>,
     ) {
-        let mut ids = self.ids.lock().unwrap();
+        self.ids.lock().unwrap().retain(|listed| listed.0 != id);
         inbox
             .send(Delivery::Job(JobNotice {
                 completed: JobCompleted {
@@ -148,7 +149,6 @@ impl FakeJobs {
                 delegate: None,
             }))
             .unwrap();
-        ids.retain(|listed| listed.0 != id);
     }
 }
 
@@ -320,7 +320,7 @@ fn the_same_folder_is_refused_without_writing() {
     assert_eq!(outcome, None);
     let rejection = rejected(answer_of(answered));
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert_eq!(rejection.message, "already in that folder.");
+    assert_eq!(rejection.message, "already in that folder");
     assert_eq!(log_bytes(&dir), before, "nothing is written");
 }
 

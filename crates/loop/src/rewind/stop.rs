@@ -126,19 +126,6 @@ impl Loop {
     /// ends the wait early: `Disconnected` returns at once instead of
     /// spinning, and the final inbox drain always runs, even when no job
     /// is running.
-    /// Stops every running job and writes each end that arrives, before the
-    /// rewind writes `rewound`. With no jobs wired it does nothing. When
-    /// `running` reads empty it still runs one `try_iter` drain of
-    /// already-waiting deliveries, as `settle` does at its empty branch,
-    /// then returns. Otherwise it sends `stop` for every running job, again
-    /// on every pass, and reads with no extra deadline of its own: the
-    /// bound on a job's stop is the normal job stop's
-    /// (`docs/events.md`, "Rewind"). Every delivery except a job's
-    /// end goes through `refuse_after_rewound`, which answers an
-    /// acknowledgement `closing` and drops the rest. Only a closed inbox
-    /// ends the wait early: `Disconnected` returns at once instead of
-    /// spinning, and the final inbox drain always runs, even when no job
-    /// is running.
     pub(crate) fn stop_jobs_for_rewind(&mut self) -> Result<(), Error> {
         self.stop_jobs_for_transition(false)
     }

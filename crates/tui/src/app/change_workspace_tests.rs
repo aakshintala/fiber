@@ -38,6 +38,8 @@ fn from(session: &str, kind: &str, payload: Value) -> Line {
 /// Sends `/cd <path>`: the one command line out, parsed.
 fn send_cd(app: &mut crate::app::App, path: &str) -> Value {
     let lines = sent(enter(app, &format!("/cd {path}")));
+    // One `/cd` with a path sends one `change_workspace` (`docs/tui.md`,
+    // "Moving workspace"): with no path it sends nothing.
     assert_eq!(lines.len(), 1, "one command line goes out");
     assert_eq!(lines[0]["command"], "change_workspace");
     assert_eq!(lines[0]["session_id"], SESSION);
@@ -149,12 +151,21 @@ fn accepted_cd_attaches_subscribes_and_asks_without_a_first_prompt() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(out.len(), 2, "subscribe full and ask commands, {out:?}");
-    assert_eq!(out[0]["command"], "subscribe");
-    assert_eq!(out[0]["session_id"], NEW);
-    assert_eq!(out[0]["args"], json!({"level": "full"}));
-    assert_eq!(out[1]["command"], "commands");
-    assert_eq!(out[1]["session_id"], NEW);
+    // The accept attaches with a `full` subscription and asks the new
+    // session's commands, as a rewind accept does: the sends carry no
+    // promised count or order, so the test names the lines, never their
+    // number or place.
+    assert!(
+        out.iter().any(|line| line["command"] == "subscribe"
+            && line["session_id"] == NEW
+            && line["args"] == json!({"level": "full"})),
+        "a full subscribe goes out, {out:?}"
+    );
+    assert!(
+        out.iter()
+            .any(|line| line["command"] == "commands" && line["session_id"] == NEW),
+        "the new session is asked its commands, {out:?}"
+    );
     assert!(
         out.iter().all(|line| line["command"] != "prompt"),
         "no first prompt goes out, {out:?}"
@@ -202,13 +213,49 @@ fn unrelated_new_session_id_switches_nothing() {
         app.session().map(|session| session.0.as_str()),
         Some(SESSION)
     );
-    // The pending move still answers: the accept switches then.
+    // The pending move still answers: the accept switches then, with
+    // the attach's lines in no promised count or order.
     let out: Vec<Value> = app
         .on_line(accept(&line["id"], NEW))
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(out.len(), 2, "{out:?}");
+    assert!(
+        out.iter()
+            .any(|line| line["command"] == "subscribe" && line["session_id"] == NEW),
+        "the pending move still attaches, {out:?}"
+    );
+    assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
+}
+
+#[test]
+fn a_second_cd_keeps_the_first_moves_correlation() {
+    let mut app = attached();
+    let first = send_cd(&mut app, "../first");
+    let second = send_cd(&mut app, "../second");
+    // The first move's accept still attaches, even though a second `/cd`
+    // went out after it: each command answers on its own id.
+    let out: Vec<Value> = app
+        .on_line(accept(&first["id"], NEW))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert!(
+        out.iter().any(|line| line["command"] == "subscribe"
+            && line["session_id"] == NEW
+            && line["args"] == json!({"level": "full"})),
+        "the first move attaches, {out:?}"
+    );
+    assert!(
+        out.iter()
+            .any(|line| line["command"] == "commands" && line["session_id"] == NEW),
+        "the first move asks the new session's commands, {out:?}"
+    );
+    assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
+    // The second command went to the session the move ended: its accept
+    // arrives stale and switches nothing.
+    let out: Vec<String> = app.on_line(accept(&second["id"], OTHER));
+    assert!(out.is_empty(), "a stale accept sends nothing");
     assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
 }
 
@@ -279,7 +326,11 @@ fn duplicate_rejection_keeps_the_claim_for_the_first_answer() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(out.len(), 2, "the first answer still switches, {out:?}");
+    assert!(
+        out.iter()
+            .any(|line| line["command"] == "subscribe" && line["session_id"] == NEW),
+        "the first answer still switches, {out:?}"
+    );
     assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
 }
 

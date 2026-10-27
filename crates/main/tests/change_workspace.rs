@@ -26,7 +26,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
-use fakes::{MUST_SUCCEED_WITHIN, ProviderServer, Response};
+use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::hello_item_done as hello;
 use support::*;
@@ -896,9 +896,12 @@ fn until_moved(setup: &Setup) -> (String, String) {
 
 /// Writes `/pwd` until the screen names `target`, proving the terminal
 /// attached to the moved child: the move's accept may land after an
-/// early probe goes out, answering it with the old workspace, so the
-/// probe repeats on a bounded tick, never on a wall sleep for the move
-/// itself.
+/// early probe goes out, answering it with the old workspace. The
+/// readiness signals are the log gate before this helper (the old
+/// session ends `moved` before the next key goes out) and the screen
+/// naming `target` here; the pause between probes is pacing only, a
+/// short bounded receive on a live but empty channel, never a sleep and
+/// never a second deadline (`docs/testing.md`, "Waits and timeouts").
 #[track_caller]
 #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
 fn until_pwd_shows(run: &mut pty::Run, target: &str, deadline: Deadline) {
@@ -913,11 +916,12 @@ fn until_pwd_shows(run: &mut pty::Run, target: &str, deadline: Deadline) {
             "waited until the deadline for the target workspace {target} in a notice; screen:\n{contents}"
         );
         run.write(b"/pwd\r");
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "poll pause inside the attach-retry loop, bounded by the test deadline"
-        )]
-        let _paused = tick.recv_timeout(deadline.left().min(MUST_SUCCEED_WITHIN));
+        assert!(
+            Deadline::after(std::time::Duration::from_millis(100))
+                .recv(&tick)
+                .is_err(),
+            "the pacing pause elapses with no signal"
+        );
     }
 }
 

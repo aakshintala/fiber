@@ -27,7 +27,7 @@ const DELEGATE: &str = "A delegate cannot change workspace.";
 
 /// `change_workspace` to the session's own workspace, compared after
 /// resolving: nothing is written and no session starts.
-const SAME_FOLDER: &str = "already in that folder.";
+const SAME_FOLDER: &str = "already in that folder";
 
 /// A late `change_workspace` refused once `moved` is durable: the session
 /// takes no more commands.
