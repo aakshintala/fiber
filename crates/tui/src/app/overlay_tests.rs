@@ -1913,10 +1913,18 @@ fn an_answer_that_leaves_a_gap_is_refused() {
     let window: Vec<contract::Envelope> = plain(200).drain(100..).collect();
     tail.prepend(window.clone())
         .unwrap_or_else(|_| panic!("the first answer"));
-    assert!(tail.prepend(plain(51)).is_err(), "a gap is refused");
+    assert!(
+        tail.prepend(plain(51)).is_err(),
+        // docs/tui.md:2439-2440 ("History and paging"): the terminal checks each answer for ascending, contiguous sequence numbers.
+        "a gap is refused"
+    );
     let mut noseq = window.clone();
     noseq[0].seq = None;
-    assert!(tail.prepend(noseq).is_err(), "a missing seq is refused");
+    assert!(
+        tail.prepend(noseq).is_err(),
+        // docs/tui.md:2439-2440 ("History and paging"): the terminal checks each answer for ascending, contiguous sequence numbers.
+        "a missing seq is refused"
+    );
     let mut app = app();
     app.overlay = Overlay::Reading(Tail::new());
     app.tail_lines(window);

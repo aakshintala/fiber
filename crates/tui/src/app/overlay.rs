@@ -87,15 +87,15 @@ impl Tail {
         // An answer's own lines run oldest first with no gap: a
         // descending, duplicate or gapped pair inside one window is as
         // out of order as a gap across windows.
-        let mut ascending = older.iter().filter_map(|line| line.seq);
-        let Some(mut previous) = ascending.next() else {
+        let ascending = older.windows(2).all(|pair| match pair {
+            [previous, next] => match (previous.seq, next.seq) {
+                (Some(previous), Some(next)) => previous.0.checked_add(1) == Some(next.0),
+                _ => false,
+            },
+            _ => false,
+        });
+        if !ascending {
             return Err(());
-        };
-        for seq in ascending {
-            if previous.0.checked_add(1) != Some(seq.0) {
-                return Err(());
-            }
-            previous = seq;
         }
         let crossed_seam = match (self.lines.first(), older.last()) {
             (Some(first), Some(newest)) => first.session_id != newest.session_id,
