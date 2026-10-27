@@ -333,7 +333,9 @@ fn a_symlink_to_a_directory_denies_its_target_and_keeps_siblings() {
     std::fs::write(home.join("sibling"), "ok").expect("write home sibling");
     std::os::unix::fs::symlink(&aws, home.join(".aws")).expect("link to the directory");
     let mut settings = workspace_settings(&fiber_home);
-    settings.deny_read.push(home.join(".aws"));
+    // The deny path traverses `.aws` as a symlink component. The resolved
+    // target must stay unreadable by its real path as well as through the link.
+    settings.deny_read.push(home.join(".aws/file"));
     let fixture = HomeFixture {
         dir,
         home,
@@ -513,6 +515,15 @@ fn forty_hops_resolve_and_forty_one_do_not() {
             symlink(&next, &link).expect("chain the link");
             next = link;
         }
+        let target = super::resolve_target(&next);
+        assert_eq!(
+            target.is_ok(),
+            available,
+            "resolve_target accepts exactly 40 endpoint hops"
+        );
+        if available {
+            assert_eq!(target.expect("40 hops resolve"), Some(real.clone()));
+        }
         let mut settings = workspace_settings(&dir.path().join("fiber-home"));
         settings.deny_read.push(next.clone());
         let result = check_available(&settings, &workspace);
@@ -526,6 +537,40 @@ fn forty_hops_resolve_and_forty_one_do_not() {
                 result.expect_err("over budget is unavailable"),
                 Unavailable::UnresolvableDeny { configured: next }
             );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn forty_symlink_components_resolve_and_forty_one_fail() {
+    use std::os::unix::fs::symlink;
+
+    for (links, available) in [(40, true), (41, false)] {
+        let dir = fixture("fiber-sandbox-component-hops");
+        let start = dir.path().join("start");
+        std::fs::create_dir(&start).expect("create start directory");
+        let mut current = start.clone();
+        for hop in 0..links {
+            let target = dir.path().join(format!("target-{hop}"));
+            std::fs::create_dir(&target).expect("create target directory");
+            symlink(&target, current.join("next")).expect("link to the next directory");
+            current = target;
+        }
+        let mut path = start;
+        for _ in 0..links {
+            path.push("next");
+        }
+
+        let result = super::resolve_target(&path);
+
+        assert_eq!(
+            result.is_ok(),
+            available,
+            "resolve_target accepts exactly 40 symlink components"
+        );
+        if available {
+            assert_eq!(result.expect("40 components resolve"), Some(current));
         }
     }
 }

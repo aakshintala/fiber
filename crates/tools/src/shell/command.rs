@@ -163,6 +163,9 @@ pub(crate) struct SandboxApply {
 }
 
 impl std::fmt::Display for SandboxApply {
+    // This private marker is downcast to recover its cause; the user-facing
+    // message is built by `ShellError::SandboxApply`, not this formatter.
+    #[cfg_attr(false, mutants::skip)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "The sandbox could not be applied: {}.", self.cause)
     }
@@ -286,6 +289,10 @@ fn execute_inner(
     let (child, listing) = match support::group::spawn(&mut cmd) {
         Ok(started) => started,
         Err(error) => {
+            // Drop the parent-held pre_exec closure before waiting for the
+            // sentinel. It owns the child stream; without closing that peer,
+            // a failed write would leave the reader waiting forever.
+            drop(cmd);
             #[cfg(target_os = "linux")]
             if let Some(parent) = sentinel_parent
                 && let Some(marker) = read_sentinel(parent)
@@ -392,7 +399,7 @@ fn set_cloexec(stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
     use rustix::fd::AsFd as _;
     let fd = stream.as_fd();
     let flags = rustix::io::fcntl_getfd(fd)?;
-    rustix::io::fcntl_setfd(fd, flags | rustix::io::FdFlags::CLOEXEC)?;
+    rustix::io::fcntl_setfd(fd, flags.union(rustix::io::FdFlags::CLOEXEC))?;
     Ok(())
 }
 
@@ -429,18 +436,7 @@ fn read_sentinel(parent: std::os::unix::net::UnixStream) -> Option<std::io::Erro
     use std::io::Read as _;
     let mut parent = parent;
     let mut bytes = [0u8; 4];
-    let mut filled = 0;
-    while filled < bytes.len() {
-        let Some(remaining) = bytes.get_mut(filled..) else {
-            break;
-        };
-        match parent.read(remaining) {
-            Ok(0) => break,
-            Ok(n) => filled += n,
-            Err(_) => break,
-        }
-    }
-    if filled == bytes.len() {
+    if parent.read_exact(&mut bytes).is_ok() {
         let code = i32::from_ne_bytes(bytes);
         Some(std::io::Error::other(SandboxApply {
             cause: std::io::Error::from_raw_os_error(code).to_string(),

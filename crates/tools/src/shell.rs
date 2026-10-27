@@ -219,15 +219,12 @@ impl Shell {
         }
     }
 
-    /// The current sandbox settings and whether the person enabled the
-    /// Linux policy. `effects` checks availability before declaring a call
-    /// confined; a call declared confined then fails closed if the policy
-    /// becomes unavailable before spawn (`docs/sandbox.md`, "When the
-    /// sandbox is unavailable").
-    fn selected(&self) -> (sandbox::Settings, bool) {
-        let settings = support::lock(&self.sandbox).clone();
-        let confined = settings.enabled && cfg!(target_os = "linux");
-        (settings, confined)
+    /// The current sandbox settings. `effects` declares a call confined
+    /// only when the platform can apply them; a call declared confined then
+    /// fails closed if the policy becomes unavailable before spawn
+    /// (`docs/sandbox.md`, "When the sandbox is unavailable").
+    fn selected(&self) -> sandbox::Settings {
+        support::lock(&self.sandbox).clone()
     }
 
     /// Wraps a spill's file in a test's own writer.
@@ -307,8 +304,8 @@ impl Tool for Shell {
         // on the reviewed path. Once declared confined, run_with_effects
         // carries that decision unchanged and fails closed if availability
         // changes before spawn.
-        let (settings, enabled) = self.selected();
-        if enabled && sandbox::check_available(&settings, &self.workspace).is_ok() {
+        let settings = self.selected();
+        if sandbox::check_available(&settings, &self.workspace).is_ok() {
             effects.declared.confined = true;
         }
         Ok(effects)
@@ -341,7 +338,7 @@ impl Tool for Shell {
         }
         // Declared confined: the frozen settings either still apply, or the
         // call fails here, before any spawn.
-        let (settings, _) = self.selected();
+        let settings = self.selected();
         if let Err(unavailable) = sandbox::check_available(&settings, &self.workspace) {
             let cause = unavailable.to_string();
             return match parse(arguments, &self.workspace, self.max_deadline_ms) {
@@ -359,7 +356,7 @@ impl Tool for Shell {
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
         // A direct call derives its decision now: there is no earlier
         // declaration to preserve.
-        let (settings, _) = self.selected();
+        let settings = self.selected();
         self.run_inner(arguments, &settings, cancel, emit)
     }
 

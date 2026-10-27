@@ -3,6 +3,8 @@
 //! child between fork and exec; a setup error aborts spawn.
 
 #[cfg(target_os = "linux")]
+use std::collections::VecDeque;
+#[cfg(target_os = "linux")]
 use std::os::unix::io::OwnedFd;
 #[cfg(target_os = "linux")]
 use std::path::Component;
@@ -235,95 +237,94 @@ fn resolve_denies(settings: &Settings) -> Result<Vec<ResolvedDeny>, Unavailable>
 /// Resolves `path` through each symlink component with `readlink`,
 /// following dangling links to their (possibly missing) targets. Returns
 /// `None` when no symlink component leads away. Stops at the first missing
-/// non-symlink component, returning what resolved so far: denying that
-/// prefix only over-denies, never under-denies. A relative link target
-/// resolves against the link's directory.
+/// non-symlink component and appends the remaining lexical suffix, so the
+/// deny still names the configured target without granting an ancestor. A
+/// relative link target resolves against the link's directory.
 #[cfg(target_os = "linux")]
 fn resolve_target(path: &Path) -> Result<Option<PathBuf>, Unavailable> {
-    let configured = || Unavailable::UnresolvableDeny {
-        configured: path.to_path_buf(),
-    };
     let absolute = normalize_absolute(path);
-    let mut components: Vec<std::ffi::OsString> = Vec::new();
-    for component in absolute.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(name) => components.push(name.to_os_string()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                components.pop();
-            }
-            Component::Prefix(_) => {}
-        }
-    }
+    let mut pending = path_components(&absolute);
     let mut current = PathBuf::from("/");
     let mut visited: Vec<PathBuf> = Vec::new();
     let mut hops = 0;
     let mut saw_link = false;
-    let mut index = 0;
-    loop {
-        while index < components.len() {
-            let Some(component) = components.get(index) else {
+    while let Some(component) = pending.pop_front() {
+        let next = current.join(component);
+        match std::fs::symlink_metadata(&next) {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                current = next;
+                for remaining in pending {
+                    current.push(remaining);
+                }
                 break;
-            };
-            let next = current.join(component);
-            match std::fs::symlink_metadata(&next) {
-                Err(_) => break,
-                Ok(metadata) if metadata.file_type().is_symlink() => {
-                    if visited.contains(&next) {
-                        return Err(configured());
-                    }
-                    visited.push(next.clone());
-                    hops += 1;
-                    if hops > MAX_SYMLINK_HOPS {
-                        return Err(configured());
-                    }
-                    saw_link = true;
-                    let raw = std::fs::read_link(&next).map_err(|_| configured())?;
-                    // The target is relative to the link's directory, which
-                    // is the ancestor the walk descended to.
-                    let joined = if raw.is_absolute() {
-                        raw
-                    } else {
-                        current.join(raw)
-                    };
-                    current = normalize_absolute(&joined);
-                    index += 1;
-                }
-                Ok(_) => {
-                    current = next;
-                    index += 1;
-                }
             }
-        }
-        // Every component is consumed or a missing one stopped the walk:
-        // when the resolved endpoint is itself a symlink, one more hop
-        // leads on. A cycle or the hop budget ends the resolution.
-        match std::fs::symlink_metadata(&current) {
+            Err(_) => return Err(unresolvable(path)),
             Ok(metadata) if metadata.file_type().is_symlink() => {
-                if visited.contains(&current) {
-                    return Err(configured());
-                }
-                visited.push(current.clone());
-                hops += 1;
-                if hops > MAX_SYMLINK_HOPS {
-                    return Err(configured());
-                }
                 saw_link = true;
-                let raw = std::fs::read_link(&current).map_err(|_| configured())?;
-                let joined = if raw.is_absolute() {
-                    raw
-                } else if let Some(parent) = current.parent() {
-                    parent.join(raw)
-                } else {
-                    return Err(configured());
-                };
-                current = normalize_absolute(&joined);
+                let target = follow_link(&next, path, &mut visited, &mut hops)?;
+                let mut target_components = path_components(&target);
+                target_components.append(&mut pending);
+                pending = target_components;
+                current = PathBuf::from("/");
             }
-            _ => break,
+            Ok(_) => current = next,
         }
     }
     Ok(saw_link.then_some(current))
+}
+
+/// Follows one link, rejecting loops and paths beyond the shared hop budget.
+#[cfg(target_os = "linux")]
+fn follow_link(
+    link: &Path,
+    configured: &Path,
+    visited: &mut Vec<PathBuf>,
+    hops: &mut usize,
+) -> Result<PathBuf, Unavailable> {
+    if visited.iter().any(|seen| seen == link) {
+        return Err(unresolvable(configured));
+    }
+    visited.push(link.to_path_buf());
+    *hops = (*hops)
+        .checked_add(1)
+        .ok_or_else(|| unresolvable(configured))?;
+    if *hops > MAX_SYMLINK_HOPS {
+        return Err(unresolvable(configured));
+    }
+    let raw = std::fs::read_link(link).map_err(|_| unresolvable(configured))?;
+    let target = if raw.is_absolute() {
+        raw
+    } else if let Some(parent) = link.parent() {
+        parent.join(raw)
+    } else {
+        return Err(unresolvable(configured));
+    };
+    Ok(normalize_absolute(&target))
+}
+
+#[cfg(target_os = "linux")]
+fn path_components(path: &Path) -> VecDeque<std::ffi::OsString> {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(name) => Some(name.to_os_string()),
+            Component::RootDir
+            | Component::CurDir
+            | Component::ParentDir
+            | Component::Prefix(_) => None,
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn unresolvable(configured: &Path) -> Unavailable {
+    Unavailable::UnresolvableDeny {
+        configured: configured.to_path_buf(),
+    }
 }
 
 /// Prepares the Landlock grants and the seccomp program. A setup error
@@ -426,12 +427,16 @@ fn errno_of(cause: &(dyn std::error::Error + 'static)) -> i32 {
 }
 
 /// A stub for non-Linux builds, which never apply the Linux policy.
+// cargo-mutants runs on Linux, where this platform-only stub is not compiled.
+#[cfg_attr(false, mutants::skip)]
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn prepare(_settings: &Settings, _workspace: &Path) -> Result<Prepared, String> {
     Err("the Linux sandbox is unavailable on this platform".to_owned())
 }
 
 /// A stub for non-Linux builds.
+// cargo-mutants runs on Linux, where this platform-only stub is not compiled.
+#[cfg_attr(false, mutants::skip)]
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn install(_prepared: &mut Prepared) -> Result<(), i32> {
     Err(rustix::io::Errno::IO.raw_os_error())

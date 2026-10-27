@@ -2059,6 +2059,30 @@ fn sandbox_setup_failure_aborts_spawn_without_running() {
     assert!(!marker.is_file(), "no command runs after an apply failure");
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn set_cloexec_sets_the_close_on_exec_flag() {
+    use std::os::fd::AsFd as _;
+    use std::os::unix::net::UnixStream;
+
+    let (stream, _peer) = UnixStream::pair().expect("create a socket pair");
+    let fd = stream.as_fd();
+    rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::empty()).expect("clear descriptor flags");
+    assert!(
+        !rustix::io::fcntl_getfd(fd)
+            .expect("read descriptor flags")
+            .contains(rustix::io::FdFlags::CLOEXEC)
+    );
+
+    super::set_cloexec(&stream).expect("set close-on-exec");
+
+    assert!(
+        rustix::io::fcntl_getfd(fd)
+            .expect("read descriptor flags")
+            .contains(rustix::io::FdFlags::CLOEXEC)
+    );
+}
+
 /// An install failure in the child aborts spawn through the sentinel: the
 /// parent reads the raw errno the child wrote and maps it to the sandbox
 /// cause, and the command never runs.
