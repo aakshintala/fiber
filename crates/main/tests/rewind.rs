@@ -482,7 +482,12 @@ fn an_at_end_rewind_continues_the_session_from_the_latest_point() {
         line["session_id"] == next && line["kind"] == "extensions_loaded"
     });
     // The new log before any prompt is one fresh start continuing the old
-    // through the admission-time point.
+    // through the admission-time point. The complete ordered kinds are the
+    // three start lines and nothing else.
+    // (`docs/extensions.md`: `session_started` is the log's first line,
+    // `fiber_started` follows it in a new session, `extensions_loaded` is
+    // written before the first model request; `docs/events.md`, "Rewind":
+    // "It never starts a turn", so no turn line follows before a prompt.)
     let new_log = session_log(&setup, &next);
     let new_kinds: Vec<&str> = new_log
         .iter()
@@ -514,6 +519,11 @@ fn an_at_end_rewind_continues_the_session_from_the_latest_point() {
     // old-log lines (`rewound`) ride along in neither.
     hubbed.prompt("c1_p3", &next, "three");
     let requests = server.requests();
+    // Three turns ran, one request each: the two old prompts and the new
+    // one. No summary ran (`at_end` carries none), and the new session
+    // starts no turn on its own.
+    // (`docs/events.md`, "Rewind": "It never starts a turn"; "A summary is
+    // optional", and `at_end` takes none, so no summary turn runs.)
     assert_eq!(requests.len(), 3, "one request per turn");
     let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
     let third: Value = serde_json::from_slice(&requests[2].body).unwrap();

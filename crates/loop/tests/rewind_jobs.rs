@@ -102,11 +102,14 @@ fn run_a_with_id(id: &str) -> Session {
 }
 
 fn args(from: Option<&str>, seq: Option<u64>, summarise: bool, at_end: bool) -> RewindArgs {
-    RewindArgs {
-        from_session_id: from.map(|id| SessionId(id.into())),
-        seq: seq.map(Seq),
-        summarise,
-        at_end,
+    if at_end {
+        RewindArgs::AtEnd
+    } else {
+        RewindArgs::Rewind {
+            from_session_id: from.map(|id| SessionId(id.into())),
+            seq: seq.map(Seq),
+            summarise,
+        }
     }
 }
 
@@ -519,10 +522,12 @@ fn an_at_end_rewind_stops_running_jobs_after_the_point() {
         let outcome = looped.turn().unwrap();
         done.send(outcome).unwrap();
     });
+    // One deadline for the whole wait: both stops arrive on it, so the
+    // wait cannot run twice as long as intended.
+    // (`docs/testing.md`, "Waits and timeouts": one deadline per wait.)
+    let wait = Deadline::after(DEADLINE);
     for _ in 0..2 {
-        Deadline::after(DEADLINE)
-            .recv(&stops)
-            .expect("the job is stopped");
+        wait.recv(&stops).expect("the job is stopped");
     }
     jobs.end(&inbox, "j_1", Outcome::Cancelled, None);
     jobs.end(&inbox, "j_2", Outcome::Cancelled, None);
@@ -535,14 +540,15 @@ fn an_at_end_rewind_stops_running_jobs_after_the_point() {
         log::read(&dir).unwrap().last().unwrap().payload["new_session_id"],
         json!(new.0)
     );
+    // The complete ordered kinds: the two job ends land before `rewound`.
+    // (`docs/events.md`, "Rewind": each job still running "ends as the
+    // normal stop ends it ... before `rewound`", and "`rewound` is the
+    // last line the process writes to that log".)
     let lines = log::read(&dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(3)
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(tail, ["rewound", "job_completed", "job_completed"]);
+    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    let mut expected: Vec<&str> = before.iter().map(|line| line.kind.as_str()).collect();
+    expected.extend(["job_completed", "job_completed", "rewound"]);
+    assert_eq!(kinds, expected, "{kinds:?}");
     // `rewound` names the admission-time point, not the later job ends.
     assert_eq!(lines.last().unwrap().payload["seq"], json!(at));
     assert!(lines.last().unwrap().payload.get("summary").is_none());

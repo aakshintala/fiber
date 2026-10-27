@@ -217,13 +217,12 @@ impl App {
         // settles, read as itself.
         let parsed = serde_json::from_value(Value::String(code.to_owned()))
             .unwrap_or_else(|_| ErrorCode::Other(code.to_owned()));
-        if self.fork_pending.as_deref() == Some(id) {
-            self.fork_pending = None;
-            if parsed == ErrorCode::NotStepBoundary {
-                self.push_notice("not_step_boundary", Self::FORK_NOT_STEP_BOUNDARY.to_owned());
-            } else {
-                self.push_notice(code, message.to_owned());
-            }
+        if self
+            .fork_pending
+            .as_ref()
+            .is_some_and(|pending| pending.0 == id)
+        {
+            self.settle_fork_refusal(&parsed, message);
             return true;
         }
         if !self.rewind.send.matches(id) {
@@ -248,7 +247,7 @@ impl App {
         &mut self,
         accepted: &CommandAccepted,
     ) -> Option<Vec<String>> {
-        let fork = self.fork_pending.as_deref() == Some(accepted.command_id.0.as_str());
+        let fork = self.fork_pending.as_ref() == Some(&accepted.command_id);
         if !fork && !self.rewind.send.matches(&accepted.command_id.0) {
             return None;
         }
@@ -286,7 +285,7 @@ impl App {
             &serving,
             Some(serde_json::json!({"at_end": true})),
         );
-        self.fork_pending = Some(id.clone());
+        self.fork_pending = Some(CommandId(id.clone()));
         Effect::Send(vec![line.to_string()])
     }
 
@@ -304,20 +303,28 @@ impl App {
         let Some(id) = rejected.command_id.as_ref() else {
             return false;
         };
-        if self.fork_pending.as_deref() != Some(id.0.as_str()) {
+        if self.fork_pending.as_ref() != Some(id) {
             return false;
         }
+        self.settle_fork_refusal(&rejected.code, &rejected.message);
+        true
+    }
+
+    /// Clears a pending `/fork` and shows its refusal as a notice: the
+    /// ruled text for `not_step_boundary`, the rejection's own text for
+    /// any other code. Both the session and hub refusal paths settle
+    /// through here, so retrying sends again either way.
+    fn settle_fork_refusal(&mut self, code: &ErrorCode, message: &str) {
         self.fork_pending = None;
-        if rejected.code == ErrorCode::NotStepBoundary {
+        if *code == ErrorCode::NotStepBoundary {
             self.push_notice("not_step_boundary", Self::FORK_NOT_STEP_BOUNDARY.to_owned());
         } else {
-            let code = serde_json::to_value(&rejected.code)
+            let notice = serde_json::to_value(code)
                 .ok()
                 .and_then(|code| code.as_str().map(str::to_owned))
                 .unwrap_or_else(|| "other".to_owned());
-            self.push_notice(&code, rejected.message.clone());
+            self.push_notice(&notice, message.to_owned());
         }
-        true
     }
 
     /// The connection ended: the pending `history` drops, and its late
@@ -476,11 +483,10 @@ impl App {
         } else {
             Some(session)
         };
-        let args = serde_json::to_value(RewindArgs {
+        let args = serde_json::to_value(RewindArgs::Rewind {
             from_session_id: from,
             seq: Some(Seq(seq)),
             summarise: self.rewind.send.summarise(),
-            at_end: false,
         })
         .unwrap_or(Value::Null);
         let id = mint();

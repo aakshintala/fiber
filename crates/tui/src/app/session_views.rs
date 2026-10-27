@@ -576,7 +576,7 @@ impl App {
                     // A pending fork attaches before any open view
                     // handles the answer: opening another view resets
                     // the rewind view, not the fork.
-                    if self.fork_pending.as_deref() == Some(accepted.command_id.0.as_str())
+                    if self.fork_pending.as_ref() == Some(&accepted.command_id)
                         && let Some(lines) = self.rewind_send_accepted(&accepted)
                     {
                         return lines;

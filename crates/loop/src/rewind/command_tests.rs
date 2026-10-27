@@ -653,11 +653,10 @@ mod closed_starts {
         rig.looped
             .take_rewind(
                 CommandId("c_1".into()),
-                RewindArgs {
+                RewindArgs::Rewind {
                     from_session_id: None,
                     seq: Some(Seq(0)),
                     summarise: false,
-                    at_end: false,
                 },
                 ack,
                 &TurnInput::of(Vec::new()),

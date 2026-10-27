@@ -1178,11 +1178,14 @@ const A_ID: &str = "s_aaaaaaaaaaaaaaaa";
 const B_ID2: &str = "s_bbbbbbbbbbbbbbbb";
 
 fn args(from: Option<&str>, seq: Option<u64>, summarise: bool, at_end: bool) -> RewindArgs {
-    RewindArgs {
-        from_session_id: from.map(|id| SessionId(id.into())),
-        seq: seq.map(Seq),
-        summarise,
-        at_end,
+    if at_end {
+        RewindArgs::AtEnd
+    } else {
+        RewindArgs::Rewind {
+            from_session_id: from.map(|id| SessionId(id.into())),
+            seq: seq.map(Seq),
+            summarise,
+        }
     }
 }
 
@@ -2461,15 +2464,15 @@ fn an_at_end_rewind_continues_from_the_admission_time_point() {
     let new = accepted(answer_of(answered));
     assert_minted(&new);
     assert_eq!(outcome, None, "no turn starts after the rewind");
-    // Nothing lands between the admission-time point and `rewound`.
+    // The complete ordered kinds: nothing lands between the
+    // admission-time point and `rewound`.
+    // (`docs/events.md`, "Rewind": "`rewound` is the last line the process
+    // writes to that log".)
     let lines = log::read(&session.dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(2)
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(tail, ["rewound", "session_named"]);
+    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    let mut expected: Vec<&str> = before.iter().map(|line| line.kind.as_str()).collect();
+    expected.push("rewound");
+    assert_eq!(kinds, expected, "{kinds:?}");
     let last = lines.last().unwrap();
     assert_eq!(last.payload["new_session_id"], json!(new.0));
     assert_eq!(last.payload["seq"], json!(at));

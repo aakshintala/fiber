@@ -1407,8 +1407,12 @@ fn fork_accept_attaches_to_the_new_session() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    // The new session is subscribed full and asked its commands.
-    assert_eq!(answered.len(), 2);
+    // The new session is subscribed full and asked its commands: each
+    // required line is present, with no pinned total.
+    // (`docs/invocation.md`, "Driver commands": `subscribe` is the first
+    // command on every connection to a session; `docs/tui.md`, "Slash
+    // commands": the terminal sends `commands` when it attaches to a
+    // session.)
     assert!(answered.iter().any(|line| line["command"] == "subscribe"
         && line["session_id"] == NEW
         && line["args"] == json!({"level": "full"})));
@@ -1483,7 +1487,25 @@ fn fork_accept_and_refusal_survive_opening_another_view() {
         "command_accepted",
         json!({"command_id": lines[0]["id"], "result": {"new_session_id": NEW}}),
     ));
-    assert_eq!(answered.len(), 2);
+    // Acceptance still attaches after another view opened: the required
+    // attach lines are present, with no pinned total.
+    // (`docs/invocation.md`, "Driver commands": `subscribe` is the first
+    // command on every connection; `docs/tui.md`, "Slash commands": the
+    // terminal sends `commands` when it attaches.)
+    let answered: Vec<Value> = answered
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert!(
+        answered
+            .iter()
+            .any(|line| line["command"] == "subscribe" && line["session_id"] == NEW)
+    );
+    assert!(
+        answered
+            .iter()
+            .any(|line| line["command"] == "commands" && line["session_id"] == NEW)
+    );
     assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
     // Refusal shows its notice after another view opened: the rewind
     // view's button never stands in for the fork.

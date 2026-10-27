@@ -99,7 +99,15 @@ impl Loop {
             return Ok(());
         }
         let own = first.session_id.clone();
-        let target = match self.target(&args, &own)? {
+        let (from_session, requested, summarise, at_end) = match &args {
+            RewindArgs::Rewind {
+                from_session_id,
+                seq,
+                summarise,
+            } => (from_session_id.clone(), *seq, *summarise, false),
+            RewindArgs::AtEnd => (None, None, false, true),
+        };
+        let target = match self.target(from_session.as_ref(), &own)? {
             Ok(target) => target,
             Err(rejection) => {
                 (ack.0)(Err(rejection));
@@ -107,14 +115,14 @@ impl Loop {
             }
         };
         let lines = log::read(&target.dir)?;
-        let point = match point_for(&lines, &target, args.seq, args.at_end) {
+        let point = match point_for(&lines, &target, requested, at_end) {
             Ok(point) => point,
             Err(rejection) => {
                 (ack.0)(Err(rejection));
                 return Ok(());
             }
         };
-        let summary = if args.summarise {
+        let summary = if summarise {
             match self.summarise(id, &target, point)? {
                 Ok(summary) => Some(summary),
                 Err(failure) => {
@@ -160,12 +168,12 @@ impl Loop {
     /// the chain is refused before it is opened, locked or read.
     fn target(
         &self,
-        args: &RewindArgs,
+        from_session: Option<&SessionId>,
         own: &SessionId,
     ) -> Result<Result<Target, Rejection>, Error> {
         // Absent, or this session's own id: the point is in this
         // session's own log.
-        let from = args.from_session_id.as_ref().filter(|from| *from != own);
+        let from = from_session.filter(|from| *from != own);
         match from {
             None => Ok(Ok(Target {
                 session: own.clone(),
