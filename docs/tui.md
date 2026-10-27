@@ -876,8 +876,12 @@ a click on it returns too. The views are:
   file (`docs/system-prompt.md`, "Skills"); on a remote terminal it opens the
   hub's copy instead ("Swapped views"). A row is "review · checks a diff
   · repo · seen · this project " and its switch, then " · everywhere " and
-  its switch, as on `/tools`; a shadowing skill adds "shadows <name>". The
-  last row is "Enter shows the text · Ctrl+G opens its file", dim.
+  its switch, as on `/tools`; a shadowing skill adds "shadows <source>".
+  A shadow path with no matching skill entry leaves out the whole
+  "shadows …" clause. Several shadowed sources list after one "shadows",
+  separated by ", ", in repo, personal, extensions-by-extension-name, then
+  built-in order. The last row is "Enter shows the text · Ctrl+G opens its
+  file", dim.
 - **`/rewind`** ("Rewind").
 - **A repository's offer**, before a new session's first request ("Approving
   what a repository ships").
