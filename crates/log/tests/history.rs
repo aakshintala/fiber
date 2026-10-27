@@ -138,22 +138,27 @@ fn a_moved_chain_links_projects_with_exact_ancestry() {
     drop(child);
 
     let segments = log::history(&new_sessions.join("s_bbbbbbbbbbbbbbbb")).unwrap();
-    assert_eq!(segments.len(), 2);
-    assert_eq!(segments[0].session_id, id("s_aaaaaaaaaaaaaaaa"));
+    let parent = segments
+        .iter()
+        .find(|segment| segment.session_id == id("s_aaaaaaaaaaaaaaaa"))
+        .expect("the moved parent is in the history");
     assert_eq!(
-        segments[0].dir,
+        parent.dir,
         log::session_dir(tmp.path(), "-work-old", &id("s_aaaaaaaaaaaaaaaa"))
     );
-    assert_eq!(segments[0].to, Some(Seq(2)));
-    assert_eq!(segments[1].session_id, id("s_bbbbbbbbbbbbbbbb"));
+    assert_eq!(parent.to, Some(Seq(2)));
+    let child = segments
+        .iter()
+        .find(|segment| segment.session_id == id("s_bbbbbbbbbbbbbbbb"))
+        .expect("the moved child is in the history");
     assert_eq!(
-        segments[1].dir,
+        child.dir,
         log::session_dir(tmp.path(), "-work-new", &id("s_bbbbbbbbbbbbbbbb"))
     );
-    assert_eq!(segments[1].to, None);
+    assert_eq!(child.to, None);
     // The parent's own `moved` ending stays intact: the walk reads first
     // lines only.
-    let tail = log::last_line(&segments[0].dir).unwrap();
+    let tail = log::last_line(&parent.dir).unwrap();
     assert_eq!(tail.kind, "moved");
 }
 

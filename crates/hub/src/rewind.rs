@@ -260,6 +260,11 @@ pub(crate) fn follow(
     if let Some(at_gate) = at_gate {
         at_gate();
     }
+    #[cfg(test)]
+    let blocked_gate = lock(relays).blocked_gate.take();
+    #[cfg(test)]
+    let _held_gate = crate::connection::lock_gate(&gate, blocked_gate);
+    #[cfg(not(test))]
     let _held_gate = lock(&gate);
     let _opening = {
         let mut held = lock(relays);

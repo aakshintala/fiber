@@ -36,11 +36,6 @@ use fakes::Deadline;
 /// before it.
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// How long the negative wait in `race_openers` holds the second opener's
-/// pause unreached: the same 200 ms bound the fakes hold tests use for
-/// the same kind of wait.
-const GATE_QUIET: Duration = Duration::from_millis(200);
-
 struct Temp {
     dir: PathBuf,
     #[expect(dead_code, reason = "Drop removes the directory")]
@@ -1716,13 +1711,13 @@ fn spawn_opener(job: impl FnOnce() + Send + 'static, name: &str) -> mpsc::Receiv
     done
 }
 
-/// Parks the first opener in the open hook, then the second in the
-/// re-armed hook, releases them, and joins both: the two opener orders
-/// share this choreography. Without the gate both wait past their checks,
-/// each about to publish; with it the second queues behind the first on
-/// the gate instead of pausing, and the wait below times out. When the
-/// waiter is the redirect it pauses in the hook once the gate frees it;
-/// when it is the command it takes the existing relay outright.
+/// Parks the first opener in the open hook, then confirms the second
+/// failed `try_lock` while the first still holds the gate. Releasing the
+/// first lets both finish: the two opener orders share this choreography.
+/// Without the gate the second never signals contention, and the test
+/// fails after releasing both open hooks. When the waiter is the redirect
+/// it pauses in the hook once the gate frees it; when it is the command it
+/// takes the existing relay outright.
 #[track_caller]
 fn race_openers(
     hub: &Arc<Hub>,
@@ -1739,87 +1734,59 @@ fn race_openers(
             .is_ok(),
         "the first opener parked after its opening"
     );
-    // Arm the gate seam now: the first opener already passed it (it is
-    // parked past the gate), so only the contender signals.
-    let (reached_tx, reached) = mpsc::channel();
-    lock(relays).at_gate = Some(Box::new(move || {
-        reached_tx.send(()).unwrap_or(());
+    // Arm the blocked-gate seam now: the first opener already holds the
+    // gate, so only the contender's failed `try_lock` signals.
+    let (blocked_tx, blocked) = mpsc::channel();
+    lock(relays).blocked_gate = Some(Box::new(move || {
+        blocked_tx.send(()).unwrap_or(());
     }));
     let (paused_second, release_second) = arm_before_open(hub);
     let done_second = spawn_opener(second, "race-second");
-    // The first opener stays parked until the contender reached the
-    // gate: releasing it on a thread start alone could release it
-    // before any contention.
-    assert!(
-        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-            .recv(&reached)
-            .is_ok(),
-        "the second opener reached the gate"
-    );
-    // The second opener queues behind the first on the gate instead of
-    // pausing: the 200 ms bound holds the pause unreached with no signal,
-    // and a late signal only takes the gated branch, where the test still
-    // fails on the two relays it then finds.
-    if Deadline::after(GATE_QUIET).recv(&paused_second).is_err() {
+    // A failed try_lock proves the second opener reached the blocking
+    // point while the first holds the gate. If it did not, release both
+    // hooks before failing so neither worker is stranded.
+    if Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&blocked)
+        .is_err()
+    {
         drop(release_first);
+        drop(release_second);
         assert!(
             Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                 .recv(&done_first)
                 .is_ok(),
             "the first opener finished"
         );
-        if second_is_follow {
-            assert!(
-                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-                    .recv(&paused_second)
-                    .is_ok(),
-                "the waiter parked after the first published"
-            );
-            drop(release_second);
-        }
         assert!(
             Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                 .recv(&done_second)
                 .is_ok(),
             "the second opener finished"
         );
-    } else {
-        // No gate: both openers are parked before publishing. Release
-        // the redirect first: it is still before its check in one order
-        // and publishes while the command is still parked; the command
-        // is already past its check, so it publishes too.
-        if second_is_follow {
-            drop(release_second);
-            assert!(
-                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-                    .recv(&done_second)
-                    .is_ok(),
-                "the second opener finished"
-            );
-            drop(release_first);
-            assert!(
-                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-                    .recv(&done_first)
-                    .is_ok(),
-                "the first opener finished"
-            );
-        } else {
-            drop(release_first);
-            assert!(
-                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-                    .recv(&done_first)
-                    .is_ok(),
-                "the first opener finished"
-            );
-            drop(release_second);
-            assert!(
-                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-                    .recv(&done_second)
-                    .is_ok(),
-                "the second opener finished"
-            );
-        }
+        panic!("the second opener did not block on the gate");
     }
+    drop(release_first);
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&done_first)
+            .is_ok(),
+        "the first opener finished"
+    );
+    if second_is_follow {
+        assert!(
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv(&paused_second)
+                .is_ok(),
+            "the waiter parked after the first published"
+        );
+        drop(release_second);
+    }
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&done_second)
+            .is_ok(),
+        "the second opener finished"
+    );
 }
 
 /// The client command for `next` as a worker job: a `tools` command, so

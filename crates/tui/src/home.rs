@@ -258,6 +258,10 @@ pub struct Launch {
     /// `main` supplies (`docs/user/reporting.md`). `None` in the jigs,
     /// which write nothing.
     pub feedback: Option<crate::WriteFeedback>,
+    /// Reads the `doctor` report the `/doctor` view shows: the injected
+    /// reader `main` supplies (`docs/invocation.md`, "Commands and
+    /// flags"). `None` in the jigs, which read nothing.
+    pub doctor: Option<contract::feedback::ReadDoctor>,
     /// `scoped_models`: the references the model picker shows; empty
     /// means every installed model (`docs/configuration.md`, "Keys").
     pub scoped_models: Vec<String>,

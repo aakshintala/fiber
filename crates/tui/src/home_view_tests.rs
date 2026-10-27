@@ -2824,8 +2824,7 @@ fn short_home_slash_keeps_its_selection_barred() {
     assert!(row.contains("credential"), "{shown}");
     // Every built-in is a row of the list.
     // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
-    // Built-ins are the base set plus `/cd`, `/fork` and `/hooks`.
-    assert!(shown.contains("of 43"), "{shown}");
+    assert!(shown.contains("of 44"), "{shown}");
 }
 
 /// A git home at 80x24 with two live rows in the launch project and no

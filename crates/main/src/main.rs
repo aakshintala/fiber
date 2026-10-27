@@ -1115,6 +1115,22 @@ fn terminal(
     let feedback_workspace = workspace.clone();
     let feedback_version = cli::bare_version();
     let feedback_clock = Arc::clone(&clock);
+    // The `doctor` output both the feedback writer and the `/doctor`
+    // view read: one closure over the launch directory, home, version
+    // and clock, so the view shows the report the headless door would
+    // print.
+    let report_home = home.clone();
+    let report_workspace = workspace.clone();
+    let report_version = cli::bare_version();
+    let report_clock = Arc::clone(&clock);
+    let report = std::sync::Arc::new(move || {
+        doctor_report(
+            &report_home,
+            &report_workspace,
+            &report_version,
+            report_clock.as_ref(),
+        )
+    });
     let identity = doors::project(&workspace);
     let mut launch = launch::launch(
         workspace,
@@ -1141,25 +1157,26 @@ fn terminal(
     // behind the contract seam, beside the model-list reader. It captures
     // the launch directory, so a later `/feedback` reports the same
     // `doctor` output the headless door would.
+    let feedback_report = std::sync::Arc::clone(&report);
     let feedback: tui::WriteFeedback =
         std::sync::Arc::new(move |description: &str, session: Option<&SessionId>| {
             let context = ::cli::ReportContext {
                 version: &feedback_version,
                 cwd: &feedback_workspace,
                 clock: feedback_clock.as_ref(),
-                doctor: &|| {
-                    doctor_report(
-                        &feedback_home,
-                        &feedback_workspace,
-                        &feedback_version,
-                        feedback_clock.as_ref(),
-                    )
-                },
+                doctor: &|| feedback_report(),
                 diagnostics: &|id| ::cli::diagnostics(&feedback_home, feedback_clock.as_ref(), id),
             };
             ::cli::write(description, session, &context).map_err(|error| error.to_string())
         });
     launch.feedback = Some(feedback);
+    // The `/doctor` view's report reader: `cli::doctor`'s capture
+    // behind the contract seam, beside the report writer. It shares the
+    // feedback writer's report closure, so the view shows the same
+    // `doctor` output the headless door prints.
+    let doctor: contract::feedback::ReadDoctor =
+        std::sync::Arc::new(move || report().map_err(|error| error.to_string()));
+    launch.doctor = Some(doctor);
     launch.open_at = open_at;
     match tui::run(
         tty,
