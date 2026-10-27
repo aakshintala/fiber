@@ -793,7 +793,7 @@ fn ids_stop_at_255_and_later_images_keep_their_one_line() {
     let mut sorted = ids.clone();
     sorted.sort_unstable();
     sorted.dedup();
-    assert_eq!(sorted.len(), 300, "no id repeats");
+    assert_eq!(sorted.len(), ids.len(), "no id repeats");
     assert!(!sorted.contains(&0), "every image is noted");
     assert!(!sorted.contains(&31), "the probe's id is never an image");
     let eligible: Vec<u32> = sorted
