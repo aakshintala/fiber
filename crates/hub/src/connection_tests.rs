@@ -3503,6 +3503,10 @@ fn a_connection_that_never_subscribes_gets_the_prompt_at_the_bound() {
     let mut client = Client::connect(&hub);
     client.hello();
     let (session, due) = start_with_content(&mut client, &temp, &clock);
+    assert!(
+        clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
+        "the first prompt waits at its bound"
+    );
     clock.advance_when_parked(
         Some(due),
         None,
