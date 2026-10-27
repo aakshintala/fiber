@@ -2842,8 +2842,7 @@ fn raw_allowance(
         path,
         function,
         occurrence,
-        reason: NO_PARK,
-        ruling: "6179406086",
+        reason: RawAdvanceReason::NoPark,
     }
 }
 
@@ -2972,21 +2971,20 @@ fn raw_advance_matches_each_allowlist_reason() {
         "fn a(clock: &FakeClock) { clock.advance(A); }\nfn b(clock: &FakeClock) { clock.advance(B); }\nfn c(clock: &FakeClock) { clock.advance(C); }\nfn d(clock: &FakeClock) { clock.advance(D); }\nfn e(clock: &FakeClock) { clock.advance(E); }\n",
     )];
     let reasons = [
-        (NO_PARK, "6179406086"),
-        (PANIC_RELEASE, "6203478697"),
-        (POLL_PAUSE, "6260728504"),
-        (LATE_WAKE, "6261259790"),
-        (STALL_DRIVER, "6263191610"),
+        RawAdvanceReason::NoPark,
+        RawAdvanceReason::PanicRelease,
+        RawAdvanceReason::PollPause,
+        RawAdvanceReason::LateWake,
+        RawAdvanceReason::StallDriver,
     ];
     let allowances: Vec<RawAdvanceAllowance> = ["a", "b", "c", "d", "e"]
         .iter()
         .zip(reasons)
-        .map(|(function, (reason, ruling))| RawAdvanceAllowance {
+        .map(|(function, reason)| RawAdvanceAllowance {
             path: "crates/hub/src/x_tests.rs",
             function,
             occurrence: 1,
             reason,
-            ruling,
         })
         .collect();
     // docs/testing.md:254-257 ("Each kept raw site carries its own allowance").
@@ -3071,18 +3069,18 @@ fn raw_advance_rejects_unused_allowances() {
 
 #[test]
 fn raw_advance_table_covers_all_five_reasons() {
-    for ruling in [
-        "6179406086",
-        "6203478697",
-        "6260728504",
-        "6261259790",
-        "6263191610",
+    for reason in [
+        RawAdvanceReason::NoPark,
+        RawAdvanceReason::PanicRelease,
+        RawAdvanceReason::PollPause,
+        RawAdvanceReason::LateWake,
+        RawAdvanceReason::StallDriver,
     ] {
         assert!(
             RAW_ADVANCE_ALLOWANCES
                 .iter()
-                .any(|allowance| allowance.ruling == ruling),
-            "no allowlist entry cites ruling {ruling}"
+                .any(|allowance| allowance.reason == reason),
+            "no allowlist entry cites reason {reason:?}"
         );
     }
 }
@@ -3262,24 +3260,40 @@ fn raw_advance_proves_a_boxed_constructor_binding() {
 }
 
 #[test]
-fn raw_advance_rejects_a_mismatched_allowance_pair() {
-    let files = [raw_file(
-        "crates/hub/src/x_tests.rs",
-        "fn t() { let clock = FakeClock::new(); clock.advance(D); }\n",
-    )];
-    let allowances = [RawAdvanceAllowance {
-        path: "crates/hub/src/x_tests.rs",
-        function: "t",
-        occurrence: 1,
-        reason: NO_PARK,
-        ruling: "6261259790",
-    }];
-    // docs/testing.md ("Each kept raw site carries its own allowance with
-    // its reason"): a matching site with an invalid reason/ruling pair still
-    // fails.
-    let failures = raw_advance_sites_with(&files, &allowances);
-    assert_eq!(failures.len(), 1, "{failures:?}");
-    assert!(failures[0].contains("invalid"), "{failures:?}");
+fn raw_advance_reason_maps_to_its_documented_ruling() {
+    // docs/testing.md:256-261 (the five keep-raw reasons with their rulings):
+    // the ruling is derived from the reason variant, so an impossible
+    // reason/ruling pair cannot be written. Flipping any arm fails here.
+    for (reason, text, ruling) in [
+        (
+            RawAdvanceReason::NoPark,
+            "no code under test waits on the clock",
+            "6179406086",
+        ),
+        (
+            RawAdvanceReason::PanicRelease,
+            "panic-handler release that re-raises the original payload",
+            "6203478697",
+        ),
+        (
+            RawAdvanceReason::PollPause,
+            "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline",
+            "6260728504",
+        ),
+        (
+            RawAdvanceReason::LateWake,
+            "late wake: one advance past a park proven at its exact instant just before",
+            "6261259790",
+        ),
+        (
+            RawAdvanceReason::StallDriver,
+            "stall driver: a shared test-support driver whose callers own the bounds",
+            "6263191610",
+        ),
+    ] {
+        assert_eq!(reason.reason(), text, "{reason:?}");
+        assert_eq!(reason.ruling(), ruling, "{reason:?}");
+    }
 }
 
 #[test]

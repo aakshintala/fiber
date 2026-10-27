@@ -362,42 +362,65 @@ pub(crate) struct RawAdvanceAllowance {
     pub(crate) path: &'static str,
     pub(crate) function: &'static str,
     pub(crate) occurrence: u32,
-    pub(crate) reason: &'static str,
-    pub(crate) ruling: &'static str,
+    pub(crate) reason: RawAdvanceReason,
 }
 
 macro_rules! raw_advance {
-    ($path:literal, $function:literal, $occurrence:literal, $reason:expr, $ruling:literal) => {
+    ($path:literal, $function:literal, $occurrence:literal, $reason:expr) => {
         RawAdvanceAllowance {
             path: $path,
             function: $function,
             occurrence: $occurrence,
             reason: $reason,
-            ruling: $ruling,
         }
     };
 }
 
-/// The keep-raw reasons (`docs/testing.md`, "Waits and timeouts").
-pub(crate) const NO_PARK: &str = "no code under test waits on the clock";
-pub(crate) const PANIC_RELEASE: &str = "panic-handler release that re-raises the original payload";
-pub(crate) const POLL_PAUSE: &str =
-    "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline";
-pub(crate) const LATE_WAKE: &str =
-    "late wake: one advance past a park proven at its exact instant just before";
-pub(crate) const STALL_DRIVER: &str =
-    "stall driver: a shared test-support driver whose callers own the bounds";
+/// The keep-raw reasons (`docs/testing.md`, "Waits and timeouts"): a closed
+/// set, so an allowance cannot cite an impossible reason/ruling pair. The
+/// ruling is derived from the variant, preserving the five documented
+/// reason/ruling mappings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RawAdvanceReason {
+    NoPark,
+    PanicRelease,
+    PollPause,
+    LateWake,
+    StallDriver,
+}
 
-/// Whether a keep-raw allowance cites one of the five documented
-/// reason/ruling pairs (`docs/testing.md`, "Waits and timeouts"): a matching
-/// site with any other pair still fails, so a wrong ruling cannot silence
-/// the ban.
-fn allowance_pair_valid(reason: &str, ruling: &str) -> bool {
-    (reason == NO_PARK && ruling == "6179406086")
-        || (reason == PANIC_RELEASE && ruling == "6203478697")
-        || (reason == POLL_PAUSE && ruling == "6260728504")
-        || (reason == LATE_WAKE && ruling == "6261259790")
-        || (reason == STALL_DRIVER && ruling == "6263191610")
+impl RawAdvanceReason {
+    /// The documented reason text (`docs/testing.md`, "Waits and timeouts").
+    pub(crate) fn reason(&self) -> &'static str {
+        match self {
+            RawAdvanceReason::NoPark => "no code under test waits on the clock",
+            RawAdvanceReason::PanicRelease => {
+                "panic-handler release that re-raises the original payload"
+            }
+            RawAdvanceReason::PollPause => {
+                "poll-pause jump: proven parked at its poll, crossing only poll pauses and the deadline"
+            }
+            RawAdvanceReason::LateWake => {
+                "late wake: one advance past a park proven at its exact instant just before"
+            }
+            RawAdvanceReason::StallDriver => {
+                "stall driver: a shared test-support driver whose callers own the bounds"
+            }
+        }
+    }
+
+    /// The ruling that documents the reason (`docs/testing.md`, "Waits and
+    /// timeouts"): derived from the variant, so a wrong ruling cannot silence
+    /// the ban.
+    pub(crate) fn ruling(&self) -> &'static str {
+        match self {
+            RawAdvanceReason::NoPark => "6179406086",
+            RawAdvanceReason::PanicRelease => "6203478697",
+            RawAdvanceReason::PollPause => "6260728504",
+            RawAdvanceReason::LateWake => "6261259790",
+            RawAdvanceReason::StallDriver => "6263191610",
+        }
+    }
 }
 
 /// Every kept raw `FakeClock` advance outside `crates/fakes` the checker
@@ -407,182 +430,182 @@ fn allowance_pair_valid(reason: &str, ruling: &str) -> bool {
 /// unproved base (docs/testing.md:254-257).
 #[rustfmt::skip]
 pub(crate) const RAW_ADVANCE_ALLOWANCES: &[RawAdvanceAllowance] = &[
-    raw_advance!("crates/bench/examples/bench/main_tests.rs", "a_stall_shifts_one_sample_not_a_side", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/bench/examples/bench/run_tests.rs", "a_startup_timing_starts_at_the_clock_read_just_before_the_spawn", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/bench/examples/bench/wheel_tests.rs", "the_send_stamp_is_read_before_the_write_it_precedes", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/bench/examples/bench/wheel_tests.rs", "the_send_stamp_is_read_before_the_write_it_precedes", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/cli/src/hub_service_tests.rs", "a_hung_command_is_killed_and_reaped_past_its_wait", 1, LATE_WAKE, "6261259790"),
-    raw_advance!("crates/cli/src/hub_service_tests.rs", "an_exited_child_with_a_lingering_descendant_is_reaped_within_its_wait", 1, LATE_WAKE, "6261259790"),
-    raw_advance!("crates/cli/src/sessions_search_tests.rs", "session", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/cli/src/sessions_search_tests.rs", "control_characters_in_paths_stay_on_their_lines", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/cli/src/stop_tests.rs", "a_silent_hub_fails_at_the_deadline", 1, LATE_WAKE, "6261259790"),
-    raw_advance!("crates/cli/src/stop_tests.rs", "a_failed_close_read_is_lost_not_late", 1, LATE_WAKE, "6261259790"),
-    raw_advance!("crates/doors/src/isolation/timing_tests.rs", "create_opens_one_stamped_line_and_a_second_open_writes_nothing", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/doors/src/isolation/timing_tests.rs", "recreation_stamp_excludes_the_lock_claim_and_the_downgrade", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/doors/src/isolation/timing_tests.rs", "recreation_stamp_excludes_the_lock_claim_and_the_downgrade", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/git_tests.rs", "a_stalled_diff_fails_at_the_git_deadline", 1, POLL_PAUSE, "6260728504"),
-    raw_advance!("crates/extensions/src/hooks_tests.rs", "process_watcher_uses_the_session_clock", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "quota_now_refetches_only_after_the_freshness_boundary", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "quota_now_refetches_only_after_the_freshness_boundary", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "quota_cached_never_starts_a_fetch_even_after_the_freshness_boundary", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_fetch_times_out_at_exactly_eight_seconds", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_failed_fetch_is_unreachable_with_the_last_value_and_its_age", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_window_reads_as_reset_once_its_reset_time_passes", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_window_reads_as_reset_once_its_reset_time_passes", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "an_unreachable_last_value_maps_a_passed_reset_time", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_model_call_refetches_only_past_five_minutes", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_model_call_refetches_only_past_five_minutes", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "the_observed_factory_respects_freshness_for_its_bound_pair", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "the_observed_factory_respects_freshness_for_its_bound_pair", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "an_overdue_flight_clears_and_its_late_finish_is_discarded", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "an_overdue_finish_with_no_reader_is_discarded", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "finish_at_the_eight_second_boundary", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "finish_at_the_eight_second_boundary", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/lua_tests.rs", "the_thread_quits_after_the_running_callback_once_stopped", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/prepare_tests.rs", "a_stalled_install_step_is_stopped_at_its_deadline", 1, POLL_PAUSE, "6260728504"),
-    raw_advance!("crates/extensions/src/repository/declared_tests.rs", "stalled_ls_files_child", 1, POLL_PAUSE, "6260728504"),
-    raw_advance!("crates/extensions/src/repository/store_tests.rs", "a_stalled_install_step_approves_nothing_and_leaves_no_copy", 1, POLL_PAUSE, "6260728504"),
-    raw_advance!("crates/extensions/src/tui_vm_tests.rs", "loading_deadline_starts_before_source_read_and_precedes_read_error", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/src/tui_vm_tests.rs", "call_advancing", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/tests/common/mod.rs", "drive", 1, STALL_DRIVER, "6263191610"),
-    raw_advance!("crates/extensions/tests/credential_headers.rs", "a_refresh_replaces_the_token_and_its_headers_together", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/tests/credential_headers.rs", "a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_history_values", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/tests/credential_pair.rs", "a_background_refresh_of_one_pair_leaves_another_pair_alone", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/tests/lazy_commands.rs", "stalled_first_run", 1, LATE_WAKE, "6261259790"),
-    raw_advance!("crates/extensions/tests/lua.rs", "a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives", 1, LATE_WAKE, "6261259790"),
-    raw_advance!("crates/extensions/tests/lua_provider.rs", "a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/tests/lua_provider.rs", "sign_sees_the_extension_clocks_time_in_unix_seconds", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/extensions/tests/oauth.rs", "poll_that_times_out_while_sleeping_is_a_timeout", 1, LATE_WAKE, "6261259790"),
-    raw_advance!("crates/hub/src/connection_tests.rs", "the_idle_timer_starts_when_the_open_count_reaches_zero", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/hub/src/connection_tests.rs", "the_idle_timer_starts_when_the_open_count_reaches_zero", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/hub/src/connection_tests.rs", "rollback_removes_the_count_and_restarts_the_timer_at_zero", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/hub/src/connection_tests.rs", "rollback_removes_the_count_and_restarts_the_timer_at_zero", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/hub/src/idle_tests.rs", "an_accept_after_the_exit_claim_gets_eof_without_hello", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/hub/src/pairing_tests.rs", "authenticate_updates_last_connected", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/hub/src/resume_tests.rs", "a_command_whose_write_to_the_exiting_relay_fails_follows_the_rerouted_one", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "an_expired_end_with_no_stop_finishes_the_partial_round", 1, LATE_WAKE, "6261259790"),
-    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "a_dead_peer_abandons_the_write_as_gone", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "a_newline_terminated_ack_answers_without_a_close", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "buffered_events_plus_the_acknowledgement_answer_at_once", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "an_unconnected_socket_is_gone_not_waited_on", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/hub/src/timing_tests.rs", "a_held_summary_handshake_ends_the_timer_at_bind", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/hub/src/timing_tests.rs", "a_failed_transfer_is_stamped_for_the_next_drain", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/jobs/src/delegate/run_tests.rs", "wake_until_draining", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/jobs/src/delegate/run_tests.rs", "the_watch_stats_the_log_once_per_poll_interval", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/jobs/src/registry_tests.rs", "seam_write_succeeds_when_the_terminal_drains_before_the_deadline", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/jobs/src/timing_tests.rs", "through_launch", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/src/diag_tests.rs", "timed_text", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/src/search/session_tests.rs", "add", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/src/search/session_tests.rs", "add_action", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/src/search_tests.rs", "session", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/src/search_timing_tests.rs", "timed", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/src/write_timing_tests.rs", "timers_stamp_at_each_call_s_completion", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/src/write_timing_tests.rs", "timers_stamp_at_each_call_s_completion", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/src/write_timing_tests.rs", "timers_stamp_at_each_call_s_completion", 3, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 3, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 4, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 5, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/tests/search.rs", "a_search_never_returns_session_search_own_calls_or_results", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/tests/search.rs", "a_search_never_returns_session_search_own_calls_or_results", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/tests/search.rs", "a_search_never_returns_session_search_own_calls_or_results", 3, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/tests/search.rs", "a_search_never_returns_session_search_own_calls_or_results", 4, NO_PARK, "6179406086"),
-    raw_advance!("crates/log/tests/writing.rs", "a_line_carries_the_envelope_the_log_fills_in", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/src/asking_tests.rs", "a_changed_suspendable_request_restarts_the_idle_deadline", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/src/asking_tests.rs", "a_changed_suspendable_request_restarts_the_idle_deadline", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/src/changes_tests.rs", "date_advances_only_to_a_later_date", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/src/inbox/session_message_tests.rs", "a_hook_parked_past_its_registered_timeout_answers_hook_failed", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/src/late_cost_tests.rs", "a_stop_before_the_due_means_the_lookup_is_never_called", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/src/late_cost_tests.rs", "dropping_the_queue_stops_the_worker_before_the_due", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/src/retry_tests.rs", "now", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/tests/support/mod.rs", "run", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/loop/tests/warm.rs", "call", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/src/model_host_tests.rs", "clock_jump_past_deadline_during_retry_wait_fails", 1, LATE_WAKE, "6261259790"),
-    raw_advance!("crates/main/src/switch/read_tests.rs", "timeout_leaves_a_stubborn_group_listed_at_its_bound", 1, POLL_PAUSE, "6260728504"),
-    raw_advance!("crates/main/src/switch/read_tests.rs", "timeout_with_a_live_leader_answers_at_the_bound_without_the_reap", 1, POLL_PAUSE, "6260728504"),
-    raw_advance!("crates/main/src/switch/read_tests.rs", "a_key_finished_after_its_timeout_is_refused", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/src/switch/read_tests.rs", "settle_withheld_reap_spends_the_bound_with_the_group_listed", 1, POLL_PAUSE, "6260728504"),
-    raw_advance!("crates/main/src/switch/read_tests.rs", "settle_withheld_reap_spends_the_bound_with_the_group_listed", 2, POLL_PAUSE, "6260728504"),
-    raw_advance!("crates/main/src/switch/read_tests.rs", "settle_retries_a_perm_group_until_the_bound_then_fails", 1, POLL_PAUSE, "6260728504"),
-    raw_advance!("crates/main/src/switch/read_tests.rs", "settle_retries_a_perm_group_until_the_bound_then_fails", 2, POLL_PAUSE, "6260728504"),
-    raw_advance!("crates/main/src/switch/read_tests.rs", "an_empty_shutdown_answers_true_past_its_end", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/src/tui_extensions_tests.rs", "render_deadline_reports_typed_extension_failure_and_switches_off", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/deadline.rs", "a_socket_line_takes_what_remains_and_no_more", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/deadline.rs", "a_socket_line_takes_what_remains_and_no_more", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/deadline.rs", "a_socket_line_takes_what_remains_and_no_more", 3, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/deadline.rs", "bounded_returns_or_expires", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/look.rs", "a_reader_past_its_deadline_ends", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/look.rs", "until_hub_exits_with_panics_naming_what_when_the_hub_outlives_the_deadline", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/mcp_elicit.rs", "read_fifo_past_a_spent_deadline_times_out", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/mcp_elicit.rs", "a_hold_that_never_reaches_the_server_is_named", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/rail_focus.rs", "hint_lift_reports_which_condition_was_false_on_a_spent_deadline", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/rail_focus.rs", "hint_lift_reports_which_condition_was_false_on_a_spent_deadline", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/rail_focus.rs", "spent_wait_message_with_a_painted_first_card", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/session_search.rs", "session", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/sessions_search.rs", "session", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/support/pty.rs", "wait_screen_panics_with_the_checked_grid_and_names_the_deadline_left", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/main/tests/support/pty.rs", "wait_screen_leading_puts_the_lead_before_the_wait_and_the_screen", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/mcp/src/login_tests.rs", "drive_releasing_on_panic", 1, PANIC_RELEASE, "6203478697"),
-    raw_advance!("crates/mcp/src/login_tests.rs", "a_reset_in_the_drain_breaks_the_drain", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 3, NO_PARK, "6179406086"),
-    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 4, NO_PARK, "6179406086"),
-    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 5, NO_PARK, "6179406086"),
-    raw_advance!("crates/provider/src/call_tests.rs", "a_backwards_clock_contributes_zero", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/provider/src/call_tests.rs", "the_first_latch_wins", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/provider/src/call_tests.rs", "the_first_latch_wins", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/provider/src/call_tests.rs", "finish_writes_once", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/provider/src/http_tests.rs", "an_observed_open_with_timing_times_one_connector_scope", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/provider/src/http_tests.rs", "an_observed_run_with_timing_times_one_scope_and_reads_the_reply", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/provider/src/http_tests.rs", "the_net_scope_ends_while_the_response_is_held", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 3, NO_PARK, "6179406086"),
-    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 4, NO_PARK, "6179406086"),
-    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 5, NO_PARK, "6179406086"),
-    raw_advance!("crates/support/src/deadline_tests.rs", "no_time_left_gives_zero_and_never_renews", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/support/src/deadline_tests.rs", "no_time_left_gives_zero_and_never_renews", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_keeps_its_reserve_after_the_waits_end", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_keeps_its_reserve_after_the_waits_end", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_keeps_its_reserve_after_the_waits_end", 3, NO_PARK, "6179406086"),
-    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_phase_left_is_cleanup_at_three_instants", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_phase_left_is_cleanup_at_three_instants", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/tools/src/job_timing_tests.rs", "through_open", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tools/src/shell/monitor_tests.rs", "flood", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tools/src/shell/output_tests.rs", "the_first_change_goes_out_at_once_and_later_ones_collapse", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tools/src/shell/output_tests.rs", "the_first_change_goes_out_at_once_and_later_ones_collapse", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/tools/src/shell/output_tests.rs", "a_large_delta_pushes_the_next_one_out_by_its_size", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tools/src/shell/output_tests.rs", "a_large_delta_pushes_the_next_one_out_by_its_size", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/tools/src/shell/output_tests.rs", "an_incomplete_character_waits_for_its_other_half", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tools/src/shell/output_tests.rs", "a_dropped_queue_discards_the_carried_tail", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tools/src/shell/output_tests.rs", "a_kept_queue_keeps_the_carried_tail", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tools/src/shell/output_tests.rs", "held_text_across_not_yet_due_passes_is_capped_at_the_newest_64_kib", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "hub_session_not_found_refusal_retries_the_open_delegate_subscribe", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 3, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_card_refused_summary_is_resent_likewise", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "no_resend_after_the_parent_lists_the_job_completed", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "no_resend_with_the_link_down", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_refusal_with_another_code_is_never_resent_and_leaves_no_wish", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "the_wake_is_the_retry_then_nothing_once_in_flight", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_close_while_full_is_in_flight_waits_for_its_acknowledgement", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "two_refusals_keep_two_wishes", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/items_tests.rs", "a_pair_refused_session_not_found_retries_while_running", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/keyboard_screen_tests.rs", "ctrl_c_twice_within_the_window_quits_with_the_screen_open", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/keyboard_screen_tests.rs", "ctrl_c_with_the_notice_overlay_open_still_clears_then_quits", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app/rewind_tests.rs", "history_wait_times_out_as_a_lost_connection", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app_tests.rs", "ctrl_c_twice_within_the_window_quits", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/app_tests.rs", "ctrl_c_at_the_window_edge_rearms", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/event_loop/attach_tests.rs", "an_answer_at_the_deadline_is_stashed_and_lost", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/event_loop_rail_tests.rs", "the_loop_gives_the_app_the_wall_time", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/lib_motion_tests.rs", "a_tick_behind_a_key_is_acked_before_the_next", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/lib_motion_tests.rs", "a_waiting_card_arms_for_ten_seconds_then_stops", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/lib_motion_tests.rs", "a_waiting_card_arms_for_ten_seconds_then_stops", 2, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/paste_image_tests.rs", "event_wakes_the_worker_before_the_advance", 1, NO_PARK, "6179406086"),
-    raw_advance!("crates/tui/src/view/item_tests.rs", "completed_delegate_header_freezes_the_elapsed_and_drops_the_stop", 1, NO_PARK, "6179406086"),
+    raw_advance!("crates/bench/examples/bench/main_tests.rs", "a_stall_shifts_one_sample_not_a_side", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/bench/examples/bench/run_tests.rs", "a_startup_timing_starts_at_the_clock_read_just_before_the_spawn", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/bench/examples/bench/wheel_tests.rs", "the_send_stamp_is_read_before_the_write_it_precedes", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/bench/examples/bench/wheel_tests.rs", "the_send_stamp_is_read_before_the_write_it_precedes", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/cli/src/hub_service_tests.rs", "a_hung_command_is_killed_and_reaped_past_its_wait", 1, RawAdvanceReason::LateWake),
+    raw_advance!("crates/cli/src/hub_service_tests.rs", "an_exited_child_with_a_lingering_descendant_is_reaped_within_its_wait", 1, RawAdvanceReason::LateWake),
+    raw_advance!("crates/cli/src/sessions_search_tests.rs", "session", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/cli/src/sessions_search_tests.rs", "control_characters_in_paths_stay_on_their_lines", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/cli/src/stop_tests.rs", "a_silent_hub_fails_at_the_deadline", 1, RawAdvanceReason::LateWake),
+    raw_advance!("crates/cli/src/stop_tests.rs", "a_failed_close_read_is_lost_not_late", 1, RawAdvanceReason::LateWake),
+    raw_advance!("crates/doors/src/isolation/timing_tests.rs", "create_opens_one_stamped_line_and_a_second_open_writes_nothing", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/doors/src/isolation/timing_tests.rs", "recreation_stamp_excludes_the_lock_claim_and_the_downgrade", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/doors/src/isolation/timing_tests.rs", "recreation_stamp_excludes_the_lock_claim_and_the_downgrade", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/git_tests.rs", "a_stalled_diff_fails_at_the_git_deadline", 1, RawAdvanceReason::PollPause),
+    raw_advance!("crates/extensions/src/hooks_tests.rs", "process_watcher_uses_the_session_clock", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "quota_now_refetches_only_after_the_freshness_boundary", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "quota_now_refetches_only_after_the_freshness_boundary", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "quota_cached_never_starts_a_fetch_even_after_the_freshness_boundary", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_fetch_times_out_at_exactly_eight_seconds", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_failed_fetch_is_unreachable_with_the_last_value_and_its_age", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_window_reads_as_reset_once_its_reset_time_passes", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_window_reads_as_reset_once_its_reset_time_passes", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "an_unreachable_last_value_maps_a_passed_reset_time", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_model_call_refetches_only_past_five_minutes", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "a_model_call_refetches_only_past_five_minutes", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "the_observed_factory_respects_freshness_for_its_bound_pair", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "the_observed_factory_respects_freshness_for_its_bound_pair", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "an_overdue_flight_clears_and_its_late_finish_is_discarded", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "an_overdue_finish_with_no_reader_is_discarded", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "finish_at_the_eight_second_boundary", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_provider/quota_tests.rs", "finish_at_the_eight_second_boundary", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/lua_tests.rs", "the_thread_quits_after_the_running_callback_once_stopped", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/prepare_tests.rs", "a_stalled_install_step_is_stopped_at_its_deadline", 1, RawAdvanceReason::PollPause),
+    raw_advance!("crates/extensions/src/repository/declared_tests.rs", "stalled_ls_files_child", 1, RawAdvanceReason::PollPause),
+    raw_advance!("crates/extensions/src/repository/store_tests.rs", "a_stalled_install_step_approves_nothing_and_leaves_no_copy", 1, RawAdvanceReason::PollPause),
+    raw_advance!("crates/extensions/src/tui_vm_tests.rs", "loading_deadline_starts_before_source_read_and_precedes_read_error", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/src/tui_vm_tests.rs", "call_advancing", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/tests/common/mod.rs", "drive", 1, RawAdvanceReason::StallDriver),
+    raw_advance!("crates/extensions/tests/credential_headers.rs", "a_refresh_replaces_the_token_and_its_headers_together", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/tests/credential_headers.rs", "a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_history_values", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/tests/credential_pair.rs", "a_background_refresh_of_one_pair_leaves_another_pair_alone", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/tests/lazy_commands.rs", "stalled_first_run", 1, RawAdvanceReason::LateWake),
+    raw_advance!("crates/extensions/tests/lua.rs", "a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives", 1, RawAdvanceReason::LateWake),
+    raw_advance!("crates/extensions/tests/lua_provider.rs", "a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/tests/lua_provider.rs", "sign_sees_the_extension_clocks_time_in_unix_seconds", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/extensions/tests/oauth.rs", "poll_that_times_out_while_sleeping_is_a_timeout", 1, RawAdvanceReason::LateWake),
+    raw_advance!("crates/hub/src/connection_tests.rs", "the_idle_timer_starts_when_the_open_count_reaches_zero", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/hub/src/connection_tests.rs", "the_idle_timer_starts_when_the_open_count_reaches_zero", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/hub/src/connection_tests.rs", "rollback_removes_the_count_and_restarts_the_timer_at_zero", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/hub/src/connection_tests.rs", "rollback_removes_the_count_and_restarts_the_timer_at_zero", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/hub/src/idle_tests.rs", "an_accept_after_the_exit_claim_gets_eof_without_hello", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/hub/src/pairing_tests.rs", "authenticate_updates_last_connected", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/hub/src/resume_tests.rs", "a_command_whose_write_to_the_exiting_relay_fails_follows_the_rerouted_one", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "an_expired_end_with_no_stop_finishes_the_partial_round", 1, RawAdvanceReason::LateWake),
+    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "a_dead_peer_abandons_the_write_as_gone", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "a_newline_terminated_ack_answers_without_a_close", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "buffered_events_plus_the_acknowledgement_answer_at_once", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/hub/src/sessions_stop_tests.rs", "an_unconnected_socket_is_gone_not_waited_on", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/hub/src/timing_tests.rs", "a_held_summary_handshake_ends_the_timer_at_bind", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/hub/src/timing_tests.rs", "a_failed_transfer_is_stamped_for_the_next_drain", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/jobs/src/delegate/run_tests.rs", "wake_until_draining", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/jobs/src/delegate/run_tests.rs", "the_watch_stats_the_log_once_per_poll_interval", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/jobs/src/registry_tests.rs", "seam_write_succeeds_when_the_terminal_drains_before_the_deadline", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/jobs/src/timing_tests.rs", "through_launch", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/src/diag_tests.rs", "timed_text", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/src/search/session_tests.rs", "add", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/src/search/session_tests.rs", "add_action", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/src/search_tests.rs", "session", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/src/search_timing_tests.rs", "timed", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/src/write_timing_tests.rs", "timers_stamp_at_each_call_s_completion", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/src/write_timing_tests.rs", "timers_stamp_at_each_call_s_completion", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/src/write_timing_tests.rs", "timers_stamp_at_each_call_s_completion", 3, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 3, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 4, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/tests/search.rs", "a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project", 5, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/tests/search.rs", "a_search_never_returns_session_search_own_calls_or_results", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/tests/search.rs", "a_search_never_returns_session_search_own_calls_or_results", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/tests/search.rs", "a_search_never_returns_session_search_own_calls_or_results", 3, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/tests/search.rs", "a_search_never_returns_session_search_own_calls_or_results", 4, RawAdvanceReason::NoPark),
+    raw_advance!("crates/log/tests/writing.rs", "a_line_carries_the_envelope_the_log_fills_in", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/loop/src/asking_tests.rs", "a_changed_suspendable_request_restarts_the_idle_deadline", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/loop/src/asking_tests.rs", "a_changed_suspendable_request_restarts_the_idle_deadline", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/loop/src/changes_tests.rs", "date_advances_only_to_a_later_date", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/loop/src/inbox/session_message_tests.rs", "a_hook_parked_past_its_registered_timeout_answers_hook_failed", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/loop/src/late_cost_tests.rs", "a_stop_before_the_due_means_the_lookup_is_never_called", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/loop/src/late_cost_tests.rs", "dropping_the_queue_stops_the_worker_before_the_due", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/loop/src/retry_tests.rs", "now", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/loop/tests/support/mod.rs", "run", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/loop/tests/warm.rs", "call", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/src/model_host_tests.rs", "clock_jump_past_deadline_during_retry_wait_fails", 1, RawAdvanceReason::LateWake),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "timeout_leaves_a_stubborn_group_listed_at_its_bound", 1, RawAdvanceReason::PollPause),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "timeout_with_a_live_leader_answers_at_the_bound_without_the_reap", 1, RawAdvanceReason::PollPause),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "a_key_finished_after_its_timeout_is_refused", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "settle_withheld_reap_spends_the_bound_with_the_group_listed", 1, RawAdvanceReason::PollPause),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "settle_withheld_reap_spends_the_bound_with_the_group_listed", 2, RawAdvanceReason::PollPause),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "settle_retries_a_perm_group_until_the_bound_then_fails", 1, RawAdvanceReason::PollPause),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "settle_retries_a_perm_group_until_the_bound_then_fails", 2, RawAdvanceReason::PollPause),
+    raw_advance!("crates/main/src/switch/read_tests.rs", "an_empty_shutdown_answers_true_past_its_end", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/src/tui_extensions_tests.rs", "render_deadline_reports_typed_extension_failure_and_switches_off", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/deadline.rs", "a_socket_line_takes_what_remains_and_no_more", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/deadline.rs", "a_socket_line_takes_what_remains_and_no_more", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/deadline.rs", "a_socket_line_takes_what_remains_and_no_more", 3, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/deadline.rs", "bounded_returns_or_expires", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/look.rs", "a_reader_past_its_deadline_ends", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/look.rs", "until_hub_exits_with_panics_naming_what_when_the_hub_outlives_the_deadline", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/mcp_elicit.rs", "read_fifo_past_a_spent_deadline_times_out", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/mcp_elicit.rs", "a_hold_that_never_reaches_the_server_is_named", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/rail_focus.rs", "hint_lift_reports_which_condition_was_false_on_a_spent_deadline", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/rail_focus.rs", "hint_lift_reports_which_condition_was_false_on_a_spent_deadline", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/rail_focus.rs", "spent_wait_message_with_a_painted_first_card", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/session_search.rs", "session", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/sessions_search.rs", "session", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/support/pty.rs", "wait_screen_panics_with_the_checked_grid_and_names_the_deadline_left", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/main/tests/support/pty.rs", "wait_screen_leading_puts_the_lead_before_the_wait_and_the_screen", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/mcp/src/login_tests.rs", "drive_releasing_on_panic", 1, RawAdvanceReason::PanicRelease),
+    raw_advance!("crates/mcp/src/login_tests.rs", "a_reset_in_the_drain_breaks_the_drain", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 3, RawAdvanceReason::NoPark),
+    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 4, RawAdvanceReason::NoPark),
+    raw_advance!("crates/provider/src/call_tests.rs", "milestones_count_from_the_send_not_from_pre_send_work", 5, RawAdvanceReason::NoPark),
+    raw_advance!("crates/provider/src/call_tests.rs", "a_backwards_clock_contributes_zero", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/provider/src/call_tests.rs", "the_first_latch_wins", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/provider/src/call_tests.rs", "the_first_latch_wins", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/provider/src/call_tests.rs", "finish_writes_once", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/provider/src/http_tests.rs", "an_observed_open_with_timing_times_one_connector_scope", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/provider/src/http_tests.rs", "an_observed_run_with_timing_times_one_scope_and_reads_the_reply", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/provider/src/http_tests.rs", "the_net_scope_ends_while_the_response_is_held", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 3, RawAdvanceReason::NoPark),
+    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 4, RawAdvanceReason::NoPark),
+    raw_advance!("crates/support/src/deadline_tests.rs", "left_is_zero_from_the_waits_on_and_never_renews", 5, RawAdvanceReason::NoPark),
+    raw_advance!("crates/support/src/deadline_tests.rs", "no_time_left_gives_zero_and_never_renews", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/support/src/deadline_tests.rs", "no_time_left_gives_zero_and_never_renews", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_keeps_its_reserve_after_the_waits_end", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_keeps_its_reserve_after_the_waits_end", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_keeps_its_reserve_after_the_waits_end", 3, RawAdvanceReason::NoPark),
+    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_phase_left_is_cleanup_at_three_instants", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/support/src/deadline_tests.rs", "cleanup_phase_left_is_cleanup_at_three_instants", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tools/src/job_timing_tests.rs", "through_open", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tools/src/shell/monitor_tests.rs", "flood", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "the_first_change_goes_out_at_once_and_later_ones_collapse", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "the_first_change_goes_out_at_once_and_later_ones_collapse", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "a_large_delta_pushes_the_next_one_out_by_its_size", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "a_large_delta_pushes_the_next_one_out_by_its_size", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "an_incomplete_character_waits_for_its_other_half", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "a_dropped_queue_discards_the_carried_tail", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "a_kept_queue_keeps_the_carried_tail", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tools/src/shell/output_tests.rs", "held_text_across_not_yet_due_passes_is_capped_at_the_newest_64_kib", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "hub_session_not_found_refusal_retries_the_open_delegate_subscribe", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_view_refused_full_is_resent_once_at_the_retry", 3, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_card_refused_summary_is_resent_likewise", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "no_resend_after_the_parent_lists_the_job_completed", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "no_resend_with_the_link_down", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_refusal_with_another_code_is_never_resent_and_leaves_no_wish", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "the_wake_is_the_retry_then_nothing_once_in_flight", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "a_close_while_full_is_in_flight_waits_for_its_acknowledgement", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/items/retry_tests.rs", "two_refusals_keep_two_wishes", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/items_tests.rs", "a_pair_refused_session_not_found_retries_while_running", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/keyboard_screen_tests.rs", "ctrl_c_twice_within_the_window_quits_with_the_screen_open", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/keyboard_screen_tests.rs", "ctrl_c_with_the_notice_overlay_open_still_clears_then_quits", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app/rewind_tests.rs", "history_wait_times_out_as_a_lost_connection", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app_tests.rs", "ctrl_c_twice_within_the_window_quits", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/app_tests.rs", "ctrl_c_at_the_window_edge_rearms", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/event_loop/attach_tests.rs", "an_answer_at_the_deadline_is_stashed_and_lost", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/event_loop_rail_tests.rs", "the_loop_gives_the_app_the_wall_time", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/lib_motion_tests.rs", "a_tick_behind_a_key_is_acked_before_the_next", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/lib_motion_tests.rs", "a_waiting_card_arms_for_ten_seconds_then_stops", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/lib_motion_tests.rs", "a_waiting_card_arms_for_ten_seconds_then_stops", 2, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/paste_image_tests.rs", "event_wakes_the_worker_before_the_advance", 1, RawAdvanceReason::NoPark),
+    raw_advance!("crates/tui/src/view/item_tests.rs", "completed_delegate_header_freezes_the_elapsed_and_drops_the_stop", 1, RawAdvanceReason::NoPark),
 ];
 
 /// A raw `FakeClock::advance` or `advance_marked` call the checker proved.
@@ -680,24 +703,19 @@ fn raw_advance_sites_with(files: &[RustFile], allowances: &[RawAdvanceAllowance]
             let duplicates = matched.len();
             if duplicates == 1 {
                 if let Some(index) = matched.first() {
-                    let allowance = remaining.remove(*index);
-                    if !allowance_pair_valid(allowance.reason, allowance.ruling) {
-                        failures.push(format!(
-                            "{}:{}: raw FakeClock advance allowance is invalid (function {}, occurrence {}; reason {} with ruling {} is not a documented pair)",
-                            file.path,
-                            call.line,
-                            call.function,
-                            occurrence,
-                            allowance.reason,
-                            allowance.ruling
-                        ));
-                    }
+                    remaining.remove(*index);
                 }
             } else {
                 let reasons = matched
                     .iter()
                     .filter_map(|index| remaining.get(*index))
-                    .map(|allowance| format!("{} (ruling {})", allowance.reason, allowance.ruling))
+                    .map(|allowance| {
+                        format!(
+                            "{} (ruling {})",
+                            allowance.reason.reason(),
+                            allowance.reason.ruling()
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 for index in matched.into_iter().rev() {
@@ -728,8 +746,8 @@ fn raw_advance_sites_with(files: &[RustFile], allowances: &[RawAdvanceAllowance]
             allowance.path,
             allowance.function,
             allowance.occurrence,
-            allowance.reason,
-            allowance.ruling
+            allowance.reason.reason(),
+            allowance.reason.ruling()
         ));
     }
     failures
