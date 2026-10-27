@@ -893,16 +893,28 @@ a click on it returns too. The views are:
   ```
 - **`/keys`:** the rebinding screen ("Bindings").
 - **`/skills`:** one row per skill with its name, one-line description, where
-  it comes from (the repository, personal, an extension by name, or built in),
-  whether the model can see it, any skill it shadows, and whether it is
-  switched off. A switch turns a skill off or on for this project or
-  everywhere, writing `skills.disabled` in that layer; the change reaches the
-  model at the next turn start. Enter shows the skill's text, Ctrl+G opens its
-  file (`docs/system-prompt.md`, "Skills"); on a remote terminal it opens the
+  it comes from (`repo`, `personal`, an extension by its bare name, or
+  `built in`; an extension named `repo`, `personal` or `built in` reads
+  `extension <name>`), whether the model can see it (`seen` or `hidden`),
+  and any skill it shadows, plus whether it is switched off. A switch turns
+  a skill off or on for this project or everywhere, writing
+  `skills.disabled` in that layer; the change reaches the model at the next
+  turn start. Enter shows the skill's text, after every skill it shadows
+  with its source and path, Ctrl+G opens its file
+  (`docs/system-prompt.md`, "Skills"); on a remote terminal it opens the
   hub's copy instead ("Swapped views"). A row is "review · checks a diff
   · repo · seen · this project " and its switch, then " · everywhere " and
-  its switch, as on `/tools`; a shadowing skill adds "shadows <name>". The
-  last row is "Enter shows the text · Ctrl+G opens its file", dim.
+  its switch, as on `/tools`; a shadowing skill adds " · shadows <source>,
+  …" after the switches, cut with "…" so both switches stay whole.
+  Several shadowed sources list after one "shadows", separated by ", ",
+  most specific first (repo, personal, extensions by extension name, then
+  built in), each source once. An unresolved shadow path — no matching
+  skill entry, or an extension entry with no extension name — leaves out
+  the whole "shadows …" clause. When the row runs out of width
+  the description is cut first, then the name, then the skill's own source,
+  keeping room for " · shadows …"; the clause is left out only when the
+  fixed fields and both switches leave less than that minimum. The last row
+  is "Enter shows the text · Ctrl+G opens its file", dim.
 - **`/rewind`** ("Rewind").
 - **`/fork`:** rewinds to the end of the conversation ("Rewind").
 - **A repository's offer**, before a new session's first request ("Approving

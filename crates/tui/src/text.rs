@@ -152,13 +152,6 @@ pub(crate) fn cut_left(text: &str, max: usize) -> String {
     format!("…{}", kept.iter().rev().collect::<String>())
 }
 
-/// `text` in exactly `columns` terminal columns: padded, or cut with `…`.
-pub(crate) fn fit(text: &str, columns: usize) -> String {
-    let mut out = cut(text, columns, "…");
-    out.push_str(&" ".repeat(columns.saturating_sub(width(&out))));
-    out
-}
-
 /// A row or column count as a screen coordinate; a screen is never
 /// larger than `u16::MAX`.
 pub(crate) fn to_u16(value: usize) -> u16 {
