@@ -2748,9 +2748,9 @@ fn the_raise_is_written_after_the_frame_draws() {
         .get_mut()
         .set_nonblocking(false)
         .unwrap_or_else(|err| panic!("blocking: {err}"));
-    // Arm the raise read's deadline while the worker still parks: its
-    // join drops the loop and closes the peer, and macOS refuses the
-    // timeout on a closed peer with `EINVAL` (#3436).
+    // `frame-enter` above holds the worker in flush, so its loop and
+    // peer cannot drop until release below. Arm the read timeout first:
+    // macOS refuses this setup after the peer closes with `EINVAL` (#3436).
     reader
         .get_mut()
         .set_read_timeout(Some(DEADLINE))
