@@ -76,6 +76,7 @@ const DRAWN_ORDER: &[&str] = &[
     "keys",
     "skills",
     "rewind",
+    "fork",
     "handoff",
     "name",
     "login",

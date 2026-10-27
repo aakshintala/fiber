@@ -14,7 +14,7 @@ use contract::events::{
     SteeringQueue, TurnStarted,
 };
 use contract::shapes::ContentPart;
-use contract::{Envelope, HubLine, Seq, SessionId};
+use contract::{CommandId, Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
 use ratatui::layout::Rect;
 use serde_json::{Map, Value, json};
@@ -337,6 +337,10 @@ pub(crate) struct App {
     session_views: session_views::SessionViews,
     /// The `/rewind` view's state (`docs/tui.md`, "Rewind").
     rewind: rewind::Rewind,
+    /// A sent `/fork` waiting for its answer: its command id. It lives
+    /// beside the rewind view's state, so opening another view resets
+    /// that state without dropping the fork (`docs/tui.md`, "Rewind").
+    fork_pending: Option<CommandId>,
     /// The open delegate or job view and the per-job fold (`docs/tui.md`,
     /// "Swapped views").
     items: items::Items,
@@ -435,6 +439,7 @@ impl App {
             config_views: config_views::ConfigViews::default(),
             session_views: session_views::SessionViews::default(),
             rewind: rewind::Rewind::default(),
+            fork_pending: None,
             items: items::Items::default(),
             reconnect: reconnect::Reconnect::default(),
             launch_overrides: Vec::new(),
