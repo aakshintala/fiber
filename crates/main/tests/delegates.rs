@@ -1657,8 +1657,11 @@ fn assert_crash_ordered(actual: &[&str]) {
 
 /// `assert_crash_ordered` pins only promised order: both crash-boundary
 /// shapes pass, while a missing or reordered promised event fails. The
-/// joined shape is the #3416 sighting, whose finish met the still-running
-/// prompt turn; the split shape opens its own wake turn.
+/// joined shape holds the crashed end inside the still-running prompt turn
+/// because a waiting finish notice joins that turn at its next step
+/// (`docs/loop.md`, "One step"); the split shape holds the same end inside
+/// its own wake turn. Both keep `delegate_finished` just before
+/// `job_completed` (`docs/delegates.md`, "Events").
 #[test]
 fn assert_crash_ordered_pins_only_promised_order() {
     let split: Vec<&str> = [CRASH_PREFIX, CRASH_TURN_PAIR, CRASH_END, CRASH_REST].concat();
