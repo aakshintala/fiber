@@ -4584,7 +4584,9 @@ fn a_prompt_read_after_close_is_rejected_closing() {
     *super::lock(&gate.probe) = Some(Arc::new(move |point| {
         if point == Probe::CommandReserved && probe_armed.load(Ordering::SeqCst) {
             if let Ok(()) = reserved_tx.send(()) {}
-            let _ = lock(&release).recv();
+            match lock(&release).recv() {
+                Ok(()) | Err(_) => {}
+            }
         }
     }));
     let socket = opened.socket.clone();
