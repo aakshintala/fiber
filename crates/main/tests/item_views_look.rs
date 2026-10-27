@@ -76,15 +76,18 @@ fn write_shared(setup: &Setup, command: &str) {
 }
 
 /// Only the delegate is held: the parent spawns one delegate whose
-/// blocking step runs `head -n 1 <hold>`, then answers. No tty job
-/// starts, so releasing the hold finishes the delegate alone.
+/// blocking step runs `head -n 1 <hold>` in the background, then
+/// answers. The background move is immediate, so the panel row draws
+/// without the foreground's 30-second move wait; the held job still
+/// parks the delegate until the test releases it. No tty job starts,
+/// so releasing the hold finishes the delegate alone.
 fn delegate_setup() -> (Setup, fs::File, fakes::Watchdog) {
     let setup = Setup::new();
     let command = format!("head -n 1 {}", setup.workspace().join("hold").display());
     write_json(
         &setup.workspace().join("d.json"),
         &json!({"steps": [
-            {"tool_calls": [{"name": "shell", "arguments": {"command": command}}]},
+            {"tool_calls": [{"name": "shell", "arguments": {"command": command, "run_in_background": true}}]},
             {"text": ["Reviewed."]},
             {"text": ["Steered."]},
             // The tool result, the steer and the shell's own end each
