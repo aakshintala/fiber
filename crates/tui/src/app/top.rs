@@ -206,7 +206,11 @@ impl App {
         self.top_surfaces().into_iter().rev().filter(|surface| {
             matches!(
                 surface,
-                Surface::Report | Surface::Quit | Surface::Clear | Surface::HooksOffer
+                Surface::Report
+                    | Surface::Quit
+                    | Surface::Clear
+                    | Surface::HooksOffer
+                    | Surface::DeleteQuestion
             )
         })
     }

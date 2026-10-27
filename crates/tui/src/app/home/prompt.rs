@@ -21,7 +21,11 @@ mod exit;
 
 mod clear;
 
+mod delete;
+
 mod hooks_offer;
+
+use delete::DeleteCommand;
 
 /// A stop, delete or import waiting for its answer: a refusal becomes
 /// the row's note and a notice, an accepted delete drops the row, an
@@ -128,6 +132,10 @@ pub(super) struct Questions {
     /// The sessions `close` went out for from the quit question, with
     /// their close ids: a close never written keeps its resume line.
     closing: Vec<(SessionId, String)>,
+    /// `/delete` for the session on screen: its discovery, question and
+    /// confirmed stops, beside the asks they correlate. The module owns
+    /// the field; the rest of the app goes through its methods.
+    delete_command: DeleteCommand,
 }
 
 impl Questions {
@@ -189,7 +197,7 @@ impl App {
             return self.import_key(key);
         }
         match key {
-            Key::Enter => Some(self.send_delete()),
+            Key::Enter => Some(self.delete_question_enter()),
             Key::Esc => {
                 self.close_prompt();
                 Some(Effect::None)
@@ -229,7 +237,8 @@ impl App {
 
     /// Settles every delete waiting after a dropped connection: a
     /// delete is a hub command and is not resent, so each one settles
-    /// as unanswered, in id order. With no home it does nothing.
+    /// as unanswered, in id order, and the command's unanswered stops
+    /// end in its stop uncertainty. With no home it does nothing.
     pub(super) fn settle_deletes(&mut self) {
         let Some(home) = self.home.as_ref() else {
             return;
@@ -249,6 +258,7 @@ impl App {
                 self.answer_ask(ask, false, &payload);
             }
         }
+        self.delete_command_disconnected();
     }
 
     /// A row's ✕: `close` with `now` for a live session, stopping it,
@@ -312,22 +322,12 @@ impl App {
         }
     }
 
-    /// Opens the delete question for `id`'s row: `/delete` reaches the
-    /// session list's existing question from the session on screen. An
-    /// id with no row opens nothing.
-    pub(super) fn ask_delete_session(&mut self, id: &SessionId) {
-        let key = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.row(id))
-            .map(|row| row.key);
-        if let Some(key) = key {
-            self.ask_delete(key);
-        }
-    }
-
-    /// Closes the foot's question, keeping the session.
+    /// Closes the foot's question, keeping the session. Esc on the
+    /// command's question cancels the command with it.
     fn close_prompt(&mut self) {
+        if self.command_owns_prompt() {
+            self.delete_command_cancel();
+        }
         if let Some(home) = self.home.as_mut() {
             home.questions.prompt = None;
         }
@@ -335,8 +335,12 @@ impl App {
 
     /// Closes the delete question, keeping the session: a
     /// `Prompt::Delete` only. The quit question and no prompt stay as
-    /// they are.
+    /// they are. The ✕ on the command's question cancels the command
+    /// with it.
     pub(super) fn close_delete_prompt(&mut self) {
+        if self.command_owns_prompt() {
+            self.delete_command_cancel();
+        }
         if let Some(home) = self.home.as_mut()
             && matches!(home.questions.prompt, Some(Prompt::Delete { .. }))
         {
@@ -631,6 +635,9 @@ impl App {
                 Vec::new()
             }
             Ask::Delete(id) => {
+                if let Some(lines) = self.delete_command_delete_answer(&id, accepted, payload) {
+                    return lines;
+                }
                 if accepted {
                     self.clear_prompt(&id);
                     // The row's project goes with the refresh: the

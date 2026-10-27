@@ -162,7 +162,7 @@ pub(crate) static TABLE: &[CommandEntry] = &[
     },
     CommandEntry {
         name: "pwd",
-        description: "Shows the session's workspace; on home, shows the notice 'No session on screen'.",
+        description: "Shows the session's workspace; on home, shows the notice 'No session on screen.'.",
         hint: None,
         run: run_pwd,
     },
@@ -270,7 +270,7 @@ pub(crate) static TABLE: &[CommandEntry] = &[
     },
     CommandEntry {
         name: "delete",
-        description: "Deletes the session on screen.",
+        description: "Stops, then deletes the session on screen.",
         hint: None,
         run: run_delete,
     },
@@ -575,9 +575,13 @@ impl App {
         // `route_key`, so a paste or a home-owned arrow reaching here
         // changes neither the draft nor the surface behind them. They run
         // ahead of the picker, the chip row and the draft, as their keys
-        // run ahead of every other key path.
+        // run ahead of every other key path. The delete question swallows
+        // edits too, over the attached session as on home.
         let top = self.top_surface();
-        if matches!(top, Surface::Quit | Surface::Clear | Surface::Report) {
+        if matches!(
+            top,
+            Surface::Quit | Surface::Clear | Surface::Report | Surface::DeleteQuestion
+        ) {
             return Effect::None;
         }
         // The reviewer setup takes every edit while it is on top: a paste

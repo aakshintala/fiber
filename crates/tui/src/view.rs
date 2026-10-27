@@ -120,6 +120,25 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
     let (width, height) = app.screen_size();
     let screen = Rect::new(0, 0, width, height);
+    if frame == Surface::DeleteQuestion {
+        // The command's delete frame for outside-click math: nothing
+        // while no command question draws. It covers the attached
+        // conversation's column, as the frame draws there.
+        let Some((question, scroll)) = app.delete_command_frame() else {
+            return Rect::default();
+        };
+        let column = app.chrome().layout().map_or(screen, |layout| layout.column);
+        let mut buf = Buffer::empty(screen);
+        let mut targets = Vec::new();
+        return home::draw_command_delete_question(
+            app,
+            &question,
+            scroll,
+            column,
+            &mut buf,
+            &mut targets,
+        );
+    }
     let swapped = app.config_view_open() || app.model_picker_open() || app.keys_screen_open();
     let column = app.chrome().layout().map_or(screen, |layout| layout.column);
     let area = match (app.home_screen(), frame) {
@@ -172,6 +191,15 @@ fn draw_framed(
         } else if surface == Surface::Clear {
             let slab = clear::draw(app, area, buf, targets);
             app.frames().note(Surface::Clear, slab);
+        } else if surface == Surface::DeleteQuestion {
+            // The command's delete frame over the attached session: the
+            // same title, ✕, footer and wrapping home draws, with its
+            // permanence warning pinned.
+            if let Some((question, scroll)) = app.delete_command_frame() {
+                let slab =
+                    home::draw_command_delete_question(app, &question, scroll, area, buf, targets);
+                app.frames().note(Surface::DeleteQuestion, slab);
+            }
         }
     }
 }
