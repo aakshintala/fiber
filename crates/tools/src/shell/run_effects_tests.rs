@@ -97,6 +97,30 @@ fn sandbox_disabled_error(output: &Output) -> &str {
         .expect("the call fails")
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn an_unavailable_sandbox_does_not_declare_the_call_confined() {
+    let dir = fixture("fiber-run-effects-unavailable");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let settings = Arc::new(Mutex::new(Settings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: vec![workspace.join("secret")],
+        fiber_home: dir.path().join("fiber-home"),
+    }));
+    let shell =
+        Shell::new(workspace.clone(), fakes::clock::FakeClock::new()).with_sandbox(settings);
+    let args = arguments("cat secret", &workspace);
+
+    let effects = shell.effects(&args).expect("valid shell arguments");
+
+    assert!(
+        !effects.declared.confined,
+        "a deny overlapping the writable workspace stays on the reviewed path"
+    );
+}
+
 #[test]
 fn a_declared_confined_call_disabled_before_run_fails_without_running() {
     let dir = fixture("fiber-run-effects-off");

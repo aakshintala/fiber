@@ -263,7 +263,10 @@ fn resolve_target(path: &Path) -> Result<Option<PathBuf>, Unavailable> {
     let mut index = 0;
     loop {
         while index < components.len() {
-            let next = current.join(&components[index]);
+            let Some(component) = components.get(index) else {
+                break;
+            };
+            let next = current.join(component);
             match std::fs::symlink_metadata(&next) {
                 Err(_) => break,
                 Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -320,7 +323,7 @@ fn resolve_target(path: &Path) -> Result<Option<PathBuf>, Unavailable> {
             _ => break,
         }
     }
-    Ok(saw_link.then(|| current))
+    Ok(saw_link.then_some(current))
 }
 
 /// Prepares the Landlock grants and the seccomp program. A setup error
@@ -529,7 +532,6 @@ fn open_nofollow(path: &Path) -> Result<OwnedFd, String> {
         .union(OFlags::NOFOLLOW)
         .union(OFlags::CLOEXEC);
     rustix::fs::open(path, flags, rustix::fs::Mode::empty())
-        .map(Into::into)
         .map_err(|cause| format!("opening {}: {cause}", path.display()))
 }
 

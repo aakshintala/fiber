@@ -331,7 +331,7 @@ fn a_symlink_to_a_directory_denies_its_target_and_keeps_siblings() {
     std::fs::write(aws.join("file"), "shh").expect("write target file");
     std::fs::write(data.join("other"), "ok").expect("write data sibling");
     std::fs::write(home.join("sibling"), "ok").expect("write home sibling");
-    std::os::unix::fs::symlink(&aws, &home.join(".aws")).expect("link to the directory");
+    std::os::unix::fs::symlink(&aws, home.join(".aws")).expect("link to the directory");
     let mut settings = workspace_settings(&fiber_home);
     settings.deny_read.push(home.join(".aws"));
     let fixture = HomeFixture {
@@ -370,7 +370,7 @@ fn a_dangling_link_created_after_setup_stays_unreadable() {
     let fixture = HomeFixture::new("fiber-sandbox-dangling", &["home/link"]);
     // The link dangles at setup; its target arrives after, and the confined
     // read still cannot reach it.
-    std::os::unix::fs::symlink("target", &fixture.home.join("link")).expect("dangle the link");
+    std::os::unix::fs::symlink("target", fixture.home.join("link")).expect("dangle the link");
     std::fs::write(fixture.home.join("sibling"), "ok").expect("write sibling");
     std::fs::write(fixture.home.join("target"), "shh").expect("create the target after setup");
     let target = fixture.confined("cat target");

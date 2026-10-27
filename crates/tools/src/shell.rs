@@ -219,12 +219,11 @@ impl Shell {
         }
     }
 
-    /// The frozen sandbox settings and whether a call they decide is
-    /// confined, shared by [`Tool::effects`] and direct [`Tool::run`]: both
-    /// decide on the same value. Confinement is the person's intent on a
-    /// platform with the mechanism, not a live check: a setup that cannot
-    /// apply fails closed at spawn instead of silently running unconfined
-    /// (`docs/sandbox.md`, "When the sandbox is unavailable").
+    /// The current sandbox settings and whether the person enabled the
+    /// Linux policy. `effects` checks availability before declaring a call
+    /// confined; a call declared confined then fails closed if the policy
+    /// becomes unavailable before spawn (`docs/sandbox.md`, "When the
+    /// sandbox is unavailable").
     fn selected(&self) -> (sandbox::Settings, bool) {
         let settings = support::lock(&self.sandbox).clone();
         let confined = settings.enabled && cfg!(target_os = "linux");
@@ -304,10 +303,12 @@ impl Tool for Shell {
             }
             Err(_) => classify::executes(None, None),
         };
-        // The `confined` effect holds only for a Linux sandbox attempt the
-        // shell will run only inside; calls remain reviewed.
-        let (_, confined) = self.selected();
-        if confined {
+        // An unavailable sandbox does not mark the call confined: it stays
+        // on the reviewed path. Once declared confined, run_with_effects
+        // carries that decision unchanged and fails closed if availability
+        // changes before spawn.
+        let (settings, enabled) = self.selected();
+        if enabled && sandbox::check_available(&settings, &self.workspace).is_ok() {
             effects.declared.confined = true;
         }
         Ok(effects)

@@ -152,10 +152,6 @@ pub(crate) fn execute(
 /// The execution with the group probe and the member-query program
 /// injected, so a test can force the probe to lag the reap and point the
 /// listing at a fixture. Production passes the real probe and bare `ps`.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "spawn, the deadline, the move policy, the spill, the sandbox and the injected probe are one call"
-)]
 /// Marks a spawn failure as a sandbox-apply failure: the shell maps it to
 /// `ShellError::SandboxApply` instead of `NotStarted`, so a policy the
 /// kernel refused never reads as a missing program. Built in the parent,
@@ -174,6 +170,10 @@ impl std::fmt::Display for SandboxApply {
 
 impl std::error::Error for SandboxApply {}
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "spawn, the deadline, the move policy, the spill, the sandbox and the injected probe are one call"
+)]
 fn execute_inner(
     program: &Path,
     command: &str,
@@ -233,20 +233,14 @@ fn execute_inner(
     let prepared = if sandbox_settings.enabled {
         match super::sandbox::check_available(sandbox_settings, sandbox_workspace) {
             Err(unavailable) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    SandboxApply {
-                        cause: unavailable.to_string(),
-                    },
-                ));
+                return Err(std::io::Error::other(SandboxApply {
+                    cause: unavailable.to_string(),
+                }));
             }
             Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace) {
                 Ok(prepared) => Some(prepared),
                 Err(cause) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        SandboxApply { cause },
-                    ));
+                    return Err(std::io::Error::other(SandboxApply { cause }));
                 }
             },
         }
@@ -397,8 +391,8 @@ fn execute_inner(
 fn set_cloexec(stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
     use rustix::fd::AsFd as _;
     let fd = stream.as_fd();
-    let flags = rustix::io::fcntl_getfd(&fd)?;
-    rustix::io::fcntl_setfd(&fd, flags | rustix::io::FdFlags::CLOEXEC)?;
+    let flags = rustix::io::fcntl_getfd(fd)?;
+    rustix::io::fcntl_setfd(fd, flags | rustix::io::FdFlags::CLOEXEC)?;
     Ok(())
 }
 
@@ -437,7 +431,10 @@ fn read_sentinel(parent: std::os::unix::net::UnixStream) -> Option<std::io::Erro
     let mut bytes = [0u8; 4];
     let mut filled = 0;
     while filled < bytes.len() {
-        match parent.read(&mut bytes[filled..]) {
+        let Some(remaining) = bytes.get_mut(filled..) else {
+            break;
+        };
+        match parent.read(remaining) {
             Ok(0) => break,
             Ok(n) => filled += n,
             Err(_) => break,
@@ -445,12 +442,9 @@ fn read_sentinel(parent: std::os::unix::net::UnixStream) -> Option<std::io::Erro
     }
     if filled == bytes.len() {
         let code = i32::from_ne_bytes(bytes);
-        Some(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            SandboxApply {
-                cause: std::io::Error::from_raw_os_error(code).to_string(),
-            },
-        ))
+        Some(std::io::Error::other(SandboxApply {
+            cause: std::io::Error::from_raw_os_error(code).to_string(),
+        }))
     } else {
         None
     }
