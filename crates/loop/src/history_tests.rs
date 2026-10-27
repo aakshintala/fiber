@@ -1993,21 +1993,23 @@ fn added_dir(path: &str) -> Event {
 }
 
 #[test]
-fn directory_added_folds_into_the_added_folders_in_order() {
+fn directory_added_keeps_each_path_at_its_first_position_after_resume() {
     let (_home, sessions) = sessions("added");
     write_log(
         &sessions,
         A,
         &[
             envelope(A, 0, None, None, &started("/w", None)),
-            envelope(A, 1, None, None, &added_dir("/shared")),
-            envelope(A, 2, None, None, &added_dir("/other")),
+            envelope(A, 1, None, None, &added_dir("/other")),
+            envelope(A, 2, None, None, &added_dir("/shared")),
+            envelope(A, 3, None, None, &added_dir("/other")),
         ],
     );
     let folded = resumed(&sessions.join(A)).unwrap();
+    // B, A, B folds to B, A; a repeated path keeps its first-event position.
     assert_eq!(
         folded.added,
-        [PathBuf::from("/shared"), PathBuf::from("/other")]
+        [PathBuf::from("/other"), PathBuf::from("/shared")]
     );
 }
 

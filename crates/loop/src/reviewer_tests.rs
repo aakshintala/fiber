@@ -1013,9 +1013,10 @@ fn the_effects_item_names_the_added_folders_beside_the_workspace_root() {
         &prepared,
         "shell",
         "/work",
+        // B, A, B has folded to B, A before reaching the reviewer.
         &[
-            std::path::PathBuf::from("/shared"),
             std::path::PathBuf::from("/other"),
+            std::path::PathBuf::from("/shared"),
         ],
     ) {
         Input::User { text, .. } => text,
@@ -1031,7 +1032,7 @@ fn the_effects_item_names_the_added_folders_beside_the_workspace_root() {
         "Call under review: the last tool call above, shell."
     );
     assert_eq!(lines[lines.len() - 2], "Workspace root: /work");
-    assert_eq!(lines[lines.len() - 1], "Added folders: /shared, /other");
+    assert_eq!(lines[lines.len() - 1], "Added folders: /other, /shared");
 }
 
 mod supervised {
