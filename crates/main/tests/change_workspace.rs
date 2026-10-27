@@ -25,9 +25,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
-use fakes::{ProviderServer, Response};
+use fakes::{MUST_SUCCEED_WITHIN, ProviderServer, Response};
 use serde_json::{Value, json};
 use support::hello_item_done as hello;
 use support::*;
@@ -903,7 +902,7 @@ fn until_moved(setup: &Setup) -> (String, String) {
 #[track_caller]
 #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
 fn until_pwd_shows(run: &mut pty::Run, target: &str, deadline: Deadline) {
-    let (_, tick) = mpsc::channel::<()>();
+    let (_wake, tick) = mpsc::channel::<()>();
     loop {
         let contents = run.screen().contents.clone();
         if contents.contains(target) {
@@ -914,7 +913,11 @@ fn until_pwd_shows(run: &mut pty::Run, target: &str, deadline: Deadline) {
             "waited until the deadline for the target workspace {target} in a notice; screen:\n{contents}"
         );
         run.write(b"/pwd\r");
-        let _ = tick.recv_timeout(deadline.left().min(Duration::from_secs(1)));
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "poll pause inside the attach-retry loop, bounded by the test deadline"
+        )]
+        let _paused = tick.recv_timeout(deadline.left().min(MUST_SUCCEED_WITHIN));
     }
 }
 

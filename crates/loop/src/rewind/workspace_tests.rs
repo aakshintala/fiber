@@ -194,7 +194,7 @@ fn a_moved_aftermath_refuses_change_workspace_closing() {
         refuse_after_rewound(make(Ack(Box::new(move |answer| {
             let _sent = tx.send(answer);
         }))));
-        let rejection = fakes::Deadline::after(std::time::Duration::from_secs(5))
+        let rejection = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("the refusal answers");
         match rejection {

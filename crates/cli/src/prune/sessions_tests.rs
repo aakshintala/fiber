@@ -274,7 +274,6 @@ fn a_young_fork_blocks_an_old_root_and_the_row_names_it() {
 }
 
 #[test]
-#[test]
 fn a_young_moved_child_blocks_an_old_root_and_the_row_names_it() {
     let setup = Setup::new();
     moved_root(

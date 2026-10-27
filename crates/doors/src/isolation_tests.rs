@@ -1170,7 +1170,6 @@ fn a_rewound_creator_keeps_a_clean_worktree() {
 }
 
 #[test]
-#[test]
 fn a_moved_creator_keeps_a_clean_worktree() {
     fakes::within(
         "a_moved_creator_keeps_a_clean_worktree",

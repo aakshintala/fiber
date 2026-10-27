@@ -21,7 +21,7 @@ fn notices(app: &crate::app::App) -> Vec<(String, String)> {
         .into_iter()
         .filter_map(|line| match line {
             NoticeLine::Notice { code, text, .. } => Some((code, text)),
-            _ => None,
+            NoticeLine::More(_) => None,
         })
         .collect()
 }
