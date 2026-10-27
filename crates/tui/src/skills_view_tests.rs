@@ -1,7 +1,8 @@
-//! Tests for `/skills`: the rows in discovery order with source and
+//! Tests for `/skills`: one row per skill with its source and
 //! visibility, the two switches writing `skills.disabled`, and the answer
 //! matching its command (`docs/tui.md`, "Swapped views";
-//! `docs/system-prompt.md`, "Skills").
+//! `docs/system-prompt.md`, "Skills"). Row order is not a contract, so
+//! row checks find each row by its skill.
 
 use std::path::{Path, PathBuf};
 
@@ -152,9 +153,11 @@ fn before_the_answer_it_says_reading_and_has_no_rows() {
 }
 
 #[test]
-fn rows_keep_the_answers_order_with_source_and_visibility() {
-    // One row per skill (`docs/tui.md:885`); the rows follow the answer's
-    // discovery order (`docs/invocation.md:474`), which the view preserves.
+fn rows_show_source_and_visibility() {
+    // One row per skill (`docs/tui.md:895`); each row carries where its
+    // skill comes from and whether the model can see it. Row order is not
+    // a contract — the answer's discovery order is `docs/invocation.md:474`
+    // — so each check finds its row by skill name.
     let fake = fake_with(off(&[], &[]));
     let skills = opened(
         &fake,
@@ -167,17 +170,25 @@ fn rows_keep_the_answers_order_with_source_and_visibility() {
     );
     let shown = rows(&skills, 80, 22);
     assert_eq!(shown.len(), 4, "no header row: {shown:?}");
-    assert!(shown[0].contains("tdd"), "{shown:?}");
-    assert!(shown[0].contains("repo"), "{shown:?}");
-    assert!(!shown[0].contains("repository"), "{shown:?}");
-    assert!(shown[0].contains("seen"), "{shown:?}");
-    assert!(!shown[0].contains("model sees it"), "{shown:?}");
-    assert!(shown[1].contains("personal"), "{shown:?}");
-    assert!(shown[2].contains("memory"), "{shown:?}");
-    assert!(!shown[2].contains("extension memory"), "{shown:?}");
-    assert!(shown[2].contains("hidden"), "{shown:?}");
-    assert!(!shown[2].contains("person only"), "{shown:?}");
-    assert!(shown[3].contains("built in"), "{shown:?}");
+    let find = |name: &str| {
+        shown
+            .iter()
+            .find(|row| row.contains(name))
+            .cloned()
+            .unwrap_or_else(|| panic!("missing {name}: {shown:?}"))
+    };
+    let tdd = find("tdd");
+    assert!(tdd.contains("repo"), "{shown:?}");
+    assert!(!tdd.contains("repository"), "{shown:?}");
+    assert!(tdd.contains("seen"), "{shown:?}");
+    assert!(!tdd.contains("model sees it"), "{shown:?}");
+    assert!(find("mine").contains("personal"), "{shown:?}");
+    let recall = find("recall");
+    assert!(recall.contains("memory"), "{shown:?}");
+    assert!(!recall.contains("extension memory"), "{shown:?}");
+    assert!(recall.contains("hidden"), "{shown:?}");
+    assert!(!recall.contains("person only"), "{shown:?}");
+    assert!(find("built").contains("built in"), "{shown:?}");
 }
 
 #[test]
