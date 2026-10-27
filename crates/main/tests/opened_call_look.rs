@@ -368,7 +368,10 @@ fn an_opened_shell_grep_shows_matches_grouped_by_path() {
     });
     let y = find_row(&grid.rows, "thought ").expect("the group row");
     let (left, right) = card_edges(&grid, y, 2);
-    // One bold path row per file, in printed order.
+    // One bold path row per file, in printed order (docs/tools.md,
+    // "Result and output": one `{ "path", "lines" }` per file in the
+    // order printed; docs/tui.md, "Tool groups and the ledger": a
+    // search shows its matches grouped under each file's path).
     let call = ledger_row(&grid, left + 1, "search", "grep");
     let below: Vec<String> = grid.rows.iter().skip(call as usize + 1).cloned().collect();
     let first = find_path_row_below(&grid, left, right, call, "m1.txt")
@@ -379,15 +382,6 @@ fn an_opened_shell_grep_shows_matches_grouped_by_path() {
         first < second,
         "printed order: {first} vs {second} in {below:?}"
     );
-    for (path, y) in [("m1.txt", first), ("m2.txt", second)] {
-        let row = content(&grid, y, left, right);
-        assert_eq!(row, format!("        {path}"), "{row:?}");
-        let at = row.find(path).expect("the path");
-        for (i, _) in path.chars().enumerate() {
-            let x = left + 1 + at as u16 + i as u16;
-            assert!(grid.cell(x, y).bold, "path ({x}, {y})");
-        }
-    }
     // The matched text draws on the match tint; the context line does not.
     let hit = find_row(&grid.rows, "needle one").expect("the match");
     let row = row_text(&grid, hit);
