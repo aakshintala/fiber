@@ -724,19 +724,14 @@ impl App {
 
     /// The attached session's screen, for folding its lines.
     pub(super) fn attached_screen_mut(&mut self) -> &mut super::screen::Screen {
-        if self
-            .items
-            .open
-            .as_ref()
-            .is_some_and(|open| open.stashed.is_some())
-        {
-            self.items
-                .open
-                .as_mut()
-                .and_then(|open| open.stashed.as_mut())
-                .unwrap_or_else(|| unreachable!())
-        } else {
-            &mut self.screen
+        let Some(open) = self.items.open.as_mut() else {
+            return &mut self.screen;
+        };
+        // The stashed screen is showing exactly when it is present;
+        // otherwise the shown screen is the attached one.
+        match &mut open.stashed {
+            Some(stashed) => stashed,
+            None => &mut self.screen,
         }
     }
 
