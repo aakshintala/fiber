@@ -362,9 +362,6 @@ fn an_animation_due_joins_the_wake_minimum() {
     let origin = clock.origin();
     let mut app = app();
     app.set_now(origin, WALL);
-    // The spinner's ask: the next frame boundary, earlier than the
-    // animation's next frame.
-    app.motion().ask_frame();
     // A painted animation due on the resident cache.
     let cache = app.pages().ext.cache.clone();
     let input = crate::ext::Input::Notice(crate::ext::Notice {
@@ -404,7 +401,15 @@ fn an_animation_due_joins_the_wake_minimum() {
         .clone()
         .expect("tagged");
     cache.mark_painted(&[key]);
-    // The earliest wake wins: the frame boundary, not the animation.
+    // With no other moving item, the animation alone asks for its next
+    // frame.
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(500))
+    );
+    // The spinner's ask: the next frame boundary, earlier than the
+    // animation's next frame. The earliest wake wins.
+    app.motion().ask_frame();
     assert_eq!(
         app.take_wake(),
         origin.checked_add(Duration::from_millis(120))
