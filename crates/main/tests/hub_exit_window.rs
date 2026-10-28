@@ -164,7 +164,22 @@ impl World {
     /// can return on a replayed one while the session still runs.
     fn close_and_wait_exit(&self) {
         let last = self.client();
-        subscribe(&last, "c_finish_sub", &self.id);
+        // The session may already have exited and been removed before
+        // this subscribe lands (see #3533): a subscribe the hub cannot
+        // serve is refused `session_not_found`, and there is no second
+        // close to send then. Any other rejection still panics below, and
+        // the close acknowledgement stays strict.
+        last.send(&command(
+            "c_finish_sub",
+            &self.id,
+            "subscribe",
+            &json!({"level": "full"}),
+        ));
+        let ack = support::recv_answer(&last, "c_finish_sub", "the subscribe acknowledgement");
+        if ack["kind"] == "command_rejected" && ack["payload"]["code"] == "session_not_found" {
+            return;
+        }
+        assert_eq!(ack["kind"], "command_accepted", "{ack}");
         last.send(&close_as("c_finish", &self.id));
         // Consumed in order, so nothing before the close's answer is kept:
         // the fold's replayed exits stay behind, and the exit waited for
