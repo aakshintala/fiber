@@ -5372,8 +5372,10 @@ fn finish_terms_the_whole_group_despite_a_held_pipe() {
 fn held_group_member_reap_timeout_kills_and_reaps_before_panicking() {
     // A group of the test's own: a `sleep` leader gives the held member a
     // group to join, and no TERM is ever sent, so the member outlives the
-    // short deadline and the reap takes its timeout branch.
-    let mut leader = std::process::Command::new("sleep")
+    // short deadline and the reap takes its timeout branch. The leader
+    // lives in a `HeldGroupMember`, so its `Drop` KILLs and reaps it on
+    // every exit path: the sole cleanup owner, with no manual path beside it.
+    let leader_child = std::process::Command::new("sleep")
         .arg("60")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -5381,7 +5383,13 @@ fn held_group_member_reap_timeout_kills_and_reaps_before_panicking() {
         .process_group(0)
         .spawn()
         .expect("a group leader starts");
-    let mut held = HeldGroupMember::spawn(leader.id());
+    let leader_pid = leader_child.id();
+    let leader = HeldGroupMember {
+        child: Some(leader_child),
+        pid: leader_pid,
+        pgid: leader_pid,
+    };
+    let mut held = HeldGroupMember::spawn(leader.pid);
     let pid = held.pid;
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         held.reap_with(
@@ -5397,12 +5405,13 @@ fn held_group_member_reap_timeout_kills_and_reaps_before_panicking() {
         !fakes::pid_alive(pid),
         "a timed-out reap leaves no running process or zombie behind"
     );
-    match fakes::kill_pid(leader.id(), "KILL") {
-        Ok(_) | Err(_) => {}
-    }
-    match leader.wait() {
-        Ok(_) | Err(_) => {}
-    }
+    // The guard owns the leader's cleanup: dropping it KILLs and reaps
+    // the leader, so its pid reads dead with no second path beside it.
+    drop(leader);
+    assert!(
+        !fakes::pid_alive(leader_pid),
+        "dropping the leader guard leaves no running process or zombie behind"
+    );
 }
 
 /// The retire peer: it answers one delivery, reads its answer's fate,
