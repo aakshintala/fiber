@@ -4,7 +4,9 @@ Whether another allocator lowers Fiber's resident memory is for the memory
 budget to measure (`docs/dependencies.md`, "Measuring memory"). This
 directory holds that one measurement: the attach timing, the attach peak
 and both retained rows (`docs/performance.md`, "Budgets") on three builds
-of the same commit, five samples each, on the same Linux x86_64 runner:
+of the same commit, five samples each, on the same Linux x86_64 runner,
+plus a fourth result rerunning the mimalloc binary with
+`MIMALLOC_PURGE_DELAY=0`:
 
 1. the musl release binary with its system allocator, the target that
    ships (`docs/releasing.md`)
@@ -12,12 +14,16 @@ of the same commit, five samples each, on the same Linux x86_64 runner:
    inside the job only and never committed
 3. an `x86_64-unknown-linux-gnu` release build, which uses glibc's
    allocator
+4. the musl-mimalloc binary of (2) through a shell wrapper exporting
+   `MIMALLOC_PURGE_DELAY=0` and forwarding every argument unchanged, with
+   no new build
 
 The manual workflow `.github/workflows/allocator-compare.yml` builds the
-three binaries, runs the full benchmark harness five times on each, and
-uploads the three result files with the commit, the runner and the
-resolved mimalloc version. The full harness runs so the attach rows keep
-their paging-jig stages; the comparison reads only the five rows below.
+three binaries, runs the full benchmark harness five times on each build
+and a fourth time on the mimalloc binary through the wrapper, and uploads
+the four result files with the commit, the runner and the resolved
+mimalloc version. The full harness runs so the attach rows keep their
+paging-jig stages; the comparison reads only the five rows below.
 It never runs on a push or a pull request: `workflow_dispatch` needs the
 file on `main`, so the first numbers arrive after this ticket merges.
 
