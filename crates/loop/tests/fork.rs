@@ -82,6 +82,7 @@ fn point(dir: &std::path::Path, request: usize) -> Point {
     Point {
         session_id: line.session_id.clone(),
         seq: Seq(line.seq.unwrap().0 - 1),
+        project: None,
     }
 }
 

@@ -38,6 +38,7 @@ fn opened(argv: &[String], dir: &std::path::Path, view: View) -> Result<(), Stri
 fn viewed(rx: &mpsc::Receiver<Input>) -> Result<(), String> {
     match Deadline::after(MUST_SUCCEED_WITHIN).recv(rx) {
         Ok(Input::Viewed { result, .. }) => result,
+        Ok(Input::Converted { .. }) => panic!("the worker answered something else"),
         Ok(
             Input::Bytes(_)
             | Input::Hub(_)

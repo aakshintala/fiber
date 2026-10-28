@@ -244,6 +244,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_rewind,
     },
     CommandEntry {
+        name: "cd",
+        description: "Moves the session to another workspace.",
+        hint: Some("<path>"),
+        run: run_cd,
+    },
+    CommandEntry {
         name: "fork",
         description: "Rewinds to the end of the conversation.",
         hint: None,
@@ -494,6 +500,32 @@ fn run_skills(app: &mut App, _rest: &str) -> Option<Effect> {
 fn run_rewind(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::Rewind))
+}
+
+fn run_cd(app: &mut App, rest: &str) -> Option<Effect> {
+    Some(app.send_change_workspace(rest))
+}
+
+impl App {
+    /// Sends `change_workspace` with `rest` as the path: with no path
+    /// the notice says so and nothing goes out, leaving the draft for
+    /// the path. A nonempty path goes out unchanged as the JSON string,
+    /// never evaluated as a shell command. Records the session on
+    /// screen, so a late answer after a switch elsewhere never attaches.
+    fn send_change_workspace(&mut self, rest: &str) -> Effect {
+        if rest.is_empty() {
+            self.push_notice("usage", "/cd needs a path.".to_owned());
+            return Effect::None;
+        }
+        let Some((session, _)) = self.command_session() else {
+            return Effect::None;
+        };
+        let (effect, id) = self.send_command("change_workspace", Some(json!({"path": rest})));
+        if let Some(id) = id {
+            self.change_workspace.begin(id, session);
+        }
+        effect
+    }
 }
 
 fn run_fork(app: &mut App, _rest: &str) -> Option<Effect> {

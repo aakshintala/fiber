@@ -14,11 +14,13 @@ use std::path::{Path, PathBuf};
 
 use crate::conversation::{rebuild_and_sent, summary_conversation};
 use contract::events::{
-    Anchor, CacheLifetime, CallStatus, Control, DecidedBy, Decision, Environment, Event,
+    Anchor, CacheLifetime, CallStatus, Control, DecidedBy, Decision, Environment, Event, Grant,
     HandoffCompleted, HandoffStarted, HandoffTrigger, InputItem, ModelChanged, ModelSettings,
-    OpeningMessage, Outcome, PermissionResolved, PreambleBuilt, PreambleReason, RanBy,
-    SessionStarted, SkillLoad, SkillSent, SkillsResent, SteeringApplied, SwitchSource,
-    ToolCallCompleted, ToolCallRequested, TurnStarted, UsageRecorded, Variables, VariablesSource,
+    Moved, OfferDecision, OfferedItem, OfferedKind, OpeningMessage, Outcome, Parent,
+    PermissionResolved, PreambleBuilt, PreambleReason, RanBy, RepositoryCodeOffered,
+    RepositoryCodeResolved, Rewound, SessionStarted, SkillLoad, SkillSent, SkillsResent,
+    SteeringApplied, SwitchSource, ToolCallCompleted, ToolCallRequested, TurnStarted,
+    UsageRecorded, Variables, VariablesSource,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Origin, Point, Sender, Tokens};
@@ -30,6 +32,7 @@ use crate::resume::resumed;
 
 const A: &str = "s_aaaaaaaaaaaaaaaa";
 const B: &str = "s_bbbbbbbbbbbbbbbb";
+const C: &str = "s_cccccccccccccccc";
 
 fn envelope(
     session: &str,
@@ -62,6 +65,7 @@ fn started(workspace: &str, from: Option<(&str, u64)>) -> Event {
         forked_from: from.map(|(session, seq)| Point {
             session_id: SessionId(session.to_owned()),
             seq: Seq(seq),
+            project: None,
         }),
         rewind: None,
         worktree: None,
@@ -1983,4 +1987,370 @@ fn a_reviewer_kept_after_the_cut_inserts_nothing() {
     assert_eq!(after.len(), 3);
     assert!(matches!(&after[0], Input::User { text, .. } if text.contains("2023-11-14")));
     assert_eq!(after[1..], [user("B"), user("")]);
+}
+
+/// A granted permission: the grant the fold carries.
+fn granted(tool: &str) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        call: None,
+        request_id: None,
+        decision: Decision::Allow,
+        decided_by: DecidedBy::Reviewer,
+        reason: None,
+        feedback: None,
+        grant: Some(Grant {
+            tool: tool.to_owned(),
+            prefix: "cargo".to_owned(),
+        }),
+        rule: None,
+        reviewer: None,
+        hosts: None,
+    })
+}
+
+/// A `session_started` in `workspace`, from a delegate `parent` and a
+/// `forked_from` point: the delegate and move shapes the fold tells apart
+/// by `parent` and the workspace alone.
+fn started_as(workspace: &str, parent: Option<&str>, from: Option<(&str, u64)>) -> Event {
+    Event::SessionStarted(SessionStarted {
+        workspace: workspace.to_owned(),
+        variables: Variables {
+            path: "/usr/bin".to_owned(),
+            names: Vec::new(),
+            source: VariablesSource::Inherited,
+        },
+        parent: parent.map(|session| Parent {
+            session_id: SessionId(session.to_owned()),
+            delegate_id: contract::JobId("j_1".to_owned()),
+        }),
+        forked_from: from.map(|(session, seq)| Point {
+            session_id: SessionId(session.to_owned()),
+            seq: Seq(seq),
+            project: None,
+        }),
+        rewind: None,
+        worktree: None,
+        supervised: false,
+    })
+}
+
+/// The old log's last line continuing `next` at `seq`.
+fn rewound(next: &str, seq: u64) -> Event {
+    Event::Rewound(Rewound {
+        new_session_id: SessionId(next.to_owned()),
+        seq: Seq(seq),
+        from_session_id: None,
+        summary: None,
+    })
+}
+
+/// The old log's last line moving to `next` at `seq`.
+fn moved(next: &str, seq: u64) -> Event {
+    Event::Moved(Moved {
+        new_session_id: SessionId(next.to_owned()),
+        seq: Seq(seq),
+        workspace: "/w2".to_owned(),
+    })
+}
+
+/// An offer of one skippable item: open while unresolved.
+fn offered_item(id: &str) -> Event {
+    Event::RepositoryCodeOffered(RepositoryCodeOffered {
+        request_id: contract::RequestId(id.to_owned()),
+        items: vec![OfferedItem {
+            kind: OfferedKind::Extension,
+            name: "n".to_owned(),
+            hash: "h".to_owned(),
+            required: false,
+            summary: "s".to_owned(),
+            files: Vec::new(),
+            version: None,
+            diff: None,
+        }],
+    })
+}
+
+/// The person's skip of the `offered_item` offer.
+fn skipped(id: &str) -> Event {
+    Event::RepositoryCodeResolved(RepositoryCodeResolved {
+        request_id: contract::RequestId(id.to_owned()),
+        decisions: vec![OfferDecision::Skip],
+    })
+}
+
+/// A rewind edge and a move edge fold in one pass: the rewind keeps the
+/// old workspace's state, and the move into another workspace drops the
+/// grants and offers folded before it while keeping the session's model
+/// and handoff state.
+#[test]
+fn a_rewind_then_a_move_clears_grants_and_offers_on_entry() {
+    let (_home, sessions) = sessions("fold-move");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &built(Some("work"))),
+            envelope(A, 2, None, None, &granted("shell")),
+            envelope(A, 3, None, None, &offered_item("r_1")),
+            envelope(A, 4, None, None, &rewound(B, 4)),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[
+            envelope(B, 0, None, None, &started_as("/w", None, Some((A, 4)))),
+            envelope(B, 1, None, None, &granted("git")),
+            envelope(B, 2, None, None, &offered_item("r_2")),
+            envelope(B, 3, None, None, &moved(C, 3)),
+        ],
+    );
+    write_log(
+        &sessions,
+        C,
+        &[envelope(
+            C,
+            0,
+            None,
+            None,
+            &started_as("/w2", None, Some((B, 3))),
+        )],
+    );
+    let folded = resumed(&sessions.join(C)).unwrap();
+    assert_eq!(folded.session, C);
+    assert_eq!(folded.root, A);
+    assert_eq!(folded.workspace, "/w2");
+    // The rewind into the same workspace kept both; the move into
+    // another cleared them on entry.
+    assert!(folded.grants.is_empty(), "{:?}", folded.grants);
+    assert_eq!(folded.offers.counts(), (0, 0));
+    // The session's other handoff state survives the move: its model,
+    // credential and window.
+    assert_eq!(folded.model.as_deref(), Some("fake/model-1"));
+    assert_eq!(folded.credential.as_deref(), Some("work"));
+    assert_eq!(folded.window, (0, 0));
+}
+
+/// A move into the same workspace keeps the grants and offers folded
+/// before it: only a workspace change clears them.
+#[test]
+fn a_move_into_the_same_workspace_keeps_grants_and_offers() {
+    let (_home, sessions) = sessions("fold-same-workspace");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &granted("shell")),
+            envelope(A, 2, None, None, &offered_item("r_1")),
+            envelope(A, 3, None, None, &skipped("r_1")),
+            envelope(A, 4, None, None, &offered_item("r_2")),
+            envelope(A, 5, None, None, &moved(B, 5)),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[envelope(
+            B,
+            0,
+            None,
+            None,
+            &started_as("/w", None, Some((A, 5))),
+        )],
+    );
+    let folded = resumed(&sessions.join(B)).unwrap();
+    assert_eq!(folded.grants.len(), 1);
+    assert_eq!(folded.grants[0].tool, "shell");
+    // The skip resolved before the move stays skipped, and the open
+    // offer stays open.
+    assert_eq!(folded.offers.counts(), (1, 1));
+}
+
+/// A cross-workspace delegate fork keeps both: its `parent` names the
+/// delegating turn, so the reset for moves never runs for it.
+#[test]
+fn a_cross_workspace_fork_with_a_parent_keeps_grants_and_offers() {
+    let (_home, sessions) = sessions("fold-delegate");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &granted("shell")),
+            envelope(A, 2, None, None, &offered_item("r_1")),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[envelope(
+            B,
+            0,
+            None,
+            None,
+            &started_as("/w2", Some(A), Some((A, 2))),
+        )],
+    );
+    let folded = resumed(&sessions.join(B)).unwrap();
+    assert_eq!(folded.grants.len(), 1);
+    assert_eq!(folded.grants[0].tool, "shell");
+    assert_eq!(folded.offers.counts(), (1, 0));
+}
+
+/// A grant resolved after the move folds again: the reset clears the
+/// staging area on entry, not the child's own lines after it.
+#[test]
+fn a_grant_after_the_move_folds_after_the_reset() {
+    let (_home, sessions) = sessions("fold-after-move");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &granted("shell")),
+            envelope(A, 2, None, None, &moved(B, 2)),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[
+            envelope(B, 0, None, None, &started_as("/w2", None, Some((A, 2)))),
+            envelope(B, 1, None, None, &granted("git")),
+        ],
+    );
+    let folded = resumed(&sessions.join(B)).unwrap();
+    assert_eq!(folded.grants.len(), 1);
+    assert_eq!(folded.grants[0].tool, "git");
+}
+
+/// A workspace change clears grants and offers only without a parent:
+/// the same workspace keeps both, and a delegate fork into another
+/// workspace keeps both, so the `&&` in the guard is load-bearing.
+#[test]
+fn a_workspace_change_clears_grants_and_offers_only_without_a_parent() {
+    fn child_started(workspace: &str, parent: Option<Parent>) -> Event {
+        Event::SessionStarted(SessionStarted {
+            workspace: workspace.to_owned(),
+            variables: Variables {
+                path: "/usr/bin".to_owned(),
+                names: Vec::new(),
+                source: VariablesSource::Inherited,
+            },
+            parent,
+            forked_from: None,
+            rewind: None,
+            worktree: None,
+            supervised: false,
+        })
+    }
+
+    fn echo_grant() -> Event {
+        Event::PermissionResolved(PermissionResolved {
+            call: None,
+            request_id: None,
+            decision: Decision::Allow,
+            decided_by: DecidedBy::Person,
+            reason: None,
+            feedback: None,
+            grant: Some(Grant {
+                tool: "shell".to_owned(),
+                prefix: "echo".to_owned(),
+            }),
+            rule: None,
+            reviewer: None,
+            hosts: None,
+        })
+    }
+
+    fn check(
+        name: &str,
+        workspace: &str,
+        parent: Option<Parent>,
+        grants: usize,
+        offers: (usize, usize),
+    ) {
+        let (_home, sessions) = sessions(name);
+        write_log(
+            &sessions,
+            A,
+            &[
+                envelope(A, 0, None, None, &started("/a", None)),
+                envelope(A, 1, None, None, &echo_grant()),
+                envelope(A, 2, None, None, &offered("r_offer")),
+            ],
+        );
+        write_log(
+            &sessions,
+            B,
+            &[envelope(
+                B,
+                0,
+                None,
+                None,
+                &child_started(workspace, parent),
+            )],
+        );
+        let folded = fold(&[
+            log::Segment {
+                session_id: SessionId(A.to_owned()),
+                dir: sessions.join(A),
+                to: Some(Seq(2)),
+            },
+            log::Segment {
+                session_id: SessionId(B.to_owned()),
+                dir: sessions.join(B),
+                to: None,
+            },
+        ])
+        .unwrap();
+        assert_eq!(folded.grants.len(), grants);
+        assert_eq!(folded.offers.counts(), offers);
+        assert_eq!(folded.workspace, workspace);
+    }
+
+    check("guard-same-workspace", "/a", None, 1, (1, 0));
+    check("guard-move", "/b", None, 0, (0, 0));
+    check(
+        "guard-delegate",
+        "/b",
+        Some(Parent {
+            session_id: SessionId(A.to_owned()),
+            delegate_id: contract::JobId("j_parent".to_owned()),
+        }),
+        1,
+        (1, 0),
+    );
+}
+
+/// A parent start cannot make an own segment without `session_started`
+/// look valid: the workspace must come from the own segment.
+#[test]
+fn a_parent_session_started_does_not_supply_the_own_workspace() {
+    let (_home, sessions) = sessions("fold-missing-own-start");
+    write_log(
+        &sessions,
+        A,
+        &[envelope(A, 0, None, None, &started("/a", None))],
+    );
+    write_log(&sessions, B, &[]);
+
+    let segments = [
+        log::Segment {
+            session_id: SessionId(A.to_owned()),
+            dir: sessions.join(A),
+            to: Some(Seq(0)),
+        },
+        log::Segment {
+            session_id: SessionId(B.to_owned()),
+            dir: sessions.join(B),
+            to: None,
+        },
+    ];
+    assert!(matches!(
+        fold(&segments),
+        Err(crate::Error::NoSessionStarted)
+    ));
 }

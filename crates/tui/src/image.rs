@@ -26,7 +26,8 @@ pub(crate) struct Part {
     /// draws two images, resolved under different `artifacts/` dirs.
     pub(crate) session: SessionId,
     pub(crate) path: String,
-    /// Its type, such as `image/png`: only PNG draws inline
+    /// Its type, such as `image/png`: PNG draws inline, and JPEG and
+    /// WebP do while the sizing's converter is available
     /// (`docs/tui.md`, "Images").
     pub(crate) mime_type: String,
     pub(crate) width: u32,
@@ -81,8 +82,16 @@ pub(crate) enum Sizing {
     #[default]
     Text,
     /// The placeholder grid with this cell size in pixels, then the
-    /// caption line (`docs/tui.md`, "Images").
-    Inline { cell: (u16, u16) },
+    /// caption line (`docs/tui.md`, "Images"). `converts` names whether
+    /// the image child is available to turn a stored JPEG or WebP into
+    /// the PNG kitty's protocol takes.
+    Inline { cell: (u16, u16), converts: bool },
+}
+
+/// Whether `mime` draws inline: PNG always, JPEG and WebP only when the
+/// image child's converter is available (`docs/tui.md`, "Images").
+pub(crate) fn inline_type(mime: &str, converts: bool) -> bool {
+    mime == "image/png" || (converts && matches!(mime, "image/jpeg" | "image/webp"))
 }
 
 /// The placeholder grid's caps: at most 40% of the conversation's width
@@ -316,8 +325,8 @@ pub(crate) enum Align {
 /// Draws `part` as its one line, cut to the columns left after its
 /// indent so it is always one row, carrying its click target. The line
 /// reads `▣ <name>` in the link look and ` · <dims>` dim
-/// (`docs/tui.md`, "Images", "Links"). A prompt bubble's PNG draws its
-/// inline grid with its caption under its text where the sizing is
+/// (`docs/tui.md`, "Images", "Links"). A prompt bubble's inline image
+/// draws its inline grid with its caption under its text where the sizing is
 /// inline, with or without text; steering images stay the one line.
 /// `columns` always sizes the shared grid, while `bubble_block_width`
 /// caps a prompt bubble's caption and fallback text at its actual
@@ -341,10 +350,10 @@ pub(crate) fn rows(
 /// Draws `part` under a prompt bubble's text, right-aligned with the
 /// bubble: the shared conversation-width grid, then its caption cut to
 /// the bubble's actual wrapped width. True when the grid drew: the
-/// sizing is inline, the part is a noted PNG on a placeholder-eligible
-/// id, and the image neither failed nor draws flat. Anything else
-/// falls back to the one clickable line (`docs/tui.md`, "Images";
-/// ticket #687 Part 2b, "Only PNG draws inline").
+/// sizing is inline, the part is a noted inline type on a
+/// placeholder-eligible id, and the image neither failed nor draws
+/// flat. Anything else falls back to the one clickable line
+/// (`docs/tui.md`, "Images").
 fn inline_bubble_rows(
     part: &Part,
     layout: &Layout,
@@ -352,10 +361,10 @@ fn inline_bubble_rows(
     block: u16,
     out: &mut Rows,
 ) -> bool {
-    let Sizing::Inline { cell } = layout.sizing else {
+    let Sizing::Inline { cell, converts } = layout.sizing else {
         return false;
     };
-    if part.mime_type != "image/png" {
+    if !inline_type(&part.mime_type, converts) {
         return false;
     }
     if layout.failed(&part.session, &part.path) || out.seam.as_ref().is_some_and(|seam| seam.flat) {
@@ -386,8 +395,8 @@ fn inline_bubble_rows(
 
 /// Draws `part` under a call's ledger row: its one line when the sizing
 /// is text, the flat seam shows, or its display failed; otherwise the
-/// placeholder grid with its caption for a noted PNG, and the one line
-/// for anything else (`docs/tui.md`, "Images").
+/// placeholder grid with its caption for a noted inline type, and the
+/// one line for anything else (`docs/tui.md`, "Images").
 pub(crate) fn ledger_rows(
     part: &Part,
     layout: &Layout,
@@ -395,7 +404,7 @@ pub(crate) fn ledger_rows(
     align: Align,
     out: &mut Rows,
 ) {
-    let Sizing::Inline { cell } = layout.sizing else {
+    let Sizing::Inline { cell, converts } = layout.sizing else {
         text_rows(part, layout, columns, align, None, out);
         return;
     };
@@ -407,10 +416,10 @@ pub(crate) fn ledger_rows(
         return;
     }
     match align {
-        // Only a noted PNG on a placeholder-eligible id under a call's
-        // ledger row draws inline; past the range the image keeps its
-        // one clickable line with its unique viewer target.
-        Align::Left { indent } if indent > 0 && part.mime_type == "image/png" => {
+        // Only a noted inline type on a placeholder-eligible id under a
+        // call's ledger row draws inline; past the range the image keeps
+        // its one clickable line with its unique viewer target.
+        Align::Left { indent } if indent > 0 && inline_type(&part.mime_type, converts) => {
             if let Some(id) = layout.id(&part.session, &part.path)
                 && placeholder_eligible(id)
             {
@@ -551,6 +560,16 @@ pub(crate) struct View {
     pub(crate) session: String,
     pub(crate) data: String,
     pub(crate) generation: u64,
+}
+
+/// One queued conversion: the answered JPEG or WebP bytes in base64,
+/// held until the one worker starts its child, with the session
+/// generation and placeholder id that asked, so a stale completion
+/// after a session change draws nowhere (`docs/tui.md`, "Images").
+pub(crate) struct Convert {
+    pub(crate) generation: u64,
+    pub(crate) id: u32,
+    pub(crate) data: String,
 }
 
 /// What the app queues for the loop: the terminal never writes to the

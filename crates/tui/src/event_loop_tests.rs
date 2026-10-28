@@ -2501,6 +2501,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
         {
             Input::FindDue(generation) => generations.push(generation),
             Input::Tick => panic!("a pause sent a tick"),
+            Input::Converted { .. } => panic!("a pause sent something else"),
             Input::Bytes(_)
             | Input::Hub(_)
             | Input::Connected(..)
@@ -3092,6 +3093,7 @@ fn the_signal_thread_sends_each_taken_signal() {
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the signal: {err}"))
     {
         Input::Signal(got) => assert_eq!(got, SIGUSR1),
+        Input::Converted { .. } => panic!("the signal thread sent something else"),
         Input::Bytes(_)
         | Input::Hub(_)
         | Input::Connected(..)
