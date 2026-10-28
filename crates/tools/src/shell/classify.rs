@@ -18,14 +18,18 @@ use super::read_only::{Command, EXACT};
 use super::syntax::{Redirect, Script, Simple, Stage, Word};
 use super::wrap::{self, Unwrapped};
 
-/// Effects of `command` run in `workdir`. A command the tree-sitter parse
-/// rejects, or any element not on the read-only list, is `executes` with no
-/// paths. The single simple stage's raw tokens are the subject.
-/// `configured` holds the person's `shell.read_only` entries beside the
-/// built-in list: an element no built-in path owns falls back to them, and
-/// a built-in path answers first so configuration cannot widen it.
+/// Effects of `command` run in `workdir` under the session `workspace`. A
+/// command the tree-sitter parse rejects, or any element not on the
+/// read-only list, is `executes` with no paths. The single simple stage's
+/// raw tokens are the subject. `workspace` is the trust anchor for the
+/// workspace's GitHub remote owners: the call's `workdir` only resolves
+/// paths, never owners. `configured` holds the person's `shell.read_only`
+/// entries beside the built-in list: an element no built-in path owns
+/// falls back to them, and a built-in path answers first so configuration
+/// cannot widen it.
 pub(super) fn classify(
     command: &str,
+    workspace: &Path,
     workdir: &Path,
     configured: &[(String, Vec<String>)],
 ) -> Effects {
@@ -33,7 +37,7 @@ pub(super) fn classify(
         return executes(None, None);
     };
     let (subject, prefix) = subject_and_prefix(&script);
-    match outcome(&script, workdir, configured) {
+    match outcome(&script, workspace, workdir, configured) {
         Outcome::Reads(paths) => reads(paths, subject, prefix),
         Outcome::Network(paths) => network(paths, subject, prefix),
         Outcome::Executes => executes(subject, prefix),
@@ -88,11 +92,12 @@ fn declared(
 /// no trustworthy parts.
 pub(super) fn not_shown_read_only(
     command: &str,
+    workspace: &Path,
     workdir: &Path,
     configured: &[(String, Vec<String>)],
 ) -> Option<String> {
     let script = super::syntax::parse(command)?;
-    let walked = walk(&script, workdir, configured);
+    let walked = walk(&script, workspace, workdir, configured);
     let shown = walked.parts.iter().any(|part| part.shown);
     let unshown: Vec<&str> = walked
         .parts
@@ -109,6 +114,15 @@ pub(super) fn not_shown_read_only(
         .collect::<Vec<_>>()
         .join(", ");
     Some(format!("Not shown read-only: {unshown}"))
+}
+
+/// The trust context for one classification: the session workspace root
+/// that owns the GitHub remote owners, beside the call's own workdir,
+/// which only resolves paths, and whether the command holds a `cd`.
+struct Trust<'a> {
+    workspace: &'a Path,
+    workdir: &'a Path,
+    has_cd: bool,
 }
 
 /// The subject reviewers see and the prefix allow rules match: the single
@@ -201,8 +215,13 @@ fn push_unshown(walked: &mut Walked, stages: &[Stage]) {
     }
 }
 
-fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]) -> Outcome {
-    let walked = walk(script, workdir, configured);
+fn outcome(
+    script: &Script,
+    workspace: &Path,
+    workdir: &Path,
+    configured: &[(String, Vec<String>)],
+) -> Outcome {
+    let walked = walk(script, workspace, workdir, configured);
     if walked.saw_executes {
         Outcome::Executes
     } else if walked.saw_network {
@@ -212,7 +231,17 @@ fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]
     }
 }
 
-fn walk(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]) -> Walked {
+fn walk(
+    script: &Script,
+    workspace: &Path,
+    workdir: &Path,
+    configured: &[(String, Vec<String>)],
+) -> Walked {
+    let trust = Trust {
+        workspace,
+        workdir,
+        has_cd: script_has_cd(script),
+    };
     let mut walked = Walked {
         saw_executes: false,
         saw_network: false,
@@ -267,6 +296,7 @@ fn walk(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]) -
                 saw_cd,
                 &stdin_words,
                 stdin_known && stdin_static,
+                &trust,
             );
             let network = matches!(verdict, Outcome::Network(_));
             let shown = !matches!(verdict, Outcome::Executes);
@@ -296,6 +326,7 @@ fn stage_outcome(
     saw_cd: bool,
     stdin_words: &[String],
     stdin_proven: bool,
+    trust: &Trust,
 ) -> Outcome {
     let Stage::Simple(simple) = stage else {
         // An unlisted or refused stage: a loop body, a heredoc with a body,
@@ -357,62 +388,117 @@ fn stage_outcome(
     // An exact form reads with no paths: `git status`, `git stash list`
     // or `git branch --show-current`, whatever wrapper leads it, where
     // the repository guards pass.
-    let verdict = if EXACT.iter().any(|row| cooked_equals(words, row)) {
-        Outcome::Reads(Vec::new())
+    let (verdict, gh_entry) = if EXACT.iter().any(|row| cooked_equals(words, row)) {
+        (Outcome::Reads(Vec::new()), None)
     } else if words.first().is_some_and(|word| word.cooked == "sed") {
         // `sed` has its own print-only grammar, not a table row.
         let files = words.iter().skip(1).map(|word| word.cooked.as_str());
         let Some(files) = super::sed::files(files) else {
             return Outcome::Executes;
         };
-        path_tail(&files, dirs)
+        (path_tail(&files, dirs), None)
     } else {
         match entry::find(words, configured) {
-            Found::Builtin(entry) => builtin_outcome(words, entry, dirs),
-            Found::Configured(flags, consumed) => {
-                entry::configured_outcome(flags, rest_after(words, consumed), dirs)
-            }
-            Found::None => Outcome::Executes,
+            Found::Builtin(entry) => (builtin_outcome(words, entry, dirs), Some(entry)),
+            Found::Configured(flags, consumed) => (
+                entry::configured_outcome(flags, rest_after(words, consumed), dirs),
+                None,
+            ),
+            Found::None => (Outcome::Executes, None),
         }
     };
     networked(
         with_inputs(git_guarded(verdict, words, dirs), simple, dirs),
         words,
+        trust,
+        gh_entry,
     )
 }
 
 /// A `gh` read hits the API: it declares `Network` with the default host
-/// beside the paths it read. A `--repo`/`-R` value naming a host reaches
-/// past that endpoint, so the call is reviewed instead. Any other verdict
-/// passes through.
-fn networked(verdict: Outcome, words: &[Word]) -> Outcome {
+/// beside the paths it read, unless it is own: every repository it names
+/// belongs to an owner of the session workspace's `github.com` remotes,
+/// and then it declares `reads` with the paths it read. A `--repo`/`-R`
+/// value naming a host reaches past that endpoint, so the call is reviewed
+/// instead. A configured `gh` entry keeps `network`: only the built-in
+/// reads qualify, because Fiber knows their flags and operands. Any other
+/// verdict passes through.
+fn networked(
+    verdict: Outcome,
+    words: &[Word],
+    trust: &Trust,
+    gh_entry: Option<&Command>,
+) -> Outcome {
     let Outcome::Reads(paths) = verdict else {
         return verdict;
     };
     if !is_gh(words) {
         return Outcome::Reads(paths);
     }
-    if repo_selects_host(words) {
+    if repo_selects_host(words, gh_entry) {
         return Outcome::Executes;
     }
-    Outcome::Network(paths)
+    let Some(entry) = gh_entry else {
+        return Outcome::Network(paths);
+    };
+    match super::gh_owner::standing(words, entry, trust.workspace, trust.workdir, trust.has_cd) {
+        super::gh_owner::Standing::Own => Outcome::Reads(paths),
+        super::gh_owner::Standing::Foreign => Outcome::Network(paths),
+    }
 }
 
 /// Whether a `--repo`/`-R` value in a `gh` call names a host:
 /// `HOST/OWNER/REPO` reaches past the default endpoint, so the call is
 /// reviewed. A bare `OWNER/REPO`, or a value with no slash, cannot name
-/// one. A `--repo` word consumed as another flag's value keeps its
-/// own meaning, but such a call is reviewed too: it stays fail-closed.
-fn repo_selects_host(words: &[Word]) -> bool {
-    words
-        .iter()
-        .any(|word| word.cooked.strip_prefix("--repo=").is_some_and(has_host))
-        || words.windows(2).any(|pair| {
-            let [flag, value] = pair else {
-                return false;
-            };
-            (flag.cooked == "--repo" || flag.cooked == "-R") && has_host(&value.cooked)
-        })
+/// one. Only a `--repo`/`-R` in flag position counts: a word another flag
+/// consumed keeps its own meaning there, so `gh pr view --json --repo
+/// h/o/r` stays `network` instead of tripping the host check.
+fn repo_selects_host(words: &[Word], gh_entry: Option<&Command>) -> bool {
+    let Some(entry) = gh_entry else {
+        return words
+            .iter()
+            .any(|word| word.cooked.strip_prefix("--repo=").is_some_and(has_host))
+            || words.windows(2).any(|pair| {
+                let [flag, value] = pair else {
+                    return false;
+                };
+                (flag.cooked == "--repo" || flag.cooked == "-R") && has_host(&value.cooked)
+            });
+    };
+    let mut rest = words.iter().skip(entry.name.split(' ').count());
+    let mut ended = false;
+    while let Some(word) = rest.next() {
+        match entry::word_at(word, ended, entry) {
+            entry::WordAt::EndFlags => ended = true,
+            entry::WordAt::Flag => {
+                // The entry already accepted this `--repo=` when the verdict
+                // read, so only the host decides here.
+                if let Some(value) = word.cooked.strip_prefix("--repo=")
+                    && has_host(value)
+                {
+                    return true;
+                }
+                if word.cooked.contains('=') {
+                    continue;
+                }
+                let Some(flag) = entry.flags.iter().find(|flag| flag.spelling == word.cooked)
+                else {
+                    continue;
+                };
+                if !flag.takes_value {
+                    continue;
+                }
+                let Some(value) = rest.next() else {
+                    return false;
+                };
+                if (word.cooked == "--repo" || word.cooked == "-R") && has_host(&value.cooked) {
+                    return true;
+                }
+            }
+            entry::WordAt::Operand(_) => {}
+        }
+    }
+    false
 }
 
 /// Whether a `--repo`/`-R` value holds a host part: more than
@@ -577,6 +663,16 @@ fn resolve_canonical(path: &Path) -> Option<PathBuf> {
 /// Whether a stage runs `cd`: its first word is exactly `cd`.
 fn is_cd(simple: &Simple) -> bool {
     simple.words.first().is_some_and(|word| word.cooked == "cd")
+}
+
+/// Whether any simple stage of the command runs `cd`: an unnamed `gh`
+/// read is own only when the command holds no `cd`, wherever it stands.
+fn script_has_cd(script: &Script) -> bool {
+    script
+        .elements
+        .iter()
+        .flat_map(|element| element.stages.iter())
+        .any(|stage| matches!(stage, Stage::Simple(simple) if is_cd(simple)))
 }
 
 /// Whether a stage's words run `gh`: the first word's basename is `gh`.

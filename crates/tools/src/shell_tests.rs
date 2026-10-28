@@ -48,7 +48,7 @@ fn run_details_call(shell: Shell, arguments: Map<String, Value>) -> contract::to
 fn nullable_optional_arguments_parse_as_absent() {
     let dir = fakes::TempDir::new("fiber-shell-nullable");
     let arguments = fakes::tool_args(json!({"command": "ls", "workdir": null, "timeout_ms": null,
-        "run_in_background": null, "tty": null, "monitor": null, "deadline_ms": null}));
+        "run_in_background": null, "tty": null, "monitor": null}));
     let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
     assert_eq!(parsed.command, "ls");
     assert_eq!(parsed.mode, Mode::Foreground);
@@ -65,8 +65,7 @@ fn nullable_optional_arguments_parse_as_absent() {
             "timeout_ms",
             "run_in_background",
             "tty",
-            "monitor",
-            "deadline_ms"
+            "monitor"
         ])
     );
     for (key, kind) in [
@@ -75,10 +74,22 @@ fn nullable_optional_arguments_parse_as_absent() {
         ("run_in_background", "boolean"),
         ("tty", "boolean"),
         ("monitor", "boolean"),
-        ("deadline_ms", "integer"),
     ] {
         assert_eq!(schema["properties"][key]["type"], json!([kind, "null"]));
     }
+    assert!(schema["properties"].get("deadline_ms").is_none());
+    assert_eq!(
+        schema["properties"]["timeout_ms"]["description"],
+        json!(
+            "How long the command may run, in milliseconds. The default is 600000; \
+             for a monitor, the default is 300000 and the maximum is 1800000 \
+             (600000 in a non-interactive run)."
+        )
+    );
+    assert!(tool.definition().description.contains(
+        "`timeout_ms` defaults to 600000, or to 300000 for a monitor. \
+             A monitor's maximum is 1800000, or 600000 in a non-interactive run."
+    ));
     for (overrides, mode, timeout) in [
         (json!({"monitor": true}), Mode::Monitor, 300_000),
         (
@@ -114,13 +125,36 @@ fn nullable_optional_arguments_parse_as_absent() {
         Some(ShellError::MonitorAlone)
     ));
     assert!(matches!(
-        refused(json!({"monitor": true, "timeout_ms": 0})),
-        Some(ShellError::MonitorTimeout)
+        refused(json!({"monitor": true, "timeout_ms": 600_001})),
+        Some(ShellError::DeadlineTooLong { .. })
     ));
-    assert!(matches!(
-        refused(json!({"deadline_ms": 0})),
-        Some(ShellError::DeadlineWithoutMonitor)
-    ));
+    // An ordinary command has no maximum: null, zero and past the monitor
+    // cap all parse.
+    for timeout in [Value::Null, json!(0), json!(1_000), json!(10_000_000)] {
+        let mut args = arguments.clone();
+        args.extend(json!({"timeout_ms": timeout}).as_object().unwrap().clone());
+        let parsed = parse(&args, dir.path(), 600_000).unwrap();
+        assert_eq!(parsed.mode, Mode::Foreground);
+        assert_eq!(parsed.timeout_ms, timeout.as_u64().unwrap_or(600_000));
+    }
+    // A monitor takes `timeout_ms` or the 5-minute default, up to the cap.
+    for (given, limit) in [
+        (Value::Null, 300_000),
+        (json!(0), 0),
+        (json!(1_000), 1_000),
+        (json!(600_000), 600_000),
+    ] {
+        let mut args = arguments.clone();
+        args.extend(
+            json!({"monitor": true, "timeout_ms": given})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let parsed = parse(&args, dir.path(), 600_000).unwrap();
+        assert_eq!(parsed.mode, Mode::Monitor);
+        assert_eq!(parsed.timeout_ms, limit);
+    }
 }
 
 #[test]
@@ -799,12 +833,8 @@ fn a_monitor_call_that_breaks_a_rule_never_starts() {
     };
     let cases = [
         (
-            with(&[("deadline_ms", json!(1_000))]),
-            "set `monitor: true`",
-        ),
-        (
-            with(&[("monitor", json!(true)), ("timeout_ms", json!(1_000))]),
-            "A monitor's limit is `deadline_ms`.",
+            with(&[("monitor", json!(true)), ("timeout_ms", json!(1_800_001))]),
+            "`timeout_ms` is more than 1800000, the longest a monitor may run here. Give 1800000 or less.",
         ),
         (
             with(&[("monitor", json!(true)), ("tty", json!(true))]),
@@ -813,10 +843,6 @@ fn a_monitor_call_that_breaks_a_rule_never_starts() {
         (
             with(&[("monitor", json!(true)), ("run_in_background", json!(true))]),
             "`monitor` cannot be combined",
-        ),
-        (
-            with(&[("monitor", json!(true)), ("deadline_ms", json!(1_800_001))]),
-            "more than 1800000",
         ),
     ];
     for (arguments, needle) in cases {
@@ -854,7 +880,7 @@ fn a_non_interactive_shell_allows_a_deadline_of_ten_minutes_at_most() {
         .with_jobs(jobs.clone())
         .non_interactive();
     let mut arguments = monitor_args(&format!("touch {}", marker.display()));
-    arguments.insert("deadline_ms".into(), json!(600_001));
+    arguments.insert("timeout_ms".into(), json!(600_001));
     let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     assert!(
@@ -876,15 +902,11 @@ fn a_deadline_at_the_limit_is_accepted() {
     let batch = Shell::new(dir.path().to_path_buf(), FakeClock::new())
         .with_jobs(jobs.clone())
         .non_interactive();
-    for (shell, deadline) in [(&interactive, 1_800_000), (&batch, 600_000)] {
+    for (shell, limit) in [(&interactive, 1_800_000), (&batch, 600_000)] {
         let mut arguments = monitor_args("exit 0");
-        arguments.insert("deadline_ms".into(), json!(deadline));
+        arguments.insert("timeout_ms".into(), json!(limit));
         let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
-        assert_ne!(
-            code(&output),
-            Some(ErrorCode::InvalidArguments),
-            "{deadline}"
-        );
+        assert_ne!(code(&output), Some(ErrorCode::InvalidArguments), "{limit}");
     }
 }
 
@@ -894,9 +916,9 @@ fn a_bare_wait_is_refused_for_a_monitor() {
     let marker = dir.path().join("marker");
     let jobs = fakes::jobs::FakeJobs::new(dir.path());
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
-    // A zero deadline, so a command that wrongly starts stops at once.
+    // A zero limit, so a command that wrongly starts stops at once.
     let mut arguments = monitor_args(&format!("sleep 30; touch {}", marker.display()));
-    arguments.insert("deadline_ms".into(), json!(0));
+    arguments.insert("timeout_ms".into(), json!(0));
     let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     assert!(text(&output).contains("jobs wait"), "{}", text(&output));

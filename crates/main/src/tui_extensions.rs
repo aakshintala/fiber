@@ -641,6 +641,15 @@ fn entry_value(entry: &tui::ext::TurnEntry<'_>) -> Value {
         tui::ext::TurnEntry::Steer { text, images, ts } => {
             json!({"kind": "steer", "text": text, "images": images_value(images), "ts": ts})
         }
+        tui::ext::TurnEntry::Message {
+            source,
+            label,
+            text,
+            images,
+            ts,
+        } => {
+            json!({"kind": "message", "source": source, "label": label, "text": text, "images": images_value(images), "ts": ts})
+        }
         tui::ext::TurnEntry::Group(group) => {
             let (running, cut) = match group.state {
                 tui::ext::TurnGroupState::Running => (true, false),

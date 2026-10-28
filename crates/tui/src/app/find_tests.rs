@@ -186,7 +186,7 @@ pub(super) fn count(app: &App) -> String {
 
 /// One durable session envelope with `seq`, recorded in `log` for the
 /// fake hub's answers.
-fn numbered(
+pub(super) fn numbered(
     log: &mut Vec<contract::Envelope>,
     seq: &mut u64,
     kind: &str,

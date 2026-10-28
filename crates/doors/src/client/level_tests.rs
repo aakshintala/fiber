@@ -210,6 +210,7 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
     log.append(
         &Event::SessionStatus(contract::events::SessionStatus {
             name: "two".into(),
+            named: false,
             workspace: "/w".into(),
             parent: None,
             model: "m".into(),
