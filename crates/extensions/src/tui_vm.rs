@@ -83,7 +83,9 @@ pub struct Span {
 /// fills the tables the prelude returns. Lua's own `wrap` is a separate C
 /// function that would make an unarmed coroutine.
 // A callback's timeout is in milliseconds (docs/extensions.md, "How an
-// extension runs"). `animate` is read by the animation work, not here.
+// extension runs"), and an animated slot's `animate` holds its raw
+// `{ interval_ms }` table: the adapter normalizes it to the tick floor
+// at registration, while the VM stores the validated raw value.
 const PRELUDE: &str = r#"
 local create, loading, valid = ...
 local slots, violations = {}, {}
@@ -130,17 +132,38 @@ fiber = {
     if type(spec.render) ~= "function" then
       refuse("fiber.slot: `" .. shown .. "`: `render` must be a function")
     end
-    slots[name] = { timeout = spec.timeout, render = spec.render }
+    if spec.animate ~= nil then
+      if type(spec.animate) ~= "table" then
+        refuse("fiber.slot: `" .. shown .. "`: `animate` must be a table with `interval_ms`")
+      end
+      if math.type(spec.animate.interval_ms) ~= "integer" or spec.animate.interval_ms <= 0 then
+        refuse("fiber.slot: `" .. shown .. "`: `animate.interval_ms` must be a whole number of milliseconds above 0")
+      end
+    end
+    slots[name] = { timeout = spec.timeout, render = spec.render, animate = spec.animate }
   end,
 }
 
 return slots, violations
 "#;
 
-/// A registered slot: its declared timeout and its renderer.
+/// A registered slot: its declared timeout, its renderer, and the raw
+/// validated animation interval when the slot animates.
 struct Slot {
     timeout: Duration,
     render: Function,
+    animate: Option<Duration>,
+}
+
+/// What an animated call returned: its lines, and whether the item keeps
+/// animating. A plain list or `{ lines }` continues at the declared
+/// interval; only `{ lines, animate = false }` stops, drawing once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderOut {
+    /// The drawn lines.
+    pub lines: Vec<Vec<Span>>,
+    /// Whether the item's animation continues.
+    pub continues: bool,
 }
 
 /// One extension's Lua VM, owned by the thread that calls it. It holds a
@@ -273,7 +296,24 @@ impl TuiVm {
             let (slot, spec) = entry.map_err(lua_error)?;
             let timeout = Duration::from_millis(spec.raw_get("timeout").map_err(lua_error)?);
             let render = spec.raw_get("render").map_err(lua_error)?;
-            slots.insert(slot, Slot { timeout, render });
+            let animate: Option<Table> = spec.raw_get("animate").map_err(lua_error)?;
+            let animate = animate
+                .map(|table| {
+                    let interval_ms: mlua::Integer =
+                        table.raw_get("interval_ms").map_err(lua_error)?;
+                    u64::try_from(interval_ms)
+                        .map(Duration::from_millis)
+                        .map_err(|_| shape("`animate.interval_ms` must be a whole number above 0"))
+                })
+                .transpose()?;
+            slots.insert(
+                slot,
+                Slot {
+                    timeout,
+                    render,
+                    animate,
+                },
+            );
         }
         Ok(Self {
             name: name.to_owned(),
@@ -293,6 +333,13 @@ impl TuiVm {
             .collect()
     }
 
+    /// The slot's raw validated animation interval, if it animates. Absent
+    /// `animate` stores none; a present one stores its whole milliseconds
+    /// above 0, unclamped: the adapter normalizes to the tick floor.
+    pub fn animate(&self, slot: &str) -> Option<Duration> {
+        self.slots.get(slot)?.animate
+    }
+
     /// Calls the renderer of `slot` for `session_id` with `input`, an object,
     /// and returns its lines. The renderer receives `input` with
     /// `session_id` set to the argument, and the width. `builtin(input, width)`
@@ -308,6 +355,46 @@ impl TuiVm {
         width: u16,
         builtin: &dyn Fn(&Value, u16) -> Vec<Vec<Span>>,
     ) -> Result<Vec<Vec<Span>>, Error> {
+        self.invoke(slot, session_id, input, width, None, builtin)
+            .and_then(|returned| lines_from(&returned))
+    }
+
+    /// Calls the renderer of `slot` for `session_id` with `input`, an object,
+    /// and returns its lines with whether the item keeps animating. The
+    /// renderer receives `input` with `session_id` set to the argument, the
+    /// `frame` count, and the width. A plain list or `{ lines }` continues
+    /// at the declared interval; only `{ lines, animate = false }` stops,
+    /// drawing once. Any other shape is the existing wrong-shape failure.
+    ///
+    /// A timeout switches the VM off: every later call is [`Error::TuiOff`].
+    /// The caller decides the fallback.
+    pub fn call_animated(
+        &mut self,
+        slot: &str,
+        session_id: Option<&str>,
+        input: &Value,
+        width: u16,
+        frame: u64,
+        builtin: &dyn Fn(&Value, u16) -> Vec<Vec<Span>>,
+    ) -> Result<RenderOut, Error> {
+        self.invoke(slot, session_id, input, width, Some(frame), builtin)
+            .and_then(|returned| render_out_from(&returned))
+    }
+
+    /// Runs the renderer once under its declared timeout and returns what
+    /// it returned. `frame` counts the frame into the input object when
+    /// set; a plain call sends no `frame` key and Lua reads nil. Shares
+    /// the deadline, the off latch and the `builtin` scope with every
+    /// animated call.
+    fn invoke(
+        &mut self,
+        slot: &str,
+        session_id: Option<&str>,
+        input: &Value,
+        width: u16,
+        frame: Option<u64>,
+        builtin: &dyn Fn(&Value, u16) -> Vec<Vec<Span>>,
+    ) -> Result<mlua::Value, Error> {
         if self.off {
             return Err(Error::TuiOff);
         }
@@ -326,6 +413,9 @@ impl TuiVm {
                 "session_id".to_owned(),
                 Value::String(session_id.to_owned()),
             );
+        }
+        if let Some(frame) = frame {
+            object.insert("frame".to_owned(), Value::from(frame));
         }
         // JSON null is nil, so an absent field and a null one read alike.
         let options = SerializeOptions::new()
@@ -349,19 +439,18 @@ impl TuiVm {
             let thread = self.lua.create_thread(render)?;
             self.deadline.arm(&thread)?;
             self.deadline.restore(at);
-            let lines = resume(
+            let returned = resume(
                 &self.deadline,
                 &thread,
                 (arg, width),
                 "a renderer makes no host call",
-            )
-            .and_then(|returned| lines_from(&returned));
+            );
             // The conversion ran no Lua, but a finish is late when the clock
             // says so, whichever path it took.
             Ok(if self.deadline.passed() {
                 Err(Error::TuiTimeout)
             } else {
-                lines
+                returned
             })
         });
         self.deadline.restore(None);
@@ -431,6 +520,57 @@ fn lines_from(returned: &mlua::Value) -> Result<Vec<Vec<Span>>, Error> {
         out.push(spans);
     }
     Ok(out)
+}
+
+/// An animated return's lines and whether the item keeps animating. A
+/// table with neither a `lines` nor an `animate` key is a plain list and
+/// continues. A table with either key is keyed: it must hold `lines` as a
+/// list, `animate` only as `false` or absent, and no other key. Only
+/// `{ lines, animate = false }` stops, drawing once; every other keyed
+/// shape is the existing wrong-shape failure. Reads with raw gets and raw
+/// iteration, so no metamethod runs.
+fn render_out_from(returned: &mlua::Value) -> Result<RenderOut, Error> {
+    let mlua::Value::Table(table) = returned else {
+        return Err(shape("a renderer returns a list of lines"));
+    };
+    let lines: mlua::Value = table.raw_get("lines").map_err(lua_error)?;
+    let animate: mlua::Value = table.raw_get("animate").map_err(lua_error)?;
+    if lines.is_nil() && animate.is_nil() {
+        return Ok(RenderOut {
+            lines: lines_from(returned)?,
+            continues: true,
+        });
+    }
+    if !lines.is_table() {
+        return Err(shape("a keyed return holds `lines` as a list of lines"));
+    }
+    // `pairs` walks with `lua_next`, so no metamethod runs.
+    for pair in table.pairs::<mlua::Value, mlua::Value>() {
+        let (key, _) = pair.map_err(lua_error)?;
+        if !is_key(&key, "lines") && !is_key(&key, "animate") {
+            return Err(shape("a keyed return holds only `lines` and `animate`"));
+        }
+    }
+    // Only `false` stops; any other set value, `true` included, is a
+    // wrong shape.
+    let continues = if animate.is_nil() {
+        true
+    } else if matches!(animate, mlua::Value::Boolean(false)) {
+        false
+    } else {
+        return Err(shape(
+            "`animate` is `false` to stop, or omitted to continue",
+        ));
+    };
+    Ok(RenderOut {
+        lines: lines_from(&lines)?,
+        continues,
+    })
+}
+
+/// Whether `key` names the string `name`.
+fn is_key(key: &mlua::Value, name: &str) -> bool {
+    matches!(key, mlua::Value::String(found) if found.to_str().is_ok_and(|found| found == name))
 }
 
 fn span_from(span: &Table, line: usize, index: usize) -> Result<Span, Error> {
