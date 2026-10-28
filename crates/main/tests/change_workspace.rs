@@ -258,16 +258,25 @@ impl Hubbed {
             let waited =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| guard.wait_gone()));
             if let Err(payload) = waited {
-                hub.lock()
-                    .unwrap()
-                    .take()
-                    .expect("the hub ran")
-                    .kill_and_wait();
-                panic!(
-                    "{}\nworkspace {workspace} holders, last session lines:\n{}",
-                    payload_message(&payload),
-                    session_log_tails(&home).join("\n"),
+                // Capture the holder failure and tails before hub cleanup:
+                // a cleanup wait expiring must not replace them.
+                let original = payload_message(&payload);
+                let tails = session_log_tails(&home).join("\n");
+                let hub_proc = hub.lock().unwrap().take().expect("the hub ran");
+                let hub_waited =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        hub_proc.kill_and_wait()
+                    }));
+                let mut message = format!(
+                    "{original}\nworkspace {workspace} holders, last session lines:\n{tails}"
                 );
+                if let Err(hub_payload) = hub_waited {
+                    message.push_str(&format!(
+                        "\nhub cleanup also failed: {}",
+                        payload_message(&hub_payload)
+                    ));
+                }
+                panic!("{message}");
             }
         }
         hub.lock()
@@ -374,6 +383,15 @@ fn finish_names_session_tails_when_a_holder_outlives_the_wait() {
         Deadline::after(std::time::Duration::ZERO),
         &held_text,
     ));
+    // The hub cleanup runs on an expired deadline too, so both waits fail
+    // and the message must name both.
+    hubbed
+        .hub
+        .lock()
+        .unwrap()
+        .as_mut()
+        .expect("the hub ran")
+        .deadline = Deadline::after(std::time::Duration::ZERO);
     let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hubbed.finish()));
     // Release the pipe the holder was blocked on, then reap it and its
     // group under the cleanup bound before asserting on the message, so
@@ -396,6 +414,7 @@ fn finish_names_session_tails_when_a_holder_outlives_the_wait() {
     assert!(message.contains("holding the workspace path"), "{message}");
     assert!(message.contains("session s_old"), "{message}");
     assert!(message.contains("\"moved\""), "{message}");
+    assert!(message.contains("the killed hub to exit"), "{message}");
 }
 
 /// Waits for `child`'s `session_started` on the client: the redirect
