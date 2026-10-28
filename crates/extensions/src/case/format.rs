@@ -64,10 +64,9 @@ pub enum Input {
 }
 
 /// A provider call case: the call and its one expected outcome.
-#[allow(dead_code, reason = "the call runner moves into this crate in Task 3")]
 pub struct CallCase {
     /// The optional display name, defaulted by the caller from the file stem.
-    pub(crate) name: Option<String>,
+    pub name: Option<String>,
     /// Ordered calls and credential barriers sharing one provider.
     pub(crate) steps: Vec<CallStep>,
     /// Stored credentials to seed before the first call.
@@ -84,13 +83,11 @@ pub struct CallCase {
     pub(crate) host: Host,
 }
 
-#[allow(dead_code, reason = "the call runner moves into this crate in Task 3")]
 pub(crate) struct CallStep {
     pub(crate) operation: CallOperation,
     pub(crate) clock: Vec<ClockAdvance>,
 }
 
-#[allow(dead_code, reason = "the call runner moves into this crate in Task 3")]
 pub(crate) enum CallOperation {
     Invoke { call: Call, outcome: CallOutcome },
     AwaitCredentialIdle,
@@ -137,7 +134,6 @@ pub struct Selector {
 }
 
 /// A provider callback invocation.
-#[allow(dead_code, reason = "the call runner moves into this crate in Task 3")]
 pub(crate) struct Call {
     /// The provider name registered by the package.
     pub(crate) provider: String,

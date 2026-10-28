@@ -9,7 +9,11 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{CallOutcome, compare_credential, compare_result, provider_extension};
+use super::{
+    CallOutcome, Verdict, compare_credential, compare_result, failure_verdict, provider_extension,
+    run_call,
+};
+use crate as extensions;
 
 #[test]
 fn cost_and_models_dispatch_and_anything_else_names_both() {
@@ -186,6 +190,51 @@ fn returns(value: Value) -> CallOutcome {
 
 fn error(value: Value) -> CallOutcome {
     CallOutcome::Error(value)
+}
+
+#[test]
+fn an_unknown_call_function_returns_a_malformed_verdict() {
+    let case = super::CallCase {
+        name: Some("unknown-function".to_owned()),
+        steps: vec![super::super::format::CallStep {
+            operation: super::CallOperation::Invoke {
+                call: super::Call {
+                    provider: "p".to_owned(),
+                    function: "unknown".to_owned(),
+                    arg: json!({}),
+                },
+                outcome: returns(json!({})),
+            },
+            clock: Vec::new(),
+        }],
+        credentials: Default::default(),
+        expect_credentials: Default::default(),
+        exact_credentials: false,
+        attended: false,
+        clock: Vec::new(),
+        host: super::super::format::Host::default(),
+    };
+
+    let verdict = run_call(case, fakes::clock::FakeClock::new());
+
+    assert_eq!(
+        verdict,
+        Verdict {
+            failures: vec![
+                "call.function: unsupported `unknown`; supported functions are `cost`, `models`, `quota`, `login`, `credential` and `sign`".to_owned(),
+            ],
+            malformed: true,
+        }
+    );
+}
+
+#[test]
+fn a_result_mismatch_is_a_non_malformed_verdict() {
+    let failures = compare_result(&returns(json!(0.4)), Ok(json!(0.5)));
+    let verdict = failure_verdict(failures);
+
+    assert!(!verdict.failures.is_empty(), "{verdict:?}");
+    assert!(!verdict.malformed, "{verdict:?}");
 }
 
 #[test]

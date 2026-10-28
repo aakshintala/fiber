@@ -11,49 +11,49 @@ use contract::clock::Clock;
 use serde_json::{Value, json};
 use support::clock::{Manual, Sleep};
 
-use super::format::{Call, CallCase, CallOperation, CallOutcome};
-use super::run::{malformed, report};
+use crate as extensions;
 
-/// Runs a provider call without creating a session.
-pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Clock>) -> i32 {
+use super::Verdict;
+use super::format::{Call, CallCase, CallOperation, CallOutcome};
+
+/// Runs a provider call without creating a session and returns its verdict.
+pub fn run_call(case: CallCase, process_clock: Arc<dyn Clock>) -> Verdict {
     let mut provider_name = None;
     for step in &case.steps {
         if let CallOperation::Invoke { call, .. } = &step.operation {
             if let Err(error) = ready(call) {
-                return malformed(&name, &[error]);
+                return malformed_verdict(vec![error]);
             }
             if provider_name
                 .as_ref()
                 .is_some_and(|name| name != &call.provider)
             {
-                return malformed(
-                    &name,
-                    &["calls: all calls must use one provider".to_owned()],
-                );
+                return malformed_verdict(vec![
+                    "calls: all calls must use one provider".to_owned(),
+                ]);
             }
             provider_name = Some(call.provider.clone());
         }
     }
     let Some(provider_name) = provider_name else {
-        return malformed(
-            &name,
-            &["calls: at least one provider call is required".to_owned()],
-        );
+        return malformed_verdict(vec![
+            "calls: at least one provider call is required".to_owned(),
+        ]);
     };
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
-        Err(error) => return report(&name, &[error.to_string()]),
+        Err(error) => return failure_verdict(vec![error.to_string()]),
     };
     let installed = match extensions::list(&home, process_clock.as_ref()) {
         Ok(listing) => listing.installed,
-        Err(error) => return report(&name, &[error.to_string()]),
+        Err(error) => return failure_verdict(vec![error.to_string()]),
     };
     if let Err(error) = write_credentials(&home, &case.credentials) {
-        return report(&name, &[error]);
+        return failure_verdict(vec![error]);
     }
     let data = match extensions::Providers::load(&home) {
         Ok((providers, _)) => providers.data(&provider_name),
-        Err(error) => return report(&name, &[error.to_string()]),
+        Err(error) => return failure_verdict(vec![error.to_string()]),
     };
     let host = extensions::HostScript::new(case.host.http, case.host.exec, case.host.oauth);
     let case_clock = Manual::with_sleep(Sleep::Waits);
@@ -68,13 +68,10 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
     ) {
         Some(extension) => extension,
         None => {
-            return report(
-                &name,
-                &[format!(
-                    "call.provider: no installed package registers provider `{}`",
-                    provider_name
-                )],
-            );
+            return failure_verdict(vec![format!(
+                "call.provider: no installed package registers provider `{}`",
+                provider_name
+            )]);
         }
     };
     let provider = extensions::LuaProvider::new(extension, provider_name);
@@ -178,7 +175,21 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
             .iter()
             .map(|entry| format!("unmet host call: {entry}")),
     );
-    report(&name, &failures)
+    failure_verdict(failures)
+}
+
+fn failure_verdict(failures: Vec<String>) -> Verdict {
+    Verdict {
+        failures,
+        malformed: false,
+    }
+}
+
+fn malformed_verdict(failures: Vec<String>) -> Verdict {
+    Verdict {
+        failures,
+        malformed: true,
+    }
 }
 
 const CALL_WAIT: Duration = super::run::UNTIL_WAIT;
