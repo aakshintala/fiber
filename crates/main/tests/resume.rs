@@ -1797,6 +1797,7 @@ fn a_turn_suspended_after_a_completed_handoff_re_raises_its_approval() {
             instruction_files: Vec::new(),
             extension_sections: Vec::new(),
             skills: Vec::new(),
+            added_directories: Vec::new(),
         })
     };
     let text = |text: &str| {
@@ -1976,6 +1977,7 @@ fn an_unreadable_line_before_the_last_handoff_does_not_fail_the_resume() {
                     instruction_files: Vec::new(),
                     extension_sections: Vec::new(),
                     skills: Vec::new(),
+                    added_directories: Vec::new(),
                 }),
                 None,
             ),

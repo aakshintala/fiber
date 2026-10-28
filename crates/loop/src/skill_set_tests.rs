@@ -327,6 +327,7 @@ fn opening_with(skills: Vec<SkillListed>) -> Event {
         instruction_files: Vec::new(),
         extension_sections: Vec::new(),
         skills,
+        added_directories: Vec::new(),
     })
 }
 

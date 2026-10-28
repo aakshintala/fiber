@@ -898,6 +898,13 @@ pub(crate) struct SessionArgs {
     #[arg(long, value_name = "depth", requires = "parent", hide = true)]
     pub(crate) depth: Option<u32>,
 
+    /// An added folder the child also runs with, passed by its parent:
+    /// hidden and free to change, alongside `--depth`. May repeat; the
+    /// child records each as its own `directory_added`
+    /// (`docs/delegates.md`, "The tools").
+    #[arg(long = "added", value_name = "path", hide = true)]
+    pub(crate) added: Vec<PathBuf>,
+
     /// Passed by the hub when the session's environment came from the
     /// login-shell capture (`docs/invocation.md`, "A session's
     /// environment").
@@ -935,6 +942,7 @@ impl From<&SessionArgs> for contract::session_argv::SessionArgv {
             parent: args.parent.clone().map(contract::SessionId),
             delegate_id: args.delegate_id.clone().map(contract::JobId),
             depth: args.depth,
+            added: args.added.clone(),
             login_shell: args.login_shell,
             supervised: args.supervised,
         }

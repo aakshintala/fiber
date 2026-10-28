@@ -92,6 +92,11 @@ pub struct Resumed {
     pub(crate) ledger: crate::usage::Ledger,
     /// Every grant a `permission_resolved` recorded.
     pub(crate) grants: Vec<Grant>,
+    /// Every `directory_added` path, resolved, in log order: the
+    /// session's added folders beside the workspace (`docs/events.md`,
+    /// "`directory_added`"). A resume, fork or rewind restores them
+    /// from the fold through the point it continues from.
+    pub(crate) added: Vec<PathBuf>,
     /// Known hosts folded over the complete history chain.
     pub(crate) known_hosts: crate::known_hosts::KnownHosts,
     /// The reviewer's blocks this session.
@@ -139,6 +144,14 @@ impl Resumed {
     /// declines the asks (`docs/invocation.md`, "Shutdown").
     pub fn exit_seed(&self) -> crate::Summary {
         self.exit.clone()
+    }
+
+    /// Every folded `directory_added` path, in log order: what a delegate
+    /// launch inherits from the parent's full history fold, and what a
+    /// fresh spawn child seeds its loop from (`docs/events.md`,
+    /// "`directory_added`").
+    pub fn added(&self) -> &[PathBuf] {
+        &self.added
     }
 }
 

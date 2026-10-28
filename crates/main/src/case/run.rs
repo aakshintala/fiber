@@ -550,6 +550,7 @@ pub(crate) fn extension_case(
         Some(Arc::clone(&case_run)),
         None,
         false,
+        Vec::new(),
     );
     let failures = case_run
         .verdict()
