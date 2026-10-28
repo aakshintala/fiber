@@ -178,3 +178,75 @@ fn page_cut_is_clear_where_no_page_closed_inside_a_turn() {
         "the open page never closed"
     );
 }
+
+/// One turn whose input carries the sender's message beside the
+/// driver's.
+fn sender_message_session() -> Vec<contract::Envelope> {
+    let mut out = Vec::new();
+    let mut seq = 0u64;
+    out.push(envelope(
+        seq,
+        "turn_started",
+        None,
+        serde_json::json!({"input": [
+            {"type": "message", "source": "driver", "content": [{"type": "text", "text": "go"}]},
+            {"type": "message", "source": "session", "from_session_id": "s_bbbbbbbbbbbbbbbb",
+             "content": [{"type": "text", "text": "please check"}]},
+        ]}),
+    ));
+    seq = seq.saturating_add(1);
+    out.push(envelope(
+        seq,
+        "text_completed",
+        Some("m_1"),
+        serde_json::json!({"text": "a reply"}),
+    ));
+    seq = seq.saturating_add(1);
+    out.push(envelope(
+        seq,
+        "turn_completed",
+        None,
+        serde_json::json!({"outcome": "completed"}),
+    ));
+    out
+}
+
+#[test]
+fn whole_turn_text_uses_the_current_name_across_renames_clears_and_fresh_pages() {
+    let session = sender_message_session();
+    let sender = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    let mut pages = fold_all(&session);
+    let named = |name: &str| {
+        std::sync::Arc::new(std::collections::HashMap::from([(
+            sender.clone(),
+            name.to_owned(),
+        )]))
+    };
+    pages.set_session_labels(named("worker"));
+    let text = pages.turn_text(0).expect("the turn has text");
+    assert!(text.contains("worker · 00:00"), "{text}");
+    assert!(text.contains("please check"), "{text}");
+    assert!(
+        !text.contains('─'),
+        "the labelled rule is decoration: {text}"
+    );
+    // A rename reaches the resident page's whole-turn text.
+    pages.set_session_labels(named("renamed"));
+    let text = pages.turn_text(0).expect("the turn has text");
+    assert!(text.contains("renamed · 00:00"), "{text}");
+    assert!(!text.contains("worker · 00:00"), "{text}");
+    // A cleared conversation keeps the names it learned.
+    pages.clear();
+    for line in &session {
+        pages.apply(line);
+    }
+    let text = pages.turn_text(0).expect("the turn has text");
+    assert!(text.contains("renamed · 00:00"), "{text}");
+    // A fresh window, as a swapped screen opens, inherits them too.
+    let mut swap = pages.fresh();
+    for line in &session {
+        swap.apply(line);
+    }
+    let text = swap.turn_text(0).expect("the turn has text");
+    assert!(text.contains("renamed · 00:00"), "{text}");
+}

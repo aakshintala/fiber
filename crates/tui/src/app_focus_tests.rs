@@ -3,7 +3,7 @@
 
 use super::super::{App, Effect, Target};
 use crate::app::rail::Spot as RailSpot;
-use crate::app::testkit::{SESSION, attached, now};
+use crate::app::testkit::{SENDER, SESSION, attached, now, sender_status};
 use crate::focus::Regions;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -1146,6 +1146,121 @@ fn y_on_a_turn_copies_its_prompt_and_replies() {
     assert_eq!(
         key(&mut app, Key::Char('y')),
         Effect::Copy("\ngo\nyou 00:00\n\none\n\n\ntwo\n\n▣ completed · 1 call".to_owned())
+    );
+}
+
+/// An attached app whose finished turn holds a session message from
+/// the sender, named `worker` by a direct status, its text, one image
+/// and a reply.
+fn turn_with_a_named_sender_message() -> App {
+    let mut app = attached(60, 24);
+    app.on_line(sender_status("worker", true));
+    app.on_line(envelope(
+        "turn_started",
+        serde_json::json!({"input": [
+            {"type": "message", "source": "driver", "content": [{"type": "text", "text": "go"}]},
+            {"type": "message", "source": "session", "from_session_id": SENDER,
+             "content": [{"type": "text", "text": "please check"},
+                 {"type": "image", "path": "artifacts/a.png", "mime_type": "image/png",
+                  "width": 10, "height": 8}]},
+        ]}),
+        None,
+    ));
+    app.on_line(envelope(
+        "text_completed",
+        serde_json::json!({"text": "a reply"}),
+        Some("m_1"),
+    ));
+    app.on_line(envelope(
+        "turn_completed",
+        serde_json::json!({"outcome": "completed"}),
+        None,
+    ));
+    frame(&mut app);
+    app
+}
+
+#[test]
+fn a_directly_attached_terminal_labels_a_sender_by_its_latest_named_status() {
+    let mut app = turn_with_a_named_sender_message();
+    let shown = screen(&app);
+    assert!(shown.contains("worker · 00:00"), "{shown}");
+    // A rename reaches the drawn card: the label follows the latest
+    // status (`docs/tui.md`, "Session names").
+    app.on_line(sender_status("renamed", true));
+    frame(&mut app);
+    let shown = screen(&app);
+    assert!(shown.contains("renamed · 00:00"), "{shown}");
+    assert!(!shown.contains("worker · 00:00"), "{shown}");
+}
+
+#[test]
+fn an_unnamed_or_empty_named_status_falls_back_to_the_sender_id() {
+    for (name, named) in [("first prompt row", false), ("", true)] {
+        let mut app = attached(60, 24);
+        app.on_line(sender_status(name, named));
+        app.on_line(envelope(
+            "turn_started",
+            serde_json::json!({"input": [
+                {"type": "message", "source": "driver", "content": [{"type": "text", "text": "go"}]},
+                {"type": "message", "source": "session", "from_session_id": SENDER,
+                 "content": [{"type": "text", "text": "please check"}]},
+            ]}),
+            None,
+        ));
+        app.on_line(envelope(
+            "text_completed",
+            serde_json::json!({"text": "a reply"}),
+            Some("m_1"),
+        ));
+        app.on_line(envelope(
+            "turn_completed",
+            serde_json::json!({"outcome": "completed"}),
+            None,
+        ));
+        frame(&mut app);
+        let shown = screen(&app);
+        assert!(
+            shown.contains(&format!("{SENDER} · 00:00")),
+            "the sender id labels the message: {shown}"
+        );
+        assert!(!shown.contains("first prompt row"), "{shown}");
+    }
+}
+
+#[test]
+fn y_on_a_turn_with_a_session_message_copies_the_label_time_and_text() {
+    let mut app = turn_with_a_named_sender_message();
+    focus_turn(&mut app, 0);
+    let Effect::Copy(text) = key(&mut app, Key::Char('y')) else {
+        panic!("the whole turn copies")
+    };
+    // The label and time, then the body, in draw order; the labelled
+    // rule is decoration, and the image copies through its own stop.
+    let label = text
+        .find("worker · 00:00")
+        .unwrap_or_else(|| panic!("the label: {text}"));
+    let body = text
+        .find("please check")
+        .unwrap_or_else(|| panic!("the body: {text}"));
+    let close = text
+        .find("▣ completed")
+        .unwrap_or_else(|| panic!("the closing line: {text}"));
+    assert!(label < body && body < close, "{text}");
+    assert!(!text.contains('─'), "the rule is decoration: {text}");
+    assert!(
+        !text.contains("a.png"),
+        "the image copies through its own stop: {text}"
+    );
+}
+
+#[test]
+fn y_on_a_message_image_copies_its_visible_label() {
+    let mut app = turn_with_a_named_sender_message();
+    app.focus = Some(TargetId::Line(Target::Image(1)));
+    assert_eq!(
+        key(&mut app, Key::Char('y')),
+        Effect::Copy("▣ a.png · 10×8".to_owned())
     );
 }
 

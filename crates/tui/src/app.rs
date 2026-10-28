@@ -731,6 +731,21 @@ impl App {
         }
     }
 
+    fn session_labels(&mut self, rows: &[crate::home::Row]) {
+        let names = Arc::make_mut(&mut self.session_names);
+        for row in rows {
+            let Some(status) = &row.status else {
+                continue;
+            };
+            if status.named && !status.name.is_empty() {
+                names.insert(row.id.clone(), status.name.clone());
+            } else {
+                names.remove(&row.id);
+            }
+        }
+        self.refresh_session_labels();
+    }
+
     fn refresh_session_labels(&mut self) {
         self.screen
             .pages_mut()

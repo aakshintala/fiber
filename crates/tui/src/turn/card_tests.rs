@@ -1316,7 +1316,34 @@ fn message_entries_keep_each_source_label_and_timestamp() {
         .iter()
         .find(|span| span.content == "Fiber")
         .unwrap();
-    assert!(fiber_label.style.add_modifier.contains(Modifier::DIM));
+    assert_eq!(
+        fiber_label.style.fg,
+        Some(Role::Muted.color()),
+        "a Fiber label is muted, not dim"
+    );
+    let fiber_time = fiber
+        .0
+        .spans
+        .iter()
+        .find(|span| span.content == " · 00:00 ")
+        .unwrap_or_else(|| panic!("fiber time span: {:?}", fiber.0.spans));
+    assert!(
+        fiber_time.style.add_modifier.contains(Modifier::DIM),
+        "the time under it stays dim"
+    );
+    let fiber_body = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("quota notice"))
+        .unwrap_or_else(|| panic!("fiber body row: {shown:?}"));
+    assert!(
+        fiber_body
+            .0
+            .spans
+            .iter()
+            .filter(|span| span.content.contains("quota notice"))
+            .all(|span| span.style.add_modifier.contains(Modifier::DIM)),
+        "the Fiber body is dim"
+    );
     let session = rows
         .iter()
         .find(|(line, _)| line.to_string().contains("worker · 00:00"))
@@ -1331,6 +1358,29 @@ fn message_entries_keep_each_source_label_and_timestamp() {
     assert!(
         texts.iter().any(|text| text.tail > 0),
         "the rule is excluded from copied text"
+    );
+    // The copied card text keeps each message's label and body, in draw
+    // order, and loses the labelled rule (`docs/tui.md`, "Copying").
+    let copied: Vec<String> = crate::logical::logical(&rows, &texts)
+        .into_iter()
+        .map(|line| line.text)
+        .collect();
+    for expected in [
+        "worker · 00:00",
+        "please check",
+        "reviewer · 00:00",
+        "looks good",
+        "Fiber · 00:00",
+        "quota notice",
+    ] {
+        assert!(
+            copied.contains(&expected.to_owned()),
+            "missing {expected:?}: {copied:?}"
+        );
+    }
+    assert!(
+        copied.iter().all(|line| !line.contains('─')),
+        "the labelled rule is decoration: {copied:?}"
     );
 }
 
@@ -1353,6 +1403,140 @@ fn a_mid_turn_non_driver_message_is_not_drawn_as_bold_steer() {
         "{shown:?}"
     );
     assert!(!shown.iter().any(|row| row.contains("steer")), "{shown:?}");
+}
+
+#[test]
+fn a_session_message_without_an_actual_name_falls_back_to_the_sender_id() {
+    let sender = "s_bbbbbbbbbbbbbbbb";
+    let mut cards = fresh();
+    feed(
+        &mut cards,
+        "turn_started",
+        None,
+        json!({"input": [
+            {"type":"message", "source":"driver", "content":[{"type":"text","text":"go"}]},
+            {"type":"message", "source":"session", "from_session_id":sender,
+             "content":[{"type":"text","text":"please check"}]}
+        ]}),
+    );
+    done(&mut cards);
+    // No status has named the sender, and a `named` status with an
+    // empty name names nothing: the sender's session id is the label.
+    let unlabelled: std::collections::HashMap<SessionId, String> = std::collections::HashMap::new();
+    let blank = std::collections::HashMap::from([(SessionId(sender.to_owned()), String::new())]);
+    for names in [unlabelled, blank] {
+        let mut out = Rows::default();
+        out.session_names = std::sync::Arc::new(names);
+        cards.turns[0].rows(
+            WIDTH,
+            &TimeZone::UTC,
+            Edges::BOTH,
+            &crate::image::Layout::default(),
+            &mut out,
+        );
+        let (rows, _) = out.into_parts();
+        let shown = shown_rows(&rows);
+        assert!(
+            shown.iter().any(|row| row.contains(sender)),
+            "the sender id labels the message: {shown:?}"
+        );
+    }
+}
+
+#[test]
+fn a_session_message_label_follows_the_current_name_at_draw() {
+    let sender = "s_bbbbbbbbbbbbbbbb";
+    let mut cards = fresh();
+    feed(
+        &mut cards,
+        "turn_started",
+        None,
+        json!({"input": [
+            {"type":"message", "source":"driver", "content":[{"type":"text","text":"go"}]},
+            {"type":"message", "source":"session", "from_session_id":sender,
+             "content":[{"type":"text","text":"please check"}]}
+        ]}),
+    );
+    done(&mut cards);
+    // The card resolves the label at draw time, so a rename reaches a
+    // resident card (`docs/tui.md`, "Session names").
+    for (name, other) in [("worker", "renamed"), ("renamed", "worker")] {
+        let mut out = Rows::default();
+        out.session_names = std::sync::Arc::new(std::collections::HashMap::from([(
+            SessionId(sender.to_owned()),
+            name.to_owned(),
+        )]));
+        cards.turns[0].rows(
+            WIDTH,
+            &TimeZone::UTC,
+            Edges::BOTH,
+            &crate::image::Layout::default(),
+            &mut out,
+        );
+        let (rows, _) = out.into_parts();
+        let shown = shown_rows(&rows);
+        assert!(
+            shown
+                .iter()
+                .any(|row| row.contains(&format!("{name} · 00:00"))),
+            "the label is {name:?}: {shown:?}"
+        );
+        assert!(
+            !shown
+                .iter()
+                .any(|row| row.contains(&format!("{other} · 00:00"))),
+            "the label is not {other:?}: {shown:?}"
+        );
+    }
+}
+
+#[test]
+fn a_message_image_draws_below_its_text() {
+    let sender = "s_bbbbbbbbbbbbbbbb";
+    let mut cards = fresh();
+    feed(
+        &mut cards,
+        "turn_started",
+        None,
+        json!({"input": [
+            {"type":"message", "source":"driver", "content":[{"type":"text","text":"go"}]},
+            {"type":"message", "source":"session", "from_session_id":sender, "content":[
+                {"type":"text", "text":"please check"},
+                {"type":"image", "path":"artifacts/a.png", "mime_type":"image/png",
+                 "width":10, "height":8}]}
+        ]}),
+    );
+    done(&mut cards);
+    let mut out = Rows::default();
+    out.session_names = std::sync::Arc::new(std::collections::HashMap::from([(
+        SessionId(sender.to_owned()),
+        "worker".to_owned(),
+    )]));
+    cards.turns[0].rows(
+        WIDTH,
+        &TimeZone::UTC,
+        Edges::BOTH,
+        &crate::image::Layout::default(),
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    let shown = shown_rows(&rows);
+    let label = shown
+        .iter()
+        .position(|row| row.contains("worker · 00:00"))
+        .unwrap_or_else(|| panic!("the label row: {shown:?}"));
+    let text = shown
+        .iter()
+        .position(|row| row.contains("please check"))
+        .unwrap_or_else(|| panic!("the text row: {shown:?}"));
+    let image = shown
+        .iter()
+        .position(|row| row.contains("▣ a.png · 10×8"))
+        .unwrap_or_else(|| panic!("the image row: {shown:?}"));
+    assert!(
+        label < text && text < image,
+        "the image draws below the text: {shown:?}"
+    );
 }
 
 #[test]

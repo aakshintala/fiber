@@ -1025,11 +1025,12 @@ arrived after `sessions` was sent.
   spend during the turn included: "▣ completed · 38s · 12 calls · 18.2k tokens
   · $0.41 · $1.10 on subscription". A figure that is zero is left out, and a
   model with no price shows tokens only (`docs/model-routing.md`, "Cost").
-- **Non-driver messages stay in the card.** A Fiber message has a muted
-  `Fiber` label, a dim ` · <time> `, and dim text without one leading
+- **Non-driver messages stay in the card.** A non-driver input message sits
+  inside the card where it landed as a labelled rule. A Fiber message has a
+  muted `Fiber` label, a dim ` · <time> `, and dim text without one leading
   `Fiber: `; a session message has its current name or id as a secondary
-  label, a dim timestamp and full-colour text; an extension message has its
-  name as a secondary label, a dim timestamp and full-colour text. Images
+  label, a dim ` · <time> ` and full-colour text; an extension message has its
+  name as a secondary label, a dim ` · <time> ` and full-colour text. Images
   draw below text. A blank message draws only its labelled rule.
 - **Replies lead, tool groups sit back.** Nothing inside the card is indented
   past its one-column padding: replies, summary lines, steering messages and
@@ -2738,15 +2739,10 @@ The entries carry these slot inputs and extra fields:
 | `reply` | The `reply` input: `text` (Markdown included) |
 | `steer` | The `steer` input: `text`, `images`, `ts` |
 | `message` | `source` (`fiber`, `session` or `extension`), `label`, `text`, `images`, `ts` |
-| `message` | `source` (`fiber`, `session` or `extension`), `label`, `text`, `images`, `ts` |
 | `group` | The `group_line` input, plus `cut` and `sections` |
 | `aside` | No slot: `{kind = "line", text}`, `{kind = "warning", message}`, or `{kind = "orphans", jobs, open}`; each job has `name` and `message` |
 | `band` | The `handoff_band` input: `trigger`, `ts`, `state`; a `done` state carries `before` and optional `after` context sizes |
 | `answers` | The `answers` input: `outcome`, `parts`, `note?`, `ts?`; each part has `header`, `text`, `skipped` |
-
-A session message's `label` is the sender's current non-empty session name,
-when one is known, else its session id. An extension message's label is its
-extension name. An unknown `kind` is skipped.
 
 A session message's `label` is the sender's current non-empty session name,
 when one is known, else its session id. An extension message's label is its

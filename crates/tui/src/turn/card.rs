@@ -17,6 +17,8 @@ use crate::format;
 use crate::rows::Rows;
 use crate::surface::{self, Edges};
 use crate::theme::Role;
+use std::borrow::Cow;
+use std::collections::HashMap;
 
 /// The whole-turn totals a page's draw supplies for the turn they
 /// close: the draw renders them without cloning or mutating the card.
@@ -164,30 +166,14 @@ impl Turn {
                     Entry::Band(band) => Some(TurnEntry::Band(band.turn_entry())),
                     Entry::Answers(answered) => Some(TurnEntry::Answers(answered.turn_entry())),
                     Entry::Message(message) => {
-                        let (source, label) = match &message.source {
-                            MessageSource::Fiber => ("fiber", std::borrow::Cow::Borrowed("Fiber")),
-                            MessageSource::Session => (
-                                "session",
-                                std::borrow::Cow::Owned(
-                                    message
-                                        .sender_id
-                                        .as_ref()
-                                        .and_then(|id| names.get(id))
-                                        .filter(|name| !name.is_empty())
-                                        .cloned()
-                                        .or_else(|| {
-                                            message.sender_id.as_ref().map(|id| id.0.clone())
-                                        })
-                                        .unwrap_or_default(),
-                                ),
-                            ),
-                            MessageSource::Extension(name) => {
-                                ("extension", std::borrow::Cow::Borrowed(name.as_str()))
-                            }
+                        let source = match &message.source {
+                            MessageSource::Fiber => "fiber",
+                            MessageSource::Session => "session",
+                            MessageSource::Extension(_) => "extension",
                         };
                         Some(TurnEntry::Message {
                             source,
-                            label,
+                            label: message.label(names),
                             text: &message.text,
                             images: message
                                 .images
@@ -431,6 +417,28 @@ fn ended_of(done: &TurnCompleted, ts: u64) -> TurnEnded<'_> {
     }
 }
 
+impl Message {
+    fn label<'a>(&'a self, names: &HashMap<contract::SessionId, String>) -> Cow<'a, str> {
+        match &self.source {
+            MessageSource::Fiber => Cow::Borrowed("Fiber"),
+            MessageSource::Session => self
+                .sender_id
+                .as_ref()
+                .and_then(|id| names.get(id))
+                .filter(|name| !name.is_empty())
+                .cloned()
+                .map(Cow::Owned)
+                .or_else(|| {
+                    self.sender_id
+                        .as_ref()
+                        .map(|id| Cow::Borrowed(id.0.as_str()))
+                })
+                .unwrap_or_default(),
+            MessageSource::Extension(name) => Cow::Borrowed(name),
+        }
+    }
+}
+
 /// Draws one non-driver message as a labelled rule and its text/images.
 fn message_rows(
     message: &Message,
@@ -439,21 +447,8 @@ fn message_rows(
     layout: &crate::image::Layout,
     out: &mut Rows,
 ) {
-    let (label, muted) = match &message.source {
-        MessageSource::Fiber => ("Fiber".to_owned(), true),
-        MessageSource::Session => (
-            message
-                .sender_id
-                .as_ref()
-                .and_then(|id| out.session_names.get(id))
-                .filter(|name| !name.is_empty())
-                .cloned()
-                .or_else(|| message.sender_id.as_ref().map(|id| id.0.clone()))
-                .unwrap_or_default(),
-            false,
-        ),
-        MessageSource::Extension(name) => (name.clone(), false),
-    };
+    let muted = matches!(&message.source, MessageSource::Fiber);
+    let label = message.label(&out.session_names).into_owned();
     let time = crate::local_time::time_of_day(message.ts, zone)
         .map_or_else(String::new, |time| format!(" · {time} "));
     let text = if matches!(&message.source, MessageSource::Fiber) {
@@ -467,7 +462,7 @@ fn message_rows(
     let tail = format!("{label}{time}");
     let dashes = usize::from(width).saturating_sub(crate::format::width(&tail).saturating_add(1));
     let label_style = if muted {
-        Style::default().add_modifier(Modifier::DIM)
+        crate::theme::style(Role::Muted)
     } else {
         crate::theme::style(Role::Secondary)
     };
