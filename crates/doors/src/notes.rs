@@ -98,7 +98,7 @@ pub(crate) fn files_evidence(workspace: &Path) -> Vec<Evidence> {
 /// outside a repository, a `git` that cannot start, a non-zero exit and
 /// unreadable output all give no item and no error.
 fn remote_texts(workspace: &Path) -> Vec<String> {
-    if !crate::resolve_project(workspace).in_repository {
+    if !worktree::resolve_project(workspace).in_repository {
         return Vec::new();
     }
     let mut remotes = remote_urls(workspace);
@@ -381,7 +381,7 @@ fn cut_text(text: &str) -> &str {
 /// identity no longer resolves, counts there too.
 fn session_evidence(home: &Path, dir: &Path, workspace: &Path) -> Vec<Evidence> {
     let mut tallies: HashMap<String, (usize, usize)> = HashMap::new();
-    let here = crate::project(workspace);
+    let here = worktree::project(workspace);
     let current = current_key(dir);
     let mut same: HashMap<String, bool> = HashMap::new();
     for escalation in log::allowed_escalations(home) {
@@ -392,7 +392,7 @@ fn session_evidence(home: &Path, dir: &Path, workspace: &Path) -> Vec<Evidence> 
             current.as_deref() == Some(escalation.project.as_str())
                 && *same
                     .entry(identity.to_owned())
-                    .or_insert_with(|| crate::project(Path::new(identity)) == here)
+                    .or_insert_with(|| worktree::project(Path::new(identity)) == here)
         });
         if is_here {
             tally.1 += 1;

@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{CallOutcome, compare_credential, compare_result, provider_extension};
+use super::{
+    CallOutcome, Verdict, compare_credential, compare_result, failure_verdict, provider_extension,
+    run_call,
+};
 
 #[test]
 fn cost_and_models_dispatch_and_anything_else_names_both() {
@@ -189,6 +192,47 @@ fn error(value: Value) -> CallOutcome {
 }
 
 #[test]
+fn an_unknown_call_function_returns_a_malformed_verdict() {
+    let case = super::CallCase {
+        name: Some("unknown-function".to_owned()),
+        steps: vec![super::super::format::CallStep {
+            operation: super::CallOperation::Invoke {
+                call: super::Call {
+                    provider: "p".to_owned(),
+                    function: "unknown".to_owned(),
+                    arg: json!({}),
+                },
+                outcome: returns(json!({})),
+            },
+            clock: Vec::new(),
+        }],
+        credentials: Default::default(),
+        expect_credentials: Default::default(),
+        exact_credentials: false,
+        attended: false,
+        clock: Vec::new(),
+        host: super::super::format::Host::default(),
+    };
+
+    let verdict = run_call(case, fakes::clock::FakeClock::new());
+
+    assert_eq!(
+        verdict,
+        Verdict::Malformed(vec![
+            "call.function: unsupported `unknown`; supported functions are `cost`, `models`, `quota`, `login`, `credential` and `sign`".to_owned(),
+        ])
+    );
+}
+
+#[test]
+fn failure_verdict_distinguishes_pass_from_failure() {
+    assert_eq!(failure_verdict(Vec::new()), Verdict::Pass);
+
+    let failures = vec!["returns: values differ".to_owned()];
+    assert_eq!(failure_verdict(failures.clone()), Verdict::Fail(failures));
+}
+
+#[test]
 fn returns_and_error_use_the_case_json_subset_matcher() {
     assert!(compare_result(&returns(json!(0.5)), Ok(json!(0.5))).is_empty());
 
@@ -331,18 +375,18 @@ fn install_package(home: &std::path::Path, package: &str, provider: Option<&str>
     }
 }
 
-fn installed(package: &str) -> extensions::Installed {
+fn installed(package: &str) -> crate::Installed {
     installed_with_depends(package, std::collections::BTreeMap::new())
 }
 
 fn installed_with_depends(
     package: &str,
     depends: std::collections::BTreeMap<String, String>,
-) -> extensions::Installed {
-    extensions::Installed {
+) -> crate::Installed {
+    crate::Installed {
         name: package.to_owned(),
         version: "0.1.0".to_owned(),
-        provenance: extensions::Provenance::Path(std::path::PathBuf::from("test")),
+        provenance: crate::Provenance::Path(std::path::PathBuf::from("test")),
         requested: true,
         floor: None,
         depends,
@@ -351,13 +395,13 @@ fn installed_with_depends(
 
 /// The name of the package `provider_extension` picks, if any.
 fn resolved(
-    installed: &[extensions::Installed],
+    installed: &[crate::Installed],
     provider: &str,
     home: &std::path::Path,
 ) -> Option<String> {
     let clock: Arc<dyn contract::clock::Clock> =
         support::clock::Manual::with_sleep(support::clock::Sleep::Waits);
-    let host = extensions::HostScript::new(Vec::new(), Vec::new(), Vec::new());
+    let host = crate::HostScript::new(Vec::new(), Vec::new(), Vec::new());
     provider_extension(installed, provider, home, &clock, &host, true)
         .map(|extension| extension.name().to_owned())
 }
@@ -389,7 +433,7 @@ fn selecting_a_declared_provider_needs_its_file_and_runs_no_lua() {
     let installed = [installed("different-package")];
     let clock: Arc<dyn contract::clock::Clock> =
         support::clock::Manual::with_sleep(support::clock::Sleep::Waits);
-    let host = extensions::HostScript::new(Vec::new(), Vec::new(), Vec::new());
+    let host = crate::HostScript::new(Vec::new(), Vec::new(), Vec::new());
     let selected = provider_extension(&installed, "p", &home, &clock, &host, true).unwrap();
     assert_eq!(selected.name(), "different-package");
     assert!(!selected.is_running());
@@ -450,13 +494,13 @@ fn point_provider_at(home: &std::path::Path, package: &str, provider: &str, requ
 }
 
 fn selected(
-    installed: &[extensions::Installed],
+    installed: &[crate::Installed],
     provider: &str,
     home: &std::path::Path,
-) -> std::sync::Arc<extensions::LuaExtension> {
+) -> std::sync::Arc<crate::LuaExtension> {
     let clock: Arc<dyn contract::clock::Clock> =
         support::clock::Manual::with_sleep(support::clock::Sleep::Waits);
-    let host = extensions::HostScript::new(Vec::new(), Vec::new(), Vec::new());
+    let host = crate::HostScript::new(Vec::new(), Vec::new(), Vec::new());
     super::provider_extension(installed, provider, home, &clock, &host, true).unwrap()
 }
 

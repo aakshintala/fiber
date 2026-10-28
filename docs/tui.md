@@ -346,7 +346,7 @@ that starts a session in that project, and, right-aligned and dim, the summed
 spend of its live sessions and "N ✓", the count of its exited sessions, which
 widens to home with focus on that project's first exited row.
 
-Each card is four rows on its own tint, inside ▄ and ▀ edges, with a ▌ stripe
+Each card is four rows on its state's tint (the theme's `card_*` roles), inside ▄ and ▀ edges, with a ▌ stripe
 on the left in the state's colour:
 
 ```
@@ -2414,8 +2414,12 @@ The roles, in order, with each built-in theme's values:
 | `scroll` | the scroll bar's thumb | `#808080` | `#b0b7bf` |
 | `background` | every cell of the conversation no surface covers | the terminal's background | `#ffffff` |
 | `panel` | the rail's and the panel's regions, the narrow layout's status line | `#0c0c11` | `#f6f8fa` |
-| `surface` | the input box, the panel's cards, the search box, a swapped view's top row, overlays | `#1a1a22` | `#eaeef2` |
+| `surface` | the input box, the panel's cards, the search box, a swapped view's top row, overlays, the rail's working cards | `#1a1a22` | `#eaeef2` |
 | `surface_raised` | the card on screen, a hovered card | `#3a3a4a` | `#d0d7de` |
+| `card_retrying` | a rail card in RETRYING | `#262014` | `#ebe5d9` |
+| `card_needs_input` | a rail card in NEEDS INPUT | `#241a10` | `#efe5db` |
+| `card_ready` | a rail card in READY or IDLE | `#121217` | `#e8e8ed` |
+| `card_crashed` | a rail card in CRASHED | `#201114` | `#eedfe2` |
 | `turn` | a turn's card | `#101017` | `#f3f5f8` |
 | `prompt` | the person's prompt bubble | `#343541` | `#dde3ea` |
 | `code` | code blocks | `#181821` | `#eff1f4` |

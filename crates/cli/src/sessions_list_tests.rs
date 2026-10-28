@@ -127,8 +127,8 @@ fn exited(id: &str, name: &str, how: &str, status: Option<Value>) -> Value {
 }
 
 /// A project at `path`, inside a repository or not.
-fn project_at(path: &str, in_repository: bool) -> doors::Project {
-    doors::Project {
+fn project_at(path: &str, in_repository: bool) -> worktree::Project {
+    worktree::Project {
         path: path.into(),
         in_repository,
     }
@@ -138,7 +138,7 @@ fn project_at(path: &str, in_repository: bool) -> doors::Project {
 /// printed, and the command the hub read.
 #[track_caller]
 fn listing(
-    project: &doors::Project,
+    project: &worktree::Project,
     all: bool,
     json: bool,
     answers: &[Value],

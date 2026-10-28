@@ -21,6 +21,10 @@ const A: &str = "s_aaaaaaaaaaaaaaaa";
 const B: &str = "s_bbbbbbbbbbbbbbbb";
 const C: &str = "s_cccccccccccccccc";
 const D: &str = "s_dddddddddddddddd";
+const E: &str = "s_eeeeeeeeeeeeeeee";
+const F: &str = "s_ffffffffffffffff";
+const G: &str = "s_1111111111111111";
+const H: &str = "s_2222222222222222";
 const CARDS: [&str; 5] = ["session", "changed_files", "delegates", "jobs", "quota"];
 /// The wall time every test sets: 2023-11-14T22:13:20Z.
 const WALL: u64 = 1_700_000_000_000;
@@ -737,7 +741,103 @@ fn the_on_screen_card_is_raised() {
     }
     for y in 8..12 {
         let bg = buf.cell((5, y)).and_then(|cell| cell.style().bg);
-        assert_eq!(bg, Some(Role::Surface.color()), "row {y}");
+        assert_eq!(bg, Some(Role::CardReady.color()), "row {y}");
+    }
+}
+
+/// `session`'s status with `fields`, unreadable: a newer schema than
+/// this terminal reads, so the row is CANNOT ATTACH with no name and
+/// its card shows the session id (`crate::home::from_status`).
+fn unreadable(session: &str, fields: Value) -> Line {
+    let Line::Session(mut envelope) = status(session, fields) else {
+        panic!("a session line");
+    };
+    envelope.schema_version = contract::SCHEMA_VERSION + 1;
+    Line::Session(envelope)
+}
+
+/// The rail painted in `setting` on a truecolour terminal: the drawn
+/// buffer carries role markers, so the paint pass resolves each card's
+/// tint to the theme's colour.
+fn painted(app: &App, setting: crate::look::ThemeSetting) -> Buffer {
+    let (look, _) = crate::look::Look::new(setting, &|name: &str| {
+        (name == "COLORTERM").then(|| "truecolor".to_owned())
+    });
+    let mut buf = rail(app);
+    look.paint(&mut buf);
+    buf
+}
+
+/// The background of the card row holding `needle`: the card's tint.
+fn body_bg(buf: &Buffer, needle: &str) -> ratatui::style::Color {
+    let y = lines(buf)
+        .iter()
+        .position(|row| row.contains(needle))
+        .unwrap_or_else(|| panic!("a card holding {needle:?}"));
+    let y = u16::try_from(y).unwrap_or(u16::MAX);
+    buf.cell((5, y))
+        .and_then(|cell| cell.style().bg)
+        .unwrap_or_else(|| panic!("a background at (5, {y})"))
+}
+
+#[test]
+fn cards_tint_by_state_in_both_themes() {
+    // `A` on screen and idle, then a working, a retrying, a waiting
+    // and an idle card: five cards draw whole in the rail's forty rows.
+    let mut states = app(20.0);
+    states.on_line(status(A, json!({"name": "screen"})));
+    states.on_line(status(B, json!({"name": "steady", "state": "streaming"})));
+    states.on_line(status(C, json!({"name": "retrying", "state": "retrying"})));
+    states.on_line(status(
+        D,
+        json!({"name": "waiting", "state": "waiting", "waiting": {"request_id": "r_1",
+            "kind": "approval", "summary": "shell ls"}}),
+    ));
+    states.on_line(status(E, json!({"name": "ready"})));
+    // A crash, a jobs card and an unreadable card: the crash wins over
+    // a working state, while jobs and unreadable keep the working tint.
+    let mut edges = app(20.0);
+    edges.on_line(status(A, json!({"name": "screen"})));
+    edges.on_line(status(F, json!({"name": "crashed", "state": "streaming"})));
+    edges.on_line(left(F, "crashed"));
+    edges.on_line(status(G, json!({"name": "jobbing", "state": "jobs"})));
+    edges.on_line(unreadable(H, json!({"name": "broken"})));
+    for (setting, raised, surface, retrying, needs_input, ready, crashed) in [
+        (
+            crate::look::ThemeSetting::Dark,
+            (0x3a, 0x3a, 0x4a),
+            (0x1a, 0x1a, 0x22),
+            (0x26, 0x20, 0x14),
+            (0x24, 0x1a, 0x10),
+            (0x12, 0x12, 0x17),
+            (0x20, 0x11, 0x14),
+        ),
+        (
+            crate::look::ThemeSetting::Light,
+            (0xd0, 0xd7, 0xde),
+            (0xea, 0xee, 0xf2),
+            (0xeb, 0xe5, 0xd9),
+            (0xef, 0xe5, 0xdb),
+            (0xe8, 0xe8, 0xed),
+            (0xee, 0xdf, 0xe2),
+        ),
+    ] {
+        let tint = |(r, g, b)| ratatui::style::Color::Rgb(r, g, b);
+        let states = painted(&states, setting.clone());
+        assert_eq!(body_bg(&states, "screen"), tint(raised), "{setting:?}");
+        assert_eq!(body_bg(&states, "steady"), tint(surface), "{setting:?}");
+        assert_eq!(body_bg(&states, "retrying"), tint(retrying), "{setting:?}");
+        assert_eq!(
+            body_bg(&states, "waiting"),
+            tint(needs_input),
+            "{setting:?}"
+        );
+        assert_eq!(body_bg(&states, "ready"), tint(ready), "{setting:?}");
+        let edges = painted(&edges, setting.clone());
+        assert_eq!(body_bg(&edges, "screen"), tint(raised), "{setting:?}");
+        assert_eq!(body_bg(&edges, "crashed"), tint(crashed), "{setting:?}");
+        assert_eq!(body_bg(&edges, "jobbing"), tint(surface), "{setting:?}");
+        assert_eq!(body_bg(&edges, H), tint(surface), "{setting:?}");
     }
 }
 
@@ -1158,15 +1258,15 @@ fn the_rail_region_is_on_the_background() {
         .and_then(|layout| layout.rail)
         .expect("a rail");
     // Below the cards the rail draws on the background (`docs/tui.md`,
-    // "Themes"): no cell of its last row carries the surface tint,
+    // "Themes"): no cell of its last row carries the idle card's tint,
     // while a card's row still does.
-    let surface = Role::Surface.color();
+    let tint = Role::CardReady.color();
     let bottom = rail.bottom().saturating_sub(1);
     for x in rail.left()..rail.right() {
-        assert_ne!(buf[(x, bottom)].bg, surface, "column {x}");
+        assert_ne!(buf[(x, bottom)].bg, tint, "column {x}");
     }
     assert!(
-        (rail.y..bottom).any(|y| (rail.left()..rail.right()).any(|x| buf[(x, y)].bg == surface)),
+        (rail.y..bottom).any(|y| (rail.left()..rail.right()).any(|x| buf[(x, y)].bg == tint)),
         "a card's row keeps its tint"
     );
 }

@@ -244,7 +244,7 @@ fn the_command_calls_the_shared_scan() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    let scan = log::SessionScan::new(&layout.home, &layout.r, Arc::new(doors::project));
+    let scan = log::SessionScan::new(&layout.home, &layout.r, Arc::new(worktree::project));
     let found = scan.scan(
         &Query {
             text: QUERY.to_owned(),

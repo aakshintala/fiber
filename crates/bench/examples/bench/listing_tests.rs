@@ -51,7 +51,7 @@ fn cloning_writes_n_directories_and_n_rows_that_parse_as_recent_rows() {
     let home = TempDir::new("fiber-bench-listing");
     let workspace = home.path().join("w");
     fs::create_dir_all(&workspace).unwrap();
-    let project = log::project_key(&doors::project(&workspace));
+    let project = log::project_key(&worktree::project(&workspace));
     seeded(&home, &workspace, "s_seed", &project, 1_700_000_000_000);
     let ids = clone_sessions(home.path(), &workspace, "s_seed", 3).unwrap();
     assert_eq!(ids.len(), 4);
