@@ -1510,11 +1510,13 @@ fn install_lua(setup: &Setup, short: &str, init: &str) {
 fn workspace_skill(setup: &Setup, name: &str, header: &str) {
     let dir = setup.workspace().join(".agents/skills").join(name);
     fs::create_dir_all(&dir).unwrap();
-    fs::write(
-        dir.join("SKILL.md"),
-        format!("---\nname: {name}\n{header}---\nBody.\n"),
-    )
-    .unwrap();
+    // Expose SKILL.md atomically: a concurrent skill scan must see the
+    // file absent or complete, never torn halfway through a write. The
+    // temporary name is never SKILL.md, so the scanner never opens it,
+    // and the rename stays on the same filesystem.
+    let staged = dir.join(".SKILL.md.tmp");
+    fs::write(&staged, format!("---\nname: {name}\n{header}---\nBody.\n")).unwrap();
+    fs::rename(&staged, dir.join("SKILL.md")).unwrap();
 }
 
 /// Writes a skill under Fiber home's `skills/<name>/`.
