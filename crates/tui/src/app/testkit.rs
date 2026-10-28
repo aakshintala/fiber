@@ -58,6 +58,39 @@ pub(crate) fn attached(width: u16, height: u16) -> App {
     app
 }
 
+/// The sender session a named message comes from: not the attached one.
+pub(crate) const SENDER: &str = "s_bbbbbbbbbbbbbbbb";
+
+/// A `session_status` for [`SENDER`], titled `name`, naming it only when
+/// `named`: a status from the hub's feed carries the sender's actual
+/// name, its title only as a display fallback.
+pub(crate) fn sender_status(name: &str, named: bool) -> Line {
+    let mut payload = json!({
+        "name": name,
+        "workspace": "/w",
+        "project": "-w",
+        "state": "idle",
+        "started": 0, "calls": 0, "since": 0,
+        "spend": {"tokens": {"input": 1, "cache_read": 0,
+            "cache_write": {}, "output": 2},
+            "cost": 0.0, "subscription_cost": 0.0},
+        "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+    });
+    if named {
+        payload["named"] = json!(true);
+    }
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(SENDER.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
 /// A live `session_status` for `session`, streaming.
 pub(crate) fn live(session: contract::SessionId) -> Line {
     Line::Session(contract::Envelope {

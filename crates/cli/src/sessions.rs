@@ -3,6 +3,7 @@
 //! `artifacts/` into a new directory; delete asks the hub to remove a
 //! session, after asking the person.
 
+use std::collections::BTreeSet;
 use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -189,14 +190,20 @@ fn delete_listed(
     print_ids(out, &set)
 }
 
-/// The hub's dry-run answer: the sessions the delete would remove.
+/// The hub's dry-run answer: the sessions the delete would remove and
+/// which of those another process holds.
 #[derive(Deserialize)]
 struct DryRun {
     sessions: Vec<SessionId>,
+    held: Vec<SessionId>,
 }
 
 /// Sends `delete` with `dry_run` and reads the answered `sessions`: the
-/// set the delete would remove, the session first.
+/// set the delete would remove, the session first. The answer is checked
+/// before anything prints or asks: a nonempty unique session set that
+/// contains the requested session and only ids the hub mints, with `held`
+/// a unique subset of it. A busy session retains the CLI's existing
+/// refusal before the person is asked.
 fn dry_run(
     read: &mut BufReader<UnixStream>,
     id: &SessionId,
@@ -212,9 +219,73 @@ fn dry_run(
             dry_run: Some(true),
         }),
     )?;
-    serde_json::from_value::<DryRun>(result)
-        .map(|dry| dry.sessions)
-        .map_err(CliError::SessionsAnswer)
+    let dry = serde_json::from_value::<DryRun>(result).map_err(CliError::SessionsAnswer)?;
+    checked_dry_run(&dry, id).map_err(CliError::SessionsAnswer)?;
+    if let Some(held) = dry
+        .sessions
+        .iter()
+        .find(|session| dry.held.contains(session))
+    {
+        return Err(CliError::Rejected {
+            code: ErrorCode::SessionHeld,
+            message: format!("Session `{}` is held by another process.", held.0),
+        });
+    }
+    Ok(dry.sessions)
+}
+
+/// Checks the dry-run answer before it prints or asks: `sessions` is a
+/// nonempty unique set containing the requested session and only minted
+/// ids, and `held` is a unique subset of it. Anything else is an
+/// undecodable answer, refused the same way.
+fn checked_dry_run(dry: &DryRun, target: &SessionId) -> Result<(), serde_json::Error> {
+    use serde::de::Error as _;
+    if dry.sessions.is_empty() {
+        return Err(serde_json::Error::custom("the dry run names no sessions"));
+    }
+    let mut seen = BTreeSet::new();
+    for id in &dry.sessions {
+        if !contract::is_minted_session_id(&id.0) {
+            return Err(serde_json::Error::custom(format!(
+                "the dry run names an id the hub never mints: `{}`",
+                id.0
+            )));
+        }
+        if !seen.insert(&id.0) {
+            return Err(serde_json::Error::custom(format!(
+                "the dry run repeats a session: `{}`",
+                id.0
+            )));
+        }
+    }
+    if !seen.contains(&target.0) {
+        return Err(serde_json::Error::custom(format!(
+            "the dry run omits the session: `{}`",
+            target.0
+        )));
+    }
+    let mut held = BTreeSet::new();
+    for id in &dry.held {
+        if !contract::is_minted_session_id(&id.0) {
+            return Err(serde_json::Error::custom(format!(
+                "the dry run holds an id the hub never mints: `{}`",
+                id.0
+            )));
+        }
+        if !held.insert(&id.0) {
+            return Err(serde_json::Error::custom(format!(
+                "the dry run repeats a held session: `{}`",
+                id.0
+            )));
+        }
+        if !seen.contains(&id.0) {
+            return Err(serde_json::Error::custom(format!(
+                "the dry run holds a session it would not remove: `{}`",
+                id.0
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Sends the confirmed `delete`: `expect` carries the dry run's exact

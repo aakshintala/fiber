@@ -1,6 +1,7 @@
 //! A turn's card whole: its prompts, every entry, and its ending,
 //! with the cache keys over the card and every field.
 
+use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -335,6 +336,19 @@ pub enum TurnEntry<'a> {
         /// When it landed.
         ts: u64,
     },
+    /// A non-driver message inside the card.
+    Message {
+        /// Its source kind.
+        source: &'a str,
+        /// The current sender label.
+        label: Cow<'a, str>,
+        /// The message text.
+        text: &'a str,
+        /// Its images, in order.
+        images: Vec<PromptImage<'a>>,
+        /// When it landed.
+        ts: u64,
+    },
     /// A tool group, inlined.
     Group(TurnGroup<'a>),
     /// A line that came while the turn ran.
@@ -622,6 +636,20 @@ impl<'a> TurnEntry<'a> {
             }
             Self::Steer { text, images, ts } => {
                 1u8.hash(key);
+                text.hash(key);
+                hash_images(images, key);
+                ts.hash(key);
+            }
+            Self::Message {
+                source,
+                label,
+                text,
+                images,
+                ts,
+            } => {
+                6u8.hash(key);
+                source.hash(key);
+                label.hash(key);
                 text.hash(key);
                 hash_images(images, key);
                 ts.hash(key);

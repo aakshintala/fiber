@@ -16,6 +16,7 @@ use contract::events::{
     SteeringApplied, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,
     ToolCallRequested, TurnCompleted, TurnStarted, UsageRecorded,
 };
+use contract::shapes::{Origin, Sender};
 use ratatui::text::Line;
 use serde_json::Value;
 
@@ -93,6 +94,47 @@ pub(crate) enum Entry {
     Band(handoff::Band),
     /// The person's answers to a question form.
     Answers(answers::Answered),
+    /// A turn-input message from Fiber, a session or an extension.
+    Message(Message),
+}
+
+/// The source of an in-card message: a session source carries its sender,
+/// so a session without an id, or Fiber or an extension with one, cannot
+/// be built.
+#[derive(Debug, Clone)]
+pub(crate) enum MessageSource {
+    Fiber,
+    Session(contract::SessionId),
+    Extension(String),
+}
+
+/// A non-driver message, retaining sender identity for current-name lookup.
+#[derive(Debug, Clone)]
+pub(crate) struct Message {
+    pub(crate) source: MessageSource,
+    pub(crate) text: String,
+    pub(crate) images: Vec<crate::image::Part>,
+    pub(crate) ts: u64,
+}
+
+fn message_of(
+    session: &contract::SessionId,
+    sender: &Sender,
+    content: &[contract::shapes::ContentPart],
+    ts: u64,
+) -> Option<Message> {
+    let source = match &sender.origin {
+        Origin::Driver => return None,
+        Origin::Fiber => MessageSource::Fiber,
+        Origin::Session { from_session_id } => MessageSource::Session(from_session_id.clone()),
+        Origin::Extension { extension } => MessageSource::Extension(extension.clone()),
+    };
+    Some(Message {
+        source,
+        text: text_of(content),
+        images: crate::image::parts(session, content),
+        ts,
+    })
 }
 
 /// One turn's card.
@@ -215,7 +257,11 @@ impl Turn {
                     break;
                 }
                 Entry::Group(_) | Entry::Band(_) => break,
-                Entry::Reply { .. } | Entry::Steer(_) | Entry::Aside(_) | Entry::Answers(_) => {}
+                Entry::Reply { .. }
+                | Entry::Steer(_)
+                | Entry::Aside(_)
+                | Entry::Answers(_)
+                | Entry::Message(_) => {}
             }
         }
         match found {
@@ -248,7 +294,8 @@ impl Turn {
                 | Entry::Group(_)
                 | Entry::Aside(_)
                 | Entry::Band(_)
-                | Entry::Answers(_) => None,
+                | Entry::Answers(_)
+                | Entry::Message(_) => None,
             })
             .nth(nth);
         match found {
@@ -530,7 +577,8 @@ impl Turn {
                 | Entry::Steer(_)
                 | Entry::Group(_)
                 | Entry::Aside(_)
-                | Entry::Answers(_) => None,
+                | Entry::Answers(_)
+                | Entry::Message(_) => None,
             }),
             Target::Orphans(id) => self.entries.iter_mut().find_map(|entry| match entry {
                 Entry::Aside(aside) => aside.toggle(Target::Orphans(id)),
@@ -538,7 +586,8 @@ impl Turn {
                 | Entry::Steer(_)
                 | Entry::Group(_)
                 | Entry::Band(_)
-                | Entry::Answers(_) => None,
+                | Entry::Answers(_)
+                | Entry::Message(_) => None,
             }),
             Target::Login | Target::Image(_) | Target::Copy { .. } | Target::CallView(_) => None,
         }
@@ -552,9 +601,11 @@ impl Turn {
             || self.entries.iter_mut().any(|entry| match entry {
                 Entry::Aside(aside) => aside.set_open(target, open),
                 Entry::Band(band) => band.set_open(target, open),
-                Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) | Entry::Answers(_) => {
-                    false
-                }
+                Entry::Reply { .. }
+                | Entry::Steer(_)
+                | Entry::Group(_)
+                | Entry::Answers(_)
+                | Entry::Message(_) => false,
             })
     }
 
@@ -611,15 +662,38 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
             let prompts = started
                 .input
                 .iter()
-                .filter_map(|input| {
-                    if let InputItem::Message { content, .. } = input {
+                .filter_map(|input| match input {
+                    InputItem::Message {
+                        content, sender, ..
+                    } if sender.origin == Origin::Driver => {
                         Some(images::prompt_of(&envelope.session_id, content))
-                    } else {
-                        None
                     }
+                    InputItem::Message { .. }
+                    | InputItem::ShellCommand { .. }
+                    | InputItem::Jobs { .. }
+                    | InputItem::Handoff { .. }
+                    | InputItem::Rewind { .. }
+                    | InputItem::Unknown => None,
                 })
                 .collect();
-            turns.push(Turn::new(prompts, ts));
+            let messages = started
+                .input
+                .iter()
+                .filter_map(|input| match input {
+                    InputItem::Message {
+                        content, sender, ..
+                    } => message_of(&envelope.session_id, sender, content, ts),
+                    InputItem::ShellCommand { .. }
+                    | InputItem::Jobs { .. }
+                    | InputItem::Handoff { .. }
+                    | InputItem::Rewind { .. }
+                    | InputItem::Unknown => None,
+                })
+                .collect::<Vec<_>>();
+            let mut turn = Turn::new(prompts, ts);
+            turn.entries
+                .extend(messages.into_iter().map(Entry::Message));
+            turns.push(turn);
             true
         }),
         "turn_completed" => read!(envelope, TurnCompleted).is_some_and(|done| {
@@ -647,11 +721,17 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
         }),
         "steering_applied" => read!(envelope, SteeringApplied).is_some_and(|applied| {
             open(turns).is_some_and(|turn| {
-                turn.steer(
-                    text_of(&applied.content),
-                    crate::image::parts(&envelope.session_id, &applied.content),
-                    ts,
-                );
+                if applied.sender.origin == Origin::Driver {
+                    turn.steer(
+                        text_of(&applied.content),
+                        crate::image::parts(&envelope.session_id, &applied.content),
+                        ts,
+                    );
+                } else if let Some(message) =
+                    message_of(&envelope.session_id, &applied.sender, &applied.content, ts)
+                {
+                    turn.entries.push(Entry::Message(message));
+                }
                 true
             })
         }),

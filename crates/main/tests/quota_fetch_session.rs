@@ -28,9 +28,6 @@ use support::*;
 /// anywhere.
 // debt: two copies of the test Lua provider installer and router (extension_diagnostics.rs), upgrade trigger: a third test file that needs them, which moves both into support/
 fn install_test_provider(setup: &Setup, server_url: &str) {
-    let source = setup.root.path().join("luasrc");
-    // A reset time the quota view draws as `resets in 3h...`: far enough
-    // out that the minute's truncation never drops the `3h` prefix.
     let reset_secs = SystemClock
         .wall()
         .duration_since(std::time::UNIX_EPOCH)
@@ -38,6 +35,12 @@ fn install_test_provider(setup: &Setup, server_url: &str) {
         .as_secs()
         + 3 * 3600
         + 600;
+    install_test_provider_with_reset(setup, server_url, Some(reset_secs));
+}
+
+fn install_test_provider_with_reset(setup: &Setup, server_url: &str, reset_secs: Option<u64>) {
+    let source = setup.root.path().join("luasrc");
+    let reset = reset_secs.map_or_else(|| "nil".to_owned(), |secs| secs.to_string());
     write_json(
         &source.join("extension.json"),
         &json!({"name": "test-ext", "version": "0.1.0", "fiber": "0.1.0", "api": 1,
@@ -58,7 +61,7 @@ fn install_test_provider(setup: &Setup, server_url: &str) {
                end }},\n\
                quota = {{ timeout = 60000, run = function(q)\n\
                  local r = host.http({{ url = \"{server_url}/lua-quota\" }})\n\
-                 return {{ windows = {{ {{ name = \"w\", used_percent = tonumber(r.body) or 1, resets_at = {reset_secs} }} }} }}\n\
+                 return {{ windows = {{ {{ name = \"w\", used_percent = tonumber(r.body) or 1, resets_at = {reset} }} }} }}\n\
                end }},\n\
                sign = {{ timeout = 60000, run = function(request) return {{}} end }},\n\
              }})\n"
@@ -341,6 +344,76 @@ fn a_hot_window_notices_rearms_and_notices_again_across_resumes() {
     }
     drop(client);
     hub.lock().unwrap().take().unwrap().kill_and_wait();
+}
+
+#[test]
+fn quota_notice_is_a_fiber_card_entry_in_pty() {
+    let setup = Setup::new();
+    let (quota_hit, quota_rx) = mpsc::channel();
+    let server = ProviderServer::start_responding(move |request| match request.path.as_str() {
+        "/lua-quota" => {
+            let _sent = quota_hit.send(());
+            Response::status(200, "90")
+        }
+        "/lua-models" | "/lua-token" => Response::status(200, "{}"),
+        "/v1/responses" => hello(),
+        _ => Response::status(500, "unrouted"),
+    })
+    .unwrap();
+    install_test_provider_with_reset(&setup, &server.url(), None);
+    fs::create_dir_all(setup.home().join("credentials/test")).unwrap();
+    fs::write(setup.home().join("credentials/test/work"), "test-key").unwrap();
+    configure(&setup, "test/m1");
+    let config_path = setup.home().join("config.json");
+    let mut config: Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    config["hub"] = json!({"idle_exit_ms": 200});
+    fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+
+    let mut run = support::pty::Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    let from = run.output().len();
+    run.write(b"first\r");
+    run.wait_screen("the first answered turn", |grid| {
+        grid.contents.contains("Hello.")
+    });
+    // The fake signals when its quota response is ready, so the one
+    // focus-in below runs after the fetch it started: the named screen
+    // wait then draws the fetched share, with no wall-clock read or
+    // sleep of its own.
+    setup.deadline.recv_or_fail(
+        &quota_rx,
+        "the fake quota response for the fetch turn one starts",
+    );
+    run.write(b"\x1b[I");
+    run.wait_screen("the fetched 10% remaining quota share", |grid| {
+        grid.contents.contains("10%")
+    });
+    // The reply draws while the first turn is still running, so the
+    // second prompt waits for its completed card: sent earlier, it
+    // would steer the first turn instead of starting the second.
+    run.turn_finished(from);
+    run.write(b"second\r");
+    let shown = run.wait_screen("the second turn's Fiber quota notice", |grid| {
+        grid.contents.contains("Fiber")
+            && grid.contents.contains("used 90%")
+            && grid.contents.contains("second")
+    });
+    assert!(shown.contents.contains("you"), "{}", shown.contents);
+    assert!(shown.contents.contains("Fiber"), "{}", shown.contents);
+    // Only the person's prompt floats above its card: one `you` row per
+    // turn (`docs/tui.md`, "Turns").
+    assert_eq!(
+        shown
+            .contents
+            .lines()
+            .filter(|line| line.trim_start().starts_with("you "))
+            .count(),
+        2,
+        "one you row per turn: {}",
+        shown.contents
+    );
+    quit(run);
 }
 
 /// The `/lua-quota` gate: armed once the drawn value below proves no

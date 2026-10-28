@@ -262,6 +262,53 @@ fn delegate_extensions_loaded_marks_swapped_transcript_changed() {
 }
 
 #[test]
+fn a_rename_reaches_the_stashed_parent_transcript() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_names", DELEGATE_A);
+    open(&mut app, "j_names");
+    // The parent folds a turn carrying the sender's message while its
+    // screen is stashed behind the delegate's.
+    app.on_line(other_line(
+        SESSION,
+        "turn_started",
+        json!({"input": [
+            {"type": "message", "source": "driver",
+             "content": [{"type": "text", "text": "go"}]},
+            {"type": "message", "source": "session",
+             "from_session_id": crate::app::testkit::SENDER,
+             "content": [{"type": "text", "text": "please check"}]},
+        ]}),
+    ));
+    let parent_rows = |app: &App| {
+        app.attached_screen()
+            .pages()
+            .rows()
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect::<Vec<_>>()
+    };
+    let rows = parent_rows(&app);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains(crate::app::testkit::SENDER)),
+        "the id labels the stashed message: {rows:?}"
+    );
+    app.on_line(crate::app::testkit::sender_status("worker", true));
+    let rows = parent_rows(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("worker · 00:00")),
+        "the stashed parent follows the name: {rows:?}"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.contains(crate::app::testkit::SENDER)),
+        "the id label is gone: {rows:?}"
+    );
+}
+
+#[test]
 fn delegate_other_line_leaves_swapped_transcript_unchanged() {
     // Any other line kind leaves the shown delegate transcript alone when
     // the fold changes nothing: the kind check is `==` (not `!=`), while

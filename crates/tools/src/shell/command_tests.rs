@@ -1922,6 +1922,7 @@ fn nl_numbered_file_piped_through_print_only_sed_reads() {
     let effects = super::super::classify::classify(
         "nl -ba crates/main/src/switch.rs | sed -n '1,5p'",
         std::path::Path::new("/work"),
+        std::path::Path::new("/work"),
         &[],
     );
     assert_eq!(
@@ -1948,6 +1949,7 @@ fn cat_with_discard_redirect_or_true_reads() {
     // `reads` with only the earlier part's path.
     let effects = super::super::classify::classify(
         "cat a 2>/dev/null || true",
+        std::path::Path::new("/work"),
         std::path::Path::new("/work"),
         &[],
     );

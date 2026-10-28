@@ -97,7 +97,11 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 - Arguments are checked against the input schema before the effects function is
   called. A call that fails the check completes as `failed` with code
   `invalid_arguments` and never writes `tool_call_started`, so the log proves
-  it never ran. The model is told what is wrong, one line per bad field. A
+  it never ran. The model is told what is wrong, one line per bad field.
+  When the model's call fails and its arguments fit exactly one other tool
+  declared in full on the request, whose schema declares properties and
+  requires one of them, a last line names that tool. An inner call's
+  message has no such line. The call is not rerouted. A
   call whose arguments are not a JSON object fails the same way, and its
   failure quotes the arguments as the model sent them.
 - A call naming a tool that does not exist completes as `failed` with code
@@ -515,18 +519,16 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   prompt.
 - Arguments: `command` (required); `workdir` (optional; defaults to the
   workspace; a relative path is resolved against the workspace);
-  `timeout_ms` (optional); `run_in_background` (optional); `tty`
-  (optional); `monitor` (optional; starts a monitor, "Background jobs");
-  `deadline_ms` (optional; a monitor's deadline). Fiber never reruns a
-  failed confined call outside its sandbox. Each call starts fresh: a `cd`
-  does not carry over to the next call.
+  `timeout_ms` (optional; for a monitor, its deadline);
+  `run_in_background` (optional); `tty` (optional); `monitor` (optional;
+  starts a monitor, "Background jobs"). Fiber never reruns a failed
+  confined call outside its sandbox. Each call starts fresh: a `cd` does
+  not carry over to the next call.
 - Its optional arguments are typed nullable and listed in `required`. The
   `minimum` limits put its schema outside the strict subset, so it is sent
   with `strict: false`.
-- A monitor takes neither `tty` nor `run_in_background`, and its only limit
-  is `deadline_ms`, so it takes no `timeout_ms`. `deadline_ms` without
-  `monitor` is refused too. Each of these fails with `invalid_arguments`,
-  the message naming the argument.
+- A monitor takes neither `tty` nor `run_in_background`. Each of these
+  fails with `invalid_arguments`, the message naming the argument.
 - A bare wait is rejected. When the call is not `run_in_background` and
   the first part of the command is `sleep N` with N of 25 seconds or more,
   alone or followed by other commands, the call completes as `failed` with
@@ -540,9 +542,9 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - `timeout_ms` is the one thing that kills a command for running long.
   When the model gives none it is 600,000 (10 minutes). There is no
   maximum. It counts from when the command started.
-- It applies to every command except a monitor, run in the foreground or as
-  a job, and it stays with a command after the command moves to the
-  background. A monitor's deadline does the same for it. This is
+- It applies to every command, run in the foreground or as a job, and
+  stays with a command after the command moves to the background. For a
+  monitor it is the deadline under "Background jobs". This is
   where a hang is bounded: "Background jobs" has no cap on waiting.
 - A command that times out ends `failed` with code `timeout` and
   `process.timed_out` true.
@@ -707,9 +709,30 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - `gh pr view`, `gh pr list`, `gh pr diff`, `gh pr checks`, `gh issue view`,
   `gh issue list`, `gh repo view`, `gh run view` and `gh run list` are
   read-only, each with only its listed flags, such as `--json`,
-  `--comments` and `--repo` for `gh pr view`. `gh api` and `curl` declare
-  `executes`: a flag such as `-f` turns a `gh api` read into a write, and a
-  GraphQL query can carry a mutation.
+  `--comments` and `--repo` for `gh pr view`. Such a read declares
+  `network` with the default host, unless it is own: every repository it
+  names belongs to an owner, an account or organisation, of one of the
+  session workspace repository's `github.com` remotes, and then it declares
+  `reads` with the paths it names. A read names its repository with
+  `--repo`/`-R owner/repo`, with a `https://github.com/owner/repo/...`
+  operand, or by naming none, so `gh` resolves it from the workspace's
+  remotes; any other slash-bearing positional operand keeps the reviewed
+  path. An unnamed read is own only when the call's `workdir` is the
+  workspace root and the command holds no `cd`, while a named read is
+  judged by its name alone whatever `workdir` or `cd` says. Owners come
+  from the common directory's git config: the nearest `.git` at or above
+  the workspace root, or the common directory a worktree's `gitdir:` and
+  `commondir` pointers name. The classifier reads at most 64 KiB of config
+  and never follows `include.path`, counting only `remote.<name>.url`
+  values on `github.com` in the HTTPS and SSH forms, matched
+  case-insensitively. A longer, unreadable or unparsable config, a
+  workspace outside a git repository, a remote on another host, and a
+  `.git` or `commondir` pointer past 512 bytes, symlinked, or pointing
+  outside version control all leave no owners, so every `gh` read stays
+  reviewed. A list read with `--search` or `-S`, and any `gh` entry from
+  `shell.read_only`, is never own. `gh api` and `curl` declare `executes`:
+  a flag such as `-f` turns a `gh api` read into a write, and a GraphQL
+  query can carry a mutation.
 - When some commands in a call are read-only and others are not, the
   reviewer's prompt for that call names the ones that were not, as
   ``Not shown read-only: `npm test` ``. The reviewer still gets the whole
@@ -873,7 +896,7 @@ The kinds are `docs/events.md`.
   - Deadline: every monitor has a deadline, 5 minutes by default, at most
     30 minutes, and at most 10 minutes in a non-interactive run. The model
     may set a shorter or longer one within those limits with the call's
-    `deadline_ms`. At the deadline the monitor ends as `failed` with code
+    `timeout_ms`. At the deadline the monitor ends as `failed` with code
     `timeout`, as a timed-out shell call does (`process.timed_out`). The
     model is told the monitor expired and can start it again. The deadline
     is what stops a forgotten monitor from holding a non-interactive run

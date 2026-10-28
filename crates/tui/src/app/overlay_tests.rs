@@ -349,6 +349,113 @@ fn session_gate_event_during_fold_survives_fresh_snapshot_and_landing() {
     );
 }
 
+/// One turn whose input carries the sender's message beside the
+/// driver's.
+fn sender_message_turn() -> Vec<Line> {
+    vec![
+        line(
+            "turn_started",
+            0,
+            None,
+            json!({"input": [
+                {"type": "message", "source": "driver",
+                 "content": [{"type": "text", "text": "prompt"}]},
+                {"type": "message", "source": "session",
+                 "from_session_id": crate::app::testkit::SENDER,
+                 "content": [{"type": "text", "text": "please check"}]},
+            ]}),
+        ),
+        line("turn_completed", 1, None, json!({"outcome": "completed"})),
+    ]
+}
+
+#[test]
+fn a_rename_during_a_fold_refreshes_the_in_flight_fold_and_the_frozen_screen() {
+    let lines = sender_message_turn();
+    let mut app = folding(&lines, &lines, 2);
+    app.on_line(crate::app::testkit::sender_status("worker", true));
+    let rows_of = |pages: &crate::window::Pages| {
+        pages
+            .rows()
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect::<Vec<_>>()
+    };
+    // The frozen screen and the in-flight fold both draw the name.
+    let screen = rows_of(app.attached_screen().pages());
+    assert!(
+        screen.iter().any(|row| row.contains("worker · 00:00")),
+        "the frozen screen draws the name: {screen:?}"
+    );
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("fold")
+    };
+    let folded = rows_of(fold);
+    assert!(
+        folded.iter().any(|row| row.contains("worker · 00:00")),
+        "the in-flight fold draws the name: {folded:?}"
+    );
+    // A rename mid-fold reaches both again.
+    app.on_line(crate::app::testkit::sender_status("renamed", true));
+    let screen = rows_of(app.attached_screen().pages());
+    assert!(
+        screen.iter().any(|row| row.contains("renamed · 00:00")),
+        "the frozen screen follows the rename: {screen:?}"
+    );
+    assert!(
+        !screen.iter().any(|row| row.contains("worker · 00:00")),
+        "{screen:?}"
+    );
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("fold")
+    };
+    let folded = rows_of(fold);
+    assert!(
+        folded.iter().any(|row| row.contains("renamed · 00:00")),
+        "the in-flight fold follows the rename: {folded:?}"
+    );
+    assert!(
+        !folded.iter().any(|row| row.contains("worker · 00:00")),
+        "{folded:?}"
+    );
+}
+
+#[test]
+fn a_rename_while_a_tail_read_runs_refreshes_the_preview_candidate() {
+    let lines = sender_message_turn();
+    let mut app = reading();
+    app.tail_lines(envelopes(&lines));
+    let rows_of = |app: &App| {
+        app.preview
+            .as_ref()
+            .unwrap_or_else(|| panic!("the candidate"))
+            .pages
+            .rows()
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect::<Vec<_>>()
+    };
+    // Before any status the candidate labels the sender by its id.
+    let rows = rows_of(&app);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains(crate::app::testkit::SENDER)),
+        "the id labels the candidate: {rows:?}"
+    );
+    app.on_line(crate::app::testkit::sender_status("worker", true));
+    let rows = rows_of(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("worker · 00:00")),
+        "the candidate follows the name: {rows:?}"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.contains(crate::app::testkit::SENDER)),
+        "the id label is gone: {rows:?}"
+    );
+}
+
 #[test]
 fn renderer_replacement_preserves_failure_memo_and_notice_across_fold_recount() {
     let lines = call_turn(&mut 0, "message", "call");

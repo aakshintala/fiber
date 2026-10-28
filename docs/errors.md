@@ -44,6 +44,11 @@ A failed model call adds two optional fields:
   header value the credential, `credential()` or `sign()` supplied is replaced
   with `[redacted]`. Fiber's `message` then names the provider and the function, such as "codex's credential() failed. Run `fiber login codex`." or, for a provider `fiber login` cannot fix, "bedrock's credential() failed.", and a `credential()` that fails at startup adds the same `provider` to `fiber_exited.error`.
 
+A hub `command_rejected` for `delete` with `code: session_held` also carries
+`held`: the ids of every session in the set another process holds, in the order
+the hub checked them. Other `session_held` refusals omit it (`docs/events.md`,
+"`command_rejected`").
+
 ## Where a code comes from
 
 Each library crate has its own error enum (`docs/code-quality.md`, "Errors").
@@ -341,10 +346,10 @@ the lines that carry it.
 | `hook_unapproved` | exit, driver command (`rewind`) | a repository's required hook is not approved; run `fiber approve` in the repository | — |
 | `http_error` | extension call, tool call | `web_fetch` got a status other than 2xx, was redirected more than 10 times, or was redirected to a URL it cannot parse | — |
 | `hub_version` | notice | the hub runs another Fiber version or commit than this terminal (`docs/tui.md`, "Notices") | event |
-| `indeterminate` | tool call, job, driver command, hub command | Fiber cannot tell whether the call completed | — |
+| `indeterminate` | tool call, job, driver command, hub command, notice | Fiber cannot tell whether the call completed, or a `/delete` whose delete got no answer or whose line write failed ambiguously | event |
 | `invalid_arguments` | driver command, hub command, extension call, tool call, notice | the arguments failed the tool's schema or checks, or a driver or hub command's `args` (`docs/invocation.md`, "Driver commands" and "The hub") | event |
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason | — |
-| `io_failed` | exit, driver command, hub command, extension call, notice | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path; or Fiber could not install its signal handlers, and the message starts `signals:`; or the terminal could not start its input reader, and the message starts `terminal:`; or the hub could not start the worker thread for a file search or a device login, or the file search worker stopped; the message says which | event |
+| `io_failed` | exit, driver command, hub command, extension call, notice | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path; or Fiber could not install its signal handlers, and the message starts `signals:`; or the terminal could not start its input reader, and the message starts `terminal:`; or the hub could not start the worker thread for a file search or a device login, or the file search worker stopped; the message says which; or the hub link dropped before a confirmed stop finished, and the message starts `Not deleted: the hub link dropped` | event |
 | `log_corrupt` | exit, hub command, driver command (`rewind`), job | a log line that cannot be encoded, or one read back that does not parse | — |
 | `login_url` | notice | an extension's `host.oauth.open` or `host.oauth.show` needs a person to finish a login; the message gives the URL to open, and the code to enter for a device-code login | condition |
 | `malformed` | driver command, hub command, notice | a command line that is not a JSON object, has no string `id` or `command`, has `args` of the wrong type, or has a key no command line takes (`docs/invocation.md`, "Driver commands"), or a hub command's answer carried no code the terminal can read | event |

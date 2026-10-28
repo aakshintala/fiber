@@ -475,6 +475,7 @@ sent the latest.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `name` | string | yes | the session's name, or its first prompt when it has none |
+| `named` | boolean | no | true when `name` came from `session_named`; absent means false |
 | `workspace` | string | yes | the workspace path |
 | `project` | string | yes | the project's key (`docs/state.md`, "Projects") |
 | `parent` | string | no | on a delegate, the parent's `session_id` |
@@ -1463,6 +1464,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `command_id` | string | no | the command's id; absent when the line was `malformed` and carried none that could be read |
 | `code` | string | yes | the rejection code (`docs/invocation.md`, "Driver commands") |
 | `message` | string | yes | Fiber's own sentence |
+| `held` | array of strings | no | only on a hub `delete` refusal with `code: session_held`: every session in the confirmed set whose lock another process holds, in check order; other `session_held` refusals omit this field. The refusal's `message` keeps its existing single-session wording (`docs/invocation.md`, "Deleting and pruning"). |
 
 A workspace move to the folder the session is already in answers:
 

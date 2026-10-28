@@ -67,3 +67,22 @@ fn it_runs_a_shell_command_and_prints_its_result_as_json() {
     assert_eq!(printed["process"]["exit_code"], json!(0));
     assert!(printed.get("error").is_none(), "{printed}");
 }
+
+/// An ordinary command spells its limit with `timeout_ms`, every optional
+/// argument present, and succeeds.
+#[test]
+fn it_runs_an_ordinary_command_with_an_explicit_timeout_ms() {
+    let out = call(
+        "shell",
+        r#"{"command":"true","monitor":false,"run_in_background":false,"timeout_ms":10000,"tty":false,"workdir":null}"#,
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(out.status.success(), "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed["content"][0]["text"], json!("Exit code 0.\n"));
+    assert_eq!(printed["details"]["command"], json!("true"));
+    assert_eq!(printed["process"]["exit_code"], json!(0));
+    assert_eq!(printed["process"]["timed_out"], json!(false));
+    assert!(printed.get("error").is_none(), "{printed}");
+}

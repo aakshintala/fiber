@@ -6,8 +6,10 @@
 use contract::Seq;
 use contract::events::{TurnCompleted, TurnOutcome};
 use jiff::tz::TimeZone;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 
-use super::{Ending, Entry, Turn};
+use super::{Ending, Entry, Message, MessageSource, Turn};
 use crate::ext::{
     CardPrompt, Input, PromptImage, TurnCard, TurnCardState, TurnEnded, TurnEntry, TurnError,
 };
@@ -15,6 +17,8 @@ use crate::format;
 use crate::rows::Rows;
 use crate::surface::{self, Edges};
 use crate::theme::Role;
+use std::borrow::Cow;
+use std::collections::HashMap;
 
 /// The whole-turn totals a page's draw supplies for the turn they
 /// close: the draw renders them without cloning or mutating the card.
@@ -111,6 +115,15 @@ impl Turn {
         summary: Option<DrawSummary<'a>>,
         flat: bool,
     ) -> TurnCard<'a> {
+        self.card_input_with_names(summary, flat, &std::collections::HashMap::new())
+    }
+
+    pub(crate) fn card_input_with_names<'a>(
+        &'a self,
+        summary: Option<DrawSummary<'a>>,
+        flat: bool,
+        names: &std::collections::HashMap<contract::SessionId, String>,
+    ) -> TurnCard<'a> {
         let ended = summary.as_ref().and_then(|view| view.ended);
         let running = ended.is_none() && self.ended.is_none();
         let state = match ended {
@@ -152,6 +165,28 @@ impl Turn {
                     Entry::Aside(aside) => Some(TurnEntry::Aside(aside.turn_input())),
                     Entry::Band(band) => Some(TurnEntry::Band(band.turn_entry())),
                     Entry::Answers(answered) => Some(TurnEntry::Answers(answered.turn_entry())),
+                    Entry::Message(message) => {
+                        let source = match &message.source {
+                            MessageSource::Fiber => "fiber",
+                            MessageSource::Session(_) => "session",
+                            MessageSource::Extension(_) => "extension",
+                        };
+                        Some(TurnEntry::Message {
+                            source,
+                            label: message.label(names),
+                            text: &message.text,
+                            images: message
+                                .images
+                                .iter()
+                                .map(|part| PromptImage {
+                                    path: &part.path,
+                                    width: part.width,
+                                    height: part.height,
+                                })
+                                .collect(),
+                            ts: message.ts,
+                        })
+                    }
                 })
                 .collect(),
             started: summary.as_ref().map_or(self.started, |view| view.started),
@@ -183,13 +218,18 @@ impl Turn {
         match out.fills_for("turn_card") {
             crate::ext::SlotSelection::Draw { extension } => {
                 let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
-                let input = self.card_input(summary, flat);
+                let input = if out.session_names.is_empty() {
+                    self.card_input(summary, flat)
+                } else {
+                    self.card_input_with_names(summary, flat, &out.session_names)
+                };
                 let wrapped = Input::TurnCard(input);
                 let builtin = |input: &Input<'_>, w: u16| {
                     if !matches!(input, Input::TurnCard(_)) {
                         return Vec::new();
                     }
                     let mut scratch = Rows::default();
+                    scratch.session_names = std::sync::Arc::clone(&out.session_names);
                     self.card_rows(w, zone, edges, layout, summary, &mut scratch);
                     let (rows, _) = scratch.into_parts();
                     rows.into_iter()
@@ -285,6 +325,7 @@ impl Turn {
                 Entry::Aside(aside) => aside.rows(inner, out),
                 Entry::Band(_) => {}
                 Entry::Answers(answered) => answered.rows(inner, zone, out),
+                Entry::Message(message) => message_rows(message, inner, zone, layout, out),
             });
             piece_drew = piece_drew || drew;
             if drew {
@@ -374,6 +415,96 @@ fn ended_of(done: &TurnCompleted, ts: u64) -> TurnEnded<'_> {
             }),
         },
     }
+}
+
+impl Message {
+    fn label<'a>(&'a self, names: &HashMap<contract::SessionId, String>) -> Cow<'a, str> {
+        match &self.source {
+            MessageSource::Fiber => Cow::Borrowed("Fiber"),
+            MessageSource::Session(id) => names
+                .get(id)
+                .filter(|name| !name.is_empty())
+                .cloned()
+                .map(Cow::Owned)
+                .unwrap_or_else(|| Cow::Borrowed(id.0.as_str())),
+            MessageSource::Extension(name) => Cow::Borrowed(name),
+        }
+    }
+}
+
+/// Whether the labelled rule draws its rule cells: with no dashes the
+/// span would hold no rule characters and copy no text.
+// With no dashes the rule span is empty, so drawing it changes no cell
+// and the copied logical text keeps the label and body unchanged.
+#[cfg_attr(false, mutants::skip)]
+fn has_rule(dashes: usize) -> bool {
+    dashes > 0
+}
+
+/// Draws one non-driver message as a labelled rule and its text/images.
+fn message_rows(
+    message: &Message,
+    width: u16,
+    zone: &TimeZone,
+    layout: &crate::image::Layout,
+    out: &mut Rows,
+) {
+    let muted = matches!(&message.source, MessageSource::Fiber);
+    let label = message.label(&out.session_names).into_owned();
+    let time = crate::local_time::time_of_day(message.ts, zone)
+        .map_or_else(String::new, |time| format!(" · {time} "));
+    let text = if matches!(&message.source, MessageSource::Fiber) {
+        message
+            .text
+            .strip_prefix("Fiber: ")
+            .unwrap_or(&message.text)
+    } else {
+        &message.text
+    };
+    let tail = format!("{label}{time}");
+    let dashes = usize::from(width).saturating_sub(crate::format::width(&tail).saturating_add(1));
+    let label_style = if muted {
+        crate::theme::style(Role::Muted)
+    } else {
+        crate::theme::style(Role::Secondary)
+    };
+    let mut spans = vec![Span::styled(label, label_style)];
+    if !time.is_empty() {
+        spans.push(Span::styled(
+            time,
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+    }
+    if has_rule(dashes) {
+        spans.push(Span::styled(
+            "─".repeat(dashes),
+            crate::theme::style(Role::Rule),
+        ));
+    }
+    out.push_text(
+        (Line::from(spans), None),
+        crate::rows::RowText {
+            tail: u16::try_from(dashes).unwrap_or(u16::MAX),
+            ..crate::rows::RowText::plain()
+        },
+    );
+    if !text.trim().is_empty() {
+        let style = if muted {
+            Style::default().add_modifier(Modifier::DIM)
+        } else {
+            Style::default()
+        };
+        for (row, join) in crate::format::wrap_joined(text, usize::from(width)) {
+            out.push_text(
+                (Line::from(Span::styled(row, style)), None),
+                crate::rows::RowText {
+                    join,
+                    ..crate::rows::RowText::plain()
+                },
+            );
+        }
+    }
+    super::images::steer_rows(&message.images, width, layout, out);
 }
 
 #[cfg(test)]

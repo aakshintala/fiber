@@ -2,7 +2,7 @@
 //! names.
 
 use super::{App, Effect};
-use crate::app::testkit::{hello, home_with};
+use crate::app::testkit::{SENDER, hello, home_with, sender_status};
 use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
 use crate::keys::{Mouse, MouseKind};
@@ -197,6 +197,173 @@ fn the_zone_survives_a_session_switch() {
             "".to_owned()
         ]
     );
+}
+
+#[test]
+fn a_named_recent_row_seeds_the_sender_label_and_a_statusless_row_keeps_it() {
+    let mut app = home_with(80, 24, launch());
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let lines: Vec<Value> = commands(app.on_line(hello()));
+    let recent = lines
+        .iter()
+        .find(|line| line["command"] == "recent")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("recent id: {lines:?}"))
+        .to_owned();
+    // The unscoped `recent` answer's row carries the sender's last
+    // status, which named it: an exited sender still labels by its
+    // actual name (`docs/tui.md`, "Turns").
+    let named_row = json!({
+        "session_id": "s_bbbbbbbbbbbbbbbb", "ts": 0, "project": "other",
+        "workspace": "/o", "name": "worker", "how": "exited",
+        "status": {
+            "name": "worker", "named": true, "workspace": "/o", "project": "other",
+            "state": "idle",
+            "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        },
+    });
+    let out = app.on_line(accepted(&recent, json!({"sessions": [named_row]})));
+    let scoped: Vec<Value> = commands(out)
+        .into_iter()
+        .filter(|line| line["command"] == "recent")
+        .collect();
+    // A project that first appears earns one scoped `recent` ask
+    // (`docs/tui.md`, "Home", "The session list").
+    assert_eq!(scoped.len(), 1, "the new project earns one scoped ask");
+    app.on_line(turn_with_sender_message("s_aaaaaaaaaaaaaaaa"));
+    let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
+    assert!(
+        texts.iter().any(|line| line.contains("worker · ")),
+        "the seeded name labels the message: {texts:?}"
+    );
+    // The scoped answer's row carries no status: the learned name stays.
+    let id = scoped[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("scoped id: {scoped:?}"))
+        .to_owned();
+    let bare_row = json!({
+        "session_id": "s_bbbbbbbbbbbbbbbb", "ts": 0, "project": "other",
+        "workspace": "/o", "name": "worker", "how": "exited",
+    });
+    app.on_line(accepted(&id, json!({"sessions": [bare_row], "total": 1})));
+    let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
+    assert!(
+        texts.iter().any(|line| line.contains("worker · ")),
+        "the learned name survives a statusless row: {texts:?}"
+    );
+}
+
+#[test]
+fn a_feed_status_names_the_sender_only_when_it_is_named() {
+    let mut app = home_with(80, 24, launch());
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.on_line(hello());
+    app.on_line(turn_with_sender_message("s_aaaaaaaaaaaaaaaa"));
+    let texts =
+        |app: &App| -> Vec<String> { app.lines().iter().map(ToString::to_string).collect() };
+    // Home lists the sender by its first prompt, which never labels it.
+    app.on_line(sender_status("first prompt row", false));
+    let shown = texts(&app);
+    assert!(
+        shown
+            .iter()
+            .any(|line| line.contains(&format!("{SENDER} · "))),
+        "an unnamed status labels by id: {shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|line| line.contains("first prompt row")),
+        "{shown:?}"
+    );
+    app.on_line(sender_status("worker", true));
+    let shown = texts(&app);
+    assert!(
+        shown.iter().any(|line| line.contains("worker · ")),
+        "a named status labels by name: {shown:?}"
+    );
+    // The latest status wins: one that is no longer named drops it.
+    app.on_line(sender_status("first prompt row", false));
+    let shown = texts(&app);
+    assert!(
+        shown
+            .iter()
+            .any(|line| line.contains(&format!("{SENDER} · "))),
+        "the id labels again: {shown:?}"
+    );
+}
+
+#[test]
+fn an_unnamed_home_row_with_a_display_name_still_labels_by_sender_id() {
+    let mut app = home_with(80, 24, launch());
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let lines: Vec<Value> = commands(app.on_line(hello()));
+    let recent = lines
+        .iter()
+        .find(|line| line["command"] == "recent")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("recent id: {lines:?}"))
+        .to_owned();
+    // The row's status carries a display name but does not name the
+    // sender: only an actual name labels it, so the message falls back
+    // to the sender id (`docs/tui.md`, "Turns").
+    let unnamed_row = json!({
+        "session_id": "s_bbbbbbbbbbbbbbbb", "ts": 0, "project": "other",
+        "workspace": "/o", "name": "worker", "how": "exited",
+        "status": {
+            "name": "first prompt row", "named": false, "workspace": "/o", "project": "other",
+            "state": "idle",
+            "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        },
+    });
+    let out = app.on_line(accepted(&recent, json!({"sessions": [unnamed_row]})));
+    let scoped: Vec<Value> = commands(out)
+        .into_iter()
+        .filter(|line| line["command"] == "recent")
+        .collect();
+    // A project that first appears earns one scoped `recent` ask
+    // (`docs/tui.md`, "Home", "The session list").
+    assert_eq!(scoped.len(), 1, "the new project earns one scoped ask");
+    app.on_line(turn_with_sender_message("s_aaaaaaaaaaaaaaaa"));
+    let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
+    assert!(
+        texts
+            .iter()
+            .any(|line| line.contains(&format!("{SENDER} · "))),
+        "the sender id labels the message: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|line| line.contains("first prompt row")),
+        "an unnamed status names nothing: {texts:?}"
+    );
+}
+
+/// A `turn_started` in `session` carrying the sender's message beside
+/// the driver's.
+fn turn_with_sender_message(session: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"input": [
+            {"type": "message", "source": "driver", "content": [{"type": "text", "text": "go"}]},
+            {"type": "message", "source": "session", "from_session_id": "s_bbbbbbbbbbbbbbbb",
+             "content": [{"type": "text", "text": "please check"}]},
+        ]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
 }
 
 #[test]
