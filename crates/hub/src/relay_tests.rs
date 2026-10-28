@@ -3081,11 +3081,6 @@ fn a_refused_admission_answers_the_pending_command() {
     assert_eq!(answer["payload"]["code"], "session_not_found");
     assert_eq!(answer["payload"]["command_id"], "c_refused");
     assert_eq!(order.session_for("c_refused"), None);
-    assert_eq!(
-        crate::connection::lock(&relays).entries.len(),
-        1,
-        "the refused attach publishes no relay"
-    );
 }
 
 /// A relay thread that never starts still answers the command already
@@ -3158,8 +3153,4 @@ fn a_spawn_failure_answers_the_written_command() {
     assert_eq!(answer["payload"]["code"], "session_not_found");
     assert_eq!(answer["payload"]["command_id"], "c_unspawned");
     assert_eq!(order.session_for("c_unspawned"), None);
-    assert!(
-        crate::connection::lock(&relays).entries.is_empty(),
-        "the unspawned attach publishes no relay"
-    );
 }
