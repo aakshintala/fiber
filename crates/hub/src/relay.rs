@@ -50,8 +50,6 @@ use crate::retire::{AckOrder, Retire};
 
 #[cfg(test)]
 pub(crate) use ack::ack_parses;
-#[cfg(test)]
-pub(crate) use ack::acknowledges;
 pub(crate) use ack::{Ack, acknowledgement};
 use ack::{Settled, Verdict, kept_has, muted, settle};
 pub(crate) use relays::Relays;

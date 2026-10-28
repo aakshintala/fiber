@@ -2288,7 +2288,10 @@ fn the_level_is_recorded_before_its_acknowledgement_is_forwarded() {
     // the acknowledgement of `c_2`: it reads the kept subscription, which
     // the relay records before it forwards.
     *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |line, relays| {
-        assert!(crate::relay::acknowledges(line, "c_2"), "{line:?}");
+        assert!(
+            crate::relay::acknowledgement(line).is_some_and(|ack| ack.id == "c_2"),
+            "{line:?}"
+        );
         let level = crate::connection::lock(relays)
             .subscribed
             .iter()
@@ -2625,7 +2628,10 @@ fn an_accepted_subscribe_is_replayed(prior: Option<&str>) {
     // before it keeps the level, so the reconnect below runs while the
     // acceptance is still unrecorded.
     *crate::connection::lock(&hub.before_accepted) = Some(Box::new(move |line: &[u8], _| {
-        assert!(crate::relay::acknowledges(line, accepted), "{line:?}");
+        assert!(
+            crate::relay::acknowledgement(line).is_some_and(|ack| ack.id == accepted),
+            "{line:?}"
+        );
         parked_tx.send(()).unwrap_or(());
         release_rx
             .recv()
@@ -2882,7 +2888,10 @@ fn an_acknowledgement_is_forwarded_before_the_next_queued_command_passes_on() {
     let log: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
     let (go_tx, go_rx) = mpsc::channel();
     *crate::connection::lock(&hub.before_accepted) = Some(Box::new(move |line, _| {
-        assert!(crate::relay::acknowledges(line, "c_2"), "{line:?}");
+        assert!(
+            crate::relay::acknowledgement(line).is_some_and(|ack| ack.id == "c_2"),
+            "{line:?}"
+        );
         go_rx.recv().expect("the test releases the forward");
     }));
     let logging = Arc::clone(&log);
@@ -2901,7 +2910,7 @@ fn an_acknowledgement_is_forwarded_before_the_next_queued_command_passes_on() {
     // by the resumed session's answer.
     let logging = Arc::clone(&log);
     *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |line, _| {
-        if crate::relay::acknowledges(line, "c_2") {
+        if crate::relay::acknowledgement(line).is_some_and(|ack| ack.id == "c_2") {
             logging.lock().unwrap().push("Forward(c_2)".to_owned());
         }
     }));
