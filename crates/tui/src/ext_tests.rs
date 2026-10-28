@@ -816,6 +816,105 @@ impl Renderer for SlotRenderer {
     }
 }
 
+/// An animated test renderer: fills one slot at its interval, drawing
+/// its label with the frame it drew, and stopping when told. The seam
+/// calls it with frame 0 first and plus one per due tick.
+#[derive(Debug)]
+pub(crate) struct AnimatedRenderer {
+    /// The slot it fills.
+    pub(crate) slot: String,
+    /// Its effective animation interval.
+    pub(crate) interval: std::time::Duration,
+    /// Lines drawn per frame.
+    pub(crate) rows: usize,
+    /// Whether each frame adds one line.
+    grow: bool,
+    /// The frames it drew, in order.
+    pub(crate) frames: RefCell<Vec<u64>>,
+    /// When set, it answers `{ lines, animate = false }`: draws once,
+    /// then stops until its input changes.
+    pub(crate) stop: Cell<bool>,
+}
+
+impl AnimatedRenderer {
+    /// A renderer filling `slot` at `interval`, drawing `rows` lines a
+    /// frame.
+    pub(crate) fn filling(slot: &str, interval: std::time::Duration, rows: usize) -> Self {
+        Self {
+            slot: slot.to_owned(),
+            interval,
+            rows: rows.max(1),
+            grow: false,
+            frames: RefCell::new(Vec::new()),
+            stop: Cell::new(false),
+        }
+    }
+
+    /// A renderer whose frame `n` draws `rows + n` lines.
+    pub(crate) fn growing(slot: &str, interval: std::time::Duration, rows: usize) -> Self {
+        let mut renderer = Self::filling(slot, interval, rows);
+        renderer.grow = true;
+        renderer
+    }
+}
+
+impl Renderer for AnimatedRenderer {
+    fn name(&self) -> &str {
+        "animated-test"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        self.slot == slot
+    }
+
+    fn render(
+        &self,
+        _ctx: &SessionCtx,
+        _slot: &str,
+        _input: &Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        // The still form, without a frame: the schedule always calls
+        // through `render_animated`, so this records nothing.
+        Decision::Draw {
+            extension: self.name().into(),
+            lines: vec![vec![raw("anim-still")]],
+        }
+    }
+
+    fn animate_interval(&self, _ctx: &SessionCtx, _slot: &str) -> Option<std::time::Duration> {
+        Some(self.interval)
+    }
+
+    fn render_animated(
+        &self,
+        _ctx: &SessionCtx,
+        _slot: &str,
+        _input: &Input<'_>,
+        _width: u16,
+        frame: u64,
+        _builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> (Decision, bool) {
+        self.frames.borrow_mut().push(frame);
+        let rows = self.rows.saturating_add(if self.grow {
+            usize::try_from(frame).unwrap_or(usize::MAX)
+        } else {
+            0
+        });
+        let lines = (0..rows)
+            .map(|row| vec![raw(&format!("anim{frame}-{row}"))])
+            .collect();
+        (
+            Decision::Draw {
+                extension: self.name().into(),
+                lines,
+            },
+            !self.stop.get(),
+        )
+    }
+}
+
 /// A seam holding `fake` on page `index` with session `session`: flat
 /// draws drop every style.
 pub(crate) fn seam(
@@ -1964,4 +2063,84 @@ fn every_notice_field_is_in_the_key() {
     {
         assert_ne!(one, varied.key("notice"), "case {index}");
     }
+}
+
+#[test]
+fn a_still_renderer_animates_nothing() {
+    let fake = Fake;
+    let ctx = SessionCtx {
+        session_id: None,
+        halves: None,
+    };
+    assert_eq!(fake.animate_interval(&ctx, "ledger_row"), None);
+    let base = base();
+    let row = base_row(&base);
+    let input = Input::LedgerRow(row);
+    let (decision, continues) = fake.render_animated(
+        &SessionCtx {
+            session_id: None,
+            halves: None,
+        },
+        "ledger_row",
+        &input,
+        80,
+        3,
+        &|_, _| Vec::new(),
+    );
+    // The default draws the still render and continues.
+    assert!(matches!(decision, Decision::Fail(_)));
+    assert!(continues);
+}
+
+#[test]
+fn an_animated_renderer_draws_its_frame_and_reports_its_interval() {
+    use std::time::Duration;
+    let fake = AnimatedRenderer::filling("ledger_row", Duration::from_millis(500), 2);
+    let interval_ctx = SessionCtx {
+        session_id: None,
+        halves: None,
+    };
+    assert_eq!(
+        fake.animate_interval(&interval_ctx, "ledger_row"),
+        Some(Duration::from_millis(500))
+    );
+    assert!(fake.fills("ledger_row"));
+    assert!(!fake.fills("notice"));
+    let base = base();
+    let row = base_row(&base);
+    let input = Input::LedgerRow(row);
+    let ctx = SessionCtx {
+        session_id: None,
+        halves: None,
+    };
+    let (decision, continues) =
+        fake.render_animated(&ctx, "ledger_row", &input, 80, 7, &|_, _| Vec::new());
+    assert!(continues);
+    let Decision::Draw { extension, lines } = decision else {
+        panic!("expected drawn lines, got {decision:?}");
+    };
+    assert_eq!(extension, "animated-test");
+    assert_eq!(fake.frames.borrow().clone(), vec![7]); // docs/tui.md:2963: the frame reaches the renderer in its input.
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0][0].text, "anim7-0");
+    assert_eq!(lines[1][0].text, "anim7-1");
+}
+
+#[test]
+fn a_stopped_animated_renderer_draws_once() {
+    use std::time::Duration;
+    let fake = AnimatedRenderer::filling("notice", Duration::from_millis(500), 1);
+    fake.stop.set(true);
+    let notice = Input::Notice(crate::ext::Notice {
+        code: "io_failed",
+        text: "x",
+        flat: false,
+    });
+    let ctx = SessionCtx {
+        session_id: None,
+        halves: None,
+    };
+    let (_, continues) = fake.render_animated(&ctx, "notice", &notice, 80, 2, &|_, _| Vec::new());
+    assert!(!continues);
+    assert_eq!(fake.frames.borrow().clone(), vec![2]); // docs/tui.md:2963: the frame reaches the renderer in its input.
 }

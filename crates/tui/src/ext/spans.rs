@@ -27,6 +27,9 @@ pub(crate) struct FittedLine {
     pub(crate) links: Vec<(Range<u16>, String)>,
     /// The trailing cells that are pad, not text.
     pub(crate) pad: u16,
+    /// The animated item that drew the line, if any: what the paint pass
+    /// marks as visible (`docs/tui.md`, "Animation").
+    pub(crate) anim: Option<super::anim::AnimKey>,
 }
 
 /// What a renderer's spans got wrong: the field that names it.
@@ -113,6 +116,9 @@ fn fit_line(spans: &[RawSpan], max: usize, flat: bool) -> Result<FittedLine, Sha
         line: Line::from(out),
         links,
         pad: u16::try_from(pad).unwrap_or(u16::MAX),
+        // The cache tags the animated item that stored the line; a
+        // fitted line is still until then.
+        anim: None,
     })
 }
 

@@ -1024,3 +1024,1038 @@ fn scroll_and_search_redraws_hit() {
     assert_eq!(calls.get(), 1, "scrolling and searching call Lua once");
     assert_eq!(crate::work::take().renderer_calls, 1);
 }
+
+/// The animated answers a test draws: every frame it drew, whether the
+/// next answer stops, and whether it fails instead.
+struct AnimAnswers {
+    frames: std::cell::RefCell<Vec<u64>>,
+    stop: Cell<bool>,
+    fail: Cell<bool>,
+}
+
+impl AnimAnswers {
+    fn new() -> Self {
+        Self {
+            frames: std::cell::RefCell::new(Vec::new()),
+            stop: Cell::new(false),
+            fail: Cell::new(false),
+        }
+    }
+}
+
+const ANIM_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+fn origin() -> std::time::Instant {
+    fakes::clock::FakeClock::new().origin()
+}
+
+fn at(origin: std::time::Instant, millis: u64) -> std::time::Instant {
+    origin
+        .checked_add(std::time::Duration::from_millis(millis))
+        .expect("after the origin")
+}
+
+/// Paints `row` through the animation schedule at `width`, recording
+/// each frame drawn.
+fn paint(
+    cache: &Cache,
+    row: &Input<'_>,
+    width: u16,
+    answers: &AnimAnswers,
+) -> Option<Arc<Vec<super::super::spans::FittedLine>>> {
+    cache.lines_animated(
+        page(0),
+        "ledger_row",
+        "test",
+        None,
+        row,
+        width,
+        ANIM_INTERVAL,
+        |frame| {
+            answers.frames.borrow_mut().push(frame);
+            if answers.fail.get() {
+                return (Decision::Fail(failed("test", "boom")), false);
+            }
+            let lines = vec![vec![raw(&format!("f{frame}"))]];
+            (
+                Decision::Draw {
+                    extension: "test".into(),
+                    lines,
+                },
+                !answers.stop.get(),
+            )
+        },
+    )
+}
+
+/// The animated item's key from its painted lines.
+fn tag_of(lines: &Arc<Vec<super::super::spans::FittedLine>>) -> super::super::anim::AnimKey {
+    lines
+        .first()
+        .expect("one fitted line")
+        .anim
+        .clone()
+        .expect("an animated line is tagged")
+}
+
+fn text_of(lines: &Arc<Vec<super::super::spans::FittedLine>>) -> String {
+    lines.first().expect("one fitted line").line.to_string()
+}
+
+#[test]
+fn an_animated_paint_starts_at_frame_zero() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let fitted = paint(&cache, &row, 20, &answers).expect("a painted line");
+    assert_eq!(crate::work::take().renderer_calls, 1); // docs/tui.md:2909: one call per cache miss.
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    assert!(text_of(&fitted).starts_with("f0"), "{fitted:?}");
+    assert!(fitted.first().expect("one line").anim.is_some());
+    // A repaint in the same frame hits: no call before the paint and
+    // the due both arrive.
+    cache.mark_painted(&[tag_of(&fitted)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    cache.begin_anim_frame(Some(t0), false);
+    let again = paint(&cache, &row, 20, &answers).expect("a painted line");
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    assert_eq!(text_of(&again), text_of(&fitted));
+}
+
+#[test]
+fn an_animated_item_advances_only_when_due_and_painted() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    // Before the interval the paint hits its stored frame: no call.
+    cache.begin_anim_frame(Some(at(t0, 100)), false);
+    let early = paint(&cache, &row, 20, &answers).expect("stored frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    assert_eq!(text_of(&early), text_of(&first));
+    cache.mark_painted(&[tag_of(&early)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    // At the interval the paint advances: frame 1, last moves.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let second = paint(&cache, &row, 20, &answers).expect("frame 1");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2968: calls follow paint in the previous frame.
+    assert!(text_of(&second).starts_with("f1"), "{second:?}");
+    cache.mark_painted(&[tag_of(&second)]);
+    assert_eq!(cache.anim_dues(), vec![(at(t0, 500), ANIM_INTERVAL)]);
+}
+
+#[test]
+fn an_unmarked_draw_never_advances_or_schedules() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    paint(&cache, &row, 20, &answers).expect("frame 0");
+    // Nothing painted: no due, and the next frame holds still.
+    assert!(cache.anim_dues().is_empty());
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let still = paint(&cache, &row, 20, &answers).expect("stored frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    assert!(text_of(&still).starts_with("f0"), "{still:?}");
+    assert!(cache.anim_dues().is_empty());
+}
+
+#[test]
+fn an_absent_item_holds_no_due_then_resumes_without_restarting() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    // Two frames absent: no paint, no due.
+    for millis in [500, 1000] {
+        cache.begin_anim_frame(Some(at(t0, millis)), false);
+        assert!(cache.anim_dues().is_empty(), "absent at {millis} ms");
+    }
+    // Back on screen: hits its stored frame with no recall, and the
+    // counter resumes instead of restarting.
+    cache.begin_anim_frame(Some(at(t0, 1500)), false);
+    let back = paint(&cache, &row, 20, &answers).expect("stored frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    assert_eq!(text_of(&back), text_of(&first));
+    cache.mark_painted(&[tag_of(&back)]);
+    // The stored paint changes nothing: the due still names the last
+    // tick.
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    cache.begin_anim_frame(Some(at(t0, 2000)), false);
+    let second = paint(&cache, &row, 20, &answers).expect("frame 1");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
+    assert!(text_of(&second).starts_with("f1"), "{second:?}");
+}
+
+#[test]
+fn a_stopped_item_hits_stored_lines_until_its_input_changes() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    answers.stop.set(true);
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("the stopping draw");
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    // Stopped: repaints hit with no recall, and ask for no wake.
+    for millis in [500, 1000, 1500] {
+        cache.begin_anim_frame(Some(at(t0, millis)), false);
+        let still = paint(&cache, &row, 20, &answers).expect("stored lines");
+        assert_eq!(text_of(&still), text_of(&first));
+        cache.mark_painted(&[tag_of(&still)]);
+        assert!(cache.anim_dues().is_empty(), "stopped at {millis} ms");
+    }
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2976: `animate = false` stays stopped until the input changes.
+    // A changed input starts a fresh item at frame 0.
+    let other = input("shell", "second", &arguments);
+    cache.begin_anim_frame(Some(at(t0, 2000)), false);
+    paint(&cache, &other, 20, &answers).expect("a fresh frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2976: `animate = false` stays stopped until the input changes.
+}
+
+#[test]
+fn a_stopped_item_is_not_recalled_for_a_width_change_alone() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    answers.stop.set(true);
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    paint(&cache, &row, 20, &answers).expect("the stopping draw");
+    // The width change itself recalls nothing.
+    cache.drop_entries();
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    // On demand it re-renders at its stored frame without advancing.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let narrow = paint(&cache, &row, 24, &answers).expect("stored frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2977: a width change redraws a stopped item at its stored frame.
+    assert!(text_of(&narrow).starts_with("f0"), "{narrow:?}");
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    paint(&cache, &row, 24, &answers).expect("stored lines");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2977: a width change redraws a stopped item at its stored frame.
+}
+
+#[test]
+fn a_stopped_item_redraws_at_its_stored_frame_after_advancing() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let second = paint(&cache, &row, 20, &answers).expect("frame 1");
+    // docs/tui.md:2962: the terminal calls the renderer again when the
+    // frame advances, with the count in its input.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]);
+    cache.mark_painted(&[tag_of(&second)]);
+    assert_eq!(cache.anim_dues(), vec![(at(t0, 500), ANIM_INTERVAL)]);
+    // The renderer stops at the next tick: frame 2 draws once, then stills.
+    answers.stop.set(true);
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    let third = paint(&cache, &row, 20, &answers).expect("frame 2 stops");
+    // docs/tui.md:2976: a renderer that returns `animate = false` stays
+    // stopped until its input changes.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 2]);
+    assert!(text_of(&third).starts_with("f2"), "{third:?}");
+    cache.mark_painted(&[tag_of(&third)]);
+    assert!(cache.anim_dues().is_empty());
+    // A width change re-renders at the stored frame 2, not at frame 0.
+    // docs/tui.md:2977: a width change redraws a stopped item once at its
+    // stored frame.
+    cache.begin_anim_frame(Some(at(t0, 1500)), false);
+    let narrow = paint(&cache, &row, 24, &answers).expect("stored frame 2");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 2, 2]); // docs/tui.md:2977: a width change redraws a stopped item at its stored frame.
+    assert!(text_of(&narrow).starts_with("f2"), "{narrow:?}");
+}
+
+#[test]
+fn a_width_change_recalls_at_the_stored_frame_then_advances() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.drop_entries();
+    // The recall reuses the stored frame with the counter, last,
+    // markers and due unchanged.
+    cache.begin_anim_frame(Some(at(t0, 100)), false);
+    let recalled = paint(&cache, &row, 24, &answers).expect("stored frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2962: a width change alone advances nothing; the stored frame draws again.
+    assert!(text_of(&recalled).starts_with("f0"), "{recalled:?}");
+    cache.mark_painted(&[tag_of(&recalled)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    // At the interval the recalled item advances.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let second = paint(&cache, &row, 24, &answers).expect("frame 1");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1]); // docs/tui.md:2962: a width change alone advances nothing; the stored frame draws again.
+    assert!(text_of(&second).starts_with("f1"), "{second:?}");
+}
+
+#[test]
+fn a_new_frame_evicts_older_entries_at_every_width() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let wide = paint(&cache, &row, 20, &answers).expect("frame 0");
+    let narrow = paint(&cache, &row, 24, &answers).expect("frame 0 again");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2974: frame 0 is the still form.
+    cache.mark_painted(&[tag_of(&wide), tag_of(&narrow)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    assert!(
+        cache
+            .animated_lines(page(0), "ledger_row", "test", None, &row, 24)
+            .is_some()
+    );
+    // Advancing stores the new frame and evicts every older same-item
+    // entry at every width: only the latest frame is kept.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    paint(&cache, &row, 20, &answers).expect("frame 1");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1]); // docs/tui.md:2962: the renderer is called again when the frame advances.
+    assert!(
+        cache
+            .animated_lines(page(0), "ledger_row", "test", None, &row, 20)
+            .is_some()
+    );
+    assert!(
+        cache
+            .animated_lines(page(0), "ledger_row", "test", None, &row, 24)
+            .is_none()
+    );
+}
+
+#[test]
+fn a_changed_animated_line_count_queues_its_page_once() {
+    crate::work::take();
+    let cache = Cache::default();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    let draw = |now, want| {
+        cache.begin_anim_frame(Some(now), false);
+        let lines = cache
+            .lines_animated(
+                page(0),
+                "ledger_row",
+                "test",
+                None,
+                &row,
+                20,
+                ANIM_INTERVAL,
+                |frame| {
+                    let count = if frame == 0 { 1 } else { want };
+                    (
+                        Decision::Draw {
+                            extension: "test".into(),
+                            lines: (0..count).map(|_| vec![raw("line")]).collect(),
+                        },
+                        true,
+                    )
+                },
+            )
+            .expect("the frame draws");
+        cache.mark_painted(&[tag_of(&lines)]);
+        lines
+    };
+
+    draw(t0, 1);
+    cache.anim_dues();
+    assert!(
+        !cache.has_changed_pages(),
+        "frame 0 is the counted baseline"
+    );
+
+    draw(at(t0, 500), 2);
+    cache.anim_dues();
+    assert!(cache.has_changed_pages());
+    assert_eq!(cache.take_changed_pages(), vec![page(0)]);
+    assert!(!cache.has_changed_pages(), "draining clears the queue");
+
+    draw(at(t0, 1000), 2);
+    cache.anim_dues();
+    assert!(
+        !cache.has_changed_pages(),
+        "an unchanged count needs no recount"
+    );
+}
+
+#[test]
+fn drop_entries_preserves_markers() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    paint(&cache, &row, 20, &answers).expect("frame 1");
+    cache.drop_entries();
+    // The markers survive the width change: the recall reuses frame 1
+    // and advances to frame 2 on schedule.
+    cache.begin_anim_frame(Some(at(t0, 600)), false);
+    let recalled = paint(&cache, &row, 20, &answers).expect("stored frame 1");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 1]); // docs/tui.md:2962: the renderer is called again when the frame advances.
+    assert!(text_of(&recalled).starts_with("f1"), "{recalled:?}");
+    cache.mark_painted(&[tag_of(&recalled)]);
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    let third = paint(&cache, &row, 20, &answers).expect("frame 2");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 1, 2]); // docs/tui.md:2962: the renderer is called again when the frame advances.
+    assert!(text_of(&third).starts_with("f2"), "{third:?}");
+}
+
+#[test]
+fn clear_drops_animation_state() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    paint(&cache, &row, 20, &answers).expect("frame 1");
+    cache.clear();
+    {
+        let anim = support::lock(&cache.anim);
+        assert!(anim.at.is_none(), "clear closes the frame");
+        assert!(anim.painted_this.is_empty());
+        assert!(anim.painted_last.is_empty());
+    }
+    // Cleared state restarts at frame 0.
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    let fresh = paint(&cache, &row, 20, &answers).expect("a fresh frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 0]); // docs/tui.md:2974: a fresh item starts at frame 0.
+    assert!(text_of(&fresh).starts_with("f0"), "{fresh:?}");
+}
+
+#[test]
+fn a_dropped_page_restarts_its_counter_at_zero() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    paint(&cache, &row, 20, &answers).expect("frame 1");
+    cache.drop_page(page(0));
+    {
+        let anim = support::lock(&cache.anim);
+        assert!(anim.painted_this.is_empty());
+        assert!(anim.painted_last.is_empty());
+    }
+    // The returning item restarts at frame 0: no state survives its
+    // page.
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    let fresh = paint(&cache, &row, 20, &answers).expect("a fresh frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 0]); // docs/tui.md:2978: a dropped page starts again at frame 0.
+    assert!(text_of(&fresh).starts_with("f0"), "{fresh:?}");
+}
+
+#[test]
+fn dropping_a_page_drops_only_its_animated_entries() {
+    let cache = Cache::default();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    for page in [page(0), page(1)] {
+        cache
+            .lines_animated(
+                page,
+                "ledger_row",
+                "test",
+                None,
+                &row,
+                20,
+                ANIM_INTERVAL,
+                |frame| {
+                    (
+                        Decision::Draw {
+                            extension: "test".into(),
+                            lines: vec![vec![raw(&format!("f{frame}"))]],
+                        },
+                        true,
+                    )
+                },
+            )
+            .expect("a frame");
+    }
+    // docs/tui.md:2978: a dropped page starts again at frame 0.
+    assert!(
+        cache
+            .animated_lines(page(0), "ledger_row", "test", None, &row, 20)
+            .is_some()
+    );
+    assert!(
+        cache
+            .animated_lines(page(1), "ledger_row", "test", None, &row, 20)
+            .is_some()
+    );
+
+    cache.drop_page(page(0));
+
+    assert!(
+        cache
+            .animated_lines(page(0), "ledger_row", "test", None, &row, 20)
+            .is_none()
+    );
+    assert!(
+        cache
+            .animated_lines(page(1), "ledger_row", "test", None, &row, 20)
+            .is_some()
+    );
+}
+
+#[test]
+fn dropping_a_page_resets_its_animated_line_count() {
+    let cache = Cache::default();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    let draw = |now, count| {
+        cache.begin_anim_frame(Some(now), false);
+        let lines = cache
+            .lines_animated(
+                page(0),
+                "ledger_row",
+                "test",
+                None,
+                &row,
+                20,
+                ANIM_INTERVAL,
+                |frame| {
+                    (
+                        Decision::Draw {
+                            extension: "test".into(),
+                            lines: (0..count)
+                                .map(|_| vec![raw(&format!("f{frame}"))])
+                                .collect(),
+                        },
+                        true,
+                    )
+                },
+            )
+            .expect("a frame");
+        cache.mark_painted(&[tag_of(&lines)]);
+        cache.anim_dues();
+    };
+    draw(t0, 1);
+    draw(at(t0, 500), 2);
+    assert_eq!(cache.take_changed_pages(), vec![page(0)]);
+
+    cache.drop_page(page(0));
+    draw(at(t0, 1000), 1);
+
+    // A dropped page starts with no old line-count baseline (`docs/tui.md:2978`).
+    assert!(
+        !cache.has_changed_pages(),
+        "a dropped page has no old baseline"
+    );
+}
+
+#[test]
+fn dropping_a_page_clears_its_painted_mark() {
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    cache.drop_page(page(0));
+
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let fresh = paint(&cache, &row, 20, &answers).expect("a fresh frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2978: a dropped page starts again at frame 0.
+    assert!(text_of(&fresh).starts_with("f0"), "{fresh:?}");
+    // docs/tui.md:2968: only a painted item asks for another frame.
+    assert!(
+        cache.anim_dues().is_empty(),
+        "the new item was not marked painted"
+    );
+}
+
+#[test]
+fn a_non_memoized_failure_drops_animation_state() {
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    cache.anim_dues();
+
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let failure = cache.lines_animated(
+        page(0),
+        "ledger_row",
+        "test",
+        None,
+        &row,
+        20,
+        ANIM_INTERVAL,
+        |frame| {
+            answers.frames.borrow_mut().push(frame);
+            (Decision::Fail(failed("other", "not memoized")), false)
+        },
+    );
+    assert!(failure.is_none());
+    assert!(
+        cache.take_failures().is_empty(),
+        "another extension is not memoized"
+    );
+    cache.anim_dues();
+
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    let fresh = paint(&cache, &row, 20, &answers).expect("a fresh frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 0]); // docs/tui.md:2989: a failure drops the active animation state.
+    assert!(text_of(&fresh).starts_with("f0"), "{fresh:?}");
+}
+
+#[test]
+fn reduced_motion_stills_at_zero_and_reactivates_at_one() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    // Reduced motion stills at frame 0 at the next paint, once.
+    cache.begin_anim_frame(Some(at(t0, 500)), true);
+    let still = paint(&cache, &row, 20, &answers).expect("the still form");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2974: reduced motion draws frame 0 once, then resumes at frame 1.
+    assert!(text_of(&still).starts_with("f0"), "{still:?}");
+    cache.mark_painted(&[tag_of(&still)]);
+    assert!(cache.anim_dues().is_empty(), "a still asks for no wake");
+    cache.begin_anim_frame(Some(at(t0, 1000)), true);
+    let again = paint(&cache, &row, 20, &answers).expect("stored still");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2974: reduced motion draws frame 0 once, then resumes at frame 1.
+    assert_eq!(text_of(&again), text_of(&still));
+    cache.mark_painted(&[tag_of(&again)]);
+    assert!(cache.anim_dues().is_empty());
+    // Reduced off reactivates at frame 1: the still form at frame 0
+    // established the counter, which resumes rather than resetting.
+    cache.begin_anim_frame(Some(at(t0, 1500)), false);
+    let second = paint(&cache, &row, 20, &answers).expect("frame 1");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1]); // docs/tui.md:2974: reduced motion draws frame 0 once, then resumes at frame 1.
+    assert!(text_of(&second).starts_with("f1"), "{second:?}");
+    cache.mark_painted(&[tag_of(&second)]);
+    assert_eq!(cache.anim_dues(), vec![(at(t0, 1500), ANIM_INTERVAL)]);
+    // Reduced on again stills at frame 0 at the next paint.
+    cache.begin_anim_frame(Some(at(t0, 2000)), true);
+    let restilled = paint(&cache, &row, 20, &answers).expect("the still form");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1, 0]); // docs/tui.md:2974: reduced motion draws frame 0 once, then resumes at frame 1.
+    assert!(text_of(&restilled).starts_with("f0"), "{restilled:?}");
+    cache.mark_painted(&[tag_of(&restilled)]);
+    assert!(cache.anim_dues().is_empty());
+}
+
+#[test]
+fn a_fresh_reduced_draw_that_stops_stays_stopped() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    answers.stop.set(true);
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    // The fresh draw under reduced motion declines to continue: it
+    // stills at frame 0 but records stopped, not reduced.
+    cache.begin_anim_frame(Some(t0), true);
+    let still = paint(&cache, &row, 20, &answers).expect("the still form");
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2976: `animate = false` stays stopped until the input changes.
+    assert!(text_of(&still).starts_with("f0"), "{still:?}");
+    cache.mark_painted(&[tag_of(&still)]);
+    assert!(
+        cache.anim_dues().is_empty(),
+        "a stopped draw asks for no wake"
+    );
+    // Leaving reduced motion recalls nothing: the stopped state holds.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let again = paint(&cache, &row, 20, &answers).expect("stored still");
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2976: `animate = false` stays stopped until the input changes.
+    assert_eq!(text_of(&again), text_of(&still));
+    cache.mark_painted(&[tag_of(&again)]);
+    assert!(cache.anim_dues().is_empty());
+}
+
+#[test]
+fn a_reduced_still_that_stops_stays_stopped() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    // The stilling draw under reduced motion declines to continue:
+    // frame 0 draws once but records stopped, not reduced.
+    answers.stop.set(true);
+    cache.begin_anim_frame(Some(at(t0, 500)), true);
+    let still = paint(&cache, &row, 20, &answers).expect("the still form");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2976: `animate = false` stays stopped until the input changes.
+    assert!(text_of(&still).starts_with("f0"), "{still:?}");
+    cache.mark_painted(&[tag_of(&still)]);
+    assert!(
+        cache.anim_dues().is_empty(),
+        "a stopped draw asks for no wake"
+    );
+    // Leaving reduced motion recalls nothing: the stopped state holds.
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    let again = paint(&cache, &row, 20, &answers).expect("stored still");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2976: `animate = false` stays stopped until the input changes.
+    assert_eq!(text_of(&again), text_of(&still));
+    cache.mark_painted(&[tag_of(&again)]);
+    assert!(cache.anim_dues().is_empty());
+}
+
+#[test]
+fn flat_does_not_still_or_restart_animation() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    // Flat affects row fitting, not the single reduced-motion source.
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    cache.mark_painted(&[tag_of(&first)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let second = paint(&cache, &row, 20, &answers).expect("frame 1 after flat");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2962: the schedule advances on paint and due alone.
+    assert!(text_of(&second).starts_with("f1"), "{second:?}");
+}
+
+#[test]
+fn an_interval_below_the_tick_floor_fires_at_the_floor() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    let floor = std::time::Duration::from_millis(80);
+    let paint_floor = |cache: &Cache, at: std::time::Instant| {
+        cache.begin_anim_frame(Some(at), false);
+        cache.lines_animated(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            floor,
+            |frame| {
+                answers.frames.borrow_mut().push(frame);
+                let lines = vec![vec![raw(&format!("f{frame}"))]];
+                (
+                    Decision::Draw {
+                        extension: "test".into(),
+                        lines,
+                    },
+                    true,
+                )
+            },
+        )
+    };
+    let painted = |cache: &Cache, now: std::time::Instant| {
+        let fitted = paint_floor(cache, now).expect("a painted frame");
+        let key = fitted
+            .first()
+            .expect("one fitted line")
+            .anim
+            .clone()
+            .expect("an animated line is tagged");
+        cache.mark_painted(&[key]);
+        cache.anim_dues();
+    };
+    painted(&cache, t0);
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    // At 80 ms the raw interval is not due: the floor holds still.
+    painted(&cache, at(t0, 80));
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2965: intervals below 120 ms use that floor.
+    // At 120 ms the floor is due: the item advances.
+    painted(&cache, at(t0, 120));
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2965: intervals below 120 ms use that floor.
+}
+
+#[test]
+fn a_renderer_failure_memoizes_and_stops_the_animation() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    answers.fail.set(true);
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    assert!(paint(&cache, &row, 20, &answers).is_none());
+    assert_eq!(answers.frames.borrow().len(), 1); // docs/tui.md:2989: a failure stops calls until the input changes.
+    // The failure is cached against the input: no call until it
+    // changes, and no wake for a stopped item.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    assert!(paint(&cache, &row, 20, &answers).is_none());
+    assert_eq!(answers.frames.borrow().len(), 1); // docs/tui.md:2989: a failure stops calls until the input changes.
+    assert!(cache.anim_dues().is_empty());
+    let listed = cache.take_failures();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "ledger_row");
+    // A changed input starts over.
+    answers.fail.set(false);
+    let other = input("shell", "second", &arguments);
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    paint(&cache, &other, 20, &answers).expect("a fresh frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2989: a failure stops calls until the input changes.
+}
+
+#[test]
+fn a_wrong_shape_falls_back_and_stops() {
+    crate::work::take();
+    let cache = Cache::default();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    let wrong = || {
+        cache.begin_anim_frame(Some(t0), false);
+        cache.lines_animated(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            |frame| {
+                assert_eq!(frame, 0);
+                (
+                    Decision::Draw {
+                        extension: "test".into(),
+                        lines: vec![vec![RawSpan {
+                            text: "hi".to_owned(),
+                            fg: Some("nope".to_owned()),
+                            ..RawSpan::default()
+                        }]],
+                    },
+                    true,
+                )
+            },
+        )
+    };
+    assert!(wrong().is_none());
+    assert!(wrong().is_none(), "the shape failure is cached");
+    let listed = cache.take_failures();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].1.message.contains("fg"), "{listed:?}");
+    assert!(cache.anim_dues().is_empty());
+}
+
+#[test]
+fn empty_lines_paint_zero_rows_and_ask_nothing() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    let empty = || {
+        cache.begin_anim_frame(Some(t0), false);
+        cache.lines_animated(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            |frame| {
+                assert_eq!(frame, 0);
+                calls.set(calls.get().saturating_add(1));
+                (
+                    Decision::Draw {
+                        extension: "test".into(),
+                        lines: Vec::new(),
+                    },
+                    true,
+                )
+            },
+        )
+    };
+    let fitted = empty().expect("an empty paint draws");
+    assert!(fitted.is_empty());
+    // Nothing painted, so nothing marks: no due, and the stored empty
+    // answers the next paint with no recall.
+    assert!(cache.anim_dues().is_empty());
+    let stored = empty().expect("the stored empty");
+    assert!(stored.is_empty());
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn closed_draws_cache_the_still_or_stored_frame_without_animation_state() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    // No open frame: closed draws cache frame 0 in ordinary entries for
+    // each width, without creating animation state.
+    let closed = || paint(&cache, &row, 20, &answers);
+    let first = closed().expect("frame 0");
+    let second = closed().expect("cached frame 0");
+    let old_width = paint(&cache, &row, 24, &answers).expect("frame 0 at new width");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2979: closed draws cache frame 0 without changing animation state.
+    assert_eq!(text_of(&first), text_of(&second));
+    assert!(text_of(&old_width).starts_with("f0"), "{old_width:?}");
+    assert!(cache.anim_dues().is_empty());
+
+    // The next open paint still starts animation at frame 0.
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let fresh = paint(&cache, &row, 20, &answers).expect("a fresh frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0]); // docs/tui.md:2979: closed draws cache frame 0 without changing animation state.
+    cache.mark_painted(&[tag_of(&fresh)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let advanced = paint(&cache, &row, 20, &answers).expect("frame 1");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1]); // docs/tui.md:2979: closed draws cache frame 0 without changing animation state.
+    cache.mark_painted(&[tag_of(&advanced)]);
+    cache.anim_dues();
+
+    // Stored animation entries beat old ordinary entries, including at a
+    // width that was cached before the item began animating.
+    let stored = closed().expect("stored frame 1");
+    assert!(text_of(&stored).starts_with("f1"), "{stored:?}");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1]); // docs/tui.md:2979: closed draws cache frame 0 without changing animation state.
+    let other = paint(&cache, &row, 24, &answers).expect("stored frame 1 at new width");
+    assert!(text_of(&other).starts_with("f1"), "{other:?}");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1, 1]); // docs/tui.md:2979: closed draws cache frame 0 without changing animation state.
+}
+
+/// A notice seam holding `fake` on page 0.
+fn notice_bound(fake: std::rc::Rc<dyn crate::ext::Renderer>) -> crate::ext::Bound {
+    let handle = crate::ext::Handle::create();
+    handle.set(fake);
+    crate::ext::Bound {
+        handle,
+        cache: Arc::new(Cache::default()),
+        page: page(0),
+        ctx: crate::ext::SessionCtx {
+            session_id: Some(contract::SessionId("s".into())),
+            halves: None,
+        },
+        flat: false,
+    }
+}
+
+#[test]
+fn a_static_notice_draw_caches_its_invocation() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["notice"],
+        SlotScript::Replace(vec![vec![raw("still")]]),
+    ));
+    let bound = notice_bound(fake.clone());
+    // A static slot keeps the cached invocation: one call answers both
+    // draws, and the paint-only entry point stays out of it.
+    let first = bound
+        .notice_lines("io_failed", "x", 20)
+        .expect("a cached line");
+    let second = bound
+        .notice_lines("io_failed", "x", 20)
+        .expect("a cached line");
+    assert_eq!(fake.calls.borrow().len(), 1); // docs/tui.md:2909: one call on a miss, none on a hit.
+    assert_eq!(text_of(&first), text_of(&second));
+    assert_eq!(fake.calls.borrow().len(), 1); // docs/tui.md:2909: one call on a miss, none on a hit.
+}
+
+#[test]
+fn an_extension_failed_notice_draws_nothing() {
+    use crate::ext::tests::AnimatedRenderer;
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling("notice", ANIM_INTERVAL, 1));
+    let bound = notice_bound(fake.clone());
+    // `extension_failed` short-circuits before any lookup: no stored
+    // lines, no call, on either path.
+    assert!(bound.notice_lines("extension_failed", "x", 20).is_none());
+    assert!(fake.frames.borrow().is_empty());
+}
+
+#[test]
+fn an_animated_notice_draws_its_cached_frame_zero_still() {
+    use crate::ext::tests::AnimatedRenderer;
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling("notice", ANIM_INTERVAL, 1));
+    let bound = notice_bound(fake.clone());
+    let first = bound
+        .notice_lines("io_failed", "x", 20)
+        .expect("frame-0 still");
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2983: notices draw frame 0 once.
+    assert_eq!(first.len(), 1);
+    // A later paint uses the same ordinary input-and-width cache entry;
+    // the notice does not create schedule state or request a timer.
+    bound.cache.begin_anim_frame(Some(origin()), false);
+    let second = bound
+        .notice_lines("io_failed", "x", 20)
+        .expect("cached still");
+    assert_eq!(text_of(&first), text_of(&second));
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2983: notices draw frame 0 once.
+    assert!(bound.cache.anim_dues().is_empty());
+}

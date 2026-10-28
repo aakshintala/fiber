@@ -1817,15 +1817,15 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
     );
 }
 
-/// An `openai-responses` stream calling `shell` with `true`. `true` is not
-/// on the shell's read-only list, so the call declares `executes` and step
-/// 7 reviews it (`docs/tools.md`, "Shell", "Effects"). Running `true`
-/// changes nothing.
+/// An `openai-responses` stream calling `shell` with `touch
+/// .fiber-review-marker`. `touch` is not on the shell's read-only list, so
+/// the call declares `executes` and step 7 reviews it (`docs/tools.md`,
+/// "Shell", "Effects"). Running `touch` creates the marker.
 fn shell_true_call() -> Response {
     let events = [
         json!({"type": "response.output_item.done", "item": {
             "type": "function_call", "id": "fc_1", "call_id": "call_1",
-            "name": "shell", "arguments": "{\"command\":\"true\"}"}}),
+            "name": "shell", "arguments": "{\"command\":\"touch .fiber-review-marker\"}"}}),
         json!({"type": "response.completed", "response": {
             "id": "resp_1", "status": "completed",
             "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}}}),
@@ -1865,7 +1865,7 @@ fn the_providers_reviewer_model_decides_a_reviewed_call() {
     );
 
     let run = setup.fiber_with_env(
-        &["ask", "--model", "muse/muse-spark-1.3", "Run true."],
+        &["ask", "--model", "muse/muse-spark-1.3", "Touch the marker."],
         &[("META_API_KEY", "sk-test-muse")],
     );
 
@@ -3914,7 +3914,7 @@ fn an_explicit_reviewer_model_wins_over_provider_and_package_picks() {
             "providers.syn.reviewer_model=prov",
             "--model",
             "syn/sess",
-            "Run true.",
+            "Touch the marker.",
         ],
         &[("SYN_API_KEY", "sk-test-syn")],
     );
@@ -3937,7 +3937,7 @@ fn a_provider_reviewer_pick_wins_over_the_package_default() {
             "providers.syn.reviewer_model=prov",
             "--model",
             "syn/sess",
-            "Run true.",
+            "Touch the marker.",
         ],
         &[("SYN_API_KEY", "sk-test-syn")],
     );
@@ -3954,7 +3954,7 @@ fn the_package_reviewer_default_decides_when_nothing_is_saved() {
     let server = ProviderServer::start([shell_true_call(), allow_text(), hello()]).unwrap();
     review_fixture(&setup, &server, Some("pkg"));
     let run = setup.fiber_with_env(
-        &["ask", "--model", "syn/sess", "Run true."],
+        &["ask", "--model", "syn/sess", "Touch the marker."],
         &[("SYN_API_KEY", "sk-test-syn")],
     );
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -3970,7 +3970,7 @@ fn with_no_reviewer_anywhere_the_call_is_denied_with_no_reviewer_request() {
     let server = ProviderServer::start([shell_true_call(), hello()]).unwrap();
     review_fixture(&setup, &server, None);
     let run = setup.fiber_with_env(
-        &["ask", "--model", "syn/sess", "Run true."],
+        &["ask", "--model", "syn/sess", "Touch the marker."],
         &[("SYN_API_KEY", "sk-test-syn")],
     );
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);

@@ -263,6 +263,13 @@ pub(crate) fn render(
     // The frame's asks start here: `Screen::draw_with` may render twice,
     // and the loop takes what the drawn frame asked.
     app.motion().clear_wake();
+    // The animation frame opens here too, on the one resident cache the
+    // conversation and notice paints draw through: open paint advances
+    // due items, and reading the dues closes the frame again.
+    app.pages()
+        .ext
+        .cache
+        .begin_anim_frame(app.motion().now_instant(), app.motion().reduced());
     app.clear_input_note();
     // The framed slabs start here too: each framed surface notes the slab
     // it draws, so a click outside the overlay on top closes it.
@@ -758,6 +765,7 @@ fn conversation_rows(
         lines,
         turns,
         spins,
+        anims,
         pin,
     } = app.shown(top, height);
     // Where this frame's turn targets splice in: after the targets
@@ -863,6 +871,22 @@ fn conversation_rows(
         y = y.saturating_add(to_u16(count));
         start = next;
     }
+    // The animated items painted this frame: rows with take greater
+    // than 0 expose their tags, and the frame marks them once, so the
+    // schedule advances only painted items.
+    let mut painted = Vec::new();
+    for (at, (_, count)) in layout.iter().enumerate() {
+        if *count == 0 {
+            continue;
+        }
+        painted.extend(
+            anims
+                .iter()
+                .filter(|(marked, _)| *marked == at)
+                .map(|(_, key)| key.clone()),
+        );
+    }
+    app.pages().ext.cache.mark_painted(&painted);
     // Turns are focus stops over the rows their page cards draw; they
     // are not click targets, so the line targets drawn before them win
     // clicks: their targets splice in front, in draw order.
