@@ -5,6 +5,7 @@ use jiff::tz::TimeZone;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::ext::Input;
 use crate::format::wrap_joined;
 use crate::local_time::time_of_day;
 use crate::rows::{RowText, Rows};
@@ -28,6 +29,23 @@ impl Steered {
         }
     }
 
+    /// Its card entry: the text with its images, and when it landed.
+    pub(crate) fn turn_entry(&self) -> crate::ext::TurnEntry<'_> {
+        crate::ext::TurnEntry::Steer {
+            text: &self.text,
+            images: self
+                .images
+                .iter()
+                .map(|part| crate::ext::PromptImage {
+                    path: &part.path,
+                    width: part.width,
+                    height: part.height,
+                })
+                .collect(),
+            ts: self.ts,
+        }
+    }
+
     /// A steering message with its image parts: each draws as its one
     /// clickable line under the text (`docs/tui.md`, "Images").
     pub(super) fn with_images(text: String, images: Vec<crate::image::Part>, ts: u64) -> Self {
@@ -41,7 +59,62 @@ impl Steered {
     /// in the rule tint filling the width past one space. A blank message
     /// draws the rule alone (`docs/tui.md`, "Turns"). Each image draws
     /// as its one clickable line under the text (`docs/tui.md`, "Images").
+    /// A bound `steer` renderer replaces the rule, the text and the image
+    /// lines: the image targets sit on the image lines they open, so no
+    /// replacement line carries one.
     pub(super) fn rows(
+        &self,
+        width: u16,
+        zone: &TimeZone,
+        layout: &crate::image::Layout,
+        out: &mut Rows,
+    ) {
+        let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
+        let input = crate::ext::Steer {
+            text: &self.text,
+            images: self
+                .images
+                .iter()
+                .map(|part| crate::ext::PromptImage {
+                    path: &part.path,
+                    width: part.width,
+                    height: part.height,
+                })
+                .collect(),
+            ts: self.ts,
+            flat,
+        };
+        let wrapped = Input::Steer(input);
+        let builtin = |input: &Input<'_>, w: u16| {
+            if !matches!(input, Input::Steer(_)) {
+                return Vec::new();
+            }
+            let mut scratch = Rows::default();
+            self.builtin_rows(w, zone, layout, &mut scratch);
+            let (rows, _) = scratch.into_parts();
+            rows.into_iter()
+                .map(|(line, _)| crate::ext::spans::from_ratatui(&line.spans))
+                .collect()
+        };
+        let rendered = match out.fills_for("steer") {
+            crate::ext::SlotSelection::Draw { extension } => {
+                out.ext_lines("steer", &extension, &wrapped, width, &builtin)
+            }
+            crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => None,
+        };
+        match rendered {
+            Some(fitted) => {
+                for line in fitted.iter() {
+                    out.push_fitted(line, None);
+                }
+            }
+            None => self.builtin_rows(width, zone, layout, out),
+        }
+    }
+
+    /// The rule over the message's bold text with each image's line
+    /// under it, as above.
+    fn builtin_rows(
         &self,
         width: u16,
         zone: &TimeZone,

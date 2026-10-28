@@ -30,7 +30,7 @@ mod key_map;
 mod logo;
 pub(crate) mod marks;
 pub(crate) mod model_picker;
-mod notice_rows;
+pub(crate) mod notice_rows;
 mod offer;
 pub(crate) mod overlay;
 pub(crate) mod panel;
@@ -142,7 +142,13 @@ pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
     } else if frame == Surface::Clear {
         clear::draw(app, area, &mut buf, &mut targets)
     } else if frame == Surface::Notice {
-        notice_rows::overlay(app, area, &mut buf, &mut targets)
+        notice_rows::overlay(
+            app,
+            area,
+            &mut buf,
+            &mut targets,
+            &notice_rows::frame_bound(app),
+        )
     } else {
         Rect::default()
     }
@@ -254,11 +260,19 @@ pub(crate) fn render(
         let mut targets = Vec::new();
         let slab = crate::swapped::draw(app, area, buf, &mut targets);
         note_swapped(app, slab);
-        let slab = notice_rows::overlay(app, area, buf, &mut targets);
+        let slab =
+            notice_rows::overlay(app, area, buf, &mut targets, &notice_rows::frame_bound(app));
         // debt: five note sites stay inline; extract a shared note helper if a sixth framed surface appears.
         app.frames().note(Surface::Notice, slab);
         let mut rows_bottom = area.bottom();
-        notice_rows::draw(app, area, buf, &mut rows_bottom, &mut targets);
+        notice_rows::draw(
+            app,
+            area,
+            buf,
+            &mut rows_bottom,
+            &mut targets,
+            &notice_rows::frame_bound(app),
+        );
         // The import report and the quit question take every key over
         // these views, so they draw over them too, the quit question
         // last: without it Enter would quit while the choices never show.
@@ -314,7 +328,14 @@ pub(crate) fn render(
     working_line::draw(app, area, buf, &mut bottom, &mut targets);
     // The notice rows sit directly above the working line, oldest first
     // (`docs/tui.md`, "Notices").
-    notice_rows::draw(app, area, buf, &mut bottom, &mut targets);
+    notice_rows::draw(
+        app,
+        area,
+        buf,
+        &mut bottom,
+        &mut targets,
+        &notice_rows::frame_bound(app),
+    );
     if let Some(rect) = app
         .badge()
         .and_then(|badge| put_spans(buf, area, &mut bottom, badge_spans(&badge)))
@@ -359,7 +380,13 @@ pub(crate) fn render(
             if app.call_view_open() {
                 marks::draw(app, conversation, buf, &mut targets, None);
             }
-            let slab = notice_rows::overlay(app, conversation, buf, &mut targets);
+            let slab = notice_rows::overlay(
+                app,
+                conversation,
+                buf,
+                &mut targets,
+                &notice_rows::frame_bound(app),
+            );
             app.frames().note(Surface::Notice, slab);
         }
         // An item view swaps into the conversation area and takes all of
@@ -386,7 +413,13 @@ pub(crate) fn render(
             } else {
                 item::draw_body(app, body, buf);
             }
-            let slab = notice_rows::overlay(app, conversation, buf, &mut targets);
+            let slab = notice_rows::overlay(
+                app,
+                conversation,
+                buf,
+                &mut targets,
+                &notice_rows::frame_bound(app),
+            );
             app.frames().note(Surface::Notice, slab);
         }
         None => {
@@ -473,7 +506,13 @@ pub(crate) fn render(
                     }
                 },
             }
-            let slab = notice_rows::overlay(app, conversation, buf, &mut targets);
+            let slab = notice_rows::overlay(
+                app,
+                conversation,
+                buf,
+                &mut targets,
+                &notice_rows::frame_bound(app),
+            );
             app.frames().note(Surface::Notice, slab);
         }
     }
