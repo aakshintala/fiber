@@ -542,7 +542,7 @@ fn exec_request(spec: &Table, workspace: &Path, cap: usize) -> mlua::Result<exec
         // Ctrl-C at the terminal still reaches the program as it does today.
         own_group: true,
         #[cfg(test)]
-        stdout_read: None,
+        test_events: None,
     })
 }
 

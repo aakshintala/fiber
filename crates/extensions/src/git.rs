@@ -113,7 +113,7 @@ pub(crate) fn run_git(
         // prompts on the terminal still work.
         own_group: false,
         #[cfg(test)]
-        stdout_read: None,
+        test_events: None,
     };
     let deadline = clock.now().checked_add(GIT_DEADLINE).unwrap_or(clock.now());
     // Never cancelled except by the call's own end: the sender drops when

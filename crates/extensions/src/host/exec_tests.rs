@@ -19,7 +19,7 @@ use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 
 use super::ExecRequest;
 use super::resolve_in_package;
-use support::group::{self, DRAIN, GROUP_POLL};
+use support::group::{self, DRAIN, GRACE, GROUP_POLL};
 /// How long a test waits on the run before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -51,7 +51,7 @@ fn request(program: &str, args: &[&str], cwd: PathBuf, cap: usize) -> ExecReques
         input: None,
         cap,
         own_group: true,
-        stdout_read: None,
+        test_events: None,
     }
 }
 
@@ -65,7 +65,7 @@ fn sh_pid(script: &str, cwd: PathBuf, cap: usize) -> ExecRequest {
         input: None,
         cap,
         own_group: false,
-        stdout_read: None,
+        test_events: None,
     }
 }
 
@@ -115,6 +115,141 @@ fn step_to_deadline(clock: &FakeClock, deadline: Instant) {
             &Deadline::after(DEADLINE),
         );
     }
+}
+
+/// Names the park a supervisor observation holds: the grace bound, the
+/// drain bound, or another instant, with the group-empty and EOF state the
+/// supervisor saw. A failed fake-clock wait reports this instead of only
+/// the park mismatch, so the failure shows what the run had seen. This
+/// reports observed state, not a deterministic repro: no pause point
+/// reaches the reader/supervisor order behind the flake.
+fn describe_park_event(
+    event: &super::ExecTestEvent,
+    kill_at: Instant,
+    drain_until: Option<Instant>,
+) -> String {
+    match *event {
+        super::ExecTestEvent::StdoutRead => "the stdout reader kept its first bytes".to_owned(),
+        super::ExecTestEvent::Park {
+            until,
+            group_empty,
+            stdout_eof,
+            stderr_eof,
+        } => {
+            let which = match until {
+                Some(at) if at == kill_at => "kill_at".to_owned(),
+                Some(at) if Some(at) == drain_until => "drain_until".to_owned(),
+                other => format!("{other:?}"),
+            };
+            format!(
+                "park at {which}: group_empty={group_empty}, stdout_eof={stdout_eof}, stderr_eof={stderr_eof}"
+            )
+        }
+    }
+}
+
+/// Takes the stdout reader's acknowledgement, skipping the supervisor's
+/// park observations, with one deadline for the whole wait: consecutive
+/// receives that drain one stream take one deadline, never a fresh one
+/// per receive.
+#[track_caller]
+fn recv_stdout_read(rx: &mpsc::Receiver<super::ExecTestEvent>, wait: &Deadline, what: &str) {
+    loop {
+        match wait.recv(rx) {
+            Ok(super::ExecTestEvent::StdoutRead) => return,
+            Ok(super::ExecTestEvent::Park { .. }) => {}
+            Err(error) => panic!("{what}: {error:?}"),
+        }
+    }
+}
+
+#[test]
+fn park_diagnostic_names_state() {
+    use super::ExecTestEvent;
+    let clock = FakeClock::new();
+    let start = clock.now();
+    let kill_at = start + Duration::from_millis(800);
+    let drain_until = start + Duration::from_secs(2);
+    let tick = Duration::from_nanos(1);
+    let park = |until: Option<Instant>, group_empty: bool, stdout_eof: bool, stderr_eof: bool| {
+        ExecTestEvent::Park {
+            until,
+            group_empty,
+            stdout_eof,
+            stderr_eof,
+        }
+    };
+    let rows = [
+        (
+            park(Some(kill_at), true, false, true),
+            [
+                "kill_at",
+                "group_empty=true",
+                "stdout_eof=false",
+                "stderr_eof=true",
+            ]
+            .as_slice(),
+            ["drain_until"].as_slice(),
+        ),
+        (
+            park(Some(drain_until), false, true, false),
+            [
+                "drain_until",
+                "group_empty=false",
+                "stdout_eof=true",
+                "stderr_eof=false",
+            ]
+            .as_slice(),
+            ["kill_at"].as_slice(),
+        ),
+    ];
+    for (event, present, absent) in rows {
+        let text = describe_park_event(&event, kill_at, Some(drain_until));
+        for want in present {
+            assert!(text.contains(want), "the park names {want}: {text}");
+        }
+        for banned in absent {
+            assert!(
+                !text.contains(banned),
+                "the park names no other bound: {text}"
+            );
+        }
+    }
+    // One tick off a bound names another instant instead of the bound, on
+    // both sides of both bounds.
+    let below_kill = kill_at
+        .checked_sub(tick)
+        .expect("the tick below the grace bound stays after the start");
+    let below_drain = drain_until
+        .checked_sub(tick)
+        .expect("the tick below the drain bound stays after the start");
+    for until in [below_kill, kill_at + tick, below_drain, drain_until + tick] {
+        let text = describe_park_event(
+            &park(Some(until), true, true, true),
+            kill_at,
+            Some(drain_until),
+        );
+        assert!(
+            !text.contains("kill_at") && !text.contains("drain_until"),
+            "a park off every bound names another instant: {text}"
+        );
+        assert!(
+            text.contains("group_empty=true")
+                && text.contains("stdout_eof=true")
+                && text.contains("stderr_eof=true"),
+            "an unnamed park still names every state field: {text}"
+        );
+    }
+    let text = describe_park_event(&park(None, false, false, false), kill_at, Some(drain_until));
+    assert!(
+        text.contains("None"),
+        "an unbounded park names its lack of bound: {text}"
+    );
+    let text = describe_park_event(&ExecTestEvent::StdoutRead, kill_at, Some(drain_until));
+    assert!(
+        text.contains("stdout"),
+        "the reader acknowledgement names stdout: {text}"
+    );
 }
 
 #[test]
@@ -924,7 +1059,7 @@ fn a_pid_mode_missing_program_reports_its_spawn_error() {
         input: None,
         cap: CAP,
         own_group: false,
-        stdout_read: None,
+        test_events: None,
     };
     let (_cancel, done) = spawn(req, Arc::clone(&clock), None);
     let err = Deadline::after(DEADLINE)
@@ -1046,9 +1181,9 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
         holder_file.display()
     );
     let deadline = clock.now() + Duration::from_secs(60);
-    let (stdout_read_tx, stdout_read_rx) = mpsc::channel();
+    let (test_events_tx, test_events_rx) = mpsc::channel();
     let mut req = sh_pid(&script, cwd, CAP);
-    req.stdout_read = Some(stdout_read_tx);
+    req.test_events = Some(test_events_tx);
     let (_cancel, done) = spawn(req, Arc::clone(&clock), Some(deadline));
     // The holder's argv carries its pid file: the guard matches it alone.
     let watchdog = fakes::Watchdog::matching(&holder_file.display().to_string());
@@ -1057,9 +1192,11 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
     clock
         .mark_parked(drain_until, fakes::Deadline::after(DEADLINE))
         .expect("waited {DEADLINE:?} for the pid-mode run to park for the 2 s drain");
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv(&stdout_read_rx)
-        .expect("waited for stdout to be read before the drain bound");
+    recv_stdout_read(
+        &test_events_rx,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+        "waited for stdout to be read before the drain bound",
+    );
     let unanswered_before_advance = matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty));
     clock.advance_when_parked(Some(drain_until), None, DRAIN, &Deadline::after(DEADLINE));
     let outcome = Deadline::after(DEADLINE).recv(&done);
@@ -1128,9 +1265,9 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         } else {
             drain_until
         };
-        let (stdout_read_tx, stdout_read_rx) = mpsc::channel();
+        let (test_events_tx, test_events_rx) = mpsc::channel();
         let mut req = sh_pid(&script, cwd.clone(), CAP);
-        req.stdout_read = Some(stdout_read_tx);
+        req.test_events = Some(test_events_tx);
         let (_cancel, done) = spawn(req, Arc::clone(&clock), Some(deadline));
         // The reap starts the 2 s drain on the fake clock.
         clock
@@ -1138,11 +1275,11 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
             .unwrap_or_else(|| {
                 panic!("waited {MUST_SUCCEED_WITHIN:?} for the pid-mode run to park for the 2 s drain ({case})")
             });
-        Deadline::after(MUST_SUCCEED_WITHIN)
-            .recv(&stdout_read_rx)
-            .unwrap_or_else(|_| {
-                panic!("waited for stdout to be read before the drain bound ({case})")
-            });
+        recv_stdout_read(
+            &test_events_rx,
+            &Deadline::after(MUST_SUCCEED_WITHIN),
+            &format!("waited for stdout to be read before the drain bound ({case})"),
+        );
         let unanswered_before_advance = matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty));
         // Reach one step before the drain bound first. For the `before`
         // case this is also the deadline: expiry must not start a stop once
@@ -1648,13 +1785,18 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
     let (_dir, cwd) = dir("fiber-exec-stdin-holder");
     let clock = FakeClock::new();
     let ready = ready_in(&cwd);
+    // The background holder keeps fd 3, duplicated from stdin before the
+    // fork: dash gives a background job `/dev/null` stdin otherwise, and
+    // the holder would prove nothing about the run's input pipe.
     let script = format!(
-        "(exec sleep 1000) &\necho $$ > '{}'\nexit 0\n",
+        "exec 3<&0\n(exec sleep 1000 <&3) &\necho $$ > '{}'\nexit 0\n",
         ready.path().display()
     );
     let deadline = clock.now() + Duration::from_millis(500);
     let mut req = sh(&script, cwd, CAP);
     req.input = Some(vec![b'y'; 1 << 18]);
+    let (test_events_tx, test_events_rx) = mpsc::channel();
+    req.test_events = Some(test_events_tx);
     let (_cancel, done) = spawn(req, Arc::clone(&clock), Some(deadline));
     let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
@@ -1662,12 +1804,43 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
     // dropped its cancel; the group signal frees the parked writer.
     step_to_deadline(&clock, deadline);
     let kill_at = clock.now() + Duration::from_millis(800);
-    clock.advance_when_parked(
-        Some(kill_at),
-        None,
-        Duration::from_millis(800),
-        &Deadline::after(DEADLINE),
-    );
+    // This test alone moves the fake clock. A miss reports the state the
+    // run had reached instead of only the park mismatch, not a
+    // deterministic repro: no pause point reaches the reader/supervisor
+    // order behind the flake.
+    if let Err(miss) = clock.try_advance_when_parked(Some(kill_at), None, GRACE, DEADLINE) {
+        let parks: Vec<super::ExecTestEvent> = test_events_rx
+            .try_iter()
+            .filter(|event| matches!(event, super::ExecTestEvent::Park { .. }))
+            .collect();
+        let watched = match &miss {
+            fakes::clock::Miss::Mismatch {
+                watched: (_, until),
+                ..
+            } => Some(*until),
+            fakes::clock::Miss::NoPark => None,
+        };
+        let observed = match watched {
+            Some(at) => parks
+                .iter()
+                .rev()
+                .find(|event| {
+                    matches!(
+                        event,
+                        super::ExecTestEvent::Park { until, .. } if *until == at
+                    )
+                })
+                .copied(),
+            None => parks.last().copied(),
+        };
+        let state = match observed {
+            Some(event) => describe_park_event(&event, kill_at, None),
+            None => format!("no park observation matched the watched instant {watched:?}"),
+        };
+        panic!(
+            "the stdin-holder run missed its grace park at kill_at ({kill_at:?}): {miss}; {state}"
+        );
+    }
     let ran = Deadline::after(DEADLINE)
         .recv(&done)
         .expect("waited {DEADLINE:?} for the stdin-holder run")
