@@ -1366,11 +1366,24 @@ fn attach_inner_with_spawner(
         Established::Running => {}
         Established::Refused(guard, stream) => {
             drop(held);
+            // No production exclusive caller passes a command (`attach`
+            // never runs exclusive, `attach_rejoin` never passes one),
+            // but a refused admission leaves a written one with no
+            // thread to answer it, so it is refused here instead.
+            if let Some((id, _, _)) = &command {
+                crate::retire::refuse_not_found(writer, hub, relays, session, id);
+            }
             drop(guard);
             stream.shutdown(Shutdown::Both).unwrap_or(());
         }
         Established::SpawnFailed(guard) => {
             drop(held);
+            // The command above already reached the session socket, and
+            // no relay thread will ever read it: refuse it so the client
+            // is answered exactly once.
+            if let Some((id, _, _)) = &command {
+                crate::retire::refuse_not_found(writer, hub, relays, session, id);
+            }
             drop(guard);
         }
     }
