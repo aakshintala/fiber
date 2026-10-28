@@ -2925,7 +2925,6 @@ fn tail_open_prepared(
     // owns the wait, the open owns the test's ends.
     let (manual_ack_release, ack_release) = mpsc::channel();
     let (ack_done, manual_ack_done) = mpsc::channel();
-    let ack_tx = tx.clone();
     let replay = matches!(full, Full::Replay);
     let manual = matches!(full, Full::ManualReplay);
     // Every replayed turn start sends `commands` again: the streamed
@@ -2935,7 +2934,7 @@ fn tail_open_prepared(
         .filter(|envelope| envelope.kind == "turn_started")
         .count();
     // One manual replay per open takes the gated accept's wait ends.
-    let mut ack_gate = Some((ack_release, ack_done, ack_tx));
+    let mut ack_gate = Some((ack_release, ack_done));
     std::thread::Builder::new()
         .name("tail-hub".to_owned())
         .spawn(move || {
@@ -3028,7 +3027,7 @@ fn tail_open_prepared(
                                 // stays single-sourced. The wait runs off the
                                 // read loop, which keeps draining the loop's
                                 // `commands` writes.
-                                let (release, done, _) = ack_gate
+                                let (release, done) = ack_gate
                                     .take()
                                     .unwrap_or_else(|| panic!("one manual replay per open"));
                                 std::thread::Builder::new()
@@ -3732,13 +3731,15 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
 }
 
-/// The hub's redundant manual-replay accept spills exactly one line into
-/// the emptied channel: with the loop held at the first batch end, the
-/// test releases the gated ack ahead of the short part, so the capped
-/// first batch still takes `HUB_BATCH`, the emptied channel takes
-/// `SHORT + 1` and the landing keeps `L`, the total conserved across the
-/// shifted boundary (the cap is checked before a pop in
-/// `crate::event_loop::batch`, so no input is taken and put back).
+/// The parked redundant manual-replay accept adds nothing to the pass:
+/// with the loop held at the first batch end, the test releases the gate
+/// ahead of the short part and waits for done, so the capped first batch
+/// still takes `HUB_BATCH`, the emptied channel takes exactly `SHORT`
+/// and the landing keeps the boundary tail. The same interleaving on the
+/// unfixed fake, which delivered the hub-built accept, took `SHORT + 1`,
+/// the total conserved across the shifted boundary (the cap is checked
+/// before a pop in `crate::event_loop::batch`, so no input is taken and
+/// put back).
 #[test]
 fn a_gated_redundant_ack_shifts_the_middle_batch() {
     use crate::event_loop::batch::HUB_BATCH;
@@ -3843,10 +3844,16 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
         taken.push(count);
         count
     };
+    // docs/tui.md, "History and paging": queued hub lines share one frame
+    // in arrival order, up to 4,096 inputs (docs/testing.md, "Event
+    // streams"). Each count below derives from what the test queued under
+    // that cap: the ack plus `head` lines fill the first batch, exactly
+    // `SHORT` lines sit behind the emptied channel, and the rest plus the
+    // live lines land last.
     assert_eq!(batch_end("the full batch"), HUB_BATCH);
-    // The forced interleaving: the gated ack lands ahead of the short
-    // part, and the done wait orders the short part behind it, so the
-    // emptied channel takes one line more.
+    // The forced interleaving: the test releases the parked ack ahead of
+    // the short part, and the done wait orders the short part behind it,
+    // so the emptied channel takes exactly what the test queued.
     manual_ack_release
         .send(())
         .unwrap_or_else(|error| panic!("{error}"));
@@ -3869,7 +3876,7 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
     assert_eq!(code, 0);
     assert_eq!(
         middle, SHORT,
-        "the gated ack spills one line into the emptied channel: full {HUB_BATCH}, middle {middle}, landing {landing}"
+        "the parked gated ack adds nothing to the emptied channel: full {HUB_BATCH}, middle {middle}, landing {landing}"
     );
     assert_eq!(
         landing, boundary,
