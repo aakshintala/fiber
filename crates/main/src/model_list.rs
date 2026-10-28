@@ -98,7 +98,11 @@ pub(crate) fn read(
     let installable = match extensions::not_installed_providers(home) {
         Ok(names) => names.into_iter().map(str::to_owned).collect(),
         Err(error) => {
-            notices.push(error.to_string());
+            notices.push(contract::events::Notice {
+                code: error.code(),
+                message: error.to_string(),
+                extension: None,
+            });
             Vec::new()
         }
     };
