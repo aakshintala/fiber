@@ -1657,7 +1657,9 @@ underlined. A focused link sits on the `surface_raised` tint, with "Enter opens
 link takes the `hover` tint.
 
 A copy, link or image command still running after 10 seconds is stopped;
-what it started keeps running.
+what it started keeps running. The image is sent to the terminal in one
+write; a very large one can hold the screen until the terminal has read
+it.
 
 ## Keys
 
@@ -2453,6 +2455,18 @@ shell, elapsed 12s", "done: completed, 2 tool calls".
 Where the terminal speaks kitty's graphics protocol (Ghostty, kitty, WezTerm),
 images show inline: an image a tool returned, in its ledger row, and a pasted
 image, with or without text, in the prompt bubble.
+
+Kitty's graphics protocol takes only PNG, so the loop converts (`fiber
+image --png /dev/stdin` with the decoded bytes streamed to its standard
+input): the terminal spawns one image child at a time and keeps that one
+worker on the loop (each completion frees it for the next queued
+conversion), and transmits only after converting. The child's standard
+output must stay under the 32 MiB cap, or the child is killed and the
+image fails; refusal and other failures reuse the child's stderr, kept to
+16 KiB and trimmed of trailing whitespace, in the existing notice. The
+draw never waits on the child: conversion runs on a worker thread and each
+completion arrives as loop input. A completion from an earlier session's
+generation is dropped, and a forgotten image never transmits.
 
 - An image is at most 40% of the conversation's width and 12 rows tall,
   keeping its proportions. A click opens it in the system viewer, from a

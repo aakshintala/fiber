@@ -277,6 +277,7 @@ fn a_hooks_thread_that_cannot_start_posts_the_failure_as_the_result() {
                 assert_eq!(got, ticket);
                 result.unwrap_err()
             }
+            Input::Converted { .. } => unreachable!("the worker posts a hooks answer"),
             Input::Bytes(_)
             | Input::Hub(_)
             | Input::Connected(..)
