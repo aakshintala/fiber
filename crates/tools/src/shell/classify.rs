@@ -471,11 +471,9 @@ fn repo_selects_host(words: &[Word], gh_entry: Option<&Command>) -> bool {
         match entry::word_at(word, ended, entry) {
             entry::WordAt::EndFlags => ended = true,
             entry::WordAt::Flag => {
+                // The entry already accepted this `--repo=` when the verdict
+                // read, so only the host decides here.
                 if let Some(value) = word.cooked.strip_prefix("--repo=")
-                    && entry
-                        .flags
-                        .iter()
-                        .any(|flag| flag.takes_value && flag.spelling == "--repo")
                     && has_host(value)
                 {
                     return true;

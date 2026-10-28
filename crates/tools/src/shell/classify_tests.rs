@@ -2582,3 +2582,486 @@ fn rejected_gh_forms_still_execute_with_owners_present() {
         assert!(effects.declared.paths.is_none(), "{command}");
     }
 }
+
+fn assert_executes_with(
+    command: &str,
+    workspace: &Path,
+    workdir: &Path,
+    entries: &[(String, Vec<String>)],
+) {
+    let effects = classify(command, workspace, workdir, entries);
+    assert_eq!(
+        effects.declared.effects,
+        vec![Effect::Executes],
+        "{command}"
+    );
+    assert!(!effects.declared.reversible, "{command}");
+    assert!(effects.declared.paths.is_none(), "{command}");
+}
+
+// Fallback host disjunction (`classify.rs`, `repo_selects_host` with no
+// built-in entry): a configured `gh` read reaches `executes` when either
+// the attached `--repo=` form or the separate `--repo`/`-R` pair names a
+// host, and stays `network` otherwise.
+#[test]
+fn fallback_repo_host_forms_execute() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-fallback-host");
+    let entries = [
+        configured("gh", &["--repo=", "-R=", "--json="]),
+        configured("gh custom", &["--repo=", "-R="]),
+    ];
+    // Attached host alone trips the first disjunct.
+    assert_executes_with("gh custom --repo=h/o/r", &workspace, &workspace, &entries);
+    // Separate long and short pairs trip the second disjunct.
+    assert_executes_with("gh custom --repo h/o/r", &workspace, &workspace, &entries);
+    assert_executes_with("gh custom -R h/o/r", &workspace, &workspace, &entries);
+}
+
+#[test]
+fn unclean_repo_segments_stay_foreign() {
+    // `clean_segment` (`gh_owner.rs`): a space pins the first
+    // `whitespace || control` disjunction, while `?` pins the second
+    // `control || marks` one. Both keep the call reviewed.
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-clean-seg");
+    for command in [
+        "gh pr view 3 --repo \"acme/a b\"",
+        "gh pr view 3 --repo \"acme/app?\"",
+        "gh pr view 3 --repo \"acme/app#frag\"",
+        "gh pr view 3 --repo \"acme/app@frag\"",
+        "gh pr view 3 --repo \"acme/app:1\"",
+        "gh pr view 3 --repo \"acme/\u{1}\"",
+    ] {
+        assert_foreign(
+            command,
+            &workspace,
+            &workspace,
+            &[],
+            vec![workspace_path(&workspace, "3")],
+        );
+    }
+    // A control-only segment pins the first disjunction the same way.
+    assert_foreign(
+        "gh pr view 3 --repo \"acme/app\u{1}\"",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "3")],
+    );
+}
+
+#[test]
+fn ssh_remote_user_and_host_mismatches_have_no_owners() {
+    // `remote_owner` (`gh_owner.rs`): a non-`git` user pins the first
+    // `||`, while a non-GitHub host pins the second.
+    for (index, url) in [
+        "ssh://evil@github.com/acme/app",
+        "ssh://git@evil.com/acme/app",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (_dir, workspace) = owner_workspace(
+            &format!("fiber-shell-gh-ssh-user-{index}"),
+            &remote_config(url),
+        );
+        assert_foreign(
+            "gh issue view 12",
+            &workspace,
+            &workspace,
+            &[],
+            vec![workspace_path(&workspace, "12")],
+        );
+    }
+}
+
+#[test]
+fn scp_remote_extra_parts_and_empty_repo_have_no_owners() {
+    // `remote_owner` scp form: a third path part pins the first `||`,
+    // while an empty repository pins the second.
+    for (index, url) in ["git@github.com:acme/app/extra", "git@github.com:acme/"]
+        .iter()
+        .enumerate()
+    {
+        let (_dir, workspace) =
+            owner_workspace(&format!("fiber-shell-gh-scp-{index}"), &remote_config(url));
+        assert_foreign(
+            "gh issue view 12",
+            &workspace,
+            &workspace,
+            &[],
+            vec![workspace_path(&workspace, "12")],
+        );
+    }
+}
+
+#[test]
+fn url_path_with_empty_repo_stays_foreign() {
+    // `url_path_owner`: `https://github.com/acme/` names no owner since
+    // the repository segment is empty.
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-url-empty-repo");
+    assert_foreign(
+        "gh pr view https://github.com/acme/",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "https://github.com/acme/")],
+    );
+}
+
+#[test]
+fn fallback_non_host_forms_stay_network() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-fallback-nohost");
+    let entries = [configured("gh", &["--repo=", "-R=", "--json="])];
+    // A separate `--repo` without a host: the left side holds while the
+    // host side fails, so the pair stays `network`.
+    let effects = classify(
+        "gh custom --repo acme/other",
+        &workspace,
+        &workspace,
+        &entries,
+    );
+    assert_eq!(
+        effects.declared.effects,
+        vec![Effect::Network],
+        "gh custom --repo acme/other"
+    );
+    assert_eq!(
+        effects.hosts,
+        Some(vec!["https://api.github.com/".to_owned()]),
+        "gh custom --repo acme/other"
+    );
+    // An unrelated value flag holding a host: the host holds while the
+    // flag side fails, so the call stays `network`.
+    let effects = classify("gh custom --json h/o/r", &workspace, &workspace, &entries);
+    assert_eq!(
+        effects.declared.effects,
+        vec![Effect::Network],
+        "gh custom --json h/o/r"
+    );
+    assert_eq!(
+        effects.hosts,
+        Some(vec!["https://api.github.com/".to_owned()]),
+        "gh custom --json h/o/r"
+    );
+    // A separate `-R` without a host also stays `network`.
+    let effects = classify("gh custom -R acme/other", &workspace, &workspace, &entries);
+    assert_eq!(
+        effects.declared.effects,
+        vec![Effect::Network],
+        "gh custom -R acme/other"
+    );
+}
+
+#[test]
+fn gitdir_pointer_outside_dot_git_has_no_owners() {
+    // `gitdir_common`: a canonical gitdir outside any `.git` component
+    // pins the `under_dot_git` disjunct.
+    let dir = fakes::TempDir::new("fiber-shell-gh-gitdir-outside");
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(
+        elsewhere.join("config"),
+        remote_config("git@github.com:acme/app.git"),
+    )
+    .unwrap();
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join(".git"),
+        format!("gitdir: {}\n", elsewhere.to_str().unwrap()),
+    )
+    .unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn commondir_as_directory_has_no_owners() {
+    // `commondir_common`: a `commondir` that is a directory (neither a
+    // symlink nor a file) pins the `is_symlink || !is_file` disjunction.
+    let (_dir, workspace) = worktree_workspace(
+        "fiber-shell-gh-commondir-dir",
+        &remote_config("git@github.com:acme/app.git"),
+        &remote_config("git@github.com:acme/app.git"),
+    );
+    let gitdir = workspace
+        .join("..")
+        .join("repo")
+        .join(".git")
+        .join("worktrees")
+        .join("wt");
+    std::fs::remove_file(gitdir.join("commondir")).unwrap();
+    std::fs::create_dir_all(gitdir.join("commondir")).unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn missing_commondir_falls_back_to_the_gitdir() {
+    // `commondir_common`: a missing `commondir` file resolves to the
+    // gitdir itself, so an owned gitdir config reads.
+    let dir = fakes::TempDir::new("fiber-shell-gh-commondir-missing");
+    let root = dir.path().join("ws");
+    let gitdir = root.join("repo").join(".git").join("worktrees").join("wt");
+    std::fs::create_dir_all(&gitdir).unwrap();
+    std::fs::write(
+        gitdir.join("config"),
+        remote_config("git@github.com:acme/app.git"),
+    )
+    .unwrap();
+    let checkout = root.join("checkout");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join(".git"), "gitdir: ../repo/.git/worktrees/wt\n").unwrap();
+    assert_own(
+        "gh issue view 12",
+        &checkout,
+        &checkout,
+        vec![workspace_path(&checkout, "12")],
+    );
+}
+
+#[test]
+fn other_io_errors_fail_closed_in_common_dir() {
+    // `common_dir`: an I/O error other than `NotFound` (here `ENOTDIR`
+    // through a file component) fails closed instead of walking to the
+    // parent repository.
+    let dir = fakes::TempDir::new("fiber-shell-gh-enotdir");
+    let root = dir.path().join("ws");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(
+        root.join(".git").join("config"),
+        remote_config("git@github.com:acme/app.git"),
+    )
+    .unwrap();
+    let file = root.join("file");
+    std::fs::write(&file, "x").unwrap();
+    let workspace = file.join("ws");
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn backslash_continuation_joins_config_lines() {
+    // `logical_lines` and `trailing_backslashes`: a single trailing
+    // backslash joins the next line, so the split section header still
+    // reads. Without the join the first line never closes, so the config
+    // is malformed.
+    let (_dir, workspace) = owner_workspace(
+        "fiber-shell-gh-continuation",
+        "[remote \"ori\\\ngin\"]\n\turl = git@github.com:acme/app.git\n",
+    );
+    assert_own(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn trailing_continuation_without_newline_still_reads() {
+    // `logical_lines`: a trailing backslash on the final line without a
+    // trailing newline still joins, so the remote URL reads.
+    let (_dir, workspace) = owner_workspace(
+        "fiber-shell-gh-trailing-continuation",
+        "[remote \"origin\"]\n\turl = git@github.com:acme/app.git\\",
+    );
+    assert_own(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn section_header_with_trailing_comment_stays_own() {
+    // `strip_comment`: a `#` after the section header is a comment, so
+    // the remote still reads. The tab variant pins the tab side of the
+    // whitespace disjunction.
+    for (index, config) in [
+        "[remote \"origin\"] # the team\n\turl = git@github.com:acme/app.git\n",
+        "[remote \"origin\"]\t# the team\n\turl = git@github.com:acme/app.git\n",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (_dir, workspace) =
+            owner_workspace(&format!("fiber-shell-gh-section-comment-{index}"), config);
+        assert_own(
+            "gh issue view 12",
+            &workspace,
+            &workspace,
+            vec![workspace_path(&workspace, "12")],
+        );
+    }
+}
+
+#[test]
+fn empty_section_name_has_no_owners() {
+    // `parse_section`: `[]` names nothing, so the whole config is
+    // malformed even beside a valid remote.
+    let (_dir, workspace) = owner_workspace(
+        "fiber-shell-gh-empty-section",
+        "[]\n[remote \"origin\"]\n\turl = git@github.com:acme/app.git\n",
+    );
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn dotted_and_dashed_section_names_read() {
+    // `parse_section`: `.` and `-` are word characters in section names.
+    let (_dir, workspace) = owner_workspace(
+        "fiber-shell-gh-section-chars",
+        "[a.b-c]\n\tfoo = bar\n[remote \"origin\"]\n\turl = git@github.com:acme/app.git\n",
+    );
+    assert_own(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn bare_subsection_with_whitespace_has_no_owners() {
+    // `parse_section`: a bare subsection holding whitespace is malformed.
+    let (_dir, workspace) = owner_workspace(
+        "fiber-shell-gh-bare-subsection",
+        "[remote my sub]\n\turl = git@github.com:acme/app.git\n",
+    );
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn bare_boolean_key_beside_a_remote_still_reads() {
+    // `split_key`: a bare boolean key validates, so the remote beside it
+    // still reads.
+    let (_dir, workspace) = owner_workspace(
+        "fiber-shell-gh-bare-key",
+        "[remote \"origin\"]\n\tfoo\n\turl = git@github.com:acme/app.git\n",
+    );
+    assert_own(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn invalid_key_lines_have_no_owners() {
+    // `split_key` and `valid_key`: an empty key, and keys holding `.`,
+    // `-` or `_` where the mutant forbids them, fail closed. Each config
+    // holds one invalid line beside a valid remote, so the whole config
+    // has no owners.
+    for (index, config) in [
+        "[remote \"origin\"]\n\t= value\n\turl = git@github.com:acme/app.git\n",
+        "[remote \"origin\"]\n\tnot a key!!!\n\turl = git@github.com:acme/app.git\n",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (_dir, workspace) =
+            owner_workspace(&format!("fiber-shell-gh-invalid-key-{index}"), config);
+        assert_foreign(
+            "gh issue view 12",
+            &workspace,
+            &workspace,
+            &[],
+            vec![workspace_path(&workspace, "12")],
+        );
+    }
+}
+
+#[test]
+fn dotted_dashed_and_underscored_keys_read() {
+    // `valid_key`: `.`, `-` and `_` are word characters in key names, so
+    // extra keys holding them do not disturb the remote.
+    let (_dir, workspace) = owner_workspace(
+        "fiber-shell-gh-key-chars",
+        "[remote \"origin\"]\n\tmy.key = foo\n\tmy-key = foo\n\tmy_key = foo\n\turl = git@github.com:acme/app.git\n",
+    );
+    assert_own(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn quoted_escapes_in_subsections_read() {
+    // `quoted_value`: each escape in a subsection still yields a
+    // non-empty name, so the remote still reads.
+    for (index, escape) in ["\\n", "\\t", "\\b", "\\\"", "\\\\"].iter().enumerate() {
+        let config = format!("[remote \"a{escape}b\"]\n\turl = git@github.com:acme/app.git\n");
+        let (_dir, workspace) = owner_workspace(&format!("fiber-shell-gh-escape-{index}"), &config);
+        assert_own(
+            "gh issue view 12",
+            &workspace,
+            &workspace,
+            vec![workspace_path(&workspace, "12")],
+        );
+    }
+}
+
+#[test]
+fn empty_quoted_subsection_has_no_owners() {
+    // `unescape`: an empty quoted subsection is empty, so the remote
+    // does not count.
+    let (_dir, workspace) = owner_workspace(
+        "fiber-shell-gh-empty-subsection",
+        "[remote \"\"]\n\turl = git@github.com:acme/app.git\n",
+    );
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn value_with_equals_inside_quotes_reads() {
+    // `split_unquoted`: an `=` inside quotes is not a separator, so the
+    // remote still reads (`=` is allowed in a segment).
+    let (_dir, workspace) = owner_workspace(
+        "fiber-shell-gh-equals-in-quotes",
+        "[remote \"origin\"]\n\turl = \"git@github.com:acme/app=bar\"\n",
+    );
+    assert_own(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "12")],
+    );
+}

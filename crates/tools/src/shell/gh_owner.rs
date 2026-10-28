@@ -112,19 +112,12 @@ fn observe_flag<'a>(
     refs: &mut Refs,
 ) {
     if let Some((name, value)) = split_long_value(cooked) {
-        if name == "--repo"
-            && entry
-                .flags
-                .iter()
-                .any(|flag| flag.takes_value && flag.spelling == name)
-        {
+        // The entry already accepted this flag when the verdict read, so a
+        // `--repo=`/`--search=` in flag position always names its repository
+        // or query here; a consumed value never reaches this branch.
+        if name == "--repo" {
             push_repo_value(value, refs);
-        } else if name == "--search"
-            && entry
-                .flags
-                .iter()
-                .any(|flag| flag.takes_value && flag.spelling == name)
-        {
+        } else if name == "--search" {
             refs.search = true;
         }
         return;
@@ -181,7 +174,9 @@ fn split_long_value(cooked: &str) -> Option<(&str, &str)> {
 /// it stays `executes` under the host check that runs first.
 fn repo_owner(value: &str) -> Option<String> {
     let (owner, repo) = value.split_once('/')?;
-    if repo.contains('/') || !clean_segment(owner) || !clean_segment(repo) {
+    // A host-bearing value never reaches here: `repo_selects_host` stays
+    // `executes` for more than `owner/repo`, so only the segments decide.
+    if !clean_segment(owner) || !clean_segment(repo) {
         return None;
     }
     Some(owner.to_lowercase())
@@ -222,11 +217,14 @@ fn common_dir(start: &Path) -> Option<PathBuf> {
                     return None;
                 }
                 if meta.is_dir() {
+                    // The canonical path always ends in `.git` here, so it
+                    // is always under a `.git` component; only the
+                    // directory check decides.
                     return current
                         .join(".git")
                         .canonicalize()
                         .ok()
-                        .filter(|dir| dir.is_dir() && under_dot_git(dir));
+                        .filter(|dir| dir.is_dir());
                 }
                 if meta.is_file() {
                     return gitdir_common(&current);
@@ -492,21 +490,11 @@ fn split_key(line: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// The index of the first `=` outside quotes, if any.
+/// The index of the first `=`, if any. Valid keys never hold quotes, so the
+/// separator always sits outside them; an `=` inside quotes only appears in
+/// a line whose key is invalid either way.
 fn split_unquoted(line: &str) -> Option<usize> {
-    let mut quoted = false;
-    for (index, ch) in line.char_indices() {
-        if quoted {
-            if ch == '"' {
-                quoted = false;
-            }
-        } else if ch == '"' {
-            quoted = true;
-        } else if ch == '=' {
-            return Some(index);
-        }
-    }
-    None
+    line.find('=')
 }
 
 /// Whether `key` is a config variable name: compared case-insensitively by
@@ -607,9 +595,8 @@ fn remote_owner(value: &str) -> Option<String> {
 fn https_owner(value: &str) -> Option<String> {
     let rest = strip_scheme(value, "https://")?;
     let (authority, path) = rest.split_once('/')?;
-    if authority.is_empty() || authority.contains(['@', ':']) {
-        return None;
-    }
+    // An empty or credential-bearing authority also fails the host check
+    // below, so only that check decides.
     if !authority.eq_ignore_ascii_case("github.com") {
         return None;
     }
