@@ -398,6 +398,17 @@ pub(crate) fn relay_command(
     }
 }
 
+/// What `route` did with the command: every path serves or refuses it.
+/// A socket that goes stale between the connect and the write resumes the
+/// exited session once instead of refusing `session_not_found`.
+pub(crate) enum RouteOutcome {
+    /// Served or refused with no stale socket.
+    Done,
+    /// The connected socket went stale before the write; the same command
+    /// id and payload went through one exited-session resume.
+    Retried,
+}
+
 /// Passes `stripped` to the session's oldest relay newer than `from`
 /// (`None`: the oldest of all), or to a new connection: the socket that
 /// accepts, or a resumed session. With `exited`, the session's log ends
@@ -425,9 +436,9 @@ pub(crate) fn route(
     from: Option<u64>,
     exited: bool,
     admit: Option<&crate::connection::Attribution>,
-) {
+) -> RouteOutcome {
     let Some(bytes) = line_bytes(&stripped) else {
-        return;
+        return RouteOutcome::Done;
     };
     // An initial route receives attribution from the accepted connection.
     // A reroute can start in the relay thread or the queue pump, so recover
@@ -463,11 +474,11 @@ pub(crate) fn route(
                 &refused.code,
                 &refused.message,
             );
-            return;
+            return RouteOutcome::Done;
         }
         if crate::resume::exited_delegate(&hub.home, &SessionId(session.to_owned())) {
             replay_exited_delegate(id, session, &stripped, hub, writer, relays);
-            return;
+            return RouteOutcome::Done;
         }
     }
     // Serves the command on the session's published relay, when one
@@ -607,7 +618,7 @@ pub(crate) fn route(
         true
     };
     if serve_existing() {
-        return;
+        return RouteOutcome::Done;
     }
     // No relay for the session: at most one opener runs past here. The
     // gate is cloned under the relays lock, which is dropped before
@@ -643,7 +654,7 @@ pub(crate) fn route(
         // An opener ahead published first: serve there. The Opening
         // guard drops here with no lock held; its Drop takes the relays
         // lock itself.
-        return;
+        return RouteOutcome::Done;
     }
     #[cfg(test)]
     {
@@ -674,7 +685,7 @@ pub(crate) fn route(
                 &refused.code,
                 &refused.message,
             );
-            return;
+            return RouteOutcome::Done;
         }
     };
     let sid = SessionId(session.to_owned());
@@ -696,7 +707,7 @@ pub(crate) fn route(
                 &refused.code,
                 &refused.message,
             );
-            return;
+            return RouteOutcome::Done;
         }
     };
     // With no relay published, the target identity comes from the newly
@@ -725,7 +736,7 @@ pub(crate) fn route(
                 &refused.code,
                 &refused.message,
             );
-            return;
+            return RouteOutcome::Done;
         }
     }
     #[cfg(test)]
@@ -737,9 +748,13 @@ pub(crate) fn route(
             after_connect();
         }
     }
+    // The retry below sends the same subscription and command again, so
+    // copies stay beside the originals: the first attach moves them.
+    let retry_kept = kept.clone();
+    let retry_command = Some((id.clone(), bytes.clone(), stripped.clone()));
     // The connection's subscription first, under an id of the hub's own,
     // so the client's command reaches a subscribed connection.
-    attach_inner(
+    let attached = attach_inner(
         session,
         stream,
         hub,
@@ -751,6 +766,49 @@ pub(crate) fn route(
         None,
         true,
     );
+    match attached {
+        AttachOutcome::Done => RouteOutcome::Done,
+        AttachOutcome::Stale => {
+            // The just-connected socket went stale before the pending
+            // command was written: the exiting process tore it down
+            // between the connect and the write, so the command reached
+            // no session. Resume the exited session once and attach the
+            // same command id and payload there, under the same opener
+            // gate and opening mark; a command is delivered once, in the
+            // order read (`docs/invocation.md`, "Lifecycle"). A retry
+            // that also fails is refused with the resume's own failure,
+            // never a new `session_not_found` for a log that exists.
+            match crate::resume::resume_exited(hub, &sid, credential.as_deref()) {
+                Ok(stream) => {
+                    attach_inner(
+                        session,
+                        stream,
+                        hub,
+                        writer,
+                        relays,
+                        retry_kept,
+                        retry_command,
+                        false,
+                        None,
+                        true,
+                    );
+                    RouteOutcome::Retried
+                }
+                Err(refused) => {
+                    crate::retire::refuse(
+                        writer,
+                        hub,
+                        relays,
+                        session,
+                        id,
+                        &refused.code,
+                        &refused.message,
+                    );
+                    RouteOutcome::Retried
+                }
+            }
+        }
+    }
 }
 
 /// Refuses `id` for `session` when its exited log cannot be replayed:
@@ -1046,9 +1104,11 @@ fn establish(
 /// client's command when one is relayed, and
 /// follows the session on a relay thread: shared by a new relay and the
 /// rewind redirect, which sends only the subscription (its caller keeps
-/// the level first). A write that fails answers the client's command
-/// `session_not_found` when there is one, in command order; without one
-/// the connection is gone, so nothing is answered. Exclusive gives up when
+/// the level first). A write that fails reports the socket stale, leaving
+/// the pending command unwritten: `route` resumes the exited session and
+/// relays the same command there, in command order, while `attach`
+/// answers a pending command `session_not_found`; without one nothing is
+/// answered. Exclusive gives up when
 /// the connection already relays the session or is opening it: the sweep's
 /// rejoin, never a client command.
 #[allow(
@@ -1065,9 +1125,18 @@ pub(crate) fn attach(
     command: Option<(CommandId, Vec<u8>, Map<String, Value>)>,
     exclusive: bool,
 ) {
-    attach_inner(
-        session, stream, hub, writer, relays, replay, command, exclusive, None, false,
+    let missing = command.as_ref().map(|(id, _, _)| id.clone());
+    let stale = matches!(
+        attach_inner(
+            session, stream, hub, writer, relays, replay, command, exclusive, None, false,
+        ),
+        AttachOutcome::Stale
     );
+    // No resume here: a stale socket refuses the pending command, as
+    // before. Only `route` relays it through the exited session instead.
+    if stale && let Some(id) = &missing {
+        crate::retire::refuse_not_found(writer, hub, relays, session, id);
+    }
 }
 
 /// Rejoins only if the candidate's mark is still current. It takes the kept
@@ -1096,6 +1165,18 @@ pub(crate) fn attach_rejoin(
     );
 }
 
+/// What `attach_inner` left behind: a published relay, or a socket that
+/// went stale before the pending command was written, for the caller to
+/// resume through. The pending command is written exactly once: a stale
+/// socket never saw it.
+enum AttachOutcome {
+    /// The entry published; nothing more to do.
+    Done,
+    /// The replay write, the command write or the clone failed: the
+    /// connected socket is stale and the pending command was never written.
+    Stale,
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "the session, its stream, the hub, the client, the relays, the replay, the command and its admission are one hand-off"
@@ -1111,7 +1192,7 @@ fn attach_inner(
     exclusive: bool,
     candidate_epoch: Option<u64>,
     reopen: bool,
-) {
+) -> AttachOutcome {
     let mark = crate::rejoin::Mark::now(&hub.home, session);
     let mut replay = replay;
     let mut replayed_id: Option<String> = None;
@@ -1122,7 +1203,7 @@ fn attach_inner(
             .as_ref()
             .and_then(|held| crate::rejoin::kept_for_candidate(held, session, candidate_epoch))
         else {
-            return;
+            return AttachOutcome::Done;
         };
         replay = Some(current);
     }
@@ -1147,10 +1228,7 @@ fn attach_inner(
         if !sent {
             drop(admission);
             drop(replay_timer);
-            if let Some((id, _, _)) = &command {
-                crate::retire::refuse_not_found(writer, hub, relays, session, id);
-            }
-            return;
+            return AttachOutcome::Stale;
         }
         lock(&replayed).push(minted.clone());
         if reopen
@@ -1171,21 +1249,17 @@ fn attach_inner(
             .into_iter()
             .collect(),
     ));
-    if let Some((id, bytes, _)) = &command
+    if let Some((_, bytes, _)) = &command
         && write_all(&stream, bytes).is_err()
     {
         drop(admission);
-        crate::retire::refuse_not_found(writer, hub, relays, session, id);
-        return;
+        return AttachOutcome::Stale;
     }
     let reader = match stream.try_clone() {
         Ok(reader) => reader,
         Err(_) => {
             drop(admission);
-            if let Some((id, _, _)) = &command {
-                crate::retire::refuse_not_found(writer, hub, relays, session, id);
-            }
-            return;
+            return AttachOutcome::Stale;
         }
     };
     let mut held = match admission {
@@ -1232,6 +1306,7 @@ fn attach_inner(
             drop(guard);
         }
     }
+    AttachOutcome::Done
 }
 
 /// What one relay thread owns besides its streams: its epoch, the ids of

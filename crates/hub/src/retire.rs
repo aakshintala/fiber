@@ -491,7 +491,9 @@ fn reroute_once(
     // `closing` below.
     if held_by_exiting(hub, session) {
         for (id, line) in sent {
-            crate::relay::route(
+            // `route` serves, refuses, or resumes-and-relays the command
+            // in the order read: the outcome needs no handling here.
+            let _outcome = crate::relay::route(
                 &CommandId(id),
                 session,
                 line,
@@ -517,7 +519,9 @@ fn reroute_once(
                 ENDED,
             );
         } else if hand_over(order, relays, session, epoch, &id, &line) {
-            crate::relay::route(
+            // `route` serves, refuses, or resumes-and-relays the command
+            // in the order read: the outcome needs no handling here.
+            let _outcome = crate::relay::route(
                 &CommandId(id),
                 session,
                 line,
@@ -614,7 +618,9 @@ pub(crate) fn recover(
         .collect();
     drop(entry);
     for (queued, line) in queued {
-        crate::relay::route(
+        // `route` serves, refuses, or resumes-and-relays the command
+        // in the order read: the outcome needs no handling here.
+        let _outcome = crate::relay::route(
             &CommandId(queued),
             session,
             line,
@@ -626,7 +632,9 @@ pub(crate) fn recover(
             admit,
         );
     }
-    crate::relay::route(
+    // `route` serves, refuses, or resumes-and-relays the command
+    // in the order read: the outcome needs no handling here.
+    let _outcome = crate::relay::route(
         id, session, stripped, hub, writer, relays, from, exited, admit,
     );
 }
@@ -671,7 +679,9 @@ fn pump(
         if let Some(passed) = lock(&hub.on_pass_on).take() {
             passed(PassOn::Popped(id.clone()));
         }
-        crate::relay::route(
+        // `route` serves, refuses, or resumes-and-relays the command
+        // in the order read: the outcome needs no handling here.
+        let _outcome = crate::relay::route(
             &CommandId(id),
             session,
             line,
