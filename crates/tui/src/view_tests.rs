@@ -370,6 +370,189 @@ fn sized(app: &mut App, width: u16, height: u16) -> String {
     text(&buf)
 }
 
+/// A whole-screen snapshot pins one `prompt` replacement alongside the
+/// built-in notice, working line, input box, status rows and a surviving target.
+#[test]
+fn conversation_slots_replace_through_the_seam() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    use serde_json::json;
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(at(
+        "preamble_built",
+        None,
+        0,
+        json!({"reason": "start", "model": "fake/m", "context_window": 1_000_000,
+            "tool_choice": "auto", "cache_lifetime": "5m", "system_prompt": "", "tools": []}),
+    ));
+    // A completed turn with a tool group, a steer and an answered form.
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_1"),
+        0,
+        json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_1"),
+        1_000,
+        json!({"status": "completed", "content": [{"type": "text", "text": "fn a() {}"}]}),
+    ));
+    app.on_line(steered("s_aaaaaaaaaaaaaaaa", "use x"));
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_2"),
+        2_000,
+        json!({"name": "ask_user", "arguments": {"questions": [{"header": "Base"}, {"header": "Name"}]}}),
+    ));
+    app.on_line(at(
+        "interaction_requested",
+        None,
+        2_000,
+        json!({"request_id": "r_4f", "kind": "form", "action_ids": ["a_2"],
+            "fields": [{"header": "Base", "question": "Which branch?", "multiSelect": true,
+                "options": [{"label": "main (Recommended)", "description": "the default"}, {"label": "dev"}]},
+                {"header": "Name", "question": "What name?"}]}),
+    ));
+    app.on_line(at(
+        "interaction_resolved",
+        None,
+        3_000,
+        json!({"request_id": "r_4f", "by": "person",
+            "answers": [{"labels": ["main (Recommended)", "dev"], "text": "and tags"}, {"skipped": true}],
+            "note": "by friday"}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_2"),
+        3_000,
+        json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+    ));
+    app.on_line(at(
+        "handoff_started",
+        None,
+        3_000,
+        json!({"trigger": "auto"}),
+    ));
+    // The note streams under its own action, then the completion names it.
+    app.on_line(at(
+        "assistant_message_delta",
+        Some("a_n"),
+        3_000,
+        json!({"text": "the plan"}),
+    ));
+    app.on_line(at(
+        "text_completed",
+        Some("a_n"),
+        3_000,
+        json!({"text": "the plan"}),
+    ));
+    app.on_line(at(
+        "handoff_completed",
+        None,
+        4_000,
+        json!({"outcome": "completed", "note": ["a_n"], "tokens_before": 100}),
+    ));
+    app.on_line(at(
+        "text_completed",
+        Some("a_m"),
+        4_000,
+        json!({"text": "Done."}),
+    ));
+    app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    // A failed turn for the error line.
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "again"));
+    app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
+    // A notice above the working line.
+    app.push_notice("io_failed", "a read failed".to_owned());
+    // Per-slot tests cover the other replacements; this test pins the
+    // whole-screen effect of replacing one prompt.
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["prompt"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    ));
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.install_renderer(renderer);
+    app.set_size(WIDTH, 40);
+    let area = Rect::new(0, 0, WIDTH, 40);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    assert!(shown.contains("custom"), "{shown}");
+    assert!(
+        shown.contains("a read failed"),
+        "the built-in notice remains: {shown}"
+    );
+    assert!(
+        shown.contains("▸ note"),
+        "the built-in note remains: {shown}"
+    );
+    assert!(
+        shown.contains("completed · 2 calls"),
+        "the group remains built in: {shown}"
+    );
+    assert!(shown.contains("›"), "the input box remains: {shown}");
+    assert!(shown.contains("▌"), "the working line remains: {shown}");
+    // The note toggle stays the terminal's beside the replaced band:
+    // its target rides the returned target list.
+    assert!(
+        targets.iter().any(|target| matches!(
+            target.id,
+            crate::mouse::TargetId::Line(crate::app::Target::Note(_))
+        )),
+        "the note toggle keeps its target: {targets:?}"
+    );
+    insta::assert_snapshot!("extension_slot_replaces_row", shown);
+}
+
+#[test]
+fn notice_replacement_reserves_each_painted_row() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    use crate::mouse::TargetId;
+    use std::rc::Rc;
+
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.push_notice("io_failed", "a read failed".to_owned());
+    let fake = Rc::new(SlotRenderer::filling(
+        &["notice"],
+        SlotScript::Replace(vec![vec![raw("first")], vec![raw("second")]]),
+    ));
+    let renderer: Rc<dyn crate::ext::Renderer> = fake;
+    app.install_renderer(renderer);
+    app.set_size(80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    assert!(
+        shown.contains("first") && shown.contains("second"),
+        "{shown}"
+    );
+    // (`docs/tui.md`, "The slots": a `notice` keeps its dismiss target on the painted lines.)
+    let rows_text: Vec<&str> = shown.lines().collect();
+    let first_y = rows_text
+        .iter()
+        .position(|row| row.contains("first"))
+        .expect("the first painted line shows");
+    let second_y = rows_text
+        .iter()
+        .position(|row| row.contains("second"))
+        .expect("the second painted line shows");
+    let dismiss = targets
+        .iter()
+        .find(|target| matches!(target.id, TargetId::DismissNotice(_)))
+        .expect("the replacement's dismiss target");
+    let top = dismiss.rect.y as usize;
+    let bottom = top + dismiss.rect.height as usize;
+    assert!(
+        top <= first_y.min(second_y) && first_y.max(second_y) < bottom,
+        "the dismiss target spans each painted line: {dismiss:?}"
+    );
+}
+
 #[test]
 fn a_short_screen_keeps_the_input_line_last() {
     let now = fakes::clock::FakeClock::new().now();

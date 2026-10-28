@@ -34,3 +34,8 @@ path = "junit.xml"
 [[profile.default.overrides]]
 filter = 'package(main) & test(=builtin::tool_budget_tests::the_built_in_definitions_fit_their_budget)'
 success-output = "immediate"
+
+# docs/testing.md, "Waits and timeouts": allow twice the test's deadline plus run time.
+[[profile.default.overrides]]
+filter = 'package(main) & test(=images_past_the_placeholder_range_keep_a_unique_viewer_target)'
+slow-timeout = { period = "30s", terminate-after = 12 }
