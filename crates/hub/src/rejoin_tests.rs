@@ -27,7 +27,7 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::connection::{Hub, lock, serve_connection};
+use crate::connection::{Accept, Hub, lock, serve_counted};
 use crate::fake::FakeStarter;
 use crate::feed::RUN_SCAN;
 use crate::testkit::{await_scanner, id, start, write_log};
@@ -174,7 +174,11 @@ impl Client {
         let hub = Arc::clone(hub);
         thread::Builder::new()
             .name("hub-conn".to_owned())
-            .spawn(move || serve_connection(a, hub))
+            .spawn(move || match hub.poll_accept(&a, &AtomicBool::new(false)) {
+                Accept::Counted(n) => serve_counted(a, hub, n),
+                Accept::Dropped => panic!("test connection stream could not be cloned"),
+                Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+            })
             .unwrap();
         b.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
         b.set_write_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
@@ -609,7 +613,7 @@ fn await_pass(done: &mpsc::Receiver<()>, what: &str) {
 
 /// Waits, at most [`MUST_SUCCEED_WITHIN`] of real time, until the registry drops
 /// every connection: a scoped thread waits on the hub's tick, which
-/// `serve_connection` wakes after it unregisters, and this takes its
+/// `serve_counted` wakes after it unregisters, and this takes its
 /// notice with one `Deadline` receive. The fake clock never moves during the
 /// wait, so the bound is the channel's, never the clock's. Fails naming
 /// `what` when the deadline passes first.

@@ -322,12 +322,6 @@ impl Hub {
         lock(&self.conns).open.len()
     }
 
-    /// When the open count last reached 0; `None` while a client is open.
-    #[cfg(test)]
-    pub(crate) fn zero_since(&self) -> Option<Instant> {
-        lock(&self.conns).zero_since
-    }
-
     /// Wakes the idle wait: the signal arm calls it after recording a
     /// signal.
     pub(crate) fn waker(&self) -> Arc<dyn Wake> {
@@ -356,17 +350,6 @@ impl Hub {
             Some(n) => Accept::Counted(n),
             None => Accept::Dropped,
         }
-    }
-
-    /// Counts one connection, for a caller with no exit to check.
-    /// `None` when the shutdown clone fails: count nothing, serve nothing.
-    #[cfg(test)]
-    pub(crate) fn register(&self, stream: &UnixStream) -> Option<u64> {
-        let mut conns = lock(&self.conns);
-        let counted = self.register_with(|| stream.try_clone().map(Closer::Local), &mut conns);
-        drop(conns);
-        self.tick.wake();
-        counted
     }
 
     /// Counts a websocket the port acceptor holds: under the connection
@@ -597,19 +580,6 @@ pub(crate) fn hello_payload(hub: &Hub) -> Map<String, Value> {
         payload.insert("fiber_commit".to_owned(), Value::String(commit.clone()));
     }
     payload
-}
-
-/// Serves one client connection: `hub_hello`, then one acknowledgement per
-/// hub command, and a relay thread per session commanded on it. Returning
-/// shuts down every relay stream of the connection, so each session sees
-/// this client leave. Tests only: production counts through
-/// [`Hub::poll_accept`], then serves here.
-#[cfg(test)]
-pub(crate) fn serve_connection(stream: UnixStream, hub: Arc<Hub>) {
-    let Some(n) = hub.register(&stream) else {
-        return;
-    };
-    serve_counted(stream, hub, n);
 }
 
 /// Serves an accepted connection already counted by [`Hub::poll_accept`].

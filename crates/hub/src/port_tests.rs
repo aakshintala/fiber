@@ -1231,9 +1231,11 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
     let sub_sock = hub_end.try_clone().unwrap();
     let closer_sock = hub_end.try_clone().unwrap();
     let retired_sock = hub_end.try_clone().unwrap();
-    let n = hub
-        .register(&hub_end)
-        .expect("the hub counts the connection");
+    let n = match hub.poll_accept(&hub_end, &AtomicBool::new(false)) {
+        crate::connection::Accept::Counted(n) => n,
+        crate::connection::Accept::Dropped => panic!("the hub counts the connection"),
+        crate::connection::Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
     let serve_hub = Arc::clone(&hub);
     let serve_web = Arc::clone(&web);
     let (serve_tx, serve_rx) = mpsc::channel();

@@ -14,6 +14,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -23,7 +24,7 @@ use contract::clock::Clock;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::connection::{Hub, serve_connection};
+use crate::connection::{Accept, Hub, serve_counted};
 use crate::fake::FakeStarter;
 use crate::testkit::{args, id};
 use fakes::Deadline;
@@ -112,7 +113,13 @@ fn hold(dir: &Path) -> File {
 fn over_the_wire(hub: &Arc<Hub>, line: &str) -> Value {
     let (a, b) = UnixStream::pair().unwrap();
     let serving = Arc::clone(hub);
-    thread::spawn(move || serve_connection(a, serving));
+    thread::spawn(
+        move || match serving.poll_accept(&a, &AtomicBool::new(false)) {
+            Accept::Counted(n) => serve_counted(a, serving, n),
+            Accept::Dropped => panic!("test connection stream could not be cloned"),
+            Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+        },
+    );
     b.set_read_timeout(Some(DEADLINE)).unwrap();
     (&b).write_all(format!("{line}\n").as_bytes()).unwrap();
     let mut read = BufReader::new(b);
@@ -643,7 +650,13 @@ fn read_file_over_the_wire_accepts_and_rejects() {
     let hub = temp.hub_with().0;
     let (a, b) = UnixStream::pair().unwrap();
     let serving = Arc::clone(&hub);
-    thread::spawn(move || serve_connection(a, serving));
+    thread::spawn(
+        move || match serving.poll_accept(&a, &AtomicBool::new(false)) {
+            Accept::Counted(n) => serve_counted(a, serving, n),
+            Accept::Dropped => panic!("test connection stream could not be cloned"),
+            Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+        },
+    );
     b.set_read_timeout(Some(DEADLINE)).unwrap();
     let mut write = b.try_clone().unwrap();
     let mut read = BufReader::new(b);

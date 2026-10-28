@@ -15,7 +15,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -24,7 +24,7 @@ use contract::clock::Clock;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::connection::serve_connection;
+use crate::connection::{Accept, serve_counted};
 use crate::fake::{FakeStarter, Handshake, failure};
 use crate::start::START_DEADLINE;
 use crate::{Started, Starter};
@@ -935,7 +935,11 @@ impl Client {
     fn connect(hub: &Arc<Hub>) -> Self {
         let (a, b) = UnixStream::pair().unwrap();
         let hub = Arc::clone(hub);
-        thread::spawn(move || serve_connection(a, hub));
+        thread::spawn(move || match hub.poll_accept(&a, &AtomicBool::new(false)) {
+            Accept::Counted(n) => serve_counted(a, hub, n),
+            Accept::Dropped => panic!("test connection stream could not be cloned"),
+            Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+        });
         b.set_read_timeout(Some(DEADLINE)).unwrap();
         let mut client = Self {
             read: BufReader::new(b.try_clone().unwrap()),
