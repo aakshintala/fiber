@@ -23,7 +23,7 @@ use contract::events::{
     McpServerFailed, McpServerReady, Outcome, RuleOffer, ServerFailure, TextDelta,
     ToolCallArgumentsDelta, ToolCallRequested, ToolReplaced, TurnOutcome,
 };
-use contract::inbox::{Ack, Delivery, Message};
+use contract::inbox::{Ack, Answer, Delivery, Message};
 use contract::jobs::Taken;
 use contract::provider::{Delta, Input, ModelRequest, Provider, ReplyAction, ToolDefinition};
 use contract::rules::{Rules, RulesError, StandingRules};
@@ -127,10 +127,11 @@ fn declared(effects: &[Effect], paths: Option<&[&str]>) -> DeclaredEffects {
 #[test]
 fn reads_and_no_effect_take_the_fast_path_wherever_they_point() {
     let (_root, ws, home) = workspace();
-    assert!(fast_path(&declared(&[], None), &ws, &home));
+    assert!(fast_path(&declared(&[], None), &ws, &[], &home));
     assert!(fast_path(
         &declared(&[Effect::Reads], Some(&["/etc/hosts"])),
         &ws,
+        &[],
         &home
     ));
 }
@@ -142,6 +143,7 @@ fn a_write_takes_the_fast_path_only_inside_the_workspace_and_outside_git_and_fib
         fast_path(
             &declared(&[Effect::Reads, Effect::Writes], Some(paths)),
             &ws,
+            &[],
             &home,
         )
     };
@@ -165,7 +167,12 @@ fn a_write_takes_the_fast_path_only_inside_the_workspace_and_outside_git_and_fib
     assert!(!writes(&["real/a.rs", ".git/x"]));
     // No paths, or none declared, is reviewed.
     assert!(!writes(&[]));
-    assert!(!fast_path(&declared(&[Effect::Writes], None), &ws, &home));
+    assert!(!fast_path(
+        &declared(&[Effect::Writes], None),
+        &ws,
+        &[],
+        &home
+    ));
 }
 
 #[test]
@@ -175,6 +182,7 @@ fn executes_and_network_never_take_the_fast_path() {
         assert!(!fast_path(
             &declared(&[Effect::Reads, effect], Some(&["real/a"])),
             &ws,
+            &[],
             &home
         ));
     }
@@ -211,7 +219,7 @@ fn data_writes(
     effects: &[Effect],
     paths: &[&str],
 ) -> bool {
-    fast_path(&declared(effects, Some(paths)), workspace, home)
+    fast_path(&declared(effects, Some(paths)), workspace, &[], home)
 }
 
 #[test]
@@ -318,7 +326,7 @@ fn other_writes_do_not_take_the_data_directory_fast_path() {
     );
     assert!(!data_writes(&ws, &home, &[Effect::Writes], &[]), "[]");
     assert!(
-        !fast_path(&declared(&[Effect::Writes], None), &ws, &home),
+        !fast_path(&declared(&[Effect::Writes], None), &ws, &[], &home),
         "no paths"
     );
     for effect in [Effect::Executes, Effect::Network] {
@@ -475,6 +483,7 @@ fn a_session_remember_adds_a_grant_the_next_call_judged_matches() {
         &looped.grants,
         &crate::known_hosts::KnownHosts::default(),
         &workspace,
+        &[],
         home.path(),
         &credentials,
         &[],
@@ -2335,4 +2344,65 @@ fn a_cancelled_call_without_loaded_keeps_its_content() {
         completed.payload["content"],
         json!([{"type": "text", "text": "ok\n"}])
     );
+}
+
+/// An acknowledgement recording its answer, failing the test past the
+/// deadline: every blocking wait carries one, so a bug fails instead of
+/// hanging.
+fn capture() -> (Ack, mpsc::Receiver<Answer>) {
+    let (tx, rx) = mpsc::channel();
+    (
+        Ack(Box::new(move |answer| {
+            drop(tx.send(answer));
+        })),
+        rx,
+    )
+}
+
+fn answered(rx: &mpsc::Receiver<Answer>) -> Answer {
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(rx)
+        .expect("the ack runs")
+}
+
+fn writes(paths: &[String]) -> Effects {
+    Effects {
+        declared: DeclaredEffects {
+            effects: vec![Effect::Writes],
+            reversible: false,
+            paths: Some(paths.to_vec()),
+        },
+        subject: Some(String::new()),
+        prefix: None,
+        always_reviewed: false,
+        hosts: None,
+    }
+}
+
+#[test]
+fn a_call_judged_after_adding_a_folder_sees_the_added_root() {
+    let (mut looped, home, _workspace, _credentials) = start(Arc::new(FakeRules::default()));
+    let shared = home.path().join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    let target = shared.join("new.rs").display().to_string();
+    // Before the folder is added the write is reviewed.
+    assert!(matches!(
+        looped.judge_call("write", &writes(std::slice::from_ref(&target))),
+        Verdict::Review
+    ));
+    let (ack, rx) = capture();
+    looped
+        .take_add_directory(
+            contract::commands::AddDirectoryArgs {
+                path: shared.display().to_string(),
+            },
+            ack,
+        )
+        .unwrap();
+    assert!(matches!(answered(&rx), Ok(None)));
+    // After the event is written the same write takes the fast path.
+    assert!(matches!(
+        looped.judge_call("write", &writes(&[target])),
+        Verdict::Allow(None)
+    ));
 }

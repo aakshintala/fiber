@@ -181,6 +181,10 @@ impl DelegateMessage {
                 parent: parent.clone(),
                 prompt: message.clone(),
                 workspace: launch_workspace,
+                // A resume continues the child's own session: its log
+                // already holds every inherited root, so no argv carries
+                // them again.
+                added: Vec::new(),
                 worktree: None,
                 start: Start::Resume,
             };

@@ -60,6 +60,8 @@ pub struct DelegateWiring {
     pub parent: SessionId,
     /// The parent's workspace, which the delegate shares.
     pub workspace: PathBuf,
+    /// Reads the parent's added folders at launch, in fold order.
+    pub inherited: InheritedRoots,
     /// Resolves the child's `events.jsonl` from its selected workspace and id.
     pub events_for: EventsFor,
     /// The session clock.
@@ -101,6 +103,15 @@ pub struct DelegateFork {
 /// Resolves a child's `events.jsonl` using the selected workspace's project
 /// identity, without making `jobs` depend on the session directory layout.
 pub type EventsFor = Arc<dyn Fn(&Path, &SessionId) -> PathBuf + Send + Sync>;
+
+/// Reads the parent's added folders at launch, in fold order: the full
+/// history fold through the current tail, so additions after the wiring
+/// was built are captured (`docs/events.md`, "`directory_added`"). A
+/// fold failure reads as no roots: fewer roots only ever deny, so an
+/// unreadable parent log cannot widen the child. The fork's point still
+/// selects its conversation prefix through [`ForkPoint`]; it never
+/// narrows these roots.
+pub type InheritedRoots = Arc<dyn Fn() -> Vec<PathBuf> + Send + Sync>;
 
 /// Reads the point a fork continues from: the caller wires the reader,
 /// and the fork only calls it. The
@@ -518,6 +529,11 @@ impl DelegateWiring {
                     guard: Some(guard),
                     finish: Arc::clone(&self.finish),
                 });
+                // The added folders read at launch, not at wiring: the
+                // parent's current tail is folded, so additions after
+                // the wiring was built are captured. The fork's point
+                // selects its conversation prefix, never these roots.
+                let added = (self.inherited)();
                 let launched = Launched {
                     depth: self.depth.saturating_add(1),
                     session_id: session_id.clone(),
@@ -527,6 +543,7 @@ impl DelegateWiring {
                     workspace: worktree
                         .as_ref()
                         .map_or(workspace.clone(), |record| PathBuf::from(&record.path)),
+                    added,
                     worktree,
                     start,
                 };
@@ -723,6 +740,7 @@ pub(crate) mod test_rig {
                 registry: Arc::clone(&self.registry),
                 parent: contract::SessionId("s_parent".into()),
                 workspace: self.sessions.parent().unwrap().to_path_buf(),
+                inherited: Arc::new(Vec::new),
                 events_for: Arc::new(move |_, id| sessions.join(&id.0).join("events.jsonl")),
                 clock: Arc::clone(&self.clock) as Arc<dyn contract::clock::Clock>,
                 bound: Duration::from_secs(5),
@@ -762,6 +780,7 @@ pub(crate) mod test_rig {
                 parent: launched.parent.clone(),
                 prompt: launched.prompt.clone(),
                 workspace: launched.workspace.clone(),
+                added: launched.added.clone(),
                 worktree: launched.worktree.clone(),
                 start: launched.start.clone(),
             });
