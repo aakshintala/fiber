@@ -3,6 +3,8 @@
 //! replaces its action's defaults, `[]` unbinds it, and an invalid or
 //! clashing entry gives one notice and keeps the defaults.
 
+use std::collections::BTreeSet;
+
 use serde_json::{Map, Value};
 
 use crate::bindings::BINDINGS;
@@ -398,6 +400,42 @@ fn resolved(event: Option<crate::keys::Event>) -> Resolved {
 }
 
 impl Keyset {
+    /// Whether any person-set row holds `stroke`: a key the person owns
+    /// in the live keyset, in every context (`docs/tui.md`, "When two
+    /// extensions want one slot"). Defaults never count, even where a
+    /// default row keeps its key.
+    pub(crate) fn person_bound_any(&self, stroke: &Stroke) -> bool {
+        self.rows
+            .iter()
+            .any(|row| row.person && row.keys.contains(stroke))
+    }
+
+    /// The checked canonical event for the named action variant: the
+    /// row's event for that variant slot, exactly as the row defines it
+    /// (`docs/tui.md`, "Bindings"). A non-`Canon::Action` event is not
+    /// discarded. `None` only for an unknown id, a missing or unknown
+    /// variant, a variant for a one-variant action, or `clear_then_quit`,
+    /// which cannot be rebound.
+    pub(crate) fn action_event(id: &str, variant: Option<&str>) -> Option<Resolved> {
+        if id == "clear_then_quit" {
+            return None;
+        }
+        let binding = BINDINGS.iter().find(|binding| binding.id == id)?;
+        let variants = binding.events.len().max(1);
+        let slot = match variant {
+            None if variants == 1 => 0,
+            None => return None,
+            Some(_) if variants == 1 => return None,
+            Some(name) => (0..variants).find(|slot| variant_name(id, *slot) == name)?,
+        };
+        let event = binding.events.get(slot)?;
+        Some(match event {
+            Canon::Key(key) => Resolved::Key(key.clone()),
+            Canon::Edit(edit) => Resolved::Edit(edit.clone()),
+            Canon::Action => Resolved::Action(binding.id),
+        })
+    }
+
     /// Whether the person bound `stroke` in `context` themselves: their
     /// own binding wins over the input editor's Home/End line edits
     /// (`docs/tui.md`, "Selection and copy"). Defaults do not count.
@@ -494,6 +532,57 @@ impl Keyset {
             .collect::<Vec<_>>()
             .join(", ")
     }
+}
+
+/// The canonical name of `name`: parsed then rewritten in lowercase with
+/// the modifiers in `ctrl`, `shift`, `alt`, `super` order, or `None` when
+/// it does not parse (`docs/tui.md`, "Bindings"). Whole-screen bindings
+/// and key-slot settings canonicalize through this one parser.
+pub fn canonical_key(name: &str) -> Option<String> {
+    Stroke::parse(name).ok().map(|stroke| stroke.name())
+}
+
+/// Whether (`id`, `variant`) names a bindable action: `None` when valid,
+/// else the reason, naming the action (`docs/tui.md`, "Bindings"). A
+/// variant action names one of its variants; a one-variant action takes
+/// none; `clear_then_quit` cannot be rebound at all.
+pub fn check_action(id: &str, variant: Option<&str>) -> Option<String> {
+    if id == "clear_then_quit" {
+        return Some(format!(
+            "{id} cannot be rebound: Ctrl+C always clears, then quits."
+        ));
+    }
+    let Some(binding) = BINDINGS.iter().find(|binding| binding.id == id) else {
+        return Some(format!("Fiber has no action {id}."));
+    };
+    let variants = binding.events.len().max(1);
+    if variants == 1
+        && let Some(variant) = variant
+    {
+        return Some(format!("{id} takes no `variant`, but names {variant:?}."));
+    }
+    if Keyset::action_event(id, variant).is_none() {
+        let (_, names) = takes(id);
+        return match variant {
+            None => Some(format!("{id} takes a `variant`: {names}.")),
+            Some(variant) => Some(format!("{id} has no variant {variant:?}: {names}.")),
+        };
+    }
+    None
+}
+
+/// The person's canonical key names after clash reversion: the keys of
+/// every entry still set (`docs/tui.md`, "Bindings"). A key the person
+/// owns stays theirs in every context (`docs/tui.md`, "When two
+/// extensions want one slot").
+pub fn person_bound_keys(user: &Map<String, Value>) -> BTreeSet<String> {
+    let (keyset, _) = load(user);
+    BINDINGS
+        .iter()
+        .zip(keyset.rows.iter())
+        .filter(|(_, row)| row.person)
+        .flat_map(|(_, row)| row.keys.iter().map(Stroke::name))
+        .collect()
 }
 
 /// The person's `keys` (`docs/configuration.md`, "Keys"): each action's id

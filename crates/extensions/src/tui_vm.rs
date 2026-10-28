@@ -88,7 +88,8 @@ pub struct Span {
 // at registration, while the VM stores the validated raw value.
 const PRELUDE: &str = r#"
 local create, loading, valid = ...
-local slots, violations = {}, {}
+local slots, violations, key_bindings, key_rejections = {}, {}, {}, {}
+local seen_keys = {}
 local resume, pack, unpack = coroutine.resume, table.pack, table.unpack
 
 coroutine.create = create
@@ -132,6 +133,9 @@ fiber = {
     if type(spec.render) ~= "function" then
       refuse("fiber.slot: `" .. shown .. "`: `render` must be a function")
     end
+    if spec.key ~= nil then
+      refuse("fiber.slot: `" .. shown .. "`: slots take no `key` field")
+    end
     if spec.animate ~= nil then
       if type(spec.animate) ~= "table" then
         refuse("fiber.slot: `" .. shown .. "`: `animate` must be a table with `interval_ms`")
@@ -147,9 +151,87 @@ fiber = {
     end
     slots[name] = { timeout = spec.timeout, render = spec.render, animate = spec.animate }
   end,
+  -- A malformed binding records one rejection and skips that
+  -- registration, leaving the extension loaded; the adapter reports
+  -- each rejection with its named field
+  -- (`docs/tui.md`, "When two extensions want one slot").
+  key = function(name, spec)
+    if not loading() then
+      error("fiber.key: registers only while the extension loads", 2)
+    end
+    if type(name) ~= "string" then
+      key_rejections[#key_rejections + 1] = {
+        reason = "fiber.key: the key must be a string",
+      }
+      return
+    end
+    local function reject(reason)
+      key_rejections[#key_rejections + 1] = {
+        reason = "fiber.key: `" .. name .. "`: " .. reason,
+      }
+    end
+    if type(spec) ~= "table" then
+      reject("takes a table of `timeout` and `run`, or `action` and `variant`")
+      return
+    end
+    local run, action = spec.run, spec.action
+    if run ~= nil and action ~= nil then
+      reject("takes either `run` or `action`, not both")
+      return
+    end
+    if run == nil and action == nil then
+      reject("takes `{ timeout, run }` or `{ action, variant }`")
+      return
+    end
+    if run ~= nil then
+      if spec.timeout == nil then
+        reject("missing `timeout`")
+        return
+      end
+      if math.type(spec.timeout) ~= "integer" or spec.timeout <= 0 then
+        reject("`timeout` must be a whole number of milliseconds above 0")
+        return
+      end
+      if type(run) ~= "function" then
+        reject("`run` must be a function")
+        return
+      end
+      if spec.variant ~= nil then
+        reject("a `run` binding takes no `variant`")
+        return
+      end
+    else
+      if spec.timeout ~= nil then
+        reject("an action binding takes no `timeout`")
+        return
+      end
+      if type(action) ~= "string" then
+        reject("`action` must be a string id")
+        return
+      end
+      if action == "clear_then_quit" then
+        reject("`clear_then_quit` cannot be rebound")
+        return
+      end
+      if spec.variant ~= nil and type(spec.variant) ~= "string" then
+        reject("`variant` must be a string")
+        return
+      end
+    end
+    if seen_keys[name] then
+      reject("is registered twice")
+      return
+    end
+    seen_keys[name] = true
+    if run ~= nil then
+      key_bindings[#key_bindings + 1] = { raw = name, run = run, timeout = spec.timeout }
+    else
+      key_bindings[#key_bindings + 1] = { raw = name, action = action, variant = spec.variant }
+    end
+  end,
 }
 
-return slots, violations
+return slots, violations, key_bindings, key_rejections
 "#;
 
 /// A registered slot: its declared timeout, its renderer, and the raw
@@ -171,6 +253,67 @@ pub struct RenderOut {
     pub continues: bool,
 }
 
+/// A whole-screen key binding's form (`docs/tui.md`, "Input and
+/// focus"): a `run` callback with its declared timeout, or an action
+/// with its optional variant. An action has no timeout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyForm {
+    /// A `run` callback and its declared timeout in milliseconds.
+    Run {
+        /// The declared timeout.
+        timeout: Duration,
+    },
+    /// An action id and its optional variant.
+    Action {
+        /// The action's id.
+        id: String,
+        /// The variant, for an action that takes variants.
+        variant: Option<String>,
+    },
+}
+
+/// One whole-screen key binding, in registration order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyBinding {
+    /// The key name as registered, spelling kept.
+    pub raw: String,
+    /// What the key does.
+    pub form: KeyForm,
+}
+
+/// One skipped `fiber.key` registration: its reason names the offending
+/// field and, for a string key, its spelling, so the adapter reports it
+/// with one notice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyRejection {
+    /// What was wrong, naming the offending field.
+    pub reason: String,
+}
+
+/// A registered key binding: a `run` binding with its callback, or an
+/// action binding. Separate variants so a `run` always holds its callback
+/// and an action never does (`docs/code-quality.md`, "Types").
+enum KeyReg {
+    /// A `run` callback with its declared timeout.
+    Run {
+        /// The key name as registered, spelling kept.
+        raw: String,
+        /// The declared timeout.
+        timeout: Duration,
+        /// The callback.
+        run: Function,
+    },
+    /// An action id with its optional variant.
+    Action {
+        /// The key name as registered, spelling kept.
+        raw: String,
+        /// The action's id.
+        id: String,
+        /// The variant, for an action that takes variants.
+        variant: Option<String>,
+    },
+}
+
 /// One extension's Lua VM, owned by the thread that calls it. It holds a
 /// `Lua`, so it is not `Send`.
 pub struct TuiVm {
@@ -179,6 +322,11 @@ pub struct TuiVm {
     deadline: Deadline,
     clock: Arc<dyn Clock>,
     slots: BTreeMap<String, Slot>,
+    /// The key bindings in registration order: never keyed by name, so
+    /// two spellings of one key keep their order.
+    keys: Vec<KeyReg>,
+    /// The skipped registrations, taken once by the loader.
+    key_rejections: Cell<Vec<KeyRejection>>,
     /// Set by a timeout: the VM answers nothing until the caller drops it
     /// (`docs/tui.md`, "When an extension fails").
     off: bool,
@@ -267,7 +415,7 @@ impl TuiVm {
         let valid = lua
             .create_function(|_, name: String| Ok(slot_name_ok(&name)))
             .map_err(lua_error)?;
-        let (registered, violations): (Table, Table) = lua
+        let (registered, violations, bound, rejected): (Table, Table, Table, Table) = lua
             .load(PRELUDE)
             .set_name("=prelude")
             .call((create, is_loading, valid))
@@ -296,6 +444,38 @@ impl TuiVm {
             (Ok(_), None) => {}
         }
 
+        let mut keys = Vec::new();
+        for number in 1..=bound.raw_len() {
+            let entry: Table = bound.raw_get(number).map_err(lua_error)?;
+            let raw: String = entry.raw_get("raw").map_err(lua_error)?;
+            let run: Option<Function> = entry.raw_get("run").map_err(lua_error)?;
+            let action: Option<String> = entry.raw_get("action").map_err(lua_error)?;
+            match (run, action) {
+                (Some(run), None) => {
+                    let timeout: mlua::Integer = entry.raw_get("timeout").map_err(lua_error)?;
+                    let timeout = u64::try_from(timeout)
+                        .map(Duration::from_millis)
+                        .map_err(|_| shape("`timeout` must be a whole number above 0"))?;
+                    keys.push(KeyReg::Run { raw, timeout, run });
+                }
+                (None, Some(id)) => {
+                    let variant: Option<String> = entry.raw_get("variant").map_err(lua_error)?;
+                    keys.push(KeyReg::Action { raw, id, variant });
+                }
+                _ => {
+                    return Err(shape(
+                        "a key binding holds either `timeout` and `run`, or `action` and `variant`",
+                    ));
+                }
+            };
+        }
+        let mut skipped = Vec::new();
+        for number in 1..=rejected.raw_len() {
+            let entry: Table = rejected.raw_get(number).map_err(lua_error)?;
+            skipped.push(KeyRejection {
+                reason: entry.raw_get("reason").map_err(lua_error)?,
+            });
+        }
         let mut slots = BTreeMap::new();
         for entry in registered.pairs::<String, Table>() {
             let (slot, spec) = entry.map_err(lua_error)?;
@@ -326,6 +506,8 @@ impl TuiVm {
             deadline,
             clock,
             slots,
+            keys,
+            key_rejections: Cell::new(skipped),
             off: false,
         })
     }
@@ -343,6 +525,107 @@ impl TuiVm {
     /// above 0, unclamped: the adapter normalizes to the tick floor.
     pub fn animate(&self, slot: &str) -> Option<Duration> {
         self.slots.get(slot)?.animate
+    }
+
+    /// The key bindings in registration order, raw spellings kept, so two
+    /// spellings of one key keep their order for the adapter to resolve.
+    pub fn key_bindings(&self) -> Vec<KeyBinding> {
+        self.keys
+            .iter()
+            .map(|reg| match reg {
+                KeyReg::Run { raw, timeout, .. } => KeyBinding {
+                    raw: raw.clone(),
+                    form: KeyForm::Run { timeout: *timeout },
+                },
+                KeyReg::Action { raw, id, variant } => KeyBinding {
+                    raw: raw.clone(),
+                    form: KeyForm::Action {
+                        id: id.clone(),
+                        variant: variant.clone(),
+                    },
+                },
+            })
+            .collect()
+    }
+
+    /// The skipped `fiber.key` registrations, taken once: the loader
+    /// reports each with one notice. A second call finds none.
+    pub fn key_rejections(&self) -> Vec<KeyRejection> {
+        self.key_rejections.take()
+    }
+
+    /// The Lua state, for tests to register host callbacks against.
+    #[cfg(test)]
+    pub(crate) fn lua(&self) -> &Lua {
+        &self.lua
+    }
+
+    /// Runs the `raw` binding's `run` with `session_id`, and returns
+    /// whether it handled the key. Only `true` handles; `false` and `nil`
+    /// do not, and any other value is the existing wrong-shape failure.
+    /// An action-only or unknown `raw` name is a programming error, not
+    /// the person's: it answers not-handled with no notice (`docs/tui.md`,
+    /// "When an extension fails").
+    ///
+    /// A timeout switches the VM off: every later call is [`Error::TuiOff`].
+    /// It takes no builtin and no width: a key callback receives only its
+    /// session.
+    pub fn run_key(&mut self, raw: &str, session_id: &str) -> Result<bool, Error> {
+        if self.off {
+            return Err(Error::TuiOff);
+        }
+        let Some(KeyReg::Run { timeout, run, .. }) = self.keys.iter().find(|reg| match reg {
+            KeyReg::Run { raw: name, .. } => name == raw,
+            KeyReg::Action { raw: name, .. } => name == raw,
+        }) else {
+            return Ok(false);
+        };
+        let (timeout, run) = (*timeout, run.clone());
+        let arg = self
+            .lua
+            .create_table()
+            .and_then(|input| {
+                input.raw_set("session_id", session_id)?;
+                Ok(input)
+            })
+            .map_err(lua_error)?;
+        let thread = self.lua.create_thread(run).map_err(lua_error)?;
+        self.deadline.arm(&thread).map_err(lua_error)?;
+        // `None` when the timeout is too large to add to an `Instant`: such
+        // a callback is never cut off.
+        let at = self.clock.now().checked_add(timeout);
+        self.deadline.restore(at);
+        let returned = resume(
+            &self.deadline,
+            &thread,
+            arg,
+            "a key handler makes no host call",
+        );
+        self.deadline.restore(None);
+        // The conversion ran no Lua, but a finish is late when the clock
+        // says so, whichever path it took.
+        let result = if self.deadline.passed() {
+            Err(Error::TuiTimeout)
+        } else {
+            returned
+        };
+        if matches!(result, Err(Error::TuiTimeout)) {
+            self.off = true;
+        }
+        match result? {
+            mlua::Value::Boolean(handled) => Ok(handled),
+            mlua::Value::Nil => Ok(false),
+            mlua::Value::LightUserData(_)
+            | mlua::Value::Integer(_)
+            | mlua::Value::Number(_)
+            | mlua::Value::String(_)
+            | mlua::Value::Table(_)
+            | mlua::Value::Function(_)
+            | mlua::Value::Thread(_)
+            | mlua::Value::UserData(_)
+            | mlua::Value::Error(_)
+            | mlua::Value::Other(_) => Err(shape("a key handler returns only true, false or nil")),
+        }
     }
 
     /// Calls the renderer of `slot` for `session_id` with `input`, an object,

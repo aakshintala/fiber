@@ -1502,7 +1502,8 @@ timeout, render, animate })`, the same shape as `fiber.command` above:
 `timeout` in milliseconds is required, `render` draws the slot, and `animate`
 is present only on a slot that animates (`docs/tui.md`, "Animation"). A
 missing `timeout` fails at registration, as a missing callback `timeout` does
-("How an extension runs").
+("How an extension runs"). A slot takes no `key` field yet: naming one
+refuses the load.
 
 An animated slot declares `animate = { interval_ms = N }`, a whole number of
 milliseconds above 0: below 120 ms the terminal fires at 120 ms instead. Any
@@ -1512,6 +1513,21 @@ plain list or `{ lines }` keeps animating; `{ lines, animate = false }` draws
 once and stops until the input changes. Any other return is the usual
 wrong-shape failure, and a frame past its timeout switches the extension off
 until `/reload`, exactly as a still call does.
+
+### Whole-screen keys
+
+A TUI extension binds whole-screen keys with `fiber.key(name, spec)`,
+registered only while the extension loads, where `spec` is
+`{ timeout, run }` or `{ action, variant }`. `run` is a function taking
+exactly `{ session_id = "…" }` and returning `true` when it handled the
+key; `timeout` is its whole milliseconds above 0. `action` is a built-in
+action id with its optional `variant`, as `keys` binds them
+(`docs/tui.md`, "Bindings"); `clear_then_quit` is never bindable. Any
+other shape records one rejection naming the offending field, skips that
+registration, and loads on. The same canonical names as `keys` apply:
+`Ctrl+O` reads as `ctrl+shift+o` with that modifier, while a second
+spelling of one key, such as `control+o` for `ctrl+o`, is a duplicate and
+keeps the first.
 
 A TUI extension has the host calls that need no session: `host.http`,
 `host.exec`, `host.fs`, `host.config`, `host.data_dir`, `host.after`,
