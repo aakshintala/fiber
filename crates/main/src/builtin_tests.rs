@@ -1181,14 +1181,18 @@ fn the_model_shell_marks_confined_when_on_and_available() {
         deny_read: Vec::new(),
         fiber_home,
     }));
+    let fiber = root.path().join("fiber-stub");
+    let artifacts = root.path().join("artifacts");
+    let images = super::session_images(fiber.clone(), &artifacts, None);
     let (tools, _infos, _driver, _forget, _images) = super::builtin_timed(
-        root.path().join("fiber-stub"),
+        fiber,
         &root.path().join("home"),
         root.path(),
-        &root.path().join("artifacts"),
+        &artifacts,
         &clock,
         &jobs,
         &Arc::new(tools::PathLocks::new()),
+        images,
         None,
         &delegates(),
         skills(),

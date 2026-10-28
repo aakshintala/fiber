@@ -3,7 +3,7 @@
 //! configuration, the installed providers and the credential.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -84,6 +84,8 @@ pub(crate) struct Parts {
     /// The session's per-path lock, shared by the file tools and `host.fs`.
     pub(crate) locks: Arc<tools::PathLocks>,
     pub(crate) mcp: mcp_servers::Specs,
+    /// MCP starts while the session extensions load; joined before tools register.
+    pub(crate) pending_mcp: Option<mcp_servers::PendingMcp>,
     /// The second-model preparation, for `Loop::switcher`.
     pub(crate) switching: switch::Switching,
     /// How a `fiber:` reference resolves for this session's delegates.
@@ -124,6 +126,7 @@ pub(crate) fn parts_with_session<'a>(
     seed: extensions::StateSeed,
     repository: session_extensions::RepositoryScope,
     launch: SessionLaunch,
+    fiber: PathBuf,
 ) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
@@ -143,12 +146,14 @@ pub(crate) fn parts_with_session<'a>(
         seed,
         repository,
         launch,
+        fiber,
     )
 }
 
 #[allow(
     dead_code,
-    reason = "the model/inspection/test entry; live sessions compose through parts_in_session"
+    clippy::too_many_arguments,
+    reason = "the model/inspection/test entry keeps its established composition inputs"
 )]
 pub(crate) fn parts_in(
     home: PathBuf,
@@ -180,6 +185,7 @@ pub(crate) fn parts_in(
         seed,
         repository,
         None,
+        None,
     )
 }
 
@@ -194,6 +200,48 @@ pub(crate) struct SessionLaunch {
     pub reason: contract::events::ExtensionReason,
     /// The log cursor captured before the first process started.
     pub event_cursor: u64,
+}
+
+/// Reads the one startup configuration and constructs its diagnostic writer.
+/// Live sessions run this before starting MCP; other callers use it in
+/// `parts_inner` as before.
+fn load_configuration(
+    home: &Path,
+    workspace: &Path,
+    project: &config::ProjectKey,
+    overrides: &[String],
+    clock: Arc<dyn contract::clock::Clock>,
+    process: log::diag::Process,
+) -> Result<(Config, Arc<log::diag::Diag>, Vec<contract::events::Notice>), Failure> {
+    // The one monotonic read the `startup.config` timer starts from,
+    // taken before configuration is read so the line covers the load
+    // and writer construction.
+    let started = clock.now();
+    let config = Config::load(Sources {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        project: project.clone(),
+        overrides: overrides.to_vec(),
+    })
+    .map_err(|e| failed(e.code(), e))?;
+    let diag = Arc::new(log::diag::Diag::new(
+        home,
+        process,
+        if config::diagnostics_debug(&config) {
+            log::diag::Level::Debug
+        } else {
+            log::diag::Level::Info
+        },
+        clock,
+    ));
+    drop(log::diag::timed(
+        &diag,
+        Op::StartupConfig,
+        None,
+        Some(started),
+    ));
+    let notices = config.notices().to_vec();
+    Ok((config, diag, notices))
 }
 
 /// As [`parts_in`], for a live session: process extensions start under
@@ -219,7 +267,43 @@ pub(crate) fn parts_in_session(
     seed: extensions::StateSeed,
     repository: session_extensions::RepositoryScope,
     launch: SessionLaunch,
+    fiber: PathBuf,
 ) -> Result<Parts, Failure> {
+    let (sessions, project) = ::cli::project_of(&home, &workspace)?;
+    let (config, diag, startup_notices) = load_configuration(
+        &home,
+        &workspace,
+        &project,
+        &overrides,
+        Arc::clone(&clock),
+        process,
+    )?;
+    // Defer configuration refusals until the pending start is joined, after
+    // provider credential discovery keeps its existing startup order.
+    let (mcp_start, mcp) = match mcp_servers::specs(&config) {
+        Ok(mut mcp) => {
+            let start = Ok((
+                std::mem::take(&mut mcp.specs),
+                std::mem::take(&mut mcp.repository),
+            ));
+            (start, mcp)
+        }
+        Err(failure) => (Err(failure), mcp_servers::Specs::default()),
+    };
+    let timing = diag.debugging().then(|| diag.timings());
+    let artifacts = log::SessionDir::new(&sessions, &launch.id).artifacts();
+    let images = crate::builtin::session_images(fiber, &artifacts, timing.clone());
+    let pending_mcp = Some(mcp_servers::start_session_tools(
+        &home,
+        &workspace,
+        &artifacts,
+        &clock,
+        &project,
+        mcp_start,
+        repository.skipped.clone(),
+        images,
+        timing,
+    )?);
     parts_inner(
         home,
         workspace,
@@ -235,6 +319,15 @@ pub(crate) fn parts_in_session(
         seed,
         repository,
         Some(launch),
+        Some((
+            sessions,
+            project,
+            config,
+            diag,
+            startup_notices,
+            mcp,
+            pending_mcp,
+        )),
     )
 }
 
@@ -247,11 +340,10 @@ fn settle<T>(
     extensions: &extensions::SessionExtensions,
     launch: &Option<SessionLaunch>,
 ) -> Result<T, Failure> {
-    result.map_err(|error| {
+    result.inspect_err(|_| {
         if launch.is_some() {
-            let _ = extensions.finish_processes(&support::cancel::Token::new());
+            drop(extensions.finish_processes(&support::cancel::Token::new()));
         }
-        error
     })
 }
 
@@ -265,8 +357,8 @@ fn settle<T>(
     reason = "one extension load: homes, model choice, clock, runner host and launch identity"
 )]
 fn load_session_extensions(
-    home: &PathBuf,
-    workspace: &PathBuf,
+    home: &Path,
+    workspace: &Path,
     project: &config::ProjectKey,
     config: &Config,
     clock: Arc<dyn contract::clock::Clock>,
@@ -284,9 +376,9 @@ fn load_session_extensions(
     let start = extensions::StartContext {
         session_id: launch.id.clone(),
         reason: launch.reason,
-        workspace: workspace.clone(),
+        workspace: workspace.to_path_buf(),
         data_dirs: extensions::DataDirBases {
-            home: home.clone(),
+            home: home.to_path_buf(),
             project: project.clone(),
         },
         drive: None,
@@ -308,7 +400,7 @@ fn load_session_extensions(
         .into_iter()
         .find(|notice| notice.code == contract::ErrorCode::ExtensionRequiredFailed)
     {
-        let _ = set.finish_processes(&support::cancel::Token::new());
+        drop(set.finish_processes(&support::cancel::Token::new()));
         return Err(Failure {
             code: contract::ErrorCode::ExtensionRequiredFailed,
             message: format!(
@@ -325,7 +417,8 @@ fn load_session_extensions(
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "one composition of the session's parts: homes, model choice, clock, runner host and diagnostic process"
+    clippy::type_complexity,
+    reason = "one composition carries shared session inputs and the preloaded config/start owner"
 )]
 fn parts_inner(
     home: PathBuf,
@@ -342,48 +435,34 @@ fn parts_inner(
     seed: extensions::StateSeed,
     repository: session_extensions::RepositoryScope,
     launch: Option<SessionLaunch>,
+    preloaded: Option<(
+        PathBuf,
+        config::ProjectKey,
+        Config,
+        Arc<log::diag::Diag>,
+        Vec<contract::events::Notice>,
+        mcp_servers::Specs,
+        Option<mcp_servers::PendingMcp>,
+    )>,
 ) -> Result<Parts, Failure> {
-    let (sessions, project) = ::cli::project_of(&home, &workspace)?;
-    // The one monotonic read the `startup.config` timer starts from,
-    // taken before the configuration is read so the line covers the
-    // load and the writer's construction. At `info` the timer stays
-    // shut, so this stamp is the only extra cost.
-    let started = clock.now();
-    let config = Config::load(Sources {
-        home: home.clone(),
-        workspace: workspace.clone(),
-        project: project.clone(),
-        overrides: overrides.clone(),
-    })
-    .map_err(|e| failed(e.code(), e))?;
-    // One writer for the process, at the configured level: the session's
-    // loop, its factories and its exit sample share it once the durable
-    // log exists. A process reads the level when it starts, so a changed
-    // value reaches new processes only.
-    let diag = Arc::new(log::diag::Diag::new(
-        &home,
-        process,
-        if config::diagnostics_debug(&config) {
-            log::diag::Level::Debug
-        } else {
-            log::diag::Level::Info
-        },
-        Arc::clone(&clock),
-    ));
-    // The configuration timer ends here, dropped at once so it covers
-    // the load and the writer above and ends before any extension work.
-    // A failed load returns before any writer exists, so it writes
-    // nothing and nothing re-reads the configuration.
-    drop(log::diag::timed(
-        &diag,
-        Op::StartupConfig,
-        None,
-        Some(started),
-    ));
-    // Configuration notices first, then loading, discovery and
-    // placeholders, then the thinking notice below: each load's notices
-    // are emitted once, after `fiber_started` with the MCP notices.
-    let mut startup_notices: Vec<contract::events::Notice> = config.notices().to_vec();
+    let (sessions, project, config, diag, mut startup_notices, preloaded_mcp, pending_mcp) =
+        match preloaded {
+            Some((sessions, project, config, diag, notices, mcp, pending)) => {
+                (sessions, project, config, diag, notices, Some(mcp), pending)
+            }
+            None => {
+                let (sessions, project) = ::cli::project_of(&home, &workspace)?;
+                let (config, diag, notices) = load_configuration(
+                    &home,
+                    &workspace,
+                    &project,
+                    &overrides,
+                    Arc::clone(&clock),
+                    process,
+                )?;
+                (sessions, project, config, diag, notices, None, None)
+            }
+        };
     // Loading extensions runs under its own timer, from the installed
     // provider packages through the session extensions' load. The budget
     // read above stays outside, and the diagnostics below stay outside:
@@ -696,7 +775,10 @@ fn parts_inner(
         });
     }
     let sandbox = std::sync::Arc::new(std::sync::Mutex::new(sandbox_settings));
-    let mut mcp = settle(mcp_servers::specs(&config), &extensions, &launch)?;
+    let mut mcp = match preloaded_mcp {
+        Some(mcp) => mcp,
+        None => settle(mcp_servers::specs(&config), &extensions, &launch)?,
+    };
     mcp.notices.splice(0..0, startup_notices);
     Ok(Parts {
         sources: Sources {
@@ -737,6 +819,7 @@ fn parts_inner(
         locks,
         extensions,
         mcp,
+        pending_mcp,
         switching,
         // The startup model's `:level` suffix, if any: a resume with
         // `--model <m>:<level>` passes one with its per-run model, else the

@@ -56,14 +56,10 @@ impl Env {
     /// the process runs the fixture example in `peer` mode with `config`.
     fn install_process(&self, short: &str, extra: &Value, config: &Value) {
         let (program, argv) = ProcessFixture::command("peer", Some(config));
-        let mut args = vec![argv[0].clone()];
-        args.extend(argv[1..].iter().cloned());
+        let args = argv.into_iter().map(Value::String).collect::<Vec<_>>();
         let mut process = serde_json::Map::new();
         process.insert("program".to_owned(), json!(program.display().to_string()));
-        process.insert(
-            "args".to_owned(),
-            Value::Array(args.into_iter().map(Value::String).collect()),
-        );
+        process.insert("args".to_owned(), Value::Array(args));
         process.insert("exit_timeout_ms".to_owned(), json!(1000));
         let mut manifest = json!({
             "name": format!("fiber.test/{short}"),
@@ -86,7 +82,10 @@ impl Env {
                 }
                 continue;
             }
-            manifest[key.clone()] = value.clone();
+            manifest
+                .as_object_mut()
+                .unwrap()
+                .insert(key.clone(), value.clone());
         }
         let source = self.root.path().join("src").join(short);
         write(&source.join("extension.json"), &manifest.to_string());
@@ -372,7 +371,9 @@ fn process_session_load_registers_tool_and_hook_with_complete_hello() {
         .iter()
         .filter_map(|part| match part {
             contract::shapes::ContentPart::Text { text } => Some(text.as_str()),
-            _ => None,
+            contract::shapes::ContentPart::Image { .. }
+            | contract::shapes::ContentPart::Pdf(_)
+            | contract::shapes::ContentPart::Unknown => None,
         })
         .collect();
     assert_eq!(text, vec!["probe-ok"]);
@@ -393,7 +394,11 @@ fn process_session_load_registers_tool_and_hook_with_complete_hello() {
         contract::hook::AfterToolOutcome::Changed { content, .. } => {
             assert_eq!(content.as_deref(), Some("hooked-content"));
         }
-        outcome => panic!("the hook changes the outcome, not {outcome:?}"),
+        outcome @ contract::hook::AfterToolOutcome::Unchanged
+        | outcome @ contract::hook::AfterToolOutcome::Failed(_)
+        | outcome @ contract::hook::AfterToolOutcome::Withheld { .. } => {
+            panic!("the hook changes the outcome, not {outcome:?}")
+        }
     }
     assert_eq!(answer.changed_by, vec!["fiber.test/proc".to_owned()]);
     session.finish_processes(&cancel);
@@ -446,9 +451,12 @@ impl contract::extension::HostDelegate for FakeDelegate {
     }
 }
 
+/// One command recorded by the fake driver.
+type DriveCall = (String, String, Map<String, Value>);
+
 /// A fake driver: records the commands it receives and answers nothing.
 struct FakeDrive {
-    received: std::sync::Mutex<Vec<(String, String, Map<String, Value>)>>,
+    received: std::sync::Mutex<Vec<DriveCall>>,
 }
 
 impl FakeDrive {

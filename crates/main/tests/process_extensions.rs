@@ -15,7 +15,7 @@
 mod support;
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 
@@ -266,17 +266,25 @@ fn process_hello_carries_session_identity_workspace_and_data_dirs() {
 }
 
 /// Configures one fixture MCP server `fx` in `dir` behind a rendezvous
-/// wrapper: the wrapper makes the `gate` FIFO, blocks writing `started`
-/// to it until the process peer opens it for reading, records
-/// `mcp-started`, then execs the real fixture server. The MCP handshake
-/// therefore cannot complete before the peer arrives, and the peer's
-/// `wait_fifo` cannot pass before this wrapper starts: only a
-/// concurrent start opens both ends.
+/// wrapper: setup creates the `gate` FIFO before either owner starts; the
+/// wrapper opens it for writing, records `mcp-started`, then execs the real
+/// fixture server. The MCP handshake cannot complete before the peer
+/// arrives, and the peer's `wait_fifo` cannot pass before this wrapper
+/// starts: only a concurrent start opens both ends.
 fn configure_gated_fx(setup: &Setup, dir: &Path) {
+    let gate = dir.join("gate");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&gate)
+            .status()
+            .unwrap()
+            .success(),
+        "the gate FIFO is created before session startup"
+    );
     let wrapper = dir.join("gate-wrapper.sh");
     std::fs::write(
         &wrapper,
-        "#!/bin/bash\ndir=\"$1\"\nfixture=\"$2\"\nmkfifo \"$dir/gate\"\nprintf started > \"$dir/gate\"\nprintf started > \"$dir/mcp-started\"\nexec /bin/bash \"$fixture\" \"$dir\"\n",
+        "#!/bin/bash\ndir=\"$1\"\nfixture=\"$2\"\nprintf started > \"$dir/gate\"\nprintf started > \"$dir/mcp-started\"\nexec /bin/bash \"$fixture\" \"$dir\"\n",
     )
     .unwrap();
     let mode = std::fs::metadata(&wrapper).unwrap().permissions().mode();
@@ -294,6 +302,29 @@ fn configure_gated_fx(setup: &Setup, dir: &Path) {
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "mcp": {"servers": {"fx": server}}}),
     );
+}
+
+fn configure_plain_fx(setup: &Setup, dir: &Path) -> (PathBuf, PathBuf) {
+    std::fs::create_dir_all(dir).unwrap();
+    let wrapper = dir.join("fx-wrapper.sh");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/bash\ndir=\"$1\"\nfixture=\"$2\"\nprintf '%s\\n' \"$$\" > \"$dir/mcp-pid\"\nprintf started > \"$dir/mcp-started\"\nexec /bin/bash \"$fixture\" \"$dir\"\n",
+    )
+    .unwrap();
+    let mode = std::fs::metadata(&wrapper).unwrap().permissions().mode();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(mode | 0o111)).unwrap();
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "fake/m",
+            "mcp": {"servers": {"fx": {
+                "command": "/bin/bash",
+                "args": [wrapper.display().to_string(), dir.display().to_string(), fakes::mcp_fixture().display().to_string()]
+            }}}
+        }),
+    );
+    (dir.join("mcp-started"), dir.join("mcp-pid"))
 }
 
 /// The peer plan that rendezvouses with the MCP wrapper before
@@ -663,4 +694,92 @@ fn process_and_mcp_start_in_parallel() {
     let completed = run.payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     assert!(fx.join("mcp-started").is_file(), "the MCP wrapper started");
+}
+
+/// A required process startup failure drops its pending MCP owner: the
+/// start joins, then stops and reaps the MCP server before the session fails.
+#[test]
+fn required_process_failure_stops_pending_mcp() {
+    let setup = Setup::new();
+    let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
+    let provider = calling(&[]);
+    setup.provider(&provider);
+    let (started, pid_file) = configure_plain_fx(&setup, &setup.workspace().join("fx"));
+    let process_plan = json!([
+        {"read": {"as": "hello"}},
+        {"hold": {"release_on": "never"}},
+    ]);
+    process_with(
+        &setup,
+        "required",
+        &json!({"required": true}),
+        &process_plan,
+    );
+
+    let run = run_ask(&setup, "say hi");
+    assert_ne!(run.code, Some(0), "the required process miss fails start");
+    assert!(
+        started.is_file(),
+        "MCP started before process loading failed"
+    );
+    let pid: u32 = std::fs::read_to_string(pid_file)
+        .expect("the wrapper records its pid")
+        .trim()
+        .parse()
+        .expect("the pid is numeric");
+    assert!(!fakes::pid_alive(pid), "the pending MCP server was reaped");
+    assert!(
+        fakes::matching_exits(
+            &setup.root.path().display().to_string(),
+            setup.deadline.cleanup_phase()
+        ),
+        "all startup children are gone"
+    );
+}
+
+/// A required MCP failure after process activation finishes the process
+/// owner before returning, so neither startup side survives the rejection.
+#[test]
+fn required_mcp_failure_finishes_process_owner() {
+    let setup = Setup::new();
+    let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
+    let provider = calling(&[]);
+    setup.provider(&provider);
+    let missing = setup.workspace().join("missing-mcp-server");
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "fake/m",
+            "mcp": {"servers": {"broken": {
+                "command": missing.display().to_string(),
+                "required": true
+            }}}
+        }),
+    );
+    let hello_marker = setup.workspace().join("hello.json");
+    process_with(
+        &setup,
+        "ready",
+        &json!({}),
+        &tool_hook_plan(hello_marker.to_str().unwrap()),
+    );
+
+    let run = run_ask(&setup, "say hi");
+    assert_ne!(run.code, Some(0), "the required MCP miss fails start");
+    assert!(
+        run.stderr.contains("MCP server `broken`"),
+        "the failure names the required server: {}",
+        run.stderr
+    );
+    assert!(
+        hello_marker.is_file(),
+        "the process owner started and readied"
+    );
+    assert!(
+        fakes::matching_exits(
+            &setup.root.path().display().to_string(),
+            setup.deadline.cleanup_phase()
+        ),
+        "all startup children are gone"
+    );
 }

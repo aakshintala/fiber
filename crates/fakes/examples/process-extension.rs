@@ -288,8 +288,8 @@ fn run_action(
                 .and_then(|object| object.get("path"))
                 .and_then(Value::as_str)
                 .ok_or_else(|| "wait_fifo needs a path".to_owned())?;
-            let mut fifo = std::fs::File::open(path)
-                .map_err(|err| format!("open fifo {path}: {err}"))?;
+            let mut fifo =
+                std::fs::File::open(path).map_err(|err| format!("open fifo {path}: {err}"))?;
             let mut drained = Vec::new();
             fifo.read_to_end(&mut drained)
                 .map_err(|err| format!("drain fifo {path}: {err}"))?;

@@ -464,6 +464,10 @@ impl SessionExtensions {
     /// misses it is left out with a notice, and a required miss carries
     /// the required code the composition gate fails the session with.
     /// `restart` names the lazy extensions to start, as a reload passes.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one live session load carries its context and existing shared services"
+    )]
     pub fn load_session(
         home: &Path,
         config: &Config,
@@ -1273,7 +1277,7 @@ impl SessionExtensions {
         if pumped.is_err() {
             // The child runs with nobody pumping it: shut it down bounded
             // and leave it out, as a wedged startup.
-            let _ = owner.finish(Duration::ZERO, &support::cancel::Token::new());
+            drop(owner.finish(Duration::ZERO, &support::cancel::Token::new()));
             Self::process_failed(
                 session,
                 &name,
@@ -1287,7 +1291,7 @@ impl SessionExtensions {
         }
         // The thread ends when the child closes; the shutdown below owns
         // the child from here, and `finish_processes` reaps it at the end.
-        let _ = pumped;
+        drop(pumped);
         let allowance = config
             .get(&format!("extensions.\"{name}\".startup_timeout_ms"), None)
             .and_then(|(value, _)| value.as_u64())
@@ -1297,12 +1301,12 @@ impl SessionExtensions {
             // The wedged child may ignore end of input, so the shutdown
             // escalates through TERM to KILL under the manifest's exit
             // allowance; no descendant outlives the load.
-            let _ = owner.finish(exit_timeout, &support::cancel::Token::new());
+            drop(owner.finish(exit_timeout, &support::cancel::Token::new()));
             // The deadline path already killed the child; reap it and join
             // its threads, since the failed owner never reaches the
             // session's finish list.
             let live = owner.transport();
-            let _ = live.wait_exit();
+            drop(live.wait_exit());
             live.join();
             Self::process_failed(session, &name, &error, required);
             return;
