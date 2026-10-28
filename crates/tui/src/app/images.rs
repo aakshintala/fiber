@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use serde_json::{Value, json};
 
 use super::{App, Effect, Target, mint};
+use crate::event_loop::kitty_writer;
 use crate::image;
 
 /// One `read_file` out for a viewer open: what its answer needs to
@@ -72,7 +73,7 @@ pub(crate) struct Images {
     pub(super) id_allocator: image::IdAllocator,
     /// The session-change deletes queued for the loop's pre-draw drain:
     /// shown images leave the terminal before the next session draws.
-    deletes: Vec<u8>,
+    deletes: Vec<kitty_writer::Delete>,
     out: image::Out,
     generation: u64,
     /// The queued conversions in asking order, holding their base64
@@ -251,14 +252,13 @@ impl App {
         };
         let columns = self.screen.pages().wrap_width();
         let (cols, rows) = crate::image::grid(&part, columns, cell);
-        self.images
-            .out
-            .kitty
-            .extend(crate::graphics::transmit(fetch.id, data));
-        self.images
-            .out
-            .kitty
-            .extend(crate::graphics::place(fetch.id, cols, rows));
+        // An empty transmit still sends its place: the writer carries the
+        // empty chunk list and the place as one item.
+        self.images.out.items.push(kitty_writer::Item::Image {
+            id: fetch.id,
+            chunks: crate::graphics::transmit(fetch.id, data),
+            place: crate::graphics::place(fetch.id, cols, rows),
+        });
         self.images.transmitted.insert(fetch.id, fetch.generation);
         self.images.display.insert(
             key,
@@ -432,8 +432,36 @@ impl App {
 
     /// The queued session-change deletes, for the loop's pre-draw drain:
     /// shown images leave the terminal before the next session draws.
-    pub(crate) fn take_image_deletes(&mut self) -> Vec<u8> {
+    pub(crate) fn take_image_deletes(&mut self) -> Vec<kitty_writer::Delete> {
         std::mem::take(&mut self.images.deletes)
+    }
+
+    /// Restores the display queue after handing the terminal to another
+    /// program and taking it back: images the writer still holds stay shown
+    /// and are sent again whole, while dropped shown images go back to
+    /// asked with a fresh `read_file` each, so on-screen and off-screen
+    /// images alike are re-fetched and converted without re-decoding
+    /// writer-held payloads (`docs/tui.md`, "Images"). The loop drains
+    /// these requests after the first post-resume frame draws.
+    pub(crate) fn images_after_handover(&mut self, retained: Vec<u32>) {
+        for ((session, path), fetch) in self.images.display.iter_mut() {
+            if fetch.state != DisplayState::Shown {
+                continue;
+            }
+            if retained.contains(&fetch.id) {
+                continue;
+            }
+            let command_id = mint();
+            let line = serde_json::json!({
+                "id": command_id.clone(),
+                "command": "read_file",
+                "args": {"session": session, "path": path},
+            })
+            .to_string();
+            self.images.out.display.push(line);
+            fetch.command = command_id;
+            fetch.state = DisplayState::Asked;
+        }
     }
 
     /// The queued display commands and kitty transmit and place bytes,
@@ -464,9 +492,13 @@ impl App {
         // child keeps the one-worker slot until its completion frees it.
         self.images.convert_queue.clear();
         self.images.out = image::Out::default();
+        self.images.out.purge = true;
         self.images.deletes.clear();
         for id in shown {
-            self.images.deletes.extend(crate::graphics::delete(id));
+            self.images.deletes.push(kitty_writer::Delete {
+                id,
+                bytes: crate::graphics::delete(id),
+            });
         }
         self.images.generation = self.images.generation.saturating_add(1);
         self.images.id_allocator.advance_generation();

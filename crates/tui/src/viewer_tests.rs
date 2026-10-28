@@ -56,6 +56,7 @@ fn viewed(rx: &mpsc::Receiver<Input>) -> Result<(), String> {
             | Input::HooksOfferNames { .. }
             | Input::HooksInstalled { .. }
             | Input::Login { .. }
+            | Input::KittyFailed
             | Input::Tick,
         ) => panic!("the worker answered something else"),
         Err(err) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the worker: {err}"),

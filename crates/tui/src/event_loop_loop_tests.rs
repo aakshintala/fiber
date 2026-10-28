@@ -172,6 +172,13 @@ fn inline_opened(
         Screen::new(TestBackend::new(60, 24), 60, 24).unwrap_or_else(|err| panic!("screen: {err}"));
     let mut lp = Loop::for_test(app, screen);
     lp.hub.store(ours);
+    // A writable tty for the image writer's clone: the file is unlinked
+    // at once, so no directory outlives the test, while the open file
+    // still takes the writer's chunks.
+    let tty_dir = fakes::TempDir::new("tui-image-tty");
+    lp.tty = std::fs::File::create(tty_dir.path().join("tty"))
+        .unwrap_or_else(|err| panic!("tty: {err}"));
+    drop(tty_dir);
     let (tx, rx) = mpsc::channel();
     (lp, theirs, tx, rx)
 }
@@ -320,6 +327,54 @@ fn read_display_id(theirs: &UnixStream) -> String {
     panic!("no display fetch reached the hub");
 }
 
+/// Reads the writer's bytes until every needle arrived, within
+/// [`DEADLINE`], returning them with the read end for the next phase: the
+/// writer sends after the step returns, so the test waits for the bytes
+/// rather than racing the writer thread.
+#[track_caller]
+fn read_until(read: std::fs::File, needles: &[&str]) -> mpsc::Receiver<(Vec<u8>, std::fs::File)> {
+    let needles: Vec<Vec<u8>> = needles
+        .iter()
+        .map(|needle| needle.as_bytes().to_vec())
+        .collect();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("loop-tty-read".to_owned())
+        .spawn(move || {
+            let mut read = read;
+            let mut bytes = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                match std::io::Read::read(&mut read, &mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        bytes.extend_from_slice(&chunk[..n]);
+                        if needles.iter().all(|needle| {
+                            bytes
+                                .windows(needle.len())
+                                .any(|window| window == needle.as_slice())
+                        }) {
+                            break;
+                        }
+                    }
+                    Err(err) => panic!("tty: {err}"),
+                }
+            }
+            done.send((bytes, read)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    finished
+}
+
+/// The read bytes within [`DEADLINE`].
+#[track_caller]
+fn recv_wire(rx: &mpsc::Receiver<(Vec<u8>, std::fs::File)>) -> (Vec<u8>, std::fs::File) {
+    match Deadline::after(DEADLINE).recv(rx) {
+        Ok(done) => done,
+        Err(err) => panic!("waited {DEADLINE:?} for tty bytes: {err}"),
+    }
+}
+
 /// Steps the loop once, on a thread: a frame that waits on the hub
 /// would hang the test, so the join carries [`DEADLINE`].
 fn stepped(
@@ -367,9 +422,11 @@ fn a_graphics_error_event_fails_the_transmitted_image() {
 #[test]
 fn a_session_change_deletes_the_shown_image_and_the_next_session_shows() {
     let (mut lp, theirs, tx, rx) = inline_opened(image_session());
-    let dir = fakes::TempDir::new("tui-image-delete-order");
-    let path = dir.path().join("tty");
-    lp.tty = std::fs::File::create(&path).unwrap_or_else(|err| panic!("tty: {err}"));
+    // A pipe tty: the writer's bytes arrive in order, and the test reads
+    // them with a deadline rather than racing the writer thread.
+    let (tty_read, tty_write) = std::io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    lp.tty = std::fs::File::from(std::os::fd::OwnedFd::from(tty_write));
+    let mut tty_read = std::fs::File::from(std::os::fd::OwnedFd::from(tty_read));
     // Nothing reaches the hub before the first frame draws: the drain
     // after the draw sends the frame's fetches.
     theirs
@@ -386,11 +443,12 @@ fn a_session_change_deletes_the_shown_image_and_the_next_session_shows() {
     // The first frame draws the image and asks for its bytes.
     let (lp, rx) = stepped(lp, rx, Input::Tick);
     let id = read_display_id(&theirs);
-    // The PNG answer transmits and places exactly once.
+    // The PNG answer transmits and places, through the writer thread.
     let (mut lp, rx) = stepped(lp, rx, display_answer(&id));
     drop(tx);
-    let wire = || std::fs::read(&path).unwrap_or_else(|err| panic!("tty: {err}"));
-    let text = String::from_utf8_lossy(&wire()).into_owned();
+    let (sent, read) = recv_wire(&read_until(tty_read, &["Ga=t,", "Ga=p,"]));
+    tty_read = read;
+    let text = String::from_utf8_lossy(&sent).into_owned();
     text.find("Ga=t,").expect("the transmit went out");
     text.find("Ga=p,").expect("the place went out");
     // The session changes: the shown image is forgotten, and the next
@@ -400,8 +458,10 @@ fn a_session_change_deletes_the_shown_image_and_the_next_session_shows() {
     for envelope in image_session() {
         lp.app.on_line(Line::Session(envelope));
     }
-    // The loop drains the queued delete in its pre-draw phase.
+    // The loop drains the queued delete in its pre-draw phase and waits
+    // for it to reach the wire, so no frame overtakes the delete.
     lp.drain_image_deletes();
+    super::tests::flush_kitty(&lp);
     assert!(
         lp.app.take_image_deletes().is_empty(),
         "the pre-draw drain empties the queue"
@@ -409,8 +469,9 @@ fn a_session_change_deletes_the_shown_image_and_the_next_session_shows() {
     let (lp, rx) = stepped(lp, rx, Input::Tick);
     let other = read_display_id(&theirs);
     let (lp, _) = stepped(lp, rx, display_answer(&other));
+    let (later, _read) = recv_wire(&read_until(tty_read, &["Ga=d,", "Ga=t,"]));
     drop(lp);
-    let text = String::from_utf8_lossy(&wire()).into_owned();
+    let text = String::from_utf8_lossy(&later).into_owned();
     assert!(text.contains("Ga=d,"), "the old image delete went out");
     assert!(text.contains("Ga=t,"), "the next session image transmits");
 }
@@ -641,7 +702,8 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::Login { .. }
             | Input::Image { .. }
             | Input::Feedback(_)
-            | Input::Viewed { .. } => "other".to_owned(),
+            | Input::Viewed { .. }
+            | Input::KittyFailed => "other".to_owned(),
             Input::Converted { .. } => "other".to_owned(),
             Input::Resize => "resize".to_owned(),
         })
@@ -2831,7 +2893,8 @@ fn hooks_results_waiting_on_history_are_stashed_then_folded_stale() {
             | Input::Login { .. }
             | Input::Install { .. }
             | Input::Tick
-            | Input::Signal(_) => "other".to_owned(),
+            | Input::Signal(_)
+            | Input::KittyFailed => "other".to_owned(),
         })
         .collect();
     assert_eq!(held, ["names", "installed"]);

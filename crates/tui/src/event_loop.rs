@@ -5,11 +5,13 @@
 
 pub(crate) mod batch;
 mod hub;
+pub(crate) mod kitty_writer;
 #[cfg(test)]
 mod pause;
 
 use batch::batchable;
 use hub::Connection;
+use kitty_writer::{Item, KittyWriter, TtyLock};
 
 use std::ffi::OsString;
 use std::fs::File;
@@ -285,6 +287,11 @@ pub(crate) fn run_with(
         parser: Parser::default(),
         screen,
         hub: Connection::new(Arc::clone(&retry)),
+        kitty_writer: None,
+        tty_lock: Arc::new(TtyLock::new()),
+        kitty_failed: Arc::new(AtomicBool::new(false)),
+        handover_retained: Vec::new(),
+        pending_resume: false,
         tty,
         on_attach,
         clock,
@@ -321,6 +328,10 @@ pub(crate) fn run_with(
     }
     let code = terminal.run(&rx);
     terminal.tick.stop();
+    // The writer goes before the hub hangs up and the guard drops: Stop
+    // sends its mandatory abort delete at the next chunk boundary, then
+    // drops queued payloads and joins.
+    terminal.stop_kitty();
     // One resume line per live session: collected first, then the hub
     // hangs up, the terminal is restored, and the lines print in cooked
     // mode, each ending in a newline.
@@ -400,6 +411,22 @@ struct Loop<B: Backend> {
     /// The hub connection: the stream, the held inputs and the hub
     /// thread's permit, reached only through its interface.
     hub: Connection,
+    /// The image writer thread, spawned lazily on the first non-empty
+    /// handoff: the sole owner of its teardown.
+    kitty_writer: Option<KittyWriter>,
+    /// The terminal-output lock arbitrating loop writes against writer
+    /// chunks. Guards cover actual tty writes only, never event dispatch.
+    tty_lock: Arc<TtyLock>,
+    /// Set when a tty write fails: the loop takes the terminal-failure
+    /// path from the next frame top, and an idle loop wakes through
+    /// [`Input::KittyFailed`].
+    kitty_failed: Arc<AtomicBool>,
+    /// Image ids the paused writer still holds, taken by `hand_over` for
+    /// the post-resume replay.
+    handover_retained: Vec<u32>,
+    /// Set after a successful resume: the first post-resume frame sends
+    /// Resume after its draw.
+    pending_resume: bool,
     /// The tty, for its size on resize.
     tty: File,
     on_attach: OnAttach,
@@ -567,6 +594,8 @@ impl<B: Backend> Loop<B> {
                     self.clock.now(),
                 ),
                 Event::Reply(Reply::KittyFlags(_)) => {
+                    let lock = Arc::clone(&self.tty_lock);
+                    let _guard = lock.loop_write();
                     self.kitty();
                     Effect::None
                 }
@@ -583,6 +612,8 @@ impl<B: Backend> Loop<B> {
             match effect {
                 Effect::None => {}
                 Effect::Copy(text) => {
+                    let lock = Arc::clone(&self.tty_lock);
+                    let _guard = lock.loop_write();
                     clipboard::copy(
                         Some(&self.tty),
                         self.programs.copy.as_deref(),
@@ -714,6 +745,10 @@ impl<B: Backend> Loop<B> {
             // A signal quits with 128 plus its number, closing nothing
             // first: live sessions keep their resume lines.
             Input::Signal(signal) => return Some(128 + signal),
+            // A failed Kitty write drops every pending image and writes
+            // nothing further: the loop quits through the failed-draw
+            // exit, closing nothing first.
+            Input::KittyFailed => return Some(1),
             Input::Bytes(bytes) => {
                 let events = self.parser.feed(&bytes);
                 return self.handle_events(events);
@@ -799,6 +834,8 @@ impl<B: Backend> Loop<B> {
                     self.app
                         .set_cell(term::cell(term::pixels(&self.tty), (width, height)));
                     self.app.set_size(width, height);
+                    let lock = Arc::clone(&self.tty_lock);
+                    let _guard = lock.loop_write();
                     if self.screen.resize(width, height).is_err() {
                         return Some(1);
                     }
@@ -812,6 +849,13 @@ impl<B: Backend> Loop<B> {
     /// batch, after every input in it is handled. Returns the exit code
     /// when the terminal cannot be drawn.
     fn frame(&mut self, rx: &Receiver<Input>) -> Option<i32> {
+        // A failed Kitty write ends the loop from the next frame top: no
+        // further frame, title, shape, alert or delete write starts. A
+        // loop write already running may be attempted before this check,
+        // but a failed tty contributes no bytes.
+        if self.kitty_failed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Some(1);
+        }
         // A frame past its 16 ms budget writes `tui.frame`; one within
         // budget writes no line, so scrolling leaves the log small.
         let _frame = self.timing.frame();
@@ -874,8 +918,21 @@ impl<B: Backend> Loop<B> {
         // already past the fade expires before arming and never draws
         // twice.
         self.app.sweep_notices(self.clock.now());
-        if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
+        let lock = Arc::clone(&self.tty_lock);
+        let draw_failed = {
+            let _guard = lock.loop_write();
+            self.screen.draw(&mut self.app, self.pointer.at).is_err()
+        };
+        if draw_failed {
             return Some(1);
+        }
+        // After the first post-handover draw, the writer restarts its
+        // retained images whole; the re-fetched requests drain below.
+        if self.pending_resume {
+            self.pending_resume = false;
+            if let Some(writer) = &self.kitty_writer {
+                writer.resume_after_handover();
+            }
         }
         // The retained count reads after the first frame draws and
         // before the `full` raise goes out below, so no ancestor window
@@ -929,30 +986,110 @@ impl<B: Backend> Loop<B> {
         }
     }
 
-    /// Writes the queued session-change deletes before the screen draw:
-    /// a later session reuses image ids from 1, so its first frame never
-    /// draws under a stale image (`docs/tui.md`, "Images").
+    /// Hands the queued session-change deletes to the writer before the
+    /// screen draw, then waits for them to reach the wire: a later session
+    /// reuses image ids from 1, so its first frame never draws under a
+    /// stale image (`docs/tui.md`, "Images"). The ack means every delete
+    /// up to the barrier is on the wire, not that payloads are drained;
+    /// its bound is at most two chunk writes plus scheduling.
     fn drain_image_deletes(&mut self) {
         let deletes = self.app.take_image_deletes();
-        if !deletes.is_empty() {
-            let mut tty = &self.tty;
-            tty.write_all(&deletes).unwrap_or(());
+        if deletes.is_empty() {
+            return;
+        }
+        if !self.ensure_kitty_writer() {
+            return;
+        }
+        let Some(writer) = &self.kitty_writer else {
+            return;
+        };
+        for delete in deletes {
+            if !writer.push(Item::Delete(delete)) {
+                self.kitty_failed();
+                return;
+            }
+        }
+        if !writer.barrier() {
+            self.kitty_failed();
         }
     }
 
-    /// Sends the display `read_file` commands the frame drew, and writes
-    /// the kitty transmit and place bytes their answers queued, after the
-    /// screen draw: each posting reaches the terminal through one write
-    /// (`docs/tui.md`, "Images"). Then starts the next queued converter
-    /// while the one worker is free, without waiting on the child.
+    /// Sends the display `read_file` commands the frame drew, and hands
+    /// the kitty transmit and place items their answers queued to the
+    /// writer thread, after the screen draw (`docs/tui.md`, "Images").
+    /// The purge a session change queued goes before later items. Then
+    /// starts the next queued converter while the one worker is free,
+    /// without waiting on the child.
     fn drain_display(&mut self) {
         let out = self.app.take_image_out();
         self.hub.send(&out.display, &mut self.app);
-        if !out.kitty.is_empty() {
-            let mut tty = &self.tty;
-            tty.write_all(&out.kitty).unwrap_or(());
+        if out.purge || !out.items.is_empty() {
+            if !self.ensure_kitty_writer() {
+                self.start_next_convert();
+                return;
+            }
+            let Some(writer) = &self.kitty_writer else {
+                self.start_next_convert();
+                return;
+            };
+            if out.purge && !writer.push_purge() {
+                self.kitty_failed();
+                self.start_next_convert();
+                return;
+            }
+            for item in out.items {
+                if !writer.push(item) {
+                    self.kitty_failed();
+                    break;
+                }
+            }
         }
         self.start_next_convert();
+    }
+
+    /// Spawns the writer on the first non-empty handoff, cloning the
+    /// loop's current tty then. Empty handoffs never spawn. False when the
+    /// tty cannot be cloned or the thread cannot start: the terminal is
+    /// failing, so the loop takes the terminal-failure path.
+    fn ensure_kitty_writer(&mut self) -> bool {
+        if self.kitty_writer.is_some() {
+            return true;
+        }
+        let Ok(tty) = self.tty.try_clone() else {
+            self.kitty_failed();
+            return false;
+        };
+        let gate = Arc::new(kitty_writer::KittyChunkGate::new(false));
+        let Some(writer) = KittyWriter::spawn(
+            tty,
+            gate,
+            Arc::clone(&self.kitty_failed),
+            self.files_out.clone(),
+            Arc::clone(&self.tty_lock),
+        ) else {
+            self.kitty_failed();
+            return false;
+        };
+        self.kitty_writer = Some(writer);
+        true
+    }
+
+    /// Takes the terminal-failure path from the loop side: the flag the
+    /// next frame top checks, plus a best-effort wake so an idle loop
+    /// quits without waiting on its channel.
+    fn kitty_failed(&self) {
+        self.kitty_failed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(self.files_out.send(Input::KittyFailed));
+    }
+
+    /// Sends Stop and joins the writer before the hub hangs up and the
+    /// guard drops, so no payload or thread outlives the loop. Joining can
+    /// wait for the current chunk's blocking write or write-readiness poll.
+    fn stop_kitty(&mut self) {
+        if let Some(writer) = self.kitty_writer.take() {
+            writer.stop_and_join();
+        }
     }
 
     /// Starts the next queued conversion when the one worker is free:
@@ -986,6 +1123,8 @@ impl<B: Backend> Loop<B> {
     /// Writes the app's window title when it changed since the last write.
     fn write_title(&mut self) {
         if let Some(bytes) = self.title.next(self.app.title()) {
+            let lock = Arc::clone(&self.tty_lock);
+            let _guard = lock.loop_write();
             let mut tty = &self.tty;
             tty.write_all(&bytes).unwrap_or(());
         }
@@ -999,6 +1138,8 @@ impl<B: Backend> Loop<B> {
             return;
         }
         if let Some(bytes) = self.shape.next(self.app.over_edge(self.pointer.at)) {
+            let lock = Arc::clone(&self.tty_lock);
+            let _guard = lock.loop_write();
             let mut tty = &self.tty;
             tty.write_all(bytes).unwrap_or(());
         }
@@ -1008,6 +1149,8 @@ impl<B: Backend> Loop<B> {
     /// "Getting the person's attention"). A failed write is dropped.
     fn write_alerts(&mut self) {
         let bytes = self.app.take_alerts();
+        let lock = Arc::clone(&self.tty_lock);
+        let _guard = lock.loop_write();
         let mut tty = &self.tty;
         tty.write_all(&bytes).unwrap_or(());
     }
@@ -1213,6 +1356,12 @@ impl<B: Backend> Loop<B> {
                 .editor_returned(target, Err(editor::NO_EDITOR.to_owned()));
             return None;
         };
+        // The writer pauses before the loop takes its terminal-output
+        // priority: the pause closes a partial upload at the next chunk
+        // boundary before `term::suspend` writes `1049l`.
+        self.pause_kitty();
+        let lock = Arc::clone(&self.tty_lock);
+        let _guard = lock.loop_write();
         let mut result = editor::Outcome::Done(Err(String::new()));
         let clock = Arc::clone(&self.clock);
         let code = self.hand_over(|| {
@@ -1246,6 +1395,11 @@ impl<B: Backend> Loop<B> {
                 .config_file_closed(Err(editor::NO_EDITOR_FILE.to_owned()));
             return None;
         };
+        // As in [`Loop::open_editor`]: pause the writer first so no upload
+        // stays open across the foreground program.
+        self.pause_kitty();
+        let lock = Arc::clone(&self.tty_lock);
+        let _guard = lock.loop_write();
         let mut result = editor::Outcome::Done(Err(String::new()));
         let clock = Arc::clone(&self.clock);
         let code = self.hand_over(|| {
@@ -1284,10 +1438,28 @@ impl<B: Backend> Loop<B> {
         }
     }
 
+    /// Pauses the writer before handing the terminal over: a partial upload
+    /// closes at the next chunk boundary, so no upload stays open across
+    /// the foreground program. The retained ids wait for `hand_over` to
+    /// take after a successful resume.
+    fn pause_kitty(&mut self) {
+        let Some(writer) = &self.kitty_writer else {
+            return;
+        };
+        match writer.pause_for_handover() {
+            Some(ids) => self.handover_retained = ids,
+            None => self.kitty_failed(),
+        }
+    }
+
     /// Hands the terminal to `program`, run in the foreground on this
     /// thread: the reader paused, the terminal restored, then both taken
     /// back and the whole screen repainted at the size read again. `Some(1)`
-    /// when the terminal cannot be taken back.
+    /// when the terminal cannot be taken back. The caller holds the
+    /// loop-priority terminal-output guard across the handover, which the
+    /// resize below reuses. After a successful resume the writer's retained
+    /// images stay shown while dropped ones are re-asked, and the first
+    /// post-resume frame restarts the writer.
     fn hand_over(&mut self, program: impl FnOnce() -> Option<i32>) -> Option<i32> {
         self.reader.pause();
         // A failed suspend still runs the program: the terminal may be
@@ -1302,6 +1474,8 @@ impl<B: Backend> Loop<B> {
             return Some(code);
         }
         if term::resume(self.parser.kitty(), self.hover).is_err() {
+            // A failed resume or a shutdown leaves the writer paused for
+            // Stop and join: no Resume is sent.
             return Some(1);
         }
         // The restore popped the title: the next frame writes it again.
@@ -1313,6 +1487,9 @@ impl<B: Backend> Loop<B> {
         let (width, height) = term::size(&self.tty)
             .unwrap_or_else(|_| (self.screen.area().width, self.screen.area().height));
         self.app.set_size(width, height);
+        let retained = std::mem::take(&mut self.handover_retained);
+        self.app.images_after_handover(retained);
+        self.pending_resume = true;
         self.screen.resize(width, height).err().map(|_| 1)
     }
 }
