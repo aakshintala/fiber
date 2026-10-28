@@ -376,7 +376,7 @@ fn a_notice_raised_during_a_drag_waits_for_the_release() {
     crate::view::render(&app, area, &mut buf, None);
     // A notice waiting for the drag's release is not on screen: no row,
     // no renderer call, and no animation wake.
-    // docs/tui.md:2999: frames advance only while a replacement row was painted.
+    // docs/tui.md:1269: a notice that arrives during a drag waits for the release.
     assert!(fake.frames.borrow().is_empty());
     assert!(!crate::view::text(&buf).contains("a read failed"));
     assert_eq!(app.take_wake(), None);

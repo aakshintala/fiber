@@ -2142,7 +2142,9 @@ fn two_notices_with_the_same_text_advance_independently() {
     let first_answers = AnimAnswers::new();
     let second_answers = AnimAnswers::new();
     let t0 = origin();
-    // The same code and text under two instances keys two animations.
+    // docs/tui.md:3001: a notice's animation state goes when the notice
+    // does, so the same code and text under two live instances keys two
+    // animations, each advancing only while painted (docs/tui.md:2999).
     cache.begin_anim_frame(Some(t0), false);
     let first = paint_notice(&cache, 7, "down", 20, &first_answers).expect("first frame 0");
     let second = paint_notice(&cache, 8, "down", 20, &second_answers).expect("second frame 0");

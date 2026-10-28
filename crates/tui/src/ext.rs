@@ -283,6 +283,12 @@ impl Bound {
             flat: self.flat,
         });
         let half = renderer.half(&self.ctx, &extension);
+        let builtin = |input: &Input<'_>, at: u16| {
+            let Input::Notice(notice) = input else {
+                return Vec::new();
+            };
+            crate::view::notice_rows::builtin_spans(notice.code, notice.text, at as usize)
+        };
         let fitted = match renderer.animate_interval(&self.ctx, "notice") {
             Some(interval) => self.cache.lines_animated_notice(
                 id,
@@ -292,16 +298,6 @@ impl Bound {
                 width,
                 interval,
                 |frame| {
-                    let builtin = |input: &Input<'_>, at| {
-                        let Input::Notice(notice) = input else {
-                            return Vec::new();
-                        };
-                        crate::view::notice_rows::builtin_spans(
-                            notice.code,
-                            notice.text,
-                            at as usize,
-                        )
-                    };
                     renderer.render_animated(&self.ctx, "notice", &input, width, frame, &builtin)
                 },
             ),
@@ -312,19 +308,7 @@ impl Bound {
                 half,
                 &input,
                 width,
-                || {
-                    let builtin = |input: &Input<'_>, at| {
-                        let Input::Notice(notice) = input else {
-                            return Vec::new();
-                        };
-                        crate::view::notice_rows::builtin_spans(
-                            notice.code,
-                            notice.text,
-                            at as usize,
-                        )
-                    };
-                    renderer.render(&self.ctx, "notice", &input, width, &builtin)
-                },
+                || renderer.render(&self.ctx, "notice", &input, width, &builtin),
             ),
         };
         for queued in renderer.take_pending() {
