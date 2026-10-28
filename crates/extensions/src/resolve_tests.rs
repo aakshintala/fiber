@@ -234,9 +234,9 @@ fn version_rejects_what_is_not_three_numbers() {
 
 #[test]
 fn meets_orders_stable_and_nightly_forms() {
-    // docs/releasing.md, "A nightly pre-release": SemVer sorts a nightly
-    // below its base stable, and the fixed-width YYYYMMDD dates order two
-    // nightlies on one base chronologically.
+    // docs/releasing.md, "Versions": two nightlies on one base sort by
+    // their YYYYMMDD identifier, so the later date sorts higher; SemVer
+    // sorts a nightly below its base stable.
     use super::at_least;
     let cases: [(&str, &str, bool); 8] = [
         ("0.3.0", "0.3.0", true),
@@ -263,7 +263,7 @@ fn meets_orders_stable_and_nightly_forms() {
 
 #[test]
 fn newest_within_accepts_a_nightly_minimum_where_its_base_passes() {
-    // docs/releasing.md, "A nightly pre-release": a nightly minimum orders
+    // docs/releasing.md, "Versions": a nightly minimum orders
     // with its base triple, below the same-base stable release.
     let all = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
     // A nightly minimum orders with its base triple: the same-base
@@ -304,9 +304,9 @@ fn newest_within_accepts_a_nightly_minimum_where_its_base_passes() {
 
 #[test]
 fn meets_orders_a_nightly_have_below_its_base_stable() {
-    // docs/releasing.md, "A nightly pre-release": a nightly sorts below
-    // the stable release on its base, and two nightlies on one base order
-    // by date; the floor's base decides.
+    // docs/releasing.md, "Versions": two nightlies on one base sort by
+    // their YYYYMMDD identifier, and SemVer sorts a nightly below its base
+    // stable; the floor's base decides.
     let cases: [(&str, &str, bool); 9] = [
         ("0.3.0", "0.3.0", true),
         ("0.3.0", "0.3.0-nightly.20240101", false),
@@ -341,11 +341,11 @@ fn meets_orders_a_nightly_have_below_its_base_stable() {
 
 #[test]
 fn an_empty_floor_keeps_a_zero_base_nightly_minimum() {
-    // The empty floor sorts below every valid minimum, including
-    // `0.0.0-nightly.YYYYMMDD` (docs/releasing.md, "A nightly
-    // pre-release"): an equal nightly `have` meets its own minimum
-    // instead of losing to the sentinel. Flipping the sentinel's `false`
-    // back to `true` fails the first two assertions.
+    // docs/releasing.md, "Versions": the empty floor sorts below
+    // every valid minimum, including `0.0.0-nightly.YYYYMMDD`: an equal
+    // nightly `have` meets its own minimum instead of losing to the
+    // sentinel. Flipping the sentinel's `false` back to `true` fails
+    // the first two assertions.
     let w = wants(&[("a", "0.0.0-nightly.20240101")]);
     assert!(meets("h", "0.0.0-nightly.20240101", &w).unwrap());
     root_meets("h", "0.0.0-nightly.20240101", &w).unwrap();
@@ -355,7 +355,7 @@ fn an_empty_floor_keeps_a_zero_base_nightly_minimum() {
 
 #[test]
 fn root_meets_accepts_a_nightly_release_and_refuses_a_malformed_one() {
-    // docs/releasing.md, "A nightly pre-release": the nightly install's
+    // docs/releasing.md, "Versions": the nightly install's
     // own version meets its dependents' minima.
     let w = wants(&[("a", "0.2.0")]);
     root_meets("h", "0.3.0-nightly.20240101", &w).unwrap();
