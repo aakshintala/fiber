@@ -1257,11 +1257,19 @@ impl SessionExtensions {
         let pump = Arc::clone(&owner);
         let pumped = std::thread::Builder::new()
             .name(format!("process pump {name}"))
-            .spawn(
-                move || {
-                    while matches!(pump.pump_once(), crate::process::Pumped::Handled) {}
-                },
-            );
+            .spawn(move || {
+                loop {
+                    let spawn = pump.transport().spawn_id();
+                    match pump.pump_once() {
+                        crate::process::Pumped::Handled => {}
+                        crate::process::Pumped::Closed(_) => {
+                            if !pump.wait_for_next_spawn(spawn) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
         if pumped.is_err() {
             // The child runs with nobody pumping it: shut it down bounded
             // and leave it out, as a wedged startup.
