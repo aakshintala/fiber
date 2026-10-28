@@ -2018,10 +2018,10 @@ fn a_static_notice_draw_caches_its_invocation() {
     // A static slot keeps the cached invocation: one call answers both
     // draws, and the paint-only entry point stays out of it.
     let first = bound
-        .notice_lines("io_failed", "x", 20)
+        .notice_lines(7, "io_failed", "x", 20)
         .expect("a cached line");
     let second = bound
-        .notice_lines("io_failed", "x", 20)
+        .notice_lines(7, "io_failed", "x", 20)
         .expect("a cached line");
     assert_eq!(fake.calls.borrow().len(), 1); // docs/tui.md:2909: one call on a miss, none on a hit.
     assert_eq!(text_of(&first), text_of(&second));
@@ -2035,7 +2035,7 @@ fn an_extension_failed_notice_draws_nothing() {
     let bound = notice_bound(fake.clone());
     // `extension_failed` short-circuits before any lookup: no stored
     // lines, no call, on either path.
-    assert!(bound.notice_lines("extension_failed", "x", 20).is_none());
+    assert!(bound.notice_lines(7, "extension_failed", "x", 20).is_none());
     assert!(fake.frames.borrow().is_empty());
 }
 
@@ -2044,18 +2044,364 @@ fn an_animated_notice_draws_its_cached_frame_zero_still() {
     use crate::ext::tests::AnimatedRenderer;
     let fake = std::rc::Rc::new(AnimatedRenderer::filling("notice", ANIM_INTERVAL, 1));
     let bound = notice_bound(fake.clone());
+    // A cold closed draw caches frame 0 without animation state.
     let first = bound
-        .notice_lines("io_failed", "x", 20)
+        .notice_lines(7, "io_failed", "x", 20)
         .expect("frame-0 still");
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2983: notices draw frame 0 once.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2979: closed draws cache frame 0 without changing animation state.
     assert_eq!(first.len(), 1);
-    // A later paint uses the same ordinary input-and-width cache entry;
-    // the notice does not create schedule state or request a timer.
-    bound.cache.begin_anim_frame(Some(origin()), false);
+    // The open draw renders frame 0 again: the cold miss never stands in
+    // for an advanced frame. Marking it schedules the notice.
+    let t0 = origin();
+    bound.cache.begin_anim_frame(Some(t0), false);
     let second = bound
-        .notice_lines("io_failed", "x", 20)
-        .expect("cached still");
+        .notice_lines(7, "io_failed", "x", 20)
+        .expect("open frame 0");
     assert_eq!(text_of(&first), text_of(&second));
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2983: notices draw frame 0 once.
-    assert!(bound.cache.anim_dues().is_empty());
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 0]);
+    bound.cache.mark_painted(&[tag_of(&second)]);
+    assert_eq!(bound.cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+}
+
+/// Paints animated notice `id` holding `text` at `width` on `cache`,
+/// recording each frame drawn.
+fn paint_notice(
+    cache: &Cache,
+    id: usize,
+    text: &'static str,
+    width: u16,
+    answers: &AnimAnswers,
+) -> Option<Arc<Vec<super::super::spans::FittedLine>>> {
+    let row = notice_input(text);
+    cache.lines_animated_notice(id, "test", None, &row, width, ANIM_INTERVAL, |frame| {
+        answers.frames.borrow_mut().push(frame);
+        if answers.fail.get() {
+            return (Decision::Fail(failed("test", "boom")), false);
+        }
+        let lines = vec![vec![raw(&format!("f{frame}"))]];
+        (
+            Decision::Draw {
+                extension: "test".into(),
+                lines,
+            },
+            !answers.stop.get(),
+        )
+    })
+}
+
+/// Marks one painted notice frame and takes its dues.
+fn mark_notice(
+    cache: &Cache,
+    fitted: &Arc<Vec<super::super::spans::FittedLine>>,
+) -> Vec<(std::time::Instant, std::time::Duration)> {
+    cache.mark_painted(&[tag_of(fitted)]);
+    cache.anim_dues()
+}
+
+#[test]
+fn an_animated_notice_advances_one_call_per_frame() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let t0 = origin();
+    // Frame 0 draws once; later lookups in the same open frame hit the
+    // stored open result, as rows, counts and the overlay share it.
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint_notice(&cache, 7, "down", 20, &answers).expect("frame 0");
+    assert!(text_of(&first).starts_with("f0"), "{first:?}");
+    let again = paint_notice(&cache, 7, "down", 20, &answers).expect("stored frame 0");
+    assert_eq!(text_of(&again), text_of(&first));
+    let stored = paint_notice(&cache, 7, "down", 20, &answers).expect("stored frame 0");
+    assert_eq!(text_of(&stored), text_of(&first));
+    assert_eq!(answers.frames.borrow().clone(), vec![0]);
+    assert_eq!(mark_notice(&cache, &first), vec![(t0, ANIM_INTERVAL)]);
+    // Each due painted frame advances once, with exactly one call.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let second = paint_notice(&cache, 7, "down", 20, &answers).expect("frame 1");
+    assert!(text_of(&second).starts_with("f1"), "{second:?}");
+    assert_eq!(
+        mark_notice(&cache, &second),
+        vec![(at(t0, 500), ANIM_INTERVAL)]
+    );
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    let third = paint_notice(&cache, 7, "down", 20, &answers).expect("frame 2");
+    assert!(text_of(&third).starts_with("f2"), "{third:?}");
+    assert_eq!(
+        mark_notice(&cache, &third),
+        vec![(at(t0, 1000), ANIM_INTERVAL)]
+    );
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 2]);
+}
+
+#[test]
+fn two_notices_with_the_same_text_advance_independently() {
+    crate::work::take();
+    let cache = Cache::default();
+    let first_answers = AnimAnswers::new();
+    let second_answers = AnimAnswers::new();
+    let t0 = origin();
+    // The same code and text under two instances keys two animations.
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint_notice(&cache, 7, "down", 20, &first_answers).expect("first frame 0");
+    let second = paint_notice(&cache, 8, "down", 20, &second_answers).expect("second frame 0");
+    assert_ne!(tag_of(&first), tag_of(&second));
+    cache.mark_painted(&[tag_of(&first), tag_of(&second)]);
+    let mut dues = cache.anim_dues();
+    dues.sort();
+    assert_eq!(dues, vec![(t0, ANIM_INTERVAL), (t0, ANIM_INTERVAL)]);
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    paint_notice(&cache, 7, "down", 20, &first_answers).expect("first frame 1");
+    paint_notice(&cache, 8, "down", 20, &second_answers).expect("second frame 1");
+    assert_eq!(first_answers.frames.borrow().clone(), vec![0, 1]);
+    assert_eq!(second_answers.frames.borrow().clone(), vec![0, 1]);
+}
+
+#[test]
+fn a_new_screen_starts_a_live_notice_at_frame_zero() {
+    crate::work::take();
+    let old = Cache::default();
+    let answers = AnimAnswers::new();
+    let t0 = origin();
+    old.begin_anim_frame(Some(t0), false);
+    let painted = paint_notice(&old, 7, "down", 20, &answers).expect("frame 0");
+    assert_eq!(mark_notice(&old, &painted), vec![(t0, ANIM_INTERVAL)]);
+    old.begin_anim_frame(Some(at(t0, 500)), false);
+    paint_notice(&old, 7, "down", 20, &answers).expect("frame 1");
+    // A new item-view `Screen` owns a new cache: the same still-live
+    // notice starts at frame 0 there, independently of the old cache.
+    let fresh = Cache::default();
+    let fresh_answers = AnimAnswers::new();
+    fresh.begin_anim_frame(Some(at(t0, 500)), false);
+    let restarted = paint_notice(&fresh, 7, "down", 20, &fresh_answers).expect("fresh frame 0");
+    assert!(text_of(&restarted).starts_with("f0"), "{restarted:?}");
+    assert_eq!(fresh_answers.frames.borrow().clone(), vec![0]);
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]);
+}
+
+#[test]
+fn an_animated_notice_stop_stays_stopped_until_its_input_changes() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    answers.stop.set(true);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let stopped = paint_notice(&cache, 7, "down", 20, &answers).expect("stopped frame 0");
+    assert_eq!(mark_notice(&cache, &stopped), vec![]);
+    // A stopped notice hits its stored lines, never recalling, until its
+    // input changes.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    paint_notice(&cache, 7, "down", 20, &answers).expect("still stopped");
+    assert_eq!(answers.frames.borrow().clone(), vec![0]);
+    let changed = paint_notice(&cache, 7, "up", 20, &answers).expect("new input frame 0");
+    assert!(text_of(&changed).starts_with("f0"), "{changed:?}");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]);
+}
+
+#[test]
+fn an_animated_notice_error_memoizes_and_stops() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    answers.fail.set(true);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    assert!(paint_notice(&cache, 7, "down", 20, &answers).is_none());
+    assert_eq!(answers.frames.borrow().clone(), vec![0]);
+    // The failure memoizes against the public input: no recall, and one
+    // failure notice until the input changes or `/reload`.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    assert!(paint_notice(&cache, 7, "down", 20, &answers).is_none());
+    assert_eq!(answers.frames.borrow().clone(), vec![0]);
+    let listed = cache.take_failures();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed.first().expect("one failure").0, "notice");
+}
+
+#[test]
+fn a_reduced_motion_notice_stills_and_reactivates() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), true);
+    let still = paint_notice(&cache, 7, "down", 20, &answers).expect("stilled frame 0");
+    assert_eq!(mark_notice(&cache, &still), vec![]);
+    // Reduced motion makes no later calls while it lasts.
+    cache.begin_anim_frame(Some(at(t0, 500)), true);
+    paint_notice(&cache, 7, "down", 20, &answers).expect("still frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0]);
+    // When reduced motion ends, the next paint resumes at frame 1.
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    let resumed = paint_notice(&cache, 7, "down", 20, &answers).expect("frame 1");
+    assert!(text_of(&resumed).starts_with("f1"), "{resumed:?}");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]);
+    assert_eq!(
+        mark_notice(&cache, &resumed),
+        vec![(at(t0, 1000), ANIM_INTERVAL)]
+    );
+}
+
+#[test]
+fn a_width_change_recalls_the_stored_notice_frame() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint_notice(&cache, 7, "down", 20, &answers).expect("frame 0");
+    assert_eq!(mark_notice(&cache, &first), vec![(t0, ANIM_INTERVAL)]);
+    // A new width before the due tick recalls the stored frame without
+    // advancing the counter or changing `last`.
+    cache.begin_anim_frame(Some(at(t0, 200)), false);
+    let wide = paint_notice(&cache, 7, "down", 24, &answers).expect("stored frame 0");
+    assert!(text_of(&wide).starts_with("f0"), "{wide:?}");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]);
+    assert_eq!(mark_notice(&cache, &wide), vec![(t0, ANIM_INTERVAL)]);
+    // The due tick then advances from the stored frame.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let advanced = paint_notice(&cache, 7, "down", 24, &answers).expect("frame 1");
+    assert!(text_of(&advanced).starts_with("f1"), "{advanced:?}");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1]);
+}
+
+#[test]
+fn a_dropped_page_restarts_items_but_not_notices() {
+    crate::work::take();
+    let cache = Cache::default();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let answers = AnimAnswers::new();
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    paint(&cache, &row, 20, &answers).expect("item frame 0");
+    let notice = paint_notice(&cache, 7, "down", 20, &answers).expect("notice frame 0");
+    assert_eq!(mark_notice(&cache, &notice), vec![(t0, ANIM_INTERVAL)]);
+    cache.drop_page(page(0));
+    // The item restarts at frame 0 on its dropped page ...
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    paint(&cache, &row, 20, &answers).expect("item frame 0 again");
+    // ... while the notice stays keyed to its instance and stable page.
+    let advanced = paint_notice(&cache, 7, "down", 20, &answers).expect("notice frame 1");
+    assert!(text_of(&advanced).starts_with("f1"), "{advanced:?}");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1]);
+}
+
+/// A `notice` renderer that always fails, for failure-memo tests.
+#[derive(Debug)]
+struct FailingNotice;
+
+impl crate::ext::Renderer for FailingNotice {
+    fn name(&self) -> &str {
+        "failing-test"
+    }
+    fn fills(&self, slot: &str) -> bool {
+        slot == "notice"
+    }
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        _input: &crate::ext::Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> Decision {
+        Decision::Fail(failed("failing-test", "boom"))
+    }
+    fn animate_interval(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+    ) -> Option<std::time::Duration> {
+        Some(ANIM_INTERVAL)
+    }
+    fn render_animated(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        _input: &crate::ext::Input<'_>,
+        _width: u16,
+        frame: u64,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> (Decision, bool) {
+        let _ = frame;
+        (Decision::Fail(failed("failing-test", "boom")), false)
+    }
+}
+
+/// A failing `notice` bound on shared `cache` at page `index`.
+fn failing_bound(cache: Arc<Cache>, index: usize) -> crate::ext::Bound {
+    let handle = crate::ext::Handle::create();
+    handle.set(std::rc::Rc::new(FailingNotice));
+    crate::ext::Bound {
+        handle,
+        cache,
+        page: page(index),
+        ctx: crate::ext::SessionCtx {
+            session_id: Some(contract::SessionId("s".into())),
+            halves: None,
+        },
+        flat: false,
+    }
+}
+
+#[test]
+fn a_failed_notice_stays_failed_across_pages_and_re_raise() {
+    crate::work::take();
+    // One cache serves every page for notices: two bounds on different
+    // pages share it, while notices key home.
+    let cache = Arc::new(Cache::default());
+    let before = failing_bound(Arc::clone(&cache), 0);
+    let after = failing_bound(Arc::clone(&cache), 3);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    assert!(before.notice_lines(7, "io_failed", "x", 20).is_none());
+    // A page change recalls nothing: the failure memo is page-stable.
+    assert!(after.notice_lines(7, "io_failed", "x", 20).is_none());
+    // A re-raise with the same input under a new instance stays failed.
+    assert!(after.notice_lines(8, "io_failed", "x", 20).is_none());
+    let listed = cache.take_failures();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed.first().expect("one failure").0, "notice");
+}
+
+#[test]
+fn closed_entries_prune_with_the_instance_and_re_raise_starts_at_zero() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint_notice(&cache, 7, "down", 20, &answers).expect("frame 0");
+    assert_eq!(mark_notice(&cache, &first), vec![(t0, ANIM_INTERVAL)]);
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let second = paint_notice(&cache, 7, "down", 20, &answers).expect("frame 1");
+    assert_eq!(
+        mark_notice(&cache, &second),
+        vec![(at(t0, 500), ANIM_INTERVAL)]
+    );
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    let third = paint_notice(&cache, 7, "down", 20, &answers).expect("frame 2");
+    assert_eq!(
+        mark_notice(&cache, &third),
+        vec![(at(t0, 1000), ANIM_INTERVAL)]
+    );
+    // The frame closed with the dues: a closed probe at a new width
+    // recalls once at the stored frame without advancing or marking.
+    let wide = paint_notice(&cache, 7, "down", 24, &answers).expect("stored frame 2");
+    assert!(text_of(&wide).starts_with("f2"), "{wide:?}");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 2, 2]);
+    // Pruning the dismissed instance drops every per-notice store.
+    assert!(cache.has_notice_state(7));
+    cache.retain_notices(&[]);
+    assert!(!cache.has_notice_state(7));
+    // The same text raised again is a new item: its first closed and
+    // open draws both show frame 0.
+    let fresh_answers = AnimAnswers::new();
+    let cold = paint_notice(&cache, 8, "down", 20, &fresh_answers).expect("cold frame 0");
+    assert!(text_of(&cold).starts_with("f0"), "{cold:?}");
+    cache.begin_anim_frame(Some(at(t0, 1500)), false);
+    let reopened = paint_notice(&cache, 8, "down", 20, &fresh_answers).expect("new frame 0");
+    assert!(text_of(&reopened).starts_with("f0"), "{reopened:?}");
+    assert_eq!(fresh_answers.frames.borrow().clone(), vec![0, 0]);
 }

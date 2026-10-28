@@ -158,7 +158,7 @@ fn paint_replacement(
     noted: &mut Vec<crate::app::SpanRow>,
     bottom: &mut u16,
 ) -> bool {
-    let Some(fitted) = bound.notice_lines(code, text, area.width) else {
+    let Some(fitted) = bound.notice_lines(id, code, text, area.width) else {
         return false;
     };
     if fitted.is_empty() {

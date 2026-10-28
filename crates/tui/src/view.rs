@@ -237,7 +237,13 @@ pub(crate) fn render(
     app.motion().clear_wake();
     // The animation frame opens here too, on the one resident cache the
     // conversation and notice paints draw through: open paint advances
-    // due items, and reading the dues closes the frame again.
+    // due items, and reading the dues closes the frame again. Faded and
+    // dismissed notices leave the stack first, so the prune drops their
+    // animation state before any paint can reuse it.
+    app.pages()
+        .ext
+        .cache
+        .retain_notices(&app.notices.live_ids());
     app.pages()
         .ext
         .cache

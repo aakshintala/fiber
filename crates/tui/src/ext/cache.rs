@@ -28,7 +28,10 @@ impl PageKey {
 }
 
 type FailKey = (PageKey, String, u64, String, Option<String>);
-type EntryKey = (FailKey, u16);
+/// Ordinary entries by input and width: items file under no notice, a
+/// notice's successful closed-draw lines under its instance, so pruning
+/// that instance never touches item lines.
+type EntryKey = (FailKey, Option<usize>, u16);
 type AnimEntries = HashMap<AnimKey, HashMap<u16, Arc<Vec<FittedLine>>>>;
 
 #[derive(Debug, Default)]
@@ -140,7 +143,7 @@ impl Cache {
         if support::lock(&self.failed).contains(&key) {
             return None;
         }
-        let entry = (key.clone(), width);
+        let entry = (key.clone(), None, width);
         if let Some(hit) = support::lock(&self.entries).get(&entry).cloned() {
             return Some(hit);
         }
@@ -226,12 +229,84 @@ impl Cache {
         let (input_key, input_flat) = key_of(input, slot);
         let key = AnimKey::new(page.clone(), slot, input_key, extension, half.clone());
         let fail_key = (page, slot.to_owned(), input_key, extension.to_owned(), half);
+        self.lines_animated_with_key(
+            key, fail_key, None, extension, input_flat, width, interval, call,
+        )
+    }
+
+    /// The animated notice's lines for one draw: the item schedule with
+    /// the notice instance qualifying the animation key, on the stable
+    /// home page that never drops or recounts. The failure memo stays
+    /// instance-free and page-stable, so a re-raised failure recalls
+    /// nothing until its public input changes; successful closed-draw
+    /// lines carry the instance and go with it.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the key, draw flags and callback describe one animated row"
+    )]
+    pub(crate) fn lines_animated_notice(
+        &self,
+        id: usize,
+        extension: &str,
+        half: Option<String>,
+        input: &Input<'_>,
+        width: u16,
+        interval: Duration,
+        call: impl FnOnce(u64) -> (Decision, bool),
+    ) -> Option<Arc<Vec<FittedLine>>> {
+        let (input_key, input_flat) = key_of(input, "notice");
+        let key = AnimKey::for_notice(
+            PageKey::home(),
+            "notice",
+            input_key,
+            extension,
+            half.clone(),
+            id,
+        );
+        let fail_key = (
+            PageKey::home(),
+            "notice".to_owned(),
+            input_key,
+            extension.to_owned(),
+            half,
+        );
+        self.lines_animated_with_key(
+            key,
+            fail_key,
+            Some(id),
+            extension,
+            input_flat,
+            width,
+            interval,
+            call,
+        )
+    }
+
+    /// The shared animated draw: the separately built animation, failure
+    /// and closed-entry keys let notices qualify animation by instance
+    /// while failures stay on public input. Item keys carry no notice,
+    /// so item behavior is unchanged.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the keys, draw flags and callback describe one animated row"
+    )]
+    fn lines_animated_with_key(
+        &self,
+        key: AnimKey,
+        fail_key: FailKey,
+        notice_id: Option<usize>,
+        extension: &str,
+        flat: bool,
+        width: u16,
+        interval: Duration,
+        call: impl FnOnce(u64) -> (Decision, bool),
+    ) -> Option<Arc<Vec<FittedLine>>> {
         if support::lock(&self.failed).contains(&fail_key) {
             return None;
         }
         let frame = support::lock(&self.anim).at;
         let Some((now, frame_reduced)) = frame else {
-            return self.closed_draw(&fail_key, &key, extension, input_flat, width, call);
+            return self.closed_draw(&fail_key, notice_id, &key, extension, flat, width, call);
         };
         let reduced = frame_reduced;
         let (state, painted) = {
@@ -246,7 +321,7 @@ impl Cache {
                 // A fresh item starts at frame 0, still under reduced.
                 let frame = 0;
                 let drawn =
-                    self.draw_frame(&fail_key, &key, extension, input_flat, width, frame, call)?;
+                    self.draw_frame(&fail_key, &key, extension, flat, width, frame, call)?;
                 // A fresh draw that declines to continue stays stopped,
                 // even under reduced motion, so leaving reduced motion
                 // recalls nothing.
@@ -274,8 +349,7 @@ impl Cache {
                 // Reduced motion stills at frame 0 at the next paint,
                 // unless the draw declines to continue: then it stays
                 // stopped, so leaving reduced motion recalls nothing.
-                let drawn =
-                    self.draw_frame(&fail_key, &key, extension, input_flat, width, 0, call)?;
+                let drawn = self.draw_frame(&fail_key, &key, extension, flat, width, 0, call)?;
                 self.set_anim(
                     &key,
                     AnimState {
@@ -294,8 +368,7 @@ impl Cache {
             Some(state) if state.kind == AnimKind::Reduced && !reduced => {
                 // Reactivation paints frame 1: the still form at 0
                 // established the counter, which resumes.
-                let drawn =
-                    self.draw_frame(&fail_key, &key, extension, input_flat, width, 1, call)?;
+                let drawn = self.draw_frame(&fail_key, &key, extension, flat, width, 1, call)?;
                 self.set_anim(
                     &key,
                     AnimState {
@@ -317,8 +390,8 @@ impl Cache {
                     .is_some_and(|elapsed| elapsed >= effective_interval(state.interval));
                 if state.kind == AnimKind::Active && painted && due {
                     let frame = state.frame.saturating_add(1);
-                    let drawn = self
-                        .draw_frame(&fail_key, &key, extension, input_flat, width, frame, call)?;
+                    let drawn =
+                        self.draw_frame(&fail_key, &key, extension, flat, width, frame, call)?;
                     self.set_anim(
                         &key,
                         AnimState {
@@ -343,7 +416,7 @@ impl Cache {
                         &fail_key,
                         &key,
                         extension,
-                        input_flat,
+                        flat,
                         width,
                         state.frame,
                         call,
@@ -356,10 +429,17 @@ impl Cache {
 
     /// A closed draw: hits stored animated lines, else calls at the
     /// stored frame or 0 and caches the result in the ordinary
-    /// input-and-width entries, with no animation-state write or mark.
+    /// input-and-width entries, with no animation-state write or mark. A
+    /// notice's closed lines file under its instance, so pruning the
+    /// instance drops them; items file under no notice.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the keys, draw flags and callback describe one animated row"
+    )]
     fn closed_draw(
         &self,
         fail_key: &FailKey,
+        notice_id: Option<usize>,
         key: &AnimKey,
         extension: &str,
         flat: bool,
@@ -373,7 +453,7 @@ impl Cache {
             .states
             .get(key)
             .map(|state| state.frame);
-        let entry = (fail_key.clone(), width);
+        let entry = (fail_key.clone(), notice_id, width);
         if frame.is_none()
             && let Some(hit) = support::lock(&self.entries).get(&entry).cloned()
         {
@@ -586,6 +666,45 @@ impl Cache {
                 .failures
                 .retain(|(at, _, _)| *at != page);
         }
+    }
+
+    /// Drops every per-notice store for instances outside `live_ids`:
+    /// animation state, both painted sets, stored animated lines, line
+    /// counts and instance-filed closed-draw lines. Item keys carry no
+    /// notice and stay, as do instance-free failure memos. A stale state
+    /// waits in an unrendered cache until that cache's next render, which
+    /// prunes before painting, so pruned state is never painted or reused.
+    pub(crate) fn retain_notices(&self, live_ids: &[usize]) {
+        let live = |key: &AnimKey| match key.notice_id() {
+            None => true,
+            Some(id) => live_ids.contains(&id),
+        };
+        let mut anim = support::lock(&self.anim);
+        anim.states.retain(|key, _| live(key));
+        anim.painted_this.retain(|key| live(key));
+        anim.painted_last.retain(|key| live(key));
+        anim.entries.retain(|key, _| live(key));
+        anim.line_counts.retain(|key, _| live(key));
+        drop(anim);
+        support::lock(&self.entries)
+            .retain(|(_, notice_id, _), _| notice_id.is_none_or(|id| live_ids.contains(&id)));
+    }
+
+    /// Whether any per-notice store retains `id`: animation state, either
+    /// painted set, stored animated lines, line counts or closed-draw
+    /// lines. A miss reads as none; this test-only view never invokes.
+    #[cfg(test)]
+    pub(crate) fn has_notice_state(&self, id: usize) -> bool {
+        let anim = support::lock(&self.anim);
+        let keyed = |key: &AnimKey| key.notice_id() == Some(id);
+        anim.states.keys().any(keyed)
+            || anim.painted_this.iter().any(keyed)
+            || anim.painted_last.iter().any(keyed)
+            || anim.entries.keys().any(keyed)
+            || anim.line_counts.keys().any(keyed)
+            || support::lock(&self.entries)
+                .keys()
+                .any(|(_, notice_id, _)| *notice_id == Some(id))
     }
 
     pub(crate) fn drop_entries(&self) {
