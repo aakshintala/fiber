@@ -37,6 +37,7 @@ impl Track {
             links,
             scopes: Vec::new(),
             spin: None,
+            anim: None,
         });
     }
 

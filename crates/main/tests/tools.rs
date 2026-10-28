@@ -720,6 +720,75 @@ fn a_configured_read_only_command_is_denied_for_a_credential_path() {
 }
 
 #[test]
+fn an_nl_read_of_a_credential_file_is_denied() {
+    // `nl -ba` reads with its operand as a path: the call declares the
+    // credential path, the credential deny refuses it before it runs, and
+    // `nl` never needs to read the file.
+    let setup = Setup::new_with_started_deadline();
+    let secret = setup.home().join("credentials").join("secret.txt");
+    fs::create_dir_all(secret.parent().unwrap()).unwrap();
+    fs::write(&secret, format!("{MARKER}\n")).unwrap();
+    let absolute = fs::canonicalize(&secret)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(!absolute.contains(MARKER), "{absolute}");
+    let events = vec![function_call(
+        "shell_0",
+        "shell",
+        &json!({"command": format!("nl -ba {absolute}")}),
+    )];
+    let script = serde_json::to_string(&events).unwrap();
+    assert!(
+        !script.contains(MARKER),
+        "the scripted arguments contain the credential file's text"
+    );
+    let server = ProviderServer::start([stream(&events), hello()]).unwrap();
+    setup.provider_with_defaults(&server);
+
+    let run = setup.run(&["ask", "show the secret"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), denied_kinds(1));
+    let requested: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_requested")
+        .collect();
+    let resolved: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "permission_resolved")
+        .collect();
+    let completed: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .collect();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(completed.len(), 1);
+    assert_eq!(&resolved[0]["action_id"], &requested[0]["action_id"]);
+    assert_eq!(&completed[0]["action_id"], &requested[0]["action_id"]);
+    assert_eq!(resolved[0]["payload"]["decided_by"], "credential_deny");
+    assert_eq!(completed[0]["payload"]["status"], "denied");
+    assert_eq!(completed[0]["payload"]["reason"], "credentials");
+    assert!(
+        !run.lines
+            .iter()
+            .any(|line| line["kind"] == "tool_call_started"),
+        "the denied call never started"
+    );
+    assert_no_marker("stdout", run.stdout.as_bytes());
+    assert_no_marker("stderr", run.stderr.as_bytes());
+    for (index, request) in server.requests().iter().enumerate() {
+        assert_no_marker(&format!("request {index}"), &request.body);
+    }
+    assert_session_has_no_marker(&run.session_dir(&setup));
+}
+
+#[test]
 fn a_resumed_session_reads_a_changed_shell_read_only_list() {
     // The first run lists nothing, so `jq` is not read-only there; the
     // resume loads the rewritten configuration and denies the same call.

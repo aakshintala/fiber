@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use contract::clock::Clock;
 use extensions::{Span, TuiVm};
@@ -117,10 +118,22 @@ fn load_one(
         || config::read_package_text(dir, "tui/init.lua", "tui/init.lua").map_err(Into::into),
         Arc::clone(clock),
     )?;
+    // The slots table reader walks `animate` at registration: a whole
+    // millisecond count above 0, clamped to the tick floor. Absent
+    // `animate` omits the slot; clamping at or above the floor is a
+    // no-op, and the seam clamps defensively again at its dues and
+    // asks (`docs/tui.md`, "Animation").
+    let mut anim = BTreeMap::new();
+    for slot in vm.slots().keys() {
+        if let Some(raw) = vm.animate(slot) {
+            anim.insert(slot.clone(), tui::ext::anim::effective_interval(raw));
+        }
+    }
     Ok(Some(Candidate {
         manifest,
         vm: RefCell::new(vm),
         off: std::cell::Cell::new(false),
+        anim,
     }))
 }
 
@@ -129,6 +142,9 @@ struct Candidate {
     manifest: config::Manifest,
     vm: RefCell<TuiVm>,
     off: std::cell::Cell<bool>,
+    /// Each animated slot's clamped interval, by slot: absent `animate`
+    /// omits the slot.
+    anim: BTreeMap<String, Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -274,6 +290,15 @@ impl Renderer for Composite {
         candidate.manifest.tui.as_ref()?.session_versions.as_ref()?;
         ctx.halves.as_ref()?.get(extension).cloned()
     }
+    fn animate_interval(&self, ctx: &SessionCtx, slot: &str) -> Option<Duration> {
+        // The winner's interval, exactly as `render` draws it: a static
+        // winner answers none, and an absent slot selects nothing.
+        let SlotSelection::Draw { extension } = self.fills_for(ctx, slot) else {
+            return None;
+        };
+        let candidate = self.candidates.get(&extension)?;
+        candidate.anim.get(slot).copied()
+    }
     fn render(
         &self,
         ctx: &SessionCtx,
@@ -317,22 +342,92 @@ impl Renderer for Composite {
                     .map(|line| line.into_iter().map(from_vm).collect())
                     .collect(),
             },
-            Err(error) => {
-                let kind = if matches!(
-                    error,
-                    extensions::Error::TuiTimeout | extensions::Error::TuiOff
-                ) {
-                    candidate.off.set(true);
-                    FailureKind::ExtensionFailed
-                } else {
-                    FailureKind::HookFailed
-                };
-                Decision::Fail(Failure {
-                    kind,
+            Err(error) => Decision::Fail(Self::failure(candidate, extension, error)),
+        }
+    }
+    fn render_animated(
+        &self,
+        ctx: &SessionCtx,
+        slot: &str,
+        input: &Input<'_>,
+        width: u16,
+        frame: u64,
+        builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> (Decision, bool) {
+        // The same selection as `render`: the frame counts the
+        // animation into the input object, and failures map exactly as
+        // a still call's do, stopping on every failure.
+        let SlotSelection::Draw { extension } = self.fills_for(ctx, slot) else {
+            return (
+                Decision::NotForSession {
+                    extension: String::new(),
+                    tui_version: String::new(),
+                    half: SessionVersion::Unseen,
+                },
+                true,
+            );
+        };
+        let Some(candidate) = self.candidates.get(&extension) else {
+            return (
+                Decision::NotForSession {
                     extension,
-                    message: error.to_string(),
-                })
-            }
+                    tui_version: String::new(),
+                    half: SessionVersion::Unseen,
+                },
+                true,
+            );
+        };
+        let value = input_value(input);
+        let built = |_: &Value, width| {
+            builtin(input, width)
+                .into_iter()
+                .map(|line| line.into_iter().map(to_vm).collect())
+                .collect()
+        };
+        match candidate.vm.borrow_mut().call_animated(
+            slot,
+            ctx.session_id.as_ref().map(|id| id.0.as_str()),
+            &value,
+            width,
+            frame,
+            &built,
+        ) {
+            Ok(out) => (
+                Decision::Draw {
+                    extension,
+                    lines: out
+                        .lines
+                        .into_iter()
+                        .map(|line| line.into_iter().map(from_vm).collect())
+                        .collect(),
+                },
+                out.continues,
+            ),
+            Err(error) => (
+                Decision::Fail(Self::failure(candidate, extension, error)),
+                false,
+            ),
+        }
+    }
+}
+
+impl Composite {
+    /// Maps a callback failure exactly as a still call does: a timeout
+    /// switches the extension off until `/reload`.
+    fn failure(candidate: &Candidate, extension: String, error: extensions::Error) -> Failure {
+        let kind = if matches!(
+            error,
+            extensions::Error::TuiTimeout | extensions::Error::TuiOff
+        ) {
+            candidate.off.set(true);
+            FailureKind::ExtensionFailed
+        } else {
+            FailureKind::HookFailed
+        };
+        Failure {
+            kind,
+            extension,
+            message: error.to_string(),
         }
     }
 }

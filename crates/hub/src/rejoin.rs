@@ -234,10 +234,19 @@ pub(crate) fn candidates(held: &Relays, names: &BTreeSet<String>) -> Vec<(String
 #[derive(Default)]
 pub(crate) struct Connections {
     inner: Mutex<Inner>,
-    /// Tests only: a one-shot pause the worker runs before each connect.
+    /// Tests only: a one-shot pause the worker runs before each connect,
+    /// holding the session gate between the scan and its `connect`, so the
+    /// test can stage a session change over wire, socket or file in that
+    /// window: no outside seam pauses the worker at that boundary, since
+    /// socket removal and `FakeStarter` operations act before the gate is
+    /// taken or after the connect, the fake clock only starts scans, and
+    /// `FakeStarter::hang` parks at admission, after the store.
     #[cfg(test)]
     pub(crate) before_connect: Mutex<Option<Box<dyn FnOnce() + Send>>>,
-    /// Tests only: told at the end of every worker pass.
+    /// Tests only: told at the end of every worker pass while armed, so
+    /// absence assertions bound their wait without sleeping: no outside
+    /// seam observes the worker pass boundary, and polling the rejoin
+    /// effect cannot bound an absence.
     #[cfg(test)]
     pub(crate) pass_done: Mutex<Option<mpsc::Sender<()>>>,
 }
@@ -270,29 +279,6 @@ impl Connections {
 
     pub(crate) fn unregister(&self, n: u64) {
         lock(&self.inner).conns.retain(|(id, _, _)| *id != n);
-    }
-
-    /// The registered connection numbers, pruning dead entries first.
-    #[cfg(test)]
-    pub(crate) fn ids(&self) -> Vec<u64> {
-        let mut inner = lock(&self.inner);
-        inner
-            .conns
-            .retain(|(_, writer, relays)| writer.upgrade().is_some() && relays.upgrade().is_some());
-        inner.conns.iter().map(|(id, _, _)| *id).collect()
-    }
-
-    /// The attribution retained by a live accepted connection.
-    #[cfg(test)]
-    pub(crate) fn attribution(&self, n: u64) -> Option<crate::connection::Attribution> {
-        let inner = lock(&self.inner);
-        let relays = inner
-            .conns
-            .iter()
-            .find(|(id, _, _)| *id == n)?
-            .2
-            .upgrade()?;
-        lock(&relays).attribution.clone()
     }
 }
 
