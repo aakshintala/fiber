@@ -148,6 +148,9 @@ pub(crate) enum Probe {
     /// runs next, so a test holding here forces a reader to reserve inside
     /// the cut window.
     SettleWaitDone,
+    /// `settle_answers` saw a reader still dispatching after quieting the
+    /// readers and waits for it to finish before cutting what is owed.
+    DispatchWaitStarted,
     /// A writer saw STOP while the session is stopping and waits instead
     /// of ending.
     WriterParkedAtStop,
@@ -2802,6 +2805,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
         }
         Probe::ShellsWaiting => if let Ok(()) = waiting_tx.send(()) {},
         Probe::SettleWaitDone
+        | Probe::DispatchWaitStarted
         | Probe::SubscribeSeeded
         | Probe::SubscribeAcknowledged
         | Probe::PrinterStopQueued
@@ -4864,6 +4868,7 @@ fn message_and_close_race_in_both_lock_orders() {
             Probe::CloseLocked => if let Ok(()) = closed_tx.send(()) {},
             Probe::CommandReserved => {}
             Probe::SettleWaitDone
+            | Probe::DispatchWaitStarted
             | Probe::FirstShellWaitDone
             | Probe::PrinterStopQueued
             | Probe::ShellsWaiting
@@ -4953,6 +4958,7 @@ fn message_and_close_race_in_both_lock_orders() {
             }
             Probe::CommandReserved => {}
             Probe::SettleWaitDone
+            | Probe::DispatchWaitStarted
             | Probe::MessageLocked
             | Probe::FirstShellWaitDone
             | Probe::PrinterStopQueued
@@ -6068,6 +6074,7 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
     let (reserved_tx, reserved) = mpsc::channel();
     let (release_tx, release) = mpsc::channel::<()>();
     let release = Mutex::new(release);
+    let (dispatch_tx, dispatch) = mpsc::channel();
     let armed = Arc::new(AtomicBool::new(false));
     let probe_armed = Arc::clone(&armed);
     *super::lock(&gate.probe) = Some(Arc::new(move |point| match point {
@@ -6079,6 +6086,7 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
             if let Ok(()) = reserved_tx.send(()) {}
             released(&release, "the dispatching reader");
         }
+        Probe::DispatchWaitStarted => if let Ok(()) = dispatch_tx.send(()) {},
         Probe::CommandReserved
         | Probe::FirstShellWaitDone
         | Probe::PrinterStopQueued
@@ -6113,16 +6121,28 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
     Deadline::after(DEADLINE)
         .recv(&reserved)
         .expect("the reader reserves c_p before dispatching it");
-    // Release the cut while the reader is still dispatching: at base the cut
-    // takes the reserved id and answers it `indeterminate`.
+    // Release the cut (a) while the reader is still dispatching: the cut
+    // waits for the dispatch to finish before deciding what is owed.
     hold_settle_tx.send(()).unwrap();
+    // The cut saw the dispatching reader and waits for it.
+    Deadline::after(DEADLINE)
+        .recv(&dispatch)
+        .expect("settle_answers waits for the dispatching reader");
+    // While the reader is held, quiesce cannot return: a wait that returns
+    // at once would let the cut through and finish before this receive
+    // times out. Shorter than DEADLINE so the dispatching hold (DEADLINE
+    // from reserve) still outlives it.
+    assert!(
+        Deadline::after(Duration::from_secs(5)).recv(&done).is_err(),
+        "quiesce waits for the dispatching reader"
+    );
+    // Release the dispatching reader (b): its `closing` answer drains
+    // before the cut, so the cut finds nothing owed.
+    release_tx.send(()).unwrap();
     Deadline::after(DEADLINE)
         .recv(&done)
-        .expect("quiesce returns once the cut is flushed");
+        .expect("quiesce returns once the dispatch is answered");
     let session = quiescer.join().expect("the quiesce thread returns");
-    // The reader's own `closing` answer arrives after the cut took the id,
-    // so the writer skips it: the wire keeps only the cut's answer.
-    release_tx.send(()).unwrap();
     armed.store(false, Ordering::SeqCst);
     let answer = loop {
         let line = recv(&client);
@@ -6615,13 +6635,33 @@ fn settle_answers_waits_for_the_flush_through_the_whole_margin() {
     let reader = thread::current().id();
     gate.accepted.track(reader);
     gate.accepted.reserve(&CommandId("c_1".into()));
-    let reading = thread::spawn(|| {});
+    let (id_tx, id_rx) = mpsc::channel::<u64>();
+    let (finish_tx, finish_rx) = mpsc::channel::<()>();
+    let (finished_tx, finished) = mpsc::channel::<()>();
+    let finishing = Arc::clone(&gate);
+    let reading = thread::spawn(move || {
+        let id = id_rx.recv().expect("the test publishes the reader");
+        // Finish only after quiet_readers: the test releases this once
+        // settle_answers notes it waits for the dispatching reader.
+        Deadline::after(DEADLINE)
+            .recv(&finish_rx)
+            .expect("the test releases the finish");
+        finishing.conns.finish(id);
+        if let Ok(()) = finished_tx.send(()) {}
+    });
     let id = gate
         .conns
         .push_reader(reading, Box::new(|| {}), Box::new(|| {}))
         .expect("the gate is running");
+    if let Ok(()) = id_tx.send(id) {}
     gate.conns.note_owed(id, reader);
     gate.conns.push_writer(id, thread::spawn(|| {}));
+    let (dispatch_tx, dispatch) = mpsc::channel();
+    *lock(&gate.probe) = Some(Arc::new(move |point| {
+        if point == Probe::DispatchWaitStarted
+            && let Ok(()) = dispatch_tx.send(())
+        {}
+    }));
     let until = clock.now() + super::GRACE;
     let (done_tx, done_rx) = mpsc::channel();
     let session = opened.session;
@@ -6634,6 +6674,15 @@ fn settle_answers_waits_for_the_flush_through_the_whole_margin() {
         "settle_answers waits for the owed answer"
     );
     clock.advance_when_parked(Some(until), None, super::GRACE, &Deadline::after(DEADLINE));
+    // The reader is still unfinished after quiet_readers, so settle_answers
+    // waits for it before cutting: release the finish outside the locks.
+    Deadline::after(DEADLINE)
+        .recv(&dispatch)
+        .expect("settle_answers waits for the reader to finish");
+    finish_tx.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the reader finished");
     // The grace passed with the answer still owed: the session cut it and
     // now waits the flush margin for the cut writer's flush.
     let parked = clock.await_parked(until + super::CUT_FLUSH, Deadline::after(DEADLINE));
@@ -6643,7 +6692,6 @@ fn settle_answers_waits_for_the_flush_through_the_whole_margin() {
     let session = Deadline::after(DEADLINE)
         .recv(&done_rx)
         .expect("the flush ends settle_answers");
-    gate.conns.finish(id);
     assert!(
         parked,
         "settle_answers waits for the cut flush through the whole margin"

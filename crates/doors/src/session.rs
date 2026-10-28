@@ -673,6 +673,7 @@ impl Session {
     /// other, so the wait below covers it. Waits up to [`conns::GRACE`]
     /// for the answers owed (the grace still bounds the wait, so a client
     /// that keeps sending cannot hold the exit), then stops the readers,
+    /// waits up to the same grace for a reader still dispatching its line,
     /// and cuts what is still unanswered, answering each
     /// `indeterminate`. A reader finishes and answers the line it is
     /// dispatching, and a line already in its buffer is still dispatched.
@@ -698,6 +699,14 @@ impl Session {
         // another line.
         self.gate.conns.mark_stopped();
         self.gate.conns.quiet_readers();
+        // A reader that reserved after the owed wait is still dispatching:
+        // wait for it to finish and answer, bounded by the same grace, so
+        // the writer drains its answer before the cut decides what is owed.
+        if self.gate.conns.has_unfinished_readers() {
+            #[cfg(test)]
+            self.gate.note(tests::Probe::DispatchWaitStarted);
+            self.gate.conns.wait_readers_finished(clock, until);
+        }
         self.gate.conns.cut_owed(&self.gate.session_id, |reader| {
             self.gate.accepted.unanswered(reader) > 0
         });
