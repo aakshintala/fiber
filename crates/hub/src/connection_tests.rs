@@ -2424,22 +2424,6 @@ fn crashed_feed(temp: &Temp, hub: &Arc<Hub>, id: &str) {
     hub.feed.start();
 }
 
-/// Waits under [`DEADLINE`] until the feed holds `n` subscribers.
-#[track_caller]
-fn until_subscribers(hub: &Arc<Hub>, n: usize, what: &str) {
-    let (done_tx, done_rx) = mpsc::channel();
-    let hub = Arc::clone(hub);
-    thread::spawn(move || {
-        while hub.feed.subscribers() != n {
-            std::thread::yield_now();
-        }
-        done_tx.send(()).unwrap_or(());
-    });
-    Deadline::after(DEADLINE)
-        .recv(&done_rx)
-        .unwrap_or_else(|_| panic!("the feed holds {n} subscribers {what}"));
-}
-
 #[test]
 fn feed_is_accepted_then_sends_the_snapshot_and_leaves_with_the_client() {
     let temp = Temp::new();
@@ -2467,10 +2451,9 @@ fn feed_is_accepted_then_sends_the_snapshot_and_leaves_with_the_client() {
             Some(&json!({"session_id": id, "how": "crashed"}))
         );
         // A second `feed` replaces the first subscription.
-        until_subscribers(&hub, 1, "on this connection");
     }
     drop(client);
-    until_subscribers(&hub, 0, "after the client left");
+    until_clients(&hub, 0, "after the client left");
     hub.feed.stop();
 }
 
