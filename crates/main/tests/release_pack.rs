@@ -810,7 +810,10 @@ impl Release {
     }
 
     /// Runs `tool` with `args` and each of `env`, in its own process
-    /// group with stdio piped, and waits for it under the deadline.
+    /// group with stdio piped, and waits for it under a deadline made
+    /// for this wait alone. Each run awaits the last run's answer, so
+    /// the runs are separate waits: one shared deadline would sum every
+    /// run's time against a single budget.
     #[track_caller]
     fn run(&self, tool: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut command = Command::new(tool);
@@ -832,7 +835,7 @@ impl Release {
             .stderr(Stdio::piped());
         run_watched(
             &mut command,
-            self.setup.deadline,
+            Deadline::start(),
             &format!("{} to exit", tool.display()),
         )
     }
