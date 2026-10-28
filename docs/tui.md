@@ -3015,14 +3015,14 @@ cache frame 0 without changing animation state.
 
 A notice animates as a conversation item does: frame 0 is still, and later
 frames advance only while a replacement row was painted in the prior frame. An
-advanced open frame's one result both measures and draws. A notice raised again
-after it faded or was dismissed is a new item and starts at frame 0; a notice's
-animation state goes when the notice does. The animation key is stable across
-page changes, and a new per-`Screen` cache starts a live notice at frame 0. A
-replacement returning no lines stays hidden until the notice fades or is
-pruned, and never advances or schedules animation while hidden. An event
-notice's fade and a condition's re-evaluation are unchanged, so an animation
-never holds a notice on screen.
+advanced open frame's one result both measures and draws. After fade or
+dismissal, a re-raised notice is new and starts at frame 0; its animation
+state goes when the notice does. Live notices with identical code and text
+have independent frames. The animation key is stable across page changes;
+a new per-`Screen` cache starts a live notice at frame 0. A replacement
+returning no lines stays hidden until it fades or is pruned, and never advances
+or schedules animation while hidden. An event notice's fade and a condition's
+re-evaluation are unchanged, so an animation never holds a notice on screen.
 
 An extension's own timers (`host.after`, `host.every`) are for work other than
 drawing. They wake the terminal whether or not anything is on screen, which is

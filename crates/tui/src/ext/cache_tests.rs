@@ -2107,14 +2107,14 @@ fn an_animated_notice_advances_one_call_per_frame() {
     // Frame 0 draws once; later lookups in the same open frame hit the
     // stored open result, as rows, counts and the overlay share it.
     cache.begin_anim_frame(Some(t0), false);
-    // docs/tui.md:2998: frame 0 is the notice's still form.
+    // docs/tui.md:3016: frame 0 is the notice's still form.
     let first = paint_notice(&cache, 7, "down", 20, &answers).expect("frame 0");
     assert!(text_of(&first).starts_with("f0"), "{first:?}");
     let again = paint_notice(&cache, 7, "down", 20, &answers).expect("stored frame 0");
     assert_eq!(text_of(&again), text_of(&first));
     let stored = paint_notice(&cache, 7, "down", 20, &answers).expect("stored frame 0");
     assert_eq!(text_of(&stored), text_of(&first));
-    // docs/tui.md:3000: an advanced open frame's one result both measures and draws.
+    // docs/tui.md:3018: an advanced open frame's one result both measures and draws.
     assert_eq!(answers.frames.borrow().clone(), vec![0]);
     assert_eq!(mark_notice(&cache, &first), vec![(t0, ANIM_INTERVAL)]);
     // Each due painted frame advances once, with exactly one call.
@@ -2142,9 +2142,9 @@ fn two_notices_with_the_same_text_advance_independently() {
     let first_answers = AnimAnswers::new();
     let second_answers = AnimAnswers::new();
     let t0 = origin();
-    // docs/tui.md:3001: a notice's animation state goes when the notice
+    // docs/tui.md:3020: a notice's animation state goes when the notice
     // does, so the same code and text under two live instances keys two
-    // animations, each advancing only while painted (docs/tui.md:2999).
+    // animations, each advancing only while painted (docs/tui.md:3017).
     cache.begin_anim_frame(Some(t0), false);
     let first = paint_notice(&cache, 7, "down", 20, &first_answers).expect("first frame 0");
     let second = paint_notice(&cache, 8, "down", 20, &second_answers).expect("second frame 0");
@@ -2176,7 +2176,7 @@ fn a_new_screen_starts_a_live_notice_at_frame_zero() {
     let fresh = Cache::default();
     let fresh_answers = AnimAnswers::new();
     fresh.begin_anim_frame(Some(at(t0, 500)), false);
-    // docs/tui.md:3003: a new per-`Screen` cache starts a live notice at frame 0.
+    // docs/tui.md:3022: a new per-`Screen` cache starts a live notice at frame 0.
     let restarted = paint_notice(&fresh, 7, "down", 20, &fresh_answers).expect("fresh frame 0");
     assert!(text_of(&restarted).starts_with("f0"), "{restarted:?}");
     assert_eq!(fresh_answers.frames.borrow().clone(), vec![0]);
@@ -2287,7 +2287,7 @@ fn a_dropped_page_restarts_items_but_not_notices() {
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     paint(&cache, &row, 20, &answers).expect("item frame 0 again");
     // ... while the notice stays keyed to its instance and stable page.
-    // docs/tui.md:3002: the animation key is stable across page changes.
+    // docs/tui.md:3021: the animation key is stable across page changes.
     let advanced = paint_notice(&cache, 7, "down", 20, &answers).expect("notice frame 1");
     assert!(text_of(&advanced).starts_with("f1"), "{advanced:?}");
     assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1]);
@@ -2363,7 +2363,7 @@ fn a_failed_notice_stays_failed_across_pages_and_re_raise() {
     cache.begin_anim_frame(Some(t0), false);
     assert!(before.notice_lines(7, "io_failed", "x", 20).is_none());
     // A page change recalls nothing: the failure memo is page-stable.
-    // docs/tui.md:3002: the animation key is stable across page changes.
+    // docs/tui.md:3021: the animation key is stable across page changes.
     assert!(after.notice_lines(7, "io_failed", "x", 20).is_none());
     // A re-raise with the same input under a new instance stays failed.
     assert!(after.notice_lines(8, "io_failed", "x", 20).is_none());
@@ -2404,7 +2404,7 @@ fn closed_entries_prune_with_the_instance_and_re_raise_starts_at_zero() {
     assert!(!cache.has_notice_state(7));
     // The same text raised again is a new item: its first closed and
     // open draws both show frame 0.
-    // docs/tui.md:3001: a re-raised notice is a new item and starts at frame 0.
+    // docs/tui.md:3019: a re-raised notice is a new item and starts at frame 0.
     let fresh_answers = AnimAnswers::new();
     let cold = paint_notice(&cache, 8, "down", 20, &fresh_answers).expect("cold frame 0");
     assert!(text_of(&cold).starts_with("f0"), "{cold:?}");

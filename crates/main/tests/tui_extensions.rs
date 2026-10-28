@@ -352,7 +352,7 @@ fn reduced_motion_draws_the_animated_still_frame() {
         None,
     );
     let mut run = turn(&setup);
-    // docs/tui.md:2974: under reduced motion the terminal draws frame 0
+    // docs/tui.md:3007: under reduced motion the terminal draws frame 0
     // once and makes no animation calls.
     run.wait_screen("animated still frame", |grid| {
         grid.contents.contains("ANIM-FRAME-0")
