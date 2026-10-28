@@ -694,11 +694,14 @@ fn notice_envelope(session_id: &str, seq: u64, message: &str) -> contract::Envel
     }
 }
 
-/// The session forwards every live event to the process owner and replays
-/// stored durable lines after hello, while ephemeral events are live-only:
-/// the ephemeral event arrives once and never replays, the two durable
-/// lines after the cursor arrive in order, and redelivering either is a
-/// no-op because the cursor already covers it.
+/// The session forwards every live event envelope to the process owner
+/// and replays stored durable lines after hello, while ephemeral events
+/// are live-only: the ephemeral envelope arrives once and never replays,
+/// the two durable lines after the cursor arrive in order, and
+/// redelivering either is a no-op because the cursor already covers it.
+/// Each delivery carries the original envelope, with its schema version
+/// and its durable `seq` — or no `seq` for the ephemeral line — rather
+/// than the filtered watcher argument Lua watchers receive.
 #[test]
 fn process_event_stream_forwards_live_and_replays_durable_lines() {
     let env = Env::new("fiber-process-event-stream");
@@ -722,14 +725,20 @@ fn process_event_stream_forwards_live_and_replays_durable_lines() {
     let Ok(Some(first_event)) = Event::from_envelope(&first) else {
         panic!("the envelope parses");
     };
-    session.deliver_event(&first_event, None);
+    session.deliver_event(&first_event, &first);
     // Two durable lines after the startup cursor replay in order.
-    session.deliver_line(&notice_envelope("s_proc", 8, "first"));
-    session.deliver_line(&notice_envelope("s_proc", 9, "second"));
+    let replayed = [
+        notice_envelope("s_proc", 8, "first"),
+        notice_envelope("s_proc", 9, "second"),
+    ];
+    for line in &replayed {
+        session.deliver_line(line);
+    }
     // Redelivering either line is a no-op: the owner's cursor already
     // covers both, so no durable line ever forwards twice.
-    session.deliver_line(&notice_envelope("s_proc", 8, "first"));
-    session.deliver_line(&notice_envelope("s_proc", 9, "second"));
+    for line in &replayed {
+        session.deliver_line(line);
+    }
     let watched = marker.clone();
     fakes::wait_until(
         "the three forwarded lines",
@@ -749,14 +758,18 @@ fn process_event_stream_forwards_live_and_replays_durable_lines() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    let messages: Vec<Value> = lines
+    let received: Vec<Value> = lines
         .iter()
-        .map(|line| line["payload"]["args"][0]["payload"]["message"].clone())
+        .map(|line| line["payload"]["args"][0].clone())
         .collect();
     assert_eq!(
-        messages,
-        vec![json!("live-ephemeral"), json!("first"), json!("second"),],
-        "the live event first, then the replayed pair, each exactly once: {messages:?}"
+        received,
+        vec![
+            serde_json::to_value(&first).unwrap(),
+            serde_json::to_value(&replayed[0]).unwrap(),
+            serde_json::to_value(&replayed[1]).unwrap(),
+        ],
+        "the live envelope first, then the replayed pair, each exactly once: {received:?}"
     );
 }
 
@@ -852,6 +865,60 @@ fn process_startup_failures_report_required_and_skip_the_rest() {
     );
     let cancel = CancelToken::new();
     session.finish_processes(&cancel);
+}
+
+/// A process extension whose child cannot spawn stays out of the loaded
+/// set with the spawn failure's notice: an optional failure is not fatal,
+/// while a required one reports the required code.
+#[test]
+fn process_spawn_failure_stays_out_with_its_notice() {
+    let missing = || json!({"process": {"program": "fiber-definitely-missing-program"}});
+    let env = Env::new("fiber-process-spawn-optional");
+    env.install_process("broken", &missing(), &json!([]));
+    let session = env.load(ExtensionReason::New, 0);
+    assert!(
+        !session
+            .loaded_names()
+            .contains(&"fiber.test/broken".to_owned()),
+        "the unspawnable extension is left out"
+    );
+    assert!(
+        session
+            .notices()
+            .iter()
+            .any(
+                |notice| notice.extension.as_deref() == Some("fiber.test/broken")
+                    && notice.code != contract::ErrorCode::ExtensionRequiredFailed
+            ),
+        "the optional spawn failure is noticed without the required code: {:?}",
+        session.notices()
+    );
+    session.finish_processes(&CancelToken::new());
+
+    let env = Env::new("fiber-process-spawn-required");
+    env.install_process(
+        "broken",
+        &json!({"process": {
+            "program": "fiber-definitely-missing-program",
+            "required": true,
+        }}),
+        &json!([]),
+    );
+    let session = env.load(ExtensionReason::New, 0);
+    assert!(
+        session.notices().iter().any(|notice| notice.code
+            == contract::ErrorCode::ExtensionRequiredFailed
+            && notice.extension.as_deref() == Some("fiber.test/broken")),
+        "the required spawn failure reports: {:?}",
+        session.notices()
+    );
+    assert!(
+        !session
+            .loaded_names()
+            .contains(&"fiber.test/broken".to_owned()),
+        "the required spawn failure is left out"
+    );
+    session.finish_processes(&CancelToken::new());
 }
 
 /// Each session folds its own state: lines one session admits never reach

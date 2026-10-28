@@ -399,16 +399,17 @@ fn package_lazy_commands_restrict_registrations() {
     );
 }
 
-/// A missing program leaves an optional extension out: the package
-/// loads with no owner for the session to start.
+/// A missing program fails the package load, required or not: the
+/// session loader leaves an optional extension out with this failure's
+/// notice instead of loading an ownerless package.
 #[test]
-fn load_process_without_a_program_leaves_an_optional_extension_out() {
+fn load_process_without_a_program_fails_the_package_load() {
     let dir = package_dir(json!({"process": {
         "program": "fiber-definitely-missing-program",
         "exit_timeout_ms": 1000,
     }}));
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let package = Package::load_process_with(
+    let outcome = Package::load_process_with(
         PackageOptions {
             dir: dir.path().to_path_buf(),
             clock: Arc::clone(&clock),
@@ -421,9 +422,11 @@ fn load_process_without_a_program_leaves_an_optional_extension_out() {
         super::host::state::StateRegistry::new(contract::hook::StateSeed::new())
             .store("fiber.test/proc"),
         None,
-    )
-    .expect("an optional extension loads without its program");
-    assert!(package.extension().is_none());
+    );
+    let Err(error) = outcome else {
+        panic!("a missing program fails the package load");
+    };
+    assert_eq!(error.code(), contract::ErrorCode::IoFailed);
 }
 
 /// A missing program fails a required extension: the package never
@@ -450,8 +453,8 @@ fn load_process_without_a_program_fails_a_required_extension() {
             .store("fiber.test/proc"),
         None,
     );
-    assert!(
-        outcome.is_err(),
-        "a required extension loads without its program"
-    );
+    let Err(error) = outcome else {
+        panic!("a required extension loads without its program");
+    };
+    assert_eq!(error.code(), contract::ErrorCode::IoFailed);
 }

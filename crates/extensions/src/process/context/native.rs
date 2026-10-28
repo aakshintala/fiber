@@ -91,19 +91,19 @@ impl NativeHostServices {
         // An absent working directory is the workspace; a relative one
         // joins it, and an absolute one is used as given, as in Lua.
         let cwd = context.workspace.join(cwd);
+        let request = crate::host::exec::ExecRequest {
+            program: program.to_owned(),
+            args: args.clone(),
+            cwd,
+            env,
+            input,
+            cap: crate::host::fs::PROCESS_READ_CAP,
+            own_group: true,
+            #[cfg(test)]
+            test_events: None,
+        };
         if let Some(script) = &self.host_script {
             // The script answers alone, as in Lua: no native I/O follows.
-            let request = crate::host::exec::ExecRequest {
-                program: program.to_owned(),
-                args: args.clone(),
-                cwd: cwd.clone(),
-                env,
-                input,
-                cap: crate::host::fs::PROCESS_READ_CAP,
-                own_group: true,
-                #[cfg(test)]
-                test_events: None,
-            };
             let case_value = request.case_value();
             let (index, outcome) = script.exec(case_value.clone());
             return match outcome {
@@ -147,30 +147,15 @@ impl NativeHostServices {
                 },
             };
         }
-        let ran = crate::host::exec::run(
-            &crate::host::exec::ExecRequest {
-                program: program.to_owned(),
-                args: args.clone(),
-                cwd: cwd.to_owned(),
-                env,
-                input,
-                cap: crate::host::fs::PROCESS_READ_CAP,
-                own_group: true,
-                #[cfg(test)]
-                test_events: None,
-            },
-            self.clock.as_ref(),
-            callback.deadline,
-            stopped,
-        )
-        .map_err(|error: Box<crate::host::exec::ExecError>| (error.code, error.message))?;
+        let ran = crate::host::exec::run(&request, self.clock.as_ref(), callback.deadline, stopped)
+            .map_err(|error: Box<crate::host::exec::ExecError>| (error.code, error.message))?;
         if callback.exec_logged() {
             self.runtime.emit(&contract::events::Event::ExtensionExec(
                 contract::events::ExtensionExec {
                     extension: context.extension.clone(),
                     program: program.to_owned(),
                     args,
-                    cwd: cwd.display().to_string(),
+                    cwd: request.cwd.display().to_string(),
                     process: contract::shapes::Process {
                         exit_code: ran.exit_code,
                         signal: ran.signal.clone(),
@@ -546,19 +531,12 @@ impl NativeHostServices {
         let session = support::lock(&self.session);
         let locks = session.as_ref().map(|session| Arc::clone(&session.locks));
         drop(session);
-        match locks {
-            Some(locks) => crate::host::fs::Fs::for_process_with_locks(
-                context.workspace.clone(),
-                context.data_dirs.machine.clone(),
-                context.data_dirs.project.clone(),
-                locks,
-            ),
-            None => crate::host::fs::Fs::for_process(
-                context.workspace.clone(),
-                context.data_dirs.machine.clone(),
-                context.data_dirs.project.clone(),
-            ),
-        }
+        crate::host::fs::Fs::for_process(
+            context.workspace.clone(),
+            context.data_dirs.machine.clone(),
+            context.data_dirs.project.clone(),
+            locks,
+        )
     }
 
     /// Reads `host.fs.read`: the file's bytes, answered as a bytes

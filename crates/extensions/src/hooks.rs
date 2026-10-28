@@ -1239,28 +1239,35 @@ impl SessionExtensions {
                 return;
             }
         };
-        let Some(owner) = package.extension().cloned() else {
-            started.push(Started {
-                name,
-                version,
-                slug,
-                dir,
-                manifest,
-                prompt,
-                extension: None,
-                package: Some(package),
-                declared: None,
-                commands: Vec::new(),
-                tools: Vec::new(),
-                backends: Vec::new(),
-                providers: Vec::new(),
-                lazy: None,
-            });
+        // One entry for the started package, kept below once the child
+        // is pumped and ready: a spawn failure surfaces as `Err` above,
+        // so only an owner reaches this entry.
+        let entry = Started {
+            name,
+            version,
+            slug,
+            dir,
+            manifest,
+            prompt,
+            extension: None,
+            package: Some(package),
+            declared: None,
+            commands: Vec::new(),
+            tools: Vec::new(),
+            backends: Vec::new(),
+            providers: Vec::new(),
+            lazy: None,
+        };
+        let Some(owner) = entry
+            .package
+            .as_ref()
+            .and_then(|package| package.extension().cloned())
+        else {
             return;
         };
         let pump = Arc::clone(&owner);
         let pumped = std::thread::Builder::new()
-            .name(format!("process pump {name}"))
+            .name(format!("process pump {}", entry.name))
             .spawn(move || {
                 loop {
                     let spawn = pump.transport().spawn_id();
@@ -1280,10 +1287,10 @@ impl SessionExtensions {
             drop(owner.finish(Duration::ZERO, &support::cancel::Token::new()));
             Self::process_failed(
                 session,
-                &name,
+                &entry.name,
                 &(
                     ErrorCode::IoFailed,
-                    format!("{name}: Fiber could not pump the process extension"),
+                    format!("{}: Fiber could not pump the process extension", entry.name),
                 ),
                 required,
             );
@@ -1293,7 +1300,10 @@ impl SessionExtensions {
         // the child from here, and `finish_processes` reaps it at the end.
         drop(pumped);
         let allowance = config
-            .get(&format!("extensions.\"{name}\".startup_timeout_ms"), None)
+            .get(
+                &format!("extensions.\"{}\".startup_timeout_ms", entry.name),
+                None,
+            )
             .and_then(|(value, _)| value.as_u64())
             .unwrap_or(5000);
         let deadline = clock.now() + Duration::from_millis(allowance);
@@ -1308,32 +1318,17 @@ impl SessionExtensions {
             let live = owner.transport();
             drop(live.wait_exit());
             live.join();
-            Self::process_failed(session, &name, &error, required);
+            Self::process_failed(session, &entry.name, &error, required);
             return;
         }
-        started.push(Started {
-            name: name.clone(),
-            version,
-            slug,
-            dir,
-            manifest,
-            prompt,
-            extension: None,
-            package: Some(package),
-            declared: None,
-            commands: Vec::new(),
-            tools: Vec::new(),
-            backends: Vec::new(),
-            providers: Vec::new(),
-            lazy: None,
-        });
         session.processes.push(ProcessLive {
-            name: name.clone(),
+            name: entry.name.clone(),
             owner,
             services,
             exit_timeout,
         });
-        lock(&session.forwarded).insert(name, start.event_cursor);
+        lock(&session.forwarded).insert(entry.name.clone(), start.event_cursor);
+        started.push(entry);
     }
 
     /// Records a process startup failure: the extension is left out with
@@ -1585,42 +1580,46 @@ impl SessionExtensions {
         }
     }
 
-    /// Forwards one live session event to every live process owner, in
-    /// arrival order: each owner's durable cursor advances past durable
-    /// lines whether or not any watcher wants the kind, and only matching
-    /// watcher callbacks dispatch, as Lua's kinds filter does. Ephemeral
-    /// skips a busy watcher, as [`SessionExtensions::deliver`] does.
-    pub fn deliver_event(&self, event: &Event, seq: Option<Seq>) {
+    /// Forwards one live session event envelope to every live process
+    /// owner, in arrival order: each owner's durable cursor advances past
+    /// durable lines whether or not any watcher wants the kind, and only
+    /// matching watcher callbacks dispatch, as Lua's kinds filter does.
+    /// Ephemeral skips a busy watcher, as [`SessionExtensions::deliver`]
+    /// does. The process owner reads the original envelope, with its
+    /// schema version and durable `seq`, while Lua watchers keep the
+    /// filtered `kind`/`payload` argument [`SessionExtensions::deliver`]
+    /// offers them.
+    pub fn deliver_event(&self, event: &Event, line: &contract::Envelope) {
         self.observe_delegate(event);
-        self.forward_process(event, seq.map(|seq| seq.0));
+        self.forward_process(event, line);
     }
 
     /// Replays one stored durable line to every live process owner, in
     /// sequence order: a line at or below an owner's cursor never
     /// forwards twice. Unknown lines are skipped, as the log drain does.
     pub fn deliver_line(&self, line: &contract::Envelope) {
-        let Some(seq) = line.seq else {
+        if line.seq.is_none() {
             return;
-        };
+        }
         let Ok(Some(event)) = Event::from_envelope(line) else {
             return;
         };
-        self.forward_process(&event, Some(seq.0));
+        self.forward_process(&event, line);
     }
 
-    /// Forwards `event` to each live process owner's matching watchers,
-    /// advancing each owner's durable cursor past `seq`: the per-owner
-    /// stream position replay resumes from. A `None` seq forwards live
-    /// ephemeral events without moving any cursor.
-    fn forward_process(&self, event: &Event, seq: Option<u64>) {
+    /// Forwards `line` to each live process owner's matching watchers,
+    /// advancing each owner's durable cursor past its `seq`: the per-owner
+    /// stream position replay resumes from. A line without `seq` forwards
+    /// live ephemeral events without moving any cursor.
+    fn forward_process(&self, event: &Event, line: &contract::Envelope) {
         if self.processes.is_empty() {
             return;
         }
         let ephemeral = event.class() == Class::Ephemeral;
-        let arg = watcher_arg(event);
+        let envelope = serde_json::to_value(line).unwrap_or(Value::Null);
         let mut forwarded = lock(&self.forwarded);
         for live in &self.processes {
-            if let Some(seq) = seq {
+            if let Some(seq) = line.seq.map(|seq| seq.0) {
                 if seq <= forwarded.get(&live.name).copied().unwrap_or(0) {
                     continue;
                 }
@@ -1637,7 +1636,9 @@ impl SessionExtensions {
                 if ephemeral && self.runtime.is_watcher_busy(&watcher.watcher) {
                     continue;
                 }
-                let _ = self.runtime.push_watcher(&watcher.watcher, arg.clone());
+                let _ = self
+                    .runtime
+                    .push_watcher(&watcher.watcher, envelope.clone());
             }
         }
     }
@@ -1754,7 +1755,7 @@ impl SessionExtensions {
                     continue;
                 }
             };
-            replay.push((seq, event));
+            replay.push((seq, event, line));
         }
         let mut advanced = BTreeMap::new();
         let mut stopped = false;
@@ -1771,14 +1772,19 @@ impl SessionExtensions {
             else {
                 continue;
             };
-            for (seq, event) in &replay {
+            // A process owner reads the original envelope, as the live
+            // forwarding does; a Lua watcher keeps its filtered argument.
+            let process = self.processes.iter().any(|live| live.name == watcher.name);
+            for (seq, event, line) in &replay {
                 if *seq < from || !watcher.kinds.iter().any(|kind| kind == event.kind()) {
                     continue;
                 }
-                match self
-                    .runtime
-                    .drain_watcher(&watcher.watcher, watcher_arg(event))
-                {
+                let arg = if process {
+                    serde_json::to_value(line).unwrap_or(Value::Null)
+                } else {
+                    watcher_arg(event)
+                };
+                match self.runtime.drain_watcher(&watcher.watcher, arg) {
                     Ok(()) => {}
                     Err(Error::Stopped { .. }) => {
                         stopped = true;

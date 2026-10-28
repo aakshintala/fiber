@@ -20,18 +20,14 @@ impl Current {
         *support::lock(&self.0) = extensions;
     }
 
-    /// Forwards one live session event to the current set: each live
-    /// process owner reads the envelope first, then the watcher fan-out
-    /// runs. Resolving per event keeps a reload's swap ordered with no
-    /// second subscription.
-    pub(crate) fn deliver_event(
-        &self,
-        event: &contract::events::Event,
-        seq: Option<contract::Seq>,
-    ) {
+    /// Forwards one live session event envelope to the current set: each
+    /// live process owner reads the envelope first, then the watcher
+    /// fan-out runs. Resolving per event keeps a reload's swap ordered
+    /// with no second subscription.
+    pub(crate) fn deliver_event(&self, event: &contract::events::Event, line: &contract::Envelope) {
         let current = self.get();
-        current.deliver_event(event, seq);
-        current.deliver(event, seq);
+        current.deliver_event(event, line);
+        current.deliver(event, line.seq);
     }
 }
 
@@ -151,7 +147,7 @@ pub(crate) fn subscribe(
         if cancel.shutdown_code().is_some() {
             return;
         }
-        current.deliver_event(event, line.seq);
+        current.deliver_event(event, line);
     }))
 }
 

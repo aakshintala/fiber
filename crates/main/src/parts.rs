@@ -109,7 +109,7 @@ pub(crate) fn per_run(model: Option<String>, overrides: Vec<String>) -> Vec<Stri
 
 /// As [`parts_in`], for the Fiber home and workspace the environment
 /// names: a live session composes process extensions under its launch
-/// identity.
+/// identity, starting pending MCP before extension/provider waits.
 #[allow(
     clippy::too_many_arguments,
     reason = "one entry composition: the recorded model, credential, thinking, clock, host, reads and diagnostic process"
@@ -131,7 +131,7 @@ pub(crate) fn parts_with_session<'a>(
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
         .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-    parts_in_session(
+    parts_inner(
         home,
         workspace,
         overrides,
@@ -145,8 +145,8 @@ pub(crate) fn parts_with_session<'a>(
         process,
         seed,
         repository,
-        launch,
-        fiber,
+        Some(launch),
+        Some(fiber),
     )
 }
 
@@ -203,8 +203,6 @@ pub(crate) struct SessionLaunch {
 }
 
 /// Reads the one startup configuration and constructs its diagnostic writer.
-/// Live sessions run this before starting MCP; other callers use it in
-/// `parts_inner` as before.
 fn load_configuration(
     home: &Path,
     workspace: &Path,
@@ -242,93 +240,6 @@ fn load_configuration(
     ));
     let notices = config.notices().to_vec();
     Ok((config, diag, notices))
-}
-
-/// As [`parts_in`], for a live session: process extensions start under
-/// the launch identity, and a required miss abandons what started and
-/// fails the composition. Model, inspection and test callers keep using
-/// [`parts_in`], which never manufactures session context.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one composition of the session's parts: homes, model choice, clock, runner host and diagnostic process"
-)]
-pub(crate) fn parts_in_session(
-    home: PathBuf,
-    workspace: PathBuf,
-    overrides: Vec<String>,
-    recorded: Option<&str>,
-    labels: crate::credential::Labels<'_>,
-    recorded_thinking: Option<ThinkingLevel>,
-    clock: Arc<dyn contract::clock::Clock>,
-    host: Option<Arc<extensions::HostScript>>,
-    agents_home: Option<PathBuf>,
-    reads: Arc<switch::Reads>,
-    process: log::diag::Process,
-    seed: extensions::StateSeed,
-    repository: session_extensions::RepositoryScope,
-    launch: SessionLaunch,
-    fiber: PathBuf,
-) -> Result<Parts, Failure> {
-    let (sessions, project) = ::cli::project_of(&home, &workspace)?;
-    let (config, diag, startup_notices) = load_configuration(
-        &home,
-        &workspace,
-        &project,
-        &overrides,
-        Arc::clone(&clock),
-        process,
-    )?;
-    // Defer configuration refusals until the pending start is joined, after
-    // provider credential discovery keeps its existing startup order.
-    let (mcp_start, mcp) = match mcp_servers::specs(&config) {
-        Ok(mut mcp) => {
-            let start = Ok((
-                std::mem::take(&mut mcp.specs),
-                std::mem::take(&mut mcp.repository),
-            ));
-            (start, mcp)
-        }
-        Err(failure) => (Err(failure), mcp_servers::Specs::default()),
-    };
-    let timing = diag.debugging().then(|| diag.timings());
-    let artifacts = log::SessionDir::new(&sessions, &launch.id).artifacts();
-    let images = crate::builtin::session_images(fiber, &artifacts, timing.clone());
-    let pending_mcp = Some(mcp_servers::start_session_tools(
-        &home,
-        &workspace,
-        &artifacts,
-        &clock,
-        &project,
-        mcp_start,
-        repository.skipped.clone(),
-        images,
-        timing,
-    )?);
-    parts_inner(
-        home,
-        workspace,
-        overrides,
-        recorded,
-        labels,
-        recorded_thinking,
-        clock,
-        host,
-        agents_home,
-        reads,
-        process,
-        seed,
-        repository,
-        Some(launch),
-        Some((
-            sessions,
-            project,
-            config,
-            diag,
-            startup_notices,
-            mcp,
-            pending_mcp,
-        )),
-    )
 }
 
 /// Settles one composition step for a live session: a failure after
@@ -418,7 +329,7 @@ fn load_session_extensions(
 #[allow(
     clippy::too_many_arguments,
     clippy::type_complexity,
-    reason = "one composition carries shared session inputs and the preloaded config/start owner"
+    reason = "one composition carries shared session inputs with its launch identity and recorded executable"
 )]
 fn parts_inner(
     home: PathBuf,
@@ -435,34 +346,53 @@ fn parts_inner(
     seed: extensions::StateSeed,
     repository: session_extensions::RepositoryScope,
     launch: Option<SessionLaunch>,
-    preloaded: Option<(
-        PathBuf,
-        config::ProjectKey,
-        Config,
-        Arc<log::diag::Diag>,
-        Vec<contract::events::Notice>,
-        mcp_servers::Specs,
-        Option<mcp_servers::PendingMcp>,
-    )>,
+    fiber: Option<PathBuf>,
 ) -> Result<Parts, Failure> {
-    let (sessions, project, config, diag, mut startup_notices, preloaded_mcp, pending_mcp) =
-        match preloaded {
-            Some((sessions, project, config, diag, notices, mcp, pending)) => {
-                (sessions, project, config, diag, notices, Some(mcp), pending)
-            }
-            None => {
-                let (sessions, project) = ::cli::project_of(&home, &workspace)?;
-                let (config, diag, notices) = load_configuration(
-                    &home,
-                    &workspace,
-                    &project,
-                    &overrides,
-                    Arc::clone(&clock),
-                    process,
-                )?;
-                (sessions, project, config, diag, notices, None, None)
-            }
-        };
+    let (sessions, project) = ::cli::project_of(&home, &workspace)?;
+    let (config, diag, mut startup_notices) = load_configuration(
+        &home,
+        &workspace,
+        &project,
+        &overrides,
+        Arc::clone(&clock),
+        process,
+    )?;
+    // A live session starts pending MCP before extension/provider waits,
+    // so the two startups overlap; other callers compose with no pending
+    // start, as before. Configuration refusals stay deferred until the
+    // pending start is joined, after provider credential discovery keeps
+    // its existing startup order. Dropping the pending owner on any early
+    // return below joins its start, then stops its servers.
+    let (preloaded_mcp, pending_mcp) = match (&launch, fiber) {
+        (Some(launch), Some(fiber)) => {
+            let (mcp_start, mcp) = match mcp_servers::specs(&config) {
+                Ok(mut mcp) => {
+                    let start = Ok((
+                        std::mem::take(&mut mcp.specs),
+                        std::mem::take(&mut mcp.repository),
+                    ));
+                    (start, mcp)
+                }
+                Err(failure) => (Err(failure), mcp_servers::Specs::default()),
+            };
+            let timing = diag.debugging().then(|| diag.timings());
+            let artifacts = log::SessionDir::new(&sessions, &launch.id).artifacts();
+            let images = crate::builtin::session_images(fiber, &artifacts, timing.clone());
+            let pending = mcp_servers::start_session_tools(
+                &home,
+                &workspace,
+                &artifacts,
+                &clock,
+                &project,
+                mcp_start,
+                repository.skipped.clone(),
+                images,
+                timing,
+            )?;
+            (Some(mcp), Some(pending))
+        }
+        _ => (None, None),
+    };
     // Loading extensions runs under its own timer, from the installed
     // provider packages through the session extensions' load. The budget
     // read above stays outside, and the diagnostics below stay outside:

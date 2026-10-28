@@ -99,9 +99,13 @@ impl Package {
 
     /// Starts the manifest-declared process behind the seam: the same
     /// manifest checks as [`Package::load`], then the child runs with
-    /// `context` as its hello and answers through `services`. A manifest
-    /// with no process loads with no owner, as `load` does. The session
-    /// passes its own folded state store and driver: the child never
+    /// `context` as its hello and answers through `services`. A spawn
+    /// failure fails the package load, required or not: the session
+    /// loader leaves an optional extension out with the failure's notice
+    /// and fails a required start, as a required MCP server does. A
+    /// manifest with no process loads with no owner, as `load` does. The
+    /// session passes its own folded state store and driver: the child
+    /// never
     /// opens a standalone store and never runs driverless.
     /// `PackageOptions` stays `{ dir, clock }`: the context carries what
     /// the session activates.
@@ -147,18 +151,12 @@ impl Package {
             clock,
             limits: super::process::transport::Limits::default(),
         });
-        // A missing program leaves an optional extension out, with no
-        // owner for the session to start; a required one fails the
-        // package, as a required MCP server does.
+        // A spawn failure fails the package load, required or not: the
+        // session loader leaves an optional extension out with this
+        // failure's notice and fails a required start, as a required MCP
+        // server does.
         let extension = match extension {
             Ok(extension) => Some(Arc::new(extension)),
-            Err(_source) if !process.required => {
-                return Ok(Arc::new(Package {
-                    manifest: package.manifest.clone(),
-                    registry: package.registry.clone(),
-                    extension: None,
-                }));
-            }
             Err(source) => return Err(Error::Io { path: dir, source }),
         };
         Ok(Arc::new(Package {
