@@ -1134,6 +1134,7 @@ fn a_check_before_message_hook_that_replaces_has_failed() {
 #[test]
 fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected() {
     use extension_harness::{send as session_send, until_session as session_until};
+    use support::{Diag, session_dir};
 
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
@@ -1148,7 +1149,11 @@ fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected()
     );
     let id = doors::mint("s_");
     let mut running = setup.start_session(&id, &[]);
-    let client = running.connect(&setup.socket(&id));
+    let mut client = running.connect(&setup.socket(&id));
+    client.set_diag(Diag::new(
+        running.stderr_snapshot.clone(),
+        session_dir(&setup, &id),
+    ));
     running.wait_for("extensions_loaded");
     session_send(
         &client,
@@ -1167,7 +1172,13 @@ fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected()
     );
     // The refusal lands after the answer, as a notice naming the code,
     // the extension and the reason: the loop never rejects a steer it
-    // already accepted.
+    // already accepted. The reader admits a steer and answers at once
+    // while the loop reconciles it at its next drain
+    // (`docs/architecture.md`, "One inbox"; `docs/loop.md`, "One step"),
+    // and a refused message is neither logged nor sent while its sender
+    // is told why (`docs/extensions.md`, "The hook points"): with the
+    // answer already out, the why is the `message_refused` notice
+    // (`docs/errors.md`, "Registry").
     let refused = session_until(&client, "the refused steer's notice", |line| {
         line["kind"] == "notice" && line["payload"]["code"] == "message_refused"
     });
@@ -1198,6 +1209,12 @@ fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected()
         line["kind"] == "turn_started"
     });
     let input = turned.last().unwrap()["payload"]["input"].clone();
+    // One input item: the refused steer and the refused prompt queued
+    // nothing — a refused message is neither logged nor sent
+    // (`docs/extensions.md`, "The hook points"), and a refused prompt is
+    // rejected (`docs/invocation.md`, "Driver commands") — so the accepted
+    // prompt is everything that started the turn, in arrival order
+    // (`docs/events.md`, "`turn_started`"; `docs/loop.md`, "Starting a turn").
     assert_eq!(input.as_array().unwrap().len(), 1);
     assert_eq!(input[0]["content"][0]["text"], "second");
     session_send(&client, r#"{"id":"c_close","command":"close"}"#);
