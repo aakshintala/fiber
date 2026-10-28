@@ -1007,6 +1007,7 @@ fn the_effects_item_names_the_added_folders_beside_the_workspace_root() {
                 effects: vec![contract::shapes::Effect::Reads],
                 reversible: false,
                 paths: None,
+                confined: false,
             },
             subject: None,
             prefix: None,

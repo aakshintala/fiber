@@ -2280,6 +2280,7 @@ fn declared_abs(paths: &[String]) -> DeclaredEffects {
         effects: vec![Effect::Writes],
         reversible: true,
         paths: Some(paths.to_vec()),
+        confined: false,
     }
 }
 

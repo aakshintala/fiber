@@ -2374,6 +2374,7 @@ fn writes(paths: &[String]) -> Effects {
             effects: vec![Effect::Writes],
             reversible: false,
             paths: Some(paths.to_vec()),
+            confined: false,
         },
         subject: Some(String::new()),
         prefix: None,

@@ -2073,6 +2073,7 @@ fn add_directory_while_an_approval_waits_is_written_and_a_later_call_sees_it() {
                 effects: vec![Effect::Writes],
                 reversible: false,
                 paths: Some(vec![shared.join("new.rs").display().to_string()]),
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,
