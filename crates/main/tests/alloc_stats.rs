@@ -193,8 +193,10 @@ fn ops(setup: &Setup, op: &str) -> Vec<Value> {
         .collect()
 }
 
-/// At `debug` the `tool.run` line of a run whose model reads the note
-/// carries the `alloc-stats` fields: numeric `alloc_bytes`, `allocs` and
+/// At `debug` a qualifying `tool.run` line of a run whose model reads
+/// the note carries the `alloc-stats` fields (`docs/state.md:306` names
+/// the `op_timing` fields, `docs/state.md:345-355` scopes `tool.run` to
+/// one entered execution): numeric `alloc_bytes`, `allocs` and
 /// `live_delta_bytes` beside `op`, `ms` and `tool`.
 #[test]
 fn a_debug_tool_run_line_carries_alloc_fields() {
@@ -204,11 +206,15 @@ fn a_debug_tool_run_line_carries_alloc_fields() {
         &json!({"diagnostics": {"level": "debug"}}),
     );
     let runs = ops(&setup, "tool.run");
-    assert_eq!(runs.len(), 1, "{:?}", op_lines(&setup));
-    let line = &runs[0];
+    let line = runs
+        .iter()
+        .find(|line| line["data"]["tool"] == "read")
+        .unwrap_or_else(|| panic!("a qualifying tool.run line: {:?}", op_lines(&setup)));
     assert_eq!(line["data"]["op"], "tool.run", "{line}");
     assert!(line["data"]["ms"].as_u64().is_some(), "{line}");
     assert_eq!(line["data"]["tool"], "read", "{line}");
+    // `docs/state.md:306`: in an `alloc-stats` build a same-thread timer
+    // also carries these three fields; otherwise they are absent, never zero.
     assert!(
         line["data"]["alloc_bytes"].as_u64().is_some(),
         "numeric alloc_bytes: {line}"

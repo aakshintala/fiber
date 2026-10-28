@@ -1084,3 +1084,39 @@ fn cross_thread_stop_then_parent_drop_writes_no_alloc_fields() {
         "no live_delta_bytes: {line}"
     );
 }
+
+/// A guard dropped on its starting thread carries every allocation field
+/// together: `alloc_bytes`, `allocs` and `live_delta_bytes` are one
+/// flattened value, so the wire holds all three or none, never a partial
+/// set, and no nested `alloc` key leaks.
+#[cfg(feature = "alloc-stats")]
+#[test]
+fn same_thread_timer_writes_all_alloc_fields_together() {
+    let home = Home::new("ld-timed-same-alloc");
+    let (inner, spy) = SpyClock::new();
+    let diag = debug_diag(&home, &spy);
+    let start = inner.now();
+    // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    inner.advance(Duration::from_millis(7));
+    drop(timed(&diag, Op::ToolRun, Some("read"), Some(start)).expect("debug guard"));
+    let line = op_line(&home, "hub.log");
+    assert_eq!(line["data"]["op"], "tool.run");
+    assert!(line["data"]["ms"].is_u64(), "ms: {line}");
+    assert!(
+        line["data"]["alloc_bytes"].is_u64(),
+        "numeric alloc_bytes: {line}"
+    );
+    assert!(line["data"]["allocs"].is_u64(), "numeric allocs: {line}");
+    assert!(
+        line["data"]["live_delta_bytes"].is_i64(),
+        "numeric live_delta_bytes: {line}"
+    );
+    assert!(
+        line["data"].get("alloc").is_none(),
+        "flattened, no nested alloc: {line}"
+    );
+}

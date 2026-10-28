@@ -107,6 +107,18 @@ struct Peak {
     peak_kib: u64,
 }
 
+/// The allocation metrics of an `op_timing` line in an `alloc-stats`
+/// build (`docs/state.md:306`): bytes allocated during the operation,
+/// the allocation count, and signed end-minus-start live bytes. The wire
+/// keeps the `alloc_bytes`, `allocs` and `live_delta_bytes` names.
+#[cfg(feature = "alloc-stats")]
+#[derive(serde::Serialize)]
+struct AllocMetrics {
+    alloc_bytes: u64,
+    allocs: u64,
+    live_delta_bytes: i64,
+}
+
 /// The `data` of an `op_timing` line: the operation, whole milliseconds,
 /// and the tool's name on a tool's timers. No other field is recorded,
 /// and never an argument, a path or any content.
@@ -116,21 +128,12 @@ struct TimingData<'a> {
     ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool: Option<&'a str>,
-    /// Bytes allocated while the timer ran, on its starting thread: an
-    /// `alloc-stats` build only, and only when the timer ends there.
+    /// The operation's allocation metrics, present as one unit: an
+    /// `alloc-stats` build only, and only when the timer ends on the
+    /// thread that started it. Otherwise absent, never a partial set.
     #[cfg(feature = "alloc-stats")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    alloc_bytes: Option<u64>,
-    /// Allocation count while the timer ran: same gating as `alloc_bytes`.
-    #[cfg(feature = "alloc-stats")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    allocs: Option<u64>,
-    /// End-minus-start live bytes while the timer ran, signed, negative
-    /// when the operation freed more than it allocated: same gating as
-    /// `alloc_bytes`.
-    #[cfg(feature = "alloc-stats")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    live_delta_bytes: Option<i64>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    alloc: Option<AllocMetrics>,
 }
 
 /// One lock across every diagnostic file in the process: a pair write
@@ -568,17 +571,13 @@ impl Drop for Timer {
             None => None,
         };
         #[cfg(feature = "alloc-stats")]
-        let (alloc_bytes, allocs, live_delta_bytes) = match end_allocs {
-            Some(end) => (
-                Some(
-                    end.alloc_bytes
-                        .saturating_sub(self.start_allocs.alloc_bytes),
-                ),
-                Some(end.allocs.saturating_sub(self.start_allocs.allocs)),
-                Some(end.live_bytes.saturating_sub(self.start_allocs.live_bytes)),
-            ),
-            None => (None, None, None),
-        };
+        let alloc = end_allocs.map(|end| AllocMetrics {
+            alloc_bytes: end
+                .alloc_bytes
+                .saturating_sub(self.start_allocs.alloc_bytes),
+            allocs: end.allocs.saturating_sub(self.start_allocs.allocs),
+            live_delta_bytes: end.live_bytes.saturating_sub(self.start_allocs.live_bytes),
+        });
         let end = self.end.unwrap_or_else(|| self.clock.now());
         // A clock that runs backwards contributes zero: no panic, and no
         // fabricated duration. A stamp from another clock reads zero too.
@@ -605,11 +604,7 @@ impl Drop for Timer {
                 ms,
                 tool: self.tool.as_deref(),
                 #[cfg(feature = "alloc-stats")]
-                alloc_bytes,
-                #[cfg(feature = "alloc-stats")]
-                allocs,
-                #[cfg(feature = "alloc-stats")]
-                live_delta_bytes,
+                alloc,
             }),
         };
         append_line(&state.file, &self.logs, self.rotate_at, &line);
