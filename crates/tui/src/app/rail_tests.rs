@@ -3,6 +3,7 @@
 
 use super::super::{App, Effect, Link};
 use super::Spot;
+use crate::app::testkit::{SESSION as A, hello, home_with};
 use crate::home::{Launch, Spot as HomeSpot};
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::keyset::Context;
@@ -14,16 +15,14 @@ use contract::clock::Clock;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-const A: &str = "s_aaaaaaaaaaaaaaaa";
 const B: &str = "s_bbbbbbbbbbbbbbbb";
 const C: &str = "s_cccccccccccccccc";
 const D: &str = "s_dddddddddddddddd";
 const CARDS: [&str; 5] = ["session", "changed_files", "delegates", "jobs", "quota"];
 
-/// An app on home at 200x40, drawing the default card list.
-fn home() -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(Launch {
+/// The home launch at 200x40, drawing the default card list.
+fn launch() -> Launch {
+    Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),
             project: "-w".to_owned(),
@@ -34,19 +33,7 @@ fn home() -> App {
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),
         ..Default::default()
-    });
-    app.set_size(200, 40);
-    app
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
+    }
 }
 
 /// Parses command lines going out.
@@ -136,7 +123,7 @@ fn number(app: &App, session: &str) -> Option<usize> {
 
 /// A linked app on home with `sessions` live and idle, in order.
 fn with(sessions: &[&str]) -> App {
-    let mut app = home();
+    let mut app = home_with(200, 40, launch());
     linked(&mut app);
     for session in sessions {
         app.on_line(live(session, json!({})));
@@ -146,7 +133,7 @@ fn with(sessions: &[&str]) -> App {
 
 #[test]
 fn remote_rail_has_no_launch_project() {
-    let mut app = home();
+    let mut app = home_with(200, 40, launch());
     app.set_home(Launch {
         location: crate::LaunchLocation::Remote {
             hub: "box".to_owned(),
@@ -325,7 +312,7 @@ fn a_crashed_row_keeps_its_number() {
 
 #[test]
 fn a_recent_row_gets_no_number() {
-    let mut app = home();
+    let mut app = home_with(200, 40, launch());
     let (_, recent) = linked(&mut app);
     app.on_line(Line::Hub(contract::HubLine {
         kind: "command_accepted".to_owned(),
@@ -1553,7 +1540,7 @@ fn answer_recent(app: &mut App, recent: &str, sessions: &[&str]) -> Vec<String> 
 fn thirty_live_on_screen() -> (App, String, u64) {
     let sessions: Vec<String> = (0..30).map(|i| format!("s_live_{i:03}")).collect();
     let refs: Vec<&str> = sessions.iter().map(String::as_str).collect();
-    let mut app = home();
+    let mut app = home_with(200, 40, launch());
     let (_, recent) = linked(&mut app);
     for session in &refs {
         app.on_line(live(session, json!({})));
@@ -1639,7 +1626,7 @@ fn resume_list_focuses_the_first_off_screen_exited_row() {
 fn focus_row_expands_a_project_hiding_the_row_behind_more() {
     let sessions: Vec<String> = (0..5).map(|i| format!("s_old_{i:03}")).collect();
     let refs: Vec<&str> = sessions.iter().map(String::as_str).collect();
-    let mut app = home();
+    let mut app = home_with(200, 40, launch());
     app.set_size(80, 24);
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &refs);
@@ -1914,7 +1901,7 @@ fn row_key(app: &App, session: &str) -> u64 {
 /// `A` on screen: feed order is `A`, `C`, `B`, but the rail draws the
 /// launch project first.
 fn two_projects() -> App {
-    let mut app = home();
+    let mut app = home_with(200, 40, launch());
     linked(&mut app);
     app.on_line(live(A, json!({})));
     app.on_line(live(C, json!({"project": "-other", "workspace": "/other"})));

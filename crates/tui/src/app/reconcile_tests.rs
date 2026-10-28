@@ -7,16 +7,15 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use super::super::{App, Link};
+use crate::app::testkit::{SESSION as S_A, hello, home_with};
 use crate::home::Launch;
 use crate::link::Line;
 
-const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 const S_B: &str = "s_bbbbbbbbbbbbbbbb";
 
-/// An app on home at 80x24.
-fn home() -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(Launch {
+/// The home launch at 80x24.
+fn launch() -> Launch {
+    Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),
             project: "-w".to_owned(),
@@ -27,19 +26,7 @@ fn home() -> App {
         rail_share: 15.0,
         panel_share: 21.0,
         ..Default::default()
-    });
-    app.set_size(80, 24);
-    app
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
+    }
 }
 
 /// A hub answer of `kind` with `payload`.
@@ -164,7 +151,7 @@ fn rows(app: &App) -> Vec<String> {
 
 #[test]
 fn a_live_row_missing_from_sessions_is_dropped() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     fold(&mut app, live(S_B, "tidy docs"));
     assert_eq!(rows(&app), ["✓  tidy docs"]);
@@ -176,7 +163,7 @@ fn a_live_row_missing_from_sessions_is_dropped() {
 
 #[test]
 fn a_row_with_a_feed_line_after_sessions_is_kept() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     fold(&mut app, live(S_B, "tidy docs"));
     let out = reconnect(&mut app);
@@ -189,7 +176,7 @@ fn a_row_with_a_feed_line_after_sessions_is_kept() {
 
 #[test]
 fn a_row_listed_by_sessions_is_kept() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     fold(&mut app, live(S_B, "tidy docs"));
     let out = reconnect(&mut app);
@@ -199,7 +186,7 @@ fn a_row_listed_by_sessions_is_kept() {
 
 #[test]
 fn a_status_before_sessions_does_not_protect() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     // The only status arrived before `sessions` was sent, so nothing after
     // protects the row.
@@ -212,7 +199,7 @@ fn a_status_before_sessions_does_not_protect() {
 
 #[test]
 fn sessions_goes_out_once_per_reconnect_after_feed_and_not_first() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     // Not on the first connection.
     let first = linked(&mut app);
     assert_eq!(names(&first), ["feed", "recent"]);
@@ -229,7 +216,7 @@ fn sessions_goes_out_once_per_reconnect_after_feed_and_not_first() {
 
 #[test]
 fn a_stale_sessions_answer_is_ignored() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     fold(&mut app, live(S_B, "tidy docs"));
     let first = reconnect(&mut app);
@@ -250,7 +237,7 @@ fn a_stale_sessions_answer_is_ignored() {
 
 #[test]
 fn a_rejected_sessions_keeps_the_rows() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     fold(&mut app, live(S_B, "tidy docs"));
     let out = reconnect(&mut app);
@@ -269,7 +256,7 @@ fn a_rejected_sessions_keeps_the_rows() {
 
 #[test]
 fn a_rejected_sessions_ends_the_wait() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     fold(&mut app, live(S_B, "tidy docs"));
     let out = reconnect(&mut app);
@@ -289,7 +276,7 @@ fn a_rejected_sessions_ends_the_wait() {
 
 #[test]
 fn a_rejection_with_another_id_leaves_the_wait() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     fold(&mut app, live(S_B, "tidy docs"));
     let out = reconnect(&mut app);
@@ -308,7 +295,7 @@ fn a_rejection_with_another_id_leaves_the_wait() {
 
 #[test]
 fn a_sessions_answer_without_live_drops_everything() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     fold(&mut app, live(S_B, "tidy docs"));
     let out = reconnect(&mut app);
@@ -324,7 +311,7 @@ fn a_sessions_answer_without_live_drops_everything() {
 
 #[test]
 fn exited_rows_survive_sessions() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     let first = linked(&mut app);
     fold(
         &mut app,
@@ -345,7 +332,7 @@ fn exited_rows_survive_sessions() {
 
 #[test]
 fn a_sessions_answer_after_a_drop_before_the_next_hello_drops_nothing() {
-    let mut app = home();
+    let mut app = home_with(80, 24, launch());
     linked(&mut app);
     fold(&mut app, live(S_B, "tidy docs"));
     let out = reconnect(&mut app);
