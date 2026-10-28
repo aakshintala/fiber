@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::clock::Clock;
-use extensions::case::format::Input;
-use extensions::case::{Case, CaseRun, SessionCase};
+use extensions::case::{Case, CaseRun, Input, SessionCase, Verdict, run_call};
 use serde_json::Value;
 
 /// Runs one case file and prints its child verdict.
@@ -37,11 +36,11 @@ pub(crate) fn extension_case(
     let (name, case) = match case {
         Case::Call(call) => {
             let name = call.name.clone().unwrap_or(fallback_name);
-            let verdict = extensions::case::run_call(call, process_clock);
-            return if verdict.malformed {
-                malformed(&name, &verdict.failures)
-            } else {
-                report(&name, &verdict.failures)
+            let verdict = run_call(call, process_clock);
+            return match verdict {
+                Verdict::Pass => report(&name, &[]),
+                Verdict::Fail(failures) => report(&name, &failures),
+                Verdict::Malformed(failures) => malformed(&name, &failures),
             };
         }
         Case::Session(mut session) => {

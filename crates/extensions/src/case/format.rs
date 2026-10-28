@@ -6,7 +6,7 @@ use contract::ErrorCode;
 use serde_json::{Map, Value};
 
 /// The injected validator for a session case's script bytes.
-pub type ScriptCheck<'a> = dyn Fn(&Path, &[u8]) -> Result<(), String> + 'a;
+type ScriptCheck<'a> = dyn Fn(&Path, &[u8]) -> Result<(), String> + 'a;
 
 /// One parsed extension case: a session case or a provider call case.
 /// The two kinds are variants, so a case cannot carry both a prompt and a
@@ -148,7 +148,7 @@ impl Case {
     pub fn parse(
         path: &Path,
         bytes: &[u8],
-        check_script: &ScriptCheck<'_>,
+        check_script: &dyn Fn(&Path, &[u8]) -> Result<(), String>,
     ) -> Result<Self, crate::Error> {
         Self::parse_inner(path, bytes, check_script).map_err(crate::Error::Case)
     }

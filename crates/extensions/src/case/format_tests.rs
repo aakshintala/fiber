@@ -13,7 +13,6 @@ use std::sync::Mutex;
 use serde_json::{Value, json};
 
 use super::{CallOutcome, Case};
-use crate as extensions;
 
 #[test]
 fn a_script_check_error_keeps_its_context_and_path() {
@@ -314,7 +313,7 @@ fn every_session_field_and_each_host_reply_shape_is_read() {
     assert_eq!(parsed.host.exec[0].request["program"], "git");
     assert_eq!(parsed.host.exec[0].request["cwd"], "/workspace");
     assert_eq!(parsed.host.exec[1].request["cwd"], Value::Null);
-    let Ok(extensions::ExecReply::Completed {
+    let Ok(crate::ExecReply::Completed {
         end,
         stdout,
         stderr,
@@ -324,7 +323,7 @@ fn every_session_field_and_each_host_reply_shape_is_read() {
     };
     assert_eq!(
         (*end, stdout.as_str(), stderr.as_str()),
-        (extensions::ExecEnd::Code(7), "out", "err")
+        (crate::ExecEnd::Code(7), "out", "err")
     );
     assert_eq!(
         parsed
@@ -618,8 +617,8 @@ fn a_signal_exec_reply_parses_to_a_signal_end() {
     assert!(
         matches!(
             parsed.host.exec[0].reply,
-            Ok(extensions::ExecReply::Completed {
-                end: extensions::ExecEnd::Signal(9),
+            Ok(crate::ExecReply::Completed {
+                end: crate::ExecEnd::Signal(9),
                 ..
             })
         ),
@@ -635,8 +634,8 @@ fn a_signal_exec_reply_parses_to_a_signal_end() {
     assert!(
         matches!(
             parsed.host.exec[0].reply,
-            Ok(extensions::ExecReply::Completed {
-                end: extensions::ExecEnd::Code(7),
+            Ok(crate::ExecReply::Completed {
+                end: crate::ExecEnd::Code(7),
                 ..
             })
         ),
@@ -680,7 +679,7 @@ fn a_hang_reply_parses_to_a_hang_end() {
         panic!("hang reply parsed as a call case");
     };
     assert!(
-        matches!(parsed.host.exec[0].reply, Ok(extensions::ExecReply::Hang)),
+        matches!(parsed.host.exec[0].reply, Ok(crate::ExecReply::Hang)),
         "{:?}",
         parsed.host.exec[0].reply
     );

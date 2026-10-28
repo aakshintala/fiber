@@ -30,7 +30,6 @@ use support::clock::Manual;
 
 use super::super::format::{CaseCommand, ClockAdvance, Host, Input, Selector, SessionCase};
 use super::{CaseRun, WaitBounds, session_verdict};
-use crate as extensions;
 use fakes::Deadline;
 
 const LOOP_WAIT: Duration = Duration::from_millis(20);
@@ -258,10 +257,10 @@ fn case_run_without_a_name_uses_the_default() {
     assert_eq!(case.name, String::new());
 }
 
-fn hang_exec_entry(program: &str) -> extensions::ExecEntry {
-    extensions::ExecEntry {
+fn hang_exec_entry(program: &str) -> crate::ExecEntry {
+    crate::ExecEntry {
         request: json!({"program": program}),
-        reply: Ok(extensions::ExecReply::Hang),
+        reply: Ok(crate::ExecReply::Hang),
     }
 }
 

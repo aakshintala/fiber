@@ -15,8 +15,7 @@ use support::group::GROUP_POLL;
 use super::format::{CaseCommand, ClockAdvance, Input, Selector, SessionCase};
 
 /// The event source that feeds case events to the driver.
-pub type EventSource =
-    dyn FnMut(Duration) -> Option<Result<Option<contract::Envelope>, String>> + Send;
+type EventSource = dyn FnMut(Duration) -> Option<Result<Option<contract::Envelope>, String>> + Send;
 
 pub(super) const ADVANCE_WAIT: Duration = Duration::from_secs(10);
 pub(super) const UNTIL_WAIT: Duration = Duration::from_secs(30);
@@ -97,12 +96,14 @@ impl CaseRun {
     }
 
     /// Starts the event driver before the loop writes its first event.
-    /// The caller registers its event source before this returns, so no
+    /// The caller registers its event source before calling this, so no
     /// event the session writes afterwards is lost.
     pub fn start(
         self: &Arc<Self>,
         driver: Arc<dyn Drive>,
-        events: Box<EventSource>,
+        events: Box<
+            dyn FnMut(Duration) -> Option<Result<Option<contract::Envelope>, String>> + Send,
+        >,
         cancel: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<JoinHandle<()>, crate::Error> {
         let case = Arc::clone(self);
