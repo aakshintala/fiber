@@ -1495,8 +1495,12 @@ const FOLD_BUDGET: &str = "Terminal attaching, fold per MiB of session log";
 #[test]
 fn fold_row_gates_each_fixtures_rate_on_eligible_models() {
     // Each fixture over 15 ms per MiB fails once on an eligible model,
-    // with the other fixture passing.
-    for (one, ten) in [([20.0; 5], [50.0; 5]), ([5.0; 5], [200.0; 5])] {
+    // with the other fixture passing, naming the over fixture: swapping
+    // the fixtures must move the failure with it.
+    for (one, ten, over) in [
+        ([20.0; 5], [50.0; 5], "1 MiB"),
+        ([5.0; 5], [200.0; 5], "10 MiB"),
+    ] {
         let (h, b) = fold_pair(&one, &ten, &[4.5; 5], &[45.0; 5], SLOW_MODEL);
         let out = judge(&h, Some(&b), Event::PullRequest);
         assert_eq!(out.failures.len(), 1, "{one:?} {ten:?}: {:?}", out.failures);
@@ -1506,12 +1510,18 @@ fn fold_row_gates_each_fixtures_rate_on_eligible_models() {
             out.failures
         );
         assert!(
+            out.failures[0].contains(&format!("ms per MiB of attach_stage_ms {over}")),
+            "{one:?} {ten:?}: {:?}",
+            out.failures
+        );
+        assert!(
             row(&out.comment, FOLD_BUDGET).ends_with("| fail |"),
             "{one:?} {ten:?}: {}",
             out.comment
         );
     }
-    // Both fixtures under the bound pass, naming the per-MiB rate.
+    // Both fixtures under the bound pass, naming the per-MiB rate and
+    // each fixture's bytes.
     let (h, b) = fold_pair(&[5.0; 5], &[50.0; 5], &[4.5; 5], &[45.0; 5], SLOW_MODEL);
     let out = judge(&h, Some(&b), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
@@ -1519,6 +1529,7 @@ fn fold_row_gates_each_fixtures_rate_on_eligible_models() {
     assert!(line.ends_with("| pass |"), "{line}");
     assert!(line.contains("ms per MiB"), "{line}");
     assert!(line.contains("1,050,231"), "{line}");
+    assert!(line.contains("10,492,016"), "{line}");
 }
 
 #[test]
@@ -1752,6 +1763,104 @@ fn missing_or_malformed_fold_base_reads_unavailable() {
     assert!(has(&out.failures, FOLD_BUDGET), "{:?}", out.failures);
     let line = row(&out.comment, FOLD_BUDGET);
     assert!(line.contains("base failed:"), "{line}");
+}
+
+#[test]
+fn fold_zero_ms_is_a_valid_rate() {
+    // Zero is finite and non-negative, so a still fold stage rates 0.0
+    // per MiB: only strictly negative ms fail the boundary.
+    let one = Value::Array(fold_entries("1 MiB", 1_050_231, &[0.0; 5]));
+    let ten = Value::Array(fold_entries("10 MiB", 10_492_016, &[0.0; 5]));
+    let entries = || {
+        let mut all = one.as_array().unwrap().clone();
+        all.extend(ten.as_array().unwrap().clone());
+        Value::Array(all)
+    };
+    let h = with_cpu(
+        with_metric(
+            neutral_scalars("terminal_attach_ms", head()),
+            "attach_stage_ms",
+            entries(),
+        ),
+        SLOW_MODEL,
+    );
+    let b = with_cpu(
+        with_metric(base(), "attach_stage_ms", entries()),
+        SLOW_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    assert!(
+        row(&out.comment, FOLD_BUDGET).ends_with("| pass |"),
+        "{}",
+        out.comment
+    );
+}
+
+#[test]
+fn fold_unknown_fixtures_fail_naming_them() {
+    // A fold entry outside the two known fixtures fails the head: the
+    // unknown entry reads as unknown, never as the other fixture.
+    let mut entries = fold_entries("1 MiB", 1_050_231, &[5.0; 5]);
+    entries.extend(fold_entries("10 MiB", 10_492_016, &[50.0; 5]));
+    entries.extend(fold_entries("2 MiB", 2_000_000, &[5.0; 5]));
+    let h = with_cpu(
+        with_metric(
+            neutral_scalars("terminal_attach_ms", head()),
+            "attach_stage_ms",
+            Value::Array(entries),
+        ),
+        SLOW_MODEL,
+    );
+    let (_, b) = fold_pair(&[5.0; 5], &[50.0; 5], &[4.5; 5], &[45.0; 5], SLOW_MODEL);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(has(&out.failures, "unknown fixture"), "{:?}", out.failures);
+    assert!(has(&out.failures, "attach_stage_ms"), "{:?}", out.failures);
+}
+
+#[test]
+fn fold_incomparable_base_stays_advisory() {
+    // A base the head's CPU cannot compare against shows its medians
+    // without satisfying the gate: the row stays advisory on an
+    // otherwise passing head.
+    let h = with_cpu(
+        with_metric(
+            neutral_scalars("terminal_attach_ms", head()),
+            "attach_stage_ms",
+            fold_metric(),
+        ),
+        SLOW_MODEL,
+    );
+    let mut different = with_cpu(base(), MIDDLE_MODEL);
+    let mut base_entries = fold_entries("1 MiB", 1_050_100, &[4.5; 5]);
+    base_entries.extend(fold_entries("10 MiB", 10_490_000, &[45.0; 5]));
+    different["metrics"]["attach_stage_ms"] = Value::Array(base_entries);
+    let out = judge(&h, Some(&different), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, FOLD_BUDGET);
+    assert!(line.ends_with("| advisory |"), "{line}");
+}
+
+#[test]
+fn fold_rate_ceiling_must_parse() {
+    // The bound reads from the ceiling cell like every other check: a
+    // non-finite cell fails the configuration instead of gating on it.
+    let out = judge_doc(
+        &doc_with(
+            "| Terminal attaching, fold per MiB of session log | 15 ms per MiB |",
+            "| Terminal attaching, fold per MiB of session log | 1e999 ms per MiB |",
+        ),
+        &head(),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert!(
+        has(&out.failures, "xtask/src/bench/judge.rs"),
+        "{:?}",
+        out.failures
+    );
+    assert!(has(&out.failures, "rate ceiling"), "{:?}", out.failures);
 }
 
 #[test]

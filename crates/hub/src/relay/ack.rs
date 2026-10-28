@@ -150,6 +150,10 @@ impl<'de> Deserialize<'de> for RawAck {
         struct AckVisitor;
         impl<'de> Visitor<'de> for AckVisitor {
             type Value = RawAck;
+            // Exempt: serde_json never calls `expecting` through the
+            // `Option`-returning parse, so its text observes nothing and
+            // its mutants change no behaviour.
+            #[cfg_attr(false, mutants::skip)]
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("a relayed line object")
             }
@@ -183,6 +187,10 @@ impl<'de> Deserialize<'de> for RawPayload {
         struct PayloadVisitor;
         impl<'de> Visitor<'de> for PayloadVisitor {
             type Value = RawPayload;
+            // Exempt: serde_json never calls `expecting` through the
+            // `Option`-returning parse, so its text observes nothing and
+            // its mutants change no behaviour.
+            #[cfg_attr(false, mutants::skip)]
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("an acknowledgement payload object")
             }
@@ -222,6 +230,10 @@ impl<'de> Deserialize<'de> for RawResult {
         struct ResultVisitor;
         impl<'de> Visitor<'de> for ResultVisitor {
             type Value = RawResult;
+            // Exempt: serde_json never calls `expecting` through the
+            // `Option`-returning parse, so its text observes nothing and
+            // its mutants change no behaviour.
+            #[cfg_attr(false, mutants::skip)]
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("an acknowledgement result object")
             }
@@ -253,12 +265,18 @@ impl<'de> Deserialize<'de> for RawResult {
             {
                 Ok(RawResult::empty())
             }
+            // Exempt: `Option` handles a missing or null result before
+            // this deserializer runs, and `deserialize_any` never routes
+            // to `some` or `none`, so the arms never run.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_none<E>(self) -> Result<RawResult, E>
             where
                 E: serde::de::Error,
             {
                 Ok(RawResult::empty())
             }
+            // Exempt: see `visit_none` above.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_some<D>(self, deserializer: D) -> Result<RawResult, D::Error>
             where
                 D: Deserializer<'de>,
@@ -330,6 +348,10 @@ impl<'de> Deserialize<'de> for LenientString {
         struct StringVisitor;
         impl<'de> Visitor<'de> for StringVisitor {
             type Value = LenientString;
+            // Exempt: serde_json never calls `expecting` through the
+            // `Option`-returning parse, so its text observes nothing and
+            // its mutants change no behaviour.
+            #[cfg_attr(false, mutants::skip)]
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("a string")
             }
@@ -339,48 +361,67 @@ impl<'de> Deserialize<'de> for LenientString {
             {
                 Ok(LenientString(Some(value.to_owned())))
             }
-            fn visit_string<E>(self, value: String) -> Result<LenientString, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(LenientString(Some(value)))
-            }
+            // No `visit_string`: `from_slice` borrows plain strings and
+            // hands escaped ones from its scratch buffer through
+            // `visit_str`, so serde's default `visit_string`, which
+            // forwards to `visit_str`, already decodes both.
+            // Exempt: a wrong-typed string reads as absent, so the arm
+            // already returns the default and its mutant is identical.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_unit<E>(self) -> Result<LenientString, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientString::default())
             }
+            // Exempt: `Option` handles a missing or null string before
+            // this deserializer runs, and `deserialize_any` never routes
+            // to `some` or `none`, so the arms never run.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_none<E>(self) -> Result<LenientString, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientString::default())
             }
+            // Exempt: see `visit_none` above.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_some<D>(self, deserializer: D) -> Result<LenientString, D::Error>
             where
                 D: Deserializer<'de>,
             {
                 Deserialize::deserialize(deserializer)
             }
+            // Exempt: a wrong-typed string reads as absent, so the arm
+            // already returns the default and its mutant is identical.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_bool<E>(self, _: bool) -> Result<LenientString, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientString::default())
             }
+            // Exempt: a wrong-typed string reads as absent, so the arm
+            // already returns the default and its mutant is identical.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_i64<E>(self, _: i64) -> Result<LenientString, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientString::default())
             }
+            // Exempt: a wrong-typed string reads as absent, so the arm
+            // already returns the default and its mutant is identical.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_u64<E>(self, _: u64) -> Result<LenientString, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientString::default())
             }
+            // Exempt: a wrong-typed string reads as absent, so the arm
+            // already returns the default and its mutant is identical.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_f64<E>(self, _: f64) -> Result<LenientString, E>
             where
                 E: serde::de::Error,
@@ -416,6 +457,10 @@ impl<'de> Deserialize<'de> for LenientU64 {
         struct SeqVisitor;
         impl<'de> Visitor<'de> for SeqVisitor {
             type Value = LenientU64;
+            // Exempt: serde_json never calls `expecting` through the
+            // `Option`-returning parse, so its text observes nothing and
+            // its mutants change no behaviour.
+            #[cfg_attr(false, mutants::skip)]
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("a sequence number")
             }
@@ -425,48 +470,67 @@ impl<'de> Deserialize<'de> for LenientU64 {
             {
                 Ok(LenientU64(Some(value)))
             }
+            // Exempt: `Option` handles a missing or null sequence before
+            // this deserializer runs, and `deserialize_any` never routes
+            // to `some` or `none`, so the arms never run.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_none<E>(self) -> Result<LenientU64, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientU64::default())
             }
+            // Exempt: see `visit_none` above.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_some<D>(self, deserializer: D) -> Result<LenientU64, D::Error>
             where
                 D: Deserializer<'de>,
             {
                 Deserialize::deserialize(deserializer)
             }
+            // Exempt: a wrong-typed sequence reads as absent, so the arm
+            // already returns the default and its mutant is identical.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_bool<E>(self, _: bool) -> Result<LenientU64, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientU64::default())
             }
+            // Exempt: a wrong-typed sequence reads as absent, so the arm
+            // already returns the default and its mutant is identical.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_i64<E>(self, _: i64) -> Result<LenientU64, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientU64::default())
             }
+            // Exempt: a wrong-typed sequence reads as absent, so the arm
+            // already returns the default and its mutant is identical.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_f64<E>(self, _: f64) -> Result<LenientU64, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientU64::default())
             }
+            // Exempt: a wrong-typed sequence reads as absent, so the arm
+            // already returns the default and its mutant is identical.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_str<E>(self, _: &str) -> Result<LenientU64, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientU64::default())
             }
-            fn visit_string<E>(self, _: String) -> Result<LenientU64, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(LenientU64::default())
-            }
+            // No `visit_string`: `from_slice` borrows plain strings and
+            // hands escaped ones from its scratch buffer through
+            // `visit_str`, so serde's default `visit_string`, which
+            // forwards to `visit_str`, already reads both as absent.
+            // Exempt: a wrong-typed sequence reads as absent, so the arm
+            // already returns the default and its mutant is identical.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_unit<E>(self) -> Result<LenientU64, E>
             where
                 E: serde::de::Error,

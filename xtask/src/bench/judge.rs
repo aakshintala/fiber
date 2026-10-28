@@ -1423,12 +1423,14 @@ pub(super) fn judge(
                     }
                 }
             };
-            // The pin carries the rate: no class cell holds one.
-            let bound = match ceiling(pin) {
+            // The table check above pins the ceiling cell to the pin, so
+            // the bound reads from the cell like every other check: a
+            // non-number cell fails the configuration here.
+            let bound = match ceiling(cell) {
                 Ok(Quantity::Ms(bound)) if bound.is_finite() && bound >= 0.0 => Some(bound),
                 _ => {
                     failures.push(format!(
-                        "{pin:?} is not a `<number> ms per MiB` rate ceiling"
+                        "{cell:?} is not a `<number> ms per MiB` rate ceiling"
                     ));
                     None
                 }

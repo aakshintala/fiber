@@ -3024,6 +3024,90 @@ fn typed_none(line: &[u8]) {
     assert_eq!(super::ack::parse_typed(line), None);
 }
 
+/// Parity proves the two paths agree; these pin the values the old full
+/// parse produced, so a mutant that shifts both paths still fails.
+#[test]
+fn parse_typed_names_the_ack_absolute_values() {
+    let line = |kind: &str, payload: Value| {
+        serde_json::to_vec(&json!({"kind": kind, "ts": 1, "payload": payload})).unwrap()
+    };
+    let accepted = line(
+        "command_accepted",
+        json!({"command_id": "c", "result": {"last_seq": 41}}),
+    );
+    let ack = super::ack::parse_typed(&accepted).expect("the accepted line acknowledges");
+    assert_eq!(ack.id, "c");
+    assert!(matches!(ack.verdict, Verdict::Accepted));
+    assert_eq!(ack.last_seq, Some(41));
+    assert_eq!(ack.rewound, None);
+    let closing = line(
+        "command_rejected",
+        json!({"command_id": "c_1", "code": "closing", "message": "m"}),
+    );
+    let ack = super::ack::parse_typed(&closing).expect("the closing line acknowledges");
+    assert_eq!(ack.id, "c_1");
+    assert!(matches!(ack.verdict, Verdict::Closing));
+    assert_eq!(ack.last_seq, None);
+    // An escaped `closing` takes the owned-string path and still closes.
+    let escaped = b"{\"kind\": \"command_rejected\", \"payload\": {\"command_id\": \"c_1\", \"code\": \"clos\\u0069ng\", \"message\": \"m\"}}\n";
+    let ack = super::ack::parse_typed(escaped).expect("the escaped closing line acknowledges");
+    assert!(matches!(ack.verdict, Verdict::Closing));
+    let rewind = line(
+        "command_accepted",
+        json!({"command_id": "c_rw", "result": {"new_session_id": "s_bbbbbbbbbbbbbbbb"}}),
+    );
+    let ack = super::ack::parse_typed(&rewind).expect("the rewind acknowledges");
+    assert_eq!(ack.id, "c_rw");
+    assert_eq!(
+        ack.rewound.map(|next| next.0),
+        Some("s_bbbbbbbbbbbbbbbb".to_owned())
+    );
+    assert_eq!(ack.last_seq, None);
+    // A wrong-typed optional reads as absent with the ack still naming
+    // its command, for a scalar, a sequence and a map alike.
+    for fragment in [
+        json!({"last_seq": "41"}),
+        json!({"last_seq": -1}),
+        json!({"last_seq": 4.5}),
+        json!({"last_seq": [41]}),
+        json!({"last_seq": {"n": 41}}),
+    ] {
+        let bytes = line(
+            "command_accepted",
+            json!({"command_id": "c", "result": fragment}),
+        );
+        let ack = super::ack::parse_typed(&bytes).expect("a wrong-typed last_seq keeps the ack");
+        assert_eq!(ack.id, "c");
+        assert!(matches!(ack.verdict, Verdict::Accepted));
+        assert_eq!(ack.last_seq, None, "{fragment}");
+        assert_eq!(ack.rewound, None, "{fragment}");
+    }
+    for fragment in [json!([1]), json!({"n": 1})] {
+        let bytes = line(
+            "command_rejected",
+            json!({"command_id": "c_1", "code": fragment, "message": "m"}),
+        );
+        let ack = super::ack::parse_typed(&bytes).expect("a wrong-typed code keeps the ack");
+        assert_eq!(ack.id, "c_1");
+        assert!(matches!(ack.verdict, Verdict::Rejected));
+    }
+    for fragment in [
+        json!("x"),
+        json!(Value::Null),
+        json!([41]),
+        json!({"n": 41}),
+    ] {
+        let bytes = line(
+            "command_accepted",
+            json!({"command_id": "c", "result": fragment}),
+        );
+        let ack = super::ack::parse_typed(&bytes).expect("a non-object result keeps the ack");
+        assert_eq!(ack.id, "c");
+        assert_eq!(ack.last_seq, None, "{fragment}");
+        assert_eq!(ack.rewound, None, "{fragment}");
+    }
+}
+
 #[test]
 fn parse_typed_matches_acknowledgement_for_verdicts() {
     let line = |kind: &str, payload: Value| {
