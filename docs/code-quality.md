@@ -123,6 +123,7 @@ the code and the list disagree.
 | `log` | `crates/log/src/diag/memory.rs` | on macOS, `proc_pid_rusage` reads the peak physical footprint for a `peak_memory` line |
 | `cli` | `crates/cli/src/stop_tests.rs` | the close-wait test wraps a write-only file fd as a `UnixStream`, forcing the read error the wait reports as lost |
 | `fakes` | `crates/fakes/src/alloc.rs` | the counting allocator implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System` |
+| `log` | `crates/log/src/alloc_stats_tests.rs` | the test-only counting mirror implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System`; the test calls it explicitly, never installing it |
 | `fakes` | `crates/fakes/examples/process-extension.rs` | the SIGTERM marker handler registers with `signal-hook` and writes its file with async-signal-safe `libc` calls |
 
 `unsafe` inside dependencies is `docs/dependencies.md`'s.
