@@ -1134,16 +1134,26 @@ fn a_check_before_message_hook_that_replaces_has_failed() {
 #[test]
 fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected() {
     use extension_harness::{send as session_send, until_session as session_until};
-    use support::{Diag, session_dir};
+    use support::{Deadline, Diag, assert_timeout_dump, session_dir};
 
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     setup.lua(
         "guard",
-        "fiber.hook(\"before_message\", { timeout = 30000, on_failure = \"blocking\",\n\
+        "local trace = host.data_dir(\"project\") .. \"/refused-steer-hook-\"\n\
+         local function mark(step)\n\
+           host.fs.write(trace .. step, \"recorded\")\n\
+         end\n\
+         fiber.hook(\"before_message\", { timeout = 30000, on_failure = \"blocking\",\n\
            run = function(call)\n\
              if call.content[1].text == \"second\" then return end\n\
+             if call.content[1].text == \"aside\" then\n\
+               mark(\"entered\")\n\
+               local result = { refuse = \"no keys\" }\n\
+               mark(\"returning\")\n\
+               return result\n\
+             end\n\
              return { refuse = \"no keys\" }\n\
            end })\n",
     );
@@ -1163,28 +1173,53 @@ fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected()
         &client,
         r#"{"id":"c_s1","command":"steer","args":{"content":[{"type":"text","text":"aside"}]}}"#,
     );
-    let accepted = session_until(&client, "the steer's at-once acceptance", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_s1"
-    });
-    assert!(
-        !accepted.is_empty(),
-        "the refused steer is still answered at once"
+    let trace_dir = session_dir(&setup, &id)
+        .parent()
+        .and_then(Path::parent)
+        .expect("the session has a project directory")
+        .join("data/fiber.test-guard");
+    client.set_trace_dir(trace_dir.clone());
+    let mut accepted = false;
+    let mut refused_notice = false;
+    let got = session_until(
+        &client,
+        "the steer's acceptance and refusal notice",
+        |line| {
+            accepted |=
+                line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_s1";
+            refused_notice |=
+                line["kind"] == "notice" && line["payload"]["code"] == "message_refused";
+            accepted && refused_notice
+        },
     );
-    // The refusal lands after the answer, as a notice naming the code,
-    // the extension and the reason: the loop never rejects a steer it
-    // already accepted. The reader admits a steer and answers at once
-    // while the loop reconciles it at its next drain
-    // (`docs/architecture.md`, "One inbox"; `docs/loop.md`, "One step"),
-    // and a refused message is neither logged nor sent while its sender
-    // is told why (`docs/extensions.md`, "The hook points"): with the
-    // answer already out, the why is the `message_refused` notice
-    // (`docs/errors.md`, "Registry").
-    let refused = session_until(&client, "the refused steer's notice", |line| {
-        line["kind"] == "notice" && line["payload"]["code"] == "message_refused"
-    });
+    let accepted_line = got
+        .iter()
+        .find(|line| line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_s1")
+        .expect("the refused steer is still answered at once");
+    assert_eq!(accepted_line["payload"]["command_id"], "c_s1");
+    // A fast loop can emit the refusal notice before the client writer
+    // sends the acceptance, so assert both lines without imposing their
+    // order. The single wait retains every line in its timeout dump.
+    let refused = got
+        .iter()
+        .find(|line| line["kind"] == "notice" && line["payload"]["code"] == "message_refused")
+        .expect("the refused steer is noticed");
+    // The notice names the code, extension and reason. The refusal does
+    // not reject a steer already accepted by the reader; it tells its
+    // sender why (`docs/architecture.md`, "One inbox"; `docs/loop.md`,
+    // "One step"; `docs/extensions.md`, "The hook points";
+    // `docs/errors.md`, "Registry").
     assert_eq!(
-        refused.last().unwrap()["payload"]["message"],
+        refused["payload"]["message"],
         "Extension fiber.test/guard refused the message: no keys"
+    );
+    assert_eq!(
+        fs::read_to_string(trace_dir.join("refused-steer-hook-entered")).unwrap(),
+        "recorded"
+    );
+    assert_eq!(
+        fs::read_to_string(trace_dir.join("refused-steer-hook-returning")).unwrap(),
+        "recorded"
     );
     session_send(
         &client,
@@ -1217,6 +1252,28 @@ fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected()
     // (`docs/events.md`, "`turn_started`"; `docs/loop.md`, "Starting a turn").
     assert_eq!(input.as_array().unwrap().len(), 1);
     assert_eq!(input[0]["content"][0]["text"], "second");
+    let deadline = running.deadline;
+    client.set_deadline(Deadline::after(Duration::ZERO));
+    let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut timeout_got = got.clone();
+        for _ in 0..1000 {
+            match client.next("the diagnostic dump", &timeout_got) {
+                Some(line) => timeout_got.push(line),
+                None => panic!("the session closed before the diagnostic dump"),
+            }
+        }
+        panic!("the diagnostic wait did not expire");
+    }))
+    .unwrap_err();
+    let message = expired
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    client.set_deadline(deadline);
+    assert_timeout_dump(&message);
+    assert!(message.contains("extension hook markers ("), "{message}");
+    assert!(message.contains("entered: recorded"), "{message}");
+    assert!(message.contains("returning: recorded"), "{message}");
     session_send(&client, r#"{"id":"c_close","command":"close"}"#);
     drop(client);
     let (status, _out, stderr) = running.wait();
