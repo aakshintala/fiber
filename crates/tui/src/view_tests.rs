@@ -2199,6 +2199,7 @@ fn painted_item_and_notice_keys_join_the_shared_frame_mark() {
     let (_, painted) = super::render_frame(&app, area, &mut buf, None);
     assert_eq!(item.frames.borrow().clone(), vec![0]);
     assert_eq!(notice.frames.borrow().clone(), vec![0]);
+    // docs/tui.md:2984: painted item and notice rows alike reach the one mark.
     assert_eq!(painted.len(), 4);
     let mut ids: Vec<Option<usize>> = painted.iter().map(|key| key.notice_id()).collect();
     ids.sort();

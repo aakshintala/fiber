@@ -1657,7 +1657,7 @@ fn a_non_memoized_failure_drops_animation_state() {
 
     cache.begin_anim_frame(Some(at(t0, 1000)), false);
     let fresh = paint(&cache, &row, 20, &answers).expect("a fresh frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 0]); // docs/tui.md:2989: a failure drops the active animation state.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 0]); // docs/tui.md:2998: a failure drops the active animation state.
     assert!(text_of(&fresh).starts_with("f0"), "{fresh:?}");
 }
 
@@ -1850,12 +1850,12 @@ fn a_renderer_failure_memoizes_and_stops_the_animation() {
     let t0 = origin();
     cache.begin_anim_frame(Some(t0), false);
     assert!(paint(&cache, &row, 20, &answers).is_none());
-    assert_eq!(answers.frames.borrow().len(), 1); // docs/tui.md:2989: a failure stops calls until the input changes.
+    assert_eq!(answers.frames.borrow().len(), 1); // docs/tui.md:2998: a failure stops calls until the input changes.
     // The failure is cached against the input: no call until it
     // changes, and no wake for a stopped item.
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     assert!(paint(&cache, &row, 20, &answers).is_none());
-    assert_eq!(answers.frames.borrow().len(), 1); // docs/tui.md:2989: a failure stops calls until the input changes.
+    assert_eq!(answers.frames.borrow().len(), 1); // docs/tui.md:2998: a failure stops calls until the input changes.
     assert!(cache.anim_dues().is_empty());
     let listed = cache.take_failures();
     assert_eq!(listed.len(), 1);
@@ -1865,7 +1865,7 @@ fn a_renderer_failure_memoizes_and_stops_the_animation() {
     let other = input("shell", "second", &arguments);
     cache.begin_anim_frame(Some(at(t0, 1000)), false);
     paint(&cache, &other, 20, &answers).expect("a fresh frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2989: a failure stops calls until the input changes.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2998: a failure stops calls until the input changes.
 }
 
 #[test]
@@ -2107,12 +2107,14 @@ fn an_animated_notice_advances_one_call_per_frame() {
     // Frame 0 draws once; later lookups in the same open frame hit the
     // stored open result, as rows, counts and the overlay share it.
     cache.begin_anim_frame(Some(t0), false);
+    // docs/tui.md:2983: frame 0 is the notice's still form.
     let first = paint_notice(&cache, 7, "down", 20, &answers).expect("frame 0");
     assert!(text_of(&first).starts_with("f0"), "{first:?}");
     let again = paint_notice(&cache, 7, "down", 20, &answers).expect("stored frame 0");
     assert_eq!(text_of(&again), text_of(&first));
     let stored = paint_notice(&cache, 7, "down", 20, &answers).expect("stored frame 0");
     assert_eq!(text_of(&stored), text_of(&first));
+    // docs/tui.md:2985: an advanced open frame's one result both measures and draws.
     assert_eq!(answers.frames.borrow().clone(), vec![0]);
     assert_eq!(mark_notice(&cache, &first), vec![(t0, ANIM_INTERVAL)]);
     // Each due painted frame advances once, with exactly one call.
@@ -2172,6 +2174,7 @@ fn a_new_screen_starts_a_live_notice_at_frame_zero() {
     let fresh = Cache::default();
     let fresh_answers = AnimAnswers::new();
     fresh.begin_anim_frame(Some(at(t0, 500)), false);
+    // docs/tui.md:2988: a new per-`Screen` cache starts a live notice at frame 0.
     let restarted = paint_notice(&fresh, 7, "down", 20, &fresh_answers).expect("fresh frame 0");
     assert!(text_of(&restarted).starts_with("f0"), "{restarted:?}");
     assert_eq!(fresh_answers.frames.borrow().clone(), vec![0]);
@@ -2282,6 +2285,7 @@ fn a_dropped_page_restarts_items_but_not_notices() {
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     paint(&cache, &row, 20, &answers).expect("item frame 0 again");
     // ... while the notice stays keyed to its instance and stable page.
+    // docs/tui.md:2987: the animation key is stable across page changes.
     let advanced = paint_notice(&cache, 7, "down", 20, &answers).expect("notice frame 1");
     assert!(text_of(&advanced).starts_with("f1"), "{advanced:?}");
     assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1]);
@@ -2357,6 +2361,7 @@ fn a_failed_notice_stays_failed_across_pages_and_re_raise() {
     cache.begin_anim_frame(Some(t0), false);
     assert!(before.notice_lines(7, "io_failed", "x", 20).is_none());
     // A page change recalls nothing: the failure memo is page-stable.
+    // docs/tui.md:2987: the animation key is stable across page changes.
     assert!(after.notice_lines(7, "io_failed", "x", 20).is_none());
     // A re-raise with the same input under a new instance stays failed.
     assert!(after.notice_lines(8, "io_failed", "x", 20).is_none());
@@ -2397,6 +2402,7 @@ fn closed_entries_prune_with_the_instance_and_re_raise_starts_at_zero() {
     assert!(!cache.has_notice_state(7));
     // The same text raised again is a new item: its first closed and
     // open draws both show frame 0.
+    // docs/tui.md:2986: a re-raised notice is a new item and starts at frame 0.
     let fresh_answers = AnimAnswers::new();
     let cold = paint_notice(&cache, 8, "down", 20, &fresh_answers).expect("cold frame 0");
     assert!(text_of(&cold).starts_with("f0"), "{cold:?}");

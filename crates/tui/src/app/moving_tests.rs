@@ -348,6 +348,7 @@ fn a_painted_animated_notice_asks_its_animation_wake() {
     crate::view::render(&app, area, &mut buf, None);
     // The notice paints frame 0 through the shared exit, so its key
     // marks and the frame asks its animation wake beside the fade wake.
+    // docs/tui.md:2983: frame 0 is the notice's still form.
     assert_eq!(fake.frames.borrow().clone(), vec![0]);
     assert_eq!(
         app.take_wake(),
@@ -375,6 +376,7 @@ fn a_notice_raised_during_a_drag_waits_for_the_release() {
     crate::view::render(&app, area, &mut buf, None);
     // A notice waiting for the drag's release is not on screen: no row,
     // no renderer call, and no animation wake.
+    // docs/tui.md:2984: frames advance only while a replacement row was painted.
     assert!(fake.frames.borrow().is_empty());
     assert!(!crate::view::text(&buf).contains("a read failed"));
     assert_eq!(app.take_wake(), None);
@@ -436,6 +438,7 @@ fn a_dismissed_notice_drops_its_animation_state_and_wake() {
     // Dismissing drops the instance: the next render prunes every
     // per-notice store before painting, makes no further renderer call,
     // and arms no wake.
+    // docs/tui.md:2986: a notice's animation state goes when the notice does.
     let id = app.notices.live_ids();
     assert_eq!(id.len(), 1);
     app.notices.dismiss(id[0]);
@@ -504,6 +507,7 @@ fn a_notice_expiring_after_its_paint_arms_no_animation_wake() {
     // The post-draw sweep expires it past its fade: the still-painted
     // key is filtered, so no animation instant is armed, and with the
     // stack empty there is no fade instant either.
+    // docs/tui.md:2991: an animation never holds a notice on screen.
     app.sweep_notices(origin.checked_add(crate::app::FADE).expect("fade"));
     assert_eq!(app.take_wake(), None);
 }
@@ -525,6 +529,7 @@ fn an_empty_replacement_stays_hidden_without_advancing_or_scheduling() {
     app.set_now(origin, WALL);
     crate::view::render(&app, area, &mut buf, None);
     // Empty output hides the notice: no row, one hidden probe, no wake.
+    // docs/tui.md:2989: no replacement lines stay hidden without advancing.
     assert!(!crate::view::text(&buf).contains("io_failed"));
     assert_eq!(fake.calls.borrow().len(), 1);
     assert_eq!(app.take_wake(), None);

@@ -2905,8 +2905,8 @@ built-in rather than drawing the row again.
 - **Each drawn item is cached** by its input and the width. Its spans name
   colour roles, which the theme resolves as the frame is written, so a theme
   change runs no renderer. A renderer runs again only when its input, the width,
-  or an on-screen animated item's frame changes ("Animation"), so an unchanged
-  frame calls no Lua: one call per cache miss or frame advance, none on a hit.
+  or an on-screen animated item's or notice's frame changes ("Animation"), so an
+  unchanged frame calls no Lua: one call per cache miss or frame advance, none on a hit.
   The cache lives with the paging window and is dropped with its pages.
   The key also includes the page's session and index, the selected extension,
   and its session-half version when it has one. A change to any of these
@@ -2959,11 +2959,11 @@ their own.
 
 ### Animation
 
-A renderer may declare `animate = { interval_ms }`. For conversation items,
-the terminal calls it again when the item's frame advances, with `frame` in
+A renderer may declare `animate = { interval_ms }`. For conversation items and
+notices, the terminal calls it again when the frame advances, with `frame` in
 its input. The terminal uses one timer for all motion. It asks for a timer only
-while an animated item was painted in the previous frame. Intervals below 120
-ms use that floor instead.
+while an animated item or notice row was painted in the previous frame.
+Intervals below 120 ms use that floor instead.
 
 The terminal calls an item when at least one of its rows was painted in the
 previous frame. It may make one due call on the frame the item scrolls off.
@@ -2980,7 +2980,16 @@ again at frame 0. Closed draws such as search and counts do not advance or
 schedule animation. They use stored lines when available; on a miss, they may
 cache frame 0 without changing animation state.
 
-Notices that declare animation draw frame 0 once. They do not animate yet.
+A notice animates as a conversation item does: frame 0 is still, and later
+frames advance only while a replacement row was painted in the prior frame. An
+advanced open frame's one result both measures and draws. A notice raised again
+after it faded or was dismissed is a new item and starts at frame 0; a notice's
+animation state goes when the notice does. The animation key is stable across
+page changes, and a new per-`Screen` cache starts a live notice at frame 0. A
+replacement returning no lines stays hidden until the notice fades or is
+pruned, and never advances or schedules animation while hidden. An event
+notice's fade and a condition's re-evaluation are unchanged, so an animation
+never holds a notice on screen.
 
 An extension's own timers (`host.after`, `host.every`) are for work other than
 drawing. They wake the terminal whether or not anything is on screen, which is
@@ -3030,8 +3039,8 @@ The terminal holds the budgets in `docs/performance.md`: its idle memory, idle
 CPU and time to first frame. The design keeps to them this way:
 
 - **Nothing runs while nothing happens.** With no turn, delegate or job running and
-  no animated item on screen, there is no timer: no frame, no byte written (an on-screen
-  animated item holds the timer, "Animation"). A still pointer sends nothing under hover.
+  no animated item or notice on screen, there is no timer: no frame, no byte written (an
+  on-screen animated item or notice holds the timer, "Animation"). A still pointer sends nothing under hover.
 - **The first frame waits on nothing but the session's last page and loading TUI extensions.** Keyboard detection, the logo's image and session listing each arrive after it. The budget is measured with no TUI extension installed. Attaching reads the last page with `history` before the first frame, and the whole log once after it ("History and paging"). The pass takes about 12 ms per MiB of log on macOS arm64, so the scroll bar of a large session appears later than a small one's.
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**

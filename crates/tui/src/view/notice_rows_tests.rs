@@ -930,6 +930,7 @@ fn draw_returns_exactly_the_painted_replacement_rows_keys() {
     let t0 = fakes::clock::FakeClock::new().origin();
     let (buf, keys) = draw_keys(&app, 30, 24, t0);
     // One replacement row painted: one key, carrying the notice instance.
+    // docs/tui.md:2984: frames advance only while a replacement row was painted.
     assert_eq!(fake.frames.borrow().clone(), vec![0]);
     assert_eq!(keys.len(), 1);
     assert_eq!(keys.first().expect("one key").notice_id(), Some(0));
@@ -991,6 +992,7 @@ fn an_empty_replacement_hides_the_notice_without_a_key() {
     let (buf, keys) = draw_keys(&app, 30, 24, t0);
     // No row paints and nothing marks: the hidden notice never advances
     // or schedules.
+    // docs/tui.md:2989: no replacement lines stay hidden without advancing.
     assert!(keys.is_empty());
     assert!(!crate::view::text(&buf).contains("io_failed"));
 }
