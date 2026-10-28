@@ -2,7 +2,8 @@
 //! publishes" and "Cutting a release"): fixture trees pack into plain-ustar
 //! archives with beside-it `.sha256` files, and the draft-publish-last flow
 //! runs against the stubbed `gh` under `release_pack_fixture/bin`, so no
-//! request reaches the network. Every run carries the test's one deadline.
+//! request reaches the network. Each `Pack` run carries the test's one
+//! deadline; each `Release` run makes its own deadline for its wait alone.
 
 #![allow(
     clippy::unwrap_used,
@@ -787,9 +788,9 @@ fn host_target() -> &'static str {
 }
 
 /// A fixture release served over loopback HTTP, installed with
-/// `scripts/install.sh` and driven with the installed binary, all under
-/// the test's one deadline. The addresses stay on loopback: no `git` and
-/// no network beyond the fixture take part.
+/// `scripts/install.sh` and driven with the installed binary, each wait
+/// under a deadline made for that wait alone. The addresses stay on
+/// loopback: no `git` and no network beyond the fixture take part.
 struct Release {
     setup: support::Setup,
     server: fakes::ProviderServer,
