@@ -12,6 +12,8 @@ use config::Config;
 use contract::ErrorCode;
 use extensions::{Providers, SessionExtensions};
 
+use contract::events::Notice;
+
 use crate::CliError;
 
 /// How the installed models' lists are read: [`model_lists`] on a thread
@@ -56,7 +58,7 @@ impl ModelListsError {
 }
 
 /// The installed providers, the configuration for `home` and `workspace`,
-/// and the notices loading the providers gave, with every installed
+/// and the [`Notice`]s loading the providers gave, with every installed
 /// model's list read at `read`: the cached lists at once, refreshed with
 /// or without the age check for [`ModelLists::Refresh`]. `load` starts the
 /// Lua providers; a [`ModelLists::Cached`] read never calls it. `Err`
@@ -69,14 +71,14 @@ pub fn model_lists(
     load: &dyn Fn(&Config) -> SessionExtensions,
     run: config::Runner<'_>,
     clock: &dyn contract::clock::Clock,
-) -> Result<(Providers, Config, Vec<String>), ModelListsError> {
+) -> Result<(Providers, Config, Vec<Notice>), ModelListsError> {
     let (providers, config, mut notices, unconfigured) =
         model_lists_apart(home, workspace, read, load, run, clock)?;
     notices.extend(unconfigured);
     Ok((providers, config, notices))
 }
 
-/// [`model_lists`] with the notices of each model the placeholder fill
+/// [`model_lists`] with the [`Notice`]s of each model the placeholder fill
 /// leaves out (`model_unconfigured`) apart, as the fourth value in the
 /// fill's order: the third holds every other notice.
 pub(crate) fn model_lists_apart(
@@ -86,13 +88,9 @@ pub(crate) fn model_lists_apart(
     load: &dyn Fn(&Config) -> SessionExtensions,
     run: config::Runner<'_>,
     clock: &dyn contract::clock::Clock,
-) -> Result<(Providers, Config, Vec<String>, Vec<String>), ModelListsError> {
-    let (mut providers, config, load_notices) =
+) -> Result<(Providers, Config, Vec<Notice>, Vec<Notice>), ModelListsError> {
+    let (mut providers, config, mut notices) =
         crate::models::providers_and_config(home, workspace).map_err(ModelListsError::Load)?;
-    let mut notices: Vec<String> = load_notices
-        .into_iter()
-        .map(|notice| notice.message)
-        .collect();
     // The cached lists serve every cached copy an installed extension
     // declares. A refresh works from the Lua providers alone, so a
     // removed one's cache file shows no longer once it answers.
@@ -117,11 +115,7 @@ pub(crate) fn model_lists_apart(
             );
         }
     }
-    let unconfigured = providers
-        .fill_placeholders(&config, &lookup)?
-        .into_iter()
-        .map(|notice| notice.message)
-        .collect();
+    let unconfigured = providers.fill_placeholders(&config, &lookup)?;
     providers.forget_lua();
     Ok((providers, config, notices, unconfigured))
 }
@@ -134,7 +128,7 @@ pub(crate) fn model_lists_apart(
 fn cached_lists(
     home: &Path,
     providers: &mut Providers,
-    notices: &mut Vec<String>,
+    notices: &mut Vec<Notice>,
 ) -> Result<(), ModelListsError> {
     for name in config::cached_model_lists(home)? {
         if name == "scripted" || providers.get(&name).is_some() {
@@ -142,7 +136,7 @@ fn cached_lists(
         }
         let models = config::read_model_cache(home, &name)?.unwrap_or_default();
         if let Some(admitted) = providers.add_cached(&name, models) {
-            notices.extend(admitted.into_iter().map(|notice| notice.message));
+            notices.extend(admitted);
         }
     }
     Ok(())
@@ -151,23 +145,19 @@ fn cached_lists(
 /// Loads the Lua providers, refreshes them with `max_age`, joins every
 /// refresh, and drops the extensions before returning, so no VM stays
 /// resident. A joined list replaces its provider's; a failed refresh is
-/// one notice, and the cached list stays.
+/// one [`Notice`] with code `extension_failed` naming the provider, and
+/// the cached list stays.
 fn refreshed(
     config: &Config,
     load: &dyn Fn(&Config) -> SessionExtensions,
     providers: &mut Providers,
-    notices: &mut Vec<String>,
+    notices: &mut Vec<Notice>,
     max_age: Option<std::time::Duration>,
     run: config::Runner<'_>,
     lookup: &dyn Fn(&str) -> Option<String>,
 ) {
     let loaded = load(config);
-    notices.extend(
-        providers
-            .add_session(&loaded, config, run, lookup)
-            .into_iter()
-            .map(|notice| notice.message),
-    );
+    notices.extend(providers.add_session(&loaded, config, run, lookup));
     let wanted: Vec<Arc<extensions::LuaProvider>> = loaded
         .lua_providers()
         .iter()
@@ -178,21 +168,23 @@ fn refreshed(
     {
         match handle.join() {
             Ok(Ok(models)) => {
-                // The caller exposes text, not notice extension metadata.
-                notices.extend(
-                    providers
-                        .set_models(&name, models)
-                        .into_iter()
-                        .map(|notice| notice.message),
-                );
+                notices.extend(providers.set_models(&name, models));
             }
             Ok(Err(error)) => {
-                notices.push(format!("Could not refresh {name}'s model list: {error}"));
+                notices.push(Notice {
+                    code: ErrorCode::ExtensionFailed,
+                    extension: Some(name.clone()),
+                    message: format!("Could not refresh {name}'s model list: {error}"),
+                });
             }
             Err(_) => {
-                notices.push(format!(
-                    "Could not refresh {name}'s model list: the refresh did not answer."
-                ));
+                notices.push(Notice {
+                    code: ErrorCode::ExtensionFailed,
+                    extension: Some(name.clone()),
+                    message: format!(
+                        "Could not refresh {name}'s model list: the refresh did not answer."
+                    ),
+                });
             }
         }
     }

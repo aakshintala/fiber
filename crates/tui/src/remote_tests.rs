@@ -1193,6 +1193,7 @@ fn catalogue_reads_send_the_refresh_word() {
 #[test]
 fn catalogue_answers_decode_field_for_field() {
     use crate::catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, Refresh};
+    use contract::events::Notice;
     let hub = Hub::new(Arc::new(Fake::new(vec![])));
     hub.remote.set_workspace(Some(PathBuf::from("/remote/ws")));
     let catalogue = hub
@@ -1213,7 +1214,7 @@ fn catalogue_answers_decode_field_for_field() {
                     {"reference": "acme/m2", "provider": "acme", "id": "m2",
                      "levels": [], "roles": []}
                 ],
-                "notices": ["acme is stale"],
+                "notices": [{"code": "model_invalid", "message": "acme is stale"}],
                 "lists": [{"provider": "acme", "updated_ms": 1, "stale": false},
                           {"provider": "other", "stale": true}]
             }),
@@ -1266,7 +1267,11 @@ fn catalogue_answers_decode_field_for_field() {
                     price: None,
                 },
             ],
-            notices: vec!["acme is stale".to_owned()],
+            notices: vec![Notice {
+                code: ErrorCode::ModelInvalid,
+                message: "acme is stale".to_owned(),
+                extension: None,
+            }],
             lists: vec![
                 ListAge {
                     provider: "acme".to_owned(),
@@ -1371,6 +1376,10 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
             json!({"models": [], "notices": [],
                    "lists": [{"provider": "a"}]}),
         ),
+        (
+            "notices with a legacy string element",
+            json!({"models": [], "notices": ["stale"], "lists": []}),
+        ),
         ("a result that is not an object", json!([])),
     ] {
         let error = hub
@@ -1389,6 +1398,7 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
 
 #[test]
 fn decode_models_reads_object_notices_with_code_and_message() {
+    use contract::events::Notice;
     let value = json!({
         "models": [],
         "notices": [{"code": "model_unconfigured",
@@ -1396,11 +1406,19 @@ fn decode_models_reads_object_notices_with_code_and_message() {
         "lists": [],
     });
     let catalogue = decode_models(&value).expect("object notices decode");
-    assert_eq!(catalogue.notices.len(), 1);
-    assert!(
-        catalogue.notices[0].contains("fake/alpha"),
-        "{:?}",
-        catalogue.notices
+    assert_eq!(
+        catalogue.notices,
+        [Notice {
+            code: ErrorCode::ModelUnconfigured,
+            message: "The model `fake/alpha` needs the setting `workspace`".to_owned(),
+            extension: None,
+        }]
+    );
+    // No `extension` key: the hub omits it, never null.
+    assert_eq!(
+        serde_json::to_value(&catalogue.notices).unwrap(),
+        json!([{"code": "model_unconfigured",
+                "message": "The model `fake/alpha` needs the setting `workspace`"}])
     );
 }
 

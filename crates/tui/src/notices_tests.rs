@@ -7,7 +7,9 @@ use super::{NoticeLine, NoticeOverlay, Notices};
 use crate::app::App;
 use crate::keys::Key;
 use crate::link::Line;
+use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::events::Notice;
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -430,26 +432,58 @@ fn keys_notices_are_config_invalid() {
 }
 
 #[test]
-fn catalogue_notices_are_model_invalid_and_a_read_error_is_io_failed() {
+fn catalogue_notices_show_under_their_own_codes_and_a_read_error_is_io_failed() {
     let mut app = attached();
     app.on_models(Ok(crate::catalogue::Catalogue {
         installable: Vec::new(),
         models: Vec::new(),
-        notices: vec!["a cached provider is gone".to_owned()],
+        notices: vec![
+            Notice {
+                code: ErrorCode::ModelUnconfigured,
+                message: "a host is missing".to_owned(),
+                extension: None,
+            },
+            Notice {
+                code: ErrorCode::ExtensionFailed,
+                message: "the refresh failed".to_owned(),
+                extension: Some("acme".to_owned()),
+            },
+            Notice {
+                code: ErrorCode::ModelInvalid,
+                message: "a cached list is bad".to_owned(),
+                extension: None,
+            },
+        ],
         lists: Vec::new(),
     }));
+    let codes: Vec<String> = app
+        .notices()
+        .iter()
+        .map(|line| match line {
+            NoticeLine::Notice { code, .. } => code.clone(),
+            line @ NoticeLine::More(_) => panic!("a more row, not a notice: {line:?}"),
+        })
+        .collect();
+    assert_eq!(
+        codes,
+        ["model_unconfigured", "extension_failed", "model_invalid"]
+    );
     assert_eq!(
         first(&app),
         (
-            "model_invalid".to_owned(),
-            "a cached provider is gone".to_owned()
+            "model_unconfigured".to_owned(),
+            "a host is missing".to_owned()
         )
     );
     app.on_models(Err("the lists could not be read".to_owned()));
+    // Three rows already show, so the read error waits behind one
+    // `+N more` row; dismissing the oldest reveals it with its code.
+    assert_eq!(app.notices()[3], NoticeLine::More(1));
+    app.dismiss_notice(0);
     assert_eq!(
-        app.notices()[1],
+        app.notices()[2],
         NoticeLine::Notice {
-            id: 1,
+            id: 3,
             code: "io_failed".to_owned(),
             text: "the lists could not be read".to_owned(),
         }

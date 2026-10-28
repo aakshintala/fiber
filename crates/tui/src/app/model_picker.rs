@@ -23,7 +23,7 @@ impl App {
         match &result {
             Ok(catalogue) => {
                 for notice in &catalogue.notices {
-                    self.push_notice("model_invalid", notice.clone());
+                    self.push_notice(&crate::format::code(&notice.code), notice.message.clone());
                 }
             }
             Err(error) => {
