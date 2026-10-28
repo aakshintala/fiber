@@ -168,25 +168,24 @@ impl Items {
     /// The record for `job`, creating it with the next serial when it is
     /// new.
     fn record(&mut self, job: &JobId) -> &mut JobRecord {
-        if !self.jobs.contains_key(job) {
+        // `or_insert_with` runs only for a new job, so a serial is
+        // consumed exactly once per new job and never for an existing
+        // one.
+        self.jobs.entry(job.clone()).or_insert_with(|| {
             let serial = self.next_serial;
             self.next_serial = self.next_serial.saturating_add(1);
             self.by_serial.insert(serial, job.clone());
-            self.jobs.insert(
-                job.clone(),
-                JobRecord {
-                    serial,
-                    description: String::new(),
-                    output_path: String::new(),
-                    started_ts: 0,
-                    delegate: None,
-                    outcome: None,
-                    output: None,
-                    tty: false,
-                },
-            );
-        }
-        self.jobs.get_mut(job).unwrap_or_else(|| unreachable!())
+            JobRecord {
+                serial,
+                description: String::new(),
+                output_path: String::new(),
+                started_ts: 0,
+                delegate: None,
+                outcome: None,
+                output: None,
+                tty: false,
+            }
+        })
     }
 }
 
@@ -725,19 +724,14 @@ impl App {
 
     /// The attached session's screen, for folding its lines.
     pub(super) fn attached_screen_mut(&mut self) -> &mut super::screen::Screen {
-        if self
-            .items
-            .open
-            .as_ref()
-            .is_some_and(|open| open.stashed.is_some())
-        {
-            self.items
-                .open
-                .as_mut()
-                .and_then(|open| open.stashed.as_mut())
-                .unwrap_or_else(|| unreachable!())
-        } else {
-            &mut self.screen
+        let Some(open) = self.items.open.as_mut() else {
+            return &mut self.screen;
+        };
+        // The stashed screen is showing exactly when it is present;
+        // otherwise the shown screen is the attached one.
+        match &mut open.stashed {
+            Some(stashed) => stashed,
+            None => &mut self.screen,
         }
     }
 

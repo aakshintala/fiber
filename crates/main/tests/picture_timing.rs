@@ -220,7 +220,7 @@ impl Setup {
 
     /// The session's directory, from its id.
     fn session_dir(&self, id: &str) -> PathBuf {
-        log::sessions_dir(&self.home(), &doors::project(&self.workspace())).join(id)
+        log::sessions_dir(&self.home(), &worktree::project(&self.workspace())).join(id)
     }
 }
 

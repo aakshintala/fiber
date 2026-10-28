@@ -101,8 +101,10 @@ const SESSION_CRATES: [&str; 16] = [
 /// through `config` (`fiber_home_from_env`) and `cli`, `doors` (the hub
 /// `cli` reaches, `cli/src/hub_status.rs:33`, `doors::hub`) and the `hub`
 /// that serves (`main/src/hub_command.rs:55`; `hub/src/start.rs:17` and
-/// `hub/src/feed.rs:137` call into `contract`, `support` and `log`).
-const LIST_CRATES: [&str; 8] = [
+/// `hub/src/feed.rs:137` call into `contract`, `support` and `log`),
+/// and `worktree` (`cli::sessions_list::list` resolves the project
+/// there, `cli/src/sessions_list.rs:137`).
+const LIST_CRATES: [&str; 9] = [
     "crates/config/",
     "crates/cli/",
     "crates/doors/",
@@ -110,6 +112,7 @@ const LIST_CRATES: [&str; 8] = [
     "crates/contract/",
     "crates/support/",
     "crates/log/",
+    "crates/worktree/",
     "crates/main/",
 ];
 

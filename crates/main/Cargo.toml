@@ -30,6 +30,7 @@ signal-hook.workspace = true
 support = { path = "../support" }
 tools = { path = "../tools" }
 tui = { path = "../tui" }
+worktree = { path = "../worktree" }
 
 [dev-dependencies]
 base64.workspace = true
