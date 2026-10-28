@@ -454,14 +454,23 @@ fn an_inner_call_matching_one_other_tool_gets_no_suggestion() {
             l.kind == "tool_call_completed" && l.action_id.as_ref() == Some(&inner_id(&lines))
         })
         .unwrap();
-    assert_eq!(
-        support::text_first(done),
-        "The arguments do not match the tool's schema:\n\
-         `/command`: missing\n\
-         `/offset`: not allowed\n\
-         `/path`: not allowed"
+    // One line per bad field, in no promised order, and no suggestion line
+    // on an inner call (`docs/tools.md`, "Before a call runs").
+    let text = support::text_first(done);
+    for line in [
+        "`/command`: missing",
+        "`/offset`: not allowed",
+        "`/path`: not allowed",
+    ] {
+        assert!(text.contains(line), "missing field line {line}: {text}");
+    }
+    assert!(
+        !text.contains("These arguments fit"),
+        "unexpected suggestion: {text}"
     );
     let outcomes = outcomes.lock().unwrap();
+    // The outer tool makes one inner call (the `outer` helper above), so the
+    // extension sees one outcome.
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0].status, CallStatus::Failed);
     assert!(shell.ran.lock().unwrap().is_empty());

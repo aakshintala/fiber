@@ -333,13 +333,58 @@ fn read_shaped() -> Value {
     json!({"path": "x.rs", "offset": 1, "limit": 20})
 }
 
-/// The field lines a `shell` call with [`read_shaped`] fails with.
-fn shell_field_lines() -> &'static str {
-    "The arguments do not match the tool's schema:\n\
-     `/command`: missing\n\
-     `/offset`: not allowed\n\
-     `/path`: not allowed"
+/// The field lines a `shell` call with [`read_shaped`] fails with, in no
+/// promised order: `docs/tools.md`, "Before a call runs", promises one line
+/// per bad field, not their order or count, so tests assert each line by
+/// containment.
+fn shell_field_lines() -> [&'static str; 3] {
+    [
+        "`/command`: missing",
+        "`/offset`: not allowed",
+        "`/path`: not allowed",
+    ]
 }
+
+/// Asserts `text` is a [`read_shaped`] schema failure with no suggestion: it
+/// holds each of [`shell_field_lines`] and no `These arguments fit` line.
+fn assert_shell_fields_without_suggestion(text: &str) {
+    for line in shell_field_lines() {
+        assert!(text.contains(line), "missing field line {line}: {text}");
+    }
+    assert!(
+        !text.contains("These arguments fit"),
+        "unexpected suggestion: {text}"
+    );
+}
+
+/// The event kinds of a one-call turn whose call fails its schema check: the
+/// reply's one request completes as `failed` without ever starting, and the
+/// turn's second reply ends it (`docs/loop.md`, "One step", "Tool calls that
+/// do not run" and "Ending a turn"; `docs/tools.md`, "Before a call runs").
+/// Pinning the whole list pins the one completion too (`docs/testing.md`,
+/// "Event streams").
+const ONE_FAILED_CALL_TURN: &[&str] = &[
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "tool_call_arguments_delta",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
 
 #[test]
 fn shell_call_with_read_shaped_arguments_names_the_matching_tool() {
@@ -353,13 +398,20 @@ fn shell_call_with_read_shaped_arguments_names_the_matching_tool() {
         vec![shell.clone(), read.clone()],
         &[("shell", read_shaped())],
     );
+    assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["status"], "failed");
     assert_eq!(done[0].payload["error"]["code"], "invalid_arguments");
-    assert_eq!(
-        text_first(done[0]),
-        format!("{}\nThese arguments fit `read`.", shell_field_lines())
+    let text = text_first(done[0]);
+    for line in shell_field_lines() {
+        assert!(text.contains(line), "missing field line {line}: {text}");
+    }
+    // The suggestion is a last line naming the one match (`docs/tools.md`,
+    // "Before a call runs").
+    assert!(
+        text.ends_with("\nThese arguments fit `read`."),
+        "missing suggestion: {text}"
     );
     // The recorded call keeps the model's choice of tool.
     let requested = lines
@@ -393,10 +445,11 @@ fn two_matching_tools_add_no_suggestion() {
         vec![shell.clone(), read.clone(), other.clone()],
         &[("shell", read_shaped())],
     );
+    assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["error"]["code"], "invalid_arguments");
-    assert_eq!(text_first(done[0]), shell_field_lines());
+    assert_shell_fields_without_suggestion(text_first(done[0]));
     assert!(shell.ran().is_empty());
     assert!(read.ran().is_empty());
     assert!(other.ran().is_empty());
@@ -412,10 +465,11 @@ fn only_a_permissive_schema_match_adds_no_suggestion() {
         vec![shell.clone(), loose.clone()],
         &[("shell", read_shaped())],
     );
+    assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["error"]["code"], "invalid_arguments");
-    assert_eq!(text_first(done[0]), shell_field_lines());
+    assert_shell_fields_without_suggestion(text_first(done[0]));
     assert!(shell.ran().is_empty());
     assert!(loose.ran().is_empty());
 }
@@ -440,6 +494,7 @@ fn an_effectively_deferred_match_adds_no_suggestion() {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
     // The preamble really did defer `read`: the suggestion is skipped
     // because of the effective deferred set, not a schema miss.
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
@@ -453,7 +508,7 @@ fn an_effectively_deferred_match_adds_no_suggestion() {
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["error"]["code"], "invalid_arguments");
-    assert_eq!(text_first(done[0]), shell_field_lines());
+    assert_shell_fields_without_suggestion(text_first(done[0]));
     assert!(shell.ran().is_empty());
     assert!(read.ran().is_empty());
 }
@@ -470,6 +525,7 @@ fn a_match_only_after_repair_adds_no_suggestion() {
         vec![shell.clone(), read.clone()],
         &[("shell", sent.clone())],
     );
+    assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
     let requested = lines
         .iter()
         .find(|l| l.kind == "tool_call_requested")
@@ -481,11 +537,13 @@ fn a_match_only_after_repair_adds_no_suggestion() {
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["error"]["code"], "invalid_arguments");
-    assert_eq!(
-        text_first(done[0]),
-        "The arguments do not match the tool's schema:\n\
-         `/command`: missing\n\
-         `/path`: not allowed"
+    let text = text_first(done[0]);
+    for line in ["`/command`: missing", "`/path`: not allowed"] {
+        assert!(text.contains(line), "missing field line {line}: {text}");
+    }
+    assert!(
+        !text.contains("These arguments fit"),
+        "unexpected suggestion: {text}"
     );
     assert!(shell.ran().is_empty());
     assert!(read.ran().is_empty());
@@ -1520,10 +1578,11 @@ fn a_hosted_match_adds_no_suggestion() {
         vec![shell.clone(), Arc::new(HostedRead)],
         &[("shell", read_shaped())],
     );
+    assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["error"]["code"], "invalid_arguments");
-    assert_eq!(text_first(done[0]), shell_field_lines());
+    assert_shell_fields_without_suggestion(text_first(done[0]));
     assert!(shell.ran().is_empty());
 }
 
