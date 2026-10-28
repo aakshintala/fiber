@@ -588,6 +588,15 @@ fn a_supervised_resume_stays_unanswerable() {
         line["kind"] == "turn_completed"
     });
     close_and_wait(&control, &id);
+    // The exited session's log is complete before the resubscribe: a
+    // missing or torn log is refused `session_not_found` on its own, and
+    // must not masquerade as the resume.
+    let exited = read_log(&setup, &id);
+    assert_eq!(
+        exited.last().expect("the exited session logged")["kind"],
+        "fiber_exited",
+        "the exited session's log ends in fiber_exited before the resubscribe"
+    );
     // A fresh client subscribing to the exited session resumes it; the
     // resumed session keeps the first line's flag. The old socket stays
     // subscribed, so re-subscribing on it would be rejected.
@@ -676,5 +685,12 @@ fn a_supervised_resume_stays_unanswerable() {
         "a resumed supervised turn sends no attention: {lines:?}"
     );
     close_and_wait(&resumed, &id);
-    stop_hub(&hub, guard);
+    // Sessions first: no live session may auto-start a new hub after the
+    // hub is gone, orphaning `fiber hub serve` past the test.
+    guard.wait_gone();
+    hub.lock()
+        .unwrap()
+        .take()
+        .expect("the hub ran")
+        .kill_and_wait();
 }
