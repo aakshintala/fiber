@@ -98,6 +98,13 @@ fn shut(closers: Vec<Closer>) {
     close_connections(closers, UnixStream::shutdown);
 }
 
+/// Registered ids in registration order, read from the private subscriber
+/// list this module's own child test sees: the tests assert on the
+/// registry they drive, so the production type carries no test-only reader.
+fn ids(fanout: &Fanout) -> Vec<u64> {
+    fanout.list.iter().map(|sub| sub.id).collect()
+}
+
 #[test]
 fn a_spawned_writer_writes_each_line_and_ends_with_its_senders() {
     let (writer, far) = UnixStream::pair().unwrap();
@@ -138,11 +145,11 @@ fn the_queue_reports_full_at_the_bound_and_keeps_a_healthy_subscriber() {
             "no overflow below the bound"
         );
         healthy_line.recv_or_fail(&healthy_rx, "each healthy line to land");
-        assert_eq!(fanout.ids(), [stalled, healthy]);
+        assert_eq!(ids(&fanout), [stalled, healthy]);
     }
     let closers = fanout.broadcast(&line());
     assert_eq!(closers.len(), 1, "exactly the stalled subscriber reports");
-    assert_eq!(fanout.ids(), [healthy], "the stalled id is gone");
+    assert_eq!(ids(&fanout), [healthy], "the stalled id is gone");
     shut(closers);
     stalled_release.send(()).unwrap_or(());
     healthy_release.send(()).unwrap_or(());
@@ -162,12 +169,12 @@ fn a_disconnected_receiver_is_not_a_cap_violation() {
     let (writer, release) = inert();
     let mut fanout = Fanout::default();
     let id = fanout.push((tx, writer), closer(), closer(), line());
-    assert_eq!(fanout.ids(), [id]);
+    assert_eq!(ids(&fanout), [id]);
     assert!(
         fanout.broadcast(&line()).is_empty(),
         "a dead writer reports no overflow"
     );
-    assert!(fanout.ids().is_empty(), "the dead id is gone");
+    assert!(ids(&fanout).is_empty(), "the dead id is gone");
     release.send(()).unwrap_or(());
     let (fanout, finished) = reap_within(fanout, "the dead writer to reap");
     assert_eq!(finished.len(), 1, "its handle is kept for joining");
@@ -203,14 +210,14 @@ fn finished_reaps_only_ended_writers_and_close_hands_back_the_rest() {
     fanout.push((gone_tx, gone), closer(), closer(), line());
     // The broadcast retires the dead channel without reporting it.
     assert!(fanout.broadcast(&line()).is_empty());
-    assert_eq!(fanout.ids(), [live_id]);
+    assert_eq!(ids(&fanout), [live_id]);
     gone_release.send(()).unwrap_or(());
     let (fanout, done) = reap_within(fanout, "the ended writer to reap");
     assert_eq!(done.len(), 1, "only the ended writer reaps");
     for writer in done {
         join_within(writer, "the ended writer");
     }
-    assert_eq!(fanout.ids(), [live_id], "the live writer stays");
+    assert_eq!(ids(&fanout), [live_id], "the live writer stays");
     live_release.send(()).unwrap_or(());
     let mut ends = fanout.close();
     assert_eq!(ends.len(), 1, "close hands back the live writer");
@@ -277,16 +284,16 @@ fn send_to_reaches_exactly_one_subscriber() {
     for _ in 0..QUEUE - 1 {
         assert!(matches!(fanout.send_to(first_id, &line()), Targeted::Sent));
     }
-    assert_eq!(fanout.ids(), [first_id, second_id]);
+    assert_eq!(ids(&fanout), [first_id, second_id]);
     match fanout.send_to(first_id, &line()) {
         Targeted::Full(closer) => shut(vec![closer]),
         Targeted::Sent => panic!("the send past the bound is not Sent"),
         Targeted::Gone => panic!("the registered id is not Gone"),
         Targeted::DeadWriter(_) => panic!("the live receiver is not dead"),
     }
-    assert_eq!(fanout.ids(), [second_id], "only the full id is gone");
+    assert_eq!(ids(&fanout), [second_id], "only the full id is gone");
     assert!(matches!(fanout.send_to(first_id, &line()), Targeted::Gone));
-    assert_eq!(fanout.ids(), [second_id], "a removed id never resurrects");
+    assert_eq!(ids(&fanout), [second_id], "a removed id never resurrects");
     // A disconnected receiver hands its handle back for joining.
     let (dead_tx, dead_rx) = held();
     drop(dead_rx);
@@ -301,7 +308,7 @@ fn send_to_reaches_exactly_one_subscriber() {
         Targeted::Full(_) => panic!("the dead receiver is not Full"),
         Targeted::Gone => panic!("the registered id is not Gone"),
     }
-    assert_eq!(fanout.ids(), [second_id], "the dead id is gone");
+    assert_eq!(ids(&fanout), [second_id], "the dead id is gone");
     first_release.send(()).unwrap_or(());
     second_release.send(()).unwrap_or(());
     for end in fanout.close() {
@@ -325,7 +332,7 @@ fn pending_registrations_take_distinct_ids_and_remove_keeps_the_first() {
     // broken counter never counts past the first.
     assert_eq!(first_id, 1, "the first registration takes id 1");
     assert_eq!(second_id, 2, "the second registration takes id 2");
-    assert_eq!(fanout.ids(), [first_id, second_id]);
+    assert_eq!(ids(&fanout), [first_id, second_id]);
     let end = fanout
         .remove(second_id)
         .expect("the second registration removes");
@@ -334,7 +341,7 @@ fn pending_registrations_take_distinct_ids_and_remove_keeps_the_first() {
         "a pending registration owns no writer"
     );
     shut(vec![end.closer]);
-    assert_eq!(fanout.ids(), [first_id], "the first registration stays");
+    assert_eq!(ids(&fanout), [first_id], "the first registration stays");
     // Pending registrations own no thread and shut nothing: closing drops
     // them with nothing to join.
     assert!(fanout.close().is_empty(), "no writer to hand back");
@@ -377,7 +384,7 @@ fn a_broadcast_whose_pending_writer_fails_to_spawn_unregisters_it_and_hands_back
     fanout.fail_next_spawn();
     let closers = fanout.broadcast(&line());
     assert_eq!(closers.len(), 1, "exactly the failed registration reports");
-    assert_eq!(fanout.ids(), [healthy_id], "the failed id is gone");
+    assert_eq!(ids(&fanout), [healthy_id], "the failed id is gone");
     assert_ne!(failed_id, healthy_id, "the two registrations differ");
     shut(closers);
     // Exactly the failed connection's shutdown came back: its far end sees
