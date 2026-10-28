@@ -389,6 +389,9 @@ pub struct Waiting {
 pub struct SessionStatus {
     /// The session's name, or its first prompt when it has none.
     pub name: String,
+    /// Whether `name` came from `session_named`, rather than the first prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub named: bool,
     /// The workspace path.
     pub workspace: String,
     /// The project's key (`docs/state.md`, "Projects").

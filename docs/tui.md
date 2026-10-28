@@ -275,7 +275,18 @@ adds no rail card, and the row stays under "exited". A ✕ on a live row stops t
 focused live row stops it too, after asking ("Quit"); on an unreadable row it does nothing, and with the link down it opens no question. Backspace never stops a session, whatever the row. Delete on a
 selected exited row deletes that session through the hub, after asking, and
 the question names any session `--cascade` would add (`docs/invocation.md`,
-"Deleting and pruning"). A row whose status this terminal cannot read says CANNOT ATTACH and why: "Cannot attach: this session runs Fiber <v>" when the hub runs another Fiber version or commit than this terminal, since a session runs the binary of the hub that started it, with `<v>` as `fiber --version` writes it; otherwise "Cannot attach: its status did not parse". Opening the row shows the same text as a `session_held` notice.
+"Deleting and pruning"). `/delete` deletes the session on screen instead:
+it asks the hub for the exact sessions the delete would remove, asks the
+person with those sessions named, stops every running one first, then
+deletes that same set, which never changes after the question. Esc, a click
+outside the frame or on its ✕ cancels and deletes nothing. It waits for fresh
+exit evidence only for held sessions represented in the feed; a delegate
+shuts down with its parent, and the hub's exact-set `session_held` refusal is
+the backstop. A stop the hub refuses deletes nothing and names the session
+still running; a stop with no answer shows `Stop status unknown`. A delete
+refused because a session is running again keeps the attached session with a
+`Not deleted` notice and does not retry; any other post-stop refusal returns
+home with its stopped rows and the hub's message. A row whose status this terminal cannot read says CANNOT ATTACH and why: "Cannot attach: this session runs Fiber <v>" when the hub runs another Fiber version or commit than this terminal, since a session runs the binary of the hub that started it, with `<v>` as `fiber --version` writes it; otherwise "Cannot attach: its status did not parse". Opening the row shows the same text as a `session_held` notice.
 
 The mouse wheel over the list's rows scrolls the list by three rows,
 leaving the focus where it is.
@@ -1011,7 +1022,7 @@ arrived after `sessions` was sent.
 
 ### Turns
 
-- **One card per turn.** The prompt that starts a turn floats above its card,
+- **One card per turn.** Only the person's prompt floats above its card,
   after a blank row, as a bubble on the right in the `prompt` tint, at most 72%
   of the width: the text padded one column on each side, a ▐ stripe in
   `accent` at its right edge, and "you 14:12" dim and right-aligned under it.
@@ -1025,6 +1036,16 @@ arrived after `sessions` was sent.
   spend during the turn included: "▣ completed · 38s · 12 calls · 18.2k tokens
   · $0.41 · $1.10 on subscription". A figure that is zero is left out, and a
   model with no price shows tokens only (`docs/model-routing.md`, "Cost").
+- **Non-driver messages stay in the card.** A non-driver input message sits
+  inside the card where it landed as a labelled rule. Start-input messages
+  open the card, before any entry, in the input's order. A Fiber message has a
+  muted `Fiber` label, a dim ` · <time> `, and dim text without one leading
+  `Fiber: `; a session message has its current name or id as a secondary
+  label, a dim ` · <time> ` and full-colour text; an extension message has its
+  name as a secondary label, a dim ` · <time> ` and full-colour text. Images
+  draw below text. A blank message draws only its labelled rule. A whole-turn
+  copy includes each message's label and text in draw order; the labelled
+  rule is decoration and is not copied.
 - **Replies lead, tool groups sit back.** Nothing inside the card is indented
   past its one-column padding: replies, summary lines, steering messages and
   answers all start at the same column. A tool group has no band of its own, and its summary line is dim
@@ -1303,6 +1324,7 @@ and an expiry wakes the loop even with no input.
 | `history_loading` | condition | History lands for the pending turn. |
 | `hook_failed` | event | Fades 10 s after it shows. |
 | `hub_version` | event | Fades 10 s after it shows. |
+| `indeterminate` | event | Fades 10 s after it shows. |
 | `instructions_large` | event | Fades 10 s after it shows. |
 | `invalid_arguments` | event | Fades 10 s after it shows. |
 | `io_failed` | event | Fades 10 s after it shows. |
@@ -1874,9 +1896,11 @@ Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  close-all and stop questions, the import report, the reviewer setup, the home screen's delete question or workspace picker, the
-  key map, an approval or question, an offer, the hooks install offer, the Ctrl+R panel, or a
-  notice's whole text; or the `/` or `@` completion panel while focus is not
+  close-all and stop questions, the import report, the reviewer setup, the
+  `/delete` question on an attached session, the session-list delete question
+  on home, the workspace picker, the key map, an approval or question, an
+  offer, the hooks install offer, the Ctrl+R panel, or a notice's whole text;
+  or the `/` or `@` completion panel while focus is not
   in the conversation. An overlay's own keys, such as an approval's ↑ and ↓,
   are not bindings.
 - Picker: the model picker or the credential picker is open. Only its own keys and the global actions
@@ -2011,6 +2035,7 @@ later release still applies.
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/clear` | Starts a fresh session in place, closing the session on screen ("Clearing"). |
 | `/close [all]`, `/stop [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
+| `/delete` | Asks before stopping the session and its cascade, then deletes the exact confirmed set permanently; it never retries a refusal ("The session list"). |
 | `/feedback <description>`, `/bug <description>` | Writes a feedback report with the description, version, platform, doctor output and the diagnostics of the session on screen, and prints its path and the issue link. With no session on screen, the diagnostics are the hub's lines only. A session this machine holds no diagnostic lines for, such as one on a remote hub, still gets its id, the instruction to export its log privately and the hub's lines, with a notice that this machine has no diagnostic lines for it. The report is the one `fiber feedback` writes (`docs/invocation.md`, "Commands and flags"). |
 | `/quit`, `/exit` | Quits ("Quit"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
@@ -2303,8 +2328,11 @@ tui       212   9,804
 ### Overlays
 
 Every surface drawn over the screen shares one frame: the
-key map, the quit question, the close-all question, the stop question, the hooks install offer, home's delete question and workspace picker, the
-`/login` overlay, the Ctrl+R panel, a notice's whole text, the import report, the reviewer setup, the `/` and `@` completion panels, and
+key map, the quit question, the close-all question, the stop question, the
+hooks install offer, the `/delete` question on an attached session, the
+session-list delete question on home, the workspace picker, the `/login`
+overlay, the Ctrl+R panel, a notice's whole text, the import report, the
+reviewer setup, the `/` and `@` completion panels, and
 the model picker inside its view.
 
 - **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,
@@ -2678,7 +2706,7 @@ itself is a separate client of the hub, not a TUI extension.
 | `layout` | Where each region goes: the conversation, the panel, the working line, the steering queue, the input box, the status rows, and any region an extension adds |
 | `home` | Home |
 | `turn_card` | A turn's card and its ▣ line |
-| `prompt` | A person's prompt bubble |
+| `prompt` | Only a person's prompt bubble: a non-driver message never calls it |
 | `reply` | An assistant reply |
 | `group_line` | A tool group's summary line |
 | `ledger_row:<tool>` | A ledger row for the named tool |
@@ -2717,7 +2745,7 @@ runs inside it; `prompt` draws only when the card itself is built in.
 
 | Field | What it holds |
 |---|---|
-| `prompts` | The turn's prompts in order, each with the `prompt` slot's `text` and `images` (`path`, `width`, `height` in pixels) |
+| `prompts` | The turn's person's prompts in order — only `Origin::Driver` messages — each with the `prompt` slot's `text` and `images` (`path`, `width`, `height` in pixels) |
 | `entries` | The card's items in order, each tagged with a `kind` and carrying the slot input shown below |
 | `started` | When the turn started |
 | `calls` | How many model calls the turn made |
@@ -2731,12 +2759,17 @@ The entries carry these slot inputs and extra fields:
 |---|---|
 | `reply` | The `reply` input: `text` (Markdown included) |
 | `steer` | The `steer` input: `text`, `images`, `ts` |
+| `message` | `source` (`fiber`, `session` or `extension`), `label`, `text`, `images`, `ts` |
 | `group` | The `group_line` input, plus `cut` and `sections` |
 | `aside` | No slot: `{kind = "line", text}`, `{kind = "warning", message}`, or `{kind = "orphans", jobs, open}`; each job has `name` and `message` |
 | `band` | The `handoff_band` input: `trigger`, `ts`, `state`; a `done` state carries `before` and optional `after` context sizes |
 | `answers` | The `answers` input: `outcome`, `parts`, `note?`, `ts?`; each part has `header`, `text`, `skipped` |
 
-**`prompt`** draws a person's prompt bubble.
+A session message's `label` is the sender's current non-empty session name,
+when one is known, else its session id. An extension message's label is its
+extension name. An unknown `kind` is skipped.
+
+**`prompt`** draws only a person's prompt bubble: a non-driver message never calls it, and goes in `entries` as `message` instead.
 
 | Field | What it holds |
 |---|---|

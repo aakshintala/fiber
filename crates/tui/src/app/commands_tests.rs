@@ -2432,6 +2432,43 @@ fn clear_switches_only_on_the_start_answer_then_closes_old() {
     assert!(app.lines().is_empty());
 }
 
+/// `/clear` keeps the names the terminal learned: the new session's
+/// card labels the same sender by its name, not its id.
+#[test]
+fn clear_keeps_the_learned_sender_names() {
+    let mut app = attached();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    app.on_line(crate::app::testkit::sender_status("worker", true));
+    let lines = sent(enter(&mut app, "/clear"));
+    let id = lines[0]["id"].clone();
+    accept_start(&mut app, &id, NEW);
+    assert!(app.lines().is_empty());
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(NEW.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"input": [
+            {"type": "message", "source": "driver",
+             "content": [{"type": "text", "text": "go"}]},
+            {"type": "message", "source": "session",
+             "from_session_id": crate::app::testkit::SENDER,
+             "content": [{"type": "text", "text": "please check"}]},
+        ]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }));
+    let shown: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
+    assert!(
+        shown.iter().any(|line| line.contains("worker · ")),
+        "the cleared conversation keeps the name: {shown:?}"
+    );
+}
+
 const NEW2: &str = "s_mmmmmmmmmmmmmmmm";
 
 /// A second `/clear` cannot replace the still-pending `start`
