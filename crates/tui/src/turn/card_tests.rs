@@ -1195,6 +1195,35 @@ fn an_open_turn_with_no_prompt_or_card_has_no_rows() {
 }
 
 #[test]
+fn non_driver_start_messages_render_inside_the_card_not_as_prompt_bubbles() {
+    let mut cards = fresh();
+    feed(
+        &mut cards,
+        "turn_started",
+        None,
+        json!({"input": [
+            {"type":"message", "source":"driver", "content":[{"type":"text","text":"go"}]},
+            {"type":"message", "source":"fiber", "content":[{"type":"text","text":"Fiber: quota notice"}]}
+        ]}),
+    );
+    text(&mut cards, "a_1", "Hello.");
+    done(&mut cards);
+    let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    assert_eq!(shown.iter().filter(|row| row.contains("go")).count(), 1);
+    assert!(
+        shown
+            .iter()
+            .any(|row| row.contains("Fiber") && row.contains("quota notice")),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|row| row.contains("Fiber: quota notice")),
+        "{shown:?}"
+    );
+}
+
+#[test]
 fn an_open_card_or_a_handoff_does_not_get_a_trailing_gap() {
     let mut cards = fresh();
     start(&mut cards, "go");
