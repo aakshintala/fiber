@@ -227,7 +227,7 @@ fn execute_inner(
         cmd.env(crate::search::matches::MATCHES_ENV, path);
     }
     #[cfg(not(target_os = "linux"))]
-    let _ = install;
+    let _ = (install, sandbox_settings, sandbox_workspace);
     // A setup failure aborts spawn before it starts: the shell maps the
     // marker to a sandbox-apply failure, so the call never runs unconfined.
     // A disabled sandbox skips the policy and runs as before; an enabled

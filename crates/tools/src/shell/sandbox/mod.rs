@@ -135,7 +135,7 @@ pub fn check_available(settings: &Settings, workspace: &Path) -> Result<(), Unav
     #[cfg(not(target_os = "linux"))]
     {
         let _ = workspace;
-        return Err(Unavailable::UnsupportedPlatform);
+        Err(Unavailable::UnsupportedPlatform)
     }
     #[cfg(target_os = "linux")]
     {
@@ -425,14 +425,6 @@ fn errno_of(cause: &(dyn std::error::Error + 'static)) -> i32 {
         next = error.source();
     }
     libc::EIO
-}
-
-/// A stub for non-Linux builds, which never apply the Linux policy.
-// cargo-mutants runs on Linux, where this platform-only stub is not compiled.
-#[cfg_attr(false, mutants::skip)]
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn prepare(_settings: &Settings, _workspace: &Path) -> Result<Prepared, String> {
-    Err("the Linux sandbox is unavailable on this platform".to_owned())
 }
 
 /// A stub for non-Linux builds.
