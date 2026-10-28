@@ -728,6 +728,15 @@ pub(crate) fn route(
             return;
         }
     }
+    #[cfg(test)]
+    {
+        // Taken out first: the pause below blocks, and must not hold
+        // the hub lock while parked, so a test can re-arm it meanwhile.
+        let after_connect = lock(&hub.after_connect).take();
+        if let Some(after_connect) = after_connect {
+            after_connect();
+        }
+    }
     // The connection's subscription first, under an id of the hub's own,
     // so the client's command reaches a subscribed connection.
     attach_inner(

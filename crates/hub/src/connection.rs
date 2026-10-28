@@ -117,6 +117,10 @@ pub(crate) struct Hub {
     /// and before the connect.
     #[cfg(test)]
     pub(crate) before_open: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot pause in `route` after the opener connects
+    /// and before the pending command is written.
+    #[cfg(test)]
+    pub(crate) after_connect: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: runs handing a queued command over, or clearing it.
     #[cfg(test)]
     pub(crate) on_pass_on: PassOnHook,
@@ -257,6 +261,8 @@ impl Hub {
             after_relay: Mutex::new(None),
             #[cfg(test)]
             before_open: Mutex::new(None),
+            #[cfg(test)]
+            after_connect: Mutex::new(None),
             #[cfg(test)]
             on_pass_on: Mutex::new(None),
             #[cfg(test)]

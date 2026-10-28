@@ -1080,6 +1080,227 @@ fn a_command_for_a_session_with_no_log_is_session_not_found() {
     assert_eq!(line["payload"]["message"], format!("No session `{SID}`."));
 }
 
+/// The exiting process's socket for the connect-to-write race: bound at
+/// `run/<SID>` while the log already ends in `fiber_exited`, so `route`
+/// connects to a socket whose process is shutting down. It accepts one
+/// connection and hands it to the test; the test closes that stream while
+/// the listener stays bound, then tears the listener down. A session whose
+/// log ends in `fiber_exited` has exited, even while its process is still
+/// shutting down (`docs/invocation.md`, "Lifecycle").
+struct ExitingSocket {
+    accepted: mpsc::Receiver<UnixStream>,
+    teardown: mpsc::Sender<()>,
+    torn_down: mpsc::Receiver<()>,
+}
+
+/// Binds the exiting process's socket: the accept proves the server side
+/// exists before the test closes it, so the client's write cannot land
+/// first. The helper owns the listener; the test owns the accepted
+/// stream and orders the teardown.
+fn exiting_socket(temp: &Temp) -> ExitingSocket {
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let socket = temp.dir.join("run").join(SID);
+    let listener = UnixListener::bind(&socket).unwrap();
+    let (accepted_tx, accepted) = mpsc::channel();
+    let (teardown_tx, teardown) = mpsc::channel();
+    let (torn_down_tx, torn_down) = mpsc::channel();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        accepted_tx.send(stream).unwrap_or(());
+        // The test owns the teardown: dropping the listener unbinds the
+        // socket, and removing the file lets the resume bind it again. A
+        // dropped sender ends the wait without hanging the helper.
+        let _released = teardown.recv();
+        drop(listener);
+        fs::remove_file(&socket).unwrap_or(());
+        torn_down_tx.send(()).unwrap_or(());
+    });
+    ExitingSocket {
+        accepted,
+        teardown: teardown_tx,
+        torn_down,
+    }
+}
+
+/// The exited session's log is complete: a missing or torn log answers
+/// `session_not_found` on its own, and cannot masquerade as this race.
+fn assert_exited_log_complete(temp: &Temp) {
+    assert_eq!(
+        crate::resume::last_kind(&temp.dir, &sid()),
+        Some("fiber_exited".to_owned()),
+        "the exited session's log ends in fiber_exited before the command"
+    );
+}
+
+/// Parks the opener between its connect and its write: the command is
+/// connected to the exiting socket, and is written only once the test
+/// releases it. A test that reproduces a race forces the bad interleaving
+/// with a pause point (`docs/testing.md`, "Waits and timeouts").
+fn pause_between_connect_and_write(hub: &Arc<Hub>) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let (connected_tx, connected) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    *crate::connection::lock(&hub.after_connect) = Some(Box::new(move || {
+        connected_tx.send(()).unwrap_or(());
+        let _released = release.recv();
+    }));
+    (connected, release_tx)
+}
+
+/// A command connected to the exiting process's socket past its last
+/// accept, and written after its teardown, reaches no session: the write
+/// fails, so the hub resumes the exited session once and relays the same
+/// command there. The pause forces the connect-then-write order on every
+/// run; the clock wait parks while the listener still accepts, and the
+/// teardown lands before the clock moves, so the wait's next pass finds
+/// no socket and resumes. Commands keep their order across that resume
+/// (`docs/invocation.md`, "Lifecycle"). Of `attach_inner`'s three
+/// `session_not_found` arms only the pending-command write can fire here:
+/// the opener carries no kept subscription, and the stream connected.
+#[test]
+fn a_command_connected_past_the_exiting_socket_is_resumed_and_relayed() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    assert_exited_log_complete(&temp);
+    let exiting = exiting_socket(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut first = Client::connect(&hub);
+    let mut second = Client::connect(&hub);
+    let (connected, release) = pause_between_connect_and_write(&hub);
+    first.send("c_1", "reply");
+    // Both the connect and the accept happened: closing the accepted
+    // stream now makes the pending write fail, instead of racing it.
+    Deadline::after(DEADLINE)
+        .recv(&connected)
+        .expect("the opener connects to the exiting socket");
+    let accepted = Deadline::after(DEADLINE)
+        .recv(&exiting.accepted)
+        .expect("the exiting process accepts the opener");
+    drop(accepted);
+    release.send(()).unwrap_or(());
+    // The listener still accepts while the log ends in `fiber_exited`:
+    // the hub waits the exiting process out instead of answering.
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
+        "the hub waits out the exiting process"
+    );
+    assert!(starter.resumed().is_empty());
+    // The teardown lands while the hub waits: the socket is gone, so the
+    // wait's next pass resumes the session instead.
+    exiting.teardown.send(()).unwrap_or(());
+    Deadline::after(DEADLINE)
+        .recv(&exiting.torn_down)
+        .expect("the exiting socket is torn down");
+    // A second command routed while the first waits holds on the resume:
+    // one resume serves both.
+    second.send("c_2", "steer");
+    temp.clock
+        .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
+    assert_eq!(first.acknowledged("the resumed reply"), "c_1");
+    assert_eq!(second.acknowledged("the resumed steer"), "c_2");
+    assert_eq!(starter.resumed().len(), 1, "one resume for both commands");
+    assert_eq!(
+        received_by_connection(&starter),
+        [
+            [("c_1".into(), "reply".into())],
+            [("c_2".into(), "steer".into())]
+        ],
+        "each command reached the resumed session on its own connection"
+    );
+}
+
+/// The control for the forced order: the hold releases with no teardown,
+/// so the write lands on the still-open socket and the command is served
+/// with no resume. The hold, not the fixture, forces the race.
+#[test]
+fn a_command_written_before_the_teardown_needs_no_resume() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    assert_exited_log_complete(&temp);
+    let exiting = exiting_socket(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    let (connected, release) = pause_between_connect_and_write(&hub);
+    client.send("c_1", "reply");
+    Deadline::after(DEADLINE)
+        .recv(&connected)
+        .expect("the opener connects to the exiting socket");
+    let mut accepted = Deadline::after(DEADLINE)
+        .recv(&exiting.accepted)
+        .expect("the exiting process accepts the opener");
+    release.send(()).unwrap_or(());
+    // The socket stays open past the write: answer as a live session
+    // would, and hold it.
+    accepted.set_read_timeout(Some(DEADLINE)).unwrap();
+    let mut reader = BufReader::new(accepted.try_clone().unwrap());
+    let mut text = String::new();
+    reader.read_line(&mut text).unwrap();
+    let command: Value = serde_json::from_str(&text).unwrap();
+    let id = command["id"].as_str().unwrap().to_owned();
+    writeln!(
+        accepted,
+        "{}",
+        json!({"kind": "command_accepted", "ts": 0, "schema_version": 1, "payload": {"command_id": id}})
+    )
+    .unwrap();
+    assert_eq!(client.acknowledged("the answered reply"), "c_1");
+    assert!(
+        starter.resumed().is_empty(),
+        "no resume: the open socket served the command"
+    );
+    drop(accepted);
+    exiting.teardown.send(()).unwrap_or(());
+    Deadline::after(DEADLINE)
+        .recv(&exiting.torn_down)
+        .expect("the exiting socket is torn down");
+}
+
+/// A stale write with no session to resume is refused with the resume's
+/// own failure: the recorded workspace is gone with no repository to make
+/// it from, so the retry cannot bind. Never a new `session_not_found` for
+/// a log that exists.
+#[test]
+fn a_stale_write_with_no_session_to_resume_is_refused_with_the_resume_code() {
+    let temp = Temp::new();
+    let workspace = temp.recorded();
+    temp.append("fiber_exited");
+    fs::remove_dir_all(&workspace).unwrap();
+    assert_exited_log_complete(&temp);
+    let exiting = exiting_socket(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    let (connected, release) = pause_between_connect_and_write(&hub);
+    client.send("c_1", "reply");
+    Deadline::after(DEADLINE)
+        .recv(&connected)
+        .expect("the opener connects to the exiting socket");
+    let accepted = Deadline::after(DEADLINE)
+        .recv(&exiting.accepted)
+        .expect("the exiting process accepts the opener");
+    // The full teardown lands before the write: neither the write nor the
+    // resume finds a socket.
+    drop(accepted);
+    exiting.teardown.send(()).unwrap_or(());
+    Deadline::after(DEADLINE)
+        .recv(&exiting.torn_down)
+        .expect("the exiting socket is torn down");
+    release.send(()).unwrap_or(());
+    let line = client.next("the refusal");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    assert_eq!(line["payload"]["code"], "io_failed", "{line}");
+    assert!(
+        starter.resumed().is_empty(),
+        "no session started: the workspace is gone"
+    );
+}
+
 /// A resumed session binds its socket for the test to play by hand.
 struct HandResume {
     home: PathBuf,
