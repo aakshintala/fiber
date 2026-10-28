@@ -139,8 +139,8 @@ pub use paging_session::paging_session;
 pub use event_loop::run;
 
 pub use ext::{
-    CallState, Failure, Input as RendererInput, LedgerResult, LedgerRow, RawSpan, Renderer,
-    RowError,
+    CallState, Failure, Input as RendererInput, KeyOutcome, LedgerResult, LedgerRow, RawSpan,
+    Renderer, RowError,
 };
 
 /// Connects to the hub, starting one when none runs: the stream and the

@@ -987,3 +987,54 @@ fn person_bound_keys_reverts_a_person_plus_person_clash() {
     // Both sides revert to their defaults, so neither owns the key.
     assert!(person_bound_keys(&user).is_empty());
 }
+
+#[test]
+fn action_event_returns_the_checked_canonical_event_for_every_variant() {
+    use super::{Keyset, Resolved};
+    for (id, variant, expected) in [
+        ("move_word", "left", Resolved::Edit(Edit::WordLeft)),
+        ("move_word", "right", Resolved::Edit(Edit::WordRight)),
+        ("line_start_end", "start", Resolved::Edit(Edit::LineStart)),
+        ("line_start_end", "end", Resolved::Edit(Edit::LineEnd)),
+        ("focus_next_prev", "next", Resolved::Key(Key::Down)),
+        ("focus_next_prev", "prev", Resolved::Key(Key::Up)),
+        ("search_next_prev", "next", Resolved::Key(Key::Down)),
+        ("search_next_prev", "prev", Resolved::Key(Key::Up)),
+        ("select_steering", "up", Resolved::Key(Key::AltUp)),
+        ("select_steering", "down", Resolved::Key(Key::AltDown)),
+        ("rail_row_n", "1", Resolved::Key(Key::AltDigit(1))),
+        ("rail_row_n", "5", Resolved::Key(Key::AltDigit(5))),
+        ("rail_row_n", "9", Resolved::Key(Key::AltDigit(9))),
+    ] {
+        assert_eq!(
+            Keyset::action_event(id, Some(variant)),
+            Some(expected),
+            "{id}/{variant}"
+        );
+    }
+    for (id, expected) in [
+        ("send", Resolved::Key(Key::Enter)),
+        ("line_break", Resolved::Edit(Edit::ShiftEnter)),
+        ("go_home", Resolved::Action("go_home")),
+        ("session_only", Resolved::Action("session_only")),
+    ] {
+        assert_eq!(Keyset::action_event(id, None), Some(expected), "{id}");
+    }
+}
+
+#[test]
+fn action_event_returns_none_for_an_invalid_id_variant_or_slot() {
+    use super::Keyset;
+    for (id, variant) in [
+        ("no_such_action", None),
+        ("clear_then_quit", None),
+        ("move_word", None),
+        ("move_word", Some("start")),
+        ("rail_row_n", Some("0")),
+        ("rail_row_n", Some("10")),
+        ("send", Some("left")),
+        ("new_session", Some("next")),
+    ] {
+        assert_eq!(Keyset::action_event(id, variant), None, "{id}/{variant:?}");
+    }
+}

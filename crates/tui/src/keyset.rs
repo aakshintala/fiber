@@ -400,6 +400,32 @@ fn resolved(event: Option<crate::keys::Event>) -> Resolved {
 }
 
 impl Keyset {
+    /// The checked canonical event for the named action variant: the
+    /// row's event for that variant slot, exactly as the row defines it
+    /// (`docs/tui.md`, "Bindings"). A non-`Canon::Action` event is not
+    /// discarded. `None` only for an unknown id, a missing or unknown
+    /// variant, a variant for a one-variant action, or `clear_then_quit`,
+    /// which cannot be rebound.
+    pub(crate) fn action_event(id: &str, variant: Option<&str>) -> Option<Resolved> {
+        if id == "clear_then_quit" {
+            return None;
+        }
+        let binding = BINDINGS.iter().find(|binding| binding.id == id)?;
+        let variants = binding.events.len().max(1);
+        let slot = match variant {
+            None if variants == 1 => 0,
+            None => return None,
+            Some(_) if variants == 1 => return None,
+            Some(name) => (0..variants).find(|slot| variant_name(id, *slot) == name)?,
+        };
+        let event = binding.events.get(slot)?;
+        Some(match event {
+            Canon::Key(key) => Resolved::Key(key.clone()),
+            Canon::Edit(edit) => Resolved::Edit(edit.clone()),
+            Canon::Action => Resolved::Action(binding.id),
+        })
+    }
+
     /// Whether the person bound `stroke` in `context` themselves: their
     /// own binding wins over the input editor's Home/End line edits
     /// (`docs/tui.md`, "Selection and copy"). Defaults do not count.
@@ -520,21 +546,19 @@ pub fn check_action(id: &str, variant: Option<&str>) -> Option<String> {
         return Some(format!("Fiber has no action {id}."));
     };
     let variants = binding.events.len().max(1);
-    if variants == 1 {
-        if let Some(variant) = variant {
-            return Some(format!("{id} takes no `variant`, but names {variant:?}."));
-        }
-        return None;
+    if variants == 1
+        && let Some(variant) = variant
+    {
+        return Some(format!("{id} takes no `variant`, but names {variant:?}."));
     }
-    let Some(variant) = variant else {
+    if Keyset::action_event(id, variant).is_none() {
         let (_, names) = takes(id);
-        return Some(format!("{id} takes a `variant`: {names}."));
-    };
-    if (0..variants).any(|slot| variant_name(id, slot) == variant) {
-        return None;
+        return match variant {
+            None => Some(format!("{id} takes a `variant`: {names}.")),
+            Some(variant) => Some(format!("{id} has no variant {variant:?}: {names}.")),
+        };
     }
-    let (_, names) = takes(id);
-    Some(format!("{id} has no variant {variant:?}: {names}."))
+    None
 }
 
 /// The person's canonical key names after clash reversion: the keys of
