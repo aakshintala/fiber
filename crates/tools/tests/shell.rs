@@ -2178,13 +2178,13 @@ fn a_tty_command_is_still_a_bare_wait() {
 // Monitors: a job whose standard output lines reach the model in batches
 // (`docs/tools.md`, "Background jobs").
 
-/// The deadline the monitor tests give, so it never interferes.
+/// The limit the monitor tests give, so it never interferes.
 const LONG_DEADLINE_MS: u64 = 1_800_000;
 
 fn start_monitor(
     dir: PathBuf,
     command: String,
-    deadline_ms: Option<u64>,
+    timeout_ms: Option<u64>,
     jobs: Arc<FakeJobs>,
 ) -> JobRun {
     let clock = FakeClock::new();
@@ -2193,8 +2193,8 @@ fn start_monitor(
         .with_jobs(jobs.clone());
     let mut arguments = args(&command);
     arguments.insert("monitor".into(), json!(true));
-    if let Some(deadline_ms) = deadline_ms {
-        arguments.insert("deadline_ms".into(), json!(deadline_ms));
+    if let Some(timeout_ms) = timeout_ms {
+        arguments.insert("timeout_ms".into(), json!(timeout_ms));
     }
     let recorder = Arc::new(Recorder::default());
     let tapped = Arc::clone(&recorder);
@@ -2396,7 +2396,7 @@ fn a_monitor_with_a_zero_deadline_times_out_in_the_foreground() {
         Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone()));
     let mut arguments = args("echo hi");
     arguments.insert("monitor".into(), json!(true));
-    arguments.insert("deadline_ms".into(), json!(0));
+    arguments.insert("timeout_ms".into(), json!(0));
     let output = run_on(&shell, arguments, &Arc::new(Recorder::default()));
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(output.process.as_ref().unwrap().timed_out);
@@ -2672,7 +2672,7 @@ fn a_monitor_ends_at_its_deadline_as_a_timeout() {
     let running = start_monitor(
         dir.path().to_path_buf(),
         blocking(ready.path(), "partial", "later"),
-        Some(5_000),
+        Some(1_000),
         Arc::clone(&jobs),
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
@@ -2681,7 +2681,7 @@ fn a_monitor_ends_at_its_deadline_as_a_timeout() {
     let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
-    let due = running.start + Duration::from_secs(5);
+    let due = running.start + Duration::from_millis(1_000);
     assert!(
         running
             .clock
@@ -2691,7 +2691,7 @@ fn a_monitor_ends_at_its_deadline_as_a_timeout() {
     running.clock.advance_when_parked(
         Some(due),
         None,
-        Duration::from_secs(5),
+        Duration::from_millis(1_000),
         &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let ended = jobs
@@ -2702,7 +2702,7 @@ fn a_monitor_ends_at_its_deadline_as_a_timeout() {
     assert_eq!(error.code, ErrorCode::Timeout);
     assert_eq!(
         error.message,
-        "The monitor's deadline of 5000 ms passed; start it again if you still need it."
+        "The monitor's deadline of 1000 ms passed; start it again if you still need it."
     );
     assert!(ended.process.unwrap().timed_out);
     let texts: Vec<String> = jobs
