@@ -279,8 +279,10 @@ fn commondir_common(gitdir: &Path) -> Option<PathBuf> {
             }
             Some(canonical)
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(gitdir.to_path_buf()),
-        Err(_) => None,
+        // A missing file falls back to the gitdir itself; any other I/O
+        // error does the same and still fails closed through the
+        // unreadable config, so the distinction needs no branch.
+        Err(_) => Some(gitdir.to_path_buf()),
     }
 }
 
