@@ -480,7 +480,10 @@ fn graphics_and_the_flag_size_images_inline() {
     started_with_image(&mut app, "artifacts/shot.png");
     assert_eq!(
         app.screen.pages().image_sizing(),
-        crate::image::Sizing::Inline { cell: (10, 20) }
+        crate::image::Sizing::Inline {
+            cell: (10, 20),
+            converts: false
+        }
     );
 }
 
@@ -600,7 +603,10 @@ fn a_draw_with_the_link_down_asks_nothing() {
     // the command, so the draw queues nothing.
     assert_eq!(
         app.screen.pages().image_sizing(),
-        crate::image::Sizing::Inline { cell: (10, 20) }
+        crate::image::Sizing::Inline {
+            cell: (10, 20),
+            converts: false
+        }
     );
     app.images_drawn(&drawn(1));
     assert!(app.take_image_out().display.is_empty());
@@ -772,7 +778,10 @@ fn set_cell_resizes_inline_images() {
     app.set_cell((40, 80));
     assert_eq!(
         app.screen.pages().image_sizing(),
-        crate::image::Sizing::Inline { cell: (40, 80) }
+        crate::image::Sizing::Inline {
+            cell: (40, 80),
+            converts: false
+        }
     );
 }
 
@@ -1033,4 +1042,285 @@ fn a_non_png_draw_asks_for_no_bytes() {
     }));
     app.images_drawn(&drawn(1));
     assert!(app.take_image_out().display.is_empty());
+}
+
+/// An app with inline images and the converter's executable path, so a
+/// stored JPEG or WebP converts before Kitty transmission.
+fn converting_app() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 24);
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        inline_images: true,
+        fiber: Some(PathBuf::from("/fiber")),
+        ..Default::default()
+    });
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.set_graphics();
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app
+}
+
+/// Folds a turn on `session` whose prompt carried a JPEG image at `path`.
+fn started_with_jpeg_in(app: &mut App, session: &str, path: &str) {
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"input": [{
+            "type": "message", "source": "driver",
+            "content": [
+                {"type": "text", "text": "look"},
+                {"type": "image", "path": path,
+                    "mime_type": "image/jpeg",
+                    "width": 1280, "height": 800},
+            ],
+        }]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }));
+}
+
+/// Folds a turn whose prompt carried a JPEG image at `path`.
+fn started_with_jpeg(app: &mut App, path: &str) {
+    started_with_jpeg_in(app, SESSION, path);
+}
+
+#[test]
+fn sizing_carries_no_converter_without_an_executable() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    assert_eq!(
+        app.screen.pages().image_sizing(),
+        crate::image::Sizing::Inline {
+            cell: (10, 20),
+            converts: false
+        }
+    );
+}
+
+#[test]
+fn sizing_carries_the_converter_with_an_executable() {
+    let mut app = converting_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    assert_eq!(
+        app.screen.pages().image_sizing(),
+        crate::image::Sizing::Inline {
+            cell: (10, 20),
+            converts: true
+        }
+    );
+}
+
+#[test]
+fn a_jpeg_draw_asks_for_its_bytes_when_converting() {
+    let mut app = converting_app();
+    started_with_jpeg(&mut app, "artifacts/shot.jpg");
+    app.images_drawn(&drawn(1));
+    let out = app.take_image_out();
+    assert!(!out.display.is_empty());
+    let value: Value =
+        serde_json::from_str(&out.display[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    assert_eq!(value.get("command"), Some(&json!("read_file")));
+    assert_eq!(
+        value.get("args"),
+        Some(&json!({"session": SESSION, "path": "artifacts/shot.jpg"}))
+    );
+}
+
+#[test]
+fn a_jpeg_answer_queues_a_conversion_not_a_transmit() {
+    use base64::Engine as _;
+    let mut app = converting_app();
+    started_with_jpeg(&mut app, "artifacts/shot.jpg");
+    let id = asked(&mut app, 1);
+    let bytes = base64::engine::general_purpose::STANDARD.encode(b"jpeg-bytes");
+    assert!(app.image_answered(&id, Some(&accepted(&id, &bytes, "image/jpeg"))));
+    // No transmit yet: the conversion worker runs first.
+    assert!(app.take_image_out().kitty.is_empty());
+    assert_eq!(app.notice(), None);
+    // The queue holds the answer's base64 until the child starts.
+    assert_eq!(app.images.convert_queue.len(), 1);
+    let convert = app.take_next_convert().expect("the queued conversion");
+    assert_eq!(
+        (convert.generation, convert.id, convert.data),
+        (app.images.generation, 1, bytes)
+    );
+    assert!(app.images.convert_busy);
+    assert!(app.take_next_convert().is_none());
+}
+
+#[test]
+fn a_duplicate_jpeg_answer_starts_no_second_conversion() {
+    use base64::Engine as _;
+    let mut app = converting_app();
+    started_with_jpeg(&mut app, "artifacts/shot.jpg");
+    let id = asked(&mut app, 1);
+    let bytes = base64::engine::general_purpose::STANDARD.encode(b"jpeg-bytes");
+    let answer = accepted(&id, &bytes, "image/jpeg");
+    assert!(app.image_answered(&id, Some(&answer)));
+    // The duplicate answer is still ours, but draws nowhere and queues
+    // nothing more.
+    assert!(app.image_answered(&id, Some(&answer)));
+    assert_eq!(app.images.convert_queue.len(), 1);
+    assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn one_conversion_runs_at_a_time_and_the_next_starts_when_one_ends() {
+    let mut app = converting_app();
+    started_with_jpeg(&mut app, "artifacts/shot.jpg");
+    started_with_jpeg(&mut app, "artifacts/old.jpg");
+    app.images_drawn(&[drawn(1), drawn(2)].concat());
+    let out = app.take_image_out();
+    assert!(!out.display.is_empty());
+    let first = command_for(&out.display, "artifacts/shot.jpg");
+    let second = command_for(&out.display, "artifacts/old.jpg");
+    assert!(app.image_answered(&first, Some(&accepted(&first, "QUJD", "image/jpeg"))));
+    assert!(app.image_answered(&second, Some(&accepted(&second, "QUJD", "image/jpeg"))));
+    assert_eq!(app.images.convert_queue.len(), 2);
+    let convert = app.take_next_convert().expect("the first conversion");
+    assert_eq!(convert.id, 1);
+    // While the first child runs, the second waits.
+    assert!(app.take_next_convert().is_none());
+    app.image_converted(app.images.generation, 1, Ok("QUJD".to_owned()));
+    let kitty = String::from_utf8(app.take_image_out().kitty).expect("escapes are text");
+    assert!(
+        kitty.contains("Ga=t,f=100,i=1,"),
+        "the converted PNG transmits: {kitty:?}"
+    );
+    // The slot freed, so the next queued conversion starts.
+    let convert = app.take_next_convert().expect("the second conversion");
+    assert_eq!(convert.id, 2);
+    app.image_converted(app.images.generation, 2, Ok("QUJD".to_owned()));
+    assert!(!app.take_image_out().kitty.is_empty());
+    assert!(!app.images.convert_busy);
+}
+
+#[test]
+fn a_conversion_failure_fails_the_image_and_frees_the_slot() {
+    let mut app = converting_app();
+    started_with_jpeg(&mut app, "artifacts/shot.jpg");
+    let id = asked(&mut app, 1);
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/jpeg"))));
+    assert!(app.take_next_convert().is_some());
+    app.image_converted(
+        app.images.generation,
+        1,
+        Err("the child refused".to_owned()),
+    );
+    assert_eq!(
+        app.notice(),
+        Some("Could not show shot.jpg: the child refused.")
+    );
+    assert!(app.take_image_out().kitty.is_empty());
+    assert!(!app.images.convert_busy);
+    assert!(app.images.convert_queue.is_empty());
+    // A failed conversion is not asked for again while its session's
+    // layout lives.
+    app.images_drawn(&drawn(1));
+    assert!(app.take_image_out().display.is_empty());
+}
+
+#[test]
+fn a_late_rejection_cannot_fail_a_converting_image() {
+    let mut app = converting_app();
+    started_with_jpeg(&mut app, "artifacts/shot.jpg");
+    let id = asked(&mut app, 1);
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/jpeg"))));
+    // The rejection lands on a converting image: it changes nothing.
+    assert!(reject(&mut app, &id, "gone.").is_empty());
+    assert_eq!(app.notice(), None);
+    assert!(
+        app.images
+            .display
+            .values()
+            .any(|display| display.id == 1 && display.state == super::DisplayState::Converting)
+    );
+    // The worker's completion still decides.
+    app.image_converted(app.images.generation, 1, Ok("QUJD".to_owned()));
+    assert!(!app.take_image_out().kitty.is_empty());
+}
+
+#[test]
+fn a_session_change_drops_the_queue_but_keeps_the_slot_busy() {
+    let mut app = converting_app();
+    started_with_jpeg(&mut app, "artifacts/shot.jpg");
+    let id = asked(&mut app, 1);
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/jpeg"))));
+    let generation = app.images.generation;
+    assert!(app.take_next_convert().is_some());
+    // The session changes while the child runs: the queued request goes,
+    // but the running child keeps the slot until its completion frees it.
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    assert!(app.images.convert_queue.is_empty());
+    assert!(app.images.convert_busy);
+    assert!(app.take_next_convert().is_none());
+    app.image_converted(generation, 1, Ok("QUJD".to_owned()));
+    assert!(!app.images.convert_busy);
+    assert!(app.take_image_out().kitty.is_empty());
+    assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn a_completion_from_an_earlier_session_frees_the_slot_but_touches_nothing() {
+    let mut app = converting_app();
+    started_with_jpeg(&mut app, "artifacts/shot.jpg");
+    let id = asked(&mut app, 1);
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/jpeg"))));
+    let generation = app.images.generation;
+    assert!(app.take_next_convert().is_some());
+    // Session B holds its own JPEG under its own id and answers while
+    // A's child still runs.
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    started_with_jpeg_in(&mut app, OTHER, "artifacts/next.jpg");
+    let next = image_id(&app, OTHER, "artifacts/next.jpg");
+    app.images_drawn(&drawn(next));
+    let out = app.take_image_out();
+    let command = command_for(&out.display, "artifacts/next.jpg");
+    assert!(!command.is_empty(), "the new image asks");
+    assert!(app.image_answered(&command, Some(&accepted(&command, "QUJD", "image/jpeg"))));
+    // A's completion frees the slot but transmits nothing: B's entry
+    // stays converting-queued, and B's child starts next.
+    app.image_converted(generation, 1, Ok("QUJD".to_owned()));
+    assert!(!app.images.convert_busy);
+    assert!(app.take_image_out().kitty.is_empty());
+    assert_eq!(app.notice(), None);
+    assert!(
+        app.images
+            .display
+            .values()
+            .any(|display| display.id == next && display.state == super::DisplayState::Converting)
+    );
+    let convert = app.take_next_convert().expect("B's conversion starts");
+    assert_eq!(convert.id, next);
+}
+
+#[test]
+fn a_completion_for_a_retired_generation_posts_nothing() {
+    let mut app = converting_app();
+    started_with_jpeg(&mut app, "artifacts/shot.jpg");
+    let id = asked(&mut app, 1);
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/jpeg"))));
+    let generation = app.images.generation;
+    assert!(app.take_next_convert().is_some());
+    app.images.generation = generation.saturating_add(1);
+    app.image_converted(generation, 1, Ok("QUJD".to_owned()));
+    assert!(!app.images.convert_busy);
+    assert!(app.take_image_out().kitty.is_empty());
+    assert_eq!(app.notice(), None);
 }
