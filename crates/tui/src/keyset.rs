@@ -400,6 +400,16 @@ fn resolved(event: Option<crate::keys::Event>) -> Resolved {
 }
 
 impl Keyset {
+    /// Whether any person-set row holds `stroke`: a key the person owns
+    /// in the live keyset, in every context (`docs/tui.md`, "When two
+    /// extensions want one slot"). Defaults never count, even where a
+    /// default row keeps its key.
+    pub(crate) fn person_bound_any(&self, stroke: &Stroke) -> bool {
+        self.rows
+            .iter()
+            .any(|row| row.person && row.keys.contains(stroke))
+    }
+
     /// The checked canonical event for the named action variant: the
     /// row's event for that variant slot, exactly as the row defines it
     /// (`docs/tui.md`, "Bindings"). A non-`Canon::Action` event is not

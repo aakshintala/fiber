@@ -1038,3 +1038,53 @@ fn action_event_returns_none_for_an_invalid_id_variant_or_slot() {
         assert_eq!(Keyset::action_event(id, variant), None, "{id}/{variant:?}");
     }
 }
+
+#[test]
+fn person_bound_any_covers_every_context() {
+    let contexts = [
+        Context::Input,
+        Context::Steering,
+        Context::Conversation,
+        Context::Search,
+        Context::Overlay,
+        Context::Picker,
+    ];
+    let (keys, notices) = keyset(&[("send", json!("ctrl+q"))]);
+    assert!(notices.is_empty(), "{notices:?}");
+    let owned = stroke("ctrl+q");
+    // The scoped check fires only where the action acts.
+    assert!(keys.person_bound(&owned, Context::Input));
+    assert!(!keys.person_bound(&owned, Context::Overlay));
+    // The live check ignores contexts: owned everywhere, even over the
+    // overlay and picker.
+    assert!(keys.person_bound_any(&owned));
+    // A default key is the person's nowhere.
+    let plain = stroke("enter");
+    assert!(!keys.person_bound_any(&plain));
+    for context in contexts {
+        assert!(!keys.person_bound(&plain, context), "{context:?}");
+    }
+}
+
+#[test]
+fn person_bound_any_ignores_default_equal_unbound_and_invalid_entries() {
+    let entries = [
+        ("send", json!("enter")),
+        ("new_session", json!([])),
+        ("toggle_ledgers", json!("bogus")),
+    ];
+    let (keys, _) = keyset(&entries);
+    for name in ["enter", "ctrl+n", "ctrl+o", "ctrl+q"] {
+        assert!(!keys.person_bound_any(&stroke(name)), "{name}");
+    }
+}
+
+#[test]
+fn person_bound_any_reverts_clashes_and_follows_live_edits() {
+    let (clashed, _) = keyset(&[("send", json!("ctrl+q")), ("new_session", json!("ctrl+q"))]);
+    assert!(!clashed.person_bound_any(&stroke("ctrl+q")));
+    // A live `/keys` change reloads the keyset: the freed key leaves the
+    // person set at once.
+    let (freed, _) = keyset(&[("send", json!("ctrl+q"))]);
+    assert!(freed.person_bound_any(&stroke("ctrl+q")));
+}
