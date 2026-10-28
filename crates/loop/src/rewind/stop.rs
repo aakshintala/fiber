@@ -127,40 +127,69 @@ impl Loop {
     /// spinning, and the final inbox drain always runs, even when no job
     /// is running.
     pub(crate) fn stop_jobs_for_rewind(&mut self) -> Result<(), Error> {
+        self.stop_jobs_for_transition(false)
+    }
+
+    /// Stops every running job and writes each end that arrives, before the
+    /// move writes `moved`: the same wait `stop_jobs_for_rewind` runs,
+    /// except a competing `rewind` or `change_workspace` is refused `busy`
+    /// until `moved` is durable, and a closed inbox with jobs still
+    /// running fails without `moved` instead of hiding the unfinished
+    /// jobs (`docs/events.md`, "Change workspace").
+    pub(crate) fn stop_jobs_for_move(&mut self) -> Result<(), Error> {
+        self.stop_jobs_for_transition(true)
+    }
+
+    /// The shared stop wait for a rewind's or a move's last line: sends
+    /// `stop` for every running job, again on every pass, and reads with
+    /// no extra deadline of its own. When `busy_competitors` a competing
+    /// `rewind` or `change_workspace` is refused `busy`; otherwise every
+    /// delivery except a job's end goes through `refuse_after_rewound`. A
+    /// move never returns success while jobs remain running: on a closed
+    /// inbox it drains what is buffered, then fails without `moved`, and
+    /// no end is fabricated. A rewind keeps the earlier behavior.
+    fn stop_jobs_for_transition(&mut self, busy_competitors: bool) -> Result<(), Error> {
         if !self.has_jobs() {
             return Ok(());
         }
         loop {
             let running = self.running();
             if running.is_empty() {
-                self.drain_waiting()?;
+                self.drain_waiting(busy_competitors)?;
                 return Ok(());
             }
             self.stop_jobs(&running);
             match self.recv_bounded(None) {
-                Ok(delivery) => self.stop_one(delivery)?,
+                Ok(delivery) => self.stop_one(delivery, busy_competitors)?,
                 // With no deadline the wait never times out: only a
                 // closed inbox ends it.
+                Err(_) if busy_competitors => {
+                    self.drain_waiting(busy_competitors)?;
+                    return Err(Error::InboxClosed);
+                }
                 Err(_) => return Ok(()),
             }
         }
     }
 
     /// One drain of the deliveries already waiting in the inbox: each is
-    /// stopped, a job's end written and anything else refused as after
+    /// stopped, a job's end written, a competing transition refused
+    /// `busy` when `busy_competitors`, and anything else refused as after
     /// `rewound`.
-    fn drain_waiting(&mut self) -> Result<(), Error> {
+    fn drain_waiting(&mut self, busy_competitors: bool) -> Result<(), Error> {
         let deliveries = self.inbox.try_iter().collect::<Vec<_>>();
         for delivery in deliveries {
-            self.stop_one(delivery)?;
+            self.stop_one(delivery, busy_competitors)?;
         }
         Ok(())
     }
 
     /// One delivery during the stop wait: a job's end is redacted and
-    /// hooked like any end, then written under its own shape, and
+    /// hooked like any end, then written under its own shape; a competing
+    /// `rewind` or `change_workspace` is refused `busy` when
+    /// `busy_competitors`, since its last line is not durable yet; and
     /// everything else is refused as after `rewound`.
-    fn stop_one(&mut self, delivery: Delivery) -> Result<(), Error> {
+    fn stop_one(&mut self, delivery: Delivery, busy_competitors: bool) -> Result<(), Error> {
         match delivery {
             Delivery::Job(notice) => {
                 self.redact_output(&notice.completed, None)?;
@@ -169,6 +198,10 @@ impl Loop {
                         self.deliver_end(None, ahead, completed, delegate)?;
                     self.write_job_end(ahead, completed, delegate)?;
                 }
+                Ok(())
+            }
+            Delivery::Rewind(.., ack) | Delivery::ChangeWorkspace(.., ack) if busy_competitors => {
+                crate::inbox::reject(ack, ErrorCode::Busy, super::workspace::MOVE_RUNNING);
                 Ok(())
             }
             other @ (Delivery::Prompt(..)
@@ -182,6 +215,7 @@ impl Loop {
             | Delivery::Name(..)
             | Delivery::AddDirectory(..)
             | Delivery::Rewind(..)
+            | Delivery::ChangeWorkspace(..)
             | Delivery::Handoff(..)
             | Delivery::Reply(..)
             | Delivery::Close(_)

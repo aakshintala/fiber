@@ -156,9 +156,11 @@ pub trait Starter: Send + Sync {
         credential: Option<&str>,
     ) -> io::Result<Box<dyn Started>>;
 
-    /// Starts the session command for a rewind's new session `id` in
-    /// `workspace`, the old session's, for the rewind of `from`
-    /// (`docs/invocation.md`, "`rewind` starts a new session process").
+    /// Starts the session command for a rewind's or workspace move's new
+    /// session `id` in `workspace`, the old session's, for the transition
+    /// of `from` (`docs/invocation.md`, "`rewind` starts a new session
+    /// process"). A moved child starts here and moves to its target
+    /// itself.
     fn rewind(
         &self,
         id: &SessionId,

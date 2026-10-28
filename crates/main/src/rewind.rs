@@ -8,6 +8,12 @@
 //! A failure before `fiber_started` deletes its directory,
 //! so the hub can start it again from `rewound`.
 //!
+//! When the old log's last line is `moved` naming this session, the same
+//! flag starts the moved child instead (`docs/invocation.md`, "Change
+//! workspace"): the hub starts the process in the old session's workspace,
+//! and it moves to the `moved` target workspace itself before running
+//! through `run_new` with no worktree and no rewind note or summary.
+//!
 //! `fiber session --forked-from <parent> --forked-seq <n>`: starts the
 //! session a `delegate_fork` call named (`docs/delegates.md`, "Forks").
 //! The point is named outright, so no last line is checked; the fold must
@@ -16,7 +22,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use contract::events::Parent;
+use contract::events::{Moved, Parent};
 use contract::shapes::{Failure, Point};
 use contract::{ErrorCode, SessionId};
 
@@ -210,10 +216,59 @@ pub(crate) fn session_forked(
         Err(failure) => super::session_command::report(signals, failure),
     }
 }
+/// The directory holding `point`'s session: the history segment when the
+/// old log's chain names it (a rewind to a point in another project, after
+/// a workspace move), else the session beside the old one, as before.
+fn point_dir(old: &Path, sessions: &Path, point: &Point) -> PathBuf {
+    if let Ok(chain) = log::history(old)
+        && let Some(segment) = chain
+            .into_iter()
+            .find(|segment| segment.session_id == point.session_id)
+    {
+        return segment.dir;
+    }
+    log::SessionDir::new(sessions, &point.session_id)
+        .path()
+        .to_path_buf()
+}
+
+/// The project key of the session in `dir`: the key its project-qualified
+/// directory names (`home/projects/<key>/sessions/<id>`), never the
+/// recorded workspace, which may have moved or vanished since the session
+/// ran. A directory outside that layout is `log_corrupt`, before any
+/// session line is written, as a fork's missing parent workspace is.
+fn ancestor_key(dir: &Path) -> Result<String, i32> {
+    let invalid = || {
+        ask_failed(failed(
+            ErrorCode::LogCorrupt,
+            format!("Cannot read the point's project from {}.", dir.display()),
+        ))
+    };
+    let sessions = dir.parent().ok_or_else(invalid)?;
+    if sessions.file_name().and_then(|name| name.to_str()) != Some("sessions") {
+        return Err(invalid());
+    }
+    let key_dir = sessions.parent().ok_or_else(invalid)?;
+    let key = key_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(invalid)?;
+    if key_dir
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        != Some("projects")
+    {
+        return Err(invalid());
+    }
+    Ok(key.to_owned())
+}
+
 /// The internal session command with `--rewound-from`: starts `new` as the
 /// continuation of `old`. A missing old log is `session_not_found`; a last
 /// line that is not `rewound` naming `new` is `invalid_arguments`, before
-/// any session line is written.
+/// any session line is written. A last line that is `moved` naming `new`
+/// starts the moved child in its target workspace instead.
 pub(crate) fn session_rewound(
     new: SessionId,
     old: SessionId,
@@ -225,24 +280,46 @@ pub(crate) fn session_rewound(
         Ok(context) => context,
         Err(code) => return code,
     };
-    let sessions = context.sessions;
-    let old_dir = log::SessionDir::new(&sessions, &old);
+    let sessions = &context.sessions;
+    let old_dir = log::SessionDir::new(sessions, &old);
     if !log::dir_exists(old_dir.path()) {
         return ask_failed(failed(
             ErrorCode::SessionNotFound,
             format!("No session `{}`.", old.0),
         ));
     }
-    let (point, summary) = match r#loop::rewound_from(log::last_line(old_dir.path()), &new, &old) {
+    let last = log::last_line(old_dir.path());
+    if last.as_ref().is_some_and(|line| line.kind == "moved") {
+        return session_moved(new, old, last, context, clock, signals, fiber);
+    }
+    let (mut point, summary) = match r#loop::rewound_from(last, &new, &old) {
         Ok(point) => point,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
-    let dir = log::SessionDir::new(&sessions, &point.session_id);
-    let forked = match r#loop::forked(dir.path(), point.seq) {
+    let dir = point_dir(old_dir.path(), sessions, &point);
+    // A rewind to a point in another project records the ancestor's
+    // project, read off the point's project-qualified directory so a
+    // recorded workspace that has since moved or vanished cannot select
+    // the wrong project. A point in the child's own project records
+    // nothing, as before. The child runs where this process started: the
+    // hub spawned it in the old session's recorded workspace.
+    let child_workspace = match std::env::current_dir() {
+        Ok(workspace) => workspace,
+        Err(error) => return ask_failed(failed(ErrorCode::IoFailed, error)),
+    };
+    let child_key = log::project_key(&doors::project(&child_workspace));
+    match ancestor_key(&dir) {
+        Ok(ancestor) if ancestor != child_key => {
+            point.project = Some(ancestor);
+        }
+        Ok(_) => {}
+        Err(code) => return code,
+    }
+    let forked = match r#loop::forked(&dir, point.seq) {
         Ok(forked) => forked,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
-    let note = match r#loop::rewind_note_with_jobs(old_dir.path(), dir.path(), point.seq) {
+    let note = match r#loop::rewind_note_with_jobs(old_dir.path(), &dir, point.seq) {
         Ok(note) => note,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
@@ -278,6 +355,113 @@ pub(crate) fn session_rewound(
             how: r#loop::Continuation::Rewind {
                 note,
                 summary,
+                name,
+            },
+        }),
+        context.reads,
+        false,
+        Vec::new(),
+    ) {
+        Ok(code) => code,
+        Err(failure) => super::session_command::report(signals, failure),
+    }
+}
+
+/// The `--rewound-from` entry when the old log ends `moved` naming `new`:
+/// starts `new` as the continuation of `old` in the moved target workspace
+/// (`docs/invocation.md`, "Change workspace"). The hub starts this process
+/// in the old session's workspace; the target comes from the durable
+/// `moved` line alone. A `moved` naming another session, or one that does
+/// not parse, is `invalid_arguments`; a missing target is `io_failed`
+/// naming the path, and the old session stays ended `moved`. The child
+/// records no worktree and no rewind note or summary: it continues the old
+/// session at the last durable line before `moved`, with the old session's
+/// latest name. Its `forked_from.project` names the parent's project only
+/// when it differs from the child's. Target configuration, instructions,
+/// MCP, extensions and repository approval inputs load through the
+/// new-session path, in the target workspace, since the process moves
+/// there before `run_new` reads them.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one internal session entry: the move record, the source context and the process inputs"
+)]
+fn session_moved(
+    new: SessionId,
+    old: SessionId,
+    last: Option<contract::Envelope>,
+    context: Context,
+    clock: Arc<dyn contract::clock::Clock>,
+    signals: &Arc<doors::Signals>,
+    fiber: Result<PathBuf, String>,
+) -> i32 {
+    let not_moved = || {
+        ask_failed(failed(
+            ErrorCode::InvalidArguments,
+            format!("Session `{}` was not moved for session `{}`.", old.0, new.0),
+        ))
+    };
+    let Some(last) = last else {
+        return not_moved();
+    };
+    let moved: Moved = match serde_json::from_value(serde_json::Value::Object(last.payload)) {
+        Ok(moved) => moved,
+        Err(_) => return not_moved(),
+    };
+    if moved.new_session_id != new {
+        return not_moved();
+    }
+    // The hub started this process in the old session's workspace, so the
+    // parent project below is the old session's.
+    let source = match std::env::current_dir() {
+        Ok(workspace) => workspace,
+        Err(error) => return ask_failed(failed(ErrorCode::IoFailed, error)),
+    };
+    if !Path::new(&moved.workspace).is_dir() {
+        return ask_failed(failed(
+            ErrorCode::IoFailed,
+            format!("`{}` no longer exists.", moved.workspace),
+        ));
+    }
+    if let Err(error) = std::env::set_current_dir(&moved.workspace) {
+        return ask_failed(failed(
+            ErrorCode::IoFailed,
+            format!("{}: {error}", moved.workspace),
+        ));
+    }
+    let parent_key = log::project_key(&doors::project(&source));
+    let child_key = log::project_key(&doors::project(Path::new(&moved.workspace)));
+    let point = Point {
+        session_id: old.clone(),
+        seq: moved.seq,
+        project: (parent_key != child_key).then_some(parent_key),
+    };
+    // The fold reads the old session where it lives: a corrupt old log
+    // fails here, before any session line is written.
+    let old_dir = log::SessionDir::new(&context.sessions, &old);
+    if let Err(e) = r#loop::forked(old_dir.path(), moved.seq) {
+        return ask_failed(failed(e.code(), e));
+    }
+    // The name is the moved session's, as a rewind keeps the rewound one.
+    let name = r#loop::latest_name(old_dir.path());
+    match super::session_command::run_new(
+        new,
+        Vec::new(),
+        None,
+        false,
+        None,
+        clock,
+        signals,
+        fiber,
+        None,
+        None,
+        None,
+        Some(r#loop::Rewound {
+            factory: Some(crate::builtin::tool_search_factory()),
+            from: point,
+            worktree: None,
+            how: r#loop::Continuation::Rewind {
+                note: String::new(),
+                summary: None,
                 name,
             },
         }),

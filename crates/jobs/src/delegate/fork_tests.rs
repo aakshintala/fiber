@@ -30,6 +30,7 @@ fn forking() -> Forking {
         point: Point {
             session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".into()),
             seq: Seq(41),
+            project: None,
         },
         model: "fiber:fake/m:high".to_owned(),
     }

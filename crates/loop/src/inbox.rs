@@ -193,7 +193,8 @@ impl Loop {
     /// passed on an empty inbox, or every sender is gone (`docs/loop.md`,
     /// "Starting a turn").
     pub(crate) fn wait_for_turn(&mut self) -> Result<Option<TurnInput>, Error> {
-        // `rewound` is the last line: the process ends, starting no turn.
+        // `rewound` or `moved` is the last line: the process ends,
+        // starting no turn.
         if self.rewound {
             return Ok(None);
         }
@@ -334,8 +335,8 @@ impl Loop {
                 self.forget_input(&input);
                 return Ok(Some(input));
             }
-            // `rewound` was written in the drain above: its deliveries
-            // are refused, and no turn starts.
+            // `rewound` or `moved` was written in the drain above: its
+            // deliveries are refused, and no turn starts.
             if self.rewound {
                 return Ok(None);
             }
@@ -541,6 +542,7 @@ impl Loop {
             | Delivery::Credential(..)
             | Delivery::Reply(..)
             | Delivery::Rewind(..)
+            | Delivery::ChangeWorkspace(..)
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)
             | Delivery::Job(_)
@@ -663,6 +665,12 @@ impl Loop {
             // "Rewind").
             Delivery::Rewind(id, args, ack) => {
                 self.take_rewind(id, args, ack, input)?;
+            }
+            // Starts a new session that continues this one in another
+            // workspace, once, while idle (`docs/events.md`, "Change
+            // workspace").
+            Delivery::ChangeWorkspace(id, args, ack) => {
+                self.take_change_workspace(id, args, ack, input)?;
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),
@@ -874,6 +882,15 @@ impl Loop {
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {
                     reject(ack, ErrorCode::Busy, crate::rewind::command::TURN_RUNNING);
+                }
+            }
+            // While a turn runs the session cannot close first: move
+            // once it ends.
+            Delivery::ChangeWorkspace(_, _, ack) => {
+                if self.closing {
+                    reject(ack, ErrorCode::Closing, CLOSING);
+                } else {
+                    reject(ack, ErrorCode::Busy, crate::rewind::workspace::TURN_RUNNING);
                 }
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),

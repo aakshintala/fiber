@@ -804,6 +804,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             | Delivery::McpReconnect(..)
             | Delivery::Credential(..)
             | Delivery::Rewind(..)
+            | Delivery::ChangeWorkspace(..)
             | Delivery::Handoff(..)
             | Delivery::Job(_)
             | Delivery::JobLine(_)

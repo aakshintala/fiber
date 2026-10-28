@@ -253,9 +253,10 @@ list is one row tall, it shows the focused row's first line.
   `session_status.closing`.
 - **The project's exited sessions** follow under a dim "exited · N": up to
   three, the most recent first, each one dim row: ○, the name, and at the
-  right the id, turns, spend and age ("3h ago"). When there are more, a last
-  row reads "… N more", and Enter or a click on it lists the rest of the
-  project's exited sessions in place.
+  right the id, turns, spend and age ("3h ago"). A session that moved
+  workspace appears like any other exited session. When there are more, a
+  last row reads "… N more", and Enter or a click on it lists
+  the rest of the project's exited sessions in place.
 The focused row is drawn on the selection bar. With no session, the list's
 rows hold two dim lines, centred: "No sessions yet." and "Type below and
 press Enter to start one."
@@ -1356,6 +1357,16 @@ pins it (`docs/tools.md`, "Naming the session"). A name is drawn with each contr
 - `summary_failed` shows the reason with three choices: retry, rewind without
   a summary, or cancel.
 
+### Moving workspace
+
+`/cd <path>` sends `change_workspace` (`docs/invocation.md`, "Driver
+commands", `change_workspace`), and the screen switches to the new session.
+The old session leaves as it does after a rewind: `session_left` has
+`how: exited`. No move-specific text appears. With no path, the command notes
+`/cd needs a path.` and sends nothing. When the session refuses the command, a notice
+gives the refusal's code and message, and the screen stays on the session it
+shows.
+
 ## Approvals and questions
 
 Approvals and questions waiting at the same time share one queue, "1 of N" in
@@ -1976,6 +1987,7 @@ later release still applies.
 | `/keys`, `/keybindings`, `/keymap` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |
 | `/rewind` | Opens the rewind view. |
+| `/cd <path>` | Moves the session to another workspace ("Moving workspace"). With no path, notes `/cd needs a path.` If the resolved path is the current workspace, refuses `invalid_arguments`, `already in that folder`. |
 | `/fork` | Rewinds to the end of the conversation: sends `rewind` with `at_end`, and the terminal switches to the new session. |
 | `/handoff [instructions]`, `/compact [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
 | `/name <text>`, `/rename <text>` | Names the session. |
@@ -2532,7 +2544,7 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   Stashed lines fold in order before the new fold, whose lines are
   never stashed. The late answer is discarded by its id, and the page
   loads in a frame after the pass ends.
-- **A rewound session pages across its `forked_from` chain as one history,**
+- **A rewound or moved session pages across its `forked_from` chain as one history,**
   cut at each continuation point. The terminal reads `forked_from` from the
   session's `session_started`, asks `history` with `session_id` set to that
   ancestor and `to_seq` set to its `seq`, pages that session the same way,

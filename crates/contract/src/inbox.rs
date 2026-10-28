@@ -141,6 +141,9 @@ pub enum Delivery {
     /// Starts a new session that continues this one from an earlier point
     /// (`docs/events.md`, "Rewind").
     Rewind(crate::CommandId, crate::commands::RewindArgs, Ack),
+    /// Starts a new session that continues this one in another workspace
+    /// (`docs/events.md`, "Change workspace").
+    ChangeWorkspace(crate::CommandId, crate::commands::ChangeWorkspaceArgs, Ack),
     /// A person's `handoff`. While a turn runs it is held until the next
     /// step boundary; while the loop is idle it starts a turn of its own
     /// (`docs/handoff.md`, "A person").

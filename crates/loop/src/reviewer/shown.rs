@@ -197,7 +197,7 @@ pub fn render_reviewed(
         // Every other kind adds nothing the reviewer reads. Each is
         // listed, so a new kind does not compile until it is placed.
         Event::FiberStarted(_) | Event::FiberExited(_) | Event::SessionStarted(_) => {}
-        Event::Rewound(_) | Event::StepStarted(_) => {}
+        Event::Rewound(_) | Event::Moved(_) | Event::StepStarted(_) => {}
         Event::SteeringQueue(_) | Event::ShellCommand(_) | Event::SessionNamed(_) => {}
         // A folder addition shows no call for the reviewer to judge.
         Event::DirectoryAdded(_) => {}

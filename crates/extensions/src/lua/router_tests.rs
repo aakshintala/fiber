@@ -54,6 +54,7 @@ fn received(rx: &std::sync::mpsc::Receiver<Delivery>) -> Option<String> {
         | Delivery::Credential(..)
         | Delivery::Reply(..)
         | Delivery::Rewind(..)
+        | Delivery::ChangeWorkspace(..)
         | Delivery::Close(_)
         | Delivery::Job(_)
         | Delivery::JobLine(_)

@@ -872,6 +872,7 @@ fn read_fork_point(
         point: Point {
             session_id: parent.clone(),
             seq: Seq(point),
+            project: None,
         },
         model,
     })

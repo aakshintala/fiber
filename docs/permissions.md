@@ -444,6 +444,10 @@ A **session grant** is an event in the session log. It is honoured for the rest
 of that session, survives a resume because the log does, is visible to every
 client, and is gone when the session ends.
 
+A session that changes folder (`/cd`, `change_workspace`) starts with none of
+its parent's session grants: they were given for the old folder. Known hosts
+carry over, as the conversation that surfaced them does.
+
 A **standing rule** is a line in [Fiber home](state.md). It survives
 everything until deleted, and it is a file a person can read and revoke.
 

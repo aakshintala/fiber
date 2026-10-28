@@ -487,6 +487,7 @@ fn fork_launch_carries_inherited_roots_as_added_flags() {
                 point: contract::shapes::Point {
                     session_id: SessionId("s_parent".into()),
                     seq: contract::Seq(41),
+                    project: None,
                 },
                 model: "fiber:parent-model".to_owned(),
             },
@@ -874,6 +875,7 @@ fn a_fork_builds_the_fork_argv_with_no_model_or_credential() {
                 point: contract::shapes::Point {
                     session_id: SessionId("s_parent".into()),
                     seq: contract::Seq(41),
+                    project: None,
                 },
                 model: "fiber:parent-model".to_owned(),
             },
@@ -2229,6 +2231,7 @@ fn the_reader_points_just_before_the_calling_message_with_its_model() {
         contract::shapes::Point {
             session_id: SessionId("s_parent".into()),
             seq: contract::Seq(6),
+            project: None,
         }
     );
     assert_eq!(forking.model, "fiber:pa/m");

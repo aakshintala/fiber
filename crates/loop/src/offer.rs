@@ -136,6 +136,14 @@ pub(crate) struct Folded {
 }
 
 impl Folded {
+    /// The open and skipped counts: the fold tests' seam for the
+    /// cross-workspace reset (`docs/events.md`, "Change workspace").
+    /// Test-only; behavior reads offers through the resume.
+    #[cfg(test)]
+    pub(crate) fn counts(&self) -> (usize, usize) {
+        (self.open.len(), self.skipped.len())
+    }
+
     /// Folds one durable line.
     pub(crate) fn fold(&mut self, event: &Event) {
         if let Event::RepositoryCodeOffered(offered) = event {
@@ -364,6 +372,7 @@ impl Loop {
                 | Delivery::McpReconnect(..)
                 | Delivery::Credential(..)
                 | Delivery::Rewind(..)
+                | Delivery::ChangeWorkspace(..)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)
                 | Delivery::ProposeNotes(..)

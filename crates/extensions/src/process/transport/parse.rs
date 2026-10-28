@@ -113,6 +113,7 @@ pub(crate) fn parse_line(line: &[u8]) -> ParsedLine {
         | contract::commands::Command::Name(_)
         | contract::commands::Command::Handoff(_)
         | contract::commands::Command::Rewind(_)
+        | contract::commands::Command::ChangeWorkspace(_)
         | contract::commands::Command::Shell(_)
         | contract::commands::Command::ProposeNotes(_)
         | contract::commands::Command::AddDirectory(_)

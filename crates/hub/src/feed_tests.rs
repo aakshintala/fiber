@@ -1738,6 +1738,57 @@ fn on_rewound_ignores_anything_but_a_rewound_last_line() {
     );
 }
 
+fn moved_last(old: &str, next: &str) -> Value {
+    json!({
+        "kind": "moved", "session_id": old, "ts": 2, "schema_version": 1, "seq": 5,
+        "payload": {"new_session_id": next, "seq": 3, "workspace": "/target"},
+    })
+}
+
+#[test]
+fn a_log_ending_in_moved_is_exited() {
+    let temp = Temp::new();
+    let (feed, _, _sub, how) = leave(&temp, "moved", "idle", false);
+    assert_eq!(how, "exited");
+    assert_eq!(entry_of(&feed, &id(1)), None);
+    stop_within(&feed);
+}
+
+#[test]
+fn a_moved_session_that_exits_waiting_stays_in_the_feed() {
+    let temp = Temp::new();
+    let (feed, _, _sub, how) = leave(&temp, "moved", "waiting", false);
+    assert_eq!(how, "exited");
+    assert_eq!(entry_of(&feed, &id(1)), Some("exited"));
+    stop_within(&feed);
+}
+
+#[test]
+fn on_rewound_fires_once_for_a_moved_last_line() {
+    let temp = Temp::new();
+    let (feed, _clock) = new_feed(&temp.dir);
+    let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    assert!(
+        feed.on_rewound
+            .set(Box::new({
+                let seen = Arc::clone(&seen);
+                move |from: SessionId, next: SessionId| {
+                    seen.lock().unwrap().push((from.0, next.0));
+                }
+            }))
+            .is_ok(),
+        "the callback sets"
+    );
+    let next = id(9);
+    let (old, dir) = logged(&temp, 1, &moved_last(&id(1), &next));
+    feed.on_left(&old, Some(("-w".to_owned(), dir, 0)));
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        vec![(old, next)],
+        "the feed retries the same child once"
+    );
+}
+
 #[test]
 fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
     use std::collections::HashSet;

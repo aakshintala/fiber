@@ -46,9 +46,9 @@ pub use offer::{
 };
 pub use session::{
     Clients, ContextAdded, ContextFill, DirectoryAdded, FiberExited, FiberStarted, FinalMessage,
-    InputItem, NamedBy, Parent, QueuedMessage, Rewind, Rewound, SessionNamed, SessionStarted,
-    SessionState, SessionStatus, ShellCommand, SteeringApplied, SteeringQueue, TurnCompleted,
-    TurnOutcome, TurnStarted, Variables, VariablesSource, Waiting, WaitingKind,
+    InputItem, Moved, NamedBy, Parent, QueuedMessage, Rewind, Rewound, SessionNamed,
+    SessionStarted, SessionState, SessionStatus, ShellCommand, SteeringApplied, SteeringQueue,
+    TurnCompleted, TurnOutcome, TurnStarted, Variables, VariablesSource, Waiting, WaitingKind,
 };
 
 use crate::{CommandId, Envelope, RequestId, SessionId};
@@ -189,6 +189,7 @@ kinds! {
     FiberExited(FiberExited) = "fiber_exited", Durable;
     SessionStarted(SessionStarted) = "session_started", Durable;
     Rewound(Rewound) = "rewound", Durable;
+    Moved(Moved) = "moved", Durable;
     TurnStarted(TurnStarted) = "turn_started", Durable;
     StepStarted(Empty) = "step_started", Durable;
     TurnCompleted(TurnCompleted) = "turn_completed", Durable;

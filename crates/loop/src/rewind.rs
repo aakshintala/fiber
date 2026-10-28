@@ -1,6 +1,7 @@
 //! Starting a rewind or fork from a step boundary (`docs/events.md`,
-//! "Rewind" and `docs/delegates.md`, "Forks"): the inherited preamble,
-//! history and worktree.
+//! "Rewind" and `docs/delegates.md`, "Forks"), or a workspace move from
+//! the tip (`docs/events.md`, "Change workspace"): the inherited
+//! preamble, history and worktree.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -17,6 +18,7 @@ use crate::{Error, Loop, Preamble, Session, ToolSearchFactory, variables};
 pub(crate) mod command;
 pub(crate) mod stop;
 pub(crate) mod summary;
+pub(crate) mod workspace;
 
 /// What a rewind or fork starts from: a point and its inherited worktree.
 pub struct Rewound {
@@ -219,7 +221,10 @@ pub fn fork_workspace(workspace: &str, parent_workspace: &str) -> String {
 
 /// The point `new` continues from, from the old log's last line: `seq`
 /// counts in the old session's log, or in `from_session_id`'s when an
-/// ancestor point names one. Anything else is [`Error::NotRewound`].
+/// ancestor point names one. A `moved` last line naming `new` decodes the
+/// same way, with no summary: the child continues the old session at the
+/// last durable line before `moved`. Anything else is
+/// [`Error::NotRewound`].
 pub fn rewound_from(
     last: Option<Envelope>,
     new: &SessionId,
@@ -232,6 +237,24 @@ pub fn rewound_from(
     let Some(last) = last else {
         return Err(not_rewound());
     };
+    if last.kind == "moved" {
+        let moved: contract::events::Moved =
+            serde_json::from_value(serde_json::Value::Object(last.payload))
+                .map_err(|_| not_rewound())?;
+        if moved.new_session_id != *new {
+            return Err(not_rewound());
+        }
+        return Ok((
+            Point {
+                session_id: old.clone(),
+                seq: moved.seq,
+                // The child's project is computed at child start, where
+                // the target workspace is known.
+                project: None,
+            },
+            None,
+        ));
+    }
     if last.kind != "rewound" {
         return Err(not_rewound());
     }
@@ -245,6 +268,9 @@ pub fn rewound_from(
         Point {
             session_id: rewound.from_session_id.unwrap_or_else(|| old.clone()),
             seq: rewound.seq,
+            // A rewind continues in its own project; a cross-project parent
+            // arrives through `forked_from.project` on a moved child's start.
+            project: None,
         },
         rewound.summary,
     ))
