@@ -134,10 +134,16 @@ impl Loop {
             }
             Err(ClassifyFailure::Schema(errors)) => Err(Box::new(crate::completion::failed(
                 ErrorCode::InvalidArguments,
-                format!(
-                    "The arguments do not match the tool's schema:\n{}",
-                    errors.join("\n")
-                ),
+                match suggestion(self, call) {
+                    Some(name) => format!(
+                        "The arguments do not match the tool's schema:\n{}\nThese arguments fit `{name}`.",
+                        errors.join("\n")
+                    ),
+                    None => format!(
+                        "The arguments do not match the tool's schema:\n{}",
+                        errors.join("\n")
+                    ),
+                },
             ))),
             Err(ClassifyFailure::Effects(message)) => Err(Box::new(crate::completion::failed(
                 ErrorCode::ToolError,
@@ -319,6 +325,63 @@ fn ready(prepared: Prepared, recorded: &PermissionRequested, state: Vec<StateLin
         step,
     };
     Again::Ready(prepared, request, state)
+}
+
+/// The one other tool whose schema the model's sent arguments fit, when
+/// exactly one qualifies (`docs/tools.md`, "Before a call runs"). An
+/// extension's inner call answers the extension, not the model, so it
+/// carries no suggestion. With no preamble no request declared any tool
+/// in full. Hosted tools ride the request as a type and name only, and
+/// deferred tools are not declared in full either, so neither counts.
+fn suggestion(looped: &Loop, call: &ToolCallRequested) -> Option<String> {
+    if call.ran_by.is_some() {
+        return None;
+    }
+    let Value::Object(sent) = &call.arguments else {
+        return None;
+    };
+    let preamble = looped.preamble.as_ref()?;
+    let deferred = preamble.deferred.as_ref();
+    let mut fitted = None;
+    for definition in &preamble.tools {
+        if definition.name == call.name || definition.hosted.is_some() {
+            continue;
+        }
+        if deferred.is_some_and(|deferred| deferred.contains(&definition.name)) {
+            continue;
+        }
+        let Some(properties) = definition
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        if !sent.keys().all(|key| properties.contains_key(key)) {
+            continue;
+        }
+        let requires_one = definition
+            .input_schema
+            .get("required")
+            .and_then(Value::as_array)
+            .is_some_and(|required| {
+                required
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|name| sent.contains_key(name))
+            });
+        if !requires_one {
+            continue;
+        }
+        if !crate::schema::check(&definition.input_schema, &call.arguments).is_empty() {
+            continue;
+        }
+        if fitted.is_some() {
+            return None;
+        }
+        fitted = Some(definition.name.clone());
+    }
+    fitted
 }
 
 /// The failed completion of a call naming no registered tool, as
