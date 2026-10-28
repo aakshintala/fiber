@@ -39,9 +39,37 @@ pub(crate) struct ExecRequest {
     /// terminal prompts and Ctrl-C still reach the program, passes `false`:
     /// the program is never listed, and only its pid is ever signalled.
     pub own_group: bool,
-    /// Test acknowledgement after the stdout reader retains its first bytes.
+    /// Test observations: the stdout reader's acknowledgement after it
+    /// retains its first bytes, and the supervisor's pre-park snapshot
+    /// before each park.
     #[cfg(test)]
-    pub stdout_read: Option<mpsc::Sender<()>>,
+    pub test_events: Option<mpsc::Sender<ExecTestEvent>>,
+}
+
+/// A test-only observation from a run: the stdout reader's acknowledgement
+/// or a pre-park snapshot of the supervisor's state. The supervisor sends
+/// a [`ExecTestEvent::Park`] immediately before parking, so the event
+/// reports the state the decision just read; when that state moved first
+/// the park never follows. The reader sends [`ExecTestEvent::StdoutRead`]
+/// once, after retaining its first bytes.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExecTestEvent {
+    /// The stdout reader retained its first bytes.
+    StdoutRead,
+    /// A pre-park snapshot: the supervisor is about to park until `until`,
+    /// having seen `group_empty`, `stdout_eof` and `stderr_eof`. The park
+    /// may never follow when the shared state moved first.
+    Park {
+        /// The instant the snapshot was taken for, `None` for an unbounded park.
+        until: Option<Instant>,
+        /// Whether the group had been seen empty when the snapshot was taken.
+        group_empty: bool,
+        /// Whether stdout had reached EOF when the snapshot was taken.
+        stdout_eof: bool,
+        /// Whether stderr had reached EOF when the snapshot was taken.
+        stderr_eof: bool,
+    },
 }
 
 /// How a run that started ended.
@@ -99,6 +127,11 @@ struct Inner {
 struct Shared {
     inner: Mutex<Inner>,
     cv: Condvar,
+    /// The test's observation sink, fed without waiting: each pre-park send
+    /// reports state the decision just read (the park may never follow),
+    /// and a gone receiver just drops it.
+    #[cfg(test)]
+    events: Option<mpsc::Sender<ExecTestEvent>>,
 }
 
 impl contract::clock::Wake for Shared {
@@ -299,6 +332,8 @@ fn run_with(
             ..Default::default()
         }),
         cv: Condvar::new(),
+        #[cfg(test)]
+        events: req.test_events.clone(),
     });
     clock.subscribe(Arc::downgrade(
         &(Arc::clone(&shared) as Arc<dyn contract::clock::Wake>),
@@ -319,12 +354,12 @@ fn run_with(
     };
     let out_shared = Arc::clone(&shared);
     #[cfg(test)]
-    let stdout_read = req.stdout_read.clone();
+    let test_events = req.test_events.clone();
     if let Err(source) = std::thread::Builder::new()
         .name("exec stdout".into())
         .spawn(move || {
             #[cfg(test)]
-            read_into(out, &out_shared, true, stdout_read);
+            read_into(out, &out_shared, true, test_events);
             #[cfg(not(test))]
             read_into(out, &out_shared, true);
         })
@@ -618,6 +653,8 @@ fn supervise(
                 }
                 // One SIGKILL: fall through to the drain below.
             } else {
+                #[cfg(test)]
+                observe_park(shared, Some(kill_at), seen_empty, out_eof, err_eof);
                 park(clock, shared, seen_seq, Some(kill_at));
                 continue;
             }
@@ -639,6 +676,8 @@ fn supervise(
                 unlist(&mut listing, seen_empty);
                 return Ok(ran);
             }
+            #[cfg(test)]
+            observe_park(shared, Some(until), seen_empty, out_eof, err_eof);
             park(clock, shared, seen_seq, Some(until));
             continue;
         } else {
@@ -646,6 +685,8 @@ fn supervise(
             // Always a concrete `until` so a test can wait for the park.
             let poll = add(clock.now(), support::group::GROUP_POLL);
             let until = Some(deadline.map_or(poll, |d| d.min(poll)));
+            #[cfg(test)]
+            observe_park(shared, until, seen_empty, out_eof, err_eof);
             park(clock, shared, seen_seq, until);
             continue;
         }
@@ -669,6 +710,8 @@ fn supervise(
             }
             return Ok(ran);
         }
+        #[cfg(test)]
+        observe_park(shared, Some(until), seen_empty, out_eof, err_eof);
         park(clock, shared, seen_seq, Some(until));
     }
 }
@@ -815,6 +858,28 @@ fn ran_of(shared: &Shared, status: Option<ExitStatus>, timed_out: bool) -> Ran {
     }
 }
 
+/// Reports a pre-park snapshot of the supervisor's state to the test's
+/// event sink. The channel is unbounded and the send reports only: a gone
+/// receiver drops the observation, and the run never waits on the test.
+/// The park may never follow when the shared state moved first.
+#[cfg(test)]
+fn observe_park(
+    shared: &Shared,
+    until: Option<Instant>,
+    group_empty: bool,
+    stdout_eof: bool,
+    stderr_eof: bool,
+) {
+    if let Some(events) = shared.events.as_ref() {
+        let _sent = events.send(ExecTestEvent::Park {
+            until,
+            group_empty,
+            stdout_eof,
+            stderr_eof,
+        });
+    }
+}
+
 /// Parks until the shared state moves or `until` on the injected clock.
 /// The condvar always times out at `support::group::GROUP_POLL`: a clock
 /// move whose wake lands between the register and the wait still surfaces
@@ -872,7 +937,7 @@ fn read_into(
     mut read: impl Read,
     shared: &Shared,
     stdout: bool,
-    #[cfg(test)] mut stdout_read: Option<mpsc::Sender<()>>,
+    #[cfg(test)] mut test_events: Option<mpsc::Sender<ExecTestEvent>>,
 ) {
     let mut buf = [0_u8; 8192];
     loop {
@@ -904,8 +969,8 @@ fn read_into(
                 bump(&mut inner, shared);
                 drop(inner);
                 #[cfg(test)]
-                if stdout && let Some(ack) = stdout_read.take() {
-                    let _sent = ack.send(());
+                if stdout && let Some(ack) = test_events.take() {
+                    let _sent = ack.send(ExecTestEvent::StdoutRead);
                 }
             }
             Err(_) => break,
