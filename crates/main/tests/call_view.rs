@@ -522,9 +522,9 @@ const THOUGHT: &str = "Ran 1 command";
 
 /// The wheel over a call's view scrolls the view, never the hidden
 /// conversation (`docs/tui.md`, "Swapped views"; see #3578): with the
-/// conversation scrolled up to its thought row, one wheel-down over the
-/// open view moves the view's rows while the conversation's top marker
-/// stays exactly where the wheel found it.
+/// conversation scrolled up to its thought row, three wheel-downs over
+/// the open view move its first visible row nine rows while the
+/// conversation's top marker stays exactly where the wheel found it.
 #[test]
 fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     let setup = Setup::new();
@@ -607,7 +607,6 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
             .iter()
             .any(|row| row.contains("── the model's view resumes ──"))
     });
-    let _tail_first = first_output_number(&grid).expect("the view's first output number");
     // PageUp twice: the ups page past the held tail window, so the tail
     // pages drop and the window re-anchors to the held head segment,
     // whose last output rows are 036 and 037 above the end marker. The
@@ -620,22 +619,30 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
         first_output_number(grid) == Some(36)
     });
     let settled = first_output_number(&grid).expect("the settled first output number");
-    // PageDown moves the selection to the bottom row of the settled window
-    // without moving the window itself (`List::key` keeps a selection
-    // inside the window shown). The wheel below proves the key landed:
-    // three Downs from anywhere but the window's bottom row would leave
-    // the window - and the number - where they are.
-    run.write(b"\x1b[6~");
-    // One wheel-down over the view moves the view's rows; the
+    // Click the first visible output row: the rendered view marks no
+    // selection, so the click establishes that row as the selected one
+    // for the wheel below.
+    let row = grid
+        .rows
+        .iter()
+        .position(|line| line.trim_start().starts_with(&format!("{settled:03}")))
+        .expect("the first visible output row") as u16;
+    click(&mut run, 20, row);
+    // Three wheel-downs over the view move its first visible row nine
+    // rows: each step shifts the viewport three displayed rows, keeping
+    // the clicked selection only while it stays on screen. The
     // conversation stays hidden, so the Esc check below is the one
     // that proves its scroll is unchanged.
     run.write(WHEEL_DOWN);
+    run.write(WHEEL_DOWN);
+    run.write(WHEEL_DOWN);
     let grid = run.wait_screen("the wheeled view", |grid| {
-        first_output_number(grid).is_some_and(|at| at != settled)
+        first_output_number(grid) == Some(settled + 9)
     });
-    assert!(
-        first_output_number(&grid).is_some_and(|at| at != settled),
-        "the wheel over the view moved the view's rows"
+    assert_eq!(
+        first_output_number(&grid),
+        Some(settled + 9),
+        "three wheel steps moved the view's first visible row nine rows"
     );
     // Esc returns to the opened call with its row still focused: the
     // conversation's scroll is exactly where the wheel found it.

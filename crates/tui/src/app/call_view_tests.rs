@@ -2391,11 +2391,12 @@ fn wheel(col: u16, row: u16, down: bool) -> Mouse {
     }
 }
 
-/// The wheel over an open call view moves its selection three rows per
+/// The wheel over an open call view shifts its visible rows three per
 /// step, never the conversation under it (`docs/tui.md`, "Swapped
-/// views"; see #3578).
+/// views"; see #3578). The selection at the window's top row leaves the
+/// window, so it clamps to the nearest row still on screen.
 #[test]
-fn wheel_over_an_open_call_view_moves_the_selection_not_the_conversation() {
+fn wheel_over_an_open_call_view_moves_visible_rows_not_the_conversation() {
     let mut app = attached(80, 24);
     turn_started(&mut app);
     let text = (0..30)
@@ -2428,21 +2429,80 @@ fn wheel_over_an_open_call_view_moves_the_selection_not_the_conversation() {
         "Up leaves follow mid-file"
     );
     let before = app.call_view().expect("open").list.selected();
+    let shown_top = app.call_view().expect("open").list.top();
     // Plain output pages nothing: the wheel sends nothing back.
     assert_eq!(app.on_wheel(&wheel(10, 5, true)), Effect::None);
     assert_eq!(app.top(), top, "the wheel left the conversation");
     assert_eq!(
+        app.call_view().expect("open").list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
         app.call_view().expect("open").list.selected(),
-        before + 3,
-        "one wheel step is three Down keys through the view"
+        shown_top + 3,
+        "the selection clamps to the nearest row still on screen"
+    );
+    assert_eq!(before, shown_top, "the selection started on the top row");
+}
+
+/// The wheel over an open call view keeps a selection that stays on
+/// screen: five Downs put it mid-window, so one step down moves the
+/// window three rows under it (`docs/tui.md`, "Swapped views"; see
+/// #3578).
+#[test]
+fn wheel_over_an_open_call_view_keeps_a_visible_selection() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let text = (0..30)
+        .map(|i| format!("row{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    requested(&mut app, "shell", json!({"command": COMMAND}), ACTION);
+    completed(
+        &mut app,
+        ACTION,
+        &text,
+        json!({"command": COMMAND, "exit_code": 0}),
+        None,
+        None,
+    );
+    let id = crate::turn::target_id(ACTION);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..5 {
+        app.on_key(Key::Down, now());
+    }
+    let before = app.call_view().expect("open").list.selected();
+    let shown_top = app.call_view().expect("open").list.top();
+    assert_eq!(before, 5, "five Downs select the fifth row: {before}");
+    assert_eq!(shown_top, 0, "the window stays at the top: {shown_top}");
+    // Plain output pages nothing: the wheel sends nothing back.
+    assert_eq!(app.on_wheel(&wheel(10, 5, true)), Effect::None);
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.call_view().expect("open").list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        app.call_view().expect("open").list.selected(),
+        before,
+        "a selection still on screen stays where it was"
     );
 }
 
-/// The wheel over an open call view with the find bar open takes three
-/// Up/Down-equivalent match steps, never the conversation under it
-/// (`docs/tui.md`, "Swapped views"; see #3578).
+/// The wheel over an open call view with the find bar open shifts the
+/// viewport instead of stepping matches, never the conversation under
+/// it (`docs/tui.md`, "Swapped views"; see #3578). The short list has
+/// no room to move, so the window, the selection and the current match
+/// all stay where they were.
 #[test]
-fn wheel_over_a_call_view_with_find_open_steps_matches_not_the_conversation() {
+fn wheel_over_a_call_view_with_find_open_scrolls_not_the_conversation() {
     let mut app = attached(80, 24);
     turn_started(&mut app);
     let id = shell_cut(&mut app, ACTION);
@@ -2467,13 +2527,19 @@ fn wheel_over_a_call_view_with_find_open_steps_matches_not_the_conversation() {
     assert_eq!(current_row(&app), Some(matches[0]));
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let before = app.call_view().expect("open").list.selected();
     // Every page is loaded: the wheel sends nothing back.
     assert_eq!(app.on_wheel(&wheel(10, 5, true)), Effect::None);
     assert_eq!(app.top(), top, "the wheel left the conversation");
     assert_eq!(
         current_row(&app),
-        Some(matches[3]),
-        "one wheel step is three Down keys through the matches"
+        Some(matches[0]),
+        "the wheel shifts the viewport instead of stepping matches"
+    );
+    assert_eq!(
+        app.call_view().expect("open").list.selected(),
+        before,
+        "a selection still on screen stays where it was"
     );
 }
 
