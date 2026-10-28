@@ -70,6 +70,11 @@ impl Feed {
         false
     }
 
+    /// Tests only: parks the listing thread between its `done()` check and
+    /// its park in `wait_for`, the window the `wait_for` comment names: no
+    /// outside seam lands a change deterministically inside that window,
+    /// since neither a fake-clock advance, a socket write nor a
+    /// `FakeStarter` operation runs between the check and the park.
     #[cfg(test)]
     fn pause_after_check(&self, _guard: &MutexGuard<'_, ()>) {
         let Some(pause) = lock(&self.settle_pause).take() else {

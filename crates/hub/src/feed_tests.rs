@@ -1075,7 +1075,6 @@ fn stop_returns_when_a_silent_session_stays_open() {
     start(&feed, &clock);
     // The status arrived, so the summary reader is tracked and reading.
     assert_eq!(sub.raw("the status"), line);
-    feed.skip_shutdown.store(true, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel();
     let stopping = Arc::clone(&feed);
     thread::spawn(move || {

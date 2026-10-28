@@ -29,8 +29,6 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(test)]
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -84,14 +82,17 @@ pub(crate) struct Feed {
     /// set once by the hub serving it: the rejoin sweep collects resumed
     /// sessions there. Never under the state lock.
     pub(crate) on_scan: OnceLock<ScanHook>,
-    /// Skips the `shutdown` in [`Feed::stop`]: with the stoppable read
-    /// wired, the stop's pipe ends a silent reader on its own.
-    #[cfg(test)]
-    pub(super) skip_shutdown: AtomicBool,
+    /// Tests only: parks the listing thread between its `done()` check and
+    /// its park in `wait_for`, so the test lands a change inside that
+    /// window: no outside seam lands a change deterministically there,
+    /// since neither a fake-clock advance, a socket write nor a
+    /// `FakeStarter` operation runs between the check and the park.
     #[cfg(test)]
     settle_pause: Mutex<Option<SettlePause>>,
 }
 
+/// Tests only: the handshake the listing thread runs between its `done()`
+/// check and its park in `wait_for`; see `settle_pause`.
 #[cfg(test)]
 pub(super) struct SettlePause {
     pub(super) arrived: mpsc::Sender<()>,
@@ -169,8 +170,6 @@ impl Feed {
             on_rewound: OnceLock::new(),
             on_scan: OnceLock::new(),
             #[cfg(test)]
-            skip_shutdown: AtomicBool::new(false),
-            #[cfg(test)]
             settle_pause: Mutex::new(None),
         }
     }
@@ -222,13 +221,7 @@ impl Feed {
         for tracked in tracked.values() {
             tracked.stop.stop();
         }
-        #[cfg(test)]
-        let skipped = self.skip_shutdown.load(Ordering::Relaxed);
         for tracked in tracked.values() {
-            #[cfg(test)]
-            if skipped {
-                continue;
-            }
             tracked.stream.shutdown(Shutdown::Both).unwrap_or(());
         }
         fanout.close().into_iter().for_each(|end| {
@@ -784,10 +777,14 @@ pub(crate) fn invalid() -> Refused {
 /// inside [`join`], before it blocks. Compiles to nothing outside tests
 /// and never alters control flow. Follows the `pairing.rs` `Pause`
 /// precedent: the test arms a hook that signals the code under test has
-/// reached the waiting point.
+/// reached the waiting point. No outside seam observes the instant before
+/// the block: without the signal the test cannot tell a join that waits
+/// from an early return, and the weakened test would pass either way.
 #[cfg(test)]
 static JOIN_PAUSE: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
 
+/// Tests only: arms the `join` test's hook, firing when the joiner is
+/// inside [`join`] before it blocks: no outside seam observes that instant.
 #[cfg(test)]
 pub(crate) fn pause_join_in_lock(hook: impl FnOnce() + Send + 'static) {
     *lock(&JOIN_PAUSE) = Some(Box::new(hook));

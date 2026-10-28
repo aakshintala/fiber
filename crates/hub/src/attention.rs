@@ -122,6 +122,11 @@ pub(crate) struct Attention {
     announced: Mutex<BTreeMap<String, Announced>>,
     listeners: Mutex<Fanout>,
     stopped: AtomicBool,
+    /// Tests only: fails the next `listen` while live, so the
+    /// refused-registration path runs without an outside seam: `listen`
+    /// refuses only once stopped or when armed, and stopping the attention
+    /// would end the live hub the test needs, while no socket, starter,
+    /// clock or file seam fails one registration while live.
     #[cfg(test)]
     fail_listen: AtomicBool,
 }
@@ -171,6 +176,11 @@ impl Attention {
         lock(&self.listeners).broadcast(&line)
     }
 
+    /// Tests only: fails the next `listen` while live, so the
+    /// refused-registration path runs without an outside seam: `listen`
+    /// refuses only once stopped or when armed, and stopping the attention
+    /// would end the live hub the test needs, while no socket, starter,
+    /// clock or file seam fails one registration while live.
     #[cfg(test)]
     pub(crate) fn fail_next_listen(&self) {
         self.fail_listen.store(true, Ordering::SeqCst);
