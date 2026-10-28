@@ -870,6 +870,8 @@ fn journey_drag_notice_copies_its_text() {
     run.wait_bytes(0, MOTION, "mouse motion enabled");
     let turn_from = run.output().len();
     run.write(b"say hi\r");
+    // One step is one round-trip that sends a request (`docs/loop.md`,
+    // "One step"), so one held request proves the turn started.
     assert!(
         server.await_requests(1, setup.deadline),
         "the first request to reach the held provider"
@@ -918,7 +920,7 @@ fn journey_drag_notice_copies_its_text() {
     let copy_from = run.output().len();
     drag(&mut run, (x, y), (x + 14, y));
     assert_eq!(osc52_copy(&mut run, copy_from), "switch_pending");
-    let after_drag = run.wait_screen("the switch_pending notice after copy", |screen| {
+    run.wait_screen("the switch_pending notice after copy", |screen| {
         shows(screen, "switch_pending")
             && shows(screen, "beta-2 applies when this turn ends")
             && screen.size() == (120, 38)
@@ -928,10 +930,6 @@ fn journey_drag_notice_copies_its_text() {
                 .position(|row| row.contains("switch_pending"))
                 == Some(usize::from(y))
     });
-    assert!(
-        shows(&after_drag, "switch_pending"),
-        "the condition notice remains visible before the held reply is released"
-    );
 
     server.release_one();
     run.wait_screen("the released reply", |screen| shows(screen, "Hello."));
