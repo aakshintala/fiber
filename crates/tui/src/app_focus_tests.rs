@@ -1186,7 +1186,7 @@ fn a_directly_attached_terminal_labels_a_sender_by_its_latest_named_status() {
     let shown = screen(&app);
     assert!(shown.contains("worker · 00:00"), "{shown}");
     // A rename reaches the drawn card: the label follows the latest
-    // status (`docs/tui.md`, "Session names").
+    // status (`docs/tui.md`, "Turns").
     app.on_line(sender_status("renamed", true));
     frame(&mut app);
     let shown = screen(&app);
@@ -1236,7 +1236,8 @@ fn y_on_a_turn_with_a_session_message_copies_the_label_time_and_text() {
         panic!("the whole turn copies")
     };
     // The label and time, then the body, in draw order; the labelled
-    // rule is decoration, and the image copies through its own stop.
+    // rule is decoration, and the image copies through its own stop
+    // (`docs/tui.md`, "Turns"; `docs/tui.md`, "Selection and copy").
     let label = text
         .find("worker · 00:00")
         .unwrap_or_else(|| panic!("the label: {text}"));

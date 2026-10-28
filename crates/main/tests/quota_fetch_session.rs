@@ -349,8 +349,12 @@ fn a_hot_window_notices_rearms_and_notices_again_across_resumes() {
 #[test]
 fn quota_notice_is_a_fiber_card_entry_in_pty() {
     let setup = Setup::new();
-    let server = ProviderServer::start_responding(|request| match request.path.as_str() {
-        "/lua-quota" => Response::status(200, "90"),
+    let (quota_hit, quota_rx) = mpsc::channel();
+    let server = ProviderServer::start_responding(move |request| match request.path.as_str() {
+        "/lua-quota" => {
+            let _sent = quota_hit.send(());
+            Response::status(200, "90")
+        }
         "/lua-models" | "/lua-token" => Response::status(200, "{}"),
         "/v1/responses" => hello(),
         _ => Response::status(500, "unrouted"),
@@ -372,17 +376,15 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
     run.wait_screen("the first answered turn", |grid| {
         grid.contents.contains("Hello.")
     });
-    loop {
-        run.write(b"\x1b[I");
-        if run.screen().contents.contains("10%") {
-            break;
-        }
-        assert!(
-            !setup.deadline.left().is_zero(),
-            "waited until the deadline for the fetched 10% remaining quota share to draw",
-        );
-        std::thread::yield_now();
-    }
+    // The fake signals when its quota response is ready, so the one
+    // focus-in below runs after the fetch it started: the named screen
+    // wait then draws the fetched share, with no wall-clock read or
+    // sleep of its own.
+    setup.deadline.recv_or_fail(
+        &quota_rx,
+        "the fake quota response for the fetch turn one starts",
+    );
+    run.write(b"\x1b[I");
     run.wait_screen("the fetched 10% remaining quota share", |grid| {
         grid.contents.contains("10%")
     });
@@ -394,6 +396,8 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
     });
     assert!(shown.contents.contains("you"), "{}", shown.contents);
     assert!(shown.contents.contains("Fiber"), "{}", shown.contents);
+    // Only the person's prompt floats above its card: one `you` row per
+    // turn (`docs/tui.md`, "Turns").
     assert_eq!(
         shown
             .contents

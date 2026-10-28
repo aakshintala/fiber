@@ -211,7 +211,7 @@ fn a_named_recent_row_seeds_the_sender_label_and_a_statusless_row_keeps_it() {
         .to_owned();
     // The unscoped `recent` answer's row carries the sender's last
     // status, which named it: an exited sender still labels by its
-    // actual name (`docs/tui.md`, "Session names").
+    // actual name (`docs/tui.md`, "Turns").
     let named_row = json!({
         "session_id": "s_bbbbbbbbbbbbbbbb", "ts": 0, "project": "other",
         "workspace": "/o", "name": "worker", "how": "exited",
@@ -230,6 +230,8 @@ fn a_named_recent_row_seeds_the_sender_label_and_a_statusless_row_keeps_it() {
         .into_iter()
         .filter(|line| line["command"] == "recent")
         .collect();
+    // A project that first appears earns one scoped `recent` ask
+    // (`docs/tui.md`, "Home", "The session list").
     assert_eq!(scoped.len(), 1, "the new project earns one scoped ask");
     app.on_line(turn_with_sender_message("s_aaaaaaaaaaaaaaaa"));
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();

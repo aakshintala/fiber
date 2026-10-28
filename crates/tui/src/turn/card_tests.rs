@@ -1210,6 +1210,8 @@ fn non_driver_start_messages_render_inside_the_card_not_as_prompt_bubbles() {
     done(&mut cards);
     let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
     let shown = shown_rows(&rows);
+    // Only the person's prompt floats above its card, and the Fiber notice
+    // sits inside it without its `Fiber: ` prefix (`docs/tui.md`, "Turns").
     assert_eq!(shown.iter().filter(|row| row.contains("go")).count(), 1);
     assert!(shown.iter().any(|row| row.contains("Fiber")), "{shown:?}");
     assert!(
@@ -1271,6 +1273,8 @@ fn message_entries_keep_each_source_label_and_timestamp() {
             | crate::ext::TurnEntry::Answers(_) => None,
         })
         .collect();
+    // Start-input messages open the card in the input's order, each with its
+    // source label (`docs/tui.md`, "Turns").
     assert_eq!(
         messages,
         [
@@ -1360,7 +1364,8 @@ fn message_entries_keep_each_source_label_and_timestamp() {
         "the rule is excluded from copied text"
     );
     // The copied card text keeps each message's label and body, in draw
-    // order, and loses the labelled rule (`docs/tui.md`, "Copying").
+    // order, and loses the labelled rule (`docs/tui.md`, "Turns";
+    // `docs/tui.md`, "Selection and copy").
     let copied: Vec<String> = crate::logical::logical(&rows, &texts)
         .into_iter()
         .map(|line| line.text)
@@ -1459,7 +1464,7 @@ fn a_session_message_label_follows_the_current_name_at_draw() {
     );
     done(&mut cards);
     // The card resolves the label at draw time, so a rename reaches a
-    // resident card (`docs/tui.md`, "Session names").
+    // resident card (`docs/tui.md`, "Turns").
     for (name, other) in [("worker", "renamed"), ("renamed", "worker")] {
         let mut out = Rows::default();
         out.session_names = std::sync::Arc::new(std::collections::HashMap::from([(
@@ -1533,6 +1538,7 @@ fn a_message_image_draws_below_its_text() {
         .iter()
         .position(|row| row.contains("▣ a.png · 10×8"))
         .unwrap_or_else(|| panic!("the image row: {shown:?}"));
+    // Images draw below text (`docs/tui.md`, "Turns").
     assert!(
         label < text && text < image,
         "the image draws below the text: {shown:?}"

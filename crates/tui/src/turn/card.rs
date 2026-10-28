@@ -168,7 +168,7 @@ impl Turn {
                     Entry::Message(message) => {
                         let source = match &message.source {
                             MessageSource::Fiber => "fiber",
-                            MessageSource::Session => "session",
+                            MessageSource::Session(_) => "session",
                             MessageSource::Extension(_) => "extension",
                         };
                         Some(TurnEntry::Message {
@@ -421,19 +421,12 @@ impl Message {
     fn label<'a>(&'a self, names: &HashMap<contract::SessionId, String>) -> Cow<'a, str> {
         match &self.source {
             MessageSource::Fiber => Cow::Borrowed("Fiber"),
-            MessageSource::Session => self
-                .sender_id
-                .as_ref()
-                .and_then(|id| names.get(id))
+            MessageSource::Session(id) => names
+                .get(id)
                 .filter(|name| !name.is_empty())
                 .cloned()
                 .map(Cow::Owned)
-                .or_else(|| {
-                    self.sender_id
-                        .as_ref()
-                        .map(|id| Cow::Borrowed(id.0.as_str()))
-                })
-                .unwrap_or_default(),
+                .unwrap_or_else(|| Cow::Borrowed(id.0.as_str())),
             MessageSource::Extension(name) => Cow::Borrowed(name),
         }
     }

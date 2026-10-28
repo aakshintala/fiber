@@ -1026,12 +1026,15 @@ arrived after `sessions` was sent.
   · $0.41 · $1.10 on subscription". A figure that is zero is left out, and a
   model with no price shows tokens only (`docs/model-routing.md`, "Cost").
 - **Non-driver messages stay in the card.** A non-driver input message sits
-  inside the card where it landed as a labelled rule. A Fiber message has a
+  inside the card where it landed as a labelled rule. Start-input messages
+  open the card, before any entry, in the input's order. A Fiber message has a
   muted `Fiber` label, a dim ` · <time> `, and dim text without one leading
   `Fiber: `; a session message has its current name or id as a secondary
   label, a dim ` · <time> ` and full-colour text; an extension message has its
   name as a secondary label, a dim ` · <time> ` and full-colour text. Images
-  draw below text. A blank message draws only its labelled rule.
+  draw below text. A blank message draws only its labelled rule. A whole-turn
+  copy includes each message's label and text in draw order; the labelled
+  rule is decoration and is not copied.
 - **Replies lead, tool groups sit back.** Nothing inside the card is indented
   past its one-column padding: replies, summary lines, steering messages and
   answers all start at the same column. A tool group has no band of its own, and its summary line is dim
@@ -2685,7 +2688,7 @@ itself is a separate client of the hub, not a TUI extension.
 | `layout` | Where each region goes: the conversation, the panel, the working line, the steering queue, the input box, the status rows, and any region an extension adds |
 | `home` | Home |
 | `turn_card` | A turn's card and its ▣ line |
-| `prompt` | A person's prompt bubble |
+| `prompt` | Only a person's prompt bubble: a non-driver message never calls it |
 | `reply` | An assistant reply |
 | `group_line` | A tool group's summary line |
 | `ledger_row:<tool>` | A ledger row for the named tool |
@@ -2724,7 +2727,7 @@ runs inside it; `prompt` draws only when the card itself is built in.
 
 | Field | What it holds |
 |---|---|
-| `prompts` | The turn's prompts in order, each with the `prompt` slot's `text` and `images` (`path`, `width`, `height` in pixels) |
+| `prompts` | The turn's person's prompts in order — only `Origin::Driver` messages — each with the `prompt` slot's `text` and `images` (`path`, `width`, `height` in pixels) |
 | `entries` | The card's items in order, each tagged with a `kind` and carrying the slot input shown below |
 | `started` | When the turn started |
 | `calls` | How many model calls the turn made |
@@ -2748,7 +2751,7 @@ A session message's `label` is the sender's current non-empty session name,
 when one is known, else its session id. An extension message's label is its
 extension name. An unknown `kind` is skipped.
 
-**`prompt`** draws a person's prompt bubble.
+**`prompt`** draws only a person's prompt bubble: a non-driver message never calls it, and goes in `entries` as `message` instead.
 
 | Field | What it holds |
 |---|---|

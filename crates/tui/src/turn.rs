@@ -98,11 +98,13 @@ pub(crate) enum Entry {
     Message(Message),
 }
 
-/// The source of an in-card message.
+/// The source of an in-card message: a session source carries its sender,
+/// so a session without an id, or Fiber or an extension with one, cannot
+/// be built.
 #[derive(Debug, Clone)]
 pub(crate) enum MessageSource {
     Fiber,
-    Session,
+    Session(contract::SessionId),
     Extension(String),
 }
 
@@ -110,7 +112,6 @@ pub(crate) enum MessageSource {
 #[derive(Debug, Clone)]
 pub(crate) struct Message {
     pub(crate) source: MessageSource,
-    pub(crate) sender_id: Option<contract::SessionId>,
     pub(crate) text: String,
     pub(crate) images: Vec<crate::image::Part>,
     pub(crate) ts: u64,
@@ -122,17 +123,14 @@ fn message_of(
     content: &[contract::shapes::ContentPart],
     ts: u64,
 ) -> Option<Message> {
-    let (source, sender_id) = match &sender.origin {
+    let source = match &sender.origin {
         Origin::Driver => return None,
-        Origin::Fiber => (MessageSource::Fiber, None),
-        Origin::Session { from_session_id } => {
-            (MessageSource::Session, Some(from_session_id.clone()))
-        }
-        Origin::Extension { extension } => (MessageSource::Extension(extension.clone()), None),
+        Origin::Fiber => MessageSource::Fiber,
+        Origin::Session { from_session_id } => MessageSource::Session(from_session_id.clone()),
+        Origin::Extension { extension } => MessageSource::Extension(extension.clone()),
     };
     Some(Message {
         source,
-        sender_id,
         text: text_of(content),
         images: crate::image::parts(session, content),
         ts,
