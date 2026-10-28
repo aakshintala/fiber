@@ -1,11 +1,12 @@
 //! Tests for the model picker's state: the rows in scope, the preselected
 //! chips, and the movement clamps. The app's keys are tested beside them.
 
+use super::filter::matches_left_out;
 use super::{
     Choice, Fresh, Mode, ModelPicker, PickerCtx, PickerView, RowAt, age, command_args, preselect,
     price_text, rebuild_cost, saves, scoped_save, shown_in, start_args, visible,
 };
-use crate::catalogue::{Catalogue, ModelEntry};
+use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, ModelEntry};
 use crate::keys::Key;
 
 fn entry(
@@ -1740,6 +1741,550 @@ fn rebuild_cost_rounds_sizes_and_picks_tiers() {
     assert!(rebuild_cost(99_999, Some(&price)).ends_with("· $0.20"));
     assert!(rebuild_cost(100_000, Some(&price)).ends_with("· $0.20"));
     assert!(rebuild_cost(100_001, Some(&price)).ends_with("· $0.30"));
+}
+
+/// One left-out group for `provider`'s unset `setting`, over `ids`
+/// with their display names.
+fn left_out(
+    provider: &str,
+    extension: &str,
+    file: &str,
+    setting: &str,
+    login: bool,
+    ids: &[(&str, Option<&str>)],
+) -> LeftOutGroup {
+    LeftOutGroup {
+        provider: provider.to_owned(),
+        extension: extension.to_owned(),
+        file: file.to_owned(),
+        setting: setting.to_owned(),
+        login,
+        models: ids
+            .iter()
+            .map(|(id, name)| LeftOutModel {
+                id: (*id).to_owned(),
+                name: name.map(str::to_owned),
+            })
+            .collect(),
+    }
+}
+
+/// An open choosing picker over `models` with `groups`.
+fn open_left_out(models: Vec<ModelEntry>, groups: Vec<LeftOutGroup>) -> ModelPicker {
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            installable: Vec::new(),
+            models,
+            notices: Vec::new(),
+            lists: Vec::new(),
+            left_out: groups,
+        },
+        ..ModelPicker::default()
+    };
+    picker.open(Mode::Choose, None);
+    picker
+}
+
+/// The count rows of every shown section, in order.
+fn count_rows(view: &PickerView) -> Vec<&str> {
+    view.sections
+        .iter()
+        .flat_map(|section| section.left_out.iter())
+        .map(|row| row.text.as_str())
+        .collect()
+}
+
+#[test]
+fn left_out_matching_is_per_field_not_a_substring() {
+    // Each word is an in-order subsequence of one field: provider, id
+    // or display name. A word never spans two fields.
+    assert!(matches_left_out("acme", "m1", Some("Opus Five"), ""));
+    assert!(matches_left_out(
+        "acme",
+        "m1",
+        Some("Opus Five"),
+        "acme opus"
+    ));
+    assert!(matches_left_out("acme", "m1", Some("Opus Five"), "OPUS"));
+    assert!(matches_left_out("acme", "m1", None, "acme m1"));
+    // A display name is the only field carrying "zed".
+    assert!(matches_left_out("acme", "m1", Some("Zed Two"), "zed"));
+    assert!(!matches_left_out("acme", "m1", None, "zed"));
+    // "e/m1" is a substring of "acme/m1", but no one field holds it
+    // in order: per-field matching hides the row.
+    assert!(!matches_left_out("acme", "m1", None, "e/m1"));
+    assert!(!matches_left_out("acme", "m1", Some("Opus Five"), "e/m1"));
+}
+
+#[test]
+fn a_login_group_counts_without_any_environment_clause() {
+    let picker = open_left_out(
+        Vec::new(),
+        vec![left_out(
+            "acme",
+            "acme-ext",
+            "config/acme-ext.json",
+            "workspace",
+            true,
+            &[("m1", Some("Acme One")), ("m2", None)],
+        )],
+    );
+    let view = view_of(&picker);
+    assert_eq!(
+        count_rows(&view),
+        ["2 models need workspace: run `fiber login acme`"]
+    );
+    let text = count_rows(&view)[0];
+    assert!(!text.contains("export"), "{text}");
+    assert!(!text.contains("ACME"), "{text}");
+    assert!(!text.contains("hub's environment"), "{text}");
+}
+
+#[test]
+fn a_credential_label_group_names_the_supplied_file() {
+    let picker = open_left_out(
+        Vec::new(),
+        vec![left_out(
+            "acme",
+            "acme-ext",
+            "config/acme-ext.json",
+            "api_key",
+            false,
+            &[("m1", Some("Acme One"))],
+        )],
+    );
+    let view = view_of(&picker);
+    assert_eq!(
+        count_rows(&view),
+        ["1 model needs api_key: set it in `config/acme-ext.json`"]
+    );
+}
+
+#[test]
+fn a_first_party_group_names_the_short_file() {
+    let picker = open_left_out(
+        Vec::new(),
+        vec![left_out(
+            "opencode",
+            "github.com/aakshintala/fiber/providers/opencode",
+            "config/opencode.json",
+            "workspace",
+            true,
+            &[("m1", None)],
+        )],
+    );
+    let view = view_of(&picker);
+    assert_eq!(
+        count_rows(&view),
+        ["1 model needs workspace: run `fiber login opencode`"]
+    );
+    let text = count_rows(&view)[0];
+    assert!(text.contains("config/opencode.json") || text.contains("fiber login opencode"));
+    // The row never derives a path from the full extension name.
+    assert!(!text.contains("github.com"), "{text}");
+}
+
+#[test]
+fn the_count_row_counts_only_the_models_the_query_keeps() {
+    let mut picker = open_left_out(
+        Vec::new(),
+        vec![left_out(
+            "acme",
+            "acme-ext",
+            "config/acme-ext.json",
+            "workspace",
+            true,
+            &[("m1", Some("Acme One")), ("m2", None)],
+        )],
+    );
+    picker.push_query('m');
+    picker.push_query('1');
+    let view = view_of(&picker);
+    assert_eq!(
+        count_rows(&view),
+        ["1 model needs workspace: run `fiber login acme`"]
+    );
+}
+
+#[test]
+fn a_display_name_only_query_keeps_its_count_row() {
+    let mut picker = open_left_out(
+        Vec::new(),
+        vec![left_out(
+            "acme",
+            "acme-ext",
+            "config/acme-ext.json",
+            "workspace",
+            true,
+            &[("m1", Some("Zed Two"))],
+        )],
+    );
+    // Neither the provider nor the id carries "zed": only the display
+    // name does.
+    for c in "zed".chars() {
+        picker.push_query(c);
+    }
+    assert_eq!(
+        count_rows(&view_of(&picker)),
+        ["1 model needs workspace: run `fiber login acme`"]
+    );
+    // A query no field carries hides the row.
+    for c in "qqq".chars() {
+        picker.push_query(c);
+    }
+    let view = view_of(&picker);
+    assert!(count_rows(&view).is_empty(), "{:?}", count_rows(&view));
+    assert!(view.sections.is_empty());
+}
+
+#[test]
+fn a_query_matching_nothing_shows_no_match_over_an_all_left_out_catalogue() {
+    let mut picker = open_left_out(
+        Vec::new(),
+        vec![left_out(
+            "acme",
+            "acme-ext",
+            "config/acme-ext.json",
+            "workspace",
+            true,
+            &[("m1", None)],
+        )],
+    );
+    for c in "zzz".chars() {
+        picker.push_query(c);
+    }
+    let view = view_of(&picker);
+    assert!(view.no_match);
+    assert!(view.sections.is_empty());
+    let layout = picker.layout().expect("the picker is open");
+    assert!(layout.contains(&RowAt::NoMatch), "{layout:?}");
+}
+
+#[test]
+fn an_all_left_out_catalogue_reads_zero_models_without_an_install_prompt() {
+    let mut picker = open_left_out(
+        Vec::new(),
+        vec![left_out(
+            "acme",
+            "acme-ext",
+            "config/acme-ext.json",
+            "workspace",
+            true,
+            &[("m1", Some("Acme One")), ("m2", None)],
+        )],
+    );
+    // The read answered: the status below is the catalogue's own.
+    let catalogue = picker.catalogue.clone();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.store(Ok(catalogue));
+    let view = view_of(&picker);
+    assert_eq!(view.count, "0 models");
+    assert!(view.status.is_empty(), "{:?}", view.status);
+    assert_eq!(view.sections.len(), 1);
+    assert_eq!(view.sections[0].provider, "acme");
+    assert!(view.sections[0].models.is_empty());
+    assert_eq!(
+        count_rows(&view),
+        ["2 models need workspace: run `fiber login acme`"]
+    );
+    // A typed query matching nothing still shows the empty-filter line
+    // instead of the install prompt.
+    for c in "zzz".chars() {
+        picker.push_query(c);
+    }
+    let view = view_of(&picker);
+    assert!(view.no_match);
+    assert!(view.status.is_empty(), "{:?}", view.status);
+}
+
+#[test]
+fn count_rows_show_in_the_choosing_picker_only() {
+    let groups = || {
+        vec![left_out(
+            "acme",
+            "acme-ext",
+            "config/acme-ext.json",
+            "workspace",
+            true,
+            &[("m1", None)],
+        )]
+    };
+    let mut picker = open_left_out(Vec::new(), groups());
+    picker.open(Mode::Thinking, Some(("acme/m1", None)));
+    assert!(count_rows(&view_of(&picker)).is_empty());
+    // The normal prompt stays with the group still held: no count row
+    // can show here.
+    let catalogue = picker.catalogue.clone();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.store(Ok(catalogue));
+    assert_eq!(
+        view_of(&picker).status,
+        ["No models. Install a provider: fiber extension install <name>.".to_owned()]
+    );
+    let mut picker = open_left_out(Vec::new(), groups());
+    picker.open(Mode::Scope, None);
+    assert!(count_rows(&view_of(&picker)).is_empty());
+    let catalogue = picker.catalogue.clone();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.store(Ok(catalogue));
+    assert_eq!(
+        view_of(&picker).status,
+        ["No models. Install a provider: fiber extension install <name>.".to_owned()]
+    );
+}
+
+#[test]
+fn count_rows_follow_the_scope_unless_show_all() {
+    let mut picker = open_left_out(
+        vec![
+            entry("acme/m1", &[], None, None),
+            entry("zeta/z1", &[], None, None),
+        ],
+        vec![
+            left_out(
+                "acme",
+                "acme-ext",
+                "config/acme-ext.json",
+                "workspace",
+                true,
+                &[("m9", None)],
+            ),
+            left_out(
+                "beta",
+                "beta-ext",
+                "config/beta-ext.json",
+                "workspace",
+                true,
+                &[("b1", None)],
+            ),
+        ],
+    );
+    picker.scoped = vec!["acme/m1".to_owned(), "zeta/z1".to_owned()];
+    picker.open(Mode::Choose, None);
+    // `beta` has no installed in-scope model: no section, no count row.
+    let view = view_of(&picker);
+    let providers: Vec<&str> = view
+        .sections
+        .iter()
+        .map(|section| section.provider.as_str())
+        .collect();
+    assert_eq!(providers, ["acme", "zeta"]);
+    assert_eq!(
+        count_rows(&view),
+        ["1 model needs workspace: run `fiber login acme`"]
+    );
+    // A query matching only the left-out model keeps the section: the
+    // scope gate does not read the query.
+    for c in "m9".chars() {
+        picker.push_query(c);
+    }
+    let view = view_of(&picker);
+    let providers: Vec<&str> = view
+        .sections
+        .iter()
+        .map(|section| section.provider.as_str())
+        .collect();
+    assert_eq!(providers, ["acme"]);
+    assert_eq!(
+        count_rows(&view),
+        ["1 model needs workspace: run `fiber login acme`"]
+    );
+    assert_eq!(view.count, "0 of 2 models");
+    // "Show all" shows the all-left-out provider too.
+    picker.clear_query();
+    picker.toggle_show_all();
+    let view = view_of(&picker);
+    let providers: Vec<&str> = view
+        .sections
+        .iter()
+        .map(|section| section.provider.as_str())
+        .collect();
+    assert_eq!(providers, ["acme", "beta", "zeta"]);
+    assert_eq!(
+        count_rows(&view),
+        [
+            "1 model needs workspace: run `fiber login acme`",
+            "1 model needs workspace: run `fiber login beta`",
+        ]
+    );
+}
+
+#[test]
+fn count_row_headings_stay_in_provider_order() {
+    let picker = open_left_out(
+        vec![
+            entry("a/m1", &[], None, None),
+            entry("c/m1", &[], None, None),
+        ],
+        vec![left_out(
+            "b",
+            "b-ext",
+            "config/b-ext.json",
+            "workspace",
+            true,
+            &[("b1", None), ("b2", None)],
+        )],
+    );
+    let view = view_of(&picker);
+    let providers: Vec<&str> = view
+        .sections
+        .iter()
+        .map(|section| section.provider.as_str())
+        .collect();
+    assert_eq!(providers, ["a", "b", "c"]);
+    assert!(view.sections[0].left_out.is_empty());
+    assert_eq!(
+        view.sections[1]
+            .left_out
+            .iter()
+            .map(|row| row.text.as_str())
+            .collect::<Vec<_>>(),
+        ["2 models need workspace: run `fiber login b`"]
+    );
+    assert!(view.sections[2].left_out.is_empty());
+    assert_eq!(view.count, "2 models");
+}
+
+#[test]
+fn count_rows_are_never_focused_or_chosen() {
+    let mut picker = open_left_out(
+        vec![
+            entry("acme/m1", &[], None, None),
+            entry("acme/m2", &[], None, None),
+        ],
+        vec![left_out(
+            "acme",
+            "acme-ext",
+            "config/acme-ext.json",
+            "workspace",
+            true,
+            &[("m9", None)],
+        )],
+    );
+    // Layout rows: 0 the filter, 1 the buttons, 2 the heading, 3 and 4
+    // the models, 5 the count row.
+    let layout = picker.layout().expect("the picker is open");
+    assert_eq!(
+        layout,
+        vec![
+            RowAt::Filter,
+            RowAt::Buttons,
+            RowAt::Heading("acme".to_owned()),
+            RowAt::Model(0),
+            RowAt::Model(1),
+            RowAt::LeftOut {
+                provider: "acme".to_owned(),
+                setting: "workspace".to_owned(),
+            },
+        ]
+    );
+    // Walking down past the last model clamps instead of stopping on
+    // the count row.
+    picker.move_row(1);
+    picker.move_row(1);
+    picker.move_row(1);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
+    assert_eq!(picker.focus(), Some(super::install::Stop::Model(1)));
+    // The count row carries its layout index, for the frame's scroll
+    // accounting.
+    let view = view_of(&picker);
+    assert_eq!(
+        view.sections[0]
+            .left_out
+            .iter()
+            .map(|row| row.at)
+            .collect::<Vec<_>>(),
+        [5]
+    );
+    // A frame row or click on the count row changes nothing.
+    picker.select_frame_row(5);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
+    assert_eq!(picker.click_cell(5, 0), None);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
+    assert!(picker.choice(false).is_some());
+}
+
+#[test]
+fn left_out_statuses_keep_read_error_loading_and_refresh() {
+    // A read error wins over the group.
+    let mut picker = open_left_out(
+        Vec::new(),
+        vec![left_out(
+            "acme",
+            "acme-ext",
+            "config/acme-ext.json",
+            "workspace",
+            true,
+            &[("m1", None)],
+        )],
+    );
+    picker.store(Err("the lists could not be read".to_owned()));
+    assert_eq!(
+        view_of(&picker).status,
+        ["the lists could not be read".to_owned()]
+    );
+    // A read in flight still reads as loading.
+    let picker = open_left_out(
+        Vec::new(),
+        vec![left_out(
+            "acme",
+            "acme-ext",
+            "config/acme-ext.json",
+            "workspace",
+            true,
+            &[("m1", None)],
+        )],
+    );
+    assert_eq!(
+        view_of(&picker).status,
+        ["Reading the model lists…".to_owned()]
+    );
+    // A running refresh beside listed models reads as refreshing.
+    let mut picker = open_left_out(
+        vec![entry("acme/m1", &[], None, None)],
+        vec![left_out(
+            "zeta",
+            "zeta-ext",
+            "config/zeta-ext.json",
+            "workspace",
+            true,
+            &[("z9", None)],
+        )],
+    );
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    assert_eq!(view_of(&picker).status, ["refreshing…".to_owned()]);
+    // The refresh beside an all-left-out provider still counts it.
+    let view = view_of(&picker);
+    assert_eq!(
+        count_rows(&view),
+        ["1 model needs workspace: run `fiber login zeta`"]
+    );
+}
+
+#[test]
+fn left_out_control_characters_show_as_spaces() {
+    let picker = open_left_out(
+        Vec::new(),
+        vec![left_out(
+            "ac\tme",
+            "acme-ext",
+            "config/acme-ext.json",
+            "work\tspace",
+            false,
+            &[("m1", None)],
+        )],
+    );
+    let view = view_of(&picker);
+    let rows = count_rows(&view);
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].chars().any(|c| c == '\t'), "{}", rows[0]);
+    assert_eq!(
+        rows[0],
+        "1 model needs work space: set it in `config/acme-ext.json`"
+    );
+    // Filtering still reads the original values.
+    assert!(matches_left_out("ac\tme", "m1", None, "acme"));
+    assert!(matches_left_out("ac\tme", "m1", None, "c\tm"));
 }
 
 #[test]
