@@ -6170,7 +6170,35 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
         .recv(&cut_wait)
         .expect("settle_answers reaches its cut flush");
     let flush_at = until + super::CUT_FLUSH;
-    if clock.await_parked(flush_at, Deadline::after(DEADLINE)) {
+    // The cut-flush wait is optional: when the writer flushed before
+    // `wait_cut`, quiesce returns without parking. Race the park against
+    // `done` so the done path finishes at once instead of waiting out the
+    // full park deadline.
+    let drive = Deadline::after(DEADLINE);
+    let mut finished_early = false;
+    let parked = loop {
+        if done.try_recv().is_ok() {
+            finished_early = true;
+            break false;
+        }
+        if clock.parked().contains(&Some(flush_at)) {
+            break true;
+        }
+        if drive.left().is_zero() {
+            if done.try_recv().is_ok() {
+                finished_early = true;
+                break false;
+            }
+            if clock.parked().contains(&Some(flush_at)) {
+                break true;
+            }
+            drive.recv_or_fail(&done, "quiesce returns once the dispatch is answered");
+            finished_early = true;
+            break false;
+        }
+        std::thread::yield_now();
+    };
+    if parked {
         // Parked in the existing cut-flush wait: drive only its two
         // existing bounds, first the grace to `until`, then the flush
         // margin after the fresh re-park. The reader already finished,
@@ -6201,9 +6229,11 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
             Err(miss) => panic!("the grace advance misses the cut-flush park: {miss:?}"),
         }
     }
-    Deadline::after(DEADLINE)
-        .recv(&done)
-        .expect("quiesce returns once the dispatch is answered");
+    if !finished_early {
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("quiesce returns once the dispatch is answered");
+    }
     let session = quiescer.join().expect("the quiesce thread returns");
     let answer = loop {
         let line = recv(&client);
