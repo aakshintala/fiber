@@ -2955,28 +2955,36 @@ their own.
 
 ### Animation
 
-A renderer may declare `animate = { interval_ms }`. While its item is on
-screen and reduced motion is off, the terminal calls it again every interval
-with a `frame` count in its input. It stops when the item scrolls off, its
-view closes, or the extension stops it. Under reduced motion the renderer gets
-`frame = 0` once and is not called again, so every extension animation has a
-still form, as the glimmer does ("The working line"). A hidden animation costs
-nothing.
+A renderer may declare `animate = { interval_ms }`. For conversation items,
+the terminal calls it again when the item's frame advances, with `frame` in
+its input. The terminal uses one timer for all motion. It asks for a timer only
+while an animated item was painted in the previous frame. Intervals below 120
+ms use that floor instead.
+
+The terminal calls an item when at least one of its rows was painted in the
+previous frame. It may make one due call on the frame the item scrolls off.
+After that unpainted frame, it makes no further calls until the item is painted
+again. A swapped view that hides the conversation counts as an unpainted
+frame; the item resumes at its stored frame when the conversation returns.
+
+Frame 0 is the still form. Under reduced motion, the terminal draws frame 0
+once and makes no animation calls. When reduced motion ends, the next paint
+resumes at frame 1. A renderer that returns `animate = false` stays stopped
+until its input changes. A width change redraws a stopped item once at its
+stored frame, then uses the cached lines for that width. A dropped page starts
+again at frame 0. Closed draws such as search and counts do not advance or
+schedule animation. They use stored lines when available; on a miss, they may
+cache frame 0 without changing animation state.
+
+Notices that declare animation draw frame 0 once. They do not animate yet.
 
 An extension's own timers (`host.after`, `host.every`) are for work other than
 drawing. They wake the terminal whether or not anything is on screen, which is
 the extension author's cost to keep down.
 
-An animation ticks on a shared floor: an interval below 120 ms fires at the
-floor instead. Each due tick needs the item painted in the previous frame:
-frame 0 draws the still form, and each due tick advances one frame. An item
-the paint skips holds its frame and asks for no wake. A stopped item
-(`animate = false`) holds until its input changes, a width change keeps the
-frame, and a dropped page restarts at frame 0. Closed draws (search, counts,
-measurement) read the stored frame without advancing or waking. A renderer
-that errors or returns the wrong shape keeps its built-in fallback with no
-further calls until its input changes ("When an extension fails"), and a
-timeout switches the extension off as a still one does.
+A renderer that errors or returns the wrong shape keeps its built-in fallback
+with no further calls until its input changes ("When an extension fails"),
+and a timeout switches the extension off as a still one does.
 
 ### When an extension fails
 

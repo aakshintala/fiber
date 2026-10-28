@@ -144,8 +144,8 @@ impl Rows {
         let renderer = seam.handle.get()?;
         let result = match renderer.animate_interval(&seam.ctx, slot) {
             // An animated slot draws through the animation schedule:
-            // open paint advances, closed draws render at the stored
-            // frame with no write and no mark.
+            // open paint advances; a closed draw caches a miss in the
+            // ordinary entries without changing animation state.
             Some(interval) => seam.cache.lines_animated(
                 seam.page.clone(),
                 slot,

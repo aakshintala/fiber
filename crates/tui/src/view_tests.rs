@@ -2083,6 +2083,20 @@ fn animated_summary() -> (App, std::rc::Rc<crate::ext::tests::AnimatedRenderer>)
     (app, fake)
 }
 
+/// The summary's renderer adds one line on each successive frame.
+fn growing_animated_summary() -> (App, std::rc::Rc<crate::ext::tests::AnimatedRenderer>) {
+    use crate::ext::tests::AnimatedRenderer;
+    let mut app = empty();
+    tool_turn(&mut app);
+    let fake = std::rc::Rc::new(AnimatedRenderer::growing(
+        "group_line",
+        std::time::Duration::from_millis(500),
+        1,
+    ));
+    app.install_renderer(fake.clone());
+    (app, fake)
+}
+
 /// A synthetic instant `millis` after `origin`.
 fn later(origin: std::time::Instant, millis: u64) -> std::time::Instant {
     origin
@@ -2176,6 +2190,32 @@ fn a_partially_painted_item_stays_active_with_dues() {
     assert!(body.contains("anim1-2"), "{body}");
     assert_eq!(fake.frames.borrow().clone(), vec![0, 1]);
     assert_eq!(app.take_wake(), Some(later(t1, 500)));
+}
+
+#[test]
+fn a_changed_frame_line_count_recounts_before_the_corrective_paint() {
+    let (mut app, fake) = growing_animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let wall = 1_000;
+    app.set_now(t0, wall);
+    let before = app.scroll().1;
+    let first = paint_conversation(&app, t0, 40);
+    assert!(text(&first).contains("anim0-0"));
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(app.take_wake(), Some(later(t0, 500)));
+
+    let t1 = later(t0, 500);
+    app.set_now(t1, wall + 500);
+    let second = paint_conversation(&app, t1, 40);
+    assert!(text(&second).contains("anim1-1"));
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]);
+    // The paint changed the page's line count. The immediate correction
+    // is earlier than the next animation due.
+    assert_eq!(app.take_wake(), Some(t1));
+
+    app.set_now(t1, wall + 500);
+    assert_eq!(app.scroll().1, before + 1);
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]);
 }
 
 #[test]

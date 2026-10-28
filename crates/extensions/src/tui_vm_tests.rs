@@ -754,6 +754,17 @@ fn the_frame_reaches_the_render_with_session_and_width() {
 }
 
 #[test]
+fn a_plain_call_accepts_keyed_renderer_results() {
+    let (_, mut vm) = notice("return { lines = { { { text = 'still' } } } }");
+    let lines = call(&mut vm, &json!({})).unwrap();
+    assert_eq!(text(&lines), "still");
+
+    let (_, mut vm) = notice("return { lines = { { { text = 'still' } } }, animate = false }");
+    let lines = call(&mut vm, &json!({})).unwrap();
+    assert_eq!(text(&lines), "still");
+}
+
+#[test]
 fn a_plain_call_sends_no_frame_key() {
     let (_, mut vm) = notice("return { { { text = tostring(input.frame) } } }");
     let lines = call(&mut vm, &json!({})).unwrap();

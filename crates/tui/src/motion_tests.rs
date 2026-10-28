@@ -440,6 +440,14 @@ fn animation_asks_keep_the_earliest() {
 }
 
 #[test]
+fn an_animation_ask_silently_ignores_an_instant_overflow() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let motion = motion(origin);
+    motion.ask_animate(origin, Duration::MAX);
+    assert_eq!(motion.take_wake(), None);
+}
+
+#[test]
 fn an_animation_ask_is_silent_under_reduced_motion() {
     let origin = fakes::clock::FakeClock::new().origin();
     let mut reduced = motion(origin);

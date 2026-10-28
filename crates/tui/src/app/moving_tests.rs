@@ -350,7 +350,7 @@ fn jobs_alone_ask_nothing() {
 }
 
 #[test]
-fn an_animated_notice_asks_its_next_frame() {
+fn an_animated_notice_uses_its_still_form_without_an_animation_wake() {
     use crate::ext::tests::AnimatedRenderer;
     let clock = FakeClock::new();
     let origin = clock.origin();
@@ -361,14 +361,15 @@ fn an_animated_notice_asks_its_next_frame() {
         Duration::from_millis(500),
         1,
     ));
-    app.install_renderer(fake);
+    app.install_renderer(fake.clone());
     app.set_now(origin, WALL);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    // Frame 0 painted and marked: the fold asks its next frame at its
-    // last tick plus its interval.
-    assert_eq!(
+    // The notice uses frame 0, but its animation does not contribute a
+    // wake. Any wake belongs to the notice's existing fade behavior.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_ne!(
         app.take_wake(),
         origin.checked_add(Duration::from_millis(500))
     );

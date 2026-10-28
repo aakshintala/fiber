@@ -827,6 +827,8 @@ pub(crate) struct AnimatedRenderer {
     pub(crate) interval: std::time::Duration,
     /// Lines drawn per frame.
     pub(crate) rows: usize,
+    /// Whether each frame adds one line.
+    grow: bool,
     /// The frames it drew, in order.
     pub(crate) frames: RefCell<Vec<u64>>,
     /// When set, it answers `{ lines, animate = false }`: draws once,
@@ -842,9 +844,17 @@ impl AnimatedRenderer {
             slot: slot.to_owned(),
             interval,
             rows: rows.max(1),
+            grow: false,
             frames: RefCell::new(Vec::new()),
             stop: Cell::new(false),
         }
+    }
+
+    /// A renderer whose frame `n` draws `rows + n` lines.
+    pub(crate) fn growing(slot: &str, interval: std::time::Duration, rows: usize) -> Self {
+        let mut renderer = Self::filling(slot, interval, rows);
+        renderer.grow = true;
+        renderer
     }
 }
 
@@ -887,7 +897,12 @@ impl Renderer for AnimatedRenderer {
         _builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> (Decision, bool) {
         self.frames.borrow_mut().push(frame);
-        let lines = (0..self.rows)
+        let rows = self.rows.saturating_add(if self.grow {
+            usize::try_from(frame).unwrap_or(usize::MAX)
+        } else {
+            0
+        });
+        let lines = (0..rows)
             .map(|row| vec![raw(&format!("anim{frame}-{row}"))])
             .collect();
         (

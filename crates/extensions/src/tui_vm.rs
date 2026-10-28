@@ -356,7 +356,8 @@ impl TuiVm {
         builtin: &dyn Fn(&Value, u16) -> Vec<Vec<Span>>,
     ) -> Result<Vec<Vec<Span>>, Error> {
         self.invoke(slot, session_id, input, width, None, builtin)
-            .and_then(|returned| lines_from(&returned))
+            .and_then(|returned| render_out_from(&returned))
+            .map(|out| out.lines)
     }
 
     /// Calls the renderer of `slot` for `session_id` with `input`, an object,

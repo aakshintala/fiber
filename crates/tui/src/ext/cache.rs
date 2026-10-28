@@ -29,6 +29,7 @@ impl PageKey {
 
 type FailKey = (PageKey, String, u64, String, Option<String>);
 type EntryKey = (FailKey, u16);
+type AnimEntries = HashMap<AnimKey, HashMap<u16, Arc<Vec<FittedLine>>>>;
 
 #[derive(Debug, Default)]
 struct Pending {
@@ -66,7 +67,7 @@ enum AnimKind {
     /// `{ lines, animate = false }` drew: hits stored lines, never
     /// recalls, until the input changes.
     Stopped,
-    /// Reduced motion (or flat) stilled it at frame 0: reactivates at
+    /// Reduced motion stilled it at frame 0: reactivates at
     /// frame 1 when reduced motion turns off.
     Reduced,
 }
@@ -79,6 +80,13 @@ struct AnimData {
     painted_this: HashSet<AnimKey>,
     painted_last: HashSet<AnimKey>,
     states: HashMap<AnimKey, AnimState>,
+    /// Animated entries are grouped by item, so replacing a frame only
+    /// touches that item's width variants.
+    entries: AnimEntries,
+    /// Last rendered-line count per item, for page recounts on change.
+    line_counts: HashMap<AnimKey, usize>,
+    /// Pages whose animated line count changed during paint.
+    changed_pages: HashSet<PageKey>,
 }
 
 impl Default for Cache {
@@ -194,9 +202,10 @@ impl Cache {
     /// active item only with paint in the previous frame and its interval
     /// due; effective reduced motion stores a reduced still at 0, and a
     /// reactivation paints frame 1. A stopped item hits its stored lines.
-    /// A closed draw renders at the stored frame or 0 with no entry
-    /// write and no mark. Failures use the memoized failure path and stop
-    /// the item's animation until its input changes.
+    /// A closed draw hits stored lines or caches a miss in the ordinary
+    /// entries without changing animation state or marking. Failures use
+    /// the memoized failure path and stop the item's animation until its
+    /// input changes.
     #[allow(
         clippy::too_many_arguments,
         reason = "the key, draw flags and callback describe one animated row"
@@ -209,7 +218,7 @@ impl Cache {
         half: Option<String>,
         input: &Input<'_>,
         width: u16,
-        flat: bool,
+        _flat: bool,
         interval: Duration,
         call: impl FnOnce(u64) -> (Decision, bool),
     ) -> Option<Arc<Vec<FittedLine>>> {
@@ -223,7 +232,7 @@ impl Cache {
         let Some((now, frame_reduced)) = frame else {
             return self.closed_draw(&fail_key, &key, extension, input_flat, width, call);
         };
-        let reduced = frame_reduced || flat;
+        let reduced = frame_reduced;
         let (state, painted) = {
             let anim = support::lock(&self.anim);
             (
@@ -253,17 +262,17 @@ impl Cache {
                         kind,
                     },
                 );
-                self.store_frame(&fail_key, &key, width, drawn.0, true)
+                self.store_frame(&key, width, drawn.0, true)
             }
             Some(state) if state.kind == AnimKind::Reduced && reduced => {
-                if let Some(hit) = self.stored_entry(&fail_key, width) {
+                if let Some(hit) = self.stored_entry(&key, width) {
                     return Some(hit);
                 }
                 // On demand only: the still form drew once, and a width
                 // change re-renders it at 0 without advancing.
                 let drawn =
                     self.draw_frame(&fail_key, &key, extension, input_flat, width, 0, call)?;
-                self.store_frame(&fail_key, &key, width, drawn.0, false)
+                self.store_frame(&key, width, drawn.0, false)
             }
             Some(state) if state.kind == AnimKind::Active && reduced => {
                 // Reduced motion stills at frame 0 at the next paint.
@@ -278,7 +287,7 @@ impl Cache {
                         kind: AnimKind::Reduced,
                     },
                 );
-                self.store_frame(&fail_key, &key, width, drawn.0, true)
+                self.store_frame(&key, width, drawn.0, true)
             }
             Some(state) if state.kind == AnimKind::Reduced && !reduced => {
                 // Reactivation paints frame 1: the still form at 0
@@ -298,10 +307,10 @@ impl Cache {
                         },
                     },
                 );
-                self.store_frame(&fail_key, &key, width, drawn.0, true)
+                self.store_frame(&key, width, drawn.0, true)
             }
             Some(state) if state.kind == AnimKind::Stopped => {
-                if let Some(hit) = self.stored_entry(&fail_key, width) {
+                if let Some(hit) = self.stored_entry(&key, width) {
                     return Some(hit);
                 }
                 // On demand only: no recall for a width change alone.
@@ -314,7 +323,7 @@ impl Cache {
                     state.frame,
                     call,
                 )?;
-                self.store_frame(&fail_key, &key, width, drawn.0, false)
+                self.store_frame(&key, width, drawn.0, false)
             }
             Some(state) => {
                 let due = now
@@ -337,8 +346,8 @@ impl Cache {
                             },
                         },
                     );
-                    self.store_frame(&fail_key, &key, width, drawn.0, true)
-                } else if let Some(hit) = self.stored_entry(&fail_key, width) {
+                    self.store_frame(&key, width, drawn.0, true)
+                } else if let Some(hit) = self.stored_entry(&key, width) {
                     Some(hit)
                 } else {
                     // A width change or an early re-render reuses the
@@ -353,14 +362,15 @@ impl Cache {
                         state.frame,
                         call,
                     )?;
-                    self.store_frame(&fail_key, &key, width, drawn.0, false)
+                    self.store_frame(&key, width, drawn.0, false)
                 }
             }
         }
     }
 
-    /// A closed draw: hits stored lines, else calls at the stored frame
-    /// or 0, with no entry write, no state change and no mark.
+    /// A closed draw: hits stored animated lines, else calls at the
+    /// stored frame or 0 and caches the result in the ordinary
+    /// input-and-width entries, with no animation-state write or mark.
     fn closed_draw(
         &self,
         fail_key: &FailKey,
@@ -370,32 +380,31 @@ impl Cache {
         width: u16,
         call: impl FnOnce(u64) -> (Decision, bool),
     ) -> Option<Arc<Vec<FittedLine>>> {
-        if let Some(hit) = self.stored_entry(fail_key, width) {
+        if let Some(hit) = self.stored_entry(key, width) {
             return Some(hit);
         }
         let frame = support::lock(&self.anim)
             .states
             .get(key)
-            .map(|state| state.frame)
-            .unwrap_or(0);
-        let (lines, _) = self.draw_frame(fail_key, key, extension, flat, width, frame, call)?;
-        Some(Arc::new(lines))
-    }
-
-    /// The animated item's stored lines at `width`, without invoking: a
-    /// miss reads as none. Never writes and never marks.
-    pub(crate) fn animated_lines(
-        &self,
-        page: PageKey,
-        slot: &str,
-        extension: &str,
-        half: Option<String>,
-        input: &Input<'_>,
-        width: u16,
-    ) -> Option<Arc<Vec<FittedLine>>> {
-        let (input_key, _) = key_of(input, slot);
-        let key = (page, slot.to_owned(), input_key, extension.to_owned(), half);
-        support::lock(&self.entries).get(&(key, width)).cloned()
+            .map(|state| state.frame);
+        let entry = (fail_key.clone(), width);
+        if frame.is_none()
+            && let Some(hit) = support::lock(&self.entries).get(&entry).cloned()
+        {
+            return Some(hit);
+        }
+        let (lines, _) = self.draw_frame(
+            fail_key,
+            key,
+            extension,
+            flat,
+            width,
+            frame.unwrap_or(0),
+            call,
+        )?;
+        let lines = Arc::new(lines);
+        support::lock(&self.entries).insert(entry, Arc::clone(&lines));
+        Some(lines)
     }
 
     /// The animation dues of items painted this frame: each active one's
@@ -418,11 +427,41 @@ impl Cache {
             .collect()
     }
 
-    /// The fitted lines stored for `fail_key` at `width`, if any.
-    fn stored_entry(&self, fail_key: &FailKey, width: u16) -> Option<Arc<Vec<FittedLine>>> {
-        support::lock(&self.entries)
-            .get(&(fail_key.clone(), width))
+    /// Whether a painted animation changed a resident page's rendered
+    /// line count since its last recount.
+    pub(crate) fn has_changed_pages(&self) -> bool {
+        !support::lock(&self.anim).changed_pages.is_empty()
+    }
+
+    /// Takes pages whose animated line count changed during paint.
+    pub(crate) fn take_changed_pages(&self) -> Vec<PageKey> {
+        support::lock(&self.anim).changed_pages.drain().collect()
+    }
+
+    /// The fitted lines stored for `key` at `width`, if any.
+    fn stored_entry(&self, key: &AnimKey, width: u16) -> Option<Arc<Vec<FittedLine>>> {
+        support::lock(&self.anim)
+            .entries
+            .get(key)?
+            .get(&width)
             .cloned()
+    }
+
+    /// The stored animated lines for cache assertions. A miss reads as
+    /// none; this test-only view never invokes or writes.
+    #[cfg(test)]
+    pub(crate) fn animated_lines(
+        &self,
+        page: PageKey,
+        slot: &str,
+        extension: &str,
+        half: Option<String>,
+        input: &Input<'_>,
+        width: u16,
+    ) -> Option<Arc<Vec<FittedLine>>> {
+        let (input_key, _) = key_of(input, slot);
+        let key = AnimKey::new(page, slot, input_key, extension, half);
+        self.stored_entry(&key, width)
     }
 
     /// Calls the renderer at `frame` and fits its lines: the drawn lines
@@ -487,7 +526,6 @@ impl Cache {
     /// latest frame is kept. Returns the stored lines.
     fn store_frame(
         &self,
-        fail_key: &FailKey,
         key: &AnimKey,
         width: u16,
         lines: Vec<FittedLine>,
@@ -501,11 +539,22 @@ impl Cache {
             })
             .collect::<Vec<_>>();
         let stored = Arc::new(tagged);
-        let mut entries = support::lock(&self.entries);
+        let mut anim = support::lock(&self.anim);
         if new_frame {
-            entries.retain(|(past, _), _| past != fail_key);
+            let count = stored.len();
+            let changed = anim
+                .line_counts
+                .insert(key.clone(), count)
+                .is_some_and(|previous| previous != count);
+            if changed && key.page().index != usize::MAX {
+                anim.changed_pages.insert(key.page().clone());
+            }
+            anim.entries.remove(key);
         }
-        entries.insert((fail_key.clone(), width), Arc::clone(&stored));
+        anim.entries
+            .entry(key.clone())
+            .or_default()
+            .insert(width, Arc::clone(&stored));
         Some(stored)
     }
 
@@ -536,11 +585,15 @@ impl Cache {
     /// Only displayed owners may prune shared failures for this exact page.
     pub(crate) fn drop_page(&self, page: PageKey) {
         support::lock(&self.entries).retain(|key, _| key.0.0 != page);
-        // Animation counters drop with their page: a returning item
-        // restarts at frame 0.
-        support::lock(&self.anim)
-            .states
-            .retain(|key, _| key.page() != &page);
+        // Animation counters, entries and pending recounts drop with the
+        // page: a returning item restarts at frame 0.
+        let mut anim = support::lock(&self.anim);
+        anim.entries.retain(|key, _| key.page() != &page);
+        anim.states.retain(|key, _| key.page() != &page);
+        anim.line_counts.retain(|key, _| key.page() != &page);
+        anim.painted_this.retain(|key| key.page() != &page);
+        anim.painted_last.retain(|key| key.page() != &page);
+        anim.changed_pages.remove(&page);
         if self.owner.load(Ordering::Relaxed) {
             support::lock(&self.failed).retain(|key| key.0 != page);
             support::lock(&self.pending)
@@ -550,14 +603,21 @@ impl Cache {
     }
 
     pub(crate) fn drop_entries(&self) {
-        // A width change keeps the frame counter, the last time and every
-        // still and stopped marker: only the rendered entries go.
+        // A width change keeps the frame counter, the last time, the line
+        // count and every still and stopped marker: only rendered entries go.
         support::lock(&self.entries).clear();
+        support::lock(&self.anim).entries.clear();
     }
 
     pub(crate) fn clear(&self) {
         self.drop_entries();
-        support::lock(&self.anim).states.clear();
+        let mut anim = support::lock(&self.anim);
+        anim.at = None;
+        anim.painted_this.clear();
+        anim.painted_last.clear();
+        anim.states.clear();
+        anim.line_counts.clear();
+        anim.changed_pages.clear();
         if self.owner.load(Ordering::Relaxed) {
             support::lock(&self.failed).clear();
             *support::lock(&self.pending) = Pending::default();

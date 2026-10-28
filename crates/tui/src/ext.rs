@@ -279,19 +279,6 @@ impl Bound {
             text,
             flat: self.flat,
         });
-        if renderer.animate_interval(&self.ctx, "notice").is_some() {
-            // An animated notice reads only stored lines here: closed
-            // draws never invoke, advance, write, schedule or mark, even
-            // while the frame is open. Only the paint path may call.
-            return self.cache.animated_lines(
-                self.page.clone(),
-                "notice",
-                &extension,
-                renderer.half(&self.ctx, &extension),
-                &input,
-                width,
-            );
-        }
         let fitted = self.cache.lines(
             self.page.clone(),
             "notice",
@@ -300,63 +287,19 @@ impl Bound {
             &input,
             width,
             || {
-                renderer.render(&self.ctx, "notice", &input, width, &|input, at| {
+                let builtin = |input: &Input<'_>, at| {
                     let Input::Notice(notice) = input else {
                         return Vec::new();
                     };
                     crate::view::notice_rows::builtin_spans(notice.code, notice.text, at as usize)
-                })
-            },
-        );
-        for queued in renderer.take_pending() {
-            self.cache.queue_notice(queued);
-        }
-        fitted
-    }
-
-    /// The bound renderer's animated `notice` lines for one paint: the
-    /// one animated path that may invoke, advance, store and schedule.
-    /// Static slots keep `notice_lines`. An empty result paints zero rows,
-    /// so the notice hides instead of falling back.
-    pub(crate) fn paint_notice_lines(
-        &self,
-        code: &str,
-        text: &str,
-        width: u16,
-    ) -> Option<Arc<Vec<spans::FittedLine>>> {
-        if code == "extension_failed" {
-            return None;
-        }
-        let renderer = self.handle.get()?;
-        let selected = renderer.fills_for(&self.ctx, "notice");
-        for queued in renderer.take_pending() {
-            self.cache.queue_notice(queued);
-        }
-        let SlotSelection::Draw { extension } = selected else {
-            return None;
-        };
-        let input = Input::Notice(Notice {
-            code,
-            text,
-            flat: self.flat,
-        });
-        let interval = renderer.animate_interval(&self.ctx, "notice")?;
-        let fitted = self.cache.lines_animated(
-            self.page.clone(),
-            "notice",
-            &extension,
-            renderer.half(&self.ctx, &extension),
-            &input,
-            width,
-            self.flat,
-            interval,
-            |frame| {
-                renderer.render_animated(&self.ctx, "notice", &input, width, frame, &|input, at| {
-                    let Input::Notice(notice) = input else {
-                        return Vec::new();
-                    };
-                    crate::view::notice_rows::builtin_spans(notice.code, notice.text, at as usize)
-                })
+                };
+                if renderer.animate_interval(&self.ctx, "notice").is_some() {
+                    renderer
+                        .render_animated(&self.ctx, "notice", &input, width, 0, &builtin)
+                        .0
+                } else {
+                    renderer.render(&self.ctx, "notice", &input, width, &builtin)
+                }
             },
         );
         for queued in renderer.take_pending() {

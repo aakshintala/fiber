@@ -1322,6 +1322,62 @@ fn a_new_frame_evicts_older_entries_at_every_width() {
 }
 
 #[test]
+fn a_changed_animated_line_count_queues_its_page_once() {
+    crate::work::take();
+    let cache = Cache::default();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    let draw = |now, want| {
+        cache.begin_anim_frame(Some(now), false);
+        let lines = cache
+            .lines_animated(
+                page(0),
+                "ledger_row",
+                "test",
+                None,
+                &row,
+                20,
+                false,
+                ANIM_INTERVAL,
+                |frame| {
+                    let count = if frame == 0 { 1 } else { want };
+                    (
+                        Decision::Draw {
+                            extension: "test".into(),
+                            lines: (0..count).map(|_| vec![raw("line")]).collect(),
+                        },
+                        true,
+                    )
+                },
+            )
+            .expect("the frame draws");
+        cache.mark_painted(&[tag_of(&lines)]);
+        lines
+    };
+
+    draw(t0, 1);
+    cache.anim_dues();
+    assert!(
+        !cache.has_changed_pages(),
+        "frame 0 is the counted baseline"
+    );
+
+    draw(at(t0, 500), 2);
+    cache.anim_dues();
+    assert!(cache.has_changed_pages());
+    assert_eq!(cache.take_changed_pages(), vec![page(0)]);
+    assert!(!cache.has_changed_pages(), "draining clears the queue");
+
+    draw(at(t0, 1000), 2);
+    cache.anim_dues();
+    assert!(
+        !cache.has_changed_pages(),
+        "an unchanged count needs no recount"
+    );
+}
+
+#[test]
 fn drop_entries_preserves_markers() {
     crate::work::take();
     let cache = Cache::default();
@@ -1364,6 +1420,12 @@ fn clear_drops_animation_state() {
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     paint(&cache, &row, 20, false, &answers).expect("frame 1");
     cache.clear();
+    {
+        let anim = support::lock(&cache.anim);
+        assert!(anim.at.is_none(), "clear closes the frame");
+        assert!(anim.painted_this.is_empty());
+        assert!(anim.painted_last.is_empty());
+    }
     // Cleared state restarts at frame 0.
     cache.begin_anim_frame(Some(at(t0, 1000)), false);
     let fresh = paint(&cache, &row, 20, false, &answers).expect("a fresh frame 0");
@@ -1386,6 +1448,11 @@ fn a_dropped_page_restarts_its_counter_at_zero() {
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     paint(&cache, &row, 20, false, &answers).expect("frame 1");
     cache.drop_page(page(0));
+    {
+        let anim = support::lock(&cache.anim);
+        assert!(anim.painted_this.is_empty());
+        assert!(anim.painted_last.is_empty());
+    }
     // The returning item restarts at frame 0: no state survives its
     // page.
     cache.begin_anim_frame(Some(at(t0, 1000)), false);
@@ -1437,25 +1504,24 @@ fn reduced_motion_stills_at_zero_and_reactivates_at_one() {
 }
 
 #[test]
-fn flat_stills_like_reduced_motion() {
+fn flat_does_not_still_or_restart_animation() {
     crate::work::take();
     let cache = Cache::default();
     let answers = AnimAnswers::new();
     let arguments = serde_json::json!({"command": "ls"});
     let row = input("shell", "first", &arguments);
     let t0 = origin();
-    // The bound is flat while the frame is not reduced: the seam
-    // stills all the same, and asks for no wake.
+    // Flat affects row fitting, not the single reduced-motion source.
     cache.begin_anim_frame(Some(t0), false);
-    let still = paint(&cache, &row, 20, true, &answers).expect("the still form");
+    let first = paint(&cache, &row, 20, true, &answers).expect("frame 0");
     assert_eq!(answers.frames.borrow().clone(), vec![0]);
-    assert!(text_of(&still).starts_with("f0"), "{still:?}");
-    cache.mark_painted(&[tag_of(&still)]);
-    assert!(cache.anim_dues().is_empty());
+    cache.mark_painted(&[tag_of(&first)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+
     cache.begin_anim_frame(Some(at(t0, 500)), false);
-    let again = paint(&cache, &row, 20, true, &answers).expect("stored still");
-    assert_eq!(answers.frames.borrow().clone(), vec![0]);
-    assert_eq!(text_of(&again), text_of(&still));
+    let second = paint(&cache, &row, 20, false, &answers).expect("frame 1 after flat");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]);
+    assert!(text_of(&second).starts_with("f1"), "{second:?}");
 }
 
 #[test]
@@ -1626,21 +1692,24 @@ fn empty_lines_paint_zero_rows_and_ask_nothing() {
 }
 
 #[test]
-fn closed_draws_render_at_the_stored_frame_or_zero() {
+fn closed_draws_cache_the_still_or_stored_frame_without_animation_state() {
     crate::work::take();
     let cache = Cache::default();
     let answers = AnimAnswers::new();
     let arguments = serde_json::json!({"command": "ls"});
     let row = input("shell", "first", &arguments);
-    // No open frame: a closed draw calls at frame 0, and writes
-    // nothing: the next closed draw calls again.
+    // No open frame: closed draws cache frame 0 in ordinary entries for
+    // each width, without creating animation state.
     let closed = || paint(&cache, &row, 20, false, &answers);
     let first = closed().expect("frame 0");
-    let second = closed().expect("frame 0 again");
+    let second = closed().expect("cached frame 0");
+    let old_width = paint(&cache, &row, 24, false, &answers).expect("frame 0 at new width");
     assert_eq!(answers.frames.borrow().clone(), vec![0, 0]);
     assert_eq!(text_of(&first), text_of(&second));
-    // A closed draw creates no animation state: the next open paint
-    // starts fresh at frame 0.
+    assert!(text_of(&old_width).starts_with("f0"), "{old_width:?}");
+    assert!(cache.anim_dues().is_empty());
+
+    // The next open paint still starts animation at frame 0.
     let t0 = origin();
     cache.begin_anim_frame(Some(t0), false);
     let fresh = paint(&cache, &row, 20, false, &answers).expect("a fresh frame 0");
@@ -1652,54 +1721,18 @@ fn closed_draws_render_at_the_stored_frame_or_zero() {
     assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1]);
     cache.mark_painted(&[tag_of(&advanced)]);
     cache.anim_dues();
-    // With the frame closed the draw hits the stored frame 1.
+
+    // Stored animation entries beat old ordinary entries, including at a
+    // width that was cached before the item began animating.
     let stored = closed().expect("stored frame 1");
     assert!(text_of(&stored).starts_with("f1"), "{stored:?}");
     assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1]);
-    // At a new width the closed draw calls at the stored frame.
-    let other = paint(&cache, &row, 24, false, &answers).expect("stored frame 1");
+    let other = paint(&cache, &row, 24, false, &answers).expect("stored frame 1 at new width");
     assert!(text_of(&other).starts_with("f1"), "{other:?}");
     assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1, 1]);
 }
 
-#[test]
-fn animated_measure_reads_stored_lines_or_none_without_calling() {
-    crate::work::take();
-    let cache = Cache::default();
-    let answers = AnimAnswers::new();
-    let arguments = serde_json::json!({"command": "ls"});
-    let row = input("shell", "first", &arguments);
-    let measured = || cache.animated_lines(page(0), "ledger_row", "test", None, &row, 20);
-    // A miss reads as none without invoking.
-    assert!(measured().is_none());
-    assert!(answers.frames.borrow().is_empty());
-    // After a paint the measure hits the stored lines.
-    let t0 = origin();
-    cache.begin_anim_frame(Some(t0), false);
-    let fitted = paint(&cache, &row, 20, false, &answers).expect("frame 0");
-    // During the open frame the measure leaves the counter and the
-    // painted set unchanged, and asks for no wake.
-    let hit = measured().expect("stored lines");
-    assert_eq!(text_of(&hit), text_of(&fitted));
-    assert_eq!(answers.frames.borrow().clone(), vec![0]);
-    assert!(cache.anim_dues().is_empty());
-    // Another width and another input still miss without invoking.
-    assert!(
-        cache
-            .animated_lines(page(0), "ledger_row", "test", None, &row, 24)
-            .is_none()
-    );
-    let other = input("shell", "second", &arguments);
-    assert!(
-        cache
-            .animated_lines(page(0), "ledger_row", "test", None, &other, 20)
-            .is_none()
-    );
-    assert_eq!(answers.frames.borrow().clone(), vec![0]);
-}
-
-/// A notice seam holding `fake` on page 0: closed draws read stored
-/// lines, and only the paint path may call.
+/// A notice seam holding `fake` on page 0.
 fn notice_bound(fake: std::rc::Rc<dyn crate::ext::Renderer>) -> crate::ext::Bound {
     let handle = crate::ext::Handle::create();
     handle.set(fake);
@@ -1733,7 +1766,6 @@ fn a_static_notice_draw_caches_its_invocation() {
         .expect("a cached line");
     assert_eq!(fake.calls.borrow().len(), 1);
     assert_eq!(text_of(&first), text_of(&second));
-    assert!(bound.paint_notice_lines("io_failed", "x", 20).is_none());
     assert_eq!(fake.calls.borrow().len(), 1);
 }
 
@@ -1745,60 +1777,31 @@ fn an_extension_failed_notice_draws_nothing() {
     // `extension_failed` short-circuits before any lookup: no stored
     // lines, no call, on either path.
     assert!(bound.notice_lines("extension_failed", "x", 20).is_none());
-    assert!(
-        bound
-            .paint_notice_lines("extension_failed", "x", 20)
-            .is_none()
-    );
     assert!(fake.frames.borrow().is_empty());
 }
 
 #[test]
-fn an_animated_notice_paint_advances_through_the_schedule() {
+fn an_animated_notice_draws_its_cached_frame_zero_still() {
     use crate::ext::tests::AnimatedRenderer;
     let fake = std::rc::Rc::new(AnimatedRenderer::filling("notice", ANIM_INTERVAL, 1));
     let bound = notice_bound(fake.clone());
-    let t0 = origin();
-    // The closed lookup misses without invoking; only the paint path
-    // may call.
-    assert!(bound.notice_lines("io_failed", "x", 20).is_none());
-    assert!(fake.frames.borrow().is_empty());
-    cache_begin(&bound, t0, false);
     let first = bound
-        .paint_notice_lines("io_failed", "x", 20)
-        .expect("frame 0");
+        .notice_lines("io_failed", "x", 20)
+        .expect("frame-0 still");
     assert_eq!(fake.frames.borrow().clone(), vec![0]);
     assert_eq!(first.len(), 1);
-    cache_mark(&bound, &first);
-    assert_eq!(bound.cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
-    // Before the interval the paint hits its stored lines.
-    cache_begin(&bound, at(t0, 100), false);
-    let early = bound
-        .paint_notice_lines("io_failed", "x", 20)
-        .expect("stored frame 0");
-    assert_eq!(fake.frames.borrow().clone(), vec![0]);
-    cache_mark(&bound, &early);
-    assert_eq!(bound.cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
-    // At the interval the paint advances.
-    cache_begin(&bound, at(t0, 500), false);
+    // A later paint uses the same ordinary input-and-width cache entry;
+    // the notice does not create schedule state or request a timer.
+    cache_begin(&bound, origin(), false);
     let second = bound
-        .paint_notice_lines("io_failed", "x", 20)
-        .expect("frame 1");
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]);
-    assert_eq!(second.len(), 1);
+        .notice_lines("io_failed", "x", 20)
+        .expect("cached still");
+    assert_eq!(text_of(&first), text_of(&second));
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert!(bound.cache.anim_dues().is_empty());
 }
 
 /// Opens the animation frame on `bound`'s cache.
 fn cache_begin(bound: &crate::ext::Bound, at: std::time::Instant, reduced: bool) {
     bound.cache.begin_anim_frame(Some(at), reduced);
-}
-
-/// Marks every tagged line of `fitted` painted on `bound`'s cache.
-fn cache_mark(bound: &crate::ext::Bound, fitted: &Arc<Vec<super::super::spans::FittedLine>>) {
-    bound.cache.mark_painted(
-        &fitted
-            .iter()
-            .filter_map(|line| line.anim.clone())
-            .collect::<Vec<_>>(),
-    );
 }

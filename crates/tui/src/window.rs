@@ -1916,6 +1916,23 @@ impl Pages {
         ((rows, texts, focus, turns), sources)
     }
 
+    /// Recounts resident pages whose animated renderer changed its line
+    /// count during the last paint. Closed draws hit the stored frame and
+    /// never invoke or advance it.
+    pub(crate) fn recount_animated(&mut self) {
+        for page in self.ext.cache.take_changed_pages() {
+            let at = page.index;
+            let belongs = self
+                .index
+                .pages()
+                .get(at)
+                .is_some_and(|current| current.session == page.session);
+            if belongs && self.part(at).is_some() {
+                self.count(at);
+            }
+        }
+    }
+
     /// Counts page `at`'s rows and focus stops from its cards, while it holds them.
     fn count(&mut self, at: usize) {
         crate::work::add(|work| work.page_counts += 1);
