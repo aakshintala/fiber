@@ -44,6 +44,7 @@ mod read_only;
 mod classify;
 mod cwd;
 mod entry;
+mod gh_owner;
 mod git;
 mod matches;
 mod syntax;
@@ -292,7 +293,7 @@ impl Tool for Shell {
         let mut effects = match parse(arguments, &self.workspace, self.max_timeout_ms) {
             Ok(parsed) => {
                 let entries = support::lock(&self.read_only);
-                classify(&parsed.command, &parsed.workdir, &entries)
+                classify(&parsed.command, &self.workspace, &parsed.workdir, &entries)
             }
             Err(_) => classify::executes(None, None),
         };
@@ -381,7 +382,7 @@ impl Tool for Shell {
     fn review_note(&self, arguments: &Map<String, Value>) -> Option<String> {
         let parsed = parse(arguments, &self.workspace, self.max_timeout_ms).ok()?;
         let entries = support::lock(&self.read_only).clone();
-        classify::not_shown_read_only(&parsed.command, &parsed.workdir, &entries)
+        classify::not_shown_read_only(&parsed.command, &self.workspace, &parsed.workdir, &entries)
     }
 }
 

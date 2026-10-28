@@ -475,6 +475,7 @@ sent the latest.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `name` | string | yes | the session's name, or its first prompt when it has none |
+| `named` | boolean | no | true when `name` came from `session_named`; absent means false |
 | `workspace` | string | yes | the workspace path |
 | `project` | string | yes | the project's key (`docs/state.md`, "Projects") |
 | `parent` | string | no | on a delegate, the parent's `session_id` |

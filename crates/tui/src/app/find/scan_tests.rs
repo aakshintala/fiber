@@ -271,3 +271,51 @@ fn a_match_at_a_page_edge_has_no_neighbour_across_it() {
     assert_eq!(flat[0].snippet.before, "needle three");
     assert_eq!(flat[0].snippet.after, "");
 }
+
+#[test]
+fn a_scratch_refold_draws_the_current_sender_name() {
+    use super::super::tests::numbered;
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0;
+    app.on_line(crate::app::testkit::sender_status("worker", true));
+    let first = numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        serde_json::json!({"input": [
+            {"type": "message", "source": "driver",
+             "content": [{"type": "text", "text": "go"}]},
+            {"type": "message", "source": "session",
+             "from_session_id": crate::app::testkit::SENDER,
+             "content": [{"type": "text", "text": "please check"}]},
+        ]}),
+        None,
+    );
+    app.on_line(first);
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        serde_json::json!({"outcome": "completed"}),
+        None,
+    ));
+    for turn in 0..16 {
+        let filler: Vec<String> = (0..4).map(|line| format!("filler {turn} {line}")).collect();
+        let refs: Vec<&str> = filler.iter().map(String::as_str).collect();
+        text_turn(&mut log, &mut seq, &mut app, &refs);
+    }
+    assert!(app.pages().part(0).is_none(), "page 0 is dropped");
+    // A rename while the page is dropped reaches its next refold.
+    app.on_line(crate::app::testkit::sender_status("renamed", true));
+    let (rows, _, _, _) = app.pages().fold_text_turns(0, &log).unwrap();
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.contains("renamed · 00:00")),
+        "the refold uses the current name: {shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|row| row.contains("worker · 00:00")),
+        "{shown:?}"
+    );
+}
