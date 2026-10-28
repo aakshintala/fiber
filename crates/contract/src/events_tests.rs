@@ -1020,6 +1020,11 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "command_rejected",
+            json!({"command_id": "c", "code": "session_held", "message": "m",
+                "held": ["s_aaaaaaaaaaaaaaaa"]}),
+        ),
+        (
+            "command_rejected",
             json!({"code": "malformed", "message": "m"}),
         ),
         (
@@ -1072,8 +1077,14 @@ fn every_sample_reads_as_its_kind_and_writes_back_unchanged() {
         assert_eq!(event.kind(), kind);
         let written = Value::Object(event.payload().unwrap());
         // `null` details read as absent, which is the one lossy key here.
+        // `held` rides the raw `command_rejected` map for the TUI; the typed
+        // `CommandRejected` leaves it off on write, so expect that loss here.
         let expected = if kind == "job_delta" {
             json!({"job_id": "j", "text": "t"})
+        } else if kind == "command_rejected" && payload.get("held").is_some() {
+            let mut without_held = payload.clone();
+            without_held.as_object_mut().unwrap().remove("held");
+            without_held
         } else {
             payload
         };

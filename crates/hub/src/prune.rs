@@ -48,8 +48,8 @@ pub(crate) fn prune(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Value
             match crate::delete::delete(hub, &delete_args) {
                 Ok(_) => Ok(()),
                 Err(refused) => Err(Failure {
-                    code: refused.code,
-                    message: refused.message,
+                    code: refused.code(),
+                    message: refused.message().to_owned(),
                     provider: None,
                     retry_after_ms: None,
                 }),
