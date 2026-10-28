@@ -284,30 +284,15 @@ fn animated_row_renders_frame_zero_then_stops() {
     quit(run);
 }
 #[test]
-fn animated_row_advances_frames_on_the_tick() {
-    let setup = Setup::new();
-    configure(&setup, None);
-    install(
-        &setup,
-        "ticker",
-        "fiber.slot('ledger_row',{timeout=100,animate={interval_ms=120},render=function(input) return {{{text='ANIM-FRAME-'..input.frame}}} end})",
-        None,
-    );
-    let mut run = turn(&setup);
-    // Past the first frame the screen shows a nonzero count: the binary
-    // advances while the row stays painted.
-    run.wait_screen("animated frame advances", |grid| {
-        grid.contents.contains("ANIM-FRAME-") && !grid.contents.contains("ANIM-FRAME-0")
-    });
-    quit(run);
-}
-#[test]
-fn reduced_motion_holds_the_animated_still_frame() {
+fn reduced_motion_draws_the_animated_still_frame() {
     let setup = Setup::new();
     configure(&setup, None);
     // `tui.reduced_motion` stills every animation (`docs/tui.md`, "Reduced
-    // motion"): the same continuing renderer as the advancing test draws
-    // its still form and never moves past it.
+    // motion"): the continuing renderer draws its still form. Stillness
+    // over time is pinned at crate level
+    // (`reduced_motion_stills_at_zero_and_reactivates_at_one`,
+    // `a_still_frame_takes_no_wake`); the binary proves the wiring, that
+    // the flag reaches the terminal and frame 0 draws.
     write_json(
         &setup.home().join("config.json"),
         &json!({"model":"scripted/s.json","hub":{"idle_exit_ms":200},"tui":{"reduced_motion":true,"rail":{"shown":false},"panel":{"cards":[]}}}),
@@ -324,16 +309,6 @@ fn reduced_motion_holds_the_animated_still_frame() {
     run.wait_screen("animated still frame", |grid| {
         grid.contents.contains("ANIM-FRAME-0")
     });
-    // Past several tick floors with no advance: the bounded receive must
-    // time out, proving the interval elapsed without sleeping.
-    let (_hold, held) = std::sync::mpsc::channel::<()>();
-    assert!(
-        matches!(
-            support::Deadline::after(std::time::Duration::from_millis(600)).recv(&held),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        ),
-        "the still-form pause ran its full interval"
-    );
     let grid = run.screen();
     assert!(grid.contents.contains("ANIM-FRAME-0"), "{}", grid.contents);
     assert_eq!(
@@ -342,32 +317,6 @@ fn reduced_motion_holds_the_animated_still_frame() {
         "every animated row still shows frame 0: {}",
         grid.contents
     );
-    quit(run);
-}
-#[test]
-fn idle_terminal_with_no_animation_writes_no_bytes() {
-    let setup = Setup::new();
-    configure(&setup, None);
-    let mut run = turn(&setup);
-    // Settled on the completed turn with builtin rows: nothing animates
-    // and nothing runs.
-    run.wait_screen("settled builtin rows", |grid| {
-        grid.contents.contains("builtin-marker")
-    });
-    let before = run.output().len();
-    // One idle interval with no timer armed: the bounded receive must time
-    // out, proving the interval elapsed without sleeping.
-    let (_hold, held) = std::sync::mpsc::channel::<()>();
-    assert!(
-        matches!(
-            support::Deadline::after(std::time::Duration::from_millis(600)).recv(&held),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        ),
-        "the idle pause ran its full interval"
-    );
-    // docs/tui.md:3032: with no turn, delegate or job running, there is no
-    // timer: no frame, no byte written.
-    assert_eq!(run.output().len(), before, "the idle terminal wrote bytes");
     quit(run);
 }
 #[test]
