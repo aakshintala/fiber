@@ -519,18 +519,16 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   prompt.
 - Arguments: `command` (required); `workdir` (optional; defaults to the
   workspace; a relative path is resolved against the workspace);
-  `timeout_ms` (optional); `run_in_background` (optional); `tty`
-  (optional); `monitor` (optional; starts a monitor, "Background jobs");
-  `deadline_ms` (optional; a monitor's deadline). Fiber never reruns a
-  failed confined call outside its sandbox. Each call starts fresh: a `cd`
-  does not carry over to the next call.
+  `timeout_ms` (optional; for a monitor, its deadline);
+  `run_in_background` (optional); `tty` (optional); `monitor` (optional;
+  starts a monitor, "Background jobs"). Fiber never reruns a failed
+  confined call outside its sandbox. Each call starts fresh: a `cd` does
+  not carry over to the next call.
 - Its optional arguments are typed nullable and listed in `required`. The
   `minimum` limits put its schema outside the strict subset, so it is sent
   with `strict: false`.
-- A monitor takes neither `tty` nor `run_in_background`, and its only limit
-  is `deadline_ms`, so it takes no `timeout_ms`. `deadline_ms` without
-  `monitor` is refused too. Each of these fails with `invalid_arguments`,
-  the message naming the argument.
+- A monitor takes neither `tty` nor `run_in_background`. Each of these
+  fails with `invalid_arguments`, the message naming the argument.
 - A bare wait is rejected. When the call is not `run_in_background` and
   the first part of the command is `sleep N` with N of 25 seconds or more,
   alone or followed by other commands, the call completes as `failed` with
@@ -544,9 +542,9 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - `timeout_ms` is the one thing that kills a command for running long.
   When the model gives none it is 600,000 (10 minutes). There is no
   maximum. It counts from when the command started.
-- It applies to every command except a monitor, run in the foreground or as
-  a job, and it stays with a command after the command moves to the
-  background. A monitor's deadline does the same for it. This is
+- It applies to every command, run in the foreground or as a job, and
+  stays with a command after the command moves to the background. For a
+  monitor it is the deadline under "Background jobs". This is
   where a hang is bounded: "Background jobs" has no cap on waiting.
 - A command that times out ends `failed` with code `timeout` and
   `process.timed_out` true.
@@ -877,7 +875,7 @@ The kinds are `docs/events.md`.
   - Deadline: every monitor has a deadline, 5 minutes by default, at most
     30 minutes, and at most 10 minutes in a non-interactive run. The model
     may set a shorter or longer one within those limits with the call's
-    `deadline_ms`. At the deadline the monitor ends as `failed` with code
+    `timeout_ms`. At the deadline the monitor ends as `failed` with code
     `timeout`, as a timed-out shell call does (`process.timed_out`). The
     model is told the monitor expired and can start it again. The deadline
     is what stops a forgotten monitor from holding a non-interactive run
