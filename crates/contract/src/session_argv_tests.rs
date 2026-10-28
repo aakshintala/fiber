@@ -91,6 +91,42 @@ fn full_value_lists_every_field_in_order_with_login_shell_last() {
 }
 
 #[test]
+fn added_roots_travel_in_fold_order_after_depth() {
+    let args = SessionArgv {
+        id: SessionId("s_0123456789abcdef".to_owned()),
+        workspace: PathBuf::from("/w"),
+        parent: Some(SessionId("s_bbbbbbbbbbbbbbbb".to_owned())),
+        delegate_id: Some(JobId("j_cccccccccccccccc".to_owned())),
+        depth: Some(1),
+        added: vec![
+            PathBuf::from("/shared"),
+            PathBuf::from("/with space/second"),
+            PathBuf::from("/-leading-dash"),
+        ],
+        login_shell: true,
+        ..SessionArgv::default()
+    };
+    // One `--added=<path>` per root, after `--depth` and before
+    // `--login-shell`: a value starting with `-` still travels as one
+    // argument, so no root reads as a flag.
+    assert_eq!(
+        rendered(&args.to_argv()),
+        [
+            "session",
+            "--id=s_0123456789abcdef",
+            "--workspace=/w",
+            "--parent=s_bbbbbbbbbbbbbbbb",
+            "--delegate-id=j_cccccccccccccccc",
+            "--depth=1",
+            "--added=/shared",
+            "--added=/with space/second",
+            "--added=/-leading-dash",
+            "--login-shell",
+        ]
+    );
+}
+
+#[test]
 fn below_and_above_the_dash_c_edge_attach_or_split() {
     let attached = SessionArgv {
         id: SessionId(String::new()),

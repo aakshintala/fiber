@@ -1153,3 +1153,72 @@ fn kind_table() -> std::collections::BTreeMap<&'static str, &'static str> {
 fn the_docs_class_every_notice_code_as_the_code_table_does() {
     assert_eq!(doc_classes(), kind_table());
 }
+
+/// A seam whose renderer hides every notice it sees.
+fn hiding() -> (
+    std::rc::Rc<crate::ext::tests::SlotRenderer>,
+    crate::ext::Bound,
+) {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["notice"],
+        SlotScript::Replace(Vec::new()),
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    (fake, bound)
+}
+
+#[test]
+fn hidden_notices_leave_no_rows_counts_or_overlays() {
+    // Four stacked past the cap of three, all hidden: no rows and no
+    // "+N more" (`docs/tui.md`, "Notices": one row each; "The slots": a
+    // replacement that returns no lines draws no row).
+    let (fake, bound) = hiding();
+    let notices = stack("io_failed", &["a", "b", "c", "d"]);
+    assert!(notices.visible_lines(&bound, 40).is_empty());
+    let mut notices = notices;
+    notices.open_all();
+    let overlay = notices
+        .visible_overlay_entries(&bound, 40)
+        .expect("the overlay still opens");
+    assert!(overlay.entries.is_empty());
+    // One cached visibility result serves rows, counts and overlays:
+    // each distinct notice calls the renderer once.
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
+    assert_eq!(fake.calls.borrow().len(), 4);
+}
+
+#[test]
+fn an_extension_failed_notice_always_shows_built_in() {
+    // A notice extension cannot hide its own switch-off failure: the
+    // empty replacement hides the I/O notice but never the
+    // `extension_failed` row beside it (`docs/tui.md`, "The slots",
+    // `notice`: a notice extension cannot hide its own switch-off failure).
+    let (_, bound) = hiding();
+    let mut notices = stack("extension_failed", &["off"]);
+    notices.push("io_failed", "a read failed".to_owned());
+    let lines = notices.visible_lines(&bound, 40);
+    assert_eq!(ids(&lines), ["notice 0"]);
+}
+
+#[test]
+fn visible_views_pass_through_without_a_notice_renderer() {
+    // Nothing fills the slot: every shown notice draws built-in, oldest
+    // first with "+N more" (`docs/tui.md`, "Notices"), and the overlay
+    // lists them.
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let fake = std::rc::Rc::new(SlotRenderer::filling(&[], SlotScript::Replace(Vec::new())));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    let notices = stack("io_failed", &["a", "b", "c", "d"]);
+    assert_eq!(
+        ids(&notices.visible_lines(&bound, 40)),
+        ["notice 0", "notice 1", "notice 2", "more 1"]
+    );
+    let mut notices = notices;
+    notices.open_all();
+    let overlay = notices
+        .visible_overlay_entries(&bound, 40)
+        .expect("open_all opens the list overlay");
+    assert_eq!(overlay.entries.len(), 4);
+    assert!(fake.calls.borrow().is_empty());
+}

@@ -920,6 +920,11 @@ impl Pages {
         }
     }
 
+    /// The session-half map the frame's notice seam reads, if loaded.
+    pub(crate) fn halves_for(&self, session: &SessionId) -> Option<BTreeMap<String, String>> {
+        self.halves.get(session).cloned()
+    }
+
     /// Retains the latest complete half map and updates only its session's pages.
     pub(crate) fn record_halves(&mut self, session: &SessionId, halves: BTreeMap<String, String>) {
         self.halves.insert(session.clone(), halves);
@@ -1777,7 +1782,7 @@ impl Pages {
             .map(|page| page.session.clone())
             .unwrap_or_else(|| SessionId(String::new()));
         let ctx = crate::ext::SessionCtx {
-            session_id: session.clone(),
+            session_id: Some(session.clone()),
             halves: self.halves.get(&session).cloned(),
         };
         let key = crate::ext::cache::PageKey {

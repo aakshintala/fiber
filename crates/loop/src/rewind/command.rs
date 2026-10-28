@@ -232,6 +232,7 @@ pub(crate) fn refuse_after_rewound(delivery: Delivery) {
         | Delivery::Reload(ack)
         | Delivery::McpReconnect(_, ack)
         | Delivery::Name(_, ack)
+        | Delivery::AddDirectory(_, ack)
         | Delivery::Shell(_, ack)
         | Delivery::Credential(_, ack)
         | Delivery::Reply(_, ack)

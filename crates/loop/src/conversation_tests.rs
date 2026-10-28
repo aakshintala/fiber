@@ -1400,6 +1400,7 @@ mod window {
             instruction_files: Vec::new(),
             extension_sections: Vec::new(),
             skills: Vec::new(),
+            added_directories: Vec::new(),
         })
     }
 
@@ -3737,6 +3738,7 @@ fn start_opening() -> Event {
         instruction_files: Vec::new(),
         extension_sections: Vec::new(),
         skills: Vec::new(),
+        added_directories: Vec::new(),
     })
 }
 
@@ -4431,4 +4433,80 @@ fn completed_actions_skips_a_completion_with_no_action() {
     anonymous.action_id = None;
     let completed = super::completed_actions(&[anonymous]).unwrap();
     assert!(completed.is_empty());
+}
+
+#[test]
+fn directory_added_renders_the_add_message_and_rebuilds_it_from_the_log() {
+    let event = Event::DirectoryAdded(contract::events::DirectoryAdded {
+        path: "/shared".into(),
+        inherited: false,
+    });
+    let mut conversation = Vec::new();
+    render(
+        &mut conversation,
+        &event,
+        None,
+        "fake/model-1",
+        &mut BTreeMap::new(),
+        &mut crate::handoff::Carry::default(),
+        Some(Seq(3)),
+    );
+    assert_eq!(conversation.len(), 1);
+    let text = user_text(&conversation[0]);
+    assert!(text.contains("/shared"), "{text}");
+    // A resume replays the message from the event alone, so a crash
+    // before the acknowledgement loses nothing.
+    let rebuilt = super::rebuild(&[line("directory_added", &event, None)], "fake/model-1").unwrap();
+    assert_eq!(rebuilt, conversation);
+}
+
+#[test]
+fn inherited_directory_added_is_not_a_separate_user_message() {
+    let event = Event::DirectoryAdded(contract::events::DirectoryAdded {
+        path: "/shared".into(),
+        inherited: true,
+    });
+    let rebuilt = super::rebuild(&[line("directory_added", &event, None)], "fake/model-1").unwrap();
+    assert!(
+        rebuilt.is_empty(),
+        "the opening already lists this inherited root"
+    );
+}
+
+#[test]
+fn a_rebuilt_conversation_lists_the_added_folders_and_keeps_the_add_message() {
+    let opening = Event::OpeningMessage(OpeningMessage {
+        environment: Environment {
+            date: "2023-11-14".into(),
+            os: "test-os".into(),
+            arch: "test-arch".into(),
+            shell: "/bin/sh".into(),
+            workspace: "/w".into(),
+            git: None,
+            session_log: "/w/s_test/events.jsonl".into(),
+        },
+        instruction_files: Vec::new(),
+        extension_sections: Vec::new(),
+        skills: Vec::new(),
+        added_directories: vec!["/shared".into()],
+    });
+    let added = Event::DirectoryAdded(contract::events::DirectoryAdded {
+        path: "/shared".into(),
+        inherited: false,
+    });
+    let rebuilt = super::rebuild(
+        &[
+            line("opening_message", &opening, None),
+            line("directory_added", &added, None),
+        ],
+        "fake/model-1",
+    )
+    .unwrap();
+    assert_eq!(rebuilt.len(), 2);
+    // The handoff's opening message lists the folded folders.
+    let text = user_text(&rebuilt[0]);
+    assert!(text.contains("- /shared"), "{text}");
+    // The event-derived add message stays visible to the consumer.
+    let added_text = user_text(&rebuilt[1]);
+    assert!(added_text.contains("/shared"), "{added_text}");
 }

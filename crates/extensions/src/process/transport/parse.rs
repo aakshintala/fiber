@@ -116,6 +116,7 @@ pub(crate) fn parse_line(line: &[u8]) -> ParsedLine {
         | contract::commands::Command::ChangeWorkspace(_)
         | contract::commands::Command::Shell(_)
         | contract::commands::Command::ProposeNotes(_)
+        | contract::commands::Command::AddDirectory(_)
         | contract::commands::Command::Command(_)
         | contract::commands::Command::Close(_)
         | contract::commands::Command::OfferedFile(_) => ParsedLine::Forward {

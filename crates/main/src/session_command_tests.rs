@@ -116,6 +116,7 @@ fn an_isolated_fork_adopts_before_reading_its_point() {
             parent: Some("s_aaaaaaaaaaaaaaaa".into()),
             delegate_id: Some("j_bbbbbbbbbbbbbbbb".into()),
             depth: Some(1),
+            added: Vec::new(),
             login_shell: false,
             supervised: false,
         };

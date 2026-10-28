@@ -68,6 +68,7 @@ const DRAWN_ORDER: &[&str] = &[
     "release-notes",
     "copy",
     "pwd",
+    "add-dir",
     "panel",
     "rail",
     "rules",

@@ -427,6 +427,71 @@ fn a_rewind_continues_the_session_from_the_latest_turn() {
 }
 
 #[test]
+fn a_point_based_person_fork_before_directory_added_does_not_inherit_it() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup);
+    let old = hubbed.start("c_fork_start", "c_fork_sub", "one");
+    let parent_lines = session_log(&setup, &old);
+    let first_turn = parent_lines
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .unwrap()["seq"]
+        .as_u64()
+        .unwrap();
+    let point = first_turn - 1;
+    let added_holder = fakes::TempDir::new("point-fork-added");
+    let added = added_holder.path().join("outside");
+    fs::create_dir_all(&added).unwrap();
+    hubbed.client().send(&command(
+        "c_fork_add",
+        Some(&old),
+        "add_directory",
+        json!({"path": added}),
+    ));
+    until_ack(
+        hubbed.client(),
+        "the folder-add acknowledgement",
+        "c_fork_add",
+    );
+    let resolved = fs::canonicalize(&added).unwrap();
+    assert!(
+        session_log(&setup, &old)
+            .iter()
+            .any(|line| line["kind"] == "directory_added"
+                && line["payload"]["path"] == resolved.to_str().unwrap())
+    );
+
+    hubbed
+        .client()
+        .send(&rewind("c_fork_point", &old, json!({"seq": point})));
+    let ack = until_ack(hubbed.client(), "the point-based fork", "c_fork_point");
+    let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until(hubbed.client(), "the continued session's start", |line| {
+        line["session_id"] == next && line["kind"] == "session_started"
+    });
+    hubbed.prompt("c_fork_prompt", &next, "check the boundary");
+    let request = server.requests().last().unwrap().body.clone();
+    assert!(
+        !String::from_utf8_lossy(&request).contains(resolved.to_str().unwrap()),
+        "the point before directory_added has no added-folder boundary"
+    );
+    assert!(
+        session_log(&setup, &next)
+            .iter()
+            .all(|line| line["kind"] != "directory_added"),
+        "the continued session writes no directory_added event from after its point"
+    );
+
+    hubbed.close("c_fork_close_next", &next);
+    hubbed.finish();
+}
+
+#[test]
 fn an_at_end_rewind_continues_the_session_from_the_latest_point() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();

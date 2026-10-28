@@ -1074,11 +1074,24 @@ pub(super) fn render(
     }
     let rows = notice_area(&placed, area);
     bottom = rows.bottom();
-    let slab = super::notice_rows::overlay(app, rows, buf, &mut targets);
+    let slab = super::notice_rows::overlay(
+        app,
+        rows,
+        buf,
+        &mut targets,
+        &super::notice_rows::frame_bound(app),
+    );
     app.frames().note(Surface::Notice, slab);
     // The rows sit above the banner, unreserved, over the area's bottom
     // rows (`docs/tui.md`, "Notices").
-    super::notice_rows::draw(app, rows, buf, &mut bottom, &mut targets);
+    super::notice_rows::draw(
+        app,
+        rows,
+        buf,
+        &mut bottom,
+        &mut targets,
+        &super::notice_rows::frame_bound(app),
+    );
     // The completion panels draw after the rows under them, so their
     // cells win, and before the quit question, which takes every key.
     // The Ctrl+R panel centres over home's whole area, as the quit

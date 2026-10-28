@@ -2823,8 +2823,10 @@ fn short_home_slash_keeps_its_selection_barred() {
     let row = row_text(&buf, selected, 80);
     assert!(row.contains("credential"), "{shown}");
     // The range counts matching entries, including every built-in
-    // (`docs/tui.md`, "Slash commands").
-    assert!(shown.contains("of 46"), "{shown}");
+    // (`docs/tui.md`, "Slash commands"): the total follows the command
+    // table, with no fixture extension rows here.
+    let total = crate::app::commands::TABLE.len();
+    assert!(shown.contains(&format!("of {total}")), "{shown}");
 }
 
 /// A git home at 80x24 with two live rows in the launch project and no
@@ -3937,4 +3939,103 @@ fn a_drag_over_the_import_offer_copies_its_row() {
         report(MouseKind::Release, x + 5, y),
         Effect::Copy("Claude".to_owned())
     );
+}
+
+/// A home notice through the client-only `script`: the screen text and
+/// the fake that drew it.
+fn home_seamed(
+    script: crate::ext::tests::SlotScript,
+) -> (String, std::rc::Rc<crate::ext::tests::SlotRenderer>) {
+    use std::rc::Rc;
+    let mut app = home(80, 24);
+    app.push_notice("io_failed", "a read failed".to_owned());
+    let fake = Rc::new(crate::ext::tests::SlotRenderer::filling(
+        &["notice"],
+        script,
+    ));
+    let renderer: Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.install_renderer(renderer);
+    (screen(&app, 80, 24), fake)
+}
+
+#[test]
+fn a_home_notice_replacement_draws_sessionless() {
+    use crate::ext::tests::{SlotScript, raw};
+    let (shown, fake) = home_seamed(SlotScript::Replace(vec![vec![raw("custom")]]));
+    assert!(shown.contains("custom"), "{shown}");
+    assert!(!shown.contains('⚠'), "{shown}");
+    // Home binds no session: Lua reads nil, never a reused, empty or
+    // synthetic id.
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow()[0].0, None);
+    assert_eq!(fake.calls.borrow()[0].1, "notice");
+}
+
+#[test]
+fn a_home_hidden_notice_draws_no_row() {
+    use crate::ext::tests::SlotScript;
+    let (shown, _) = home_seamed(SlotScript::Replace(Vec::new()));
+    assert!(!shown.contains("a read failed"), "{shown}");
+    assert!(!shown.contains('⚠'), "{shown}");
+}
+
+/// A range-bound notice renderer: eligible only with its half loaded.
+#[derive(Debug)]
+struct Halved;
+
+impl crate::ext::Renderer for Halved {
+    fn name(&self) -> &str {
+        "halved"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "notice"
+    }
+
+    fn fills_for(&self, ctx: &crate::ext::SessionCtx, slot: &str) -> crate::ext::SlotSelection {
+        if !self.fills(slot) {
+            return crate::ext::SlotSelection::Absent;
+        }
+        match ctx.halves.as_ref().and_then(|halves| halves.get("halved")) {
+            Some(_) => crate::ext::SlotSelection::Draw {
+                extension: self.name().to_owned(),
+            },
+            // No half on home: inert without notice.
+            None => crate::ext::SlotSelection::Absent,
+        }
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        _input: &crate::ext::Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        crate::ext::Decision::Draw {
+            extension: self.name().to_owned(),
+            lines: vec![vec![crate::ext::RawSpan {
+                text: "custom".into(),
+                ..crate::ext::RawSpan::default()
+            }]],
+        }
+    }
+}
+
+#[test]
+fn a_home_range_bound_notice_stays_inert_without_notice() {
+    use std::rc::Rc;
+    let mut app = home(80, 24);
+    app.push_notice("io_failed", "a read failed".to_owned());
+    let renderer: Rc<dyn crate::ext::Renderer> = Rc::new(Halved);
+    app.install_renderer(renderer);
+    let shown = screen(&app, 80, 24);
+    assert!(shown.contains('⚠'), "{shown}");
+    assert!(!shown.contains("custom"), "{shown}");
+    // Inert without notice: no incompatibility notice joins the one
+    // already showing (`docs/tui.md`, "How a TUI extension runs": a
+    // range-bound half stays inert without notice).
+    assert_eq!(app.notices().len(), 1);
 }

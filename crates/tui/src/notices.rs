@@ -8,6 +8,7 @@
 use std::time::{Duration, Instant};
 
 use super::App;
+use crate::ext::Bound;
 
 /// How many notices show before "+N more".
 const SHOWN: usize = 3;
@@ -330,12 +331,6 @@ impl Notices {
             .filter(move |notice| held.is_none_or(|from| notice.id < from))
     }
 
-    /// How many rows [`Notices::lines`] draws, without building them.
-    pub(crate) fn drawn(&self) -> usize {
-        let shown = self.shown().count();
-        shown.min(SHOWN) + usize::from(shown > SHOWN)
-    }
-
     /// The rows the view draws, oldest first: at most [`SHOWN`] notices,
     /// then one `More` for the rest.
     pub(crate) fn lines(&self) -> Vec<NoticeLine> {
@@ -353,6 +348,88 @@ impl Notices {
             lines.push(NoticeLine::More(rest));
         }
         lines
+    }
+
+    /// Whether the bound renderer hides the notice: a bound `notice`
+    /// renderer returning no lines hides it everywhere. Only an empty
+    /// replacement hides: a failure or a miss falls back to the
+    /// built-in row.
+    fn hidden(&self, bound: &Bound, width: u16, notice: &Notice) -> bool {
+        matches!(
+            bound.notice_lines(&notice.code, &notice.text, width),
+            Some(lines) if lines.is_empty()
+        )
+    }
+
+    /// The shown notices `keep` accepts that the bound renderer does
+    /// not hide, oldest first: hidden notices drop out before the cap,
+    /// so the rows, the drawn count and the overlay share the one
+    /// filtered view.
+    fn visible(
+        &self,
+        bound: &Bound,
+        width: u16,
+        keep: impl Fn(&Notice) -> bool,
+    ) -> impl DoubleEndedIterator<Item = &Notice> {
+        self.shown()
+            .filter(move |notice| keep(notice) && !self.hidden(bound, width, notice))
+    }
+
+    /// The rows the view draws through `bound`, oldest first: the
+    /// [`SHOWN`] oldest visible notices, then one `More` for the
+    /// visible rest. A notice the bound renderer hides with no lines
+    /// drops out before the cap, so it takes no row and no count.
+    pub(crate) fn visible_lines(&self, bound: &Bound, width: u16) -> Vec<NoticeLine> {
+        let shown: Vec<&Notice> = self.visible(bound, width, |_| true).collect();
+        let mut lines: Vec<NoticeLine> = shown
+            .iter()
+            .take(SHOWN)
+            .map(|notice| NoticeLine::Notice {
+                id: notice.id,
+                code: notice.code.clone(),
+                text: notice.text.clone(),
+            })
+            .collect();
+        let rest = shown.len().saturating_sub(SHOWN);
+        if rest > 0 {
+            lines.push(NoticeLine::More(rest));
+        }
+        lines
+    }
+
+    /// How many rows [`Notices::visible_lines`] draws through `bound`,
+    /// without building them.
+    pub(crate) fn visible_drawn(&self, bound: &Bound, width: u16) -> usize {
+        let shown: Vec<&Notice> = self.visible(bound, width, |_| true).collect();
+        shown
+            .iter()
+            .take(SHOWN)
+            .fold(usize::from(shown.len() > SHOWN), |rows, notice| {
+                let lines = bound
+                    .notice_lines(&notice.code, &notice.text, width)
+                    .map_or(1, |lines| lines.len());
+                rows.saturating_add(lines)
+            })
+    }
+
+    /// The overlay's entries through `bound`, newest first, while it is
+    /// open: hidden notices drop out, so the overlay never opens one.
+    pub(crate) fn visible_overlay_entries(
+        &self,
+        bound: &Bound,
+        width: u16,
+    ) -> Option<NoticeOverlay> {
+        let overlay = self.overlay?;
+        Some(NoticeOverlay {
+            all: overlay == Overlay::All,
+            entries: self
+                .visible(bound, width, |notice| {
+                    overlay == Overlay::All || overlay == Overlay::One(notice.id)
+                })
+                .rev()
+                .map(|notice| (notice.code.clone(), notice.text.clone()))
+                .collect(),
+        })
     }
 
     /// Removes notice `id`, closing an overlay that showed it alone.
@@ -415,11 +492,6 @@ impl App {
     /// The notice rows the view draws above the working line.
     pub(crate) fn notices(&self) -> Vec<NoticeLine> {
         self.notices.lines()
-    }
-
-    /// The notice overlay's entries while it is open.
-    pub(crate) fn notice_overlay_entries(&self) -> Option<NoticeOverlay> {
-        self.notices.overlay_entries()
     }
 
     /// The notice overlay's text while it is open.

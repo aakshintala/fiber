@@ -905,16 +905,28 @@ a click on it returns too. The views are:
   ```
 - **`/keys`:** the rebinding screen ("Bindings").
 - **`/skills`:** one row per skill with its name, one-line description, where
-  it comes from (the repository, personal, an extension by name, or built in),
-  whether the model can see it, any skill it shadows, and whether it is
-  switched off. A switch turns a skill off or on for this project or
-  everywhere, writing `skills.disabled` in that layer; the change reaches the
-  model at the next turn start. Enter shows the skill's text, Ctrl+G opens its
-  file (`docs/system-prompt.md`, "Skills"); on a remote terminal it opens the
+  it comes from (`repo`, `personal`, an extension by its bare name, or
+  `built in`; an extension named `repo`, `personal` or `built in` reads
+  `extension <name>`), whether the model can see it (`seen` or `hidden`),
+  and any skill it shadows, plus whether it is switched off. A switch turns
+  a skill off or on for this project or everywhere, writing
+  `skills.disabled` in that layer; the change reaches the model at the next
+  turn start. Enter shows the skill's text, after every skill it shadows
+  with its source and path, Ctrl+G opens its file
+  (`docs/system-prompt.md`, "Skills"); on a remote terminal it opens the
   hub's copy instead ("Swapped views"). A row is "review · checks a diff
   · repo · seen · this project " and its switch, then " · everywhere " and
-  its switch, as on `/tools`; a shadowing skill adds "shadows <name>". The
-  last row is "Enter shows the text · Ctrl+G opens its file", dim.
+  its switch, as on `/tools`; a shadowing skill adds " · shadows <source>,
+  …" after the switches, cut with "…" so both switches stay whole.
+  Several shadowed sources list after one "shadows", separated by ", ",
+  most specific first (repo, personal, extensions by extension name, then
+  built in), each source once. An unresolved shadow path — no matching
+  skill entry, or an extension entry with no extension name — leaves out
+  the whole "shadows …" clause. When the row runs out of width
+  the description is cut first, then the name, then the skill's own source,
+  keeping room for " · shadows …"; the clause is left out only when the
+  fixed fields and both switches leave less than that minimum. The last row
+  is "Enter shows the text · Ctrl+G opens its file", dim.
 - **`/rewind`** ("Rewind").
 - **`/fork`:** rewinds to the end of the conversation ("Rewind").
 - **A repository's offer**, before a new session's first request ("Approving
@@ -1992,6 +2004,7 @@ later release still applies.
 | `/release-notes` | Opens the running version's release notes, or says none are available. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
 | `/pwd`, `/cwd` | Shows the session's workspace; on home, shows the notice `No session on screen.` |
+| `/add-dir <path>` | Adds an existing folder to the session's boundary. Relative paths resolve from the workspace. A folder already inside the boundary is accepted without a change. The folder lasts for the session; `/cd` or a new session drops it. With no path, the terminal shows the command's usage. |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules`, `/permissions` | Opens the standing rules. |
@@ -2021,6 +2034,12 @@ later release still applies.
 
 The `/` list shows built-in commands in this order.
 
+`/add-dir path/to/shared` sends this driver command:
+
+```json
+{"id":"c_7f3a","command":"add_directory","args":{"path":"path/to/shared"}}
+```
+
 The range line's total counts every entry the query matches: the matching built-in rows plus the matching session commands.
 
 A row's other names, such as `/exit`, are aliases: typing one runs the same command, and the `/` list shows them after the name on that command's row, never as rows of their own.
@@ -2041,6 +2060,11 @@ input box and shows the notice `Unknown command /<name>. Type / for the
 list.` A first word with another `/` in it, such as `/usr/bin/env`, is a
 path and is sent as a message. On home, the same rule applies against
 the built-in commands only.
+
+`/add-dir <path>` adds a folder to the session's boundary: it sends
+`add_directory` with the path (`docs/invocation.md`, "Driver commands").
+With no path, it shows the command's usage. There is no removal: an added
+folder lasts for the session.
 
 ### Clearing
 
@@ -2689,10 +2713,125 @@ itself is a separate client of the hub, not a TUI extension.
 | `question_form` | The question form, draw-only |
 | `repository_offer` | The offer of what a repository ships, draw-only |
 
-A slot receives what its built-in renderer receives, and all of it comes from
-the event stream. A ledger row, for example, receives the call's name,
+A slot receives what its built-in renderer receives. All of it comes from the
+event stream, except whether the row is open, which the person's clicks and
+keys set, and notices the terminal raises itself, such as a configuration or
+I/O failure. A ledger row, for example, receives the call's name,
 arguments, status, exit code, duration, line count, `changes` and error, folded
 from its `tool_call_*` events. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
+
+Each slot's input holds exactly what its built-in renderer reads. Every input listed here also carries `flat`, which is true in screen-reader mode when the terminal drops every style.
+
+A replacement owns its rows whole: where the built-in row carries one target over the row, each replacement line keeps it. A target placed on part of a row goes away when the extension owns those rows. A `notice` keeps its notice target on every replacement line and its dismiss target spans those painted lines. A `notice` replacement with more lines than the notice rows left keeps its first lines in order and drops the rest, as a line too wide is cut; the rows it paints are the rows it takes, and its targets span only those. An `error_line` keeps its failed-login target on each line. A `steer` replacement drops image-line targets because it owns those lines. A `prompt` keeps the target for a single image on each replacement line and drops targets for several images. A writing `handoff_band` has no target, and `reply`, `turn_card` and `answers` remain without targets.
+
+**`turn_card`** draws a turn's card whole: its prompts, every entry, and its
+ending. A replaced card is drawn whole by the extension, so no nested slot
+runs inside it; `prompt` draws only when the card itself is built in.
+
+| Field | What it holds |
+|---|---|
+| `prompts` | The turn's prompts in order, each with the `prompt` slot's `text` and `images` (`path`, `width`, `height` in pixels) |
+| `entries` | The card's items in order, each tagged with a `kind` and carrying the slot input shown below |
+| `started` | When the turn started |
+| `calls` | How many model calls the turn made |
+| `usage` | The turn's totals: `tokens` (`input`, `cache_read`, `cache_write`, `output`), `cost`, `subscription_cost` |
+| `ended` | How the turn ended: `outcome`, `ended_ts`, and on a failure its `error` (`code`, `message`); absent while the turn runs |
+| `running` | Whether the turn is still running |
+
+The entries carry these slot inputs and extra fields:
+
+| Kind | Fields |
+|---|---|
+| `reply` | The `reply` input: `text` (Markdown included) |
+| `steer` | The `steer` input: `text`, `images`, `ts` |
+| `group` | The `group_line` input, plus `cut` and `sections` |
+| `aside` | No slot: `{kind = "line", text}`, `{kind = "warning", message}`, or `{kind = "orphans", jobs, open}`; each job has `name` and `message` |
+| `band` | The `handoff_band` input: `trigger`, `ts`, `state`; a `done` state carries `before` and optional `after` context sizes |
+| `answers` | The `answers` input: `outcome`, `parts`, `note?`, `ts?`; each part has `header`, `text`, `skipped` |
+
+**`prompt`** draws a person's prompt bubble.
+
+| Field | What it holds |
+|---|---|
+| `text` | The prompt's text |
+| `images` | Its images in order, each `path`, `width` and `height` in pixels |
+
+**`reply`** draws an assistant reply.
+
+| Field | What it holds |
+|---|---|
+| `text` | The reply's text, Markdown included |
+
+**`thinking_line`** draws a thinking line.
+
+| Field | What it holds |
+|---|---|
+| `text` | The thought's text |
+| `started` | When the thought started |
+| `ended` | When it ended; absent while it streams |
+| `open` | Whether the thought is open |
+
+An empty `thinking_line` result draws no row and no opened body.
+
+**`group_line`** draws a tool group's summary line.
+
+| Field | What it holds |
+|---|---|
+| `running` | Whether the turn runs and this is its open group |
+| `calls` | The group's calls in order, each with the call fields a card's group entry carries |
+| `streaming` | The calls the model is still emitting, each with `message`, `index`, `name` and `text` |
+| `thoughts` | The group's thinking blocks, each with `text`, `started`, `ended` and `open` |
+| `failed` | The retried model calls, each with its code and attempt |
+| `first` | The earliest timestamp the group spans |
+| `last` | The latest timestamp the group spans |
+| `open` | Whether the group's ledger is open |
+
+**`steer`** draws a steering message.
+
+| Field | What it holds |
+|---|---|
+| `text` | The message's text |
+| `images` | Its images in order, each `path`, `width` and `height` in pixels |
+| `ts` | When it landed |
+
+**`answers`** draws what a form left: the answers or the decline.
+
+| Field | What it holds |
+|---|---|
+| `outcome` | `given` or `declined` |
+| `parts` | Each question's part, in field order: its `header`, `text`, and whether `skipped` |
+| `note` | The note on the whole form, when one was left |
+| `ts` | When the form was resolved; absent when declined |
+
+**`handoff_band`** draws a handoff's band, without its note.
+
+| Field | What it holds |
+|---|---|
+| `trigger` | What the handoff runs at |
+| `ts` | The band's timestamp |
+| `state` | `writing`, `done`, or `unchanged` with `cancelled`; a `done` state carries `before` and optional `after` context sizes |
+
+**`error_line`** draws a turn's failure line.
+
+| Field | What it holds |
+|---|---|
+| `code` | The failure's code |
+| `message` | Fiber's own sentence |
+| `provider` | When present, the provider's `name`, optional HTTP `status`, and `message` |
+
+For example, for a failed login, clicking any line an extension returns for this row opens the login view.
+
+**`notice`** draws a notice, in the conversation and on home. The
+terminal's own notices carry the same fields: a configuration or I/O
+failure raises the same input an extension draws.
+
+| Field | What it holds |
+|---|---|
+| `code` | The notice's registry code |
+| `text` | The notice's message |
+
+The `extension_failed` switched-off notice always draws built-in: a
+notice extension cannot hide its own switch-off failure.
 
 `layout` places regions and never draws them. It receives the screen's size
 and returns a rectangle for each region it shows. A region it leaves out is not
@@ -2792,6 +2931,11 @@ built-in rather than drawing the row again.
   version until `/reload`; omission counts as `not loaded`. The notice names
   the TUI version and the session-half version, or `not loaded`.
   A client half with no session half, such as a layout or a ledger row for a built-in tool, draws for every session.
+- **Home has no session.** Its notices reach extensions without one: the
+  input carries no `session_id` key (Lua reads nil), never another
+  session's id and never an empty one. A client-only half draws for every
+  home notice; a range-bound half stays inert without notice until the
+  session's first `extensions_loaded`, as on a session it has not seen.
 
 Measured in the prototype on macOS arm64, on a session of 1,047 tool calls
 ([research/tui-prototype/SEAMS.md](../research/tui-prototype/SEAMS.md)): a

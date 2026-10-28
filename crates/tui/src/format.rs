@@ -577,8 +577,50 @@ pub(crate) fn code(code: &ErrorCode) -> String {
 
 /// A failed turn's lines before its ▣ line: "✗ <message> · <code>", then,
 /// when the provider said something, its words dim under it. A failed
-/// login offers "log in" on the ✗ line.
-pub(crate) fn failure(error: &Failure, out: &mut Rows) {
+/// login offers "log in" on the ✗ line. A bound `error_line` renderer
+/// replaces the lines: a failed login keeps its login target on every
+/// replacement line, like the row-level targets other slots keep.
+pub(crate) fn failure(error: &Failure, width: u16, out: &mut Rows) {
+    let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
+    let input = crate::ext::ErrorLine {
+        code: error.code.clone(),
+        message: &error.message,
+        provider: error.provider.as_ref(),
+        flat,
+    };
+    let wrapped = crate::ext::Input::ErrorLine(input);
+    let builtin = |input: &crate::ext::Input<'_>, _w: u16| {
+        if !matches!(input, crate::ext::Input::ErrorLine(_)) {
+            return Vec::new();
+        }
+        let mut scratch = Rows::default();
+        builtin_failure(error, &mut scratch);
+        let (rows, _) = scratch.into_parts();
+        rows.into_iter()
+            .map(|(line, _)| crate::ext::spans::from_ratatui(&line.spans))
+            .collect()
+    };
+    let rendered = match out.fills_for("error_line") {
+        crate::ext::SlotSelection::Draw { extension } => {
+            out.ext_lines("error_line", &extension, &wrapped, width, &builtin)
+        }
+        crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => None,
+    };
+    match rendered {
+        Some(fitted) => {
+            // A failed login offers the login view on every
+            // replacement line (`docs/tui.md`, "Turns").
+            let login = (error.code == ErrorCode::AuthenticationFailed).then_some(Target::Login);
+            for line in fitted.iter() {
+                out.push_fitted(line, login);
+            }
+        }
+        None => builtin_failure(error, out),
+    }
+}
+
+/// The failure's lines, as above.
+fn builtin_failure(error: &Failure, out: &mut Rows) {
     // A failed login offers the login view (`docs/tui.md`, "Turns").
     let login = (error.code == ErrorCode::AuthenticationFailed).then_some(Target::Login);
     let line = format!("✗ {} · {}", error.message, code(&error.code));

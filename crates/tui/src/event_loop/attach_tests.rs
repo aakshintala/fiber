@@ -2819,6 +2819,14 @@ struct TailOpen {
     tx: mpsc::Sender<Input>,
     rx: mpsc::Receiver<Input>,
     hub_done: mpsc::Receiver<()>,
+    /// Releases the hub's gated redundant accept in manual-replay mode:
+    /// the test sends once it has held the loop where it wants the ack
+    /// to land. A test that never sends keeps the ack parked, so its
+    /// pass stays single-sourced; dropping the sender parks it too.
+    manual_ack_release: mpsc::Sender<()>,
+    /// Fires after the gated accept is delivered (or skipped), so the
+    /// test's next send orders behind it on the channel.
+    manual_ack_done: mpsc::Receiver<()>,
 }
 
 /// The doors' history window over `log`: the last 256 lines at or below
@@ -2913,6 +2921,10 @@ fn tail_open_prepared(
     let want_drop = matches!(history, History::Drop);
     let (hub_done_tx, hub_done) = mpsc::channel();
     let (full_tx, full_seen) = mpsc::channel();
+    // The gated redundant accept's release and done ends: the hub thread
+    // owns the wait, the open owns the test's ends.
+    let (manual_ack_release, ack_release) = mpsc::channel();
+    let (ack_done, manual_ack_done) = mpsc::channel();
     let replay = matches!(full, Full::Replay);
     let manual = matches!(full, Full::ManualReplay);
     // Every replayed turn start sends `commands` again: the streamed
@@ -2921,6 +2933,8 @@ fn tail_open_prepared(
         .iter()
         .filter(|envelope| envelope.kind == "turn_started")
         .count();
+    // One manual replay per open takes the gated accept's wait ends.
+    let mut ack_gate = Some((ack_release, ack_done));
     std::thread::Builder::new()
         .name("tail-hub".to_owned())
         .spawn(move || {
@@ -3006,8 +3020,24 @@ fn tail_open_prepared(
                             }
                             Full::Hung => {}
                             Full::ManualReplay => {
-                                // The test injects the ack itself before
-                                // replay: read
+                                // The hub's own accept is redundant beside
+                                // the accept the test feeds itself: wait out
+                                // the test's release, then signal done while
+                                // sending nothing, so the choreographed pass
+                                // stays single-sourced. The wait runs off the
+                                // read loop, which keeps draining the loop's
+                                // `commands` writes.
+                                let (release, done) = ack_gate
+                                    .take()
+                                    .unwrap_or_else(|| panic!("one manual replay per open"));
+                                std::thread::Builder::new()
+                                    .name("manual-ack".to_owned())
+                                    .spawn(move || {
+                                        release.recv().unwrap_or(());
+                                        done.send(()).unwrap_or(());
+                                    })
+                                    .unwrap_or_else(|err| panic!("spawn: {err}"));
+                                // The test feeds the replay itself: read
                                 // its `commands`, answer none, and hang up
                                 // when the loop does.
                                 replaying = true;
@@ -3099,6 +3129,8 @@ fn tail_open_prepared(
         tx,
         rx,
         hub_done,
+        manual_ack_release,
+        manual_ack_done,
     }
 }
 
@@ -3551,9 +3583,8 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         .pop()
         .unwrap_or_else(|| panic!("a preview frame"));
     assert!(first.contains("quokkas"), "{first}");
-    // Drain first: the test injects the ack itself before replay, and
-    // the worker must see exactly one pass, this ack, then the replay.
-    while open.rx.try_recv().is_ok() {}
+    // No drain: the hub's own ack stays gated until released, so the
+    // worker sees exactly one pass, this ack, then the replay.
     let raise_id = open
         .seen
         .lock()
@@ -3573,6 +3604,10 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         tx,
         rx,
         hub_done,
+        // Held, never sent: the gated accept stays parked, so this pass
+        // stays single-sourced.
+        manual_ack_release: _held_ack,
+        manual_ack_done: _ack_done,
     } = open;
     let send = |input: Input| tx.send(input).unwrap_or_else(|error| panic!("{error}"));
     let send_lines = |lines: &[contract::Envelope]| {
@@ -3592,7 +3627,6 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         let code = lp.run(&rx);
         done_tx.send((code, lp)).unwrap_or(());
     });
-    let wait = Deadline::after(DEADLINE);
     let mut taken = Vec::new();
     // Each batch end holds the loop until this send: the next part is
     // queued whole by then.
@@ -3601,8 +3635,15 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
             .send(())
             .unwrap_or_else(|error| panic!("{error}"))
     };
+    // Each batch-end wait carries its own full deadline: the receives are
+    // separated by `resume` sends the next one awaits, so they are separate
+    // waits, and the label names the taken counts so far. Each invocation
+    // starts its own full deadline, so an earlier wait cannot spend the
+    // later one's budget.
     let mut batch_end = |what: &str| {
-        let count = wait.recv_or_fail(&ended, what);
+        let wait = Deadline::after(DEADLINE);
+        let label = format!("{what} after {taken:?}");
+        let count = wait.recv_or_fail(&ended, &label);
         taken.push(count);
         count
     };
@@ -3669,6 +3710,186 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         whole.apply(envelope);
     }
     assert_eq!(lp.app.pages().index().total(), whole.index().total());
+    // Every replayed turn start sends `commands` again: one per log
+    // turn plus the live one, each read and none answered.
+    drop(lp);
+    Deadline::after(DEADLINE).recv_or_fail(&hub_done, "the hub to hang up");
+    let replay_turns = log
+        .iter()
+        .filter(|envelope| envelope.kind == "turn_started")
+        .count()
+        + 1;
+    let seen_commands: Vec<serde_json::Value> =
+        seen.lock().map(|held| held.clone()).unwrap_or_default();
+    let full_at = seen_commands
+        .iter()
+        .position(|command| command["command"] == "subscribe" && command["args"]["level"] == "full")
+        .expect("the full subscribe");
+    let replayed: Vec<&serde_json::Value> = seen_commands[full_at + 1..]
+        .iter()
+        .filter(|command| command["command"] == "commands")
+        .collect();
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
+}
+
+/// The parked redundant manual-replay accept adds nothing to the pass:
+/// with the loop held at the first batch end, the test releases the gate
+/// ahead of the short part and waits for done, so the capped first batch
+/// still takes `HUB_BATCH`, the emptied channel takes exactly `SHORT`
+/// and the landing keeps the boundary tail. The same interleaving on the
+/// unfixed fake, which delivered the hub-built accept, took `SHORT + 1`,
+/// the total conserved across the shifted boundary (the cap is checked
+/// before a pop in `crate::event_loop::batch`, so no input is taken and
+/// put back).
+#[test]
+fn a_gated_redundant_ack_shifts_the_middle_batch() {
+    use crate::event_loop::batch::HUB_BATCH;
+    const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
+    // The lines the emptied channel takes behind the full batch.
+    const SHORT: usize = 50;
+    // Nine lines a turn bar the last: the replay overfills one batch,
+    // with a tail behind the short part.
+    let log = super::handoff_log(479, "the last reply holds quokkas");
+    // The ack and `HUB_BATCH - 1` lines fill the first batch.
+    let head = HUB_BATCH - 1;
+    assert!(
+        log.len() > head + SHORT + 1,
+        "the boundary sits behind the emptied channel"
+    );
+    let last = last_seq(&log);
+    let live = [
+        super::line(
+            "turn_started",
+            Some(last + 1),
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "live otters"}]}]}),
+        ),
+        // A whole turn, so the quit below finds nothing running to
+        // interrupt.
+        super::line(
+            "turn_completed",
+            Some(last + 2),
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ];
+    // The hub gates its own accept on the test's release: nothing extra
+    // is queued until the test releases it, so the choreographed pass
+    // starts single-sourced.
+    let open = tail_open(
+        log.clone(),
+        Full::ManualReplay,
+        History::Windows,
+        Vec::new(),
+    );
+    let first = frames(&open)
+        .pop()
+        .unwrap_or_else(|| panic!("a preview frame"));
+    assert!(first.contains("quokkas"), "{first}");
+    let raise_id = open
+        .seen
+        .lock()
+        .map(|held| {
+            held.iter()
+                .find(|command| {
+                    command["command"] == "subscribe" && command["args"]["level"] == "full"
+                })
+                .and_then(|command| command["id"].as_str().map(str::to_owned))
+        })
+        .unwrap_or_default()
+        .unwrap_or_else(|| panic!("the raise"));
+    let TailOpen {
+        mut lp,
+        events: _events,
+        seen,
+        tx,
+        rx,
+        hub_done,
+        manual_ack_release,
+        manual_ack_done,
+    } = open;
+    let send = |input: Input| tx.send(input).unwrap_or_else(|error| panic!("{error}"));
+    let send_lines = |lines: &[contract::Envelope]| {
+        for envelope in lines {
+            send(Input::Hub(Line::Session(envelope.clone())));
+        }
+    };
+    // The first part: the ack carrying the boundary and enough replay
+    // to fill a batch.
+    send(Input::Hub(raise_accepted(SESSION, &raise_id, last)));
+    send_lines(&log[..head]);
+    let (ended_tx, ended) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    std::thread::spawn(move || {
+        pause::report_ends(ended_tx, release);
+        let code = lp.run(&rx);
+        done_tx.send((code, lp)).unwrap_or(());
+    });
+    let mut taken = Vec::new();
+    // Each batch end holds the loop until this send: the next part is
+    // queued whole by then.
+    let resume = || {
+        release_tx
+            .send(())
+            .unwrap_or_else(|error| panic!("{error}"))
+    };
+    // Each batch-end wait carries its own full deadline: the receives are
+    // separated by `resume` sends the next one awaits, so they are separate
+    // waits, and the label names the taken counts so far. Each invocation
+    // starts its own full deadline, so an earlier wait cannot spend the
+    // later one's budget.
+    let mut batch_end = |what: &str| {
+        let wait = Deadline::after(DEADLINE);
+        let label = format!("{what} after {taken:?}");
+        let count = wait.recv_or_fail(&ended, &label);
+        taken.push(count);
+        count
+    };
+    // docs/tui.md, "History and paging": queued hub lines share one frame
+    // in arrival order, up to 4,096 inputs (docs/testing.md, "Event
+    // streams"). Each count below derives from what the test queued under
+    // that cap: the ack plus `head` lines fill the first batch, exactly
+    // `SHORT` lines sit behind the emptied channel, and the rest plus the
+    // live lines land last.
+    assert_eq!(batch_end("the full batch"), HUB_BATCH);
+    // The forced interleaving: the test releases the parked ack ahead of
+    // the short part, and the done wait orders the short part behind it,
+    // so the emptied channel takes exactly what the test queued.
+    manual_ack_release
+        .send(())
+        .unwrap_or_else(|error| panic!("{error}"));
+    Deadline::after(DEADLINE).recv_or_fail(&manual_ack_done, "the gated ack to land");
+    send_lines(&log[head..head + SHORT]);
+    resume();
+    let middle = batch_end("the emptied channel");
+    // The last part: the rest of the replay with the live lines pushed
+    // behind the boundary line.
+    send_lines(&log[head + SHORT..]);
+    send_lines(&live);
+    resume();
+    let landing = batch_end("the landing batch");
+    let boundary = log.len() - head - SHORT + live.len();
+    // Every later batch end runs through.
+    drop(release_tx);
+    send(quit());
+    let (code, lp) =
+        Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after the replay");
+    assert_eq!(code, 0);
+    assert_eq!(
+        middle, SHORT,
+        "the parked gated ack adds nothing to the emptied channel: full {HUB_BATCH}, middle {middle}, landing {landing}"
+    );
+    assert_eq!(
+        landing, boundary,
+        "the landing keeps the tail: {landing} against {boundary}"
+    );
+    assert!(
+        taken.contains(&HUB_BATCH),
+        "a full batch was taken: {taken:?}"
+    );
     // Every replayed turn start sends `commands` again: one per log
     // turn plus the live one, each read and none answered.
     drop(lp);

@@ -76,6 +76,7 @@ mod reviewer_setup;
 mod rows;
 mod rules_view;
 mod running_view;
+mod scope_switches;
 mod screen;
 mod settings_view;
 mod shell;
@@ -137,7 +138,10 @@ pub use paging_session::paging_session;
 
 pub use event_loop::run;
 
-pub use ext::{Failure, Input as RendererInput, LedgerRow, RawSpan, Renderer, RowError, Status};
+pub use ext::{
+    CallState, Failure, Input as RendererInput, LedgerResult, LedgerRow, RawSpan, Renderer,
+    RowError,
+};
 
 /// Connects to the hub, starting one when none runs: the stream and the
 /// `hub_hello` it spoke first. Called again for each reconnect.

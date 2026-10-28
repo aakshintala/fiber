@@ -96,6 +96,7 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
             registry: Arc::clone(&registry),
             parent: SessionId("s_parent".into()),
             workspace: dir.path().to_path_buf(),
+            inherited: Arc::new(Vec::new),
             events_for: {
                 let sessions = sessions.clone();
                 Arc::new(move |_, id| sessions.join(&id.0).join("events.jsonl"))

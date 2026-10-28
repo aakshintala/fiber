@@ -1983,3 +1983,108 @@ fn a_running_shutdown_before_the_hook_runs_answers_closing() {
     assert!(answers.try_recv().is_err(), "the ack fires exactly once");
     world.looped = Some(looped);
 }
+
+/// A bare loop on a temporary tree, with its log.
+fn bare() -> (Loop, fakes::TempDir) {
+    let home = fakes::TempDir::new("fiber-add-dir-approval");
+    let workspace = home.path().join("workspace");
+    let credentials = home.path().join("credentials");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&credentials).unwrap();
+    let fake = FakeClock::new();
+    let clock: Arc<dyn contract::clock::Clock> = fake.clone();
+    let log =
+        Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
+    let (_inbox, rx) = mpsc::channel();
+    let looped = Loop::start(
+        crate::Session {
+            log,
+            provider: Arc::new(ScriptedProvider::new(Vec::new())),
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                clock,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials,
+                credential_files: Vec::new(),
+                rules: Arc::new(AskGated),
+            },
+        },
+        None,
+    )
+    .unwrap();
+    (looped, home)
+}
+
+#[test]
+fn add_directory_while_an_approval_waits_is_written_and_a_later_call_sees_it() {
+    let (mut looped, home) = bare();
+    let shared = home.path().join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    let pending = RequestId("r_approval".into());
+    let turn = TurnId("t_test".into());
+    let (ack, answers) = capture();
+    let waited = looped
+        .take_while_waiting(
+            &pending,
+            Delivery::AddDirectory(
+                contract::commands::AddDirectoryArgs {
+                    path: shared.display().to_string(),
+                },
+                ack,
+            ),
+            &turn,
+        )
+        .unwrap();
+    assert!(matches!(waited, crate::inbox::Waited::Again));
+    assert!(matches!(
+        answered(&answers, "add_directory is accepted"),
+        Ok(None)
+    ));
+    // The event reaches the log before the ack runs.
+    let kinds: Vec<String> = log::read(&home.path().join("s_test"))
+        .unwrap()
+        .into_iter()
+        .map(|line| line.kind)
+        .collect();
+    assert!(kinds.contains(&"directory_added".to_owned()), "{kinds:?}");
+    // A later call with paths under the added root fast-paths against
+    // the loop's folded roots.
+    let verdict = crate::permission::judge(
+        "write",
+        &Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Writes],
+                reversible: false,
+                paths: Some(vec![shared.join("new.rs").display().to_string()]),
+            },
+            subject: Some(String::new()),
+            prefix: None,
+            always_reviewed: false,
+            hosts: None,
+        },
+        &Ok(contract::rules::StandingRules::default()),
+        &[],
+        &crate::known_hosts::KnownHosts::default(),
+        &looped.workspace,
+        looped.changes.added(),
+        home.path(),
+        &looped.credentials,
+        &[],
+    );
+    assert!(matches!(verdict, crate::permission::Verdict::Allow(None)));
+}

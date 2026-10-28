@@ -13,6 +13,7 @@ use ratatui::text::{Line, Span};
 use super::overlay::{self, Place, Row};
 use crate::app::App;
 use crate::app::NoticeLine;
+use crate::ext::Bound;
 use crate::format;
 use crate::mouse::{Target, TargetId};
 use crate::text::to_u16;
@@ -21,30 +22,67 @@ use crate::theme::{Role, style};
 /// The overlay's preferred content width (`docs/tui.md`, "Overlays").
 const PREFER: u16 = 71;
 
+/// The seam notices on `app`'s frame draw through: home binds the home
+/// page with no session, so Lua reads nil; the conversation binds its
+/// open page, so entries drop with it.
+pub(crate) fn frame_bound(app: &App) -> Bound {
+    match app.session() {
+        Some(session) => {
+            let pages = app.pages();
+            let index = pages.page_count().saturating_sub(1);
+            pages.ext.bind(
+                crate::ext::cache::PageKey {
+                    session: session.clone(),
+                    index,
+                },
+                crate::ext::SessionCtx {
+                    session_id: Some(session.clone()),
+                    halves: pages.halves_for(session),
+                },
+            )
+        }
+        None => app.pages().ext.bind(
+            crate::ext::cache::PageKey::home(),
+            crate::ext::SessionCtx {
+                session_id: None,
+                halves: None,
+            },
+        ),
+    }
+}
+
 /// Draws the notice rows bottom-up from `bottom`, moving it up past
 /// them: at most the rows above `area.y`, the lowest rows kept, so rows
-/// past the top are dropped from the top. Nothing at width zero.
+/// past the top are dropped from the top. Nothing at width zero. A bound
+/// `notice` renderer replaces a notice row whole; its notice and dismiss
+/// targets stay on the replacement rows.
 pub(super) fn draw(
     app: &App,
     area: Rect,
     buf: &mut Buffer,
     bottom: &mut u16,
     targets: &mut Vec<Target>,
+    bound: &Bound,
 ) {
     let width = usize::from(area.width);
     if width == 0 {
         return;
     }
-    let lines = app.notices();
+    let lines = app.notices.visible_lines(bound, area.width);
     let room = bottom.saturating_sub(area.y) as usize;
     let skip = lines.len().saturating_sub(room);
     let mut noted: Vec<crate::app::SpanRow> = Vec::new();
     for line in lines.iter().skip(skip).rev() {
-        let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) else {
-            break;
-        };
         match line {
             NoticeLine::Notice { id, code, text } => {
+                if paint_replacement(
+                    bound, *id, code, text, area, buf, targets, &mut noted, bottom,
+                ) {
+                    continue;
+                }
+                let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) else {
+                    break;
+                };
                 let (drawn, copied) = notice_row_and_copy(code, text, width);
                 buf.set_line(area.x, row, &drawn, area.width);
                 noted.push(crate::app::SpanRow {
@@ -62,8 +100,12 @@ pub(super) fn draw(
                     id: TargetId::DismissNotice(*id),
                     rect: Rect::new(area.right().saturating_sub(1), row, 1, 1),
                 });
+                *bottom = row;
             }
             NoticeLine::More(n) => {
+                let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) else {
+                    break;
+                };
                 let text = format!("  +{n} more");
                 let kept = format::width(&text).min(width);
                 buf.set_stringn(
@@ -84,9 +126,9 @@ pub(super) fn draw(
                     text: crate::format::cut(&text, kept),
                     join: crate::rows::Join::Break,
                 });
+                *bottom = row;
             }
         }
-        *bottom = row;
     }
     // Bottom-up drew newest first: reading order is oldest first.
     noted.reverse();
@@ -97,12 +139,75 @@ pub(super) fn draw(
     super::marks::paint_selection(app, buf, crate::app::SurfaceId::Notices, area);
 }
 
+/// Paints the bound renderer's `notice` lines that fit above `area.y`,
+/// keeping the notice target on each painted row and the dismiss target
+/// on their last column: true when the replacement owns the notice. The
+/// replacement owns its painted rows whole, ✕ cell included. A renderer
+/// returning no lines hides the notice instead; the frame already dropped
+/// those before the split, so an empty result here falls back to the
+/// built-in row ([`Bound::notice_lines`]).
+#[allow(clippy::too_many_arguments, reason = "one row's paint inputs")]
+fn paint_replacement(
+    bound: &Bound,
+    id: usize,
+    code: &str,
+    text: &str,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+    noted: &mut Vec<crate::app::SpanRow>,
+    bottom: &mut u16,
+) -> bool {
+    let Some(fitted) = bound.notice_lines(code, text, area.width) else {
+        return false;
+    };
+    if fitted.is_empty() {
+        return false;
+    }
+    let count = fitted
+        .len()
+        .min(usize::from(u16::MAX))
+        .min(bottom.saturating_sub(area.y) as usize);
+    if count == 0 {
+        return true;
+    }
+    *bottom = bottom.saturating_sub(to_u16(count));
+    for (dy, line) in fitted.iter().take(count).enumerate() {
+        let row = bottom.saturating_add(to_u16(dy));
+        buf.set_line(area.x, row, &line.line, area.width);
+        targets.push(Target {
+            id: TargetId::Notice(id),
+            rect: Rect::new(area.x, row, area.width, 1),
+        });
+        noted.push(crate::app::SpanRow {
+            y: row,
+            x: area.x,
+            end: area.x.saturating_add(area.width),
+            text: line.line.to_string(),
+            join: crate::rows::Join::Break,
+        });
+    }
+    targets.push(Target {
+        id: TargetId::DismissNotice(id),
+        rect: Rect::new(area.right().saturating_sub(1), *bottom, 1, to_u16(count)),
+    });
+    true
+}
+
 /// Draws the notice overlay over `area` in the shared frame, hiding the
 /// conversation's targets as before: one notice's whole text, or every
 /// notice as `code · text` paragraphs, newest first. An emptied list
 /// draws nothing. Returns the drawn slab, empty when nothing drew.
-pub(super) fn overlay(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) -> Rect {
-    let Some(entries) = app.notice_overlay_entries() else {
+/// Hidden notices drop out of the entries, so the overlay never opens
+/// one.
+pub(super) fn overlay(
+    app: &App,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+    bound: &Bound,
+) -> Rect {
+    let Some(entries) = app.notices.visible_overlay_entries(bound, area.width) else {
         return Rect::default();
     };
     targets.retain(|target| {
@@ -342,6 +447,13 @@ fn wrap_joined_runs(
 #[cfg(test)]
 fn notice_row(code: &str, text: &str, width: usize) -> Line<'static> {
     notice_row_and_copy(code, text, width).0
+}
+
+/// The built-in notice row's spans at `width`, for the seam's
+/// decorator path: the drawn row, without the copy text.
+pub(crate) fn builtin_spans(code: &str, text: &str, width: usize) -> Vec<Vec<crate::ext::RawSpan>> {
+    let (line, _) = notice_row_and_copy(code, text, width);
+    vec![crate::ext::spans::from_ratatui(&line.spans)]
 }
 
 /// A notice's drawn row with the text a copy reads: the head and the

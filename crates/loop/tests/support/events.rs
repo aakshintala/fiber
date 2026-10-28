@@ -184,6 +184,7 @@ pub(crate) fn opening_of(os: &str) -> Event {
         instruction_files: Vec::new(),
         extension_sections: Vec::new(),
         skills: Vec::new(),
+        added_directories: Vec::new(),
     })
 }
 

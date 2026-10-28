@@ -5,7 +5,7 @@ use super::*;
 
 const DOC: &str = concat!(
     "# Performance\n\n## Budgets\n\n",
-    "| Budget | Ceiling | Gated on | Basis | Fast ceiling | Middle ceiling | Slow ceiling | Fast tolerance | Slow tolerance |\n",
+    "| Budget | Ceiling | Gated on | Basis | Recorded fast ceiling | Recorded middle ceiling | Recorded slow ceiling | Fast tolerance | Slow tolerance |\n",
     "|---|---|---|---|---|---|---|---|---|\n",
     "| Session, idle, headless | 12 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Terminal, idle | 9,048 KiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |\n",
@@ -4791,6 +4791,174 @@ fn session_list_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
         "fast session_list",
         true,
     );
+    // The table keeps the 1 ms recorded ceiling; the gate judges it on
+    // an effective 2 ms floor.
+    let (recorded, _) = doc_gate("| `session_list`, waiting for every running");
+    assert_eq!(
+        recorded, 1.0,
+        "the recorded session_list ceiling stays 1 ms"
+    );
+}
+
+// --- #3503 the 1 ms quantum: one tick of runner jitter passes ---
+
+/// A `session_list_ms` head/base pair on the eligible fast model: every
+/// other metric neutral, five samples per side on the same CPU, so only
+/// the quantum row can gate the verdict.
+fn quantum_pair(head_median: f64, base_median: f64) -> (Value, Value) {
+    scalar_pair(
+        "session_list_ms",
+        json!(vec![head_median; 5]),
+        json!(vec![base_median; 5]),
+        FAST_MODEL,
+    )
+}
+
+#[test]
+fn one_quantum_over_base_passes_on_the_recorded_one_ms_ceiling() {
+    // Head 2.0 ms against a 1.0 ms base and the 1.0 ms recorded fast
+    // ceiling: over neither the 2.0 ms effective ceiling nor base + 1 ms,
+    // so both strictly-over legs hold back.
+    let (h, b) = quantum_pair(2.0, 1.0);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    let line = row(&out.comment, "`session_list`");
+    assert!(
+        line.contains("2.0 ms (fast ceiling 2.0 ms, +1.0 ms absolute over base)"),
+        "{line}"
+    );
+    assert!(line.ends_with("| pass |"), "{line}");
+}
+
+#[test]
+fn two_quanta_over_base_fails_on_the_recorded_one_ms_ceiling() {
+    // Head 3.0 ms against a 1.0 ms base: over the 2.0 ms effective
+    // ceiling and over base + 1 ms, so both legs fail the row.
+    let (h, b) = quantum_pair(3.0, 1.0);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert!(
+        has(
+            &out.failures,
+            "median 3.0 ms of session_list_ms is over 2.0 ms fast ceiling \
+             and over base 1.0 ms by more than 1 ms absolute allowance"
+        ),
+        "{:?}",
+        out.failures
+    );
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| fail |"), "{line}");
+}
+
+#[test]
+fn exactly_one_quantum_over_base_passes_and_just_over_fails() {
+    // Head exactly base + 1.0 ms: the absolute leg needs strictly over.
+    let (h, b) = quantum_pair(3.0, 2.0);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| pass |"), "{line}");
+    // Just over base + 1.0 ms fails: both legs are strictly over.
+    let (h, b) = quantum_pair(3.0, 1.9);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert!(
+        has(&out.failures, "by more than 1 ms absolute allowance"),
+        "{:?}",
+        out.failures
+    );
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| fail |"), "{line}");
+    // Just under base + 1.0 ms passes.
+    let (h, b) = quantum_pair(3.0, 2.1);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| pass |"), "{line}");
+}
+
+#[test]
+fn one_and_a_half_quanta_over_base_fails() {
+    // Head 3.0 ms against a 1.5 ms base: over the effective ceiling and
+    // over base + 1 ms, so the row fails.
+    let (h, b) = quantum_pair(3.0, 1.5);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert!(
+        has(&out.failures, "by more than 1 ms absolute allowance"),
+        "{:?}",
+        out.failures
+    );
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| fail |"), "{line}");
+}
+
+#[test]
+fn just_over_the_effective_ceiling_fails() {
+    // Head 2.1 ms against a 1.0 ms base: over the 2.0 ms effective
+    // ceiling and over base + 1 ms.
+    let (h, b) = quantum_pair(2.1, 1.0);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert!(
+        has(&out.failures, "by more than 1 ms absolute allowance"),
+        "{:?}",
+        out.failures
+    );
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| fail |"), "{line}");
+}
+
+#[test]
+fn effective_ceiling_equality_does_not_fail_when_base_leg_is_over() {
+    // Head 2.0 ms equals the 2.0 ms effective ceiling while standing
+    // more than 1.0 ms over the 0.5 ms base: the ceiling leg needs
+    // strictly over, so equality alone holds the row back from failing.
+    let (h, b) = quantum_pair(2.0, 0.5);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    let line = row(&out.comment, "`session_list`");
+    assert!(
+        line.contains("2.0 ms (fast ceiling 2.0 ms, +1.0 ms absolute over base)"),
+        "{line}"
+    );
+    assert!(line.ends_with("| pass |"), "{line}");
+}
+
+#[test]
+fn a_two_ms_recorded_ceiling_keeps_the_percentage_path() {
+    // A recorded ceiling of exactly 2.0 ms is not under 2 ms, so the
+    // quantum floor does not apply: head 2.5 ms over a 2.0 ms base fails
+    // at 0 % tolerance, where the quantum row would pass.
+    let doc = doc_with(
+        "| 1 ms | 1 ms | 72 ms | 0 % | 0 % |",
+        "| 2 ms | 2 ms | 72 ms | 0 % | 0 % |",
+    );
+    let (h, b) = quantum_pair(2.5, 2.0);
+    let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+    assert!(has(&out.failures, "by more than 0%"), "{:?}", out.failures);
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| fail |"), "{line}");
+    // The same pair passes on the recorded 1 ms ceiling.
+    let (h, b) = quantum_pair(2.5, 2.0);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| pass |"), "{line}");
+}
+
+#[test]
+fn a_slow_session_list_regression_still_fails_at_its_tolerance() {
+    // The slow 72 ms cell is not under 2 ms, so the absolute allowance
+    // never applies: head 73 ms over base 72 ms fails at 0 % tolerance.
+    let (h, b) = scalar_pair(
+        "session_list_ms",
+        json!(vec![73.0; 5]),
+        json!(vec![72.0; 5]),
+        SLOW_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert!(
+        has(
+            &out.failures,
+            "72.0 ms slow ceiling and over base 72.0 ms by more than 0%"
+        ),
+        "{:?}",
+        out.failures
+    );
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| fail |"), "{line}");
 }
 
 // --- #1212 Part 16 the debug-run section, from the head's op_breakdown ---

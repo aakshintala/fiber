@@ -104,10 +104,24 @@ fn row_text(buf: &Buffer, y: u16) -> String {
         .collect()
 }
 
-/// An app with a long `/` list: the built-ins and 17 session skills.
+/// The fixture session skills behind `slash_list_with_skills()`: one row
+/// each after the built-ins.
+const FIXTURE_SKILLS: usize = 17;
+
+/// The `/`-query filtered total: every built-in command row plus the
+/// fixture extension rows, all of which match the empty query. The
+/// below-counts derive from this total; the window bounds stay literal,
+/// pinned by the snapshot and the range assertions beside them.
+fn slash_total() -> usize {
+    crate::app::commands::TABLE.len() + FIXTURE_SKILLS
+}
+
+/// An app with a long `/` list: the built-ins and the fixture session skills.
 fn slash_list_with_skills() -> App {
     let mut app = attached(160, 48);
-    let skills: Vec<String> = (0..17).map(|n| format!("skill{n:02}")).collect();
+    let skills: Vec<String> = (0..FIXTURE_SKILLS)
+        .map(|n| format!("skill{n:02}"))
+        .collect();
     let refs: Vec<&str> = skills.iter().map(String::as_str).collect();
     answer_commands(&mut app, &refs);
     app
@@ -121,8 +135,16 @@ fn slash_eight_of_long_list() {
     // Eight entries and the range line, with the first match focused.
     let shown = screen(&app, 160, 48);
     // The range counts matching entries, not just visible rows
-    // (`docs/tui.md`, "Slash commands").
-    assert!(shown.contains("1–8 of 63 · ↓ 55 more"), "{shown}");
+    // (`docs/tui.md`, "Slash commands"). The total follows the command table
+    // and fixture skill rows.
+    let total = slash_total();
+    assert!(
+        shown.contains(&format!(
+            "1–8 of {total} · ↓ {} more",
+            total - crate::slash::SHOWN
+        )),
+        "{shown}"
+    );
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
     // The first match is focused (`docs/tui.md:1682`).
@@ -213,9 +235,13 @@ fn a_scrolled_slash_list_counts_both_directions() {
     let shown = screen(&app, 160, 48);
     // The window follows the selection; the total and the count below
     // follow the list. The range counts matching entries, not just visible
-    // rows (`docs/tui.md`, "Slash commands").
+    // rows; the total follows the command table and fixture skill rows.
+    let total = slash_total();
     assert!(
-        shown.contains("↑ 3 above · 4–11 of 63 · ↓ 52 more"),
+        shown.contains(&format!(
+            "↑ 3 above · 4–11 of {total} · ↓ {} more",
+            total - 11
+        )),
         "{shown}"
     );
     let buf = buffer(&app, 160, 48);
@@ -402,8 +428,13 @@ fn narrow_slash() {
     // The focused match and range line follow the slash-panel rules
     // (`docs/tui.md`, "Slash commands").
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
-    // The range counts matching entries, not just visible rows.
-    assert!(screen(&app, 100, 40).contains("1–8 of 63 · ↓ 55 more"));
+    // The range counts matching entries, not just visible rows; the total
+    // follows the command table and fixture skill rows.
+    let total = slash_total();
+    assert!(screen(&app, 100, 40).contains(&format!(
+        "1–8 of {total} · ↓ {} more",
+        total - crate::slash::SHOWN
+    )));
 }
 
 #[test]
@@ -734,8 +765,10 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     assert_eq!(bars.len(), 1, "{shown}");
     // `/hooks` follows `/tools` (`docs/tui.md`, "Slash commands"): ten downs bar `/context`.
     assert!(row_text(&buf, bars[0]).contains("context"), "{shown}");
-    // The range counts matching entries, not just visible rows.
-    assert!(shown.contains("of 63"), "{shown}");
+    // The range counts matching entries, not just visible rows; the total
+    // follows the command table and fixture skill rows.
+    let total = slash_total();
+    assert!(shown.contains(&format!("of {total}")), "{shown}");
 }
 
 /// A short conversation with an `@` list: the third path stays barred,
