@@ -119,3 +119,42 @@ fn per_thread_counters_stay_on_their_thread() {
     );
     assert_eq!(alloc_stats::snapshot(), parent_before);
 }
+
+/// A `realloc` from a smaller to a larger size counts one allocation of
+/// the new size and moves live bytes by the signed size difference: the
+/// bytes delta is the new size, the count delta is one, and the live
+/// delta is new minus old.
+#[test]
+#[allow(
+    unsafe_code,
+    reason = "the test drives its GlobalAlloc mirror by hand, never installing it"
+)]
+fn realloc_from_smaller_to_larger_counts_new_size() {
+    const OLD_SIZE: usize = 32;
+    const NEW_SIZE: usize = 96;
+    let old_layout = Layout::from_size_align(OLD_SIZE, 8).unwrap();
+    let new_layout = Layout::from_size_align(NEW_SIZE, 8).unwrap();
+    let mirror = Mirror;
+    // SAFETY: `old_layout` came from `from_size_align`, so it is valid
+    // for `alloc`, and the block is checked before use.
+    let block = unsafe { mirror.alloc(old_layout) };
+    assert!(!block.is_null());
+    let before = alloc_stats::snapshot();
+    // SAFETY: `block` came from this mirror's `alloc` with `old_layout`
+    // and is live, so it is valid for `realloc` with the larger size.
+    let moved = unsafe { mirror.realloc(block, old_layout, NEW_SIZE) };
+    assert!(!moved.is_null());
+    let after = alloc_stats::snapshot();
+    assert_eq!(
+        after.alloc_bytes - before.alloc_bytes,
+        u64::try_from(NEW_SIZE).unwrap()
+    );
+    assert_eq!(after.allocs - before.allocs, 1);
+    assert_eq!(
+        after.live_bytes - before.live_bytes,
+        i64::try_from(NEW_SIZE).unwrap() - i64::try_from(OLD_SIZE).unwrap()
+    );
+    // SAFETY: `moved` came from this mirror's `realloc` with the new
+    // size, and is live until this free.
+    unsafe { mirror.dealloc(moved, new_layout) };
+}

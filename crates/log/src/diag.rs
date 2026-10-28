@@ -521,6 +521,23 @@ fn start_timer(
     Some(timer)
 }
 
+// Exempt: cargo-mutants' default-feature workspace job does not compile
+// this body, and the existing `alloc-stats` tests cover same-thread output
+// (`same_thread_timer_writes_all_alloc_fields_together`) and both
+// cross-thread omission cases (`cross_thread_timer_writes_no_alloc_fields`
+// and `cross_thread_stop_then_parent_drop_writes_no_alloc_fields`).
+#[cfg(feature = "alloc-stats")]
+#[cfg_attr(false, mutants::skip)]
+fn snapshot_on_starting_thread(
+    start_thread: std::thread::ThreadId,
+) -> Option<crate::alloc_stats::Snapshot> {
+    if std::thread::current().id() == start_thread {
+        Some(crate::alloc_stats::snapshot())
+    } else {
+        None
+    }
+}
+
 impl Timer {
     /// Stamps completion; the drop then emits with the stamped end. The
     /// first stamp wins. In an `alloc-stats` build the end snapshot lands
@@ -529,8 +546,8 @@ impl Timer {
     pub fn stop(&mut self) {
         if self.end.is_none() {
             #[cfg(feature = "alloc-stats")]
-            if std::thread::current().id() == self.start_thread {
-                self.end_allocs = Some(crate::alloc_stats::snapshot());
+            {
+                self.end_allocs = snapshot_on_starting_thread(self.start_thread);
             }
             self.end = Some(self.clock.now());
         }
@@ -565,10 +582,7 @@ impl Drop for Timer {
         #[cfg(feature = "alloc-stats")]
         let end_allocs = match self.end {
             Some(_) => self.end_allocs,
-            None if std::thread::current().id() == self.start_thread => {
-                Some(crate::alloc_stats::snapshot())
-            }
-            None => None,
+            None => snapshot_on_starting_thread(self.start_thread),
         };
         #[cfg(feature = "alloc-stats")]
         let alloc = end_allocs.map(|end| AllocMetrics {
