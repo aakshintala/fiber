@@ -252,7 +252,7 @@ fn list_shows_personal_lines_then_repository_rows() {
         out,
         format!(
             "github.com/acme/y v1.0.0 local\ngithub.com/acme/pkg v2.0.0 repository {} pkg {digest}\n",
-            doors::project(&setup.workspace()).display()
+            worktree::project(&setup.workspace()).display()
         )
     );
 }

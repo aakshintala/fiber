@@ -161,7 +161,7 @@ pub(crate) fn wait_listed(
 
 /// The session's `events.jsonl` path.
 pub(crate) fn log_path(home: &Home, id: &str) -> std::path::PathBuf {
-    log::sessions_dir(&home.home(), &doors::project(&home.workspace()))
+    log::sessions_dir(&home.home(), &worktree::project(&home.workspace()))
         .join(id)
         .join("events.jsonl")
 }

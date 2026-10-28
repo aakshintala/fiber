@@ -277,7 +277,7 @@ pub(crate) fn new_session(
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
-    case_run: Option<Arc<crate::case::run::CaseRun>>,
+    case_run: Option<Arc<extensions::case::CaseRun>>,
     parent: Option<Parent>,
     supervised: bool,
     inherited: Vec<PathBuf>,
@@ -373,7 +373,7 @@ pub(crate) fn run_new(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
     host: Option<Arc<extensions::HostScript>>,
-    case_run: Option<Arc<crate::case::run::CaseRun>>,
+    case_run: Option<Arc<extensions::case::CaseRun>>,
     parent: Option<Parent>,
     rewound: Option<r#loop::Rewound>,
     reads: Arc<crate::switch::Reads>,
@@ -403,7 +403,7 @@ pub(crate) fn run_new(
             let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
             let workspace = std::env::current_dir()
                 .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+            let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
             // The point's session lives beside the child, or in the
             // recorded parent project when the continuation names one: a
             // workspace move, or a rewind to a point in another project.
@@ -729,10 +729,22 @@ pub(crate) fn run_new(
         fetch_prompts.get(server, prompt, text, cancel)
     });
     let case_driver = case_run.as_ref().and_then(|case| {
-        match case.start(session.driver(), Arc::clone(&log), Arc::clone(&cancel)) {
+        let mut watcher = log.watch_all();
+        let events = Box::new(move |wait| {
+            watcher
+                .recv_timeout(wait)
+                .map(|result| result.map_err(|error| error.to_string()))
+        });
+        let case_cancel: Arc<dyn Fn() + Send + Sync> = {
+            let cancel = Arc::clone(&cancel);
+            Arc::new(move || {
+                cancel.cancel();
+            })
+        };
+        match case.start(session.driver(), events, case_cancel) {
             Ok(driver) => Some(driver),
             Err(error) => {
-                case.record_failure(format!("starting the case driver: {error}"));
+                case.record_failure(error.to_string());
                 None
             }
         }
@@ -912,7 +924,7 @@ pub(crate) fn run_new_with(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
     host: Option<Arc<extensions::HostScript>>,
-    case_run: Option<Arc<crate::case::run::CaseRun>>,
+    case_run: Option<Arc<extensions::case::CaseRun>>,
     parent: Option<Parent>,
     rewound: Option<r#loop::Rewound>,
     reads: Arc<crate::switch::Reads>,

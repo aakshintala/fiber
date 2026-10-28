@@ -117,6 +117,10 @@ fn among_by_role() {
     // A neutral tint takes the grey ramp, any other tint the colour cube,
     // and a text role either (`docs/tui.md`, "Look").
     assert_eq!(among(Role::Surface), GREY);
+    assert_eq!(among(Role::CardRetrying), CUBE);
+    assert_eq!(among(Role::CardNeedsInput), CUBE);
+    assert_eq!(among(Role::CardReady), GREY);
+    assert_eq!(among(Role::CardCrashed), GREY);
     assert_eq!(among(Role::Rule), GREY);
     assert_eq!(among(Role::Handoff), CUBE);
     assert_eq!(among(Role::Alert), CUBE);
@@ -162,6 +166,10 @@ fn dark_at_256_known_entries() {
         (Role::Panel, 233),
         (Role::Surface, 234),
         (Role::SurfaceRaised, 238),
+        (Role::CardRetrying, 16),
+        (Role::CardNeedsInput, 16),
+        (Role::CardReady, 233),
+        (Role::CardCrashed, 233),
         (Role::Turn, 233),
         (Role::Prompt, 237),
         (Role::Code, 234),
@@ -418,7 +426,7 @@ fn paint_leaves_reset_and_other_colours() {
         ("a", Style::new().fg(Color::Reset).bg(Color::Reset)),
         (
             "b",
-            Style::new().fg(Color::Indexed(37)).bg(Color::Rgb(1, 2, 3)),
+            Style::new().fg(Color::Indexed(41)).bg(Color::Rgb(1, 2, 3)),
         ),
         ("c", Style::new().fg(Color::Red).bg(Color::Indexed(255))),
     ]);
@@ -454,7 +462,7 @@ fn no_color_blanks_edges_but_not_text_half_blocks() {
         ("▄", Style::new().fg(Role::Surface.color())),
         ("▀", Style::new().fg(Role::Prompt.color())),
         ("▄", Style::new().fg(Role::Accent.color())),
-        ("▀", Style::new().fg(Color::Indexed(37))),
+        ("▀", Style::new().fg(Color::Indexed(41))),
         ("x", Style::new().fg(Role::Surface.color())),
     ]);
     look.paint(&mut buf);

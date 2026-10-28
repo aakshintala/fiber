@@ -30,7 +30,7 @@ fn initial(
     forked_from: Option<Point>,
     parent: Option<Parent>,
 ) -> log::Log {
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let log = log::Log::create(
         &sessions,
         SessionId(id.into()),
@@ -357,7 +357,7 @@ fn fork_latest_reads_the_parent_value_at_its_point() {
     let parent = initial(&setup, PARENT, None, None);
     drop(parent);
     ask(&setup, PARENT);
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let parent_log = log::Log::open(
         &sessions,
         SessionId(PARENT.into()),
@@ -406,7 +406,7 @@ fn rewind_latest_reads_the_parent_value_at_the_end() {
     let parent = initial(&setup, PARENT, None, None);
     drop(parent);
     ask(&setup, PARENT);
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let parent_log = log::Log::open(
         &sessions,
         SessionId(PARENT.into()),

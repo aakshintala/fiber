@@ -180,7 +180,7 @@ fn started(run: &mut Run) {
 
 /// The session directories under the workspace, oldest first.
 fn sessions(setup: &Setup) -> Vec<PathBuf> {
-    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let mut ids: Vec<PathBuf> = fs::read_dir(&dir)
         .unwrap()
         .flatten()

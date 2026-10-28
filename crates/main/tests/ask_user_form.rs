@@ -143,8 +143,11 @@ impl Hubbed {
 
     /// The session's log, parsed.
     fn log(&self) -> Vec<Value> {
-        let dir = log::sessions_dir(&self.setup.home(), &doors::project(&self.setup.workspace()))
-            .join(&self.session);
+        let dir = log::sessions_dir(
+            &self.setup.home(),
+            &worktree::project(&self.setup.workspace()),
+        )
+        .join(&self.session);
         fs::read_to_string(dir.join("events.jsonl"))
             .unwrap()
             .lines()
@@ -609,7 +612,7 @@ fn idle(setup: &Setup, ms: Option<u64>) {
 
 /// The log of session `id` in `setup`'s workspace, parsed.
 fn log_of(setup: &Setup, id: &str) -> Vec<Value> {
-    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace())).join(id);
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace())).join(id);
     fs::read_to_string(dir.join("events.jsonl"))
         .unwrap()
         .lines()

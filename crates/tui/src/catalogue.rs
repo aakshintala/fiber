@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::thread;
 
+use contract::events::Notice;
+
 /// A model's prices in integer micro-dollars per million tokens, so
 /// `ModelEntry` keeps `Eq`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,8 +91,9 @@ pub struct Catalogue {
     /// One entry per model of every installed provider, providers sorted
     /// by name, models in list order.
     pub models: Vec<ModelEntry>,
-    /// One notice per read, in read order.
-    pub notices: Vec<String>,
+    /// One notice per read, in read order: [`Notice`], code and message,
+    /// so each surface shows it under its own code.
+    pub notices: Vec<Notice>,
     /// One list time per installed provider.
     pub lists: Vec<ListAge>,
     /// Each first-party provider no installed extension declares, sorted by
