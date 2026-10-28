@@ -1221,3 +1221,57 @@ fn an_unreachable_entry_is_unread_without_a_notice_and_a_dangling_link_is_skippe
     assert_eq!(found.unread, [place.join("link")]);
     assert!(found.notices.is_empty(), "{:?}", messages(&found));
 }
+
+#[test]
+fn a_raced_skill_read_does_not_pin_the_torn_header() {
+    crate::read_stat::disarm();
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    // Torn (invalid) and final (valid) share size: the first line alone
+    // decides validity, so a read landing mid-write parses as Invalid.
+    let torn = "~~~\nname: same\ndescription: aaa\n---\nBody.\n";
+    let final_text = "---\nname: same\ndescription: aaa\n---\nBody.\n";
+    assert_eq!(
+        torn.len(),
+        final_text.len(),
+        "the race hides in content, not size"
+    );
+    let path = write(&place, "a", torn);
+    let pre_mtime = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
+    let final_mtime = std::time::UNIX_EPOCH + std::time::Duration::from_secs(2_000);
+    assert_ne!(pre_mtime, final_mtime, "pre/post stats must differ");
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(pre_mtime)
+        .unwrap();
+    let mut cache = Cache::default();
+    let target = path.display().to_string();
+    // Pre-stat edge, read-return edge, hook-rewrite edge, post-stat edge:
+    // the read returns the torn bytes and the rewrite lands before the
+    // post-stat, so the post-stat is the final one.
+    crate::read_stat::arm(&target, {
+        let path = path.clone();
+        move || {
+            std::fs::write(&path, final_text).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(final_mtime)
+                .unwrap();
+        }
+    });
+    let first = cached(&tree, &mut cache);
+    assert!(
+        names(&first).is_empty(),
+        "this turn serves the torn Invalid: {:?}",
+        names(&first)
+    );
+    // The next turn start re-reads: the torn header was never pinned
+    // under the final stat.
+    let second = cached(&tree, &mut cache);
+    assert_eq!(names(&second), ["same"], "the next turn offers the skill");
+    assert_eq!(description_of(&second, "same"), "aaa");
+}

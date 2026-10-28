@@ -310,10 +310,16 @@ fn read_place(
             });
             continue;
         }
-        match std::fs::read(&path) {
+        // A stat taken after the read is stored as the stat of what was
+        // read only when nothing moved across the read: on mismatch the
+        // header serves this turn and no stat is stored, so the next
+        // turn start reads the file again.
+        let key = path.display().to_string();
+        let (result, validated) = crate::read_stat::read_validated(&key);
+        match result {
             Ok(bytes) => {
                 let header = skill_header::parse(&String::from_utf8_lossy(&bytes));
-                if let Some(now) = stat_of(&path.display().to_string()) {
+                if let Some(now) = validated {
                     cache.entries.insert(path.clone(), (now, header.clone()));
                 }
                 found.push(Read { path, header });

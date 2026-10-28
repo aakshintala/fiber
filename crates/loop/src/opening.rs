@@ -2,6 +2,7 @@
 //! the environment and instruction files, read once at the first turn,
 //! and the rendering of the logged fields back into the conversation.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -9,6 +10,8 @@ use contract::ErrorCode;
 use contract::events::{
     Environment, ExtensionSectionSent, Git, InstructionFileSent, Notice, OpeningMessage,
 };
+
+use crate::changes::Stat;
 
 use crate::prompt::{PromptInputs, fill};
 use crate::skills;
@@ -34,6 +37,12 @@ pub(crate) struct Collected {
     /// The discovery's winners, in discovery order: what the listing was
     /// built from, and what the maintained set is refreshed with.
     pub(crate) found: Vec<skills::Found>,
+    /// One stat taken immediately before each instruction-file and sized
+    /// section-file read, by path string: the baseline the tracked state
+    /// stores, so a change between the stat and the read shows as a
+    /// difference at the next check. Absent or unreadable at the stat
+    /// edge maps to `None`.
+    pub(crate) pre_stats: BTreeMap<String, Option<Stat>>,
 }
 
 /// Reads the environment, the instruction files and the skills once
@@ -47,16 +56,22 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
     let (chain, git) = repo_chain(&workspace);
     let mut files = Vec::new();
     let mut notices = Vec::new();
+    let mut pre_stats: BTreeMap<String, Option<Stat>> = BTreeMap::new();
     // The global file first, then the chain from the repository's top
     // level down to the workspace.
-    read_candidate(&home.join("AGENTS.md"), &mut files, &mut notices);
+    read_candidate(
+        &home.join("AGENTS.md"),
+        &mut files,
+        &mut notices,
+        &mut pre_stats,
+    );
     for dir in &chain {
         // The global file already covered the home directory: reading it
         // again would send `<home>/AGENTS.md` twice.
         if dir == &home {
             continue;
         }
-        read_dir_file(dir, &mut files, &mut notices);
+        read_dir_file(dir, &mut files, &mut notices, &mut pre_stats);
     }
     let found = skills::discover(inputs, chain.first().unwrap_or(&workspace));
     let listed = skills::listing(&found.skills, &inputs.skills_disabled);
@@ -64,7 +79,13 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
     for (name, paths, budget) in &inputs.extension_sections {
         let mut files = Vec::new();
         for path in paths {
-            match std::fs::read(path) {
+            // The stat is taken immediately before the read, with no
+            // other edge between: a change across them misses the
+            // size-and-time shortcut at the next check.
+            let key = path.display().to_string();
+            let (result, before) = crate::read_stat::read_pre(&key);
+            pre_stats.insert(key, before);
+            match result {
                 Ok(bytes) => files.push(sent(path, &bytes)),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => notices.push(section_io_failed(path, &e, name)),
@@ -104,6 +125,7 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
         message,
         notices,
         found: found.skills,
+        pre_stats,
     }
 }
 
@@ -387,11 +409,22 @@ pub(crate) fn candidate(dir: &Path) -> Option<PathBuf> {
 /// The instruction file `dir` holds: [`candidate`], read in full. Gone
 /// after the check is left out silently; present but unreadable is left
 /// out and a notice names it; an empty file is sent as it is.
-fn read_dir_file(dir: &Path, files: &mut Vec<InstructionFileSent>, notices: &mut Vec<Notice>) {
+fn read_dir_file(
+    dir: &Path,
+    files: &mut Vec<InstructionFileSent>,
+    notices: &mut Vec<Notice>,
+    pre_stats: &mut BTreeMap<String, Option<Stat>>,
+) {
     let Some(path) = candidate(dir) else {
         return;
     };
-    match std::fs::read(&path) {
+    // The stat is taken immediately before the read, with no other edge
+    // between: a change across them misses the size-and-time shortcut at
+    // the next check.
+    let key = path.display().to_string();
+    let (result, before) = crate::read_stat::read_pre(&key);
+    pre_stats.insert(key, before);
+    match result {
         Ok(bytes) => files.push(sent(&path, &bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => notices.push(io_failed(&path, &e)),
@@ -405,8 +438,15 @@ fn read_candidate(
     path: &Path,
     files: &mut Vec<InstructionFileSent>,
     notices: &mut Vec<Notice>,
+    pre_stats: &mut BTreeMap<String, Option<Stat>>,
 ) -> bool {
-    match std::fs::read(path) {
+    // The stat is taken immediately before the read, with no other edge
+    // between: a change across them misses the size-and-time shortcut at
+    // the next check.
+    let key = path.display().to_string();
+    let (result, before) = crate::read_stat::read_pre(&key);
+    pre_stats.insert(key, before);
+    match result {
         Ok(bytes) => {
             files.push(sent(path, &bytes));
             true
