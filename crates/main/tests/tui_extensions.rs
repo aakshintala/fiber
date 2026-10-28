@@ -283,6 +283,89 @@ fn animated_row_renders_frame_zero_then_stops() {
     });
     quit(run);
 }
+/// Parses every `NOTE-<digits>` suffix on the grid as a number, so
+/// `NOTE-1` never matches `NOTE-10`: only whole suffixes count.
+fn notice_frames(contents: &str) -> Vec<u64> {
+    let mut frames = Vec::new();
+    let mut rest = contents;
+    while let Some(at) = rest.find("NOTE-") {
+        rest = &rest[at + 5..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(frame) = digits.parse::<u64>() {
+            frames.push(frame);
+        }
+    }
+    frames
+}
+#[test]
+fn animated_notice_redraws_over_two_intervals() {
+    let setup = Setup::new();
+    configure(&setup, None);
+    install(
+        &setup,
+        "ticker",
+        "fiber.slot('notice',{timeout=100,animate={interval_ms=120},render=function(input) return {{{text='NOTE-'..input.frame}}} end})",
+        None,
+    );
+    let mut run = turn(&setup);
+    // An unknown slash command is refused with a notice, which the
+    // replacement draws. The event's 10 s fade bounds both waits; each
+    // needs one effective interval (120 ms floor) plus frame/pty slop.
+    run.write(b"/nope\r");
+    let first = run.wait_screen("animated notice advances", |grid| {
+        notice_frames(&grid.contents)
+            .iter()
+            .any(|&frame| frame >= 1)
+    });
+    let seen = notice_frames(&first.contents)
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(1);
+    run.wait_screen("animated notice advances again", |grid| {
+        notice_frames(&grid.contents)
+            .iter()
+            .any(|&frame| frame > seen)
+    });
+    // The refusal keeps `/nope` in the draft: one press clears it, so
+    // quit's own two presses land on an empty box.
+    run.write(b"\x03");
+    quit(run);
+}
+#[test]
+fn reduced_motion_draws_the_animated_notice_still_frame() {
+    let setup = Setup::new();
+    configure(&setup, None);
+    // `tui.reduced_motion` stills the notice animation (`docs/tui.md`,
+    // "Reduced motion"): the binary proves frame 0 is wired, while the
+    // crate-level tests prove no later renderer calls follow.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model":"scripted/s.json","hub":{"idle_exit_ms":200},"tui":{"reduced_motion":true,"rail":{"shown":false},"panel":{"cards":[]}}}),
+    );
+    install(
+        &setup,
+        "ticker",
+        "fiber.slot('notice',{timeout=100,animate={interval_ms=120},render=function(input) return {{{text='NOTE-'..input.frame}}} end})",
+        None,
+    );
+    let mut run = turn(&setup);
+    run.write(b"/nope\r");
+    let grid = run.wait_screen("animated notice still frame", |grid| {
+        notice_frames(&grid.contents).contains(&0)
+    });
+    assert!(
+        notice_frames(&grid.contents)
+            .iter()
+            .all(|&frame| frame == 0),
+        "every animated notice row still shows frame 0: {}",
+        grid.contents
+    );
+    // The refusal keeps `/nope` in the draft: one press clears it, so
+    // quit's own two presses land on an empty box.
+    run.write(b"\x03");
+    quit(run);
+}
 #[test]
 fn reduced_motion_draws_the_animated_still_frame() {
     let setup = Setup::new();
