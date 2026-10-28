@@ -348,16 +348,13 @@ fn exact_forms_read_without_paths() {
 fn nl_numbering_and_layout_flags_read() {
     // The ticket's acceptance command: `nl -ba` over a file, piped
     // through a print-only `sed`. The `sed` with no file declares the
-    // workdir beside the numbered file.
-    assert_reads("nl -ba crates/main/src/switch.rs | sed -n '1,5p'");
-    assert_eq!(
-        classified("nl -ba crates/main/src/switch.rs | sed -n '1,5p'")
-            .declared
-            .paths,
-        Some(vec![
-            "/work/crates/main/src/switch.rs".to_owned(),
-            "/work".to_owned()
-        ])
+    // workdir beside the numbered file. `docs/tools.md`, "Shell",
+    // "Effects" promises the paths each stage names, not their order,
+    // so the two paths are asserted as a set (`docs/testing.md`,
+    // "Event streams").
+    assert_declares(
+        "nl -ba crates/main/src/switch.rs | sed -n '1,5p'",
+        &["/work/crates/main/src/switch.rs", "/work"],
     );
     for command in [
         "nl f",

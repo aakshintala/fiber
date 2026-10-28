@@ -1840,3 +1840,55 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
         );
     }
 }
+
+#[test]
+fn nl_numbered_file_piped_through_print_only_sed_reads() {
+    // #3597 acceptance: `nl -ba` over a file, piped through a
+    // print-only `sed`, declares `reads`. `docs/tools.md`, "Shell",
+    // "Effects" promises the paths each stage names, not their order,
+    // so the two paths are asserted as a set (`docs/testing.md`,
+    // "Event streams").
+    let effects = super::super::classify::classify(
+        "nl -ba crates/main/src/switch.rs | sed -n '1,5p'",
+        std::path::Path::new("/work"),
+        &[],
+    );
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Reads],
+        "nl -ba crates/main/src/switch.rs | sed -n '1,5p'"
+    );
+    assert!(
+        effects.declared.reversible,
+        "nl -ba crates/main/src/switch.rs | sed -n '1,5p'"
+    );
+    let declared = effects.declared.paths.unwrap_or_default();
+    let actual: std::collections::BTreeSet<&str> = declared.iter().map(String::as_str).collect();
+    assert_eq!(
+        actual,
+        std::collections::BTreeSet::from(["/work/crates/main/src/switch.rs", "/work"]),
+        "nl -ba crates/main/src/switch.rs | sed -n '1,5p'"
+    );
+}
+
+#[test]
+fn cat_with_discard_redirect_or_true_reads() {
+    // #3597 acceptance: a read-only `cat` beside `true` declares
+    // `reads` with only the earlier part's path.
+    let effects = super::super::classify::classify(
+        "cat a 2>/dev/null || true",
+        std::path::Path::new("/work"),
+        &[],
+    );
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Reads],
+        "cat a 2>/dev/null || true"
+    );
+    assert!(effects.declared.reversible, "cat a 2>/dev/null || true");
+    assert_eq!(
+        effects.declared.paths,
+        Some(vec!["/work/a".to_owned()]),
+        "cat a 2>/dev/null || true"
+    );
+}
