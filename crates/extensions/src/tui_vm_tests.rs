@@ -1176,11 +1176,11 @@ fn run_key_on_an_action_only_or_unknown_key_is_not_handled() {
         "fiber.key('alt+h', { action = 'move_word', variant = 'left' })\n\
          fiber.key('ctrl+o', { timeout = 100, run = function() return true end })",
     );
-    assert_eq!(run(&mut vm, "alt+h").unwrap(), false);
-    assert_eq!(run(&mut vm, "ctrl+z").unwrap(), false);
+    assert!(!run(&mut vm, "alt+h").unwrap());
+    assert!(!run(&mut vm, "ctrl+z").unwrap());
     // Neither call notifies or switches the VM off.
     assert!(vm.key_rejections().is_empty());
-    assert_eq!(run(&mut vm, "ctrl+o").unwrap(), true);
+    assert!(run(&mut vm, "ctrl+o").unwrap());
 }
 
 #[test]
@@ -1220,17 +1220,14 @@ fn run_key_with_a_lua_error_or_yield_is_a_lua_error() {
 fn run_key_receives_only_the_session_id() {
     let (_, mut vm) = vm("fiber.key('ctrl+o', { timeout = 100, \
          run = function(input) return input.session_id == 's1' and input.key == nil end })");
-    assert_eq!(run(&mut vm, "ctrl+o").unwrap(), true);
+    assert!(run(&mut vm, "ctrl+o").unwrap());
 }
 
 #[test]
 fn a_run_that_finishes_before_its_deadline_is_handled() {
     let (clock, mut vm) =
         vm("fiber.key('ctrl+o', { timeout = 100, run = function() ticked() return true end })");
-    assert_eq!(
-        run_advancing(&mut vm, clock, "ctrl+o", 99 * MS).unwrap(),
-        true
-    );
+    assert!(run_advancing(&mut vm, clock, "ctrl+o", 99 * MS).unwrap());
 }
 
 #[test]
@@ -1255,8 +1252,5 @@ fn a_fresh_load_works_after_a_timeout() {
     let timed_out = run_advancing(&mut timed, clock, "ctrl+o", 100 * MS);
     assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
     let (_, mut again) = vm(source);
-    assert_eq!(
-        run_advancing(&mut again, FakeClock::new(), "ctrl+o", Duration::ZERO).unwrap(),
-        true
-    );
+    assert!(run_advancing(&mut again, FakeClock::new(), "ctrl+o", Duration::ZERO).unwrap());
 }

@@ -597,7 +597,16 @@ impl TuiVm {
         match result? {
             mlua::Value::Boolean(handled) => Ok(handled),
             mlua::Value::Nil => Ok(false),
-            _ => Err(shape("a key handler returns only true, false or nil")),
+            mlua::Value::LightUserData(_)
+            | mlua::Value::Integer(_)
+            | mlua::Value::Number(_)
+            | mlua::Value::String(_)
+            | mlua::Value::Table(_)
+            | mlua::Value::Function(_)
+            | mlua::Value::Thread(_)
+            | mlua::Value::UserData(_)
+            | mlua::Value::Error(_)
+            | mlua::Value::Other(_) => Err(shape("a key handler returns only true, false or nil")),
         }
     }
 
