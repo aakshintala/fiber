@@ -710,6 +710,10 @@ impl Session {
         self.gate.conns.cut_owed(&self.gate.session_id, |reader| {
             self.gate.accepted.unanswered(reader) > 0
         });
+        // The cut is decided: what follows is only the existing flush
+        // margin for the cut writers.
+        #[cfg(test)]
+        self.gate.note(tests::Probe::CutWaitStarted);
         self.gate.conns.wait_cut(clock, until + CUT_FLUSH);
     }
 
