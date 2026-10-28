@@ -533,6 +533,20 @@ fn waits_count_stalls_already_past_their_event() {
         .await_closed(2, Deadline::after(event_within))));
 }
 
+/// Waits until at least `count` persistent windows started on the
+/// provider core. A window is announced after its budget exists, so an
+/// observed window proves its start precedes the test's next advance.
+fn await_provider_windows(server: &ProviderServer, count: usize, deadline: Deadline) -> bool {
+    let guard = lock(&server.core.shared.windows);
+    let (guard, _) = server
+        .core
+        .shared
+        .windows_changed
+        .wait_timeout_while(guard, deadline.left(), |windows| *windows < count)
+        .unwrap_or_else(PoisonError::into_inner);
+    *guard >= count
+}
+
 /// Idle windows never expire the provider: with no client for longer
 /// than a request bound, the next request is still served in order.
 #[test]
@@ -540,6 +554,10 @@ fn idle_windows_do_not_expire_the_provider() {
     let clock = FakeClock::new();
     let server =
         ProviderServer::start_on(clock.clone(), vec![Response::status(200, "ok")]).unwrap();
+    assert!(
+        await_provider_windows(&server, 1, Deadline::after(READ_WITHIN)),
+        "the first window started before the advance"
+    );
     // Longer than a request bound with no client: idle windows renew,
     // and no missing request fails.
     #[allow(
@@ -547,6 +565,10 @@ fn idle_windows_do_not_expire_the_provider() {
         reason = "fakes-internal advance inside the crates/fakes path exemption (ruling 6246218049)"
     )]
     clock.advance(Duration::from_secs(31));
+    assert!(
+        await_provider_windows(&server, 2, Deadline::after(READ_WITHIN)),
+        "the second window started before the request"
+    );
     assert_eq!(get_status(&server), "200");
     assert_eq!(server.requests().len(), 1);
     assert_eq!(get_status(&server), "500");
