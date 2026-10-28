@@ -25,16 +25,6 @@ pub(crate) fn on(lists: &ToolLists, tool: &str) -> bool {
         && !lists.disabled.iter().any(|name| name == tool)
 }
 
-/// A switch's mark: on or off, with `›` when it is the selection's focus.
-pub(crate) fn mark(on: bool, focused: bool) -> String {
-    let mark = if on { "[x]" } else { "[ ]" };
-    if focused {
-        format!("›{mark}")
-    } else {
-        mark.to_owned()
-    }
-}
-
 /// The group a tool row's switches write.
 fn group_of(source: &ToolSource) -> Option<ToolGroup> {
     match source {
