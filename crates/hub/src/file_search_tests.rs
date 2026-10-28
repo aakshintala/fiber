@@ -2,9 +2,9 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, atomic::AtomicBool, mpsc};
 
-use crate::connection::{Hub, lock, serve_connection};
+use crate::connection::{Accept, Hub, lock, serve_counted};
 use crate::fake::{FakeMachine, FakeStarter, SearchGate};
 use crate::testkit::{DEADLINE, await_true, hub};
 use fakes::clock::FakeClock;
@@ -41,7 +41,11 @@ impl Client {
         let held = h.clone();
         std::thread::spawn(move || {
             held.environments.first(held.clock.as_ref(), &held.diag);
-            serve_connection(server, held);
+            match held.poll_accept(&server, &AtomicBool::new(false)) {
+                Accept::Counted(n) => serve_counted(server, held, n),
+                Accept::Dropped => panic!("test connection stream could not be cloned"),
+                Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+            }
             done.send(()).unwrap_or(());
         });
         let (out, answers) = mpsc::channel();
