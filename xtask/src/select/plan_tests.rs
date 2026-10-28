@@ -536,6 +536,8 @@ fn a_cli_diff_skips_session_start_and_paging() {
 
 #[test]
 fn a_worktree_diff_selects_the_list_row() {
+    // The `docs/ci.md:120` Selection row names crates that select
+    // `sessions list`; `worktree` belongs there because
     // `cli::sessions_list::list` resolves the project in `worktree`
     // (`cli/src/sessions_list.rs:137`), so a worktree change selects
     // `sessions list` alongside `session start` and the terminal rows:
