@@ -525,23 +525,52 @@ fn esc_keeps_the_live_session_for_a_second_prompt() {
         !kinds.contains(&"fiber_exited"),
         "no exit between the turns: {kinds:?}"
     );
-    // The prologue order the docs promise: `session_started` is the
-    // log's first line and `fiber_started` follows it in a new session
-    // (`docs/events.md`, "Process boundary"); `extensions_loaded` is
-    // written at each process start (`docs/events.md`,
-    // "`extensions_loaded`"); `preamble_built` follows
-    // `session_started` or `fiber_started` (`docs/events.md`,
-    // "`preamble_built`"); `opening_message` is written at session start
-    // (`docs/events.md`, "`opening_message`"). Each turn then opens its
-    // one step before the assistant message (`docs/loop.md`, "One step").
+    // The order the docs promise: `session_started` is always the log's
+    // first line and `fiber_started` follows it in a new session, each
+    // written once by the one process here (`docs/events.md`, "Process
+    // boundary"). `extensions_loaded` is written at each process start
+    // before the first model request, `preamble_built` follows the
+    // start before the next model request, and `opening_message` is
+    // written at session start (`docs/events.md`, "`extensions_loaded`",
+    // "`preamble_built`", "`opening_message`"). The docs promise no
+    // relative order among those three, so the test pins only that each
+    // appears once between the start and the first turn. Each turn then
+    // opens its one step before the assistant message (`docs/loop.md`,
+    // "One step").
+    assert_eq!(kinds[0], "session_started", "the log starts: {kinds:?}");
     assert_eq!(
-        kinds,
+        kinds[1], "fiber_started",
+        "the new session follows: {kinds:?}"
+    );
+    for prologue in ["session_started", "fiber_started"] {
+        assert_eq!(
+            kinds.iter().filter(|kind| **kind == prologue).count(),
+            1,
+            "one process, one {prologue}: {kinds:?}"
+        );
+    }
+    let first_turn = kinds
+        .iter()
+        .position(|kind| *kind == "turn_started")
+        .unwrap_or_else(|| panic!("a first turn: {kinds:?}"));
+    for prologue in ["extensions_loaded", "preamble_built", "opening_message"] {
+        assert_eq!(
+            kinds.iter().filter(|kind| **kind == prologue).count(),
+            1,
+            "one {prologue} with no reload or handoff: {kinds:?}"
+        );
+        let at = kinds
+            .iter()
+            .position(|kind| *kind == prologue)
+            .unwrap_or_else(|| panic!("a {prologue}: {kinds:?}"));
+        assert!(
+            at > 1 && at < first_turn,
+            "{prologue} sits between the start and the first turn: {kinds:?}"
+        );
+    }
+    assert_eq!(
+        kinds[first_turn..],
         [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "preamble_built",
-            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -557,7 +586,7 @@ fn esc_keeps_the_live_session_for_a_second_prompt() {
             "assistant_message_completed",
             "turn_completed",
         ],
-        "the session start and both turns in order"
+        "both turns in order"
     );
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }

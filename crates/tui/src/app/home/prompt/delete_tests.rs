@@ -1227,9 +1227,70 @@ fn unanswered_delete_is_uncertain_and_is_not_retried() {
 
 #[test]
 fn delete_accepted_goes_home_with_a_fresh_page() {
-    let mut app = attached();
+    // The attached target lives in project `-w` (`live`). Its first
+    // status already put one scoped ask for `-w` in flight; answer it
+    // here so the asks below are the delete's own. The setup keeps the
+    // live fold's lines instead of using `attached`, which drops them.
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    let live_out: Vec<Value> = app
+        .on_line(live(A, "old work"))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    app.attach(SessionId(A.to_owned()));
+    let live_scoped = live_out
+        .iter()
+        .find(|line| {
+            line["command"] == "recent"
+                && line
+                    .get("args")
+                    .and_then(|args| args.get("project"))
+                    .and_then(Value::as_str)
+                    == Some("-w")
+        })
+        .unwrap_or_else(|| panic!("the live scoped ask: {live_out:?}"));
+    let live_id = live_scoped["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("live scoped ask id: {live_scoped:?}"));
+    let quiet: Vec<Value> = app
+        .on_line(accepted(live_id, json!({"sessions": [], "total": 0})))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert!(
+        quiet.is_empty(),
+        "a clean scoped answer sends no follow-up: {quiet:?}"
+    );
     let _raw = asked(&mut app, &[A], &[A]);
     let out = fold_lines(&mut app, left(A, "exited"));
+    // The stop's project refresh goes out while the delete waits; the
+    // hub may answer it before the delete does, so answer it here.
+    // That leaves no `-w` ask in flight and nothing dirty, and the
+    // accept below re-asks the project's page itself.
+    let stop_scoped = out
+        .iter()
+        .find(|line| {
+            line["command"] == "recent"
+                && line
+                    .get("args")
+                    .and_then(|args| args.get("project"))
+                    .and_then(Value::as_str)
+                    == Some("-w")
+        })
+        .unwrap_or_else(|| panic!("the stop-time scoped ask: {out:?}"));
+    let stop_id = stop_scoped["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("stop scoped ask id: {stop_scoped:?}"));
+    let quiet: Vec<Value> = app
+        .on_line(accepted(stop_id, json!({"sessions": [], "total": 0})))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert!(
+        quiet.is_empty(),
+        "a clean scoped answer sends no follow-up: {quiet:?}"
+    );
     let gone = deletes(&out);
     assert_eq!(gone.len(), 1);
     let delete = gone[0]["id"]
@@ -1241,7 +1302,35 @@ fn delete_accepted_goes_home_with_a_fresh_page() {
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
     assert!(app.on_home());
-    assert!(lines.iter().any(|line| line["command"] == "recent"));
+    // The accepted delete refills the unscoped page and the attached
+    // target's own project page. A `None` project sends no scoped ask
+    // and an empty one is dropped by `scoped_first`, so either mutant
+    // fails the scoped assertion while the unscoped refresh holds; a
+    // wrong project asks for a page this terminal never shows.
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["command"] == "recent" && line.get("args").is_none()),
+        "the unscoped page refreshes: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line["command"] == "recent"
+            && line
+                .get("args")
+                .and_then(|args| args.get("project"))
+                .and_then(Value::as_str)
+                == Some("-w")),
+        "the attached target's project page refreshes: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line["command"] == "recent"
+            && line
+                .get("args")
+                .and_then(|args| args.get("project"))
+                .and_then(Value::as_str)
+                .is_some_and(|project| project != "-w")),
+        "no other project's page refreshes on accept: {lines:?}"
+    );
     // The connection is neither released nor replaced.
     assert!(app.outbox.is_up());
 }
