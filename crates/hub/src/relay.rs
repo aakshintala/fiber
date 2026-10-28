@@ -954,6 +954,7 @@ fn replay_exited_delegate(
             // is the hub's own, so its peer pid says nothing.
             target: RelayTarget::SyntheticReplay,
         },
+        spawn_relay_thread,
     ) {
         Established::Running => {}
         Established::SpawnFailed(_) | Established::Refused(_, _) => {
@@ -1031,6 +1032,18 @@ enum Established {
     SpawnFailed(Option<log::diag::Timer>),
 }
 
+/// Starts a relay thread for `establish`: the spawner every production
+/// call shares, so a test can inject a deterministic failure without a
+/// resource the harness cannot control.
+type RelaySpawner = fn(Box<dyn FnOnce() + Send>) -> std::io::Result<thread::JoinHandle<()>>;
+
+/// Starts a relay thread under the `hub-relay` name.
+fn spawn_relay_thread(task: Box<dyn FnOnce() + Send>) -> std::io::Result<thread::JoinHandle<()>> {
+    thread::Builder::new()
+        .name("hub-relay".to_owned())
+        .spawn(task)
+}
+
 /// Mints the epoch, admits the session, starts the relay thread and pushes
 /// its entry: the establishment `attach_inner` and `replay_exited_delegate`
 /// share. The entry is pushed only when the thread runs. The caller answers
@@ -1044,6 +1057,7 @@ fn establish(
     relays: &Arc<Mutex<Relays>>,
     held: &mut std::sync::MutexGuard<'_, Relays>,
     establishment: Establishment,
+    spawner: RelaySpawner,
 ) -> Established {
     let Establishment {
         mark,
@@ -1085,13 +1099,13 @@ fn establish(
     };
     // The thread may run before its entry is pushed: on session EOF it
     // only removes an entry it finds.
-    let relayed = thread::Builder::new().name("hub-relay".to_owned()).spawn({
+    let relayed = spawner(Box::new({
         let hub = Arc::clone(hub);
         let writer = Arc::clone(writer);
         let relays = Arc::clone(relays);
         let session = session.to_owned();
         move || relay(owned, &session, reader, &hub, &writer, &relays)
-    });
+    }));
     let Ok(thread) = relayed else {
         let guard = pending_key
             .as_ref()
@@ -1207,6 +1221,41 @@ fn attach_inner(
     candidate_epoch: Option<u64>,
     reopen: bool,
 ) -> AttachOutcome {
+    attach_inner_with_spawner(
+        session,
+        stream,
+        hub,
+        writer,
+        relays,
+        replay,
+        command,
+        exclusive,
+        candidate_epoch,
+        reopen,
+        spawn_relay_thread,
+    )
+}
+
+/// The establishment `attach_inner` and its tests share: production
+/// callers pass the real spawner, while a test injects a deterministic
+/// thread failure.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the session, its stream, the hub, the client, the relays, the replay, the command, its admission and the spawner are one hand-off"
+)]
+fn attach_inner_with_spawner(
+    session: &str,
+    stream: UnixStream,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    replay: Option<Map<String, Value>>,
+    command: Option<(CommandId, Vec<u8>, Map<String, Value>)>,
+    exclusive: bool,
+    candidate_epoch: Option<u64>,
+    reopen: bool,
+    spawner: RelaySpawner,
+) -> AttachOutcome {
     let mark = crate::rejoin::Mark::now(&hub.home, session);
     let mut replay = replay;
     let mut replayed_id: Option<String> = None;
@@ -1312,15 +1361,29 @@ fn attach_inner(
             pending: replayed_id.zip(replay_timer.take()),
             target,
         },
+        spawner,
     ) {
         Established::Running => {}
         Established::Refused(guard, stream) => {
             drop(held);
+            // No production exclusive caller passes a command (`attach`
+            // never runs exclusive, `attach_rejoin` never passes one),
+            // but a refused admission leaves a written one with no
+            // thread to answer it, so it is refused here instead.
+            if let Some((id, _, _)) = &command {
+                crate::retire::refuse_not_found(writer, hub, relays, session, id);
+            }
             drop(guard);
             stream.shutdown(Shutdown::Both).unwrap_or(());
         }
         Established::SpawnFailed(guard) => {
             drop(held);
+            // The command above already reached the session socket, and
+            // no relay thread will ever read it: refuse it so the client
+            // is answered exactly once.
+            if let Some((id, _, _)) = &command {
+                crate::retire::refuse_not_found(writer, hub, relays, session, id);
+            }
             drop(guard);
         }
     }
