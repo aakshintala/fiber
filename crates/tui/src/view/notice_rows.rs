@@ -68,7 +68,7 @@ pub(super) fn draw(
     if width == 0 {
         return;
     }
-    let lines = app.visible_notices(bound, area.width);
+    let lines = app.notices.visible_lines(bound, area.width);
     let room = bottom.saturating_sub(area.y) as usize;
     let skip = lines.len().saturating_sub(room);
     let mut noted: Vec<crate::app::SpanRow> = Vec::new();
@@ -139,13 +139,13 @@ pub(super) fn draw(
     super::marks::paint_selection(app, buf, crate::app::SurfaceId::Notices, area);
 }
 
-/// Paints the bound renderer's `notice` lines for one notice, keeping
-/// its notice target on every painted row and its dismiss target on the
-/// rows' last column: true when the renderer drew. The replacement owns
-/// its rows whole, ✕ cell included. A renderer returning no lines hides
-/// the notice instead; the frame already dropped those before the
-/// split, so an empty result here falls back to the built-in row
-/// ([`Bound::notice_lines`]).
+/// Paints the bound renderer's `notice` lines that fit above `area.y`,
+/// keeping the notice target on each painted row and the dismiss target
+/// on their last column: true when the replacement owns the notice. The
+/// replacement owns its painted rows whole, ✕ cell included. A renderer
+/// returning no lines hides the notice instead; the frame already dropped
+/// those before the split, so an empty result here falls back to the
+/// built-in row ([`Bound::notice_lines`]).
 #[allow(clippy::too_many_arguments, reason = "one row's paint inputs")]
 fn paint_replacement(
     bound: &Bound,
@@ -164,9 +164,12 @@ fn paint_replacement(
     if fitted.is_empty() {
         return false;
     }
-    let count = fitted.len().min(usize::from(u16::MAX));
-    if count > bottom.saturating_sub(area.y) as usize {
-        return false;
+    let count = fitted
+        .len()
+        .min(usize::from(u16::MAX))
+        .min(bottom.saturating_sub(area.y) as usize);
+    if count == 0 {
+        return true;
     }
     *bottom = bottom.saturating_sub(to_u16(count));
     for (dy, line) in fitted.iter().take(count).enumerate() {
@@ -204,7 +207,7 @@ pub(super) fn overlay(
     targets: &mut Vec<Target>,
     bound: &Bound,
 ) -> Rect {
-    let Some(entries) = app.visible_notice_overlay_entries(bound, area.width) else {
+    let Some(entries) = app.notices.visible_overlay_entries(bound, area.width) else {
         return Rect::default();
     };
     targets.retain(|target| {

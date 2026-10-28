@@ -174,8 +174,7 @@ impl Band {
     pub(crate) fn rows(&self, width: u16, zone: &jiff::tz::TimeZone, out: &mut Rows) {
         let max = usize::from(width);
         if max == 0 {
-            // An empty band row, as before: no seam draws into a row
-            // with no cells.
+            // The band keeps its row, but zero width leaves no cells for the seam to paint.
             out.push((Line::default(), None));
             let band_at = out.len().saturating_sub(1);
             out.on_surface(band_at, width, Role::Handoff, crate::surface::Edges::BOTH);

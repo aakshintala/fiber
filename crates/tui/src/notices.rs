@@ -494,22 +494,6 @@ impl App {
         self.notices.lines()
     }
 
-    /// The notice rows the view draws through `bound`: hidden notices
-    /// drop out before the cap.
-    pub(crate) fn visible_notices(&self, bound: &Bound, width: u16) -> Vec<NoticeLine> {
-        self.notices.visible_lines(bound, width)
-    }
-
-    /// The notice overlay's entries through `bound` while it is open:
-    /// hidden notices drop out, so the overlay never opens one.
-    pub(crate) fn visible_notice_overlay_entries(
-        &self,
-        bound: &Bound,
-        width: u16,
-    ) -> Option<NoticeOverlay> {
-        self.notices.visible_overlay_entries(bound, width)
-    }
-
     /// The notice overlay's text while it is open.
     pub(crate) fn notice_overlay(&self) -> Option<Vec<String>> {
         self.notices.overlay()

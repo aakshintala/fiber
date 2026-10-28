@@ -1278,5 +1278,6 @@ fn a_sessionless_range_bound_renderer_stays_inert_without_notice() {
         renderer.fills_for(&ctx, "ledger_row"),
         SlotSelection::Absent
     );
+    // (`docs/tui.md`, "How a TUI extension runs": a range-bound client half stays inert without notice until the session's first `extensions_loaded`.)
     assert!(renderer.take_pending().is_empty());
 }

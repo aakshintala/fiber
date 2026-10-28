@@ -252,7 +252,7 @@ pub(crate) struct App {
     /// (`docs/tui.md`, "Images").
     images: images::Images,
     /// The notices floating over the conversation.
-    notices: Notices,
+    pub(crate) notices: Notices,
     /// The conversation's size, scroll and pages (`docs/tui.md`, "History
     /// and paging").
     screen: Screen,
