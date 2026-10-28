@@ -4,15 +4,12 @@
 
 use std::path::PathBuf;
 
-use contract::clock::Clock;
 use serde_json::json;
 
 use super::super::{App, Effect};
 use super::{Kind, Link, Outbox};
+use crate::app::testkit::{SESSION, hello, now};
 use crate::input::Draft;
-use crate::link::Line;
-
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
 /// An outbox with the link up.
 fn up() -> Outbox {
@@ -130,21 +127,6 @@ fn wrote_keeps_session_commands_but_not_subscribe_commands_or_start() {
 /// An app with no home, before the hub connects.
 fn fresh() -> App {
     App::new(PathBuf::from("/w"))
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
-}
-
-/// The injected clock's now.
-fn now() -> std::time::Instant {
-    fakes::clock::FakeClock::new().now()
 }
 
 /// Types `text`, checking each key does nothing else.
