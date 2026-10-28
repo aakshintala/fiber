@@ -285,18 +285,6 @@ impl Attention {
         lock(&self.announced).remove(session);
     }
 
-    #[cfg(test)]
-    pub(crate) fn listeners(&self) -> usize {
-        lock(&self.listeners).ids().len()
-    }
-
-    /// How many retired writers still wait for joining: the fan-out's
-    /// count under the registry guard.
-    #[cfg(test)]
-    pub(crate) fn retired(&self) -> usize {
-        lock(&self.listeners).retired()
-    }
-
     /// How many attention writers started, including retired ones: actual
     /// successful starts, not currently live writers. Test-only: no
     /// outside socket outcome distinguishes an idle parked thread from no

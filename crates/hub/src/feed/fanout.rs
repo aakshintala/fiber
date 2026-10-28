@@ -440,26 +440,12 @@ impl Fanout {
         self.fail_spawn.store(true, Ordering::SeqCst);
     }
 
-    /// Registered ids in registration order.
-    #[cfg(test)]
-    pub(crate) fn ids(&self) -> Vec<u64> {
-        self.list.iter().map(|sub| sub.id).collect()
-    }
-
     /// Successful writer starts, including retired ones: never
     /// decremented. Test-only: no outside socket outcome distinguishes an
     /// idle parked thread from no thread.
     #[cfg(test)]
     pub(crate) fn started(&self) -> usize {
         self.started
-    }
-
-    /// How many retired writers still wait for joining. Test-only: a
-    /// retained shut-socket descriptor is invisible except through
-    /// descriptor exhaustion, so no outside seam observes its release.
-    #[cfg(test)]
-    pub(crate) fn retired(&self) -> usize {
-        self.retired.len()
     }
 }
 

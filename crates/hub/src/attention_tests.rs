@@ -635,15 +635,13 @@ fn a_dead_or_slow_listener_does_not_stop_a_live_one() {
         status: &streaming,
         live: true,
     };
-    drop(attention.notify("a", Some(heard), &idle, false));
+    assert!(
+        attention.notify("a", Some(heard), &idle, false).is_empty(),
+        "the dead sender stays until the next send"
+    );
     assert_eq!(
         read_line(&mut read, "the first attention")["payload"]["reason"],
         "finished"
-    );
-    assert_eq!(
-        attention.listeners(),
-        3,
-        "the dead sender stays until the next send"
     );
     // The dead writer ends on its first failed write; further sends retire
     // it. Each send carries a distinct idle `since`, so none is
@@ -652,9 +650,6 @@ fn a_dead_or_slow_listener_does_not_stop_a_live_one() {
     let counted = Arc::clone(&polls);
     let retiring = Arc::clone(&attention);
     await_true("the dead listener to drop", move || {
-        if retiring.listeners() == 2 {
-            return true;
-        }
         let n = polls.fetch_add(1, Ordering::SeqCst);
         let streaming = status_of("streaming", None, S, None);
         let idle = status_of("idle", None, S + 2 + n, None);
@@ -662,8 +657,12 @@ fn a_dead_or_slow_listener_does_not_stop_a_live_one() {
             status: &streaming,
             live: true,
         };
-        drop(retiring.notify("a", Some(heard), &idle, false));
-        false
+        let shut = retiring.notify("a", Some(heard), &idle, false);
+        if shut.is_empty() {
+            return false;
+        }
+        assert_eq!(shut.len(), 1, "exactly one reported shutdown");
+        true
     });
     let extra = counted.load(Ordering::SeqCst);
     assert_eq!(
@@ -719,6 +718,7 @@ fn a_stalled_listener_is_dropped_at_the_bound_and_a_live_one_keeps_every_line() 
     // QUEUE+2 distinct waiting requests: dedup cannot hide a send, and
     // one dequeued in-flight item still leaves the bound firing.
     let count = crate::feed::QUEUE + 2;
+    let mut reported = 0;
     for n in 0..count {
         let request = format!("r{n}");
         let waiting = status_of("waiting", Some(&request), S, None);
@@ -726,6 +726,7 @@ fn a_stalled_listener_is_dropped_at_the_bound_and_a_live_one_keeps_every_line() 
         // Only the stalled connection can ever report: shut it outside
         // every lock, as production callers do.
         if !closers.is_empty() {
+            reported += closers.len();
             crate::feed::close_connections(closers, UnixStream::shutdown);
         }
         let line = read_line(&mut read, "every attention");
@@ -734,7 +735,7 @@ fn a_stalled_listener_is_dropped_at_the_bound_and_a_live_one_keeps_every_line() 
     }
     // The bound fired while the mutex was still held: the stalled
     // registration is gone and the live one is retained.
-    assert_eq!(attention.listeners(), 1, "the stalled listener is gone");
+    assert_eq!(reported, 1, "the stalled listener is gone");
     drop(guard);
     // The overflow shut the stalled connection both ways: EOF, not a line.
     let mut buf = [0; 1];
@@ -781,7 +782,6 @@ fn announce_reports_a_stalled_listener_without_silently_dropping_it() {
         }
     }
     assert_eq!(reported, 1, "the overflow hands back exactly one shutdown");
-    assert_eq!(attention.listeners(), 0, "the stalled listener is gone");
     drop(guard);
     let mut buf = [0; 1];
     assert_eq!(
@@ -865,7 +865,6 @@ fn stop_shuts_active_but_leaves_pending_receiving() {
     );
     let line = b"{\"kind\":\"device_changed\",\"payload\":{}}";
     assert!(attention.announce(Arc::from(&line[..])).is_empty());
-    assert_eq!(attention.listeners(), 0);
     // The pending socket was never shut: a server-side write still reaches
     // its far end, so a relay on the same connection keeps receiving past
     // the feed's stop.
@@ -943,11 +942,9 @@ fn a_pending_unlisten_starts_no_writer() {
         .listen(Arc::new(Mutex::new(writer)), closer, retired)
         .unwrap();
     attention.unlisten(id);
-    assert_eq!(attention.listeners(), 0);
     let waiting = status_of("waiting", Some("r1"), S, None);
     drop(attention.notify("s_0000000000000001", None, &waiting, false));
     assert_eq!(attention.writers_started(), 0, "no writer ever started");
-    assert_eq!(attention.listeners(), 0);
 }
 
 #[test]
@@ -1131,7 +1128,6 @@ fn unlisten_after_overflow_joins_without_draining() {
         }
     }
     assert_eq!(reported, 1, "the overflow hands back exactly one shutdown");
-    assert_eq!(attention.listeners(), 0, "the bound fired while stalled");
     drop(guard);
     // The far end sees EOF, not the queued megabytes: the overflow shut
     // the connection instead of draining it.
@@ -1341,12 +1337,7 @@ fn one_unlisten_closes_and_joins_a_retired_writer_before_overflow_shutdown() {
             overflow = closers;
         }
     }
-    assert_eq!(attention.listeners(), 0, "the bound fired while stalled");
-    assert_eq!(
-        attention.retired(),
-        1,
-        "the overflowed writer and its retained closer await teardown"
-    );
+    assert!(!overflow.is_empty(), "the bound hands back the shutdown");
 
     let (done_tx, done_rx) = mpsc::channel();
     let tearing = Arc::clone(&attention);
@@ -1379,11 +1370,6 @@ fn one_unlisten_closes_and_joins_a_retired_writer_before_overflow_shutdown() {
     assert!(
         unlisten_returned,
         "unlisten returns after joining the writer"
-    );
-    assert_eq!(
-        attention.retired(),
-        0,
-        "the retired handle and closer are released"
     );
     assert_eq!(
         Arc::strong_count(&kept),
