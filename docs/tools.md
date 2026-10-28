@@ -97,7 +97,11 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 - Arguments are checked against the input schema before the effects function is
   called. A call that fails the check completes as `failed` with code
   `invalid_arguments` and never writes `tool_call_started`, so the log proves
-  it never ran. The model is told what is wrong, one line per bad field. A
+  it never ran. The model is told what is wrong, one line per bad field.
+  When the model's call fails and its arguments fit exactly one other tool
+  declared in full on the request, whose schema declares properties and
+  requires one of them, a last line names that tool. An inner call's
+  message has no such line. The call is not rerouted. A
   call whose arguments are not a JSON object fails the same way, and its
   failure quotes the arguments as the model sent them.
 - A call naming a tool that does not exist completes as `failed` with code
