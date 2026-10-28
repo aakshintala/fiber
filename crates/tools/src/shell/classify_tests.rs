@@ -383,6 +383,14 @@ fn nl_numbering_and_layout_flags_read() {
         classified("nl -- -b").declared.paths,
         Some(vec!["/work/-b".to_owned()])
     );
+    // The credential deny judges declared paths: `-ba` takes no value,
+    // so the operand survives as a path.
+    assert_eq!(
+        classified("nl -ba ../credentials/openrouter")
+            .declared
+            .paths,
+        Some(vec!["/work/../credentials/openrouter".to_owned()])
+    );
     // With no operand `nl` reads its standard input, so the call
     // declares the workdir, as `cat` with no operand does.
     assert_eq!(
