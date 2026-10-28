@@ -1112,7 +1112,7 @@ fn an_animated_paint_starts_at_frame_zero() {
     let t0 = origin();
     cache.begin_anim_frame(Some(t0), false);
     let fitted = paint(&cache, &row, 20, &answers).expect("a painted line");
-    assert_eq!(crate::work::take().renderer_calls, 1);
+    assert_eq!(crate::work::take().renderer_calls, 1); // docs/tui.md:2909: one call per cache miss.
     assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     assert!(text_of(&fitted).starts_with("f0"), "{fitted:?}");
     assert!(fitted.first().expect("one line").anim.is_some());
@@ -1704,6 +1704,68 @@ fn reduced_motion_stills_at_zero_and_reactivates_at_one() {
 }
 
 #[test]
+fn a_fresh_reduced_draw_that_stops_stays_stopped() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    answers.stop.set(true);
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    // The fresh draw under reduced motion declines to continue: it
+    // stills at frame 0 but records stopped, not reduced.
+    cache.begin_anim_frame(Some(t0), true);
+    let still = paint(&cache, &row, 20, &answers).expect("the still form");
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2976: `animate = false` stays stopped until the input changes.
+    assert!(text_of(&still).starts_with("f0"), "{still:?}");
+    cache.mark_painted(&[tag_of(&still)]);
+    assert!(
+        cache.anim_dues().is_empty(),
+        "a stopped draw asks for no wake"
+    );
+    // Leaving reduced motion recalls nothing: the stopped state holds.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let again = paint(&cache, &row, 20, &answers).expect("stored still");
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2976: `animate = false` stays stopped until the input changes.
+    assert_eq!(text_of(&again), text_of(&still));
+    cache.mark_painted(&[tag_of(&again)]);
+    assert!(cache.anim_dues().is_empty());
+}
+
+#[test]
+fn a_reduced_still_that_stops_stays_stopped() {
+    crate::work::take();
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    // The stilling draw under reduced motion declines to continue:
+    // frame 0 draws once but records stopped, not reduced.
+    answers.stop.set(true);
+    cache.begin_anim_frame(Some(at(t0, 500)), true);
+    let still = paint(&cache, &row, 20, &answers).expect("the still form");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2976: `animate = false` stays stopped until the input changes.
+    assert!(text_of(&still).starts_with("f0"), "{still:?}");
+    cache.mark_painted(&[tag_of(&still)]);
+    assert!(
+        cache.anim_dues().is_empty(),
+        "a stopped draw asks for no wake"
+    );
+    // Leaving reduced motion recalls nothing: the stopped state holds.
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    let again = paint(&cache, &row, 20, &answers).expect("stored still");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2976: `animate = false` stays stopped until the input changes.
+    assert_eq!(text_of(&again), text_of(&still));
+    cache.mark_painted(&[tag_of(&again)]);
+    assert!(cache.anim_dues().is_empty());
+}
+
+#[test]
 fn flat_does_not_still_or_restart_animation() {
     crate::work::take();
     let cache = Cache::default();
@@ -1961,9 +2023,9 @@ fn a_static_notice_draw_caches_its_invocation() {
     let second = bound
         .notice_lines("io_failed", "x", 20)
         .expect("a cached line");
-    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow().len(), 1); // docs/tui.md:2909: one call on a miss, none on a hit.
     assert_eq!(text_of(&first), text_of(&second));
-    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow().len(), 1); // docs/tui.md:2909: one call on a miss, none on a hit.
 }
 
 #[test]

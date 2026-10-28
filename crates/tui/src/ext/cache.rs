@@ -201,7 +201,9 @@ impl Cache {
     /// The animated item's lines for one draw. An open frame advances an
     /// active item only with paint in the previous frame and its interval
     /// due; effective reduced motion stores a reduced still at 0, and a
-    /// reactivation paints frame 1. A stopped item hits its stored lines.
+    /// reactivation paints frame 1, unless the stilling draw declines to
+    /// continue, which stays stopped instead. A stopped item hits its
+    /// stored lines.
     /// A closed draw hits stored lines or caches a miss in the ordinary
     /// entries without changing animation state or marking. Failures use
     /// the memoized failure path and stop the item's animation until its
@@ -245,10 +247,15 @@ impl Cache {
                 let frame = 0;
                 let drawn =
                     self.draw_frame(&fail_key, &key, extension, input_flat, width, frame, call)?;
-                let kind = if reduced {
-                    AnimKind::Reduced
-                } else if drawn.1 {
-                    AnimKind::Active
+                // A fresh draw that declines to continue stays stopped,
+                // even under reduced motion, so leaving reduced motion
+                // recalls nothing.
+                let kind = if drawn.1 {
+                    if reduced {
+                        AnimKind::Reduced
+                    } else {
+                        AnimKind::Active
+                    }
                 } else {
                     AnimKind::Stopped
                 };
@@ -264,7 +271,9 @@ impl Cache {
                 self.store_frame(&key, width, drawn.0, true)
             }
             Some(state) if state.kind == AnimKind::Active && reduced => {
-                // Reduced motion stills at frame 0 at the next paint.
+                // Reduced motion stills at frame 0 at the next paint,
+                // unless the draw declines to continue: then it stays
+                // stopped, so leaving reduced motion recalls nothing.
                 let drawn =
                     self.draw_frame(&fail_key, &key, extension, input_flat, width, 0, call)?;
                 self.set_anim(
@@ -273,7 +282,11 @@ impl Cache {
                         frame: 0,
                         last: now,
                         interval,
-                        kind: AnimKind::Reduced,
+                        kind: if drawn.1 {
+                            AnimKind::Reduced
+                        } else {
+                            AnimKind::Stopped
+                        },
                     },
                 );
                 self.store_frame(&key, width, drawn.0, true)

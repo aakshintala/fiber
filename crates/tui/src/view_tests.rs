@@ -2409,6 +2409,7 @@ fn shown_exposes_animation_tags_only_for_in_range_items() {
     let start = y.saturating_sub(40 - total);
     assert_eq!(app.take_wake(), Some(later(t0, 500)));
     // The full range exposes one tag per animated row, all one item.
+    // docs/tui.md:2968: only rows painted in the previous frame are exposed.
     let shown = app.shown(0, 40);
     assert_eq!(shown.anims.len(), 3, "one tag per animated row");
     let boundary = app.shown(start.saturating_add(1), 1);

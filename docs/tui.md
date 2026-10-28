@@ -2904,10 +2904,10 @@ built-in rather than drawing the row again.
   rules"). `tui` tests use a fake renderer.
 - **Each drawn item is cached** by its input and the width. Its spans name
   colour roles, which the theme resolves as the frame is written, so a theme
-  change runs no renderer. A renderer runs again only when its input or the
-  width changes, so an unchanged frame
-  calls no Lua and scrolling or searching costs what it costs for built-in
-  rows. The cache lives with the paging window and is dropped with its pages.
+  change runs no renderer. A renderer runs again only when its input, the width,
+  or an on-screen animated item's frame changes ("Animation"), so an unchanged
+  frame calls no Lua: one call per cache miss or frame advance, none on a hit.
+  The cache lives with the paging window and is dropped with its pages.
   The key also includes the page's session and index, the selected extension,
   and its session-half version when it has one. A change to any of these
   reruns the renderer; an unrelated session-half change does not. Failures
@@ -3029,9 +3029,9 @@ one tool, the input box, the layout, or one key.
 The terminal holds the budgets in `docs/performance.md`: its idle memory, idle
 CPU and time to first frame. The design keeps to them this way:
 
-- **Nothing runs while nothing happens.** With no turn, delegate or job
-  running, there is no timer: no frame, no byte written. A still pointer sends
-  nothing under hover.
+- **Nothing runs while nothing happens.** With no turn, delegate or job running and
+  no animated item on screen, there is no timer: no frame, no byte written (an on-screen
+  animated item holds the timer, "Animation"). A still pointer sends nothing under hover.
 - **The first frame waits on nothing but the session's last page and loading TUI extensions.** Keyboard detection, the logo's image and session listing each arrive after it. The budget is measured with no TUI extension installed. Attaching reads the last page with `history` before the first frame, and the whole log once after it ("History and paging"). The pass takes about 12 ms per MiB of log on macOS arm64, so the scroll bar of a large session appears later than a small one's.
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**
