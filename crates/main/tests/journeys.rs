@@ -932,6 +932,36 @@ fn journey_drag_notice_copies_its_text() {
         (stale_x, stale_y),
         "the resize moved the notice cell"
     );
+    // A frame landing between reading the cell and dragging moves the
+    // bottom-anchored notice, so the just-read cell points at blank
+    // conversation cells. The second resize forces that interleaving:
+    // the offset is taken before it, so the frame-end wait catches the
+    // redraw it causes, and the settled-grid wait makes the new row
+    // final before the pointer goes out.
+    let forced_from = run.output().len();
+    run.resize(120, 44);
+    run.wait_bytes(forced_from, b"\x1b[?2026l", "the forced frame");
+    let forced_row = usize::from(y);
+    let forced = run.wait_screen("the cache-rebuild notice after forced resize", |screen| {
+        shows(screen, "cache_rebuild")
+            && shows(screen, "✕")
+            && shows(screen, "Beta here.")
+            && screen.size() == (120, 44)
+            && screen
+                .rows
+                .iter()
+                .position(|row| row.contains("cache_rebuild"))
+                .is_some_and(|row| row != forced_row)
+    });
+    let forced_at = forced
+        .rows
+        .iter()
+        .position(|row| row.contains("cache_rebuild"))
+        .expect("the forced frame kept the notice");
+    assert_ne!(
+        forced_at, forced_row,
+        "the forced resize moved the notice cell"
+    );
     // The forced stale interleaving: the snapshot's cell now sits on
     // blank conversation cells, so its release routes through
     // copy_selection to an empty OSC 52 payload — the flake's exact
