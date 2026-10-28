@@ -234,6 +234,10 @@ pub(crate) struct Shown {
     /// The spinning marks drawn, each a line's index and its cell's
     /// column (`docs/tui.md`, "The working line").
     pub(crate) spins: Vec<SpinMark>,
+    /// The animated items drawn, each a line's index and its key
+    /// (`docs/tui.md`, "Animation"): only lines in range expose tags,
+    /// so an offscreen item never marks.
+    pub(crate) anims: Vec<AnimMark>,
     /// The pinned header, when the top row sits inside opened content.
     pub(crate) pin: Option<Pin>,
 }
@@ -241,6 +245,10 @@ pub(crate) struct Shown {
 /// A spinning mark: a line's index in [`Shown::lines`] and its cell's
 /// column in that line.
 pub(crate) type SpinMark = (usize, u16);
+
+/// An animated mark: a line's index in [`Shown::lines`] and its item's
+/// key in the animation schedule.
+pub(crate) type AnimMark = (usize, crate::ext::anim::AnimKey);
 
 /// What a page draws: as shown, or with every section open for the
 /// search (`docs/tui.md`, "Search": every match is counted at once).
@@ -1433,6 +1441,7 @@ impl Pages {
         let mut lines = Vec::new();
         let mut turns = Vec::new();
         let mut spins = Vec::new();
+        let mut anims = Vec::new();
         let mut pin: Option<Pin> = None;
         let mut pin_done = false;
         let mut start = 0usize;
@@ -1465,6 +1474,23 @@ impl Pages {
                             let count = crate::view::rows(line.clone(), self.width);
                             (line, count, target)
                         }));
+                        // A line past the viewport exposes no tag: its
+                        // item is off screen, so it never advances or
+                        // asks.
+                        let mut off = start;
+                        for (at, text) in texts.iter().enumerate() {
+                            let count = lines
+                                .get(base.saturating_add(at))
+                                .map(|(_, count, _)| *count)
+                                .unwrap_or(0);
+                            if off.saturating_add(count) > top
+                                && off < end
+                                && let Some(key) = text.anim.clone()
+                            {
+                                anims.push((base.saturating_add(at), key));
+                            }
+                            off = off.saturating_add(count);
+                        }
                         turns.extend(
                             page_turns
                                 .into_iter()
@@ -1481,6 +1507,7 @@ impl Pages {
             lines,
             turns,
             spins,
+            anims,
             pin,
         }
     }

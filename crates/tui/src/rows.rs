@@ -52,6 +52,9 @@ pub(crate) struct RowText {
     /// working line's tick (`docs/tui.md`, "The working line"); none in
     /// [`RowText::plain`].
     pub(crate) spin: Option<u16>,
+    /// The animated item that drew the row, if any: what the paint pass
+    /// marks as visible (`docs/tui.md`, "Animation").
+    pub(crate) anim: Option<crate::ext::anim::AnimKey>,
 }
 
 impl RowText {
@@ -65,6 +68,9 @@ impl RowText {
             links: Vec::new(),
             scopes: Vec::new(),
             spin: None,
+            // A still row draws no animated item until an animated
+            // replacement tags it.
+            anim: None,
         }
     }
 }
@@ -136,15 +142,31 @@ impl Rows {
     ) -> Option<Arc<Vec<FittedLine>>> {
         let seam = self.seam.as_ref()?;
         let renderer = seam.handle.get()?;
-        let result = seam.cache.lines(
-            seam.page.clone(),
-            slot,
-            extension,
-            renderer.half(&seam.ctx, extension),
-            input,
-            width,
-            || renderer.render(&seam.ctx, slot, input, width, builtin),
-        );
+        let result = match renderer.animate_interval(slot) {
+            // An animated slot draws through the animation schedule:
+            // open paint advances, closed draws render at the stored
+            // frame with no write and no mark.
+            Some(interval) => seam.cache.lines_animated(
+                seam.page.clone(),
+                slot,
+                extension,
+                renderer.half(&seam.ctx, extension),
+                input,
+                width,
+                seam.flat,
+                interval,
+                |frame| renderer.render_animated(&seam.ctx, slot, input, width, frame, builtin),
+            ),
+            None => seam.cache.lines(
+                seam.page.clone(),
+                slot,
+                extension,
+                renderer.half(&seam.ctx, extension),
+                input,
+                width,
+                || renderer.render(&seam.ctx, slot, input, width, builtin),
+            ),
+        };
         for notice in renderer.take_pending() {
             seam.cache.queue_notice(notice);
         }
@@ -173,13 +195,15 @@ impl Rows {
 
     /// Adds a fitted replacement line as its own row: the line's cells
     /// with its links, the pad count in the row text's tail, and
-    /// `target`. The pad is decoration, never text.
+    /// `target`. The pad is decoration, never text. The line's animated
+    /// tag rides along, so the paint pass marks the item visible.
     pub(crate) fn push_fitted(&mut self, line: &FittedLine, target: Option<Target>) {
         self.push_text(
             (line.line.clone(), target),
             RowText {
                 tail: line.pad,
                 links: line.links.clone(),
+                anim: line.anim.clone(),
                 ..RowText::plain()
             },
         );
@@ -300,6 +324,9 @@ impl Rows {
                         .map(|spin| {
                             spin.saturating_sub(u16::try_from(start_cell).unwrap_or(u16::MAX))
                         }),
+                    // Every piece paints the same item, so each keeps
+                    // its tag: a split row still marks its item visible.
+                    anim: text.anim.clone(),
                 };
                 let target = (index == 0).then_some(target).flatten();
                 let mut row = (piece, target);

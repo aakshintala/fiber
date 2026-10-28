@@ -13,6 +13,8 @@ use std::sync::Arc;
 
 pub(crate) mod cache;
 
+pub mod anim;
+
 use cache::Cache;
 pub(crate) mod input;
 
@@ -223,6 +225,26 @@ pub trait Renderer: std::fmt::Debug {
         width: u16,
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> Decision;
+    /// The slot's effective animation interval, if the slot animates
+    /// (`docs/tui.md`, "Animation"). Still slots answer none, and keep
+    /// the cached `render` path.
+    fn animate_interval(&self, _slot: &str) -> Option<std::time::Duration> {
+        None
+    }
+    /// Lines for `slot` at frame `frame`, with whether the item keeps
+    /// animating. The default draws the still `render` and continues,
+    /// so a renderer without animation needs no new code.
+    fn render_animated(
+        &self,
+        ctx: &SessionCtx,
+        slot: &str,
+        input: &Input<'_>,
+        width: u16,
+        _frame: u64,
+        builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> (Decision, bool) {
+        (self.render(ctx, slot, input, width, builtin), true)
+    }
 }
 
 impl Bound {
@@ -255,6 +277,19 @@ impl Bound {
             text,
             flat: self.flat,
         });
+        if renderer.animate_interval("notice").is_some() {
+            // An animated notice reads only stored lines here: closed
+            // draws never invoke, advance, write, schedule or mark, even
+            // while the frame is open. Only the paint path may call.
+            return self.cache.animated_lines(
+                self.page.clone(),
+                "notice",
+                &extension,
+                renderer.half(&self.ctx, &extension),
+                &input,
+                width,
+            );
+        }
         let fitted = self.cache.lines(
             self.page.clone(),
             "notice",
@@ -264,6 +299,57 @@ impl Bound {
             width,
             || {
                 renderer.render(&self.ctx, "notice", &input, width, &|input, at| {
+                    let Input::Notice(notice) = input else {
+                        return Vec::new();
+                    };
+                    crate::view::notice_rows::builtin_spans(notice.code, notice.text, at as usize)
+                })
+            },
+        );
+        for queued in renderer.take_pending() {
+            self.cache.queue_notice(queued);
+        }
+        fitted
+    }
+
+    /// The bound renderer's animated `notice` lines for one paint: the
+    /// one animated path that may invoke, advance, store and schedule.
+    /// Static slots keep `notice_lines`. An empty result paints zero rows,
+    /// so the notice hides instead of falling back.
+    pub(crate) fn paint_notice_lines(
+        &self,
+        code: &str,
+        text: &str,
+        width: u16,
+    ) -> Option<Arc<Vec<spans::FittedLine>>> {
+        if code == "extension_failed" {
+            return None;
+        }
+        let renderer = self.handle.get()?;
+        let selected = renderer.fills_for(&self.ctx, "notice");
+        for queued in renderer.take_pending() {
+            self.cache.queue_notice(queued);
+        }
+        let SlotSelection::Draw { extension } = selected else {
+            return None;
+        };
+        let input = Input::Notice(Notice {
+            code,
+            text,
+            flat: self.flat,
+        });
+        let interval = renderer.animate_interval("notice")?;
+        let fitted = self.cache.lines_animated(
+            self.page.clone(),
+            "notice",
+            &extension,
+            renderer.half(&self.ctx, &extension),
+            &input,
+            width,
+            self.flat,
+            interval,
+            |frame| {
+                renderer.render_animated(&self.ctx, "notice", &input, width, frame, &|input, at| {
                     let Input::Notice(notice) = input else {
                         return Vec::new();
                     };

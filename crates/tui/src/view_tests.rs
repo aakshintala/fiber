@@ -2066,6 +2066,181 @@ fn a_click_on_a_notice_cross_removes_that_row() {
 
 /// Renders `app` at `width` by `height` with the pointer at `pointer`,
 /// returning the buffer and the click targets.
+/// An app with a completed tool turn and an animated `group_line`
+/// drawing three rows a frame, installed after the content counted: the
+/// first paint draws frame 0. The summary replacement sits at the top,
+/// so a short following viewport cuts or drops it by height alone.
+fn animated_summary() -> (App, std::rc::Rc<crate::ext::tests::AnimatedRenderer>) {
+    use crate::ext::tests::AnimatedRenderer;
+    let mut app = empty();
+    tool_turn(&mut app);
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling(
+        "group_line",
+        std::time::Duration::from_millis(500),
+        3,
+    ));
+    app.install_renderer(fake.clone());
+    (app, fake)
+}
+
+/// A synthetic instant `millis` after `origin`.
+fn later(origin: std::time::Instant, millis: u64) -> std::time::Instant {
+    origin
+        .checked_add(std::time::Duration::from_millis(millis))
+        .expect("after the origin")
+}
+
+/// Paints the conversation at `height` in frame time `at`: opens the
+/// animation frame, paints, and returns the buffer.
+fn paint_conversation(app: &App, at: std::time::Instant, height: u16) -> Buffer {
+    app.pages().ext.cache.begin_anim_frame(Some(at), false);
+    let area = Rect::new(0, 0, WIDTH, height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    conversation_rows(app, area, &mut buf, &mut targets);
+    buf
+}
+
+/// The animated summary's first page row and the counted total, for the
+/// tool turn at width 60: heights below cut or drop the summary by row
+/// arithmetic, and every test proves its premise on the buffer.
+fn summary_geometry() -> (usize, usize) {
+    let (app, _) = animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let full = paint_conversation(&app, t0, 40);
+    let body = text(&full);
+    assert!(body.contains("anim0-2"), "{body}");
+    let total = app.scroll().1;
+    assert!(total <= 40, "the turn fits the full viewport");
+    let y = body
+        .lines()
+        .position(|row| row.contains("anim0-0"))
+        .expect("the animated row shows");
+    (y.saturating_sub(40 - total), total)
+}
+
+#[test]
+fn an_offscreen_item_never_advances_or_asks() {
+    // A twin app fixes the geometry: this app's first paint is
+    // already offscreen, so the item is never marked.
+    let (start, total) = summary_geometry();
+    let (app, fake) = animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    // The viewport starts past the summary's last row: the short paint
+    // draws without it, and the buffer proves the premise.
+    let height =
+        u16::try_from(total.saturating_sub(start).saturating_sub(3)).expect("a short viewport");
+    assert!(height >= 1, "room stays below the summary");
+    let shown = paint_conversation(&app, t0, height);
+    let body = text(&shown);
+    assert!(!body.contains("anim"), "{body}");
+    // At most the initial still render: the item drew once for the
+    // draw, was never marked, and asks for no wake.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(app.take_wake(), None);
+    paint_conversation(&app, later(t0, 500), height);
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(app.take_wake(), None);
+}
+
+#[test]
+fn a_partially_painted_item_stays_active_with_dues() {
+    let (app, fake) = animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    // The full paint draws all three animated rows at frame 0.
+    let full = paint_conversation(&app, t0, 40);
+    let body = text(&full);
+    assert!(body.contains("anim0-0"), "{body}");
+    assert!(body.contains("anim0-2"), "{body}");
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(
+        app.take_wake(),
+        Some(later(t0, 500)),
+        "frame 0 painted and marked"
+    );
+    // A viewport starting inside the summary still paints the item: it
+    // advances at its due tick and asks its next frame.
+    let total = app.scroll().1;
+    let y = body
+        .lines()
+        .position(|row| row.contains("anim0-0"))
+        .expect("the animated row shows");
+    let start = y.saturating_sub(40 - total);
+    let height =
+        u16::try_from(total.saturating_sub(start).saturating_sub(1)).expect("a cut viewport");
+    let t1 = later(t0, 500);
+    let cut = paint_conversation(&app, t1, height);
+    let body = text(&cut);
+    assert!(!body.contains("anim1-0"), "{body}");
+    assert!(body.contains("anim1-1"), "{body}");
+    assert!(body.contains("anim1-2"), "{body}");
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]);
+    assert_eq!(app.take_wake(), Some(later(t1, 500)));
+}
+
+#[test]
+fn a_scrolled_off_item_resumes_without_restarting() {
+    let (app, fake) = animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let full = paint_conversation(&app, t0, 40);
+    let body = text(&full);
+    assert!(body.contains("anim0-0"), "{body}");
+    assert_eq!(app.take_wake(), Some(later(t0, 500)));
+    // Scrolled off: the next paint advances once on its previous
+    // paint, then holds with no due.
+    let total = app.scroll().1;
+    let y = body
+        .lines()
+        .position(|row| row.contains("anim0-0"))
+        .expect("the animated row shows");
+    let start = y.saturating_sub(40 - total);
+    let height =
+        u16::try_from(total.saturating_sub(start).saturating_sub(3)).expect("a short viewport");
+    assert!(height >= 1, "room stays below the summary");
+    let t1 = later(t0, 500);
+    let away = paint_conversation(&app, t1, height);
+    let body = text(&away);
+    assert!(!body.contains("anim"), "{body}");
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]);
+    assert_eq!(app.take_wake(), None);
+    // Back on screen: hits its stored frame with no recall, and the
+    // next due tick continues the counter instead of restarting it.
+    let t2 = later(t0, 1000);
+    let back = paint_conversation(&app, t2, 40);
+    let body = text(&back);
+    assert!(body.contains("anim1-0"), "{body}");
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]);
+    assert_eq!(app.take_wake(), Some(later(t1, 500)));
+    let t3 = later(t0, 1500);
+    let onward = paint_conversation(&app, t3, 40);
+    let body = text(&onward);
+    assert!(body.contains("anim2-0"), "{body}");
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1, 2]);
+}
+
+#[test]
+fn shown_exposes_animation_tags_only_for_in_range_items() {
+    let (app, _) = animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let full = paint_conversation(&app, t0, 40);
+    let body = text(&full);
+    let total = app.scroll().1;
+    let y = body
+        .lines()
+        .position(|row| row.contains("anim0-0"))
+        .expect("the animated row shows");
+    let start = y.saturating_sub(40 - total);
+    assert_eq!(app.take_wake(), Some(later(t0, 500)));
+    // The full range exposes one tag per animated row, all one item.
+    let shown = app.shown(0, 40);
+    assert_eq!(shown.anims.len(), 3, "one tag per animated row");
+    let first = shown.anims.first().expect("a tag").1.clone();
+    assert!(shown.anims.iter().all(|(_, key)| key == &first));
+    // Past the item exposes none; starting inside exposes the rest.
+    assert!(app.shown(start.saturating_add(3), 40).anims.is_empty());
+    assert_eq!(app.shown(start.saturating_add(1), 40).anims.len(), 2);
+}
+
 fn pointed(
     app: &mut App,
     width: u16,

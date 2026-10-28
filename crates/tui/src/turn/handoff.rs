@@ -206,7 +206,9 @@ impl Band {
         match rendered {
             Some(fitted) => {
                 // The replacement owns the band row whole, tint and
-                // edges included; the note below keeps its own.
+                // edges included; the note below keeps its own. Its
+                // animated tag rides along, so the paint pass marks the
+                // item visible.
                 for line in fitted.iter() {
                     out.push_text(
                         (line.line.clone(), None),
@@ -214,6 +216,7 @@ impl Band {
                             tail: line.pad,
                             links: line.links.clone(),
                             spin: writing.then_some(0),
+                            anim: line.anim.clone(),
                             ..RowText::plain()
                         },
                     );

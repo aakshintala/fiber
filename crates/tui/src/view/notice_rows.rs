@@ -158,11 +158,26 @@ fn paint_replacement(
     noted: &mut Vec<crate::app::SpanRow>,
     bottom: &mut u16,
 ) -> bool {
-    let Some(fitted) = bound.notice_lines(code, text, area.width) else {
+    // An animated slot paints through the animation schedule, which may
+    // invoke and store; a still slot keeps the cached invocation. The
+    // animated path is the only one that marks: overlay and measure
+    // draws never paint.
+    let animated = bound
+        .handle
+        .get()
+        .and_then(|renderer| renderer.animate_interval("notice"))
+        .is_some();
+    let Some(fitted) = (if animated {
+        bound.paint_notice_lines(code, text, area.width)
+    } else {
+        bound.notice_lines(code, text, area.width)
+    }) else {
         return false;
     };
     if fitted.is_empty() {
-        return false;
+        // An empty animated paint hides the notice with zero rows; a
+        // still empty one falls back to the built-in row as before.
+        return animated;
     }
     let count = fitted
         .len()
@@ -186,6 +201,17 @@ fn paint_replacement(
             text: line.line.to_string(),
             join: crate::rows::Join::Break,
         });
+    }
+    if animated {
+        // Only painted rows mark: an item clipped to zero rows stays
+        // unmarked, so it never advances or asks.
+        bound.cache.mark_painted(
+            &fitted
+                .iter()
+                .take(count)
+                .filter_map(|line| line.anim.clone())
+                .collect::<Vec<_>>(),
+        );
     }
     targets.push(Target {
         id: TargetId::DismissNotice(id),

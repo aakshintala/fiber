@@ -26,7 +26,9 @@ impl App {
     /// The earliest wake the frame asked for, leaving none behind: what
     /// the loop arms the tick with after the draw. The earliest of the
     /// motion wake, the reconciler's retry wake and the notices wake.
+    /// Animation dues fold into the motion wake first.
     pub(crate) fn take_wake(&self) -> Option<Instant> {
+        self.anim_asks();
         [
             self.motion.take_wake(),
             self.items_wake(),
@@ -36,6 +38,15 @@ impl App {
         .into_iter()
         .flatten()
         .min()
+    }
+
+    /// Folds the painted animations' dues into the motion wake: each
+    /// animated item on screen asks its next frame at its last tick plus
+    /// its interval, and the loop arms the earliest ask after the frame.
+    fn anim_asks(&self) {
+        for (last, interval) in self.pages().ext.cache.anim_dues() {
+            self.motion.ask_animate(last, interval);
+        }
     }
 
     /// Whether spinners, the glimmer and the pulse stay still. Home sets
