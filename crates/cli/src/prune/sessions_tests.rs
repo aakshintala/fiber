@@ -98,6 +98,27 @@ fn old_ts() -> u64 {
     0
 }
 
+/// A moved parent's log: the `session_started`, then the `moved` last
+/// line naming the child, as a prune meets it.
+fn moved_root(dir: &Path, workspace: &str, child: &str, ts: u64) {
+    fs::create_dir_all(dir.join("artifacts")).unwrap();
+    let first = json!({"kind": "session_started", "seq": 0,
+        "payload": {"workspace": workspace}});
+    let last = json!({"kind": "moved", "ts": ts,
+        "payload": {"new_session_id": child, "seq": 1, "workspace": "/w2"}});
+    fs::write(dir.join("events.jsonl"), format!("{first}\n{last}\n")).unwrap();
+    fs::write(dir.join("artifacts/a.txt"), b"bytes").unwrap();
+}
+
+/// A workspace outside the setup's, so its sessions inventory under
+/// another project.
+fn other_workspace(setup: &Setup) -> (PathBuf, PathBuf) {
+    let workspace = setup.root.path().join("elsewhere");
+    fs::create_dir_all(&workspace).unwrap();
+    let sessions = log::sessions_dir(&setup.home(), &doors::project(&workspace));
+    (workspace, sessions)
+}
+
 fn young_ts() -> u64 {
     wall_ms(wall())
 }
@@ -250,6 +271,64 @@ fn a_young_fork_blocks_an_old_root_and_the_row_names_it() {
     if let SessionRow::Blocked { blockers, .. } = &selected.rows[0] {
         assert_eq!(blockers, &["s_00000000000000b2".to_owned()]);
     }
+}
+
+#[test]
+fn a_young_moved_child_blocks_an_old_root_and_the_row_names_it() {
+    let setup = Setup::new();
+    moved_root(
+        &setup.sessions().join("s_00000000000000a1"),
+        "/w",
+        "s_00000000000000b2",
+        old_ts(),
+    );
+    // The moved child lives in another project: the inventory still
+    // names it as the old root's blocker.
+    let (other, sessions) = other_workspace(&setup);
+    session_in(
+        &sessions.join("s_00000000000000b2"),
+        other.to_str().unwrap(),
+        Some("s_00000000000000a1"),
+        young_ts(),
+    );
+    let selected = setup.select(false);
+    assert!(selected.deletes.is_empty());
+    // The young moved child is not listed without cascade.
+    assert_eq!(row_ids(&selected.rows), ["s_00000000000000a1"]);
+    assert!(matches!(&selected.rows[0], SessionRow::Blocked { .. }));
+    if let SessionRow::Blocked { blockers, .. } = &selected.rows[0] {
+        assert_eq!(blockers, &["s_00000000000000b2".to_owned()]);
+    }
+}
+
+#[test]
+fn with_cascade_one_delete_for_the_root_covers_the_young_moved_child() {
+    let setup = Setup::new();
+    moved_root(
+        &setup.sessions().join("s_00000000000000a1"),
+        "/w",
+        "s_00000000000000b2",
+        old_ts(),
+    );
+    let (other, sessions) = other_workspace(&setup);
+    session_in(
+        &sessions.join("s_00000000000000b2"),
+        other.to_str().unwrap(),
+        Some("s_00000000000000a1"),
+        young_ts(),
+    );
+    let selected = setup.select(true);
+    assert_eq!(selected.deletes.len(), 1);
+    assert_eq!(selected.deletes[0].id.0, "s_00000000000000a1");
+    assert!(selected.deletes[0].cascade);
+    assert_eq!(
+        row_ids(&selected.rows),
+        ["s_00000000000000a1", "s_00000000000000b2"]
+    );
+    assert!(matches!(
+        &selected.rows[1],
+        SessionRow::Continues { parent, .. } if parent == "s_00000000000000a1"
+    ));
 }
 
 #[test]

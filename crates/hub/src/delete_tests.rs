@@ -208,6 +208,59 @@ fn arguments_that_do_not_fit_are_invalid_and_remove_nothing() {
     assert!(dir.join("events.jsonl").is_file());
 }
 
+/// Appends a `moved` last line to `dir`'s log naming `next`: the parent's
+/// post-move state, as a hub delete meets it.
+fn append_moved(dir: &Path, old: u64, next: u64) {
+    let line = json!({"kind": "moved", "seq": 3, "session_id": id(old), "ts": 1,
+        "payload": {"new_session_id": id(next), "seq": 2, "workspace": "/w2"}});
+    let mut log = fs::read_to_string(dir.join("events.jsonl")).unwrap();
+    log.push_str(&format!("{line}\n"));
+    fs::write(dir.join("events.jsonl"), log).unwrap();
+}
+
+#[test]
+fn a_moved_child_blocks_its_parent_without_cascade() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    append_moved(&root, 1, 3);
+    let moved = temp.session("-q", 3, Some(1));
+    let hub = temp.hub();
+    // The moved child continues the parent across projects: deleting the
+    // parent refuses, as with any dependent.
+    let refused = refused(&hub, json!({"session": id(1)}));
+    assert_eq!(refused.code, ErrorCode::SessionHasDependents);
+    assert_eq!(
+        refused.message,
+        format!(
+            "Session `{}` has sessions that continue it: `{}`. `--cascade` deletes them too.",
+            id(1),
+            id(3)
+        )
+    );
+    for dir in [&root, &moved] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
+    // A session nothing continues is deleted without cascade.
+    assert_eq!(delete(&hub, &args(json!({"session": id(3)}))), Ok(None));
+    assert!(!moved.exists());
+}
+
+#[test]
+fn cascade_removes_a_moved_parent_and_its_cross_project_child() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    append_moved(&root, 1, 3);
+    let moved = temp.session("-q", 3, Some(1));
+    let other = temp.session("-p", 5, None);
+    let hub = temp.hub();
+    let got = delete(&hub, &args(json!({"session": id(1), "cascade": true})));
+    assert_eq!(got, Ok(None));
+    for dir in [&root, &moved] {
+        assert!(!dir.exists(), "{}", dir.display());
+    }
+    assert!(other.join("events.jsonl").is_file());
+}
+
 #[test]
 fn expect_without_cascade_is_checked_but_not_compared() {
     let temp = Temp::new();
