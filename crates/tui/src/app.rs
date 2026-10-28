@@ -106,21 +106,37 @@ pub(crate) use top::Surface;
 /// line is skipped.
 macro_rules! read {
     ($envelope:expr, $kind:ty) => {
-        serde_json::from_value::<$kind>(serde_json::Value::Object($envelope.payload.clone())).ok()
+        $crate::app::read_ref::<$kind>(&$envelope.payload)
     };
 }
 pub(crate) use read;
 
 /// A line's payload as `T`, borrowed from the envelope's map: no clone
-/// and no `Value` tree. It returns `Some` exactly when the `read!` body
-/// above returns `Some`.
-#[cfg(test)]
+/// and no `Value` tree. It returns `Some` exactly when the decoded
+/// payload parses as `T`.
 pub(crate) fn read_ref<'de, T>(payload: &'de Map<String, Value>) -> Option<T>
 where
     T: serde::Deserialize<'de>,
 {
-    let _ = payload;
-    None
+    #[cfg(test)]
+    DECODE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+    T::deserialize(payload).ok()
+}
+
+// Borrowed decodes on the calling thread: the counted-work test reads
+// it on the folding thread, since one fold's decodes never leave it.
+// Test-only; non-test builds carry no counter.
+#[cfg(test)]
+thread_local! {
+    static DECODE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many borrowed decodes the calling thread has made
+/// (`docs/testing.md`, "a test of how much work something does counts
+/// the work"). The counted-work test reads it on the folding thread.
+#[cfg(test)]
+pub(crate) fn decode_count() -> usize {
+    DECODE_COUNT.with(|count| count.get())
 }
 
 /// How long the second Ctrl+C waits for the first.
