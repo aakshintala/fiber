@@ -368,6 +368,22 @@ fn a_symlink_to_a_directory_denies_its_target_and_keeps_siblings() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn a_dangling_directory_link_with_a_suffix_keeps_siblings_readable() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = HomeFixture::new("fiber-sandbox-dangling-suffix", &["home/link/secret"]);
+    symlink("missing-directory", fixture.home.join("link")).expect("dangle the directory link");
+    std::fs::write(fixture.home.join("sibling"), "ok").expect("write sibling");
+    let sibling = fixture.confined("cat sibling");
+    assert!(sibling.status.is_some_and(|status| status.success()));
+    assert!(
+        matches!(sibling.output, super::super::command::Kept::Whole(ref bytes) if bytes == b"ok"),
+        "the dangling deny leaves its sibling readable"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn a_dangling_link_created_after_setup_stays_unreadable() {
     let fixture = HomeFixture::new("fiber-sandbox-dangling", &["home/link"]);
     // The link dangles at setup; its target arrives after, and the confined
@@ -494,6 +510,31 @@ fn a_symlink_loop_makes_the_sandbox_unavailable() {
     let unavailable = check_available(&settings, &workspace).expect_err("a loop is unavailable");
     assert_eq!(unavailable, Unavailable::UnresolvableDeny { configured: a });
     assert_eq!(unavailable.code(), contract::ErrorCode::ToolError);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_permission_denied_during_deny_resolution_makes_the_sandbox_unavailable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = fixture("fiber-sandbox-unresolvable-deny");
+    let workspace = dir.path().join("workspace");
+    let locked = dir.path().join("locked");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    std::fs::create_dir(&locked).expect("create locked directory");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o0))
+        .expect("hide locked directory");
+    let denied = locked.join("secret");
+    let mut settings = workspace_settings(&dir.path().join("fiber-home"));
+    settings.deny_read.push(denied.clone());
+
+    let result = check_available(&settings, &workspace);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700))
+        .expect("restore locked directory permissions");
+    assert_eq!(
+        result.expect_err("a permission error is not a missing path"),
+        Unavailable::UnresolvableDeny { configured: denied }
+    );
 }
 
 #[cfg(target_os = "linux")]
