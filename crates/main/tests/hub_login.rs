@@ -15,12 +15,13 @@ mod support;
 use std::fs;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use fakes::{OauthReply, OauthServer, ProviderServer, Response};
-use serde_json::json;
+use serde_json::{Value, json};
 use support::*;
 
 fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> Socket {
@@ -417,4 +418,70 @@ fn a_resumed_session_installs_live_attendance_and_login_notices() {
     close(&client, &session, "c_close_last");
     drop(client);
     stop(&hub, guard);
+}
+
+/// A `fiber_exited` socket line for `session`, as the closing session relays it.
+fn fiber_exited_line(session: &str) -> Value {
+    json!({"kind":"fiber_exited","session_id":session})
+}
+
+/// A `session_left` feed line for `session`, as the hub fans it out.
+fn session_left_line(session: &str) -> Value {
+    json!({"kind":"session_left","payload":{"session_id":session}})
+}
+
+/// Serves one scripted close over `peer`: holds every reply until the close
+/// command arrives, then emits `replies` in order and signals `done`. The hub
+/// fans `session_left` out on one path while the closing session's
+/// `fiber_exited` arrives on another, so the scripted order is one the live
+/// pair produces either way. The read ends when the test drops its socket,
+/// so a test failure releases the peer instead of hanging it.
+fn serve_close(peer: UnixStream, replies: Vec<Value>, done: mpsc::Sender<()>) {
+    let mut reader = BufReader::new(peer.try_clone().unwrap());
+    let mut command = String::new();
+    match reader.read_line(&mut command) {
+        Ok(0) => return,
+        Ok(_) => assert!(
+            command.contains("\"command\":\"close\""),
+            "the peer holds its replies for the close command, got {command}"
+        ),
+        Err(_) => return,
+    }
+    let mut peer = peer;
+    for reply in &replies {
+        if write!(peer, "{reply}\n").is_err() {
+            return;
+        }
+    }
+    drop(peer);
+    let _ = done.send(());
+}
+
+#[test]
+fn a_session_left_sent_before_fiber_exited_sits_in_the_close_wait() {
+    let deadline = Deadline::after(Duration::from_secs(10));
+    let (client_stream, peer_stream) = UnixStream::pair().unwrap();
+    let client = Socket::from(deadline, client_stream);
+    let session = "s1";
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        serve_close(
+            peer_stream,
+            vec![session_left_line(session), fiber_exited_line(session)],
+            done_tx,
+        );
+    });
+    // The wait `close` performs: it keeps every line through `fiber_exited`,
+    // then drops what it kept with its return value.
+    client.send(&json!({"id":"c_close","session_id":session,"command":"close"}).to_string());
+    let closed = until(&client, "fiber_exited after close", |line| {
+        line["kind"] == "fiber_exited" && line["session_id"] == session
+    });
+    assert!(
+        closed
+            .iter()
+            .any(|line| line["kind"] == "session_left" && line["payload"]["session_id"] == session),
+        "the close wait read the feed's session_left before fiber_exited: {closed:?}"
+    );
+    deadline.recv_or_fail(&done_rx, "the peer answered the close");
 }
