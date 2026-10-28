@@ -1504,6 +1504,15 @@ is present only on a slot that animates (`docs/tui.md`, "Animation"). A
 missing `timeout` fails at registration, as a missing callback `timeout` does
 ("How an extension runs").
 
+An animated slot declares `animate = { interval_ms = N }`, a whole number of
+milliseconds above 0: below 120 ms the terminal fires at 120 ms instead. Any
+other shape fails registration, naming the slot. Each frame reaches `render`
+with `frame` counting in its input, alongside the session id and the width. A
+plain list or `{ lines }` keeps animating; `{ lines, animate = false }` draws
+once and stops until the input changes. Any other return is the usual
+wrong-shape failure, and a frame past its timeout switches the extension off
+until `/reload`, exactly as a still call does.
+
 A TUI extension has the host calls that need no session: `host.http`,
 `host.exec`, `host.fs`, `host.config`, `host.data_dir`, `host.after`,
 `host.every`, `host.drive`, `host.log`, the hashes and `json`. It has no

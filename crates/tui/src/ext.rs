@@ -13,6 +13,8 @@ use std::sync::Arc;
 
 pub(crate) mod cache;
 
+pub mod anim;
+
 use cache::Cache;
 pub(crate) mod input;
 
@@ -223,6 +225,28 @@ pub trait Renderer: std::fmt::Debug {
         width: u16,
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> Decision;
+    /// The slot's effective animation interval for the winning
+    /// extension, if it animates (`docs/tui.md`, "Animation"). Still
+    /// slots answer none, and keep the cached `render` path. The winner
+    /// depends on the session, so the context selects it, exactly as
+    /// `render` draws it.
+    fn animate_interval(&self, _ctx: &SessionCtx, _slot: &str) -> Option<std::time::Duration> {
+        None
+    }
+    /// Lines for `slot` at frame `frame`, with whether the item keeps
+    /// animating. The default draws the still `render` and continues,
+    /// so a renderer without animation needs no new code.
+    fn render_animated(
+        &self,
+        ctx: &SessionCtx,
+        slot: &str,
+        input: &Input<'_>,
+        width: u16,
+        _frame: u64,
+        builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> (Decision, bool) {
+        (self.render(ctx, slot, input, width, builtin), true)
+    }
 }
 
 impl Bound {
@@ -263,12 +287,19 @@ impl Bound {
             &input,
             width,
             || {
-                renderer.render(&self.ctx, "notice", &input, width, &|input, at| {
+                let builtin = |input: &Input<'_>, at| {
                     let Input::Notice(notice) = input else {
                         return Vec::new();
                     };
                     crate::view::notice_rows::builtin_spans(notice.code, notice.text, at as usize)
-                })
+                };
+                if renderer.animate_interval(&self.ctx, "notice").is_some() {
+                    renderer
+                        .render_animated(&self.ctx, "notice", &input, width, 0, &builtin)
+                        .0
+                } else {
+                    renderer.render(&self.ctx, "notice", &input, width, &builtin)
+                }
             },
         );
         for queued in renderer.take_pending() {
