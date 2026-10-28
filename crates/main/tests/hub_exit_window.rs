@@ -816,21 +816,43 @@ fn a_full_subscribe_in_the_post_close_exit_window_resumes_while_the_log_exists()
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
+    let held = world.session_pids();
+    assert!(!held.is_empty(), "the held run is a session process");
 
     let second = world.client();
     subscribe(&second, "c_sub2", &id);
     second.send(&close(&id));
-    // Consumed in order, so nothing before the close's answer is kept:
-    // the fold replays the ask run's own exit, which stays behind, and
-    // the exit waited for follows the close.
-    let mut closed = until(&second, "the close acknowledgement", |line| {
-        is_answer(line, "c_close")
-    });
-    let ack = closed.pop().expect("the acknowledgement ends the wait");
+    // Both signals are collected as a set: no doc orders the close
+    // acknowledgement against `fiber_exited` (`docs/testing.md`,
+    // "Event streams"), so the wait ends when both have arrived,
+    // whichever comes first. The fold may replay the ask run's own exit
+    // before the close is answered; the socket-absent, process-exit and
+    // log checks below prove the close-caused teardown happened.
+    let mut saw_ack = false;
+    let mut saw_exited = false;
+    let both = until(
+        &second,
+        "the close acknowledgement and the close-caused exit",
+        |line| {
+            if is_answer(line, "c_close") {
+                saw_ack = true;
+            }
+            if line["kind"] == "fiber_exited" {
+                saw_exited = true;
+            }
+            saw_ack && saw_exited
+        },
+    );
+    let ack = answers(&both, "c_close")
+        .pop()
+        .expect("the close acknowledgement arrives");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
-    until(&second, "the close-caused exit", |line| {
-        line["kind"] == "fiber_exited"
-    });
+    assert!(
+        both.iter().any(|line| line["kind"] == "fiber_exited"),
+        "the close-caused exit arrives: {both:?}"
+    );
+    world.await_socket_absent();
+    world.await_exit(&held);
 
     // The held import never finishes, so the close grace cuts it: the
     // cut answer proves the command was answered and will never be
@@ -884,20 +906,21 @@ fn a_full_subscribe_in_the_post_close_exit_window_resumes_while_the_log_exists()
 
 #[test]
 fn a_finish_after_the_exited_session_is_removed_sends_no_second_close() {
-    // The forced order for #3533: the probe's close exits the session,
-    // the test waits out the close-caused exit and the session processes,
-    // the retired session's directory is removed, and only then `finish`
+    // The forced teardown for #3533: the probe's close exits the session,
+    // the test collects the close acknowledgement and the exit signal as
+    // a set, waits out the socket removal and the session processes, the
+    // retired session's directory is removed, and only then `finish`
     // runs, so the finish subscribe deterministically names a removed
     // session. The finish must return without sending `c_finish` instead
     // of panicking on `session_not_found`.
     //
-    // The removal stands in for the race the suite hit twice (see #3533):
-    // a subscribe for a session the hub cannot serve is refused
-    // `session_not_found` (`crates/hub/src/relay.rs`, the failed write in
-    // `attach_inner`, and `crates/hub/src/resume.rs`, the log lookup in
-    // `attempt`). Awaiting the exit alone lets the hub settle and resume
-    // instead, so the removal is forced here the way a prune between the
-    // exit and the finish would.
+    // The removal stands in for a prune between the exit and the finish
+    // (see #3533): a subscribe for a session the hub cannot serve is
+    // refused `session_not_found` (`crates/hub/src/relay.rs`, the failed
+    // write in `attach_inner`, and `crates/hub/src/resume.rs`, the log
+    // lookup in `attempt`). Awaiting the exit alone lets the hub settle
+    // and resume instead, so the removal is forced here the way a prune
+    // between the exit and the finish would.
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
@@ -913,14 +936,36 @@ fn a_finish_after_the_exited_session_is_removed_sends_no_second_close() {
     let probe = world.client();
     subscribe(&probe, "c_probe_sub", &id);
     probe.send(&close(&id));
-    let mut closed = until(&probe, "the close acknowledgement", |line| {
-        is_answer(line, "c_close")
-    });
-    let ack = closed.pop().expect("the acknowledgement ends the wait");
+    // Both signals are collected as a set: no doc orders the close
+    // acknowledgement against `fiber_exited` (`docs/testing.md`,
+    // "Event streams"), so the wait ends when both have arrived,
+    // whichever comes first. The exit signal may be the fold's replay of
+    // the ask run's exit; `await_socket_absent` and `await_exit` below
+    // prove the close-caused teardown happened.
+    let mut saw_ack = false;
+    let mut saw_exited = false;
+    let both = until(
+        &probe,
+        "the close acknowledgement and the close-caused exit",
+        |line| {
+            if is_answer(line, "c_close") {
+                saw_ack = true;
+            }
+            if line["kind"] == "fiber_exited" {
+                saw_exited = true;
+            }
+            saw_ack && saw_exited
+        },
+    );
+    let ack = answers(&both, "c_close")
+        .pop()
+        .expect("the close acknowledgement arrives");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
-    until(&probe, "the close-caused exit", |line| {
-        line["kind"] == "fiber_exited"
-    });
+    assert!(
+        both.iter().any(|line| line["kind"] == "fiber_exited"),
+        "the close-caused exit arrives: {both:?}"
+    );
+    world.await_socket_absent();
     world.await_exit(&running);
     fs::remove_dir_all(support::session_dir(&world.setup, &id))
         .expect("the retired session's directory removes");
