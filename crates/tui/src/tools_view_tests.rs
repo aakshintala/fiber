@@ -329,57 +329,6 @@ fn this_project_reads_the_project_lists_and_everywhere_the_global() {
     assert_eq!(frame.rows[1][5].0, "[on]");
 }
 
-#[test]
-fn space_switches_the_focused_layer_off_then_on() {
-    let fake = fake_with(vec![group_switches(
-        ToolGroup::Mcp("gh".to_owned()),
-        &[],
-        &[],
-    )]);
-    let mut tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], None);
-    tools.key(&Key::Char(' '), &ctx(&fake, None));
-    tools.key(&Key::Char(' '), &ctx(&fake, None));
-    assert_eq!(
-        fake.switched.lock().unwrap().clone(),
-        vec![
-            (
-                ToolGroup::Mcp("gh".to_owned()),
-                "t".to_owned(),
-                SwitchScope::Project,
-                false
-            ),
-            (
-                ToolGroup::Mcp("gh".to_owned()),
-                "t".to_owned(),
-                SwitchScope::Project,
-                true
-            ),
-        ]
-    );
-}
-
-#[test]
-fn left_and_right_choose_the_switch_and_stop_at_each_end() {
-    let fake = fake_with(vec![group_switches(
-        ToolGroup::Mcp("gh".to_owned()),
-        &[],
-        &[],
-    )]);
-    let mut tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], None);
-    for _ in 0..3 {
-        tools.edit_key(&Edit::Right);
-    }
-    tools.key(&Key::Char(' '), &ctx(&fake, None));
-    for _ in 0..3 {
-        tools.edit_key(&Edit::Left);
-    }
-    tools.key(&Key::Char(' '), &ctx(&fake, None));
-    let switched = fake.switched.lock().unwrap().clone();
-    assert_eq!(switched.len(), 2);
-    assert_eq!(switched[0].2, SwitchScope::Everywhere);
-    assert_eq!(switched[1].2, SwitchScope::Project);
-}
-
 /// The mark cells of the tool row at `row`: the project switch's and the
 /// everywhere switch's.
 fn marks(tools: &Tools, row: usize) -> (String, String) {
@@ -669,27 +618,6 @@ fn a_declared_tool_is_not_doubled_by_its_list() {
 }
 
 #[test]
-fn an_off_row_stays_after_it_is_switched_on() {
-    let fake = fake_with(vec![group_switches(
-        ToolGroup::Mcp("m".to_owned()),
-        &["gone"],
-        &[],
-    )]);
-    let mut tools = opened(&fake, &[], None);
-    tools.key(&Key::Char(' '), &ctx(&fake, None));
-    assert_eq!(
-        fake.switched.lock().unwrap().clone(),
-        vec![(
-            ToolGroup::Mcp("m".to_owned()),
-            "gone".to_owned(),
-            SwitchScope::Project,
-            true
-        )]
-    );
-    assert_eq!(tool_names(&tools), vec!["gone"]);
-}
-
-#[test]
 fn the_last_row_is_the_reload_cost_in_every_state() {
     let fake = fake_with(vec![group_switches(
         ToolGroup::Mcp("gh".to_owned()),
@@ -756,41 +684,6 @@ fn moving_clears_a_failed_switchs_message() {
     assert!(!frame(&tools).below.is_empty());
     tools.key(&Key::Down, &ctx(&fake, None));
     assert!(frame(&tools).below.is_empty());
-}
-
-#[test]
-fn a_failed_switch_shows_its_message_and_keeps_the_rows() {
-    let fake = fake_with(vec![group_switches(
-        ToolGroup::Mcp("gh".to_owned()),
-        &[],
-        &[],
-    )]);
-    if let Ok(mut refuse) = fake.refuse.lock() {
-        *refuse = Some("config.json: not JSON".to_owned());
-    }
-    let mut tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], None);
-    tools.key(&Key::Char(' '), &ctx(&fake, None));
-    let frame = frame(&tools);
-    assert_eq!(frame.below, vec!["config.json: not JSON".to_owned()]);
-    assert_eq!(tool_names(&tools), vec!["t"]);
-    assert_eq!(frame.rows[1][2].0, "[on]");
-}
-
-#[test]
-fn a_switch_that_wrote_then_failed_shows_what_the_files_hold() {
-    let fake = fake_with(vec![group_switches(
-        ToolGroup::Mcp("gh".to_owned()),
-        &[],
-        &[],
-    )]);
-    if let Ok(mut fail) = fake.fail_after_write.lock() {
-        *fail = true;
-    }
-    let mut tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], None);
-    tools.key(&Key::Char(' '), &ctx(&fake, None));
-    let frame = frame(&tools);
-    assert_eq!(frame.rows[1][2].0, "[off]");
-    assert!(!frame.below.is_empty());
 }
 
 /// The view over one `deferred` MCP tool named `name`, both switches off,

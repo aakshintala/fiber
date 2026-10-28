@@ -76,6 +76,7 @@ mod reviewer_setup;
 mod rows;
 mod rules_view;
 mod running_view;
+mod scope_switches;
 mod screen;
 mod settings_view;
 mod shell;
