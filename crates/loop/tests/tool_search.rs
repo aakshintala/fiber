@@ -1603,6 +1603,7 @@ fn a_rewound_session_matches_the_parent_request_bytes() {
             from: Point {
                 session_id: SessionId("s_test".into()),
                 seq: Seq(at),
+                project: None,
             },
             worktree: None,
             how: r#loop::Continuation::Rewind {
@@ -1800,6 +1801,7 @@ fn a_rewound_session_orders_the_rebuilt_search_and_reports_its_inputs() {
             from: Point {
                 session_id: SessionId("s_test".into()),
                 seq: Seq(at),
+                project: None,
             },
             worktree: None,
             how: r#loop::Continuation::Rewind {
@@ -2064,6 +2066,7 @@ fn a_rewound_session_off_deferral_renders_the_logged_search_as_text() {
             from: Point {
                 session_id: SessionId("s_test".into()),
                 seq: Seq(at),
+                project: None,
             },
             worktree: None,
             how: r#loop::Continuation::Rewind {

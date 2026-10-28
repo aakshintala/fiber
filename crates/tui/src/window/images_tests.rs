@@ -184,9 +184,15 @@ fn one_path_noted_under_two_sessions_draws_two_ids() {
 /// A call whose result carried the image at `path`: a ledger row, so
 /// inline sizing grids it.
 fn called(path: &str) -> Vec<Envelope> {
+    called_with(path, "image/png")
+}
+
+/// A call whose result carried the image at `path` of `mime`: a ledger
+/// row, so inline sizing grids it while the converter is available.
+fn called_with(path: &str, mime: &str) -> Vec<Envelope> {
     use contract::Seq;
     let image = json!({"type": "image", "path": path,
-        "mime_type": "image/png", "width": 1280, "height": 800});
+        "mime_type": mime, "width": 1280, "height": 800});
     let mut seq = 0;
     let mut acted = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
         seq += 1;
@@ -237,7 +243,10 @@ fn inline_sizing_counts_the_placeholder_grid() {
     let text = pages.rows().len();
     // 1280 by 800 at 60 columns with a 10 by 20 cell: 24 by 7
     // placeholders, then the caption line.
-    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    pages.set_image_sizing(Sizing::Inline {
+        cell: (10, 20),
+        converts: false,
+    });
     let rows = pages.rows();
     assert_eq!(rows.len(), text + 7, "the grid replaces the line");
     let placeholders = rows
@@ -257,6 +266,50 @@ fn inline_sizing_counts_the_placeholder_grid() {
 }
 
 #[test]
+fn a_converting_jpeg_counts_the_placeholder_grid() {
+    use crate::image::Sizing;
+    let mut pages = pages();
+    for line in called_with("artifacts/a.jpg", "image/jpeg") {
+        pages.apply(&line);
+    }
+    // The ledger draws once its group is open.
+    assert!(
+        pages.open(&crate::app::Target::Group(crate::turn::target_id("a_t"))),
+        "the call's group opens"
+    );
+    let text = pages.rows().len();
+    // Without the converter the JPEG stays its one line.
+    pages.set_image_sizing(Sizing::Inline {
+        cell: (10, 20),
+        converts: false,
+    });
+    assert_eq!(pages.rows().len(), text, "no grid without the converter");
+    // With the converter the grid replaces the line: 24 by 7
+    // placeholders at 60 columns with a 10 by 20 cell, then the
+    // caption line.
+    pages.set_image_sizing(Sizing::Inline {
+        cell: (10, 20),
+        converts: true,
+    });
+    let rows = pages.rows();
+    assert_eq!(rows.len(), text + 7, "the grid replaces the line");
+    let placeholders = rows
+        .iter()
+        .filter(|(line, _)| {
+            line.spans
+                .iter()
+                .any(|span| span.content.as_ref().starts_with('\u{10EEEE}'))
+        })
+        .count();
+    assert_eq!(placeholders, 7);
+    assert!(
+        rows.iter()
+            .any(|(line, _)| line.to_string().ends_with("▣ a.jpg · 1280×800")),
+        "the caption still counts its row"
+    );
+}
+
+#[test]
 fn set_image_sizing_recounts_only_on_change() {
     use crate::image::Sizing;
     let mut pages = pages();
@@ -266,13 +319,22 @@ fn set_image_sizing_recounts_only_on_change() {
     pages.set_image_sizing(Sizing::Text);
     assert_eq!(pages.recounts, recounts);
     // Inline sizing recounts the resident page.
-    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    pages.set_image_sizing(Sizing::Inline {
+        cell: (10, 20),
+        converts: false,
+    });
     assert!(pages.recounts > recounts, "the sizing change recounts");
     let recounts = pages.recounts;
-    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    pages.set_image_sizing(Sizing::Inline {
+        cell: (10, 20),
+        converts: false,
+    });
     assert_eq!(pages.recounts, recounts);
     // A new cell size recounts again.
-    pages.set_image_sizing(Sizing::Inline { cell: (8, 16) });
+    pages.set_image_sizing(Sizing::Inline {
+        cell: (8, 16),
+        converts: false,
+    });
     assert!(pages.recounts > recounts, "the new cell recounts");
     let recounts = pages.recounts;
     pages.set_image_sizing(Sizing::Text);
@@ -290,7 +352,10 @@ fn flat_reports_text_and_draws_the_one_line() {
         pages.open(&crate::app::Target::Group(crate::turn::target_id("a_t"))),
         "the call's group opens"
     );
-    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    pages.set_image_sizing(Sizing::Inline {
+        cell: (10, 20),
+        converts: false,
+    });
     let inline = pages.rows().len();
     assert!(inline > 2, "the grid takes rows: {inline}");
     // Flat reports text, so no display fetch goes out for the page.
@@ -318,7 +383,10 @@ fn a_failed_image_recounts_to_its_one_line() {
         pages.open(&crate::app::Target::Group(crate::turn::target_id("a_t"))),
         "the call's group opens"
     );
-    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    pages.set_image_sizing(Sizing::Inline {
+        cell: (10, 20),
+        converts: false,
+    });
     let inline = pages.rows().len();
     assert!(inline > 2, "the grid takes rows: {inline}");
     // Failing the image recounts its resident page to the one-line form.

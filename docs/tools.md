@@ -269,8 +269,10 @@ path's directory, ending in `/`.
   image part (`docs/model-routing.md`, "Image limits"). An image that cannot
   be read, or is over 50 megapixels, fails with `unsupported_file` and the
   decoder's message (or the pixel count). A CMYK JPEG decodes and is
-  accepted. For a model that cannot take images, the image is left out and
-  the result says so. On a protocol that cannot carry an image inside a tool
+  accepted. The terminal displays a stored JPEG or WebP inline on kitty
+  terminals by converting it with `fiber image --png`; read-side storage,
+  naming, MIME and size behavior are unchanged. For a model that cannot
+  take images, the image is left out and the result says so. On a protocol that cannot carry an image inside a tool
   result, the image goes in a user message right after the run of tool
   messages that holds its result, as rendered PDF pages do on
   `openai-completions`, because nothing may come between the tool messages

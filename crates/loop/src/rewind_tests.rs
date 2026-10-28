@@ -427,6 +427,7 @@ fn a_rewound_loop_takes_its_thinking_and_its_trigger_from_the_logged_build() {
             from: contract::shapes::Point {
                 session_id: SessionId("s_parent00000001".to_owned()),
                 seq: Seq(1),
+                project: None,
             },
             worktree: None,
             how: Continuation::Rewind {
@@ -560,6 +561,7 @@ fn a_rewound_loop_writes_no_model_changed_for_a_later_label_switch() {
             from: contract::shapes::Point {
                 session_id: SessionId("s_parent00000001".to_owned()),
                 seq: Seq(2),
+                project: None,
             },
             worktree: None,
             how: Continuation::Rewind {
@@ -654,6 +656,7 @@ fn rewound_from_parent(
             from: contract::shapes::Point {
                 session_id: SessionId(parent_id.to_owned()),
                 seq: Seq(point_seq),
+                project: None,
             },
             worktree: None,
             how: Continuation::Rewind {
@@ -908,6 +911,7 @@ fn handoff_session_started(from: Option<(&str, u64)>) -> Event {
         forked_from: from.map(|(session, seq)| Point {
             session_id: SessionId(session.to_owned()),
             seq: Seq(seq),
+            project: None,
         }),
         rewind: None,
         worktree: None,
@@ -1688,6 +1692,7 @@ fn a_forked_loop_writes_no_model_changed_for_a_later_label_switch() {
             from: contract::shapes::Point {
                 session_id: SessionId("s_parent00000001".to_owned()),
                 seq: Seq(2),
+                project: None,
             },
             worktree: None,
             how: Continuation::Fork {
@@ -1745,6 +1750,7 @@ fn rewound_from_reads_the_old_session_and_its_seq() {
             Point {
                 session_id: old.clone(),
                 seq: contract::Seq(3),
+                project: None,
             },
             None
         )
@@ -1770,6 +1776,7 @@ fn rewound_from_reads_the_ancestor_an_ancestor_point_names() {
             Point {
                 session_id: ancestor,
                 seq: contract::Seq(3),
+                project: None,
             },
             None
         )
@@ -1787,6 +1794,7 @@ fn rewound_from_reads_the_summary_for_the_restarted_process() {
         (
             Point {
                 session_id: old,
+                project: None,
                 seq: contract::Seq(3)
             },
             Some("Tried X.\nReverted it.".into())

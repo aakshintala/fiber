@@ -96,6 +96,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         own_segment: false,
         index: 0,
         workspace: None,
+        previous_workspace: None,
         // A parent segment's own first-seen generations, so a correction
         // there keeps the model its call was first recorded at, as the
         // ledger does for the own segment. Never written anywhere.
@@ -163,12 +164,14 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
 }
 
 /// What [`fold_line`] carries through the pass besides the [`Resumed`] it
-/// builds: the own segment's workspace until it moves, and the state
-/// that only exists mid-pass. Every field is owned.
+/// builds: the own segment's workspace until it moves, the workspace of
+/// the previously read `session_started`, and the state that only exists
+/// mid-pass. Every field is owned.
 struct Pass {
     own_segment: bool,
     index: usize,
     workspace: Option<String>,
+    previous_workspace: Option<String>,
     parent_ledger: crate::usage::Ledger,
     running: Carry,
     starts: HashMap<TurnId, ((usize, u64), Carry)>,
@@ -271,13 +274,27 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         }
     }
     pass.running.fold_jobs(&event);
-    if let Event::SessionStarted(started) = &event
-        && pass.own_segment
-        && pass.workspace.is_none()
-    {
-        pass.workspace = Some(started.workspace.clone());
-        resumed.worktree = started.worktree.clone();
-        resumed.supervised = started.supervised;
+    if let Event::SessionStarted(started) = &event {
+        // A move starts a new workspace: grants and repository-code offers
+        // folded before it belong to the old run, so a segment with no
+        // parent in another workspace clears both on entry
+        // (`docs/events.md`, "Change workspace"). Delegate forks keep
+        // both: their `parent` names the delegating turn. The previous
+        // workspace comes from the same already-read event: no extra
+        // read, no segment marker.
+        if started.parent.is_none()
+            && let Some(previous) = pass.previous_workspace.as_ref()
+            && *previous != started.workspace
+        {
+            resumed.grants.clear();
+            resumed.offers = crate::offer::Folded::default();
+        }
+        pass.previous_workspace = Some(started.workspace.clone());
+        if pass.own_segment && pass.workspace.is_none() {
+            pass.workspace = Some(started.workspace.clone());
+            resumed.worktree = started.worktree.clone();
+            resumed.supervised = started.supervised;
+        }
     } else if let Event::UsageRecorded(recorded) = &event {
         // The call's model is not the session's: the line may be a
         // delegate's copy, a reviewer's call or an extension's.

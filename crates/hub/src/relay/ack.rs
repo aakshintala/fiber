@@ -15,8 +15,9 @@ pub(super) fn kept_has(kept: &Kept, id: &str) -> bool {
 }
 
 /// What settling an acknowledged command decides: either the command is
-/// routed again, an accepted `rewind` starts the session it names, or an
-/// accepted `subscribe` becomes the kept subscription.
+/// routed again, an accepted `rewind` or `change_workspace` starts the
+/// session it names, or an accepted `subscribe` becomes the kept
+/// subscription.
 pub(super) enum Settled {
     Reroute(String, Map<String, Value>),
     Rewound(SessionId),
@@ -58,7 +59,12 @@ pub(super) fn settle(
         {
             Some(Settled::Subscribed(command))
         }
-        Verdict::Accepted if command.get("command").and_then(Value::as_str) == Some("rewind") => {
+        Verdict::Accepted
+            if matches!(
+                command.get("command").and_then(Value::as_str),
+                Some("rewind" | "change_workspace")
+            ) =>
+        {
             ack.rewound.clone().map(Settled::Rewound)
         }
         Verdict::Accepted | Verdict::Rejected | Verdict::Closing => None,
@@ -75,11 +81,13 @@ pub(crate) enum Verdict {
 }
 
 /// What one parse of a relayed session line settles: the acknowledged
-/// command's id and verdict, and the session an accepted `rewind` starts
-/// (`docs/events.md`:1308): `result.new_session_id` with the shape the hub
-/// mints. `None` for an acknowledgement that names none or names one of
-/// another shape, which starts nothing. `settle` still starts one only for
-/// a kept `rewind`, so a `rewound` value on any other command is ignored.
+/// command's id and verdict, and the session an accepted `rewind` or
+/// `change_workspace` starts (`docs/events.md`:1308):
+/// `result.new_session_id` with the shape the hub mints. `None` for an
+/// acknowledgement that names none or names one of another shape, which
+/// starts nothing. `settle` still starts one only for a kept `rewind` or
+/// `change_workspace`, so a `new_session_id` value on any other command
+/// is ignored.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Ack {
     pub(crate) id: String,

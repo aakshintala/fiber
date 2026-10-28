@@ -22,6 +22,7 @@ mod configure;
 #[cfg(test)]
 mod configure_fake;
 mod context_view;
+mod convert;
 mod diff;
 mod editor;
 mod event_loop;
@@ -193,6 +194,18 @@ pub(crate) enum Input {
         generation: u64,
         /// Nothing, or why the open failed.
         result: Result<(), String>,
+    },
+    /// A conversion worker finished for `id`: the converted PNG in
+    /// base64, already encoded on the worker, or why the image failed.
+    /// A completion from an earlier session frees the one worker but
+    /// draws nowhere (`docs/tui.md`, "Images").
+    Converted {
+        /// The session generation that asked.
+        generation: u64,
+        /// The placeholder id the converted PNG transmits under.
+        id: u32,
+        /// The converted PNG in base64, or the failure.
+        result: Result<String, String>,
     },
     /// A model-list read answered: the installed models, or why they
     /// could not be read. An answer for a closed loop is dropped.

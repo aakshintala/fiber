@@ -393,13 +393,19 @@ pub struct Sender {
     pub command_id: Option<CommandId>,
 }
 
-/// A point in a session's log that a fork or a rewind continues from.
+/// A point in a session's log that a fork, a rewind, or a workspace move
+/// continues from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Point {
     /// The session.
     pub session_id: SessionId,
     /// The position in its log.
     pub seq: Seq,
+    /// The parent's project key, present only when it differs from the
+    /// child's (`docs/state.md`: the key comes from the workspace). Absent
+    /// means the parent is in the child's project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 /// A git worktree Fiber created for a delegate or a session.
