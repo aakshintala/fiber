@@ -569,6 +569,38 @@ impl Loop {
         Self::open(session, Some(parent), worktree, false)
     }
 
+    /// A fresh spawn delegate's loop: as [`Loop::delegate`], then each
+    /// inherited parent root is recorded as the child's own
+    /// `directory_added` before the opening, seeding the loop from its
+    /// inherited durable events (`docs/delegates.md`, "The tools"). A
+    /// root the boundary already covers writes nothing, and a root
+    /// removed since the parent folded it is skipped: it permits
+    /// nothing. A fork never starts here: it restores its roots from
+    /// the point-based history chain instead, with no duplicate events.
+    pub fn delegate_with_added(
+        session: Session,
+        parent: Parent,
+        worktree: Option<Worktree>,
+        inherited: Vec<std::path::PathBuf>,
+    ) -> Result<Self, Error> {
+        let mut looped = Self::delegate(session, parent, worktree)?;
+        looped.seed_inherited(inherited, true)?;
+        Ok(looped)
+    }
+
+    /// A delegate fork's continuation, then the folders present at the
+    /// parent launch tail but missing from its point-based history.
+    pub fn fork_with_added(
+        session: Session,
+        start: Rewound,
+        worktree: Option<Worktree>,
+        inherited: Vec<std::path::PathBuf>,
+    ) -> Result<Self, Error> {
+        let mut looped = Self::rewound_with_worktree(session, start, worktree)?;
+        looped.seed_inherited(inherited, false)?;
+        Ok(looped)
+    }
+
     /// [`Loop::start`], [`Loop::supervised`] and [`Loop::delegate`]
     /// through one writer: the session's `session_started` carries
     /// `parent` (`None` for a plain start), `supervised` and `worktree`.

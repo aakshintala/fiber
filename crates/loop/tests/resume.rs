@@ -878,6 +878,7 @@ fn a_resume_over_a_log_with_an_opening_message_writes_none() {
             instruction_files: Vec::new(),
             extension_sections: Vec::new(),
             skills: Vec::new(),
+            added_directories: Vec::new(),
         }),
         None,
     );

@@ -515,6 +515,7 @@ fn entry_child() {
         parent: None,
         delegate_id: None,
         depth: None,
+        added: Vec::new(),
         login_shell: false,
         supervised: false,
     };

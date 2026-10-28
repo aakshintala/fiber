@@ -190,6 +190,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_pwd,
     },
     CommandEntry {
+        name: "add-dir",
+        description: "Adds an existing folder to the session's boundary.",
+        hint: Some("<path>"),
+        run: run_add_dir,
+    },
+    CommandEntry {
         name: "panel",
         description: "Shows or hides the panel.",
         hint: None,
@@ -602,6 +608,25 @@ fn run_release_notes(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_copy(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.copy_last_reply())
+}
+
+/// `/add-dir`: with a path, sends `add_directory` with it; with none,
+/// asks for one by leaving the draft on `/add-dir `.
+fn run_add_dir(app: &mut App, rest: &str) -> Option<Effect> {
+    let path = rest.trim();
+    if path.is_empty() {
+        app.push_notice(
+            "add-dir",
+            "Add a folder after /add-dir, then press Enter.".to_owned(),
+        );
+        app.draft.clear();
+        app.draft.paste("/add-dir ");
+        return Some(Effect::None);
+    }
+    Some(
+        app.send_command("add_directory", Some(json!({ "path": path })))
+            .0,
+    )
 }
 
 /// Shows the session's recorded workspace root as a notice: the

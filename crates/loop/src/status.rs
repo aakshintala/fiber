@@ -484,6 +484,7 @@ impl Fold {
             | Event::JobLine(_)
             | Event::JobsPendingNotified(_)
             | Event::CommandAccepted(_)
+            | Event::DirectoryAdded(_)
             | Event::CommandRejected(_) => {}
         }
     }

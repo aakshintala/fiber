@@ -269,6 +269,10 @@ pub struct OpeningMessage {
     pub extension_sections: Vec<ExtensionSectionSent>,
     /// The skills listing, one entry per skill the model may load.
     pub skills: Vec<SkillListed>,
+    /// The session's added folders, resolved, in log order; absent when
+    /// empty (`docs/events.md`, "`directory_added`").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added_directories: Vec<String>,
 }
 
 /// One skills listing entry (`docs/system-prompt.md`, "Skills listing").

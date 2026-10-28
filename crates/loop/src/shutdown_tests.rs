@@ -1557,6 +1557,48 @@ fn after_rewound_a_shutdown_writes_nothing_and_refuses_what_waits_closing() {
     assert_eq!(held.kinds(), ["session_started", "rewound"]);
 }
 
+#[test]
+fn an_add_directory_settling_while_closing_is_refused_without_an_event() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let mut world = World::new(jobs);
+    // `close` has been taken: the loop settles what the inbox still
+    // holds, refusing every command with `closing` instead of writing.
+    world.looped.take_close(Ack(Box::new(|_| {})));
+    // Outside the workspace, so a settle would write its event: the
+    // refusal must leave the log alone instead.
+    let sibling = world.held._home.path().join("sibling");
+    std::fs::create_dir_all(&sibling).unwrap();
+    let before = world.held.kinds();
+    let (tx, refused) = mpsc::channel();
+    let ack = Ack(Box::new(move |answer| {
+        let _sent = tx.send(answer);
+    }));
+    world
+        .looped
+        .settle_one(Delivery::AddDirectory(
+            contract::commands::AddDirectoryArgs {
+                path: sibling.display().to_string(),
+            },
+            ack,
+        ))
+        .unwrap();
+    match Deadline::after(DEADLINE)
+        .recv(&refused)
+        .expect("the ack runs")
+    {
+        Err(rejection) => {
+            assert_eq!(rejection.code, ErrorCode::Closing);
+            assert_eq!(rejection.message, crate::inbox::CLOSING);
+        }
+        Ok(_) => panic!("the add is refused while closing"),
+    }
+    assert_eq!(
+        world.held.kinds(),
+        before,
+        "nothing is written while closing"
+    );
+}
+
 /// A queued notice whose claim answers `holds`, counting its asks in
 /// `asked`, with a delegate's finish riding it.
 fn queued_notice(holds: bool, asked: &Arc<AtomicUsize>) -> crate::jobs::Queued {

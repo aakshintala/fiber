@@ -177,6 +177,7 @@ impl Loop {
             | Delivery::Reload(..)
             | Delivery::McpReconnect(..)
             | Delivery::Name(..)
+            | Delivery::AddDirectory(..)
             | Delivery::Credential(..)
             | Delivery::Rewind(..)
             | Delivery::ChangeWorkspace(..)

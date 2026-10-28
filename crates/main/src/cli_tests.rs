@@ -821,6 +821,7 @@ fn parses_argv_into_its_invocation() {
                     parent: None,
                     delegate_id: None,
                     depth: None,
+                    added: Vec::new(),
                     login_shell: false,
                     credential: None,
                     supervised: false,
@@ -857,6 +858,7 @@ fn parses_argv_into_its_invocation() {
                     parent: None,
                     delegate_id: None,
                     depth: None,
+                    added: Vec::new(),
                     login_shell: false,
                     credential: None,
                     supervised: false,
@@ -889,6 +891,7 @@ fn parses_argv_into_its_invocation() {
                     parent: None,
                     delegate_id: None,
                     depth: None,
+                    added: Vec::new(),
                     login_shell: false,
                     credential: None,
                     supervised: false,
@@ -922,6 +925,7 @@ fn parses_argv_into_its_invocation() {
                     parent: None,
                     delegate_id: None,
                     depth: None,
+                    added: Vec::new(),
                     login_shell: false,
                     credential: None,
                     supervised: false,
@@ -960,6 +964,7 @@ fn parses_argv_into_its_invocation() {
                     parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                     delegate_id: Some("j_0123456789abcdef".to_owned()),
                     depth: None,
+                    added: Vec::new(),
                     login_shell: false,
                     credential: None,
                     supervised: false,
@@ -1000,6 +1005,7 @@ fn parses_argv_into_its_invocation() {
                     parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                     delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
                     depth: None,
+                    added: Vec::new(),
                     login_shell: false,
                     credential: None,
                     supervised: false,
@@ -1034,6 +1040,7 @@ fn parses_argv_into_its_invocation() {
                     parent: None,
                     delegate_id: None,
                     depth: None,
+                    added: Vec::new(),
                     login_shell: false,
                     credential: None,
                     supervised: false,
@@ -1067,6 +1074,7 @@ fn parses_argv_into_its_invocation() {
                     parent: None,
                     delegate_id: None,
                     depth: None,
+                    added: Vec::new(),
                     login_shell: true,
                     credential: None,
                     supervised: false,
@@ -3850,7 +3858,7 @@ fn round_tripped(args: &SessionArgs) -> SessionArgs {
     got
 }
 
-/// Every field of two sessions is equal: the round-trip keeps all 17.
+/// Every field of two sessions is equal: the round-trip keeps all 18.
 #[track_caller]
 fn assert_same_session(got: &SessionArgs, want: &SessionArgs) {
     assert_eq!(got.id, want.id, "id");
@@ -3868,6 +3876,7 @@ fn assert_same_session(got: &SessionArgs, want: &SessionArgs) {
     assert_eq!(got.parent, want.parent, "parent");
     assert_eq!(got.delegate_id, want.delegate_id, "delegate_id");
     assert_eq!(got.depth, want.depth, "depth");
+    assert_eq!(got.added, want.added, "added");
     assert_eq!(got.login_shell, want.login_shell, "login_shell");
     assert_eq!(got.supervised, want.supervised, "supervised");
 }
@@ -3889,6 +3898,7 @@ fn minimal_session() -> SessionArgs {
         parent: None,
         delegate_id: None,
         depth: None,
+        added: Vec::new(),
         login_shell: false,
         supervised: false,
     }
@@ -3925,6 +3935,7 @@ fn session_argv_round_trips_a_new_launch_with_overrides() {
         parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
         delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
         depth: Some(2),
+        added: Vec::new(),
         login_shell: false,
         supervised: false,
     };
@@ -3962,6 +3973,7 @@ fn session_argv_round_trips_a_resume_with_a_credential() {
         parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
         delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
         depth: Some(1),
+        added: Vec::new(),
         ..minimal_session()
     };
     let argv = contract::session_argv::SessionArgv::from(&args).to_argv();
@@ -4214,6 +4226,7 @@ fn session_argv_round_trips_a_fork() {
         parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
         delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
         depth: Some(1),
+        added: Vec::new(),
         ..minimal_session()
     };
     let argv = contract::session_argv::SessionArgv::from(&args).to_argv();
@@ -4282,6 +4295,33 @@ fn session_argv_round_trips_a_workspace_that_is_not_utf8() {
     // The workspace travels byte for byte: a lossy render would fail
     // the round-trip below.
     assert_eq!(argv[2], OsString::from_vec(b"--workspace=/w/\xff".to_vec()),);
+    assert_same_session(&round_tripped(&args), &args);
+}
+
+#[test]
+fn session_argv_round_trips_repeated_added_roots() {
+    let args = SessionArgs {
+        prompt: Some("scan the tree".to_owned()),
+        parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
+        delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
+        depth: Some(1),
+        added: vec![PathBuf::from("/shared"), PathBuf::from("/-leading-dash")],
+        ..minimal_session()
+    };
+    let argv = contract::session_argv::SessionArgv::from(&args).to_argv();
+    let rendered: Vec<String> = argv
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    // One `--added=<path>` per root, so a root starting with `-` never
+    // reads as a flag.
+    assert_eq!(
+        rendered
+            .iter()
+            .filter(|arg| arg.starts_with("--added="))
+            .collect::<Vec<_>>(),
+        ["--added=/shared", "--added=/-leading-dash"]
+    );
     assert_same_session(&round_tripped(&args), &args);
 }
 

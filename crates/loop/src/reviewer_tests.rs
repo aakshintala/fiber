@@ -962,7 +962,7 @@ fn a_review_note_follows_the_declared_effects_in_both_branches() {
             },
             rewritten,
         };
-        let lines = match super::under_item(&prepared, "shell", "/work") {
+        let lines = match super::under_item(&prepared, "shell", "/work", &[]) {
             Input::User { text, .. } => text.lines().map(str::to_owned).collect::<Vec<_>>(),
             Input::Assistant { .. }
             | Input::Reasoning { .. }
@@ -994,6 +994,51 @@ fn a_review_note_follows_the_declared_effects_in_both_branches() {
         );
         assert!(rest.next().is_none(), "{lines:?}");
     }
+}
+
+#[test]
+fn the_effects_item_names_the_added_folders_beside_the_workspace_root() {
+    let tool: Arc<dyn contract::tool::Tool> = Arc::new(ReviewTool { note: None });
+    let prepared = crate::before_tool::Prepared {
+        tool: Arc::clone(&tool),
+        arguments: Map::new(),
+        effects: contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Reads],
+                reversible: false,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+            hosts: None,
+        },
+        rewritten: None,
+    };
+    let text = match super::under_item(
+        &prepared,
+        "shell",
+        "/work",
+        // B, A, B has folded to B, A before reaching the reviewer.
+        &[
+            std::path::PathBuf::from("/other"),
+            std::path::PathBuf::from("/shared"),
+        ],
+    ) {
+        Input::User { text, .. } => text,
+        Input::Assistant { .. }
+        | Input::Reasoning { .. }
+        | Input::ToolCall { .. }
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. } => panic!("the effects item is a user message"),
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines[0],
+        "Call under review: the last tool call above, shell."
+    );
+    assert_eq!(lines[lines.len() - 2], "Workspace root: /work");
+    assert_eq!(lines[lines.len() - 1], "Added folders: /other, /shared");
 }
 
 mod supervised {

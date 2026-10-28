@@ -1387,6 +1387,7 @@ fn opening() -> Event {
         instruction_files: Vec::new(),
         extension_sections: Vec::new(),
         skills: Vec::new(),
+        added_directories: Vec::new(),
     })
 }
 
@@ -2354,4 +2355,93 @@ fn a_parent_session_started_does_not_supply_the_own_workspace() {
         fold(&segments),
         Err(crate::Error::NoSessionStarted)
     ));
+}
+
+fn added_dir(path: &str) -> Event {
+    Event::DirectoryAdded(contract::events::DirectoryAdded {
+        path: path.to_owned(),
+        inherited: false,
+    })
+}
+
+#[test]
+fn directory_added_keeps_each_path_at_its_first_position_after_resume() {
+    let (_home, sessions) = sessions("added");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &added_dir("/other")),
+            envelope(A, 2, None, None, &added_dir("/shared")),
+            envelope(A, 3, None, None, &added_dir("/other")),
+        ],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    // B, A, B folds to B, A; a repeated path keeps its first-event
+    // position (`docs/events.md`, "`directory_added`").
+    assert_eq!(
+        folded.added,
+        [PathBuf::from("/other"), PathBuf::from("/shared")]
+    );
+    // Through the accessor the delegate launch and the seed read: the
+    // folded roots are returned in that same order.
+    assert_eq!(
+        folded.added(),
+        &[PathBuf::from("/other"), PathBuf::from("/shared")]
+    );
+}
+
+#[test]
+fn a_fold_at_a_point_holds_only_the_dirs_added_at_or_before_it() {
+    let (_home, sessions) = sessions("added-point");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &added_dir("/shared")),
+            envelope(A, 2, Some("t_1"), None, &turn()),
+            envelope(A, 3, None, None, &added_dir("/later")),
+        ],
+    );
+    let before = forked(&sessions.join(A), Seq(1)).unwrap();
+    assert_eq!(before.added, [PathBuf::from("/shared")]);
+    let at_start = forked(&sessions.join(A), Seq(0)).unwrap();
+    assert!(at_start.added.is_empty());
+    let past = forked(&sessions.join(A), Seq(3)).unwrap();
+    assert_eq!(
+        past.added,
+        [PathBuf::from("/shared"), PathBuf::from("/later")]
+    );
+}
+
+#[test]
+fn a_workspace_move_drops_added_directories() {
+    // `change_workspace` starts a new session, so its added folders do not
+    // cross the move (`docs/invocation.md`, "Driver commands").
+    let (_home, sessions) = sessions("move-added");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &added_dir("/shared")),
+            envelope(A, 2, None, None, &moved(B, 1)),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[envelope(
+            B,
+            0,
+            None,
+            None,
+            &started_as("/w2", None, Some((A, 1))),
+        )],
+    );
+    let folded = resumed(&sessions.join(B)).unwrap();
+    assert_eq!(folded.workspace, "/w2");
+    assert!(folded.added.is_empty());
 }
