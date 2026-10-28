@@ -29,7 +29,8 @@ fn drawn(code: &str, message: &str) -> (Buffer, Vec<crate::mouse::Target>) {
     let mut buf = Buffer::empty(area);
     let mut bottom = area.bottom();
     let mut targets = Vec::new();
-    super::draw(&app, area, &mut buf, &mut bottom, &mut targets);
+    let bound = super::frame_bound(&app);
+    super::draw(&app, area, &mut buf, &mut bottom, &mut targets, &bound);
     (buf, targets)
 }
 
@@ -170,7 +171,8 @@ fn overlay_only(app: &App, width: u16, height: u16) -> (Buffer, Vec<crate::mouse
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
-    super::overlay(app, area, &mut buf, &mut targets);
+    let bound = super::frame_bound(app);
+    super::overlay(app, area, &mut buf, &mut targets, &bound);
     (buf, targets)
 }
 
@@ -603,4 +605,290 @@ fn wrapped_rows_join_as_the_source_reads() {
         plain,
         vec![("a".to_owned(), Join::Break), ("b".to_owned(), Join::Break)]
     );
+}
+
+/// Draws the app's single notice through `script`: the buffer, the
+/// targets, the fake, and how many rows `bottom` moved.
+fn seamed(
+    code: &str,
+    message: &str,
+    script: crate::ext::tests::SlotScript,
+    flat: bool,
+) -> (
+    Buffer,
+    Vec<crate::mouse::Target>,
+    std::rc::Rc<crate::ext::tests::SlotRenderer>,
+    u16,
+) {
+    use std::rc::Rc;
+    let app = app_with_notice(code, message);
+    let fake = Rc::new(crate::ext::tests::SlotRenderer::filling(
+        &["notice"],
+        script,
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, flat);
+    let area = Rect::new(0, 0, 30, 24);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    super::draw(&app, area, &mut buf, &mut bottom, &mut targets, &bound);
+    (buf, targets, fake, 24 - bottom)
+}
+
+#[test]
+fn a_notice_replacement_draws_instead_of_the_row() {
+    use crate::ext::tests::{SlotScript, raw};
+    let (buf, targets, fake, moved) = seamed(
+        "io_failed",
+        "a read failed",
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+        false,
+    );
+    // (`docs/tui.md`, "The slots": a notice replacement paints its fitting lines and reserves those rows.)
+    assert_eq!(moved, 1);
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow()[0].1, "notice");
+    assert_eq!(fake.calls.borrow()[0].2, 30);
+    let row = row_text(&buf, 23);
+    assert!(row.starts_with("custom"), "{row:?}");
+    assert!(!row.contains('⚠'), "{row:?}");
+    assert!(
+        targets.iter().any(|target| target.id == TargetId::Notice(0)
+            && target.rect.x == 0
+            && target.rect.width == 30),
+        "{targets:?}"
+    );
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::DismissNotice(0)
+                && target.rect.x == 29
+                && target.rect.width == 1),
+        "{targets:?}"
+    );
+}
+
+#[test]
+fn session_half_lookup_returns_only_the_recorded_map() {
+    use std::collections::BTreeMap;
+
+    let session = contract::SessionId("session-a".to_owned());
+    let mut pages = crate::window::Pages::new(80);
+    // (`docs/tui.md`, "How a TUI extension runs": range-bound halves stay inert until `extensions_loaded`.)
+    assert_eq!(pages.halves_for(&session), None);
+    let expected = BTreeMap::from([
+        ("ledger".to_owned(), "2.1.0".to_owned()),
+        ("shell".to_owned(), "1.0.0".to_owned()),
+    ]);
+    pages.record_halves(&session, expected.clone());
+    assert_eq!(pages.halves_for(&session), Some(expected));
+}
+
+#[test]
+fn a_notice_replacement_fills_the_last_available_rows() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    use std::rc::Rc;
+
+    let app = app_with_notice("io_failed", "a read failed");
+    let fake = Rc::new(SlotRenderer::filling(
+        &["notice"],
+        SlotScript::Replace(vec![vec![raw("first")], vec![raw("last")]]),
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    let area = Rect::new(0, 22, 30, 2);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    super::draw(&app, area, &mut buf, &mut bottom, &mut targets, &bound);
+
+    // (`docs/tui.md`, "What a renderer returns" and "The slots": a notice replacement paints fitting lines in order, reserves those rows, and spans its targets over the painted lines.)
+    assert!(row_text(&buf, 22).starts_with("first"));
+    assert!(row_text(&buf, 23).starts_with("last"));
+    assert!(targets.iter().any(|target| {
+        target.id == TargetId::Notice(0) && target.rect.y == 22 && target.rect.height == 1
+    }));
+    assert!(targets.iter().any(|target| {
+        target.id == TargetId::Notice(0) && target.rect.y == 23 && target.rect.height == 1
+    }));
+    assert!(targets.iter().any(|target| {
+        target.id == TargetId::DismissNotice(0) && target.rect.y == 22 && target.rect.height == 2
+    }));
+}
+
+#[test]
+fn a_three_line_notice_replacement_clips_to_available_rows_and_dismisses() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    use std::rc::Rc;
+
+    let mut app = app_with_notice("io_failed", "a read failed");
+    let fake = Rc::new(SlotRenderer::filling(
+        &["notice"],
+        SlotScript::Replace(vec![
+            vec![raw("first")],
+            vec![raw("second")],
+            vec![raw("third")],
+        ]),
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    let area = Rect::new(0, 22, 30, 2);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    super::draw(&app, area, &mut buf, &mut bottom, &mut targets, &bound);
+
+    // (`docs/tui.md`, "The slots": a notice replacement keeps its first fitting lines, reserves those rows, and spans its targets over them.)
+    assert!(row_text(&buf, 22).starts_with("first"));
+    assert!(row_text(&buf, 23).starts_with("second"));
+    assert_eq!(24 - bottom, 2);
+    assert!(targets.iter().any(|target| {
+        target.id == TargetId::DismissNotice(0) && target.rect.y == 22 && target.rect.height == 2
+    }));
+
+    let clicked = crate::mouse::hit(&targets, 29, 23).expect("second row has a dismiss target");
+    assert_eq!(clicked, TargetId::DismissNotice(0));
+    // (`docs/tui.md`, "Notices": ✕ dismisses an event notice.)
+    app.on_click(clicked);
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn a_notice_decorator_draws_the_built_in_row_under_its_badge() {
+    use crate::ext::tests::{SlotScript, raw};
+    let (buf, targets, fake, _) = seamed(
+        "io_failed",
+        "a read failed",
+        SlotScript::Decorate {
+            badge: vec![vec![raw("BADGE")]],
+            trim: 5,
+        },
+        false,
+    );
+    // The badge decorates the built-in row; the notice target covers both painted rows.
+    assert_eq!(fake.builtins.borrow().as_slice(), &[25]);
+    assert!(row_text(&buf, 22).starts_with("BADGE"));
+    let row = row_text(&buf, 23);
+    assert!(row.contains('⚠'), "{row:?}");
+    assert!(
+        targets.iter().any(|target| target.id == TargetId::Notice(0)
+            && target.rect.y == 22
+            && target.rect.height == 1),
+        "{targets:?}"
+    );
+    assert!(
+        targets.iter().any(|target| target.id == TargetId::Notice(0)
+            && target.rect.y == 23
+            && target.rect.height == 1),
+        "{targets:?}"
+    );
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::DismissNotice(0)
+                && target.rect.x == 29
+                && target.rect.y == 22
+                && target.rect.height == 2),
+        "{targets:?}"
+    );
+}
+
+#[test]
+fn a_notice_error_falls_back_with_one_failure() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use std::rc::Rc;
+    let app = app_with_notice("io_failed", "a read failed");
+    let fake = Rc::new(SlotRenderer::filling(
+        &["notice"],
+        SlotScript::Fail {
+            kind: FailureKind::HookFailed,
+            message: "boom".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    for _ in 0..2 {
+        let area = Rect::new(0, 0, 30, 24);
+        let mut buf = Buffer::empty(area);
+        let mut bottom = area.bottom();
+        let mut targets = Vec::new();
+        super::draw(&app, area, &mut buf, &mut bottom, &mut targets, &bound);
+        let row = row_text(&buf, 23);
+        assert!(row.contains('⚠'), "{row:?}");
+    }
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(
+        fake.calls.borrow().len(),
+        1,
+        "the failure calls nothing again"
+    );
+    let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "notice");
+    assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
+}
+
+#[test]
+fn a_flat_notice_replacement_drops_every_style() {
+    use crate::ext::tests::SlotScript;
+    use ratatui::style::{Color, Modifier};
+    let script = || {
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "custom".into(),
+            bold: true,
+            fg: Some("accent".into()),
+            ..crate::ext::RawSpan::default()
+        }]])
+    };
+    let (styled, _, _, _) = seamed("io_failed", "a read failed", script(), false);
+    let cell = &styled[(0, 23)];
+    assert!(cell.modifier.contains(Modifier::BOLD), "bold lost");
+    assert_ne!(cell.fg, Color::Reset, "accent lost");
+    // Flat drops both: the same replacement draws plain.
+    let (buf, _, _, moved) = seamed("io_failed", "a read failed", script(), true);
+    // (`docs/tui.md`, "The slots": a notice replacement paints its fitting lines and reserves those rows.)
+    assert_eq!(moved, 1);
+    assert!(row_text(&buf, 23).starts_with("custom"));
+    for x in 0..30 {
+        let cell = &buf[(x, 23)];
+        assert!(!cell.modifier.contains(Modifier::BOLD), "cell {x}");
+        assert_eq!(cell.fg, Color::Reset, "cell {x}");
+    }
+}
+
+#[test]
+fn a_width_1_row_still_draws_its_cross() {
+    // One column holds no text: the dismiss cross still draws, and its
+    // target sits over that same cell.
+    let mut app = app_with_notice("io_failed", "a read failed");
+    app.set_size(1, 24);
+    let area = Rect::new(0, 0, 1, 24);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    let bound = super::frame_bound(&app);
+    super::draw(&app, area, &mut buf, &mut bottom, &mut targets, &bound);
+    assert_eq!(buf[(0, 23)].symbol(), "✕");
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::DismissNotice(0)
+                && target.rect.x == 0
+                && target.rect.width == 1),
+        "{targets:?}"
+    );
+}
+
+#[test]
+fn an_extension_failed_notice_ignores_the_renderer() {
+    use crate::ext::tests::{SlotScript, raw};
+    let (buf, _, _, _) = seamed(
+        "extension_failed",
+        "switched off",
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+        false,
+    );
+    let row = row_text(&buf, 23);
+    assert!(row.contains('⚠'), "{row:?}");
+    assert!(!row.contains("custom"), "{row:?}");
 }

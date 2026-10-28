@@ -124,6 +124,29 @@ pub(crate) enum Aside {
 }
 
 impl Aside {
+    /// Its card entry: the line's joined span text, the warning's
+    /// message, or the orphaned jobs with their open state. The row
+    /// targets stay the terminal's.
+    pub(crate) fn turn_input(&self) -> crate::ext::TurnAside<'_> {
+        match self {
+            Self::Line(line) => crate::ext::TurnAside::Line {
+                text: line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect(),
+            },
+            Self::Warning { message } => crate::ext::TurnAside::Warning { message },
+            Self::Orphans { jobs, open, .. } => crate::ext::TurnAside::Orphans {
+                jobs: jobs
+                    .iter()
+                    .map(|(name, message)| crate::ext::TurnOrphan { name, message })
+                    .collect(),
+                open: *open,
+            },
+        }
+    }
+
     /// Its lines at the card's inner width.
     pub(crate) fn rows(&self, inner: u16, out: &mut Rows) {
         match self {

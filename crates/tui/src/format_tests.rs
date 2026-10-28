@@ -842,3 +842,195 @@ fn answer_parts_carries_labels_quoted_words_or_skipped() {
     assert_eq!(parts.text, r#"a \"b\", "x\ny""#);
     assert!(!parts.skipped);
 }
+
+/// A failure's rows through a seam drawing `fake`.
+fn failed_seamed(
+    error: &contract::shapes::Failure,
+    width: u16,
+    fake: &std::rc::Rc<crate::ext::tests::SlotRenderer>,
+    flat: bool,
+) -> Vec<crate::turn::Row> {
+    let mut out =
+        crate::rows::Rows::default().with_seam(crate::ext::tests::seam(fake, "s", 0, flat));
+    super::failure(error, width, &mut out);
+    out.into_parts().0
+}
+
+fn failed(code: contract::ErrorCode) -> contract::shapes::Failure {
+    contract::shapes::Failure {
+        code,
+        message: "sign in".to_owned(),
+        retry_after_ms: None,
+        provider: Some(contract::shapes::ProviderFailure {
+            name: "fake".to_owned(),
+            status: Some(401),
+            message: "bad key".to_owned(),
+        }),
+    }
+}
+
+fn replaced() -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    std::rc::Rc::new(SlotRenderer::filling(
+        &["error_line"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    ))
+}
+
+#[test]
+fn an_error_line_replacement_draws_instead_of_the_failure() {
+    let error = failed(contract::ErrorCode::IoFailed);
+    let fake = replaced();
+    let rows = failed_seamed(&error, 40, &fake, false);
+    // (`docs/tui.md`, "When an extension fails": the failure is cached against its input.)
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow()[0].1, "error_line");
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    assert!(!shown.iter().any(|row| row.contains('✗')), "{shown:?}");
+    assert!(
+        !shown.iter().any(|row| row.contains("bad key")),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn a_login_replacement_keeps_the_login_target_on_every_line() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let error = failed(contract::ErrorCode::AuthenticationFailed);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["error_line"],
+        SlotScript::Replace(vec![vec![raw("one")], vec![raw("two")]]),
+    ));
+    let rows = failed_seamed(&error, 40, &fake, false);
+    // (`docs/tui.md`, "The slots", `error_line`: the failed-login target stays on each line.)
+    assert!(!rows.is_empty());
+    for (line, target) in &rows {
+        assert_eq!(*target, Some(crate::app::Target::Login), "{line:?}");
+    }
+}
+
+#[test]
+fn a_non_login_replacement_carries_no_target() {
+    let error = failed(contract::ErrorCode::IoFailed);
+    let fake = replaced();
+    let rows = failed_seamed(&error, 40, &fake, false);
+    // (`docs/tui.md`, "The slots", `error_line`: only the failed-login row carries a target.)
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    for (line, target) in &rows {
+        assert_eq!(*target, None, "{line:?}");
+    }
+}
+
+#[test]
+fn the_login_target_sits_on_the_built_in_failure_line_only() {
+    // (`docs/tui.md`, "The slots", `error_line`: the built-in draws the
+    // ✗ line with the login target and the provider's words without one.)
+    let error = failed(contract::ErrorCode::AuthenticationFailed);
+    let fake = std::rc::Rc::new(crate::ext::tests::SlotRenderer::filling(
+        &[],
+        crate::ext::tests::SlotScript::default(),
+    ));
+    let rows = failed_seamed(&error, 40, &fake, false);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("✗ sign in")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|row| row.contains("bad key")), "{shown:?}");
+    let login_lines = rows
+        .iter()
+        .filter(|(_, target)| *target == Some(crate::app::Target::Login))
+        .count();
+    assert_eq!(login_lines, 1, "{shown:?}");
+}
+
+#[test]
+fn an_error_line_decorator_draws_the_built_in_failure_under_its_badge() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let error = failed(contract::ErrorCode::IoFailed);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["error_line"],
+        SlotScript::Decorate {
+            badge: vec![vec![raw("BADGE")]],
+            trim: 5,
+        },
+    ));
+    let rows = failed_seamed(&error, 40, &fake, false);
+    assert_eq!(fake.builtins.borrow().as_slice(), &[35]);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("BADGE")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|row| row.contains('✗')), "{shown:?}");
+}
+
+#[test]
+fn an_error_line_error_falls_back_with_one_failure() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let error = failed(contract::ErrorCode::IoFailed);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["error_line"],
+        SlotScript::Fail {
+            kind: FailureKind::HookFailed,
+            message: "boom".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    for _ in 0..2 {
+        let mut out = crate::rows::Rows::default().with_seam(bound.clone());
+        super::failure(&error, 40, &mut out);
+        let shown: Vec<String> = out
+            .into_parts()
+            .0
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect();
+        assert!(shown.iter().any(|row| row.contains('✗')), "{shown:?}");
+    }
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(
+        fake.calls.borrow().len(),
+        1,
+        "the failure calls nothing again"
+    );
+    let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "error_line");
+    assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
+}
+
+#[test]
+fn a_flat_error_line_replacement_drops_every_style() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use ratatui::style::Style;
+    let error = failed(contract::ErrorCode::IoFailed);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["error_line"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "custom".into(),
+            bold: true,
+            fg: Some("accent".into()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let rows = failed_seamed(&error, 40, &fake, true);
+    // (`docs/tui.md`, "How a TUI extension runs": in screen-reader mode the terminal drops every style.)
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("custom")), "{shown:?}");
+    for (line, _) in &rows {
+        for span in &line.spans {
+            assert_eq!(span.style, Style::default(), "{span:?}");
+        }
+    }
+}
