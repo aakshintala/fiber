@@ -148,7 +148,7 @@ impl Case {
     pub fn parse(
         path: &Path,
         bytes: &[u8],
-        check_script: &dyn Fn(&Path, &[u8]) -> Result<(), String>,
+        check_script: &ScriptCheck<'_>,
     ) -> Result<Self, crate::Error> {
         Self::parse_inner(path, bytes, check_script).map_err(crate::Error::Case)
     }

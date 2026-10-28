@@ -101,9 +101,7 @@ impl CaseRun {
     pub fn start(
         self: &Arc<Self>,
         driver: Arc<dyn Drive>,
-        events: Box<
-            dyn FnMut(Duration) -> Option<Result<Option<contract::Envelope>, String>> + Send,
-        >,
+        events: Box<EventSource>,
         cancel: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<JoinHandle<()>, crate::Error> {
         let case = Arc::clone(self);
