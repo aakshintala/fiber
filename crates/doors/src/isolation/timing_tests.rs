@@ -30,7 +30,7 @@ use fakes::clock::FakeClock;
 use log::Log;
 
 use super::{isolate, recreate};
-use crate::project;
+use worktree::project;
 
 /// One budget for the whole wait: setup, the code under test and the
 /// assertions run on one thread under one deadline (`docs/testing.md`,
