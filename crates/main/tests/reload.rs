@@ -536,7 +536,7 @@ fn reviewer_model_changes_apply_to_the_next_reviewed_call() {
     let setup = Setup::new();
     let call = || {
         stream(&[
-            json!({"type":"response.output_item.done","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"shell","arguments":"{\"command\":\"true\"}"}}),
+            json!({"type":"response.output_item.done","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"shell","arguments":"{\"command\":\"touch .fiber-review-marker\"}"}}),
             json!({"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":10,"output_tokens":3}}}),
         ])
     };
