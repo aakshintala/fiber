@@ -139,14 +139,15 @@ impl State {
         for root in &message.added_directories {
             state.track_added(Path::new(root));
         }
-        // The pre-read baseline threads through here; the store gate
-        // lands with the fix, so this still stores the post-read stat.
-        let _ = pre_stats;
+        // The baseline is the stat taken immediately before the opening
+        // build read each file: a change between the stat and the read
+        // misses the size-and-time shortcut at the next check and content
+        // decides.
         for file in &message.instruction_files {
             state.files.insert(
                 file.path.clone(),
                 Tracked {
-                    stat: stat_of(&file.path),
+                    stat: pre_stats.get(&file.path).copied().flatten(),
                     noticed: None,
                 },
             );
@@ -262,10 +263,9 @@ impl State {
         sized: bool,
         pre_stats: &BTreeMap<String, Option<Stat>>,
     ) {
-        // The pre-read baseline threads through here; the store gate
-        // lands with the fix, so a sized build still stores the
-        // post-read stat.
-        let _ = pre_stats;
+        // A sized build baselines each section file on its pre-read stat,
+        // so a change between the stat and the read misses the shortcut
+        // at the next check; a resume remembers nothing.
         for (name, paths, budget) in sections {
             let keys: Vec<String> = paths
                 .iter()
@@ -273,7 +273,11 @@ impl State {
                 .collect();
             for key in &keys {
                 self.files.entry(key.clone()).or_insert_with(|| Tracked {
-                    stat: if sized { stat_of(key) } else { None },
+                    stat: if sized {
+                        pre_stats.get(key).copied().flatten()
+                    } else {
+                        None
+                    },
                     noticed: None,
                 });
             }

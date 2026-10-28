@@ -51,16 +51,23 @@ fn run_hook(path: &str) {
 #[cfg(not(test))]
 fn run_hook(_path: &str) {}
 
-/// The bytes at `path` with the stat taken after the read. The
-/// pre-read stat and the hook edge are already wired; the store gate
-/// lands with the fix, so this still pins the stale header on a raced
-/// read.
+/// The bytes at `path` with the stat of what was read: the stat before
+/// the read and the stat after it, returning the after-stat only when the
+/// two match, else no stat. The caller stores a stat only on `Some`, and
+/// serves the bytes for this turn either way, so the next turn start
+/// reads the file again.
 pub(crate) fn read_validated(path: &str) -> (std::io::Result<Vec<u8>>, Option<Stat>) {
-    let _before = stat_of(path);
+    let before = stat_of(path);
     let bytes = std::fs::read(path);
     run_hook(path);
     let after = stat_of(path);
-    (bytes, after)
+    // A stat taken after a read is stored as the stat of what was read
+    // only when nothing moved across the read.
+    if before == after {
+        (bytes, after)
+    } else {
+        (bytes, None)
+    }
 }
 
 /// The bytes at `path` with the stat taken immediately before the read:
