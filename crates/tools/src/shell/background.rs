@@ -398,7 +398,7 @@ fn monitor_receipt(
     path: &Path,
     errors: &Path,
     sink: &std::io::Result<()>,
-    deadline_ms: u64,
+    timeout_ms: u64,
 ) -> Output {
     let errors = match sink {
         Ok(()) => format!("Errors: {}.", errors.display()),
@@ -408,7 +408,7 @@ fn monitor_receipt(
         ),
     };
     let text = format!(
-        "Started a monitor.\nJob {id}. Output: {path}. {errors} Lines it prints reach you in batches; its deadline is {deadline_ms} ms.\n",
+        "Started a monitor.\nJob {id}. Output: {path}. {errors} Lines it prints reach you in batches; its deadline is {timeout_ms} ms.\n",
         id = started.job_id.0,
         path = path.display(),
     );
