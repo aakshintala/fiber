@@ -562,7 +562,7 @@ two-column gutter, as overlay choices do, without the bar.
 A view swaps into the conversation area and takes all of it. Esc returns to
 the conversation. Its top row, on the `surface` tint, is the view's name
 bold, its command dim ("  /context"), and "Esc returns" dim, right-aligned;
-a click on it returns too. The mouse wheel over a view scrolls it 3 rows a step, as the conversation scrolls, and never the conversation under it. The views are:
+a click on it returns too. The mouse wheel over a view moves its visible rows 3 a step and never the conversation under it. The views are:
 
 - **A delegate's or job's view.** Its header is a breadcrumb
   ("main › ◆ review: …"). A status card gives harness, model, calls, elapsed
@@ -1408,6 +1408,7 @@ An approval request is a panel at the bottom that replaces the input box
   behind an approval, a second Esc declines the form.
 - `/approvals` reopens the waiting queue at the first request. It is the key
   path for reopening a request put aside and for moving to the next.
+- The mouse wheel over the panel's rows does nothing.
 
 The panel is a slab with ▄ and ▀ edges, every row starting with a ▌ stripe
 and a space: the `approval` tint and an `attention` stripe for a standing
