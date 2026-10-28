@@ -2118,7 +2118,8 @@ impl contract::clock::Clock for JumpClock {
     }
 
     fn sleep(&self, d: std::time::Duration) {
-        let steps = d.as_millis().div_ceil(self.step.as_millis().max(1)) as u64;
+        let steps =
+            u64::try_from(d.as_millis().div_ceil(self.step.as_millis().max(1))).unwrap_or(u64::MAX);
         self.calls
             .fetch_add(steps, std::sync::atomic::Ordering::SeqCst);
     }

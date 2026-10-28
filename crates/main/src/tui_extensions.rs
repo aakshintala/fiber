@@ -702,9 +702,7 @@ impl Renderer for Composite {
         person_bound: bool,
     ) -> Option<(String, Option<String>)> {
         // With no session on screen neither kind of binding acts.
-        if ctx.session_id.is_none() {
-            return None;
-        }
+        ctx.session_id.as_ref()?;
         if person_bound {
             notice_person(self, key);
             return None;
