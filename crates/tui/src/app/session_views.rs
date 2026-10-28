@@ -236,6 +236,41 @@ impl App {
         Some(Effect::None)
     }
 
+    /// Shifts the open session view's window one wheel step through its
+    /// own entry point: the call's viewport and the rewind list through
+    /// theirs, every other list three rows with its selection kept while
+    /// shown. `None` with no view open. Never an Up/Down step: the keys
+    /// keep their own path.
+    pub(in crate::app) fn session_view_wheel(&mut self, up: bool) -> Option<Effect> {
+        if matches!(self.session_views.open, Some(Open::Call(_))) {
+            return Some(self.call_view_wheel(up));
+        }
+        if matches!(self.session_views.open, Some(Open::Rewind(_))) {
+            return Some(self.rewind_wheel(up));
+        }
+        let (rows, height) = self.session_view_list_metrics()?;
+        if self.session_views.diff.is_some() {
+            self.session_views.diff_list.wheel(up, rows, height, 3);
+            return Some(Effect::None);
+        }
+        if let Some(
+            Open::Delegates(list)
+            | Open::Jobs(list)
+            | Open::AllDelegates(list)
+            | Open::Files(list)
+            | Open::Usage(list)
+            | Open::Quota(list)
+            | Open::Context(list)
+            | Open::Status(list)
+            | Open::ReleaseNotes(list)
+            | Open::Hooks(list),
+        ) = self.session_views.open.as_mut()
+        {
+            list.wheel(up, rows, height, 3);
+        }
+        Some(Effect::None)
+    }
+
     /// Hands the horizontal-left edit key to the diff view. Other editing
     /// keys are swallowed while a session view is open.
     pub(in crate::app) fn session_view_edit(&mut self, edit: &Edit) -> Option<Effect> {

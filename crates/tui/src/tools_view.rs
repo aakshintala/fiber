@@ -188,6 +188,19 @@ impl Tools {
         Act::Stay
     }
 
+    /// Shifts the window one wheel step: three rows, clamping the
+    /// selection onto a row that takes a switch as the keys do.
+    pub(crate) fn wheel(&mut self, up: bool, ctx: &Ctx<'_>) -> Act {
+        let shown = self.shown(ctx);
+        let before = (self.list.top(), self.list.selected());
+        self.list.wheel(up, self.rows.len(), shown, 3);
+        self.list.rest_on(&self.takes(), self.rows.len(), shown);
+        if (self.list.top(), self.list.selected()) != before {
+            self.said.clear();
+        }
+        Act::Stay
+    }
+
     /// Handles one editing key: ← and → choose the row's switch.
     pub(crate) fn edit_key(&mut self, edit: &Edit) {
         self.focus.edit_key(edit);

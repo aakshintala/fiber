@@ -1,29 +1,113 @@
-//! Unit tests for `/logout`'s window arithmetic (`logout_view.rs`): the
-//! edge table no screen test can separate, and the scrolled starts a
-//! tall list shows.
+//! Tests for `/logout`'s wheel window (`logout_view.rs`): the wheel
+//! shifts the provider list three rows a step, keeping the focus while
+//! it shows, and the confirm takes no wheel.
 
-use super::window_start;
+use super::Logout;
+use crate::configure::{LoginKind, LoginTarget};
+use crate::configure_fake::Fake;
+use crate::keys::Key;
+use crate::settings_view::{Act, Ctx};
+use std::path::Path;
 
-#[test]
-fn window_start_edges_empty_body_and_empty_window_at_the_top() {
-    // An empty body or window shows nothing: the window starts at the
-    // top whatever holds the focus.
-    for (focused, shown, rows) in [
-        (0, 0, 0),
-        (3, 0, 5),
-        (0, 0, 5),
-        (3, 5, 0),
-        (0, 5, 0),
-        (0, 16, 31),
-        (15, 16, 31),
-    ] {
-        assert_eq!(
-            window_start(focused, shown, rows),
-            0,
-            "focused={focused} shown={shown} rows={rows}"
-        );
+/// Thirty key providers: enough rows that the window moves three and
+/// the focus stays on screen.
+fn many_targets() -> Vec<LoginTarget> {
+    (0..30)
+        .map(|at| LoginTarget {
+            name: format!("p{at:02}"),
+            kind: LoginKind::Key,
+        })
+        .collect()
+}
+
+/// A seam answering `targets`.
+fn fake_with(targets: Vec<LoginTarget>) -> Fake {
+    let fake = Fake::new(Vec::new());
+    if let Ok(mut held) = fake.logout.lock() {
+        *held = Ok(targets
+            .into_iter()
+            .enumerate()
+            .map(|(at, target)| crate::configure::LogoutRow::Provider {
+                name: target.name,
+                label: format!("l{at:02}"),
+                default: at == 0,
+                deletable: true,
+                origin: None,
+                siblings: Vec::new(),
+            })
+            .collect());
     }
-    // Past the window the start keeps the focused row as the last shown.
-    assert_eq!(window_start(16, 16, 31), 1);
-    assert_eq!(window_start(30, 16, 31), 15);
+    fake
+}
+
+/// A call's context over `fake`, `height` rows tall, in `/w`.
+fn ctx_h(fake: &Fake, height: usize) -> Ctx<'_> {
+    Ctx {
+        seam: fake,
+        workspace: Path::new("/w"),
+        height,
+        width: 80,
+        usage: None,
+    }
+}
+
+/// The wheel over the rows shifts the window three rows and keeps a
+/// focus still on screen: five Downs put it mid-window, so one step
+/// down moves the window three rows under it.
+#[test]
+fn wheel_keeps_a_visible_focus_and_shifts_the_window_three() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut logout = Logout::open(&context);
+    assert_eq!(logout.selected, 1);
+    for _ in 0..5 {
+        logout.key(&Key::Down, &context);
+    }
+    assert_eq!(logout.selected, 6);
+    assert_eq!(logout.top, 0);
+    assert!(matches!(logout.wheel(false, &context), Act::Stay));
+    assert_eq!(logout.top, 3);
+    assert_eq!(
+        logout.selected, 6,
+        "a focus still on screen stays where it was"
+    );
+}
+
+/// The wheel clamps a focus that leaves the window to the nearest
+/// shown target row: from the top row, one step down moves the window
+/// three rows and the focus to its first row.
+#[test]
+fn wheel_clamps_a_leaving_focus_to_the_window() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut logout = Logout::open(&context);
+    assert_eq!(logout.selected, 1);
+    assert!(matches!(logout.wheel(false, &context), Act::Stay));
+    assert_eq!(logout.top, 3);
+    assert_eq!(
+        logout.selected, 3,
+        "the focus clamps to the nearest shown target row"
+    );
+}
+
+/// The wheel up from the top row moves nothing, and the confirm takes
+/// no wheel: Enter asks, and the wheel over it changes nothing.
+#[test]
+fn wheel_up_at_the_top_and_over_the_confirm_moves_nothing() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut logout = Logout::open(&context);
+    assert!(matches!(logout.wheel(true, &context), Act::Stay));
+    assert_eq!((logout.top, logout.selected), (0, 1));
+    for _ in 0..3 {
+        logout.key(&Key::Down, &context);
+    }
+    assert_eq!(logout.selected, 4);
+    assert!(matches!(logout.key(&Key::Enter, &context), Act::Stay));
+    assert!(matches!(logout.wheel(false, &context), Act::Stay));
+    assert!(matches!(logout.wheel(true, &context), Act::Stay));
+    assert_eq!(
+        logout.selected, 4,
+        "the wheel over the confirm keeps the confirmed row"
+    );
 }

@@ -989,3 +989,34 @@ fn ctrl_g_uses_key_ownership_even_for_default_rows() {
         }
     }
 }
+
+/// The wheel shifts the visible rows three a step, keeping a visible
+/// selection where it was; over the edit field it is swallowed, so the
+/// wheel cannot retarget the key being edited (`docs/tui.md`, "Swapped
+/// views"; see #3578).
+#[test]
+fn wheel_shifts_three_rows_and_holds_over_the_field() {
+    let fake = Fake::new(
+        (0..30)
+            .map(|n| {
+                row(
+                    &format!("s.key-{n:02}"),
+                    value("\"x\""),
+                    "default",
+                    WriteScope::Any { repo: false },
+                )
+            })
+            .collect(),
+    );
+    let context = ctx(&fake);
+    let mut settings = Settings::open(&context);
+    settings.list.select(10, settings.list_len(), 20);
+    assert_eq!((settings.list.top(), settings.list.selected()), (0, 10));
+    assert!(matches!(settings.wheel(false, &context), Act::Stay));
+    assert_eq!(settings.list.top(), 3);
+    assert_eq!(settings.list.selected(), 10, "a visible selection stays");
+    // Enter opens the edit field on a plain row; the wheel holds there.
+    assert!(matches!(settings.key(&Key::Enter, &context), Act::Stay));
+    assert!(matches!(settings.wheel(false, &context), Act::Stay));
+    assert_eq!((settings.list.top(), settings.list.selected()), (3, 10));
+}

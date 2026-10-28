@@ -44,6 +44,23 @@ fn offer(session: &str) -> Line {
     )
 }
 
+/// An offer `r_1` of ten MCP servers from `session`: tall enough that
+/// the wheel moves its window three rows a step.
+fn offer_many(session: &str) -> Line {
+    let items: Vec<Value> = (0..10)
+        .map(|n| {
+            json!({"kind": "mcp_server", "name": format!("m{n}"), "hash": "h", "required": false,
+                "summary": format!("MCP server: m{n}")})
+        })
+        .collect();
+    session_line(
+        session,
+        "repository_code_offered",
+        json!({"request_id": "r_1", "items": items}),
+        None,
+    )
+}
+
 /// An app attached to [`S_A`] with its offer open.
 fn offered() -> App {
     let mut app = attached();
@@ -671,9 +688,10 @@ fn cursor_text(app: &App) -> String {
         .expect("a cursor row")
 }
 
-/// The wheel over the offer with no source open moves its cursor three
-/// rows, never the conversation under it (`docs/tui.md`, "Swapped
-/// views"; see #3578).
+/// The wheel over the offer with no source open shifts its rows three,
+/// never the conversation under it (`docs/tui.md`, "Swapped views";
+/// see #3578). Two Downs put the cursor on the third item, so the
+/// window moves three rows under it while the choice stays.
 #[test]
 fn wheel_over_offer_moves_the_cursor_not_the_conversation() {
     let mut app = attached();
@@ -682,15 +700,53 @@ fn wheel_over_offer_moves_the_cursor_not_the_conversation() {
     // offer covers it once its rows draw.
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
-    offered_lines(&mut app);
+    assert!(app.on_line(offer_many(S_A)).is_empty());
+    assert!(app.offer_open());
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
-    assert!(cursor_text(&app).contains("MCP server a"));
+    press(&mut app, Key::Down);
+    press(&mut app, Key::Down);
+    assert!(cursor_text(&app).contains("MCP server m2"));
+    let (_, offer_top) = app
+        .offer_rows(app.column_width())
+        .expect("the offer is open");
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
+    let (_, moved) = app
+        .offer_rows(app.column_width())
+        .expect("the offer is open");
+    assert_eq!(
+        moved,
+        offer_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
     assert!(
-        cursor_text(&app).contains("Send"),
-        "one wheel step is three Down keys onto the Send row"
+        cursor_text(&app).contains("MCP server m2"),
+        "a cursor still on screen stays where it was"
+    );
+}
+
+/// The wheel over the offer with no source open clamps a cursor that
+/// leaves the window to the nearest shown row, and never chooses: the
+/// cursor moves off the first item while no answer sends.
+#[test]
+fn wheel_over_offer_clamps_a_leaving_cursor_without_choosing() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    assert!(app.on_line(offer_many(S_A)).is_empty());
+    assert!(app.offer_open());
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    assert!(cursor_text(&app).contains("MCP server m0"));
+    for _ in 0..3 {
+        assert_eq!(app.on_wheel(&wheel(10, 5, true)), Effect::None);
+    }
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert!(
+        !cursor_text(&app).contains("MCP server m0"),
+        "the first item left the window, so the cursor followed"
     );
 }
 
@@ -728,7 +784,7 @@ fn wheel_over_offer_source_scrolls_the_source_not_the_conversation() {
     assert_eq!(
         app.offer_rows(app.column_width()).expect("source rows").1,
         source_top + 3,
-        "one wheel step is three Down keys through the source"
+        "one wheel step shifts the source three lines"
     );
 }
 

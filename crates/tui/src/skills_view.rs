@@ -246,6 +246,27 @@ impl Skills {
         Act::Stay
     }
 
+    /// Shifts the window one wheel step: three rows, clamping to the
+    /// frame's final rows as the keys do. The open text pane takes
+    /// Up/Down without scrolling the rows, so the wheel is swallowed
+    /// there and never retargets the skill.
+    pub(crate) fn wheel(&mut self, up: bool, ctx: &Ctx<'_>) -> Act {
+        if self.text.is_some() {
+            return Act::Stay;
+        }
+        let shown = self.shown(ctx);
+        let before = (self.list.top(), self.list.selected());
+        self.list.wheel(up, self.rows_len(ctx.width), shown, 3);
+        if (self.list.top(), self.list.selected()) != before {
+            self.said.clear();
+            // The new selection can add two details lines, and
+            // clearing the message frees one, so the frame's available
+            // rows change: clamp to the final frame.
+            self.clamp(ctx);
+        }
+        Act::Stay
+    }
+
     /// Handles one editing key: ← and → choose the row's switch.
     pub(crate) fn edit_key(&mut self, edit: &Edit) {
         self.focus.edit_key(edit);

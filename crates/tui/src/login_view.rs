@@ -320,6 +320,10 @@ pub(crate) struct Login {
     /// The focused row, an index into `items`: a target whenever one
     /// exists, else 0. Headings, the gap and the note never take it.
     selected: usize,
+    /// The first body row shown: the wheel moves it three rows a step,
+    /// and the keys move it only as far as needed to keep the focus
+    /// shown.
+    top: usize,
     mode: Mode,
     /// What the last action said, shown below the rows.
     said: Vec<String>,
@@ -348,6 +352,7 @@ impl Login {
             targets,
             items,
             selected: 0,
+            top: 0,
             mode: Mode::Rows,
             said,
         };
@@ -543,7 +548,17 @@ impl Login {
             .spans
             .push(Span::raw(" ".repeat(wide.saturating_sub(have))));
         let shown = shown_body_rows(usize::from(area.height));
-        let start = window_start(self.selected, shown, body.len());
+        // The window starts at the wheel's top row, moved only as far
+        // as needed to keep the focus shown: the keys never re-derive
+        // the window from the focus, so a wheeled position survives
+        // them, and a shorter body clamps it back into range.
+        let start = if body.is_empty() || shown == 0 {
+            0
+        } else {
+            let end = body.len().saturating_sub(shown);
+            let low = self.selected.saturating_add(1).saturating_sub(shown);
+            self.top.clamp(low, self.selected).min(end)
+        };
         let end = start.saturating_add(shown).min(body.len());
         let kept: Vec<(overlay::Row, Join)> = body
             .into_iter()
@@ -666,6 +681,67 @@ impl Login {
             }
         }
         Act::Stay
+    }
+
+    /// Shifts the provider list's window one wheel step: three body
+    /// rows, clamped at either end, keeping the focus while it shows,
+    /// else moving it to the nearest shown target row. Steps and detail
+    /// views take no wheel: they do not scroll, so the wheel is
+    /// swallowed there.
+    pub(crate) fn wheel(&mut self, up: bool, ctx: &Ctx<'_>) -> Act {
+        if !matches!(self.mode, Mode::Rows) {
+            return Act::Stay;
+        }
+        let shown = shown_body_rows(ctx.height);
+        if shown == 0 {
+            return Act::Stay;
+        }
+        let rows = self.body_len(ctx.width);
+        let end = rows.saturating_sub(shown);
+        let next = if up {
+            self.top.saturating_sub(3)
+        } else {
+            self.top.saturating_add(3).min(end)
+        };
+        self.top = next;
+        // Clamp the focus into the window, onto a target row; with no
+        // target shown the focus stays where it was.
+        let targets = self.target_rows();
+        if !targets.is_empty()
+            && (self.selected < next || self.selected >= next.saturating_add(shown))
+        {
+            if self.selected < next {
+                if let Some(at) = targets.iter().copied().find(|at| *at >= next) {
+                    self.selected = at;
+                }
+            } else if let Some(at) = targets
+                .iter()
+                .copied()
+                .rev()
+                .find(|at| *at < next.saturating_add(shown))
+            {
+                self.selected = at;
+            }
+        }
+        Act::Stay
+    }
+
+    /// How many body rows the provider list holds at `width` wide: one
+    /// per item, then what the last action said with its blank row, at
+    /// least three so the window never clips them.
+    fn body_len(&self, width: usize) -> usize {
+        let mut rows = self.items.len();
+        if !self.said.is_empty() {
+            let width = u16::try_from(width).unwrap_or(u16::MAX);
+            let overlay = overlay::width(u16::MAX, 96, width);
+            let inner = overlay::inner(overlay);
+            rows = rows.saturating_add(1);
+            for line in &self.said {
+                rows =
+                    rows.saturating_add(wrapped_rows(line, usize::from(inner), Style::new()).len());
+            }
+        }
+        rows.max(3)
     }
 
     /// Opens the selected row: a key or secret row opens the panel, a

@@ -1432,3 +1432,20 @@ fn resize_redraws_rows_details_and_text_at_the_new_width() {
     assert_eq!(entered.frame(80, 22).rows.len(), 2);
     assert_eq!(entered.frame(48, 22).rows.len(), 3);
 }
+
+/// The wheel shifts the visible rows three a step, keeping a visible
+/// selection where it was (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
+    let fake = fake_with(off(&[], &[]));
+    let infos: Vec<SkillInfo> = (0..30)
+        .map(|n| repository(&format!("skill-{n:02}")))
+        .collect();
+    let mut skills = opened(&fake, &infos);
+    skills.click(Spot::Row(10), &ctx(&fake));
+    assert_eq!(skills.list.selected(), 10);
+    let top = skills.list.top();
+    assert!(matches!(skills.wheel(false, &ctx(&fake)), Act::Stay));
+    assert_eq!(skills.list.top(), top + 3);
+    assert_eq!(skills.list.selected(), 10, "a visible selection stays");
+}

@@ -447,3 +447,19 @@ fn clicking_selects_the_row_enter_acts_on() {
         "enter acts on the clicked row"
     );
 }
+
+/// The wheel shifts the visible rows three a step, keeping a visible
+/// selection where it was (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
+    let rows: Vec<McpServerRow> = (0..30).map(|n| ready(&format!("s{n:02}"))).collect();
+    let (fake, mut mcp) = opened(&rows);
+    let context = context(&fake);
+    for _ in 0..10 {
+        assert!(matches!(mcp.key(&Key::Down, &context), Act::Stay));
+    }
+    let (top, selected) = (mcp.list.top(), mcp.list.selected());
+    assert!(matches!(mcp.wheel(false, &context), Act::Stay));
+    assert_eq!(mcp.list.top(), top + 3);
+    assert_eq!(mcp.list.selected(), selected, "a visible selection stays");
+}

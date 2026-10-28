@@ -270,13 +270,11 @@ impl App {
         Effect::None
     }
 
-    /// Steps the `/keys` screen's list for a wheel step through the same
-    /// path as an Up/Down stroke; an open notice overlay swallows the
-    /// wheel so the hidden list does not move. Away from `bindings_press`.
+    /// Shifts the `/keys` screen's list three rows for a wheel step while
+    /// browsing; Capture and Clash swallow through the wrapper. The
+    /// router swallows the wheel over the notice overlay's own slab
+    /// before calling. Away from `bindings_press`.
     pub(crate) fn keys_screen_wheel(&mut self, up: bool) -> Effect {
-        if self.notice_overlay().is_some() {
-            return Effect::None;
-        }
         let height = self.keys_height();
         let outcome = match self.keyboard.screen.as_mut() {
             Some(screen) => screen.wheel(up, &self.keyboard.keys, height),

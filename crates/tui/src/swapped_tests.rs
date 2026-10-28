@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
-use super::{Frame, Ink, List, Spot, about, compact, render, rows_height};
+use super::{Frame, Ink, List, Spot, about, compact, render, rows_height, wheel_window};
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::theme::Role;
@@ -753,4 +753,79 @@ fn a_cramped_frame_skips_the_field_at_the_footer() {
     let frame = made_frame(&["alpha"], &[], Some(("query text", 10)));
     let effect = drag_over(&mut app, &frame, 80, 2, (2, 1), (6, 1));
     assert_eq!(effect, Effect::None);
+}
+
+/// One wheel step moves the window three rows, clamped at either end.
+#[test]
+fn wheel_moves_the_window_three_rows() {
+    let (selected, top) = wheel_window(false, 0, 0, 20, 6, 3);
+    assert_eq!((selected, top), (3, 3));
+    let (selected, top) = wheel_window(false, 3, 3, 20, 6, 3);
+    assert_eq!((selected, top), (6, 6));
+    let (selected, top) = wheel_window(true, 6, 6, 20, 6, 3);
+    assert_eq!((selected, top), (6, 3));
+    // Clamped at either end: the last window starts at rows less height.
+    let (selected, top) = wheel_window(false, 14, 14, 20, 6, 3);
+    assert_eq!((selected, top), (14, 14));
+    let (selected, top) = wheel_window(false, 10, 10, 20, 6, 3);
+    assert_eq!((selected, top), (13, 13));
+    let (selected, top) = wheel_window(true, 3, 2, 20, 6, 3);
+    assert_eq!((selected, top), (3, 0));
+}
+
+/// A selection still on screen stays where it was; one that leaves the
+/// window moves to the nearest shown row.
+#[test]
+fn wheel_keeps_a_visible_selection_and_clamps_a_leaving_one() {
+    // In the middle, at the first row, and at the last row: all stay.
+    assert_eq!(wheel_window(false, 7, 3, 20, 6, 3), (7, 6));
+    assert_eq!(wheel_window(false, 6, 3, 20, 6, 3), (6, 6));
+    assert_eq!(wheel_window(false, 10, 3, 20, 6, 3), (10, 6));
+    assert_eq!(wheel_window(false, 11, 3, 20, 6, 3), (11, 6));
+    // Just above the window clamps down to the new top; just below it
+    // clamps up to the new bottom row.
+    assert_eq!(wheel_window(false, 5, 3, 20, 6, 3), (6, 6));
+    assert_eq!(wheel_window(false, 12, 3, 20, 6, 3), (11, 6));
+    assert_eq!(wheel_window(true, 2, 6, 20, 6, 3), (3, 3));
+    assert_eq!(wheel_window(true, 8, 6, 20, 6, 3), (8, 3));
+}
+
+/// An empty or short list, or a zero-height window, does not move, and a
+/// blurred selection stays blurred.
+#[test]
+fn wheel_leaves_empty_short_and_zero_height_lists() {
+    assert_eq!(wheel_window(false, 0, 0, 0, 6, 3), (0, 0));
+    assert_eq!(wheel_window(false, 0, 4, 0, 6, 3), (0, 4));
+    assert_eq!(wheel_window(true, 2, 4, 5, 6, 3), (2, 0));
+    assert_eq!(wheel_window(false, 2, 0, 5, 6, 3), (2, 0));
+    assert_eq!(wheel_window(false, 2, 0, 5, 0, 3), (2, 0));
+    // A blurred list keeps no selection, whatever the window does.
+    assert_eq!(
+        wheel_window(false, usize::MAX, 0, 20, 6, 3),
+        (usize::MAX, 3)
+    );
+    assert_eq!(wheel_window(true, usize::MAX, 6, 20, 6, 3), (usize::MAX, 3));
+}
+
+/// `List::wheel` moves the window the shared helper computes: a stale
+/// top clamps into range before stepping.
+#[test]
+fn list_wheel_shifts_the_window_and_clamps_the_selection() {
+    let mut list = List::default();
+    list.select(10, 20, 6);
+    list.wheel(false, 20, 6, 3);
+    assert_eq!(list.top(), 8);
+    assert_eq!(list.selected(), 10);
+    list.wheel(false, 20, 6, 3);
+    assert_eq!(list.top(), 11);
+    assert_eq!(list.selected(), 11);
+    list.wheel(true, 20, 6, 3);
+    assert_eq!(list.top(), 8);
+    assert_eq!(list.selected(), 11);
+    // A stale top past the end clamps before the step runs.
+    let mut stale = List::default();
+    stale.select(19, 20, 6);
+    stale.wheel(false, 20, 6, 3);
+    assert_eq!(stale.top(), 14);
+    assert_eq!(stale.selected(), 19);
 }

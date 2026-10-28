@@ -1488,3 +1488,33 @@ fn a_scrolled_line_copies_its_shown_text() {
     let effect = report(MouseKind::Release, 10, 1);
     assert_eq!(effect, Effect::Copy("columns\n  2 ( ) t".to_owned()));
 }
+
+/// Drawing the request panel notes its full drawn rectangle under the
+/// existing Panel surface, so the wheel route can tell the panel from
+/// Offer rows drawn outside it (`docs/tui.md`, "Swapped views"; see
+/// #3578).
+#[test]
+fn drawing_the_panel_notes_its_full_drawn_rectangle() {
+    use crate::app::Surface;
+    let app = asking(base_and_name(false), 80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let slab = app
+        .frames()
+        .slab_of(Surface::Panel)
+        .expect("the panel drew");
+    assert!(!slab.is_empty(), "the noted rectangle has rows");
+    assert_eq!((slab.x, slab.width), (area.x, area.width));
+    let rows: Vec<String> = (0..24)
+        .map(|y| (0..80).map(|x| buf[(x, y)].symbol()).collect())
+        .collect();
+    let question = rows
+        .iter()
+        .position(|row| row.contains("Which branch?"))
+        .expect("the question drew");
+    assert!(
+        (slab.y as usize) <= question && question < (slab.y + slab.height) as usize,
+        "the noted rectangle covers the drawn panel rows: {slab:?}"
+    );
+}

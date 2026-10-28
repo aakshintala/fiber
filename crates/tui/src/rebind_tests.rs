@@ -57,6 +57,11 @@ fn selected(screen: &KeysScreen, keys: &Keyset) -> usize {
     screen.frame(keys, 24).list.selected()
 }
 
+/// The first visible row over `keys`.
+fn top(screen: &KeysScreen, keys: &Keyset) -> usize {
+    screen.frame(keys, 24).list.top()
+}
+
 /// Selects row `at`.
 fn select(screen: &mut KeysScreen, at: usize) {
     let outcome = screen.click(Spot::Row(at), 24);
@@ -530,19 +535,22 @@ fn a_row_click_selects_while_browsing_only() {
     );
 }
 
-/// The wheel steps the list one row per step while browsing, clearing
-/// the transient message as a stroke does.
+/// The wheel shifts the visible rows three a step while browsing,
+/// keeping a still-visible selection where it was and clearing the
+/// transient message as a stroke does.
 #[test]
-fn wheel_steps_one_row_and_clears_the_message_while_browsing() {
+fn wheel_shifts_three_rows_and_keeps_a_visible_selection_while_browsing() {
     let keys = keys();
     let mut screen = keys_screen();
     screen.failed("boom".to_owned());
     assert_eq!(below(&screen, &keys), ["Not saved: boom"]);
     select(&mut screen, 5);
     assert!(matches!(screen.wheel(false, &keys, 24), Outcome::Nothing));
-    assert_eq!(selected(&screen, &keys), 6);
+    assert_eq!(top(&screen, &keys), 3);
+    assert_eq!(selected(&screen, &keys), 5);
     assert!(below(&screen, &keys).is_empty());
     assert!(matches!(screen.wheel(true, &keys, 24), Outcome::Nothing));
+    assert_eq!(top(&screen, &keys), 0);
     assert_eq!(selected(&screen, &keys), 5);
 }
 

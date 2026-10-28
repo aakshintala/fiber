@@ -301,18 +301,17 @@ impl KeysScreen {
         }
     }
 
-    /// Steps the list one row for a wheel step while browsing, clearing
-    /// the transient message as a stroke does; in Capture or Clash the
-    /// wheel is swallowed, never a captured key. `height` is the view's
-    /// rows.
+    /// Shifts the list three rows for a wheel step while browsing,
+    /// clearing the transient message as a stroke does; in Capture or
+    /// Clash the wheel is swallowed, never a captured key. `height` is
+    /// the view's rows.
     pub(crate) fn wheel(&mut self, up: bool, keys: &Keyset, height: usize) -> Outcome {
         if !matches!(self.mode, Mode::Browse) {
             return Outcome::Nothing;
         }
         self.message = None;
         let shown = rows_height(&self.frame(keys, height), height);
-        let key = if up { Key::Up } else { Key::Down };
-        self.list.key(&key, BINDINGS.len(), shown);
+        self.list.wheel(up, BINDINGS.len(), shown, 3);
         Outcome::Nothing
     }
 

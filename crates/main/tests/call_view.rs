@@ -602,7 +602,7 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     let x = text.find("more lines").unwrap_or(20) as u16 + 1;
     click(&mut run, x, row);
     // The view follows to the resume marker at the tail.
-    let grid = run.wait_screen("the call's view", |grid| {
+    run.wait_screen("the call's view", |grid| {
         grid.rows
             .iter()
             .any(|row| row.contains("── the model's view resumes ──"))
@@ -619,15 +619,22 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
         first_output_number(grid) == Some(36)
     });
     let settled = first_output_number(&grid).expect("the settled first output number");
-    // Click the first visible output row: the rendered view marks no
-    // selection, so the click establishes that row as the selected one
-    // for the wheel below.
+    // Click the first output row past the head segment's end marker and
+    // step the viewport onto it: the marker row breaks the
+    // output-number/top-row one-to-one, so the nine-row proof starts
+    // past it. The rendered view marks no selection, so the click
+    // establishes that row as the selected one for the wheels below.
+    let start = settled + 2;
     let row = grid
         .rows
         .iter()
-        .position(|line| line.trim_start().starts_with(&format!("{settled:03}")))
-        .expect("the first visible output row") as u16;
+        .position(|line| line.trim_start().starts_with(&format!("{start:03}")))
+        .expect("the first output row past the end marker") as u16;
     click(&mut run, 20, row);
+    run.write(WHEEL_DOWN);
+    run.wait_screen("the view past the end marker", |grid| {
+        first_output_number(grid) == Some(start)
+    });
     // Three wheel-downs over the view move its first visible row nine
     // rows: each step shifts the viewport three displayed rows, keeping
     // the clicked selection only while it stays on screen. The
@@ -637,11 +644,11 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     run.write(WHEEL_DOWN);
     run.write(WHEEL_DOWN);
     let grid = run.wait_screen("the wheeled view", |grid| {
-        first_output_number(grid) == Some(settled + 9)
+        first_output_number(grid) == Some(start + 9)
     });
     assert_eq!(
         first_output_number(&grid),
-        Some(settled + 9),
+        Some(start + 9),
         "three wheel steps moved the view's first visible row nine rows"
     );
     // Esc returns to the opened call with its row still focused: the

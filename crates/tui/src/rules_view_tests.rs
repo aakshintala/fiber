@@ -743,3 +743,31 @@ fn rules_80x24() {
     let rules = open(&fake);
     insta::assert_snapshot!("rules_80x24", drawn(&rules, 80, 24));
 }
+
+/// The wheel shifts the visible rows three a step, keeping a visible
+/// selection where it was (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
+    let global: Vec<RuleRow> = (0..30)
+        .map(|n| {
+            row(
+                n + 1,
+                contract::rules::RuleDecision::Allow,
+                "shell",
+                "npm test",
+                None,
+                None,
+            )
+        })
+        .collect();
+    let fake = fake(global, Ok(Vec::new()));
+    let context = ctx(&fake);
+    let mut rules = Rules::open(&context);
+    for _ in 0..10 {
+        rules.key(&Key::Down, &context);
+    }
+    let (top, selected) = (rules.list.top(), rules.list.selected());
+    assert!(matches!(rules.wheel(false, &context), Act::Stay));
+    assert_eq!(rules.list.top(), top + 3);
+    assert_eq!(rules.list.selected(), selected, "a visible selection stays");
+}

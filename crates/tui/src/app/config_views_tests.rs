@@ -1699,6 +1699,108 @@ fn big_fake() -> Arc<Fake> {
             "global",
             WriteScope::Any { repo: true },
         ),
+        row(
+            "handoff.dir",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "hub.badge",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "hub.cards",
+            Shown::Value("4".to_owned()),
+            "project",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "keys.repeat",
+            Shown::Value("50".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "models.recent",
+            Shown::Value("5".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "panel.cards",
+            Shown::Value("session".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "rail.shown",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "session.persist",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "shell.confinement",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "shell.tools",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "steering.attention",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "turns.budget",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "turns.cap",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "turns.follow",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "turns.hints",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "view.banner",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "view.gutter",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
     ]))
 }
 
@@ -1716,19 +1818,26 @@ fn wheel_over_settings_scrolls_the_list_not_the_conversation() {
     app.open_config_view(ConfigView::Settings);
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
     let frame = app.config_view_screen().expect("the view is open");
     // The gutter list holds a header row, so the first key row is 1.
     assert!(frame.rows.len() >= 5, "the list fits three steps");
-    assert_eq!(frame.list.selected(), 1);
+    assert_eq!(frame.list.selected(), 4);
+    let shown_top = frame.list.top();
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.config_view_screen().expect("the view is open");
     assert_eq!(
-        app.config_view_screen()
-            .expect("the view is open")
-            .list
-            .selected(),
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
         4,
-        "one wheel step is three Down keys through the view"
+        "a selection still on screen stays where it was"
     );
 }
 
@@ -1748,6 +1857,21 @@ fn wheel_over_theme_moves_the_picker_not_the_conversation() {
         "dusk".to_owned(),
         "noon".to_owned(),
         "night".to_owned(),
+        "ember".to_owned(),
+        "frost".to_owned(),
+        "grove".to_owned(),
+        "harbor".to_owned(),
+        "ivory".to_owned(),
+        "jungle".to_owned(),
+        "kelp".to_owned(),
+        "lagoon".to_owned(),
+        "meadow".to_owned(),
+        "nebula".to_owned(),
+        "onyx".to_owned(),
+        "prairie".to_owned(),
+        "quartz".to_owned(),
+        "reef".to_owned(),
+        "sable".to_owned(),
     ];
     let mut app = attached(Some(Arc::new(fake)));
     app.on_wheel(&wheel(10, 5, false));
@@ -1757,18 +1881,25 @@ fn wheel_over_theme_moves_the_picker_not_the_conversation() {
     app.open_config_view(ConfigView::Theme);
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
     let frame = app.config_view_screen().expect("the view is open");
     assert!(frame.rows.len() >= 4, "the picker fits three steps");
-    assert_eq!(frame.list.selected(), 0);
+    assert_eq!(frame.list.selected(), 3);
+    let shown_top = frame.list.top();
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.config_view_screen().expect("the view is open");
     assert_eq!(
-        app.config_view_screen()
-            .expect("the view is open")
-            .list
-            .selected(),
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
         3,
-        "one wheel step is three Down keys through the picker"
+        "a selection still on screen stays where it was"
     );
 }
 
@@ -1783,7 +1914,27 @@ fn six_tools_answer() -> serde_json::Value {
         {"name": "mcp__m__c", "source": "mcp", "server": "m", "tool": "c", "state": "deferred", "bytes": 1},
         {"name": "mcp__m__d", "source": "mcp", "server": "m", "tool": "d", "state": "deferred", "bytes": 1},
         {"name": "mcp__m__e", "source": "mcp", "server": "m", "tool": "e", "state": "deferred", "bytes": 1},
-        {"name": "mcp__m__f", "source": "mcp", "server": "m", "tool": "f", "state": "deferred", "bytes": 1}]})
+        {"name": "mcp__m__f", "source": "mcp", "server": "m", "tool": "f", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__g", "source": "mcp", "server": "m", "tool": "g", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__h", "source": "mcp", "server": "m", "tool": "h", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__i", "source": "mcp", "server": "m", "tool": "i", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__j", "source": "mcp", "server": "m", "tool": "j", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__k", "source": "mcp", "server": "m", "tool": "k", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__l", "source": "mcp", "server": "m", "tool": "l", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__m", "source": "mcp", "server": "m", "tool": "m", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__n", "source": "mcp", "server": "m", "tool": "n", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__o", "source": "mcp", "server": "m", "tool": "o", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__p", "source": "mcp", "server": "m", "tool": "p", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__q", "source": "mcp", "server": "m", "tool": "q", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__r", "source": "mcp", "server": "m", "tool": "r", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__s", "source": "mcp", "server": "m", "tool": "s", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__t", "source": "mcp", "server": "m", "tool": "t", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__u", "source": "mcp", "server": "m", "tool": "u", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__v", "source": "mcp", "server": "m", "tool": "v", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__w", "source": "mcp", "server": "m", "tool": "w", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__x", "source": "mcp", "server": "m", "tool": "x", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__y", "source": "mcp", "server": "m", "tool": "y", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__z", "source": "mcp", "server": "m", "tool": "z", "state": "deferred", "bytes": 1}]})
 }
 
 /// The wheel over the tools view moves its selection, never the
@@ -1806,18 +1957,25 @@ fn wheel_over_tools_moves_the_selection_not_the_conversation() {
     ));
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
     let frame = app.config_view_screen().expect("the view is open");
     let before = frame.list.selected();
     assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    let shown_top = frame.list.top();
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.config_view_screen().expect("the view is open");
     assert_eq!(
-        app.config_view_screen()
-            .expect("the view is open")
-            .list
-            .selected(),
-        before + 3,
-        "one wheel step is three Down keys through the view"
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        before,
+        "a selection still on screen stays where it was"
     );
 }
 
@@ -1835,6 +1993,46 @@ fn six_skills_answer() -> serde_json::Value {
         {"name": "e", "description": "E.", "path": "/w/.fiber/skills/e/SKILL.md",
          "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
         {"name": "f", "description": "F.", "path": "/w/.fiber/skills/f/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "g", "description": "G.", "path": "/w/.fiber/skills/g/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "h", "description": "H.", "path": "/w/.fiber/skills/h/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "i", "description": "I.", "path": "/w/.fiber/skills/i/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "j", "description": "J.", "path": "/w/.fiber/skills/j/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "k", "description": "K.", "path": "/w/.fiber/skills/k/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "l", "description": "L.", "path": "/w/.fiber/skills/l/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "m", "description": "M.", "path": "/w/.fiber/skills/m/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "n", "description": "N.", "path": "/w/.fiber/skills/n/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "o", "description": "O.", "path": "/w/.fiber/skills/o/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "p", "description": "P.", "path": "/w/.fiber/skills/p/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "q", "description": "Q.", "path": "/w/.fiber/skills/q/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "r", "description": "R.", "path": "/w/.fiber/skills/r/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "s", "description": "S.", "path": "/w/.fiber/skills/s/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "t", "description": "T.", "path": "/w/.fiber/skills/t/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "u", "description": "U.", "path": "/w/.fiber/skills/u/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "v", "description": "V.", "path": "/w/.fiber/skills/v/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "w", "description": "W.", "path": "/w/.fiber/skills/w/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "x", "description": "X.", "path": "/w/.fiber/skills/x/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "y", "description": "Y.", "path": "/w/.fiber/skills/y/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "z", "description": "Z.", "path": "/w/.fiber/skills/z/SKILL.md",
          "source": "repository", "model_invocable": true, "disabled": false, "shadows": []}]})
 }
 
@@ -1857,18 +2055,25 @@ fn wheel_over_skills_scrolls_the_list_not_the_conversation() {
     ));
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
     let frame = app.config_view_screen().expect("the view is open");
     let before = frame.list.selected();
     assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    let shown_top = frame.list.top();
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.config_view_screen().expect("the view is open");
     assert_eq!(
-        app.config_view_screen()
-            .expect("the view is open")
-            .list
-            .selected(),
-        before + 3,
-        "one wheel step is three Down keys through the view"
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        before,
+        "a selection still on screen stays where it was"
     );
 }
 
@@ -1897,8 +2102,14 @@ fn wheel_over_rules_scrolls_the_list_not_the_conversation() {
                 .collect()),
         };
         *rules = Ok((
-            section("/w/.fiber/rules.md", &["- a", "- b", "- c", "- d"]),
-            section("/global.md", &["- g", "- h"]),
+            section(
+                "/w/.fiber/rules.md",
+                &[
+                    "- a", "- b", "- c", "- d", "- e", "- f", "- g", "- h", "- i", "- j", "- k",
+                    "- l", "- m", "- n", "- o", "- p", "- q", "- r", "- s", "- t",
+                ],
+            ),
+            section("/global.md", &["- m", "- n", "- o", "- p", "- q"]),
         ));
     }
     let mut app = attached(Some(seam));
@@ -1909,18 +2120,25 @@ fn wheel_over_rules_scrolls_the_list_not_the_conversation() {
     assert!(app.config_view_open(), "the rules view opened");
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
     let frame = app.config_view_screen().expect("the view is open");
     let before = frame.list.selected();
     assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    let shown_top = frame.list.top();
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.config_view_screen().expect("the view is open");
     assert_eq!(
-        app.config_view_screen()
-            .expect("the view is open")
-            .list
-            .selected(),
-        before + 3,
-        "one wheel step is three Down keys through the view"
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        before,
+        "a selection still on screen stays where it was"
     );
 }
 
@@ -1930,7 +2148,7 @@ fn wheel_over_rules_scrolls_the_list_not_the_conversation() {
 fn wheel_over_login_scrolls_the_list_not_the_conversation() {
     let seam = fake();
     if let Ok(mut targets) = seam.targets.lock() {
-        *targets = Ok((0..6)
+        *targets = Ok((0..30)
             .map(|at| crate::configure::LoginTarget {
                 name: format!("p{at}"),
                 kind: crate::configure::LoginKind::Key,
@@ -1945,11 +2163,14 @@ fn wheel_over_login_scrolls_the_list_not_the_conversation() {
     assert!(app.config_view_open(), "the login view opened");
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
-    // Three Down equivalents move past p0..p2 onto p3: Enter opens p3's
-    // key field, the paste fills it, and a second Enter stores p3's key,
-    // not p0's.
+    // Three Downs put the focus on p3's row and the wheel keeps it
+    // there while the window moves: Enter opens p3's key field, the
+    // paste fills it, and a second Enter stores p3's key, not p0's.
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     app.on_edit(Edit::Paste("s3\n".to_owned()));
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
@@ -1962,7 +2183,7 @@ fn wheel_over_login_scrolls_the_list_not_the_conversation() {
 fn wheel_over_logout_scrolls_the_list_not_the_conversation() {
     let seam = fake();
     if let Ok(mut rows) = seam.logout.lock() {
-        *rows = Ok((0..6)
+        *rows = Ok((0..30)
             .map(|at| crate::configure::LogoutRow::Provider {
                 name: "acme".to_owned(),
                 label: format!("l{at:02}"),
@@ -1981,10 +2202,14 @@ fn wheel_over_logout_scrolls_the_list_not_the_conversation() {
     assert!(app.config_view_open(), "the logout view opened");
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
-    // Three Down equivalents move past l00..l02 onto l03: Enter asks to
-    // delete l03, not the still-selected l00 the base wheel would keep.
+    // Three Downs put the focus on l03's row and the wheel keeps it
+    // there while the window moves: Enter asks to delete l03, not the
+    // still-focused l00 the base wheel would keep.
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     let shown = screen(&app).join("\n");
     assert!(shown.contains("Delete acme/l03?"), "{shown}");
@@ -2004,7 +2229,47 @@ fn six_servers_answer() -> serde_json::Value {
         {"name": "e", "layer": "global", "state": "needs-login",
          "reason": "HTTP 401 e", "tools": 0, "approved": true, "auth_url": null},
         {"name": "f", "layer": "global", "state": "needs-login",
-         "reason": "HTTP 401 f", "tools": 0, "approved": true, "auth_url": null}]})
+         "reason": "HTTP 401 f", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "g", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 g", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "h", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 h", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "i", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 i", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "j", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 j", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "k", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 k", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "l", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 l", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "m", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 m", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "n", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 n", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "o", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 o", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "p", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 p", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "q", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 q", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "r", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 r", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "s", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 s", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "t", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 t", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "u", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 u", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "v", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 v", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "w", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 w", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "x", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 x", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "y", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 y", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "z", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 z", "tools": 0, "approved": true, "auth_url": null}]})
 }
 
 /// The wheel over the MCP view scrolls the view's list, never the
@@ -2026,18 +2291,25 @@ fn wheel_over_mcp_scrolls_the_list_not_the_conversation() {
     ));
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
     let frame = app.config_view_screen().expect("the view is open");
     let before = frame.list.selected();
     assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    let shown_top = frame.list.top();
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.config_view_screen().expect("the view is open");
     assert_eq!(
-        app.config_view_screen()
-            .expect("the view is open")
-            .list
-            .selected(),
-        before + 3,
-        "one wheel step is three Down keys through the view"
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        before,
+        "a selection still on screen stays where it was"
     );
 }
 
@@ -2075,17 +2347,24 @@ fn wheel_over_doctor_scrolls_the_list_not_the_conversation() {
     assert!(app.config_view_open(), "the doctor view opened");
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
     let frame = app.config_view_screen().expect("the view is open");
     let before = frame.list.selected();
     assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    let shown_top = frame.list.top();
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.config_view_screen().expect("the view is open");
     assert_eq!(
-        app.config_view_screen()
-            .expect("the view is open")
-            .list
-            .selected(),
-        before + 3,
-        "one wheel step is three Down keys through the view"
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        before,
+        "a selection still on screen stays where it was"
     );
 }

@@ -3,7 +3,7 @@
 //! closing, against the app and the view it draws.
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use serde_json::{Value, json};
 
 use super::super::find::FIND_PAUSE;
@@ -650,14 +650,15 @@ fn wheel(col: u16, row: u16, down: bool) -> Mouse {
     }
 }
 
-/// The wheel over search results steps the selection three rows, never
+/// The wheel over search results moves one three-row entry card, never
 /// the conversation under it (`docs/tui.md`, "Swapped views"; see
-/// #3578).
+/// #3578). Opening selects the current match with its window on it, so
+/// the step moves the window one entry under a selection that stays.
 #[test]
-fn wheel_over_results_steps_the_selection_not_the_conversation() {
-    let matches: Vec<String> = (1..=30).map(|n| format!("needle {n:02}")).collect();
+fn wheel_over_results_steps_one_card_not_the_conversation() {
+    let matches: Vec<String> = (1..=18).map(|n| format!("needle {n:02}")).collect();
     let refs: Vec<&str> = matches.iter().map(String::as_str).collect();
-    let mut app = turned(40, 25, &refs);
+    let mut app = turned(40, 45, &refs);
     // Scroll first, while the wheel still reaches the conversation: the
     // results cover it once open.
     app.on_wheel(&wheel(10, 5, false));
@@ -666,39 +667,93 @@ fn wheel_over_results_steps_the_selection_not_the_conversation() {
     open(&mut app);
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
+    app.on_key(Key::Down, now());
     let before = cursor(&app);
-    assert!(before.0 + 4 <= 30, "the matches fit three steps");
+    assert_eq!(before.0, 1);
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
     assert_eq!(
         cursor(&app),
-        (before.0 + 3, before.1),
-        "one wheel step is three Down keys through the results"
+        (before.0, before.1 + 1),
+        "one wheel step moves one three-row entry card"
     );
 }
 
-/// A wheel with Search open over the results is swallowed by the
-/// higher Search surface: neither the results cursor nor the
-/// conversation moves.
+/// A wheel inside Search's drawn slab is swallowed by the higher
+/// Search surface: neither the results cursor nor the conversation
+/// moves. Outside the slab, the wheel reaches the drawn results.
 #[test]
-fn wheel_with_search_open_leaves_results_and_conversation() {
-    let matches: Vec<String> = (1..=30).map(|n| format!("needle {n:02}")).collect();
+fn wheel_with_search_open_swallows_inside_its_slab() {
+    let matches: Vec<String> = (1..=18).map(|n| format!("needle {n:02}")).collect();
     let refs: Vec<&str> = matches.iter().map(String::as_str).collect();
-    let mut app = turned(40, 25, &refs);
+    let mut app = turned(40, 45, &refs);
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
     scan(&mut app, "needle");
     open(&mut app);
+    app.on_key(Key::Down, now());
     app.open_search();
     assert!(app.top_surfaces().contains(&crate::app::Surface::Search));
     assert!(app.top_surfaces().contains(&crate::app::Surface::Results));
+    // A frame notes every drawn slab: the wheel routes by the Search
+    // panel's recorded rectangle.
+    let (_buf, _targets) = draw(&app, 40, 45);
+    let slab = app
+        .frames()
+        .slab_of(crate::app::Surface::Search)
+        .expect("the Search slab");
     let top = app.top();
     let before = cursor(&app);
-    app.on_wheel(&wheel(10, 5, true));
+    app.on_wheel(&wheel(slab.x + 1, slab.y + 1, true));
     assert_eq!(
         cursor(&app),
         before,
         "the higher surface swallowed the wheel"
     );
     assert_eq!(app.top(), top, "the wheel left the conversation");
+    // Outside the slab, over the drawn results, the wheel moves one
+    // entry card: the first row from the entries' top outside it.
+    let probe = (3..40)
+        .map(|y| Position::new(10, y))
+        .find(|at| !slab.contains(*at))
+        .expect("a row outside the Search slab");
+    app.on_wheel(&wheel(probe.x, probe.y, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        cursor(&app),
+        (before.0, before.1 + 1),
+        "outside the slab the wheel reaches the results"
+    );
+}
+
+/// With Search open and no results underneath, the wheel inside its
+/// slab is swallowed, while outside it the conversation scrolls as it
+/// always has.
+#[test]
+fn wheel_with_search_open_and_no_results_reaches_the_conversation() {
+    let matches: Vec<String> = (1..=18).map(|n| format!("needle {n:02}")).collect();
+    let refs: Vec<&str> = matches.iter().map(String::as_str).collect();
+    let mut app = turned(40, 45, &refs);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    app.open_search();
+    assert!(!app.results_open(), "no scan ran, so no results show");
+    let (_buf, _targets) = draw(&app, 40, 45);
+    let slab = app
+        .frames()
+        .slab_of(crate::app::Surface::Search)
+        .expect("the Search slab");
+    let top = app.top();
+    app.on_wheel(&wheel(slab.x + 1, slab.y + 1, true));
+    assert_eq!(app.top(), top, "the slab swallowed the wheel");
+    let probe = (3..40)
+        .map(|y| Position::new(10, y))
+        .find(|at| !slab.contains(*at))
+        .expect("a row outside the Search slab");
+    app.on_wheel(&wheel(probe.x, probe.y, true));
+    assert_ne!(
+        app.top(),
+        top,
+        "with no results underneath the conversation scrolls"
+    );
 }

@@ -3781,6 +3781,97 @@ fn an_older_chunk_ending_at_the_named_point_is_accepted() {
     );
 }
 
+/// The wheel inside the approval panel's drawn rectangle is the
+/// panel's: the choice stands and the Offer rows under it keep their
+/// window, while an Offer row still drawn outside the rectangle
+/// scrolls three rows; the hidden conversation never moves
+/// (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_inside_the_approval_rectangle_is_swallowed_outside_scrolls_the_offer() {
+    use crate::app::Surface;
+    use crate::app::testkit::session_line;
+    /// A wheel report at (`col`, `row`): down steps toward the tail.
+    fn wheel(col: u16, row: u16, down: bool) -> Mouse {
+        Mouse {
+            kind: if down {
+                MouseKind::WheelDown
+            } else {
+                MouseKind::WheelUp
+            },
+            col,
+            row,
+        }
+    }
+    /// The open offer's cursor item and first shown row.
+    fn cursor(app: &App) -> (String, usize) {
+        let (rows, top) = app
+            .offer_rows(app.column_width())
+            .expect("the offer is open");
+        let marked = rows
+            .iter()
+            .find_map(|row| {
+                let mut text = String::new();
+                for span in &row.line.spans {
+                    text.push_str(span.content.as_ref());
+                }
+                text.strip_prefix("▸ ").map(str::to_owned)
+            })
+            .expect("a cursor row");
+        (marked, top)
+    }
+    let mut app = app();
+    // Scroll first, while the wheel still reaches the conversation: the
+    // offer covers it once its rows draw.
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    let items: Vec<Value> = (0..10)
+        .map(|n| {
+            json!({"kind": "mcp_server", "name": format!("m{n}"), "hash": "h",
+                "required": false, "summary": format!("MCP server: m{n}")})
+        })
+        .collect();
+    app.on_line(session_line(
+        SESSION,
+        "repository_code_offered",
+        json!({"request_id": "r_1", "items": items}),
+        None,
+    ));
+    assert!(app.offer_open());
+    app.on_line(session_line(
+        SESSION,
+        "permission_requested",
+        json!({"request_id": "r_9", "effects": ["executes"], "reversible": true,
+            "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "p"}}),
+        Some("a_1"),
+    ));
+    assert!(app.panel().is_some(), "the approval panel opened");
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let slab = app
+        .frames()
+        .slab_of(Surface::Panel)
+        .expect("the panel drew");
+    let (marked, offer_top) = cursor(&app);
+    // Inside the recorded rectangle the wheel changes nothing.
+    app.on_wheel(&wheel(slab.x + 2, slab.y + 1, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        cursor(&app),
+        (marked.clone(), offer_top),
+        "the panel swallowed the wheel"
+    );
+    // An Offer row drawn above the rectangle still scrolls three rows.
+    app.on_wheel(&wheel(slab.x + 2, slab.y.saturating_sub(2), true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let (moved_marked, moved_top) = cursor(&app);
+    assert_eq!(moved_top, offer_top + 3, "one step shifts three rows");
+    assert_eq!(moved_marked, marked, "a cursor still on screen stays");
+}
+
 /// The surfaces on top: two open in either order give the same keys,
 /// Esc, wheel and drawn top frame (`docs/tui.md`, "Keys", "Overlays").
 mod stacked {

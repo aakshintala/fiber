@@ -445,6 +445,69 @@ impl Offer {
             .is_some_and(|source| source.refused(id, code, message))
     }
 
+    /// Shifts the open offer three wrapped rows for a wheel step: the
+    /// source's rows when open, else the offer's, clamped at either
+    /// end, keeping the cursor while it shows, else moving it to the
+    /// nearest shown row. The choice never changes: the wheel neither
+    /// decides nor sends, and a wheel over the approval panel is the
+    /// router's to swallow.
+    pub(crate) fn wheel(&mut self, up: bool, width: u16, height: usize) {
+        if !self.open() || height == 0 {
+            return;
+        }
+        let total = self.total(width);
+        if total == 0 {
+            return;
+        }
+        let end = total.saturating_sub(height);
+        let Some(held) = self.held.as_mut() else {
+            return;
+        };
+        if let Some(source) = held.source.as_mut() {
+            source.wheel(up, total, height);
+            return;
+        }
+        held.top = if up {
+            held.top.saturating_sub(3)
+        } else {
+            held.top.saturating_add(3).min(end)
+        };
+        // Clamp the cursor into the window: a cursor row still shown
+        // keeps it, else the nearest shown cursor position takes it.
+        let (rows, cursor_rows) = layout(held, width);
+        let mut prefix: Vec<usize> = Vec::with_capacity(rows.len().saturating_add(1));
+        prefix.push(0);
+        for row in &rows {
+            let last = prefix.last().copied().unwrap_or(0);
+            prefix.push(last.saturating_add(row.height(width)));
+        }
+        let at = |row: usize| prefix.get(row).copied().unwrap_or(0);
+        let positions = held.items.len().saturating_add(1);
+        let span = |c: usize| {
+            let from = cursor_rows.get(c).map_or(0, |row| at(*row));
+            let after = cursor_rows
+                .get(c.saturating_add(1))
+                .map_or(rows.len(), |row| *row);
+            (from, at(after))
+        };
+        let (from, to) = span(held.cursor);
+        let top = held.top;
+        let bottom = top.saturating_add(height);
+        if to <= top || from >= bottom {
+            if from < top {
+                // The cursor sits above the window: the first position
+                // whose rows end past the top is nearest.
+                if let Some(c) = (0..positions).find(|c| span(*c).1 > top) {
+                    held.cursor = c;
+                }
+            // The cursor sits below the window: the last position whose
+            // rows start above the bottom is nearest.
+            } else if let Some(c) = (0..positions).rev().find(|c| span(*c).0 < bottom) {
+                held.cursor = c;
+            }
+        }
+    }
+
     /// Scrolls so the cursor's row shows in `height` rows.
     fn keep_in_view(&mut self, width: u16, height: usize) {
         let Some(held) = self.held.as_mut() else {

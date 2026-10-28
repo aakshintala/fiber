@@ -1870,7 +1870,7 @@ fn wheel_over_a_live_tty_item_moves_nothing() {
     app.jump(1);
     let before = app.screen.top();
     assert!(before.is_some(), "the view starts scrolled");
-    app.on_wheel(&wheel(20, 12, true));
+    app.on_wheel(&wheel(20, 4, true));
     assert_eq!(
         app.screen.top(),
         before,
@@ -1893,7 +1893,7 @@ fn wheel_over_a_finished_tty_item_moves_nothing() {
     app.jump(1);
     let before = app.screen.top();
     assert!(before.is_some(), "the view starts scrolled");
-    app.on_wheel(&wheel(20, 12, true));
+    app.on_wheel(&wheel(20, 4, true));
     assert_eq!(
         app.screen.top(),
         before,
@@ -1916,7 +1916,7 @@ fn wheel_over_a_finished_job_item_moves_nothing() {
     app.jump(1);
     let before = app.screen.top();
     assert!(before.is_some(), "the view starts scrolled");
-    app.on_wheel(&wheel(20, 12, true));
+    app.on_wheel(&wheel(20, 4, true));
     assert_eq!(
         app.screen.top(),
         before,
@@ -1950,7 +1950,7 @@ fn wheel_over_a_foreign_delegate_item_moves_nothing() {
     app.jump(1);
     let before = app.screen.top();
     assert!(before.is_some(), "the view starts scrolled");
-    app.on_wheel(&wheel(20, 12, true));
+    app.on_wheel(&wheel(20, 4, true));
     assert_eq!(
         app.screen.top(),
         before,
@@ -1994,11 +1994,43 @@ fn wheel_over_the_fiber_transcript_scrolls_it_not_the_parent() {
     app.jump(1);
     let item = app.screen.top().expect("the transcript starts scrolled");
     let parent = app.attached_screen().top();
-    app.on_wheel(&wheel(20, 12, true));
+    app.on_wheel(&wheel(20, 4, true));
     assert_eq!(
         app.screen.top(),
         Some(item + 3),
         "one wheel step is three rows down the transcript"
+    );
+    assert_eq!(
+        app.attached_screen().top(),
+        parent,
+        "the wheel left the stashed parent"
+    );
+}
+
+/// The wheel over the item's header rows is the item's, never the
+/// conversation's: the header is drawn content, so a transcript
+/// scrolls three rows there while the stashed parent stays put
+/// (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_the_transcript_header_scrolls_it_not_the_parent() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    let _ = open(&mut app, "j_1");
+    assert!(app.item_open());
+    assert!(
+        app.item_transcript(),
+        "the fiber delegate swaps its transcript"
+    );
+    tall_transcript(&mut app);
+    app.jump(1);
+    let item = app.screen.top().expect("the transcript starts scrolled");
+    let parent = app.attached_screen().top();
+    app.on_wheel(&wheel(20, 2, true));
+    assert_eq!(
+        app.screen.top(),
+        Some(item + 3),
+        "the header rows count as the item's drawn content"
     );
     assert_eq!(
         app.attached_screen().top(),
@@ -2056,7 +2088,7 @@ fn wheel_over_the_fiber_transcript_wins_over_offer_and_results() {
     });
     assert!(offer.is_some(), "the offer shows rows");
     let results = app.find_results().map(|view| (view.selected, view.top));
-    app.on_wheel(&wheel(20, 12, true));
+    app.on_wheel(&wheel(20, 4, true));
     assert_eq!(
         app.screen.top(),
         Some(item + 3),

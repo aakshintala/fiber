@@ -173,6 +173,18 @@ impl List {
         self.selected != before
     }
 
+    /// Shifts the window one wheel step over `rows` rows shown `height`
+    /// at a time: up to `step` rows toward the top or the end, clamped
+    /// at either end. The selection stays where it is while it shows,
+    /// else moves to the nearest shown row. An empty or short list, or
+    /// a zero-height window, does not move; a blurred selection stays
+    /// blurred. `key` keeps the keyboard's semantics.
+    pub(crate) fn wheel(&mut self, up: bool, rows: usize, height: usize, step: usize) {
+        let (selected, top) = wheel_window(up, self.selected, self.top, rows, height, step);
+        self.selected = selected;
+        self.top = top;
+    }
+
     /// Selects row `at`, clamped to the last of `rows`, and scrolls so it
     /// shows in `height` rows. An empty list or area selects nothing.
     pub(crate) fn select(&mut self, at: usize, rows: usize, height: usize) {
@@ -195,6 +207,45 @@ impl List {
     pub(crate) fn top(&self) -> usize {
         self.top
     }
+}
+
+/// Shifts a viewport one wheel step: the window over `rows` rows shown
+/// `height` at a time moves up to `step` rows toward the top or the end,
+/// clamped at either end, and the selection stays while it shows, else
+/// moves to the nearest shown row. Returns the selection and the first
+/// row shown. An empty or short list, or a zero-height window, keeps
+/// both; a selection past the last row stays past it. Views whose
+/// selection is not a [`List`] share this window.
+pub(crate) fn wheel_window(
+    up: bool,
+    selected: usize,
+    top: usize,
+    rows: usize,
+    height: usize,
+    step: usize,
+) -> (usize, usize) {
+    if rows == 0 || height == 0 {
+        return (selected, top);
+    }
+    let end = rows.saturating_sub(height);
+    let top = top.min(end);
+    let next = if up {
+        top.saturating_sub(step)
+    } else {
+        top.saturating_add(step).min(end)
+    };
+    let selected = if selected < rows {
+        if selected < next {
+            next
+        } else if selected >= next.saturating_add(height) {
+            next.saturating_add(height).saturating_sub(1)
+        } else {
+            selected
+        }
+    } else {
+        selected
+    };
+    (selected, next)
 }
 
 /// One frame of a view, as the app builds it.

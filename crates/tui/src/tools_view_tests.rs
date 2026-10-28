@@ -881,3 +881,14 @@ fn tools_80x24() {
     // the prototype's (Ruling 17), which the docs leave open.
     insta::assert_snapshot!("tools_80x24", text.join("\n"));
 }
+
+/// The wheel shifts the visible rows three a step, keeping a visible
+/// selection where it was (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
+    let (fake, mut tools) = tall();
+    tools.click(Spot::Row(10), &ctx(&fake, None));
+    assert_eq!((selected(&tools), tools.list.top()), (10, 0));
+    assert!(matches!(tools.wheel(false, &ctx(&fake, None)), Act::Stay));
+    assert_eq!((selected(&tools), tools.list.top()), (10, 3));
+}

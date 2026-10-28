@@ -3569,3 +3569,73 @@ fn a_failed_read_starts_the_body_with_the_message() {
         "the message leads the body: {text:?}"
     );
 }
+
+/// Thirty key providers: enough rows that the window moves three and
+/// the focus stays on screen.
+fn many_targets() -> Vec<LoginTarget> {
+    (0..30)
+        .map(|at| LoginTarget {
+            name: format!("p{at:02}"),
+            kind: LoginKind::Key,
+        })
+        .collect()
+}
+
+/// The wheel over the rows shifts the window three rows and keeps a
+/// focus still on screen: five Downs put it mid-window, so one step
+/// down moves the window three rows under it.
+#[test]
+fn wheel_keeps_a_visible_focus_and_shifts_the_window_three() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut login = Login::open(&context);
+    assert_eq!(login.selected, 1);
+    for _ in 0..5 {
+        login.key(&Key::Down, &context);
+    }
+    assert_eq!(login.selected, 6);
+    assert_eq!(login.top, 0);
+    assert!(matches!(login.wheel(false, &context), Act::Stay));
+    assert_eq!(login.top, 3);
+    assert_eq!(
+        login.selected, 6,
+        "a focus still on screen stays where it was"
+    );
+}
+
+/// The wheel clamps a focus that leaves the window to the nearest
+/// shown target row: from the first target, one step down moves the
+/// window three rows and the focus to its first shown row.
+#[test]
+fn wheel_clamps_a_leaving_focus_to_the_window() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut login = Login::open(&context);
+    assert_eq!(login.selected, 1);
+    assert!(matches!(login.wheel(false, &context), Act::Stay));
+    assert_eq!(login.top, 3);
+    assert_eq!(
+        login.selected, 3,
+        "the focus clamps to the nearest shown target row"
+    );
+}
+
+/// The wheel up from the top row moves nothing, and a panel step takes
+/// no wheel: Enter opens the panel, and the wheel over it changes
+/// nothing.
+#[test]
+fn wheel_up_at_the_top_and_over_a_panel_step_moves_nothing() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut login = Login::open(&context);
+    assert!(matches!(login.wheel(true, &context), Act::Stay));
+    assert_eq!((login.top, login.selected), (0, 1));
+    open_key_panel(&mut login, &fake);
+    assert!(matches!(login.wheel(false, &context), Act::Stay));
+    assert!(matches!(login.wheel(true, &context), Act::Stay));
+    assert_eq!(
+        (login.top, login.selected),
+        (0, 1),
+        "the wheel over a panel step keeps the rows"
+    );
+}

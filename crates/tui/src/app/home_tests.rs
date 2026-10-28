@@ -5,6 +5,7 @@ use super::{App, Effect};
 use crate::app::testkit::{hello, home_with};
 use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
+use crate::keys::{Mouse, MouseKind};
 use crate::link::Line;
 use crate::local_time::{new_york, turn_started_at};
 use contract::clock::Clock;
@@ -6674,4 +6675,54 @@ fn out_of_order_scoped_answers_leave_the_unscoped_cursor() {
     assert_eq!(page["command"], "recent");
     assert_eq!(page["args"]["before"], "s_bbbbbbbbbbbbbbbb");
     assert!(page["args"].get("project").is_none());
+}
+
+/// A wheel report at (`col`, `row`): down steps toward the tail, up away
+/// from it, over home's session list.
+fn wheel(col: u16, row: u16, down: bool) -> Mouse {
+    Mouse {
+        kind: if down {
+            MouseKind::WheelDown
+        } else {
+            MouseKind::WheelUp
+        },
+        col,
+        row,
+    }
+}
+
+/// The wheel over the open key map on home is the map's: the home
+/// session list keeps its scroll, while the same wheel with the map
+/// closed scrolls the list three rows (`docs/tui.md`, "Key map"; see
+/// #3578).
+#[test]
+fn wheel_over_keymap_on_home_leaves_the_session_list() {
+    let mut app = home_with(80, 24, launch());
+    // Twenty live rows, taller than the list's window.
+    for n in 0..20 {
+        app.on_line(live(
+            &format!("s_{n:016x}"),
+            &format!("work {n}"),
+            "/w",
+            "-w",
+            json!({"state": "idle"}),
+        ));
+    }
+    assert_eq!(app.home_list_scroll(), 0);
+    // The baseline: with the map closed the wheel scrolls the list.
+    assert_eq!(app.on_wheel(&wheel(10, 10, true)), Effect::None);
+    assert_eq!(app.home_list_scroll(), 3, "the wheel scrolls the home list");
+    assert_eq!(app.on_wheel(&wheel(10, 10, false)), Effect::None);
+    assert_eq!(app.home_list_scroll(), 0);
+    // With the map open the same wheel is swallowed.
+    app.open_keymap();
+    assert!(app.keymap_top().is_some(), "the key map opened");
+    assert_eq!(app.on_wheel(&wheel(10, 10, true)), Effect::None);
+    assert_eq!(app.on_wheel(&wheel(10, 10, false)), Effect::None);
+    assert_eq!(
+        app.home_list_scroll(),
+        0,
+        "the wheel left the home session list"
+    );
+    assert!(app.keymap_top().is_some(), "the key map stays open");
 }
