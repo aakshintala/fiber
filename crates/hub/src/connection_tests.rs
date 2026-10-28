@@ -2869,8 +2869,6 @@ fn sessions_empty_log_lists_with_null_active_and_skips_delegates() {
     stop_within(&hub.feed);
 }
 
-/// Waits under [`DEADLINE`] until attention holds `n` listeners.
-#[track_caller]
 /// A `session_status` payload with a `waiting` state: `request_id` and
 /// `summary "run <request_id>"`, named `n` in `/w`.
 fn waiting_payload(request: &str) -> Value {
@@ -3058,9 +3056,7 @@ fn overflow_race() -> OverflowRace {
     );
     // A status answer runs after the server's register and listen, before
     // the test-owned subscriber joins.
-    let mut cmd = serde_json::to_vec(&command("c_status", "status", json!({}))).unwrap();
-    cmd.push(b'\n');
-    client.write_all(&cmd).unwrap();
+    writeln!(client, "{}", command("c_status", "status", json!({}))).unwrap();
     let mut ack = String::new();
     read.read_line(&mut ack).unwrap();
     assert_eq!(

@@ -176,11 +176,9 @@ impl Attention {
         lock(&self.listeners).broadcast(&line)
     }
 
-    /// Tests only: fails the next `listen` while live, so the
-    /// refused-registration path runs without an outside seam: `listen`
-    /// refuses only once stopped or when armed, and stopping the attention
-    /// would end the live hub the test needs, while no socket, starter,
-    /// clock or file seam fails one registration while live.
+    /// Tests only: arms the `fail_listen` refusal, so the next `listen`
+    /// is refused; see the field for why no outside seam fails one
+    /// registration while live.
     #[cfg(test)]
     pub(crate) fn fail_next_listen(&self) {
         self.fail_listen.store(true, Ordering::SeqCst);

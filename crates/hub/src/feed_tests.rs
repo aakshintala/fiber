@@ -2009,13 +2009,12 @@ fn a_repeated_feed_on_a_stalled_subscriber_shuts_its_connection_and_drops_the_re
             "the code path takes every change"
         );
     }
-    // The writer never dequeued: the registration is still there.
     // Repeated feeds re-queue the snapshot behind its acknowledgement.
     // Each fills one more slot, and the writer is still blocked on the
     // held mutex, so a Full is certain within QUEUE further replaces:
     // every Sent stays queued, and only 1,024 slots exist.
     let mut full = Vec::new();
-    for _ in 0..crate::feed::QUEUE + 1 {
+    for i in 0..crate::feed::QUEUE + 1 {
         let closers = feed.replace_snapshot(stalled_id);
         if !closers.is_empty() {
             full = closers;
@@ -2023,7 +2022,14 @@ fn a_repeated_feed_on_a_stalled_subscriber_shuts_its_connection_and_drops_the_re
         }
         // Gone would resurrect nothing and DeadWriter would park the
         // handle: neither may happen while the registration is live and
-        // its writer only waits on the held mutex.
+        // its writer only waits on the held mutex. A parked handle would
+        // land in the join pool, so its absence pins each replacement as
+        // neither Gone (which removes the registration, making the final
+        // Full impossible) nor DeadWriter.
+        assert!(
+            lock(&feed.state).threads.is_empty(),
+            "no replacement parked the writer (replace {i})"
+        );
     }
     assert_eq!(full.len(), 1, "the full queue hands back its shutdown");
     close_connections(full, UnixStream::shutdown);

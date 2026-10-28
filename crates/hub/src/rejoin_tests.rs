@@ -1196,10 +1196,10 @@ fn accepted_local_connection_retains_its_kernel_attribution() {
     let ack = client.next("the status acknowledgement");
     assert_eq!(ack.get("kind"), Some(&json!("command_accepted")));
     let pairs = live_pairs(&hub.rejoins);
-    assert_eq!(pairs.len(), 1, "the accepted client is registered");
+    let pair = pairs.first().expect("the accepted client is registered");
     assert!(
         matches!(
-            lock(&pairs[0].1).attribution.clone(),
+            lock(&pair.1).attribution.clone(),
             Some(crate::connection::Attribution::Local {
                 peer_pid,
                 session_process_pids

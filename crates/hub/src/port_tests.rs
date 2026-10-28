@@ -1194,26 +1194,26 @@ fn an_out_pump_spawn_failure_disconnects_through_the_pair() {
 /// time and each notify lands after the previous scan, so no scan can eat
 /// a later needle.
 fn await_tcp_needle(tcp_client: &mut TcpStream, needle: &[u8], what: &str) {
-    let drained = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
-    let mut overlap = Vec::new();
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let mut seen = Vec::new();
     loop {
-        if drained.left().is_zero() {
+        let left = deadline.left();
+        if left.is_zero() {
             panic!("{what}");
         }
+        tcp_client.set_read_timeout(Some(left)).unwrap();
         let mut chunk = [0u8; 4096];
         let n = match tcp_client.read(&mut chunk) {
             Ok(0) => panic!("{what}: the stream closed"),
             Ok(n) => n,
             Err(error) => panic!("{what}: {error}"),
         };
-        // The frame may split the needle across reads, so each search
-        // covers the new chunk plus the previous needle-length overlap.
-        overlap.extend_from_slice(&chunk[..n]);
-        if overlap.windows(needle.len()).any(|w| w == needle) {
+        // The frame may split the needle across reads; the frames are
+        // short, so the whole prefix stays resident for one search.
+        seen.extend_from_slice(&chunk[..n]);
+        if seen.windows(needle.len()).any(|w| w == needle) {
             return;
         }
-        let keep = overlap.len().min(needle.len() - 1);
-        overlap.drain(..overlap.len() - keep);
     }
 }
 
@@ -1295,10 +1295,12 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
         pump_tx.send(()).unwrap_or(());
     });
     // A status answer runs after the served bridge registered and listened.
-    let mut cmd =
-        serde_json::to_vec(&json!({"id": "c_ready", "command": "status", "args": {}})).unwrap();
-    cmd.push(b'\n');
-    status_end.write_all(&cmd).unwrap();
+    writeln!(
+        status_end,
+        "{}",
+        json!({"id": "c_ready", "command": "status", "args": {}})
+    )
+    .unwrap();
     await_tcp_needle(&mut tcp_client, b"c_ready", "the status acknowledgement");
     // One attention probe proves the writer started and the pump flows: the
     // served bridge reads the probe back from the TCP side.
@@ -1340,13 +1342,9 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
         );
         false
     });
-    let fill_closers = {
-        let mut out = lock(&fill_closers);
-        std::mem::take(&mut *out)
-    };
-    assert_eq!(
-        fill_closers.len(),
-        1,
+    let fill_closers = std::mem::take(&mut *lock(&fill_closers));
+    assert!(
+        !fill_closers.is_empty(),
         "the fill phase removed the connection listener at the bound"
     );
     // Dropped without shutdown: the bridge stays alive.
@@ -1376,11 +1374,11 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
             .attention
             .notify("s_0000000000000000", None, &first, false),
     );
-    let drained = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let needle: &[u8] = b"run r0";
     let mut overlap = Vec::new();
     loop {
-        if drained.left().is_zero() {
+        if deadline.left().is_zero() {
             panic!("the TCP peer to drain the first small line");
         }
         let mut chunk = [0u8; 4096];

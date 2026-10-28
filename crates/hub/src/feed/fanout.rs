@@ -436,11 +436,9 @@ impl Fanout {
         ends
     }
 
-    /// Tests only: refuses the next lazy writer spawn in `broadcast`, so
-    /// the failed-spawn path runs without an outside seam: thread-spawn
-    /// failure has no deterministic outside trigger, since resource
-    /// exhaustion cannot be staged per test and no socket outcome fails a
-    /// spawn on demand.
+    /// Tests only: arms the `fail_spawn` refusal, so the next lazy writer
+    /// spawn in `broadcast` is refused; see the field for why no outside
+    /// seam stages that failure.
     #[cfg(test)]
     pub(crate) fn fail_next_spawn(&self) {
         self.fail_spawn.store(true, Ordering::SeqCst);
