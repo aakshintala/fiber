@@ -45,7 +45,7 @@ fn a_file_workdir_executes() {
     // errors with something other than not-found, so the call is
     // reviewed instead of walking past it.
     assert!(!repository_ok(&file));
-    let effects = classify("git status", &file, &[]);
+    let effects = classify("git status", &workspace, &file, &[]);
     assert_eq!(effects.declared.effects, vec![Effect::Executes]);
     assert!(effects.declared.paths.is_none());
 }
@@ -67,7 +67,7 @@ fn a_missing_workdir_beneath_a_bare_repository_reads() {
     let (_dir, workspace) = workspace("fiber-shell-git-missing-bare");
     make_bare(&workspace);
     assert!(repository_ok(&workspace.join("missing")));
-    let effects = classify("git status", &workspace.join("missing"), &[]);
+    let effects = classify("git status", &workspace, &workspace.join("missing"), &[]);
     assert_eq!(effects.declared.effects, vec![Effect::Reads]);
 }
 
@@ -229,9 +229,9 @@ fn the_gitfile_size_cap_holds_at_512_bytes() {
 fn git_reads_in_a_repository_and_executes_in_a_bare_one() {
     let (_dir, repo) = workspace("fiber-shell-git-classify-repo");
     make_git_dir(&repo);
-    let effects = classify("git status", &repo, &[]);
+    let effects = classify("git status", &repo, &repo, &[]);
     assert_eq!(effects.declared.effects, vec![Effect::Reads]);
-    let effects = classify("git log --oneline x", &repo, &[]);
+    let effects = classify("git log --oneline x", &repo, &repo, &[]);
     assert_eq!(effects.declared.effects, vec![Effect::Reads]);
     assert_eq!(
         effects.declared.paths,
@@ -240,7 +240,7 @@ fn git_reads_in_a_repository_and_executes_in_a_bare_one() {
     let (_bare_dir, bare) = workspace("fiber-shell-git-classify-bare");
     make_bare(&bare);
     for command in ["git status", "git log --oneline x"] {
-        let effects = classify(command, &bare, &[]);
+        let effects = classify(command, &bare, &bare, &[]);
         assert_eq!(
             effects.declared.effects,
             vec![Effect::Executes],
@@ -255,11 +255,11 @@ fn a_configured_git_entry_takes_the_same_guards() {
     let entries = [("git archive".to_owned(), Vec::new())];
     let (_dir, repo) = workspace("fiber-shell-git-configured-repo");
     make_git_dir(&repo);
-    let effects = classify("git archive x", &repo, &entries);
+    let effects = classify("git archive x", &repo, &repo, &entries);
     assert_eq!(effects.declared.effects, vec![Effect::Reads]);
     let (_bare_dir, bare) = workspace("fiber-shell-git-configured-bare");
     make_bare(&bare);
-    let effects = classify("git archive x", &bare, &entries);
+    let effects = classify("git archive x", &bare, &bare, &entries);
     assert_eq!(effects.declared.effects, vec![Effect::Executes]);
     assert!(effects.declared.paths.is_none());
 }
