@@ -26,6 +26,36 @@ use serde_json::json;
 use support::*;
 
 const FORK: &str = "s_00000000000000d2";
+const MOVED: &str = "s_00000000000000d3";
+
+/// Appends a `moved` last line to `dir`'s log naming `next`: the parent's
+/// post-move state, as `fiber sessions delete` meets it.
+fn append_moved(dir: &Path, old: &str, next: &str) {
+    let line = json!({"kind": "moved", "session_id": old, "ts": 1,
+        "schema_version": 1, "seq": 3,
+        "payload": {"new_session_id": next, "seq": 1, "workspace": "/w2"}});
+    let mut log = fs::read_to_string(dir.join("events.jsonl")).unwrap();
+    log.push_str(&format!("{line}\n"));
+    fs::write(dir.join("events.jsonl"), log).unwrap();
+}
+
+/// Session `id` in another project's sessions, continuing `from`: the
+/// cross-project moved child, as `fiber sessions delete` meets it.
+fn moved_child(setup: &Setup, id: &str, from: &str) -> PathBuf {
+    let workspace = setup.root.path().join("elsewhere");
+    fs::create_dir_all(&workspace).unwrap();
+    let dir = log::sessions_dir(&setup.home(), &doors::project(&workspace)).join(id);
+    fs::create_dir_all(dir.join("artifacts")).unwrap();
+    let first = json!({"kind": "session_started", "session_id": id, "ts": 0,
+        "schema_version": 1, "seq": 0,
+        "payload": {"workspace": workspace,
+        "variables": {"path": "/usr/bin", "names": [], "source": "inherited"},
+        "forked_from": {"session_id": from, "seq": 1}}});
+    fs::write(dir.join("events.jsonl"), format!("{first}\n")).unwrap();
+    fs::write(dir.join("artifacts/a_1.txt"), b"bytes").unwrap();
+    fs::write(dir.join("session.lock"), b"").unwrap();
+    dir
+}
 
 /// The hub idles out soon after the run's connection closes, so none
 /// lingers past the test.
@@ -252,6 +282,27 @@ fn dependents_exit_one_naming_the_fork_and_cascade_removes_both() {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert_eq!(text(&output.stdout), format!("{ROOT}\n{FORK}\n"));
     assert!(!root.exists() && !fork.exists());
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
+
+#[test]
+fn dependents_exit_one_naming_the_moved_child_and_cascade_removes_both() {
+    let setup = setup();
+    let root = session(&setup, ROOT, None);
+    append_moved(&root, ROOT, MOVED);
+    let moved = moved_child(&setup, MOVED, ROOT);
+    // The moved child continues the parent across projects: deleting the
+    // parent names it and refuses without `--cascade`.
+    let output = delete(&setup, &["--yes", ROOT]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = text(&output.stderr);
+    assert!(stderr.contains(MOVED), "{stderr}");
+    assert!(stderr.contains("--cascade"), "{stderr}");
+    assert!(root.is_dir() && moved.is_dir());
+    let output = delete(&setup, &["--cascade", "--yes", ROOT]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert_eq!(text(&output.stdout), format!("{ROOT}\n{MOVED}\n"));
+    assert!(!root.exists() && !moved.exists());
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
 

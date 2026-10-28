@@ -265,6 +265,7 @@ fn kinds(inputs: &[Input]) -> Vec<String> {
             Input::Hub(Line::Hub(line)) => line.kind.clone(),
             Input::Bytes(_) => "bytes".to_owned(),
             Input::Tick => "tick".to_owned(),
+            Input::Converted { .. } => "other".to_owned(),
             Input::Connected(..)
             | Input::ConnectFailed(_)
             | Input::Disconnected
@@ -2565,7 +2566,9 @@ impl ratatui::backend::Backend for RecordBackend {
 }
 
 /// The open's `full` raise is written after the first frame draws, never
-/// before it. The recording backend's armed flush parks the frame's
+/// before it (`docs/tui.md`, "History and paging": the first frame draws
+/// the preview, then the terminal raises the subscription to `full`).
+/// The recording backend's armed flush parks the frame's
 /// worker mid-`draw`: a raise on the socket before the test's release
 /// fails, and the raise after it passes. Moving the raise before `draw`
 /// in a scratch copy fails this test at the parked read.
@@ -2746,16 +2749,19 @@ fn the_raise_is_written_after_the_frame_draws() {
         .get_mut()
         .set_nonblocking(false)
         .unwrap_or_else(|err| panic!("blocking: {err}"));
+    // `frame-enter` above holds the worker in flush, so its loop and
+    // peer cannot drop until release below. Arm the read timeout first:
+    // macOS refuses this setup after the peer closes with `EINVAL` (#3436).
+    reader
+        .get_mut()
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
     // One release, then disarmed: later flushes in this step run
     // through, so the frame always finishes after exactly one park.
     block.store(false, Ordering::SeqCst);
     release_tx
         .send(())
         .unwrap_or_else(|err| panic!("release: {err}"));
-    reader
-        .get_mut()
-        .set_read_timeout(Some(DEADLINE))
-        .unwrap_or_else(|err| panic!("timeout: {err}"));
     let raise = socket_line(&mut reader).unwrap_or_else(|| panic!("the raise"));
     let raise: serde_json::Value = serde_json::from_str(&raise).unwrap_or_default();
     assert_eq!(raise["command"], "subscribe");

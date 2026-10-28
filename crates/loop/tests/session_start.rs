@@ -369,6 +369,7 @@ fn a_rewound_loop_runs_session_start_with_reason_rewind() {
     let from = contract::shapes::Point {
         session_id: SessionId("s_test".into()),
         seq: Seq(starts.next().unwrap() - 1),
+        project: None,
     };
     let home = session.dir.parent().unwrap().to_path_buf();
     let clock = Arc::clone(&session.clock) as Arc<dyn contract::clock::Clock>;
@@ -472,6 +473,7 @@ fn a_forked_loop_runs_session_start_with_reason_fork() {
     let from = contract::shapes::Point {
         session_id: SessionId("s_test".into()),
         seq: Seq(starts.next().unwrap() - 1),
+        project: None,
     };
     let home = session.dir.parent().unwrap().to_path_buf();
     let clock = Arc::clone(&session.clock) as Arc<dyn contract::clock::Clock>;

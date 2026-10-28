@@ -621,6 +621,11 @@ pub(crate) fn route(
     if let Some(at_gate) = at_gate {
         at_gate();
     }
+    #[cfg(test)]
+    let blocked_gate = lock(relays).blocked_gate.take();
+    #[cfg(test)]
+    let _held_gate = crate::connection::lock_gate(&gate, blocked_gate);
+    #[cfg(not(test))]
     let _held_gate = lock(&gate);
     // Mark opening before the re-check, under one lock hold with the
     // kept read: a rejoin worker either published before this mark (the

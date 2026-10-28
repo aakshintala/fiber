@@ -243,6 +243,7 @@ fn quota_notice_fold_reads_only_the_sessions_own_log() {
             forked_from: Some(Point {
                 session_id: SessionId("s_test".into()),
                 seq: lines.last().unwrap().seq.unwrap(),
+                project: None,
             }),
             rewind: None,
             worktree: None,

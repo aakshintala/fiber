@@ -443,6 +443,41 @@ fn the_passed_callback_deletes_through_the_hubs_own_delete() {
     drop(held);
 }
 
+/// Appends a `moved` last line to `dir`'s log naming `next`: the parent's
+/// post-move state, as a hub prune meets it.
+fn append_moved(dir: &std::path::Path, old: u64, next: u64) {
+    let line = json!({"kind": "moved", "seq": 3, "session_id": id(old), "ts": 1,
+        "payload": {"new_session_id": id(next), "seq": 2, "workspace": "/w2"}});
+    let mut log = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+    log.push_str(&format!("{line}\n"));
+    std::fs::write(dir.join("events.jsonl"), log).unwrap();
+}
+
+#[test]
+fn prune_with_cascade_removes_a_moved_parent_and_its_cross_project_child() {
+    let (_held, dir) = crate::testkit::home("hp-moved");
+    let root = session(&dir, "-p", 1, None);
+    append_moved(&root, 1, 2);
+    let moved = session(&dir, "-q", 2, Some(1));
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let hub = hub(&dir, Arc::new(FakeStarter::hang(&dir)), clock);
+    let hub = Arc::new(hub.with_machine(Arc::new(InvokeMachine {
+        fake: FakeMachine::default(),
+    })));
+    // The moved child continues the parent across projects: the cascade
+    // names both, and the hub's own delete removes both, inventory and
+    // all.
+    let got = crate::prune::prune(
+        &hub,
+        &args(
+            json!({"cascade": true, "expect": {"sessions": [{"id": id(1), "cascade": [id(1), id(2)]}]}}),
+        ),
+    );
+    assert!(got.is_ok(), "{got:?}");
+    assert!(!root.exists(), "the moved parent is gone");
+    assert!(!moved.exists(), "its cross-project child is gone");
+}
+
 #[test]
 fn the_passed_callback_maps_a_forked_set_to_stale_request() {
     let (_held, dir) = crate::testkit::home("hp");
