@@ -91,6 +91,10 @@ fn serve(
 /// list. Every archive route is answered twice, since the install and
 /// the stage fetch every archive and the fixture server answers one
 /// request per route.
+// debt: serve and serve_nightly build the same three archives from
+// (marker, docs, shorts); share one archives(marker, docs, shorts) helper
+// after lane 1232's held update_tests work lands and serve is available
+// to edit.
 fn serve_nightly(marker: &[u8], docs: &[u8], shorts: &[(&str, &str)]) -> fakes::ProviderServer {
     let binary = gzip(&archive(&[(
         header("fiber", b'0', marker.len() as u64, 0o755, ""),

@@ -95,7 +95,11 @@ pub(crate) fn newest(tags: &[String]) -> Option<String> {
 /// orderable key [`minimum`] returns. Minimums of two major versions
 /// stop with both named.
 fn floor(name: &str, wants: &BTreeMap<String, String>) -> Result<([u64; 3], bool, String), Error> {
-    let mut floor = ([0; 3], true, String::new());
+    // The empty floor sorts below every valid minimum: a nightly
+    // (`false`) sorts below a stable (`true`) on the same base, and the
+    // empty date sorts below any eight-digit one, so the first minimum
+    // always wins the `max` below, including `0.0.0-nightly.YYYYMMDD`.
+    let mut floor = ([0; 3], false, String::new());
     let mut first: Option<(&String, &String, u64)> = None;
     for (requirer, min) in wants {
         let v = minimum(min)?;
