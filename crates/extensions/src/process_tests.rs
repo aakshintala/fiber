@@ -10,7 +10,7 @@
     reason = "test code; a failure is the test's"
 )]
 
-use std::os::unix::process::ExitStatusExt as _;
+use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::time::Duration;
 
 use contract::{CommandId, ErrorCode};
@@ -5221,6 +5221,71 @@ const FINISH_GROUP: &str = r#"[
     {"linger": true}
 ]"#;
 
+/// A process the test spawns into the peer's group and holds itself: the
+/// shutdown's group TERM ends it with the peer, while the test keeps it
+/// unreaped. A terminated-but-unreaped member keeps the group reading
+/// alive, so holding one forces the order the flake reaches by timing.
+struct HeldGroupMember {
+    child: Option<std::process::Child>,
+    pid: u32,
+    pgid: u32,
+}
+
+impl HeldGroupMember {
+    /// Spawns `sleep` into `pgid`, so the group TERM ends it with the
+    /// peer while the test holds it unreaped.
+    fn spawn(pgid: u32) -> Self {
+        let child = std::process::Command::new("sleep")
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(i32::try_from(pgid).expect("a peer group id fits in an i32"))
+            .spawn()
+            .expect("a held group member starts");
+        let pid = child.id();
+        Self {
+            child: Some(child),
+            pid,
+            pgid,
+        }
+    }
+
+    /// Reaps the member once, within one deadline: the group TERM already
+    /// ended it, so the reap returns at once. A member that outlives the
+    /// TERM is named, since only a survivor outlives it.
+    fn reap(&mut self, what: &str) {
+        let mut child = self.child.take().expect("the held member reaps once");
+        let (pid, pgid) = (self.pid, self.pgid);
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || match done.send(child.wait()) {
+            Ok(()) | Err(_) => {}
+        });
+        match fakes::Deadline::after(WITHIN).recv(&finished) {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                panic!("reaping held member {pid} of group {pgid} failed: {error}")
+            }
+            Err(_) => panic!("waited {WITHIN:?} for {what} (held member {pid} of group {pgid})"),
+        }
+    }
+}
+
+impl Drop for HeldGroupMember {
+    /// KILLs and reaps a member the test never reaped, so a failure
+    /// leaves neither a running process nor a zombie behind.
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            match fakes::kill_pid(self.pid, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            match child.wait() {
+                Ok(_) | Err(_) => {}
+            }
+        }
+    }
+}
+
 /// The shutdown terms the whole group: a grandchild holding the pipes
 /// open dies with the child, and the group reads empty after.
 #[test]
@@ -5233,6 +5298,10 @@ fn finish_terms_the_whole_group_despite_a_held_pipe() {
     );
     owner.pump();
     owner.pump();
+    // The test holds a terminated group member unreaped, forcing the
+    // order the flake reaches when init has not reaped the grandchild yet.
+    let pgid = owner.extension.transport().pgid();
+    let mut held = HeldGroupMember::spawn(pgid);
     let cancel = support::cancel::Token::new();
     let finishing = {
         let extension = Arc::clone(&owner.extension);
@@ -5263,9 +5332,13 @@ fn finish_terms_the_whole_group_despite_a_held_pipe() {
         Some(rustix::process::Signal::TERM.as_raw()),
         "TERM ends the group"
     );
+    // The held member reads alive until it is reaped, so the test reaps
+    // its own member first then waits for the rest of the group to empty:
+    // the wait absorbs init's reap of the grandchild instead of racing it.
+    held.reap("the held group member to exit on the group TERM");
     assert!(
-        !owner.extension.transport().group_alive(),
-        "no descendant survives the group TERM"
+        fakes::group_empties(pgid, fakes::Deadline::after(WITHIN)),
+        "waited {WITHIN:?} for group {pgid} to empty after the group TERM",
     );
     assert_eq!(owner.drain(), CloseReason::Stopped);
 }
