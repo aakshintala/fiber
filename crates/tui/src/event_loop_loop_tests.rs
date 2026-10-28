@@ -476,6 +476,126 @@ fn a_session_change_deletes_the_shown_image_and_the_next_session_shows() {
     assert!(text.contains("Ga=t,"), "the next session image transmits");
 }
 
+/// An upload item for the boundary test: `full` 4096-byte chunks plus a
+/// `tail`-byte last chunk, with its place, and every byte the writer must
+/// send for it.
+fn kitty_image(id: u32, full: usize, tail: usize) -> (super::kitty_writer::Item, Vec<u8>) {
+    use super::kitty_writer::Item;
+
+    let payload = "B".repeat(full * 4096 + tail);
+    let chunks = crate::graphics::transmit(id, &payload);
+    let place = crate::graphics::place(id, 7, 3);
+    let mut bytes = Vec::new();
+    for chunk in &chunks {
+        bytes.extend_from_slice(chunk);
+    }
+    bytes.extend_from_slice(&place);
+    (Item::Image { id, chunks, place }, bytes)
+}
+
+/// Reads exactly `n` bytes off the pipe, returning them with the read end
+/// so the test can close it for the failure injection.
+#[track_caller]
+fn read_exact_bytes(read: std::fs::File, n: usize) -> mpsc::Receiver<(Vec<u8>, std::fs::File)> {
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("loop-tty-read".to_owned())
+        .spawn(move || {
+            let mut read = read;
+            let mut buf = vec![0u8; n];
+            std::io::Read::read_exact(&mut read, &mut buf)
+                .unwrap_or_else(|err| panic!("read {n}: {err}"));
+            done.send((buf, read)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    finished
+}
+
+/// The loop draws frames between whole Kitty chunks: a frame stepped while
+/// a payload waits lands on the screen with the image's rows blank, and a
+/// delete plus a queued image released together send no further first-image
+/// chunk and no first place before the full second transmit and place. A
+/// failing tty then reports the failure, and the next step quits.
+#[test]
+fn kitty_event_loop_draws_at_chunk_boundary() {
+    use super::kitty_writer::{Delete, Item, KittyChunkGate, KittyWriter};
+
+    let (mut lp, _theirs, tx, rx) = inline_opened(image_session());
+    drop(tx);
+    // A held gate over a pipe sink: the writer parks after the first chunk.
+    let gate = Arc::new(KittyChunkGate::new(true));
+    let (pipe_read, pipe_write) = std::io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    let (live_tx, live_rx) = mpsc::channel();
+    lp.files_out = live_tx.clone();
+    let writer = KittyWriter::spawn(
+        std::fs::File::from(std::os::fd::OwnedFd::from(pipe_write)),
+        Arc::clone(&gate),
+        Arc::clone(&lp.kitty_failed),
+        live_tx,
+        Arc::clone(&lp.tty_lock),
+    )
+    .expect("the writer starts");
+    lp.kitty_writer = Some(writer);
+    // `inline_opened` attached before any frame ran, so the attach's purge
+    // is still queued. No frame the test cares about has drained it, and the
+    // key frame below would hand it to the writer as an abort of the test's
+    // own upload. Drop that stale handoff before the test's payload.
+    let _ = lp.app.take_image_out();
+    // A large payload pending: the first chunk reads off the pipe with the
+    // deadline, and the held gate parks the writer after it.
+    let (first, first_bytes) = kitty_image(1, 2, 10);
+    let head = match &first {
+        Item::Image { chunks, .. } => chunks[0].len(),
+        Item::Delete(_) => panic!("an image, not a delete"),
+    };
+    let installed = lp.kitty_writer.as_ref().expect("writer installed");
+    assert!(installed.push(first));
+    let (chunk, read) = recv_wire(&read_exact_bytes(
+        std::fs::File::from(std::os::fd::OwnedFd::from(pipe_read)),
+        head,
+    ));
+    assert_eq!(chunk, first_bytes[..head].to_vec());
+    // A key's frame is written while the payload is pending: the image's
+    // rows stay blank, at their size, until it lands.
+    let (mut lp, rx) = stepped(lp, rx, Input::Bytes(b"a".to_vec()));
+    assert!(shown(&lp).contains('\u{10EEEE}'));
+    // The image's delete plus a queued second image released together send
+    // no further first-image chunk and no first place, then the full second
+    // transmit and place in order; the barrier ack proves the delete went
+    // out.
+    let (second, second_bytes) = kitty_image(2, 1, 10);
+    let installed = lp.kitty_writer.as_ref().expect("writer installed");
+    assert!(installed.push(Item::Delete(Delete {
+        id: 1,
+        bytes: crate::graphics::delete(1),
+    })));
+    assert!(installed.push(second));
+    gate.release();
+    super::tests::flush_kitty(&lp);
+    let deleted = crate::graphics::delete(1);
+    let (rest, read) = recv_wire(&read_exact_bytes(read, deleted.len() + second_bytes.len()));
+    assert_eq!(
+        rest,
+        [deleted, second_bytes].concat(),
+        "no further first-image chunk and no first place"
+    );
+    // An injected write error drops what is pending and writes nothing
+    // after it: closing the read end fails the next chunk write.
+    drop(read);
+    let (third, _) = kitty_image(3, 0, 5);
+    let installed = lp.kitty_writer.as_ref().expect("writer installed");
+    assert!(installed.push(third));
+    match Deadline::after(DEADLINE).recv(&live_rx) {
+        Ok(Input::KittyFailed) => {}
+        Ok(_) => panic!("a failure, not KittyFailed"),
+        Err(err) => panic!("waited {DEADLINE:?} for the failure: {err}"),
+    }
+    assert!(lp.kitty_failed.load(Ordering::SeqCst));
+    // The sink holds exactly the error position with nothing after it, and
+    // the next step quits through the failed-draw exit.
+    assert_eq!(lp.step(Input::KittyFailed, &rx), Some(1));
+}
+
 /// A loop at 60x12, attached to the session, with its lines folded and
 /// the hub connected: the loop, the hub's end, and the inputs' sender.
 fn opened() -> (
