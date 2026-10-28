@@ -787,6 +787,87 @@ fn a_command_held_past_the_close_grace_is_rejected_indeterminate_once_and_not_re
 }
 
 #[test]
+fn a_full_subscribe_in_the_post_close_exit_window_resumes_while_the_log_exists() {
+    // A hub subscribe naming an exited session resumes it; only a
+    // vanished log is refused `session_not_found` (`docs/invocation.md`,
+    // "Driver commands", `subscribe`). The close below exits the session
+    // while its import is still held, so the subscribe lands in the
+    // post-close exit/retirement window: the log is present and ends in
+    // `fiber_exited`, and the answer must resume, not refuse.
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe(&first, "c_sub", &id);
+    world.hold_imports();
+    first.send(&import("c_q", &id));
+    let writer = world.await_import();
+
+    let second = world.client();
+    subscribe(&second, "c_sub2", &id);
+    second.send(&close(&id));
+    // Consumed in order, so nothing before the close's answer is kept:
+    // the fold replays the ask run's own exit, which stays behind, and
+    // the exit waited for follows the close.
+    let mut closed = until(&second, "the close acknowledgement", |line| {
+        is_answer(line, "c_close")
+    });
+    let ack = closed.pop().expect("the acknowledgement ends the wait");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    until(&second, "the close-caused exit", |line| {
+        line["kind"] == "fiber_exited"
+    });
+
+    // The held import never finishes, so the close grace cuts it: the
+    // cut answer proves the command was answered and will never be
+    // re-routed (`docs/invocation.md`, "What the hub speaks").
+    let cut = support::recv_answer(&first, "c_q", "the cut answer for the held import");
+    assert_eq!(cut["kind"], "command_rejected", "{cut:?}");
+    assert_eq!(cut["payload"]["code"], "indeterminate", "{cut:?}");
+
+    // The durable log is present and ends in the exit: the only log a
+    // subscribe may refuse as `session_not_found` is a vanished one, so
+    // this read lays the refusal's alibi before the subscribe is sent.
+    let text = fs::read_to_string(support::session_dir(&world.setup, &id).join("events.jsonl"))
+        .expect("the exited session's log is present for the window subscribe");
+    let log = support::complete_lines(&text);
+    let last = log
+        .last()
+        .expect("the exited session's log holds the close-caused exit");
+    assert_eq!(
+        last["kind"], "fiber_exited",
+        "the log ends in the close-caused exit: {log:?}"
+    );
+
+    // One full subscribe in the retirement window, while the unreleased
+    // import still holds the teardown: the cut left nothing to re-route,
+    // and the log exists, so the hub resumes. A `session_not_found` here
+    // is the product race, not an already-exited session.
+    let third = world.client();
+    third.send(&command(
+        "c_window_sub",
+        &id,
+        "subscribe",
+        &json!({"level": "full"}),
+    ));
+    let ack = support::recv_answer(&third, "c_window_sub", "the window subscribe's answer");
+    assert_eq!(
+        ack["kind"],
+        "command_accepted",
+        "a full subscribe with the log present resumes the session: {ack} (hub log tail:\n{})",
+        support::hub_log_tail(&world.setup.hub_log())
+    );
+
+    // Deterministic teardown: the cut proved no reader will ever park
+    // in the receipt, so the writer is dropped unanswered, and the run
+    // the window subscribe resumed idles. The shared finish then
+    // subscribes onto the running session and closes it, instead of
+    // racing a resume.
+    drop(writer);
+    drop((first, second, third));
+    world.finish();
+}
+
+#[test]
 fn a_finish_without_a_close_leaves_no_session_running() {
     // The session runs idle with the ask run's exit already in its log: a
     // fresh subscribe replays that exit while the session lives, so an exit
