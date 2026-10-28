@@ -4248,6 +4248,27 @@ mod stacked {
 
     #[test]
     fn swapped_view_open_matches_each_view_flag() {
+        assert!(!short_home().swapped_view_open(), "no view open");
+        // Each flag alone is a swapped view.
+        for kind in ["keys", "settings", "picker"] {
+            let mut app = short_home();
+            app.set_configure(Some(
+                std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]))
+                    as std::sync::Arc<dyn crate::Configure>,
+            ));
+            match kind {
+                "picker" => {
+                    app.on_key(Key::CtrlL, now());
+                }
+                _ => {
+                    for ch in format!("/{kind}").chars() {
+                        app.on_key(Key::Char(ch), now());
+                    }
+                    app.on_key(Key::Enter, now());
+                }
+            }
+            assert!(app.swapped_view_open(), "{kind}");
+        }
         // `ReleaseNotes` opens its session view on home with no session
         // on screen, the one swapped view reachable there alone.
         let mut app = short_home();
@@ -4256,6 +4277,7 @@ mod stacked {
         }
         app.on_key(Key::Enter, now());
         assert!(app.session_view_open());
+        assert!(app.swapped_view_open(), "release notes");
         open(&mut app, Surface::Notice);
         let area = ratatui::layout::Rect::new(0, 0, 60, 12);
         let mut buf = ratatui::buffer::Buffer::empty(area);
