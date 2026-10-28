@@ -247,6 +247,14 @@ fn a_git_diff_of_fiber_home_is_refused() {
 }
 
 #[test]
+fn an_nl_of_a_credential_file_is_refused() {
+    assert_refused_as_credentials(
+        "nl ../credentials/openrouter",
+        &["../credentials/openrouter"],
+    );
+}
+
+#[test]
 fn a_standing_deny_refuses_and_never_runs() {
     let tool = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(

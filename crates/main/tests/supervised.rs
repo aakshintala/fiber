@@ -185,7 +185,7 @@ fn stop_hub(hub: &Arc<Mutex<Option<HubProc>>>, guard: SessionGuard) {
 fn a_supervised_start_denies_without_asking_and_sends_no_attention() {
     let setup = Setup::new();
     let server = ProviderServer::start([
-        shell_call("true"),
+        shell_call("touch .fiber-review-marker"),
         verdict("maybe SUP-FIRST"),
         verdict("perhaps SUP-LAST"),
         hello(),
@@ -307,11 +307,11 @@ fn a_supervised_steer_grants_a_fresh_review_and_allows() {
     const MARKER: &str = "grant-marker-7f3a";
     let setup = Setup::new();
     let server = ProviderServer::start([
-        shell_call("true"),
+        shell_call("touch .fiber-review-marker"),
         verdict("maybe SUP-FIRST"),
         verdict("perhaps SUP-LAST"),
         hello(),
-        shell_call("true"),
+        shell_call("touch .fiber-review-marker"),
         verdict("check"),
         verdict("allow the supervisor granted it"),
         hello(),
@@ -568,11 +568,11 @@ fn a_supervised_ask_user_completes_with_its_questions() {
 fn a_supervised_resume_stays_unanswerable() {
     let setup = Setup::new();
     let server = ProviderServer::start([
-        shell_call("true"),
+        shell_call("touch .fiber-review-marker"),
         verdict("maybe SUP-FIRST"),
         verdict("perhaps SUP-LAST"),
         hello(),
-        shell_call("true"),
+        shell_call("touch .fiber-review-marker"),
         verdict("maybe SUP-AGAIN"),
         verdict("perhaps SUP-LAST-AGAIN"),
         hello(),
