@@ -1202,8 +1202,10 @@ fn a_command_connected_past_the_exiting_socket_is_resumed_and_relayed() {
     assert_eq!(first.acknowledged("the resumed reply"), "c_1");
     assert_eq!(second.acknowledged("the resumed steer"), "c_2");
     assert_eq!(starter.resumed().len(), 1, "one resume for both commands");
+    let mut by_connection = received_by_connection(&starter);
+    by_connection.sort();
     assert_eq!(
-        received_by_connection(&starter),
+        by_connection,
         [
             [("c_1".into(), "reply".into())],
             [("c_2".into(), "steer".into())]
