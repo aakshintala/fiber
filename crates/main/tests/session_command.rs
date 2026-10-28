@@ -3708,6 +3708,96 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
     );
 }
 
+#[test]
+fn a_skill_rewritten_in_place_between_turns_is_offered_at_the_next_turn_start() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([
+        hello(),
+        stream(&[function_call(
+            "call_late",
+            "skill",
+            &json!({"name": "late"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    // The skill starts invalid, with a different size than the valid
+    // rewrite: a normally detectable change, in place at the same path.
+    let dir = setup.workspace().join(".agents/skills/late");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("SKILL.md"), "no header at all\n").unwrap();
+    // Turn 1 runs with the skill left out.
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    let first = until_session(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert!(
+        first
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the first turn ran: {first:?}"
+    );
+    // Rewritten in place to a valid skill between turns.
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: late\ndescription: Runs late.\n---\nRuns late.\n",
+    )
+    .unwrap();
+    send(
+        &client,
+        r#"{"id":"c_load","command":"prompt","args":{"content":[{"type":"text","text":"load the skill"}]}}"#,
+    );
+    let second = until_session(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let changed = second
+        .iter()
+        .find(|line| line["kind"] == "skills_changed")
+        .expect("the check announced the rewritten skill");
+    assert_eq!(changed["payload"]["added"][0]["name"], "late");
+    assert_eq!(changed["payload"]["added"][0]["description"], "Runs late.");
+    let path = changed["payload"]["added"][0]["path"].clone();
+    // The second request carries the added line's text.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        String::from_utf8_lossy(&requests[1].body)
+            .contains("Fiber: skill late can now be loaded: Runs late."),
+        "the added line reached the model"
+    );
+    let completed = second
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the skill call completed");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed["payload"]["control"],
+        json!({"skill": {"name": "late", "path": path}})
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_session_close(&client);
+    assert_eq!(kinds(&tail), ["command_accepted", "fiber_exited"]);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
 /// An `openai-responses` stream answering `Again.` in two fragments: the
 /// resumed delegate's reply.
 fn again() -> Response {
