@@ -777,6 +777,7 @@ fn pad_with_a_missing_text_row_leaves_the_rows() {
         scopes: Vec::new(),
         all_open: false,
         seam: None,
+        session_names: Default::default(),
     };
     out.pad(0, 1, 10);
     assert_eq!(out.rows.len(), 1);

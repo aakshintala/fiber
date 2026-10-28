@@ -845,7 +845,8 @@ fn the_rule_keeps_the_resolution_time() {
             | crate::turn::Entry::Steer(_)
             | crate::turn::Entry::Group(_)
             | crate::turn::Entry::Aside(_)
-            | crate::turn::Entry::Band(_) => None,
+            | crate::turn::Entry::Band(_)
+            | crate::turn::Entry::Message(_) => None,
         });
     let Some(super::Answered::Given { ts, .. }) = ts else {
         panic!("a rule with the resolution time");

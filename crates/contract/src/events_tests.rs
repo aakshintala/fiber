@@ -459,7 +459,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("clients", json!({"count": 1})),
         (
             "session_status",
-            json!({"name": "n", "workspace": "/w", "parent": "s0", "supervised": true, "model": "p/m", "thinking": "high",
+            json!({"name": "n", "named": true, "workspace": "/w", "parent": "s0", "supervised": true, "model": "p/m", "thinking": "high",
             "state": "idle", "started": 0, "calls": 0, "turns": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
@@ -2407,6 +2407,28 @@ fn a_session_started_omits_supervised_when_false_and_round_trips_when_true() {
         panic!("not a session_started");
     };
     assert!(present.supervised);
+    assert_eq!(serde_json::to_value(&present).unwrap(), shown);
+}
+
+#[test]
+fn a_session_status_omits_named_when_false_and_round_trips_when_true() {
+    let (_, base) = samples()
+        .into_iter()
+        .find(|(kind, payload)| {
+            *kind == "session_status" && !payload.as_object().unwrap().contains_key("named")
+        })
+        .unwrap();
+    let Some(Event::SessionStatus(absent)) = read("session_status", base.clone()).unwrap() else {
+        panic!("not a session_status");
+    };
+    assert!(!absent.named);
+    assert_eq!(serde_json::to_value(&absent).unwrap(), base);
+    let mut shown = base.clone();
+    shown["named"] = json!(true);
+    let Some(Event::SessionStatus(present)) = read("session_status", shown.clone()).unwrap() else {
+        panic!("not a session_status");
+    };
+    assert!(present.named);
     assert_eq!(serde_json::to_value(&present).unwrap(), shown);
 }
 

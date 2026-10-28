@@ -380,7 +380,8 @@ impl Turn {
             | Entry::Steer(_)
             | Entry::Group(_)
             | Entry::Aside(_)
-            | Entry::Answers(_) => None,
+            | Entry::Answers(_)
+            | Entry::Message(_) => None,
         })
     }
 
@@ -490,7 +491,8 @@ pub(crate) fn sized(turns: &mut [Turn], line: &UsageRecorded) -> bool {
             | Entry::Steer(_)
             | Entry::Group(_)
             | Entry::Aside(_)
-            | Entry::Answers(_) => None,
+            | Entry::Answers(_)
+            | Entry::Message(_) => None,
         });
     match latest.map(|band| &mut band.state) {
         Some(State::Done {

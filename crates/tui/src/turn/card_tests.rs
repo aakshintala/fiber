@@ -1211,16 +1211,148 @@ fn non_driver_start_messages_render_inside_the_card_not_as_prompt_bubbles() {
     let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
     let shown = shown_rows(&rows);
     assert_eq!(shown.iter().filter(|row| row.contains("go")).count(), 1);
+    assert!(shown.iter().any(|row| row.contains("Fiber")), "{shown:?}");
     assert!(
-        shown
-            .iter()
-            .any(|row| row.contains("Fiber") && row.contains("quota notice")),
+        shown.iter().any(|row| row.contains("quota notice")),
         "{shown:?}"
     );
     assert!(
         !shown.iter().any(|row| row.contains("Fiber: quota notice")),
         "{shown:?}"
     );
+    assert_eq!(
+        shown.iter().filter(|row| row.starts_with("you ")).count(),
+        1,
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn message_entries_keep_each_source_label_and_timestamp() {
+    use ratatui::style::Modifier;
+
+    let sender = "s_bbbbbbbbbbbbbbbb";
+    let mut cards = fresh();
+    feed(
+        &mut cards,
+        "turn_started",
+        None,
+        json!({"input": [
+            {"type":"message", "source":"driver", "content":[{"type":"text","text":"go"}]},
+            {"type":"message", "source":"session", "from_session_id":sender, "content":[{"type":"text","text":"please check"}]},
+            {"type":"message", "source":"extension", "extension":"reviewer", "content":[{"type":"text","text":"looks good"}]},
+            {"type":"message", "source":"fiber", "content":[{"type":"text","text":"Fiber: quota notice"}]},
+            {"type":"message", "source":"extension", "extension":"reviewer", "content":[]}
+        ]}),
+    );
+    done(&mut cards);
+    let mut out = Rows::default();
+    out.session_names = std::sync::Arc::new(std::collections::HashMap::from([(
+        SessionId(sender.to_owned()),
+        "worker".to_owned(),
+    )]));
+    let input = cards.turns[0].card_input_with_names(None, false, &out.session_names);
+    let messages: Vec<_> = input
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            crate::ext::TurnEntry::Message {
+                source,
+                label,
+                text,
+                ts,
+                ..
+            } => Some((*source, label.as_ref(), *text, *ts)),
+            crate::ext::TurnEntry::Reply { .. }
+            | crate::ext::TurnEntry::Steer { .. }
+            | crate::ext::TurnEntry::Group(_)
+            | crate::ext::TurnEntry::Aside(_)
+            | crate::ext::TurnEntry::Band(_)
+            | crate::ext::TurnEntry::Answers(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        messages,
+        [
+            ("session", "worker", "please check", 0),
+            ("extension", "reviewer", "looks good", 0),
+            ("fiber", "Fiber", "Fiber: quota notice", 0),
+            ("extension", "reviewer", "", 0),
+        ]
+    );
+    cards.turns[0].rows(
+        WIDTH,
+        &TimeZone::UTC,
+        Edges::BOTH,
+        &crate::image::Layout::default(),
+        &mut out,
+    );
+    let (rows, texts) = out.into_parts();
+    let shown = shown_rows(&rows);
+    for expected in [
+        "worker · 00:00",
+        "please check",
+        "reviewer · 00:00",
+        "looks good",
+        "Fiber · 00:00",
+        "quota notice",
+    ] {
+        assert!(
+            shown.iter().any(|row| row.contains(expected)),
+            "missing {expected:?}: {shown:?}"
+        );
+    }
+    assert!(
+        !shown.iter().any(|row| row.contains("Fiber: quota notice")),
+        "{shown:?}"
+    );
+    let fiber = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("Fiber · 00:00"))
+        .unwrap();
+    let fiber_label = fiber
+        .0
+        .spans
+        .iter()
+        .find(|span| span.content == "Fiber")
+        .unwrap();
+    assert!(fiber_label.style.add_modifier.contains(Modifier::DIM));
+    let session = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("worker · 00:00"))
+        .unwrap();
+    let session_label = session
+        .0
+        .spans
+        .iter()
+        .find(|span| span.content == "worker")
+        .unwrap();
+    assert_eq!(session_label.style.fg, Some(Role::Secondary.color()));
+    assert!(
+        texts.iter().any(|text| text.tail > 0),
+        "the rule is excluded from copied text"
+    );
+}
+
+#[test]
+fn a_mid_turn_non_driver_message_is_not_drawn_as_bold_steer() {
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    feed(
+        &mut cards,
+        "steering_applied",
+        None,
+        json!({"content": [{"type":"text","text":"Fiber: quota notice"}], "source":"fiber"}),
+    );
+    done(&mut cards);
+    let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    assert!(shown.iter().any(|row| row.contains("Fiber")), "{shown:?}");
+    assert!(
+        shown.iter().any(|row| row.contains("quota notice")),
+        "{shown:?}"
+    );
+    assert!(!shown.iter().any(|row| row.contains("steer")), "{shown:?}");
 }
 
 #[test]
@@ -1618,7 +1750,8 @@ fn a_running_card_marks_its_open_group_running() {
             | Entry::Steer(_)
             | Entry::Aside(_)
             | Entry::Band(_)
-            | Entry::Answers(_) => None,
+            | Entry::Answers(_)
+            | Entry::Message(_) => None,
         })
         .expect("a card group");
     let entry_at = turn
@@ -1856,7 +1989,8 @@ fn the_card_input_uses_the_summary_totals_and_ending() {
         | crate::ext::TurnEntry::Steer { .. }
         | crate::ext::TurnEntry::Aside(_)
         | crate::ext::TurnEntry::Band(_)
-        | crate::ext::TurnEntry::Answers(_) => None,
+        | crate::ext::TurnEntry::Answers(_)
+        | crate::ext::TurnEntry::Message { .. } => None,
     });
     assert_eq!(group_running, Some(crate::ext::TurnGroupState::Finished));
     // An open summary keeps the card's own ending and running: the
@@ -1952,6 +2086,7 @@ fn the_card_input_holds_every_entry_variant() {
                 "given"
             }
             TurnEntry::Answers(TurnAnswers::Declined) => "declined",
+            TurnEntry::Message { .. } => "message",
         })
         .collect();
     for expected in [
