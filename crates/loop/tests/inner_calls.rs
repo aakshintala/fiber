@@ -416,6 +416,67 @@ fn unknown_schema_nonobject_and_effects_failures_are_ordinary_inner_returns() {
     }
 }
 
+#[test]
+fn an_inner_call_matching_one_other_tool_gets_no_suggestion() {
+    // An extension's inner call names `shell` with `read`'s arguments, and
+    // `read` is the one other tool whose schema fits them. The failure
+    // still keeps only its field lines: the suggestion answers the model,
+    // and an inner call's result goes to the extension instead
+    // (`docs/extensions.md`, "When an extension calls a tool").
+    let mut shell = FakeTool::new("shell", |_, _, _, _| text("must not run"));
+    shell.schema = json!({
+        "type": "object",
+        "properties": {"command": {"type": "string"}, "limit": {"type": "integer"}},
+        "required": ["command"],
+        "additionalProperties": false
+    });
+    let mut read = FakeTool::new("read", |_, _, _, _| text("must not run"));
+    read.schema = json!({
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "offset": {"type": "integer"},
+            "limit": {"type": "integer"}
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    });
+    let arguments = json!({"path": "x.rs", "offset": 1, "limit": 20});
+    let (outer, outcomes) = outer("shell", arguments);
+    let shell = Arc::new(shell);
+    let read = Arc::new(read);
+    let mut session = session(vec![outer, shell.clone(), read.clone()]);
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let done = lines
+        .iter()
+        .find(|l| {
+            l.kind == "tool_call_completed" && l.action_id.as_ref() == Some(&inner_id(&lines))
+        })
+        .unwrap();
+    // One line per bad field, in no promised order, and no suggestion line
+    // on an inner call (`docs/tools.md`, "Before a call runs").
+    let text = support::text_first(done);
+    for line in [
+        "`/command`: missing",
+        "`/offset`: not allowed",
+        "`/path`: not allowed",
+    ] {
+        assert!(text.contains(line), "missing field line {line}: {text}");
+    }
+    assert!(
+        !text.contains("These arguments fit"),
+        "unexpected suggestion: {text}"
+    );
+    let outcomes = outcomes.lock().unwrap();
+    // The outer tool makes one inner call (the `outer` helper above), so the
+    // extension sees one outcome.
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].status, CallStatus::Failed);
+    assert!(shell.ran.lock().unwrap().is_empty());
+    assert!(read.ran.lock().unwrap().is_empty());
+}
+
 struct FakeHooks {
     before: contract::hook::BeforeToolOutcome,
     check: contract::hook::CheckOutcome,
