@@ -148,7 +148,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server; the hub's websocket handshake (SHA-1) and device-token hashes; the hub client's websocket handshake (SHA-1); secure random pairing codes and device tokens | ~0 | ~0 | ~0 | 8 | 341 |
 | base64 | PKCE, attachments sent to providers, images a client pastes, the terminal's copy through OSC 52 (`docs/tui.md`, "Selection and copy"), the files the hub's `read_file` answers with, the hub client's websocket key and a proxy's credentials | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group, and reading a key without echo; `host.exec`'s process groups; signalling MCP servers; killing a credential command at its timeout, or on shutdown; signalling a Fiber delegate's process group; the terminal's clipboard read: its process group, its pipe's poll and waiting for its exit; and the test fakes' process and process-group probes; and the process-group guard and the stoppable read's poll in `support`; doctor's non-blocking credential open and descriptor check; the hub client's non-blocking connect and handshake poll in `doors` and `session_list`'s and `session_message`'s non-blocking connects to session sockets; the hub sessions-stop bounded socket, flag, address, connect, error and poll calls; the loop's no-follow, non-blocking output-file open and descriptor check; and `log`'s identity-safe session-directory removal | ~0 | ~0 | ~0 | 4 | 330 |
-| libc | macOS: the peak physical footprint for a `peak_memory` line (`docs/state.md`, "What each part holds"); and the socket peer process id and the `proc_pidinfo(PROC_PIDTBSDINFO)` parent/effective-uid and `sysctl KERN_PROCARGS2` argv queries behind `support::peer` (`docs/permissions.md`, "Sessions on the sockets") | n/a | n/a | ~0 | 2 | n/a |
+| libc | macOS: the peak physical footprint for a `peak_memory` line (`docs/state.md`, "What each part holds"); and the socket peer process id and the `proc_pidinfo(PROC_PIDTBSDINFO)` parent/effective-uid and `sysctl KERN_PROCARGS2` argv queries behind `support::peer` (`docs/permissions.md`, "Sessions on the sockets"). Linux: raw `write` for the shell tool's pre-exec errors, the `EPERM`, `EINVAL` and `EIO` errno values, and syscall numbers for its seccomp filter (`docs/sandbox.md`, "On Linux") | n/a | n/a | ~0 | 2 | n/a |
 | ignore, grep-searcher, grep-regex, grep-matcher | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search"), `session_search`'s scan (`docs/tools.md`, "Searching past sessions"), and the terminal's `@` path search (`docs/tui.md`, "Rules") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
 | similar | an edit's diff in `details` (`docs/tools.md`, "edit"), the lines a `write` added and removed (`docs/tools.md`, "write"), an instruction file's diff (`docs/system-prompt.md`, "When something changes"), a repository's changed code against its approved copy (`docs/extensions.md`, "Code a repository ships"), and the terminal's diff of the reviewer notes before they are saved (`docs/tui.md`, "Rules") | ~0 | 380 | ~0 | 1 | 389 |
 | html5ever | `web_fetch`'s tokenizer, without its tree builder | 808 | 960 | 480 | 19 | 1,058 |
@@ -181,10 +181,11 @@ Notes:
 - mlua carries Lua's C source.
 - ratatui's figure is its two 200 by 50 screen buffers. Any full-screen
   terminal UI holds a screen model of that size.
-- thiserror, ring, rustix and libc are already in the tree
-  through other crates (rustls, crossterm, mlua), so listing them directly
-  adds no crate. libc is a direct dependency on macOS only; Linux reads
-  `/proc/self/status` instead.
+- thiserror, ring, rustix and libc are already in the tree through other
+  crates (rustls, crossterm and mlua), so listing them directly adds no
+  crate. `libc` is direct on macOS for `peak_memory` and `support::peer`, and
+  on Linux for the shell sandbox's pre-exec error reporting and seccomp
+  filter. Linux's `peak_memory` reader uses `/proc/self/status` instead.
 - Random ids come from the standard library's `RandomState`, which the
   operating system seeds, so no crate mints them. Secret random values, the PKCE verifier, pairing codes and device tokens,
   come from ring.
