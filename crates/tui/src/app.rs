@@ -235,7 +235,7 @@ pub(crate) struct App {
     /// The launch directory `start` names: none on a remote home, which
     /// carries no local workspace.
     workspace: Option<PathBuf>,
-    /// Home's state, once `run` sets it; `None` keeps today's screen.
+    /// Home's state, once `run` sets it; `None` is a launch without home.
     home: Option<home::Home>,
     draft: Draft,
     /// The one clipboard image read at a time, and its ticket.
