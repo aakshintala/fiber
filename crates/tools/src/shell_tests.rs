@@ -48,7 +48,7 @@ fn run_details_call(shell: Shell, arguments: Map<String, Value>) -> contract::to
 fn nullable_optional_arguments_parse_as_absent() {
     let dir = fakes::TempDir::new("fiber-shell-nullable");
     let arguments = fakes::tool_args(json!({"command": "ls", "workdir": null, "timeout_ms": null,
-        "run_in_background": null, "tty": null, "monitor": null, "deadline_ms": null}));
+        "run_in_background": null, "tty": null, "monitor": null}));
     let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
     assert_eq!(parsed.command, "ls");
     assert_eq!(parsed.mode, Mode::Foreground);
@@ -65,8 +65,7 @@ fn nullable_optional_arguments_parse_as_absent() {
             "timeout_ms",
             "run_in_background",
             "tty",
-            "monitor",
-            "deadline_ms"
+            "monitor"
         ])
     );
     for (key, kind) in [
@@ -75,10 +74,22 @@ fn nullable_optional_arguments_parse_as_absent() {
         ("run_in_background", "boolean"),
         ("tty", "boolean"),
         ("monitor", "boolean"),
-        ("deadline_ms", "integer"),
     ] {
         assert_eq!(schema["properties"][key]["type"], json!([kind, "null"]));
     }
+    assert!(schema["properties"].get("deadline_ms").is_none());
+    assert_eq!(
+        schema["properties"]["timeout_ms"]["description"],
+        json!(
+            "How long the command may run, in milliseconds. The default is 600000; \
+             for a monitor, the default is 300000 and the maximum is 1800000 \
+             (600000 in a non-interactive run)."
+        )
+    );
+    assert!(tool.definition().description.contains(
+        "`timeout_ms` defaults to 600000, or to 300000 for a monitor. \
+             A monitor's maximum is 1800000, or 600000 in a non-interactive run."
+    ));
     for (overrides, mode, timeout) in [
         (json!({"monitor": true}), Mode::Monitor, 300_000),
         (

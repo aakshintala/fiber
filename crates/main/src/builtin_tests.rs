@@ -404,6 +404,50 @@ fn the_model_shell_is_non_interactive() {
     assert!(!marker.exists());
 }
 
+/// The model-facing shell schema has one limit argument: `timeout_ms`, with
+/// no `deadline_ms`, and a closed shape.
+#[test]
+fn the_shell_schema_is_closed_and_excludes_deadline_ms() {
+    let root = fakes::TempDir::new("fiber-builtin-shell-schema");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (tools, _infos, _driver, _forget, _images) = super::builtin(
+        root.path().join("fiber-stub"),
+        &root.path().join("home"),
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        None,
+        &delegates(),
+        skills(),
+    )
+    .unwrap();
+    let shell = tools
+        .iter()
+        .map(|(_, tool)| tool)
+        .find(|tool| tool.definition().name == "shell")
+        .expect("a shell tool");
+    let schema = shell.definition().input_schema;
+    assert!(
+        schema["properties"].get("deadline_ms").is_none(),
+        "{schema}"
+    );
+    assert!(schema["properties"].get("timeout_ms").is_some(), "{schema}");
+    assert_eq!(schema["additionalProperties"], serde_json::json!(false));
+    let required = schema["required"].as_array().expect("required names");
+    assert!(required.iter().any(|name| name == "timeout_ms"), "{schema}");
+    assert!(
+        !required.iter().any(|name| name == "deadline_ms"),
+        "{schema}"
+    );
+}
+
 /// The names and hosted types `builtin` registers for `web_search`.
 fn registered_with(web_search: Option<&str>) -> (Vec<(String, Option<String>)>, Vec<String>) {
     let root = fakes::TempDir::new("fiber-hosted-search");

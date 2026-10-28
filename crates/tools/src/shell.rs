@@ -243,7 +243,8 @@ impl Tool for Shell {
             name: "shell".to_owned(),
             description: "Runs a command in a new process session. `command` is the command. \
                  `workdir` defaults to the workspace; a relative path is resolved against it. \
-                 `timeout_ms` defaults to 600000. Standard output and standard error are one stream, \
+                 `timeout_ms` defaults to 600000, or to 300000 for a monitor. A monitor's maximum is 1800000, \
+                 or 600000 in a non-interactive run. Standard output and standard error are one stream, \
                  except in a monitor, whose standard error goes to its own file."
                 .to_owned(),
             input_schema: json!({
@@ -260,7 +261,7 @@ impl Tool for Shell {
                     "timeout_ms": {
                         "type": ["integer", "null"],
                         "minimum": 0,
-                        "description": "How long the command may run, in milliseconds. The default is 600000."
+                        "description": "How long the command may run, in milliseconds. The default is 600000; for a monitor, the default is 300000 and the maximum is 1800000 (600000 in a non-interactive run)."
                     },
                     "run_in_background": {
                         "type": ["boolean", "null"],
@@ -273,14 +274,9 @@ impl Tool for Shell {
                     "monitor": {
                         "type": ["boolean", "null"],
                         "description": "Start the command as a monitor: a job whose standard output lines reach you in batches. Standard error goes to its own file."
-                    },
-                    "deadline_ms": {
-                        "type": ["integer", "null"],
-                        "minimum": 0,
-                        "description": "A monitor's deadline, in milliseconds. The default is 300000; the most is 1800000, or 600000 in a non-interactive run."
                     }
                 },
-                "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor", "deadline_ms"],
+                "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor"],
                 "additionalProperties": false
             }),
             deferred: false, hosted: None,
