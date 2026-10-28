@@ -1505,7 +1505,9 @@ missing `timeout` fails at registration, as a missing callback `timeout` does
 ("How an extension runs"). A slot takes no `key` field yet: naming one
 refuses the load.
 
-An animated slot declares `animate = { interval_ms = N }`, a whole number of Each frame reaches `render`
+An animated slot declares `animate = { interval_ms = N }`, a whole number of
+milliseconds above 0: below 120 ms the terminal fires at 120 ms instead. Any
+other shape fails registration, naming the slot. Each frame reaches `render`
 with `frame` counting in its input, alongside the session id and the width. A
 plain list or `{ lines }` keeps animating; `{ lines, animate = false }` draws
 once and stops until the input changes. Any other return is the usual

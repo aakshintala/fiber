@@ -167,7 +167,6 @@ fiber = {
     end
     local function reject(reason)
       key_rejections[#key_rejections + 1] = {
-        raw = name,
         reason = "fiber.key: `" .. name .. "`: " .. reason,
       }
     end
@@ -283,21 +282,36 @@ pub struct KeyBinding {
 }
 
 /// One skipped `fiber.key` registration: its reason names the offending
-/// field, so the adapter reports it with one notice.
+/// field and, for a string key, its spelling, so the adapter reports it
+/// with one notice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyRejection {
-    /// The key name as registered, absent when it was not a string.
-    pub raw: Option<String>,
     /// What was wrong, naming the offending field.
     pub reason: String,
 }
 
-/// A registered key binding: its public shape and, for a `run` binding,
-/// its callback.
-struct KeyReg {
-    raw: String,
-    form: KeyForm,
-    run: Option<Function>,
+/// A registered key binding: a `run` binding with its callback, or an
+/// action binding. Separate variants so a `run` always holds its callback
+/// and an action never does (`docs/code-quality.md`, "Types").
+enum KeyReg {
+    /// A `run` callback with its declared timeout.
+    Run {
+        /// The key name as registered, spelling kept.
+        raw: String,
+        /// The declared timeout.
+        timeout: Duration,
+        /// The callback.
+        run: Function,
+    },
+    /// An action id with its optional variant.
+    Action {
+        /// The key name as registered, spelling kept.
+        raw: String,
+        /// The action's id.
+        id: String,
+        /// The variant, for an action that takes variants.
+        variant: Option<String>,
+    },
 }
 
 /// One extension's Lua VM, owned by the thread that calls it. It holds a
@@ -436,17 +450,17 @@ impl TuiVm {
             let raw: String = entry.raw_get("raw").map_err(lua_error)?;
             let run: Option<Function> = entry.raw_get("run").map_err(lua_error)?;
             let action: Option<String> = entry.raw_get("action").map_err(lua_error)?;
-            let (form, callback) = match (run, action) {
+            match (run, action) {
                 (Some(run), None) => {
                     let timeout: mlua::Integer = entry.raw_get("timeout").map_err(lua_error)?;
                     let timeout = u64::try_from(timeout)
                         .map(Duration::from_millis)
                         .map_err(|_| shape("`timeout` must be a whole number above 0"))?;
-                    (KeyForm::Run { timeout }, Some(run))
+                    keys.push(KeyReg::Run { raw, timeout, run });
                 }
                 (None, Some(id)) => {
                     let variant: Option<String> = entry.raw_get("variant").map_err(lua_error)?;
-                    (KeyForm::Action { id, variant }, None)
+                    keys.push(KeyReg::Action { raw, id, variant });
                 }
                 _ => {
                     return Err(shape(
@@ -454,17 +468,11 @@ impl TuiVm {
                     ));
                 }
             };
-            keys.push(KeyReg {
-                raw,
-                form,
-                run: callback,
-            });
         }
         let mut skipped = Vec::new();
         for number in 1..=rejected.raw_len() {
             let entry: Table = rejected.raw_get(number).map_err(lua_error)?;
             skipped.push(KeyRejection {
-                raw: entry.raw_get("raw").map_err(lua_error)?,
                 reason: entry.raw_get("reason").map_err(lua_error)?,
             });
         }
@@ -524,9 +532,18 @@ impl TuiVm {
     pub fn key_bindings(&self) -> Vec<KeyBinding> {
         self.keys
             .iter()
-            .map(|reg| KeyBinding {
-                raw: reg.raw.clone(),
-                form: reg.form.clone(),
+            .map(|reg| match reg {
+                KeyReg::Run { raw, timeout, .. } => KeyBinding {
+                    raw: raw.clone(),
+                    form: KeyForm::Run { timeout: *timeout },
+                },
+                KeyReg::Action { raw, id, variant } => KeyBinding {
+                    raw: raw.clone(),
+                    form: KeyForm::Action {
+                        id: id.clone(),
+                        variant: variant.clone(),
+                    },
+                },
             })
             .collect()
     }
@@ -557,12 +574,13 @@ impl TuiVm {
         if self.off {
             return Err(Error::TuiOff);
         }
-        let Some(reg) = self.keys.iter().find(|reg| reg.raw == raw) else {
+        let Some(KeyReg::Run { timeout, run, .. }) = self.keys.iter().find(|reg| match reg {
+            KeyReg::Run { raw: name, .. } => name == raw,
+            KeyReg::Action { raw: name, .. } => name == raw,
+        }) else {
             return Ok(false);
         };
-        let (Some(run), KeyForm::Run { timeout }) = (reg.run.clone(), reg.form.clone()) else {
-            return Ok(false);
-        };
+        let (timeout, run) = (*timeout, run.clone());
         let arg = self
             .lua
             .create_table()

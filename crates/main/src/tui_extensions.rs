@@ -113,6 +113,35 @@ fn register_keys(
     }
 }
 
+/// Reports an incompatible extension once per extension, TUI version and
+/// half, with the same text the drawable path gives.
+fn notice_incompatible(
+    composite: &Composite,
+    extension: &str,
+    tui_version: &str,
+    half: SessionVersion,
+) {
+    if half == SessionVersion::Unseen {
+        return;
+    }
+    let key = VersionNoticeKey {
+        extension: extension.to_owned(),
+        tui_version: tui_version.to_owned(),
+        half: half.clone(),
+    };
+    if composite.versions.borrow_mut().insert(key) {
+        let half = match half {
+            SessionVersion::NotLoaded => "not loaded".to_owned(),
+            SessionVersion::Version(version) => version,
+            SessionVersion::Unseen => return,
+        };
+        composite.pending.borrow_mut().push((
+            "extension_incompatible".into(),
+            format!("extension {extension} TUI {tui_version} does not support session half {half}; the built-in is drawn"),
+        ));
+    }
+}
+
 /// The compatible contenders for a canonical key, in load order: a
 /// switched-off or incompatible extension contends for nothing, with the
 /// same version notice the drawable path gives.
@@ -133,26 +162,12 @@ fn key_contenders(composite: &Composite, ctx: &SessionCtx, canonical: &str) -> V
             out.push(contender.clone());
             continue;
         }
-        let half = candidate.half(ctx);
-        if half == SessionVersion::Unseen {
-            continue;
-        }
-        let key = VersionNoticeKey {
-            extension: contender.extension.clone(),
-            tui_version: candidate.manifest.version.clone(),
-            half: half.clone(),
-        };
-        if composite.versions.borrow_mut().insert(key) {
-            let half = match half {
-                SessionVersion::NotLoaded => "not loaded".to_owned(),
-                SessionVersion::Version(version) => version,
-                SessionVersion::Unseen => continue,
-            };
-            composite.pending.borrow_mut().push((
-                "extension_incompatible".into(),
-                format!("extension {} TUI {} does not support session half {half}; the built-in is drawn", contender.extension, candidate.manifest.version),
-            ));
-        }
+        notice_incompatible(
+            composite,
+            &contender.extension,
+            &candidate.manifest.version,
+            candidate.half(ctx),
+        );
     }
     out
 }
@@ -512,23 +527,7 @@ impl Renderer for Composite {
                 contenders.push(name.clone());
                 continue;
             }
-            let half = candidate.half(ctx);
-            if half == SessionVersion::Unseen {
-                continue;
-            }
-            let key = VersionNoticeKey {
-                extension: name.clone(),
-                tui_version: candidate.manifest.version.clone(),
-                half: half.clone(),
-            };
-            if self.versions.borrow_mut().insert(key) {
-                let half = match half {
-                    SessionVersion::NotLoaded => "not loaded".to_owned(),
-                    SessionVersion::Version(v) => v,
-                    SessionVersion::Unseen => continue,
-                };
-                self.pending.borrow_mut().push(("extension_incompatible".into(), format!("extension {name} TUI {} does not support session half {half}; the built-in is drawn", candidate.manifest.version)));
-            }
+            notice_incompatible(self, name, &candidate.manifest.version, candidate.half(ctx));
         }
         let configured = self.configured.get(slot).cloned();
         if contenders.len() == 1 {
