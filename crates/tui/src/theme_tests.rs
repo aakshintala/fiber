@@ -9,8 +9,8 @@ fn all_lists_every_role_once_in_index_order() {
         assert_eq!(Role::from_index(index), Some(role));
         assert_eq!(role.color(), ratatui::style::Color::Indexed(index));
     }
-    assert_eq!(Role::from_index(36), Some(Role::MatchCurrent));
-    assert_eq!(Role::from_index(37), None);
+    assert_eq!(Role::from_index(40), Some(Role::MatchCurrent));
+    assert_eq!(Role::from_index(41), None);
     assert_eq!(Role::from_index(255), None);
 }
 
@@ -21,7 +21,7 @@ fn lifted_markers_match_no_role() {
         let ratatui::style::Color::Indexed(index) = lifted else {
             panic!("a lifted marker: {lifted:?}");
         };
-        assert!((64..=100).contains(&index), "{index}");
+        assert!((64..=104).contains(&index), "{index}");
         assert_eq!(Role::from_index(index), None, "{index}");
         assert_eq!(Role::from_lifted(index), Some(role), "{index}");
     }
@@ -44,6 +44,10 @@ fn names_round_trip() {
     }
     assert_eq!(Role::CodeText.name(), "code_text");
     assert_eq!(Role::SurfaceRaised.name(), "surface_raised");
+    assert_eq!(Role::CardRetrying.name(), "card_retrying");
+    assert_eq!(Role::CardNeedsInput.name(), "card_needs_input");
+    assert_eq!(Role::CardReady.name(), "card_ready");
+    assert_eq!(Role::CardCrashed.name(), "card_crashed");
     assert_eq!(Role::MatchCurrent.name(), "match_current");
     assert_eq!(Role::Info.name(), "info");
     assert_eq!(Role::Secondary.name(), "secondary");
@@ -59,9 +63,14 @@ type Case = (&'static str, Theme, &'static [(Role, Shade)]);
 
 #[test]
 fn parse_accepts_base_and_roles() {
-    let cases: [Case; 4] = [
+    let cases: [Case; 5] = [
         (r#"{"base": "dark"}"#, Theme::DARK, &[]),
         (r#"{"base": "light", "roles": {}}"#, Theme::LIGHT, &[]),
+        (
+            r##"{"base": "dark", "roles": {"card_retrying": "#010203"}}"##,
+            Theme::DARK,
+            &[(Role::CardRetrying, Shade::Rgb((1, 2, 3)))],
+        ),
         (
             r##"{"base": "light", "roles": {"accent": "#0b7285", "alert": "#5f1e22"}}"##,
             Theme::LIGHT,
@@ -200,6 +209,10 @@ fn tint_and_grey_per_role() {
         (Role::Panel, true, true),
         (Role::Surface, true, true),
         (Role::SurfaceRaised, true, true),
+        (Role::CardRetrying, true, false),
+        (Role::CardNeedsInput, true, false),
+        (Role::CardReady, true, true),
+        (Role::CardCrashed, true, true),
         (Role::Turn, true, true),
         (Role::Prompt, true, true),
         (Role::Code, true, true),
@@ -419,7 +432,7 @@ fn of_marker_round_trips_every_role_and_nothing_else() {
         Color::Reset,
         Color::Red,
         Color::Rgb(1, 2, 3),
-        Color::Indexed(37),
+        Color::Indexed(41),
         Color::Indexed(255),
         Role::Text.lifted(),
     ] {
