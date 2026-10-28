@@ -137,7 +137,7 @@ fn a_full_subscriber_gets_every_line_before_an_unreadable_one_then_end_of_file()
         "the held response was requested"
     );
     let log_path =
-        log::sessions_dir(&setup.home(), &doors::project(&setup.workspace())).join(&session_id);
+        log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace())).join(&session_id);
     let events = log_path.join("events.jsonl");
 
     // The observer subscribes `full` before anything is damaged, and reads

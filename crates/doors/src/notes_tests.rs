@@ -122,8 +122,8 @@ fn counts_span_projects_with_here_only_for_this_one() {
     let home = root.path().join("home");
     let here_repo = repo(root.path(), "here");
     let away_repo = repo(root.path(), "away");
-    let here_key = log::project_key(&crate::project(&here_repo));
-    let away_key = log::project_key(&crate::project(&away_repo));
+    let here_key = log::project_key(&worktree::project(&here_repo));
+    let away_key = log::project_key(&worktree::project(&away_repo));
     assert_ne!(here_key, away_key);
     seed(
         &home,
@@ -159,8 +159,8 @@ fn a_shared_slug_still_files_by_resolved_identity() {
     // `<tmp>/a-b` and `<tmp>/a/b` share one project slug.
     let outside = repo(root.path(), "a-b");
     let inner = repo(&root.path().join("a"), "b");
-    let left = log::project_key(&crate::project(&outside));
-    let right = log::project_key(&crate::project(&inner));
+    let left = log::project_key(&worktree::project(&outside));
+    let right = log::project_key(&worktree::project(&inner));
     assert_eq!(left, right);
     seed(
         &home,
@@ -194,7 +194,7 @@ fn a_recorded_workspace_that_is_gone_counts_away() {
     let root = fakes::TempDir::new("doors-notes-gone");
     let home = root.path().join("home");
     let here_repo = repo(root.path(), "here");
-    let here_key = log::project_key(&crate::project(&here_repo));
+    let here_key = log::project_key(&worktree::project(&here_repo));
     let gone = root.path().join("gone");
     seed(
         &home,
@@ -228,7 +228,7 @@ fn one_escalation_reads_singular() {
     let root = fakes::TempDir::new("doors-notes-singular");
     let home = root.path().join("home");
     let here_repo = repo(root.path(), "here");
-    let here_key = log::project_key(&crate::project(&here_repo));
+    let here_key = log::project_key(&worktree::project(&here_repo));
     seed(
         &home,
         &here_key,
@@ -254,7 +254,7 @@ fn session_items_sort_by_count_then_prefix() {
     let root = fakes::TempDir::new("doors-notes-order");
     let home = root.path().join("home");
     let here_repo = repo(root.path(), "here");
-    let here_key = log::project_key(&crate::project(&here_repo));
+    let here_key = log::project_key(&worktree::project(&here_repo));
     let workspace = here_repo.to_str().unwrap();
     seed(
         &home,
@@ -285,7 +285,7 @@ fn session_items_sort_by_count_then_prefix() {
 fn capped_home(root: &Path, count: usize) -> (PathBuf, PathBuf, PathBuf) {
     let home = root.join("home");
     let workspace = repo(root, "here");
-    let key = log::project_key(&crate::project(&workspace));
+    let key = log::project_key(&worktree::project(&workspace));
     let mut log = started(workspace.to_str().unwrap());
     for index in 0..count {
         let prefix = format!("p{index:02}");

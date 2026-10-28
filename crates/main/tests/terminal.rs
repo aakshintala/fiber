@@ -420,7 +420,7 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
     // The project's rules live in Fiber home at `projects/<key>/rules`
     // (`docs/state.md`, "Projects"), never in the workspace, so the harness
     // places one through the canonical project key, as `Setup::sessions` does.
-    let key = log::project_key(&doors::project(&setup.workspace()));
+    let key = log::project_key(&worktree::project(&setup.workspace()));
     let rule = setup.home().join("projects").join(key).join("rules");
     fs::create_dir_all(rule.parent().unwrap()).unwrap();
     fs::write(
@@ -982,7 +982,7 @@ fn assert_names_ask(deadline: Deadline, stdin: Stdio, missing: &str, args: &[&st
 /// Waits under the setup's deadline for exactly one `artifacts/i_*.png`
 /// under the session directory, equal byte for byte to [`PIXEL`].
 fn stored_pixel(setup: &support::Setup) {
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     loop {
         let mut found = Vec::new();
         if let Ok(entries) = fs::read_dir(&sessions) {
@@ -2679,7 +2679,7 @@ fn shows(grid: &support::pty::Grid, needle: &str) -> bool {
 /// construction are absent, never failures: a missing session dir or
 /// log reads as empty.
 fn session_model_changed(setup: &support::Setup) -> String {
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let mut switches = Vec::new();
     if let Ok(dirs) = fs::read_dir(&sessions) {
         for dir in dirs.filter_map(Result::ok) {

@@ -1468,7 +1468,7 @@ pub(crate) fn holds_marker(bytes: &[u8], marker: &str) -> bool {
 
 /// The session's directory, from its id.
 pub(crate) fn session_dir(setup: &Setup, id: &str) -> PathBuf {
-    log::sessions_dir(&setup.home(), &doors::project(&setup.workspace())).join(id)
+    log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace())).join(id)
 }
 
 /// The newline-terminated lines of `text` as JSON: a trailing fragment

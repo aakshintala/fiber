@@ -398,7 +398,7 @@ fn list_in(
                 "{} {} repository {} {} {}",
                 entry.name,
                 entry.version,
-                doors::project(workspace).display(),
+                worktree::project(workspace).display(),
                 entry.path,
                 entry.hash
             ),

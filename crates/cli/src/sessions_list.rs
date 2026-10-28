@@ -134,7 +134,7 @@ pub fn list(
     let ran = std::env::current_dir()
         .map_err(CliError::CurrentDirectory)
         .and_then(|workspace| {
-            let project = doors::resolve_project(&workspace);
+            let project = worktree::resolve_project(&workspace);
             run(&project, all, json, &mut io::stdout(), connect)
         });
     finish(ran)
@@ -143,7 +143,7 @@ pub fn list(
 /// Lists the sessions in `project`'s scope, as
 /// text or JSON Lines on `out`.
 fn run(
-    project: &doors::Project,
+    project: &worktree::Project,
     all: bool,
     json: bool,
     out: &mut dyn Write,

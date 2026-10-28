@@ -94,7 +94,7 @@ fn write_hook(dir: &Path, script: &str) {
 
 /// The project key of the repository `dir` is in, as prune computes it.
 fn key_of(dir: &Path) -> String {
-    log::project_key(&doors::resolve_project(dir).path)
+    log::project_key(&worktree::resolve_project(dir).path)
 }
 
 /// The hook `fmt` the tree at `dir` declares, with its content hash.
@@ -941,7 +941,7 @@ fn recorded_setup(prefix: &str) -> (Setup, PathBuf, PathBuf, String, Arc<FakeClo
     let clock = FakeClock::new();
     let kept = approve(&home, &key, &second, clock.as_ref());
     let elsewhere = setup.workspace();
-    let common = |repo: &Path| doors::resolve_project(repo).path;
+    let common = |repo: &Path| worktree::resolve_project(repo).path;
     session(
         &home,
         &key,

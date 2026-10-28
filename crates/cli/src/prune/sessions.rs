@@ -145,7 +145,7 @@ pub(crate) fn select_scoped(
     };
     let cyclic: BTreeSet<String> = children.cyclic().into_iter().map(|id| id.0).collect();
     let project = match scope {
-        super::Scope::Project(workspace) => Some(doors::resolve_project(workspace)),
+        super::Scope::Project(workspace) => Some(worktree::resolve_project(workspace)),
         super::Scope::HubWide => None,
     };
     let sessions_dir = project
@@ -171,7 +171,7 @@ pub(crate) fn select_scoped(
             }
             *memo
                 .entry(work.clone())
-                .or_insert_with(|| doors::project(Path::new(work)) == resolved.path)
+                .or_insert_with(|| worktree::project(Path::new(work)) == resolved.path)
         } else {
             true
         }

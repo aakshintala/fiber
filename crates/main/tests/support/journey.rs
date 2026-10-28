@@ -399,7 +399,7 @@ pub(crate) fn provider_full(
 pub(crate) fn only_session(setup: &Setup) -> String {
     let mut ids: Vec<String> = fs::read_dir(log::sessions_dir(
         &setup.home(),
-        &doors::project(&setup.workspace()),
+        &worktree::project(&setup.workspace()),
     ))
     .unwrap()
     .flatten()

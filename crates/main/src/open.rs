@@ -78,9 +78,9 @@ pub(crate) fn resume(
                 format!("the current directory: {e}"),
             )
         })?;
-        let project = doors::project(&workspace);
+        let project = worktree::project(&workspace);
         let sessions = log::sessions_dir(&home, &project);
-        let in_project = in_project(&project, &doors::project);
+        let in_project = in_project(&project, &worktree::project);
         log::resolve(&sessions, &selector, &in_project).map_err(|e| crate::failed(e.code(), e))
     };
     let mut listed = |name: &str| {
@@ -129,9 +129,9 @@ pub(crate) fn continue_latest(fiber: Result<PathBuf, String>, hub: Option<String
                 format!("the current directory: {e}"),
             )
         })?;
-        let project = doors::project(&workspace);
+        let project = worktree::project(&workspace);
         let sessions = log::sessions_dir(&home, &project);
-        let in_project = in_project(&project, &doors::project);
+        let in_project = in_project(&project, &worktree::project);
         select_latest(&sessions, &in_project)
     };
     let mut listed = |name: &str| {
@@ -240,7 +240,7 @@ fn target_in(
     named: Option<&str>,
     layer: Vec<String>,
 ) -> Result<doors::hub::Target, Failure> {
-    let project = config::ProjectKey::new(log::project_key(&doors::project(workspace)))
+    let project = config::ProjectKey::new(log::project_key(&worktree::project(workspace)))
         .map_err(|e| crate::failed(e.code(), e))?;
     let config = config::Config::load(config::Sources {
         home: home.to_path_buf(),
