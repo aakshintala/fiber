@@ -114,7 +114,7 @@ fn screen(app: &App, width: u16, height: u16) -> String {
 /// at widths the floor line covers on screen.
 fn home_only(app: &App, area: Rect, buf: &mut Buffer) -> Vec<crate::mouse::Target> {
     let screen = app.home_screen().expect("home draws");
-    super::render(app, &screen, area, buf, None)
+    super::render(app, &screen, area, buf, None).0
 }
 
 /// Home with `count` live sessions in one project.

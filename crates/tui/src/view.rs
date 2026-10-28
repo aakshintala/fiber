@@ -224,7 +224,8 @@ fn note_swapped(app: &App, slab: Option<Rect>) {
 /// its top, except that a question form scrolls to keep its cursor's row
 /// shown.
 ///
-/// Returns the click targets drawn, in draw order. Last, the target under
+/// Returns the click targets drawn, in draw order, with the one mark
+/// scheduling the animated rows the frame painted. Last, the target under
 /// `pointer`, if any, gets [`lift_hover`] as its background.
 pub(crate) fn render(
     app: &App,
@@ -248,6 +249,23 @@ pub(crate) fn render(
         .ext
         .cache
         .begin_anim_frame(app.motion().now_instant(), app.motion().reduced());
+    // Every path hands its painted animated keys to this one mark, so a
+    // painted item or notice schedules exactly one due per frame.
+    let (targets, painted) = render_frame(app, area, buf, pointer);
+    app.pages().ext.cache.mark_painted(&painted);
+    targets
+}
+
+/// Draws `app` into `area` of `buf`, from the bottom up, like [`render`]
+/// documents, and returns the click targets in draw order with the
+/// animated item and notice keys the frame painted.
+fn render_frame(
+    app: &App,
+    area: Rect,
+    buf: &mut Buffer,
+    pointer: Option<(u16, u16)>,
+) -> (Vec<Target>, Vec<crate::ext::anim::AnimKey>) {
+    let mut painted = Vec::new();
     app.clear_input_note();
     // The framed slabs start here too: each framed surface notes the slab
     // it draws, so a click outside the overlay on top closes it.
@@ -257,7 +275,7 @@ pub(crate) fn render(
     // attaches.
     if let Some(line) = app.chrome().floor_line() {
         chrome::floor(line, area, buf);
-        return Vec::new();
+        return (Vec::new(), painted);
     }
     // A swapped view takes home's place (`docs/tui.md`, "Swapped
     // views"): the `/keys` screen, the configuration view, the model
@@ -273,14 +291,14 @@ pub(crate) fn render(
         // debt: five note sites stay inline; extract a shared note helper if a sixth framed surface appears.
         app.frames().note(Surface::Notice, slab);
         let mut rows_bottom = area.bottom();
-        notice_rows::draw(
+        painted.extend(notice_rows::draw(
             app,
             area,
             buf,
             &mut rows_bottom,
             &mut targets,
             &notice_rows::frame_bound(app),
-        );
+        ));
         // The import report and the quit question take every key over
         // these views, so they draw over them too, the quit question
         // last: without it Enter would quit while the choices never show.
@@ -297,7 +315,7 @@ pub(crate) fn render(
                 focus_style(buf, target.rect);
             }
         }
-        return targets;
+        return (targets, painted);
     }
     if let Some(screen) = app.home_screen() {
         return home::render(app, &screen, area, buf, pointer);
@@ -336,14 +354,14 @@ pub(crate) fn render(
     working_line::draw(app, area, buf, &mut bottom, &mut targets);
     // The notice rows sit directly above the working line, oldest first
     // (`docs/tui.md`, "Notices").
-    notice_rows::draw(
+    painted.extend(notice_rows::draw(
         app,
         area,
         buf,
         &mut bottom,
         &mut targets,
         &notice_rows::frame_bound(app),
-    );
+    ));
     if let Some(rect) = app
         .badge()
         .and_then(|badge| put_spans(buf, area, &mut bottom, badge_spans(&badge)))
@@ -412,7 +430,8 @@ pub(crate) fn render(
             let body = Rect::new(conversation.x, body_y, conversation.width, body_height);
             if app.item_view().is_some_and(|view| view.has_transcript) {
                 let inset = crate::layout::past_gutter(body, app.chrome().gutter());
-                let _ = conversation_rows(app, inset, buf, &mut targets);
+                let (_, keys) = conversation_rows(app, inset, buf, &mut targets);
+                painted.extend(keys);
                 marks::draw(app, inset, buf, &mut targets, app.hint_layout(inset).gap);
             } else {
                 item::draw_body(app, body, buf);
@@ -493,7 +512,8 @@ pub(crate) fn render(
                         // on the left while the layout applies.
                         let inset = crate::layout::past_gutter(conversation, app.chrome().gutter());
                         let (rows, bar) = scroll_bar::split(inset);
-                        let pin = conversation_rows(app, rows, buf, &mut targets);
+                        let (pin, keys) = conversation_rows(app, rows, buf, &mut targets);
+                        painted.extend(keys);
                         scroll_bar::draw(app, bar, buf);
                         marks::draw(app, inset, buf, &mut targets, app.hint_layout(inset).gap);
                         // The pinned header over row 0, drawn as the row
@@ -569,7 +589,7 @@ pub(crate) fn render(
             focus_style(buf, target.rect);
         }
     }
-    targets
+    (targets, painted)
 }
 
 /// The badge's spans: `⚠` in `attention`, the rest bold in `attention`
@@ -722,13 +742,15 @@ fn blank_row(buf: &mut Buffer, area: Rect, y: u16, style: Style) {
 /// that opens something, and over "↓ New messages below" when drawn.
 /// Returns the pinned header for the caller to draw after the marks pass,
 /// so covered-row selection, find and link looks never land on the pin
-/// (`docs/tui.md`, "Pinned call").
+/// (`docs/tui.md`, "Pinned call"), with the painted animated items' keys
+/// for the frame's single mark: the caller marks them once, so the
+/// schedule advances only painted items.
 fn conversation_rows(
     app: &App,
     area: Rect,
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
-) -> Option<crate::window::Pin> {
+) -> (Option<crate::window::Pin>, Vec<crate::ext::anim::AnimKey>) {
     let height = usize::from(area.height);
     // The focused link's hint reserves the row under its line, laid out
     // with the targets: rows on and below it draw one lower, so hint
@@ -850,7 +872,7 @@ fn conversation_rows(
         start = next;
     }
     // The animated items painted this frame: rows with take greater
-    // than 0 expose their tags, and the frame marks them once, so the
+    // than 0 expose their tags for the frame's single mark, so the
     // schedule advances only painted items.
     let mut painted = Vec::new();
     for (at, (_, count)) in layout.iter().enumerate() {
@@ -864,7 +886,6 @@ fn conversation_rows(
                 .map(|(_, key)| key.clone()),
         );
     }
-    app.pages().ext.cache.mark_painted(&painted);
     // Turns are focus stops over the rows their page cards draw; they
     // are not click targets, so the line targets drawn before them win
     // clicks: their targets splice in front, in draw order.
@@ -950,7 +971,7 @@ fn conversation_rows(
             buf.set_stringn(x, y, COPIED, usize::from(width), style(Role::Info));
         }
     }
-    pin
+    (pin, painted)
 }
 
 /// Where the conversation is scrolled to.

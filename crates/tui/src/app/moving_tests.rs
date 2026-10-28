@@ -330,7 +330,7 @@ fn jobs_alone_ask_nothing() {
 }
 
 #[test]
-fn an_animated_notice_uses_its_still_form_without_an_animation_wake() {
+fn a_painted_animated_notice_asks_its_animation_wake() {
     use crate::ext::tests::AnimatedRenderer;
     let clock = FakeClock::new();
     let origin = clock.origin();
@@ -346,10 +346,44 @@ fn an_animated_notice_uses_its_still_form_without_an_animation_wake() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    // The notice uses frame 0, but its animation does not contribute a
-    // wake. Any wake belongs to the notice's existing fade behavior.
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2983: notices draw frame 0 once.
-    assert_ne!(
+    // The notice paints frame 0 through the shared exit, so its key
+    // marks and the frame asks its animation wake beside the fade wake.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(500))
+    );
+}
+
+#[test]
+fn a_notice_raised_during_a_drag_waits_for_the_release() {
+    use crate::ext::tests::AnimatedRenderer;
+    let clock = FakeClock::new();
+    let origin = clock.origin();
+    let mut app = app();
+    app.notices.hold();
+    app.push_notice("io_failed", "a read failed".to_owned());
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling(
+        "notice",
+        Duration::from_millis(500),
+        1,
+    ));
+    app.install_renderer(fake.clone());
+    app.set_now(origin, WALL);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    // A notice waiting for the drag's release is not on screen: no row,
+    // no renderer call, and no animation wake.
+    assert!(fake.frames.borrow().is_empty());
+    assert!(!crate::view::text(&buf).contains("a read failed"));
+    assert_eq!(app.take_wake(), None);
+    // After the release the row paints and starts at frame 0.
+    app.notices.release();
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(
         app.take_wake(),
         origin.checked_add(Duration::from_millis(500))
     );

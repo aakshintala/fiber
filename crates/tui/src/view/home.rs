@@ -746,10 +746,11 @@ pub(super) fn render(
     area: Rect,
     buf: &mut Buffer,
     pointer: Option<(u16, u16)>,
-) -> Vec<Target> {
+) -> (Vec<Target>, Vec<super::super::ext::anim::AnimKey>) {
     if area.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
+    let mut painted = Vec::new();
     let mut targets = Vec::new();
     let placed = layout(app, screen, area);
     if placed.logo_rows == 4 {
@@ -1037,14 +1038,14 @@ pub(super) fn render(
     app.frames().note(Surface::Notice, slab);
     // The rows sit above the banner, unreserved, over the area's bottom
     // rows (`docs/tui.md`, "Notices").
-    super::notice_rows::draw(
+    painted.extend(super::notice_rows::draw(
         app,
         rows,
         buf,
         &mut bottom,
         &mut targets,
         &super::notice_rows::frame_bound(app),
-    );
+    ));
     // The completion panels draw after the rows under them, so their
     // cells win, and before the quit question, which takes every key.
     // The Ctrl+R panel centres over home's whole area, as the quit
@@ -1131,7 +1132,7 @@ pub(super) fn render(
             }
         }
     }
-    targets
+    (targets, painted)
 }
 
 /// One body row of the typed workspace picker, top to bottom.
