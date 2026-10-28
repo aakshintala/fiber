@@ -168,25 +168,24 @@ impl Items {
     /// The record for `job`, creating it with the next serial when it is
     /// new.
     fn record(&mut self, job: &JobId) -> &mut JobRecord {
-        if !self.jobs.contains_key(job) {
+        // `or_insert_with` runs only for a new job, so a serial is
+        // consumed exactly once per new job and never for an existing
+        // one.
+        self.jobs.entry(job.clone()).or_insert_with(|| {
             let serial = self.next_serial;
             self.next_serial = self.next_serial.saturating_add(1);
             self.by_serial.insert(serial, job.clone());
-            self.jobs.insert(
-                job.clone(),
-                JobRecord {
-                    serial,
-                    description: String::new(),
-                    output_path: String::new(),
-                    started_ts: 0,
-                    delegate: None,
-                    outcome: None,
-                    output: None,
-                    tty: false,
-                },
-            );
-        }
-        self.jobs.get_mut(job).unwrap_or_else(|| unreachable!())
+            JobRecord {
+                serial,
+                description: String::new(),
+                output_path: String::new(),
+                started_ts: 0,
+                delegate: None,
+                outcome: None,
+                output: None,
+                tty: false,
+            }
+        })
     }
 }
 
