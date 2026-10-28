@@ -752,6 +752,15 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `-n <number>`; `tail -n +<number>`, such as `tail -n +3 f`, reads from
   that line on. An attached value, such as `head -n10`, is not on the
   list, so the call declares `executes`.
+- `nl` is read-only with only the flags that change numbering or layout:
+  `-b`, `-n`, `-w`, `-s`, `-v` and `-i`, each taking a separate value or
+  the `--long=value` form (`--body-numbering`, `--number-format`,
+  `--number-width`, `--number-separator`, `--starting-line-number` and
+  `--line-increment`), and the standalone `-ba`. An attached value, such
+  as `nl -w3`, and any other flag make the call `executes`. Every operand
+  is a path, so the credential deny and the `/proc/` rule apply as they
+  do for `cat`. `true` and `:` are read-only only as bare commands, with
+  no operands and no flags.
 - `find` accepts the selection operators `-not`, `-a`, `-o` and `-prune`:
   they only choose which paths print, so a call holding only them declares
   `reads`. `-exec`, `-execdir`, `-ok`, `-delete` and `-fprint*` still
