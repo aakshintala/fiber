@@ -396,7 +396,7 @@ fn the_model_shell_is_non_interactive() {
         serde_json::Value::String(format!("touch {}", marker.display())),
     );
     arguments.insert("monitor".to_owned(), serde_json::Value::Bool(true));
-    arguments.insert("deadline_ms".to_owned(), serde_json::json!(700_000));
+    arguments.insert("timeout_ms".to_owned(), serde_json::json!(700_000));
     let output = shell.run(&arguments, &Never, &Quiet);
     let error = output.error.expect("a refusal");
     assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
