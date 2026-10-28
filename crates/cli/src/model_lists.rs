@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use config::Config;
 use contract::ErrorCode;
-use extensions::{Providers, SessionExtensions};
+use extensions::{Providers, SessionExtensions, Unconfigured};
 
 use contract::events::Notice;
 
@@ -89,6 +89,75 @@ pub(crate) fn model_lists_apart(
     run: config::Runner<'_>,
     clock: &dyn contract::clock::Clock,
 ) -> Result<(Providers, Config, Vec<Notice>, Vec<Notice>), ModelListsError> {
+    let (mut providers, config, notices, lookup) =
+        lists_before_fill(home, workspace, read, load, run, clock)?;
+    let unconfigured = providers.fill_placeholders(&config, &lookup)?;
+    providers.forget_lua();
+    Ok((providers, config, notices, unconfigured))
+}
+
+/// [`model_lists`] with the placeholder fill's two outcomes apart: the
+/// fourth value holds the per-model notices for a value that is not a
+/// host, and the fifth one group per provider and unset setting for a
+/// placeholder with no value, in provider then setting order. The third
+/// holds every other notice; a provider with no value is absent from both
+/// notice lists.
+#[allow(
+    clippy::type_complexity,
+    reason = "the grouped read: five values the terminal maps to its catalogue in one step"
+)]
+pub fn model_lists_grouped(
+    home: &Path,
+    workspace: &Path,
+    read: ModelLists,
+    load: &dyn Fn(&Config) -> SessionExtensions,
+    run: config::Runner<'_>,
+    clock: &dyn contract::clock::Clock,
+) -> Result<
+    (
+        Providers,
+        Config,
+        Vec<Notice>,
+        Vec<Notice>,
+        Vec<Unconfigured>,
+    ),
+    ModelListsError,
+> {
+    let (mut providers, config, notices, lookup) =
+        lists_before_fill(home, workspace, read, load, run, clock)?;
+    let (not_host, groups) = providers.fill_placeholders_grouped(&config, &lookup)?;
+    providers.forget_lua();
+    Ok((providers, config, notices, not_host, groups))
+}
+
+/// The installed providers, the configuration for `home` and
+/// `workspace`, and the [`Notice`]s loading the providers gave, with
+/// every installed model's list read at `read`: the cached lists at
+/// once, refreshed with or without the age check for
+/// [`ModelLists::Refresh`]. `load` starts the Lua providers; a
+/// [`ModelLists::Cached`] read never calls it. The fourth value reads
+/// each placeholder value the way the hub would: from the hub's captured
+/// environment, else the process environment.
+#[allow(
+    clippy::type_complexity,
+    reason = "the shared read prefix: four values both the apart and grouped reads map in one step"
+)]
+fn lists_before_fill(
+    home: &Path,
+    workspace: &Path,
+    read: ModelLists,
+    load: &dyn Fn(&Config) -> SessionExtensions,
+    run: config::Runner<'_>,
+    clock: &dyn contract::clock::Clock,
+) -> Result<
+    (
+        Providers,
+        Config,
+        Vec<Notice>,
+        impl Fn(&str) -> Option<String> + use<>,
+    ),
+    ModelListsError,
+> {
     let (mut providers, config, mut notices) =
         crate::models::providers_and_config(home, workspace).map_err(ModelListsError::Load)?;
     // The cached lists serve every cached copy an installed extension
@@ -115,9 +184,7 @@ pub(crate) fn model_lists_apart(
             );
         }
     }
-    let unconfigured = providers.fill_placeholders(&config, &lookup)?;
-    providers.forget_lua();
-    Ok((providers, config, notices, unconfigured))
+    Ok((providers, config, notices, lookup))
 }
 
 /// Adds every cached-only provider's list: each cached name no provider
