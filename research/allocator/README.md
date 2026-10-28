@@ -32,6 +32,18 @@ in `research/concurrency/README.md`.
 
 ## Results
 
+Run [40630772922](https://github.com/aakshintala/fiber/actions/runs/40630772922)
+on commit `691b590bb`, runner `ubuntu-24.04`, mimalloc v0.1.52: the median
+of five samples per binary, with the fourth column rerunning the mimalloc
+binary under `MIMALLOC_PURGE_DELAY=0`.
+
+| Row | musl system | musl + mimalloc | musl + mimalloc, purge delay 0 | gnu |
+|---|---|---|---|---|
+| attach 10 MiB terminal ms | 40.6 | 28.4 | 35.2 | 23.8 |
+| attach peak RSS KiB | 41544 | 79212 | 51264 | 42952 |
+| attach retained RssAnon KiB | 4068 | 26360 | 11264 | 28892 |
+| busy turn retained RssAnon KiB | 8380 | 33848 | 12796 | 7476 |
+
 Run [38139307008](https://github.com/aakshintala/fiber/actions/runs/38139307008)
 on commit `a8ae8a1d`, runner `ubuntu-24.04`, mimalloc v0.1.52: the median
 of five samples per binary.
