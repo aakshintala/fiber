@@ -209,7 +209,7 @@ fn parse(value: &Value) -> Result<Case, String> {
 
 fn parse_with_script_check(
     value: &Value,
-    check_script: &dyn Fn(&Path, &[u8]) -> Result<(), String>,
+    check_script: &super::ScriptCheck<'_>,
 ) -> Result<Case, String> {
     Case::parse(
         Path::new("case.json"),

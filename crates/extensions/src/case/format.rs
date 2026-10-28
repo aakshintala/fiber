@@ -5,6 +5,9 @@ use std::path::Path;
 use contract::ErrorCode;
 use serde_json::{Map, Value};
 
+/// The injected validator for a session case's script bytes.
+pub type ScriptCheck<'a> = dyn Fn(&Path, &[u8]) -> Result<(), String> + 'a;
+
 /// One parsed extension case: a session case or a provider call case.
 /// The two kinds are variants, so a case cannot carry both a prompt and a
 /// call, and a call case cannot carry both a return and an error
@@ -61,6 +64,7 @@ pub enum Input {
 }
 
 /// A provider call case: the call and its one expected outcome.
+#[allow(dead_code, reason = "the call runner moves into this crate in Task 3")]
 pub struct CallCase {
     /// The optional display name, defaulted by the caller from the file stem.
     pub(crate) name: Option<String>,
@@ -80,11 +84,13 @@ pub struct CallCase {
     pub(crate) host: Host,
 }
 
+#[allow(dead_code, reason = "the call runner moves into this crate in Task 3")]
 pub(crate) struct CallStep {
     pub(crate) operation: CallOperation,
     pub(crate) clock: Vec<ClockAdvance>,
 }
 
+#[allow(dead_code, reason = "the call runner moves into this crate in Task 3")]
 pub(crate) enum CallOperation {
     Invoke { call: Call, outcome: CallOutcome },
     AwaitCredentialIdle,
@@ -131,6 +137,7 @@ pub struct Selector {
 }
 
 /// A provider callback invocation.
+#[allow(dead_code, reason = "the call runner moves into this crate in Task 3")]
 pub(crate) struct Call {
     /// The provider name registered by the package.
     pub(crate) provider: String,
@@ -145,16 +152,12 @@ impl Case {
     pub fn parse(
         path: &Path,
         bytes: &[u8],
-        check_script: &dyn Fn(&Path, &[u8]) -> Result<(), String>,
+        check_script: &ScriptCheck<'_>,
     ) -> Result<Self, crate::Error> {
         Self::parse_inner(path, bytes, check_script).map_err(crate::Error::Case)
     }
 
-    fn parse_inner(
-        path: &Path,
-        bytes: &[u8],
-        check_script: &dyn Fn(&Path, &[u8]) -> Result<(), String>,
-    ) -> Result<Self, String> {
+    fn parse_inner(path: &Path, bytes: &[u8], check_script: &ScriptCheck) -> Result<Self, String> {
         let value: Value = serde_json::from_slice(bytes)
             .map_err(|error| format!("{}: invalid JSON: {error}", path.display()))?;
         let map = value

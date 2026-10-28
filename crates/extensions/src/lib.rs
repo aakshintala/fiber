@@ -150,6 +150,9 @@ pub enum Error {
     /// An extension case file is malformed.
     #[error("{0}")]
     Case(String),
+    /// Starting an extension case driver thread failed.
+    #[error("starting the case driver: {0}")]
+    CaseDriver(#[source] io::Error),
     /// Copying or moving an extension's files failed.
     #[error("{}: {source}", path.display())]
     Io {
@@ -592,6 +595,7 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Config(e) => e.code(),
+            Self::CaseDriver(_) => ErrorCode::IoFailed,
             Self::Io { .. } | Self::Pin { .. } | Self::ChangedWhileCopying { .. } => {
                 ErrorCode::IoFailed
             }
