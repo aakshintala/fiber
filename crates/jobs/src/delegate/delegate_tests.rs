@@ -8,8 +8,10 @@
     reason = "test code"
 )]
 
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -372,6 +374,40 @@ fn a_role_starts_its_resolved_reference_and_records_it() {
         panic!("a spawn launches fresh");
     };
     assert_eq!(model, "fake/m:high");
+    assert_eq!(rig.registry.stop_delegates(), 1);
+    assert_cancelled_notice(&rig);
+}
+
+#[test]
+fn a_spawn_reads_its_inherited_roots_at_launch() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    // Read at launch, not at wiring: the roots below are added after
+    // the tool was built, and the start still captures them. A spawn
+    // folds the parent's current tail.
+    let seen = Arc::new(Mutex::new(false));
+    let seen_in = Arc::clone(&seen);
+    let late = Arc::new(Mutex::new(Vec::new()));
+    let late_in = Arc::clone(&late);
+    spawned.wiring.inherited = Arc::new(move || {
+        *seen_in.lock().unwrap() = true;
+        late_in.lock().unwrap().clone()
+    });
+    late.lock().unwrap().push(PathBuf::from("/late"));
+    let output = spawned.run(
+        &arguments("fiber:fake/m"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    // Guard first: the child is already running, so arm its watchdog
+    // before any assertion that could fail and strand it.
+    let _watchdog = child_group(&rig);
+    assert!(output.error.is_none());
+    assert!(*seen.lock().unwrap(), "the roots are read at launch");
+    let launched = Deadline::after(DEADLINE)
+        .recv(&rig.launched)
+        .expect("the launcher ran");
+    assert_eq!(launched.added, [PathBuf::from("/late")]);
     assert_eq!(rig.registry.stop_delegates(), 1);
     assert_cancelled_notice(&rig);
 }

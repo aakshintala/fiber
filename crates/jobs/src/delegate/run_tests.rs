@@ -381,6 +381,7 @@ impl Rig {
             parent: SessionId("s_parent".into()),
             prompt: "hi".into(),
             workspace: self.events.parent().unwrap().to_path_buf(),
+            added: Vec::new(),
             start: Start::Fresh(Fresh::Spawn {
                 model: "fake/m".into(),
                 credential: None,
@@ -2992,6 +2993,7 @@ fn the_fold_starts_from_the_run_boundary() {
         parent: SessionId("s_parent".into()),
         prompt: "hi".into(),
         workspace: rig.events.parent().unwrap().to_path_buf(),
+        added: Vec::new(),
         start: Start::Fresh(Fresh::Spawn {
             model: "fake/m".into(),
             credential: None,

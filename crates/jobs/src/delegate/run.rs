@@ -125,6 +125,12 @@ pub struct Launched {
     pub prompt: String,
     /// The parent's workspace, which the delegate shares.
     pub workspace: PathBuf,
+    /// The parent's added folders at launch, in fold order: the child's
+    /// argv carries each as `--added`, and a fresh spawn child records
+    /// them as its own `directory_added` events (`docs/delegates.md`,
+    /// "The tools"). Empty on a resume, whose own log already holds
+    /// them.
+    pub added: Vec<PathBuf>,
     /// The parent's pre-created worktree, absent without isolation.
     pub worktree: Option<contract::shapes::Worktree>,
     /// What this launch starts: a fresh child or a resume of the

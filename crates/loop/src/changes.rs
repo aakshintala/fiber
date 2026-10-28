@@ -72,6 +72,11 @@ pub(crate) struct State {
     /// Every directory checked: Fiber home and the repository chain, plus
     /// each subdirectory a call's paths reached. Canonical.
     dirs: BTreeSet<PathBuf>,
+    /// The session's added folders, canonical, in log order: never walked
+    /// at a build, only through [`State::touch_subdirs`] when a call's
+    /// declared paths reach them
+    /// (`docs/system-prompt.md`, "Added folders").
+    added: Vec<PathBuf>,
     /// The date last given, `YYYY-MM-DD`.
     date: String,
     /// Canonical Fiber home: its directory holds only `AGENTS.md`.
@@ -106,6 +111,7 @@ impl State {
         Self {
             files: BTreeMap::new(),
             dirs: BTreeSet::from([home.clone()]),
+            added: Vec::new(),
             date: String::new(),
             home,
             had: BTreeMap::new(),
@@ -127,6 +133,11 @@ impl State {
         let (chain, _) = opening::repo_chain(&workspace);
         let mut state = Self::empty(&prompt.home);
         state.dirs.extend(chain);
+        // The folders the opening lists: tracked, never walked. Their
+        // instruction files send only when a call's paths touch them.
+        for root in &message.added_directories {
+            state.track_added(Path::new(root));
+        }
         for file in &message.instruction_files {
             state.files.insert(
                 file.path.clone(),
@@ -185,6 +196,15 @@ impl State {
                 for file in &message.instruction_files {
                     state.files.entry(file.path.clone()).or_default();
                 }
+                // A new context lists its added folders again: the record
+                // the opening carries replaces the tracked ones.
+                state.added.clear();
+                for root in &message.added_directories {
+                    state.track_added(Path::new(root));
+                }
+            }
+            if let Event::DirectoryAdded(added) = &event {
+                state.track_added(Path::new(&added.path));
             }
             if let Event::InstructionFile(file) = &event {
                 if file.extension.is_some() {
@@ -216,9 +236,12 @@ impl State {
             apply(&mut state.had, &event);
         }
         // Each declared path stat'ed once: a directory at the resume
-        // joins the checked directories, anything else is dropped.
+        // joins the checked directories, anything else is dropped. The
+        // walk covers the added folders as well as the workspace.
         let declared: Vec<PathBuf> = declared.into_iter().collect();
-        state.dirs.extend(reached(&workspace, &declared));
+        state
+            .dirs
+            .extend(reached(&workspace, &state.added, &declared));
         Ok(state)
     }
 
@@ -254,6 +277,24 @@ impl State {
             .iter()
             .find(|section| section.paths.iter().any(|key| key == path))
             .map(|section| section.extension.as_str())
+    }
+
+    /// The session's added folders, canonical, in first-event order: the
+    /// fold of the `directory_added` lines (`docs/events.md`,
+    /// "`directory_added`"). Later calls judge against them with the
+    /// workspace.
+    pub(crate) fn added(&self) -> &[PathBuf] {
+        &self.added
+    }
+
+    /// Records an added folder, canonical, in log order: tracked, never
+    /// walked. The next call whose declared paths touch it queues its
+    /// instruction file through [`State::touch_subdirs`].
+    pub(crate) fn track_added(&mut self, root: &Path) {
+        let root = opening::canonical(root);
+        if !self.added.contains(&root) {
+            self.added.push(root);
+        }
     }
 
     /// The turn-start check (`docs/system-prompt.md`, "When something
@@ -569,9 +610,12 @@ impl State {
 
     /// Each directory [`reached`] by a call's resolved paths, once per
     /// context: a new directory holding a candidate file queues one
-    /// `subdirectory` line with the full text.
+    /// `subdirectory` line with the full text. The walk covers the added
+    /// folders as well as the workspace, so touching one queues its
+    /// instruction file; the folders themselves are never walked at a
+    /// build.
     fn touch_subdirs(&mut self, workspace: &Path, resolved: &[PathBuf]) {
-        let fresh: BTreeSet<PathBuf> = reached(workspace, resolved)
+        let fresh: BTreeSet<PathBuf> = reached(workspace, &self.added, resolved)
             .into_iter()
             .filter(|dir| !self.dirs.contains(dir))
             .collect();
@@ -687,26 +731,37 @@ fn resolve(workspace: &Path, paths: &[String]) -> Vec<PathBuf> {
 }
 
 /// The subdirectories `resolved` paths reach: for each path under the
-/// workspace, the ancestors strictly below the workspace up to its parent,
-/// and the path itself when it is a directory. Paths outside the workspace
-/// reach none.
-fn reached(workspace: &Path, resolved: &[PathBuf]) -> BTreeSet<PathBuf> {
+/// workspace or an added folder, the ancestors strictly below the root it
+/// sits under up to its parent, the path itself when it is a directory,
+/// and the added root itself when a path sits at or under it. Paths
+/// outside every root reach none. The workspace walk reads exactly as
+/// before; only the added roots are new.
+fn reached(workspace: &Path, added: &[PathBuf], resolved: &[PathBuf]) -> BTreeSet<PathBuf> {
     let mut dirs = BTreeSet::new();
     for resolved in resolved {
-        if resolved.strip_prefix(workspace).is_err() {
-            continue;
-        }
-        let mut parent = resolved.parent();
-        while let Some(dir) = parent {
-            if dir == workspace || dir.strip_prefix(workspace).is_err() {
-                break;
+        let bases = std::iter::once(workspace).chain(added.iter().map(PathBuf::as_path));
+        for base in bases {
+            if resolved.strip_prefix(base).is_err() {
+                continue;
             }
-            dirs.insert(dir.to_path_buf());
-            parent = dir.parent();
-        }
-        // A shell search declaring `sub/` reaches `sub/AGENTS.md`.
-        if resolved.is_dir() {
-            dirs.insert(resolved.clone());
+            // An added root the paths touch joins the checked set, so its
+            // own instruction file sends on touch. The workspace is
+            // already checked from the chain.
+            if base != workspace {
+                dirs.insert(base.to_path_buf());
+            }
+            let mut parent = resolved.parent();
+            while let Some(dir) = parent {
+                if dir == base || dir.strip_prefix(base).is_err() {
+                    break;
+                }
+                dirs.insert(dir.to_path_buf());
+                parent = dir.parent();
+            }
+            // A shell search declaring `sub/` reaches `sub/AGENTS.md`.
+            if resolved.is_dir() {
+                dirs.insert(resolved.clone());
+            }
         }
     }
     dirs

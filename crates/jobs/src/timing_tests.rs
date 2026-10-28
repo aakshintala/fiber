@@ -223,6 +223,7 @@ impl Fixture {
                 registry: Arc::clone(&self.registry),
                 parent: SessionId("s_parent".into()),
                 workspace: self._dir.path().to_path_buf(),
+                inherited: Arc::new(Vec::new),
                 events_for: {
                     let sessions = self.sessions.clone();
                     Arc::new(move |_, id| sessions.join(&id.0).join("events.jsonl"))
@@ -478,6 +479,7 @@ fn expect_end(inbox: &mpsc::Receiver<Delivery>, deadline: Deadline, what: &str) 
         | Delivery::McpReconnect(..)
         | Delivery::Credential(..)
         | Delivery::Name(..)
+        | Delivery::AddDirectory(..)
         | Delivery::Rewind(..)
         | Delivery::ChangeWorkspace(..)
         | Delivery::Handoff(..)

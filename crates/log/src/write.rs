@@ -851,6 +851,9 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         Event::AssistantMessageCompleted(_)
         | Event::ToolCallCompleted(_)
         | Event::ShellCommand(_)
+        // An added folder is fsynced before its ack, so a later call
+        // judges against it.
+        | Event::DirectoryAdded(_)
         | Event::ExtensionExec(_) => true,
         // A reviewer's or an extension's model call belongs to no action, and
         // no other line records it. The conversation's own call is recorded

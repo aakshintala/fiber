@@ -38,7 +38,8 @@ pub(crate) struct Collected {
 
 /// Reads the environment, the instruction files and the skills once
 /// (`docs/system-prompt.md`, "Environment", "Instruction files" and
-/// "Skills").
+/// "Skills"), recording no added folders: the empty-roots wrapper every
+/// caller without folded roots stays on.
 /// `workspace` is the loop's canonical workspace.
 pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
     let workspace = canonical(workspace);
@@ -93,6 +94,7 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
         instruction_files: files,
         extension_sections: sections,
         skills: listed.iter().map(|skill| skill.listed.clone()).collect(),
+        added_directories: Vec::new(),
     };
     let large = size_notice(inputs, &message);
     notices.extend(large);
@@ -103,6 +105,24 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
         notices,
         found: found.skills,
     }
+}
+
+/// Reads the opening with the session's added folders recorded: every
+/// folder `directory_added` folded, resolved, in log order. The folders
+/// are listed, never read: no added-root instruction file is loaded
+/// here, only when a call's declared paths touch it
+/// (`docs/system-prompt.md`, "Added folders").
+pub(crate) fn collect_with_added(
+    inputs: &PromptInputs,
+    workspace: &Path,
+    added: &[PathBuf],
+) -> Collected {
+    let mut collected = collect(inputs, workspace);
+    collected.message.added_directories = added
+        .iter()
+        .map(|root| root.display().to_string())
+        .collect();
+    collected
 }
 
 /// Renders `message` from its logged fields only: no clock, no disk, so a
@@ -155,6 +175,20 @@ pub(crate) fn render(message: &OpeningMessage) -> String {
     } else {
         format!("{files}\n\n{sections}")
     };
+    // The folded added folders, listed after the files: a resume renders
+    // the identical bytes from the logged message, and the folders read
+    // nothing here.
+    let added = if message.added_directories.is_empty() {
+        String::new()
+    } else {
+        let folders = message
+            .added_directories
+            .iter()
+            .map(|root| format!("- {root}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("\n\n# Added folders\n\n{folders}")
+    };
     // With an empty listing the `# Skills` heading and `{skills}` are left
     // out: the template is cut at its last `# Skills` line. Cutting before
     // the one `fill` keeps inserted text (a path or a file's content
@@ -170,19 +204,22 @@ pub(crate) fn render(message: &OpeningMessage) -> String {
         .map(skills::entry)
         .collect::<Vec<_>>()
         .join("\n");
-    fill(
-        &template,
-        &[
-            ("date", environment.date.as_str()),
-            ("os", environment.os.as_str()),
-            ("arch", environment.arch.as_str()),
-            ("shell", environment.shell.as_str()),
-            ("workspace", environment.workspace.as_str()),
-            ("git", git.as_str()),
-            ("session_log", environment.session_log.as_str()),
-            ("instruction_files", instruction_files.as_str()),
-            ("skills", skills.as_str()),
-        ],
+    format!(
+        "{}{added}",
+        fill(
+            &template,
+            &[
+                ("date", environment.date.as_str()),
+                ("os", environment.os.as_str()),
+                ("arch", environment.arch.as_str()),
+                ("shell", environment.shell.as_str()),
+                ("workspace", environment.workspace.as_str()),
+                ("git", git.as_str()),
+                ("session_log", environment.session_log.as_str()),
+                ("instruction_files", instruction_files.as_str()),
+                ("skills", skills.as_str()),
+            ],
+        )
     )
 }
 

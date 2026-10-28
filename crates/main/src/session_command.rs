@@ -216,6 +216,7 @@ pub(crate) fn run(
             parent,
             args.depth.unwrap_or(0),
             prompt,
+            args.added,
             adopted,
             clock,
             &signals,
@@ -234,6 +235,9 @@ pub(crate) fn run(
     if parent.is_some() {
         signals.lifeline(Box::new(std::io::stdin()));
     }
+    // The child session command carries the delegate's launch-time
+    // folders: a fresh spawn marks them inherited, while a fork records
+    // only the roots missing from its point-based history.
     new_session(
         SessionId(args.id),
         crate::per_run(args.model, args.overrides),
@@ -247,6 +251,7 @@ pub(crate) fn run(
         None,
         parent,
         args.supervised,
+        args.added.clone(),
     )
 }
 
@@ -275,6 +280,7 @@ pub(crate) fn new_session(
     case_run: Option<Arc<crate::case::run::CaseRun>>,
     parent: Option<Parent>,
     supervised: bool,
+    inherited: Vec<PathBuf>,
 ) -> i32 {
     // One reads for the process: the worktree's `git worktree add` and
     // every startup credential read run through it, so one cancel reaches
@@ -287,7 +293,7 @@ pub(crate) fn new_session(
     if !worktree || adopted.is_some() {
         return match run_new(
             id, overrides, prompt, one_turn, adopted, clock, signals, fiber, host, case_run,
-            parent, None, reads, supervised,
+            parent, None, reads, supervised, inherited,
         ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),
@@ -342,6 +348,7 @@ pub(crate) fn new_session(
         reads,
         Some(opened),
         supervised,
+        inherited,
     );
     isolation.end();
     match result {
@@ -371,6 +378,7 @@ pub(crate) fn run_new(
     rewound: Option<r#loop::Rewound>,
     reads: Arc<crate::switch::Reads>,
     supervised: bool,
+    inherited: Vec<PathBuf>,
 ) -> Result<i32, Failure> {
     // Held by `run_new_with` for a fresh worktree, empty on every direct
     // call: taking leaves the slot empty, so a panic leaves nothing
@@ -748,8 +756,9 @@ pub(crate) fn run_new(
             // delegate opens through `Loop::delegate`, naming its parent.
             let committed = signals.commit(|| {
                 let started = match (rewound, parent) {
-                    (Some(start), _) => Loop::rewound_with_worktree(
-                        r#loop::Session {
+                    (Some(start), _) => {
+                        let is_fork = matches!(&start.how, r#loop::Continuation::Fork { .. });
+                        let session = r#loop::Session {
                             log: Arc::clone(&log),
                             provider,
                             model,
@@ -757,11 +766,17 @@ pub(crate) fn run_new(
                             inbox,
                             tools: r#loop::capped(tools, &caps),
                             permissions,
-                        },
-                        start,
-                        worktree,
-                    ),
-                    (None, Some(parent)) => Loop::delegate(
+                        };
+                        if is_fork {
+                            Loop::fork_with_added(session, start, worktree, inherited)
+                        } else {
+                            Loop::rewound_with_worktree(session, start, worktree)
+                        }
+                    }
+                    // A fresh spawn records its inherited roots here,
+                    // after `session_started` and before the opening. A
+                    // fork's roots are seeded in its point-continuation arm.
+                    (None, Some(parent)) => Loop::delegate_with_added(
                         r#loop::Session {
                             log: Arc::clone(&log),
                             provider,
@@ -773,6 +788,7 @@ pub(crate) fn run_new(
                         },
                         parent,
                         worktree,
+                        inherited,
                     ),
                     (None, None) if supervised => Loop::supervised(
                         r#loop::Session {
@@ -902,11 +918,12 @@ pub(crate) fn run_new_with(
     reads: Arc<crate::switch::Reads>,
     opened: Option<doors::WorktreeOpener>,
     supervised: bool,
+    inherited: Vec<PathBuf>,
 ) -> Result<i32, Failure> {
     let _hold = OpenedHold::set(opened);
     run_new(
         id, overrides, prompt, one_turn, worktree, clock, signals, fiber, host, case_run, parent,
-        rewound, reads, supervised,
+        rewound, reads, supervised, inherited,
     )
 }
 

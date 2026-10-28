@@ -307,6 +307,7 @@ impl Rendered {
             | Event::TurnCompleted(_)
             | Event::SteeringQueue(_)
             | Event::SessionNamed(_)
+            | Event::DirectoryAdded(_)
             | Event::Clients(_)
             | Event::SessionStatus(_)
             | Event::AssistantMessageDelta(_)
@@ -553,6 +554,16 @@ pub(crate) fn render(
                 None => conversation.push(context),
             }
         }
+        // An added folder: one user message naming it, rendered from the
+        // event alone, so a resume replays it after a crash before the
+        // acknowledgement. It joins neither the handoff's input nor what
+        // the reviewer is shown: the handoff opening lists the folded
+        // folders itself.
+        Event::DirectoryAdded(added) if !added.inherited => conversation.push(Input::User {
+            text: format!("Added folder {} to the session.", added.path),
+            images: Vec::new(),
+        }),
+        Event::DirectoryAdded(_) => {},
         // A rewind's note rides on its `session_started`: one user
         // message, so a live start and a resume render it the same way.
         Event::SessionStarted(started) => {
