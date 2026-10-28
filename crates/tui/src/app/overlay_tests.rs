@@ -4238,12 +4238,39 @@ mod stacked {
                 app.keys_screen_open() || app.config_view_open() || app.model_picker_open(),
                 "{kind}"
             );
+            assert!(app.swapped_view_open(), "{kind}");
             open(&mut app, Surface::Notice);
             let slab = crate::view::frame_of(&app, Surface::Notice);
             // Centred on the 12 rows, not squeezed into the notice rows.
             assert!(!slab.is_empty(), "{kind}");
             assert_eq!(slab.y, (12 - slab.height) / 2, "{kind}: {slab:?}");
         }
+    }
+
+    #[test]
+    fn swapped_view_open_matches_each_view_flag() {
+        assert!(!short_home().swapped_view_open(), "no view open");
+        // `ReleaseNotes` opens its session view on home with no session
+        // on screen, the one swapped view reachable there alone.
+        let mut app = short_home();
+        for ch in "/release-notes".chars() {
+            app.on_key(Key::Char(ch), now());
+        }
+        app.on_key(Key::Enter, now());
+        assert!(app.session_view_open());
+        assert!(app.swapped_view_open(), "release notes");
+        open(&mut app, Surface::Notice);
+        let area = ratatui::layout::Rect::new(0, 0, 60, 12);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        // The drawn overlay covers the swapped view, so `frame_of` names
+        // that same slab instead of home's notice rows.
+        assert_eq!(
+            crate::view::frame_of(&app, Surface::Notice),
+            app.frames()
+                .slab_of(Surface::Notice)
+                .expect("the drawn notice overlay notes its slab"),
+        );
     }
 
     #[test]

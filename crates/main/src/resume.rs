@@ -150,11 +150,11 @@ pub(crate) fn ask_resume(
             ));
         }
     };
-    let project = doors::project(&workspace);
+    let project = worktree::project(&workspace);
     let sessions = log::sessions_dir(&home, &project);
     // One memo serves the lookup and the launch-project check below, so
     // every session in one workspace runs the identity once.
-    let in_project = crate::open::in_project(&project, &doors::project);
+    let in_project = crate::open::in_project(&project, &worktree::project);
     let id = match log::resolve(&sessions, &resuming.selector, &in_project) {
         Ok(id) => id,
         Err(e) => return ask_failed(failed(e.code(), e)),
@@ -272,7 +272,7 @@ pub(crate) fn session_resume(
             ));
         }
     };
-    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
     log::crash::attach(&id);
     let log = match Log::open(&sessions, id.clone(), Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),

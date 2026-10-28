@@ -62,7 +62,7 @@ pub(crate) fn session_continues(
             ));
         }
     };
-    let sessions = log::sessions_dir(&home, &doors::project(&current));
+    let sessions = log::sessions_dir(&home, &worktree::project(&current));
     let recorded = match resolve(
         &new,
         &old,

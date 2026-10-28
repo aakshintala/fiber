@@ -53,7 +53,7 @@ impl Setup {
     }
 
     fn sessions(&self) -> PathBuf {
-        log::sessions_dir(&self.home(), &doors::project(&self.workspace()))
+        log::sessions_dir(&self.home(), &worktree::project(&self.workspace()))
     }
 
     /// Session `id` continuing `from`, with `workspace` and a last `ts`:
@@ -115,7 +115,7 @@ fn moved_root(dir: &Path, workspace: &str, child: &str, ts: u64) {
 fn other_workspace(setup: &Setup) -> (PathBuf, PathBuf) {
     let workspace = setup.root.path().join("elsewhere");
     fs::create_dir_all(&workspace).unwrap();
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&workspace));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&workspace));
     (workspace, sessions)
 }
 
@@ -422,7 +422,7 @@ fn in_project_scope_a_session_from_another_project_is_excluded_and_a_missing_wor
     let workspace = fs::canonicalize(&repo).unwrap();
     let home = root.path().join("home");
     fs::create_dir_all(&home).unwrap();
-    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
     let other = root.path().join("other");
     fs::create_dir_all(&other).unwrap();
     let missing = root.path().join("gone");
@@ -654,14 +654,14 @@ fn a_git_redirect_keeps_selection_scoped_to_the_workspace_project() {
             let decoy_canon = fs::canonicalize(&decoy).unwrap();
             let home = root.path().join("home");
             fs::create_dir_all(&home).unwrap();
-            let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+            let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
             session_in(
                 &sessions.join("s_00000000000000a1"),
                 workspace.to_str().unwrap(),
                 None,
                 old_ts(),
             );
-            let decoy_sessions = log::sessions_dir(&home, &doors::project(&decoy_canon));
+            let decoy_sessions = log::sessions_dir(&home, &worktree::project(&decoy_canon));
             session_in(
                 &decoy_sessions.join("s_00000000000000b2"),
                 decoy_canon.to_str().unwrap(),

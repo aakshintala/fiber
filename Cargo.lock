@@ -167,6 +167,7 @@ dependencies = [
  "serde_json",
  "support",
  "tui",
+ "worktree",
 ]
 
 [[package]]
@@ -1706,6 +1707,7 @@ dependencies = [
  "tools",
  "tui",
  "vt100",
+ "worktree",
 ]
 
 [[package]]

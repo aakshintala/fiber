@@ -194,10 +194,7 @@ fn put_row(
 /// the box exactly then (`super::cursor`).
 fn cursor_shown(app: &App) -> bool {
     app.chrome().floor_line().is_none()
-        && !app.config_view_open()
-        && !app.model_picker_open()
-        && !app.keys_screen_open()
-        && !app.session_view_open()
+        && !app.swapped_view_open()
         && app.focused().is_none()
         && app.panel().is_none()
         && !app.offer_open()

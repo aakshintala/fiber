@@ -46,7 +46,7 @@ fn moved_parent(setup: &Setup, id: &str, next: &str, ts: u64) -> PathBuf {
 fn moved_child(setup: &Setup, id: &str, from: &str, ts: u64) -> PathBuf {
     let workspace = setup.root.path().join("elsewhere");
     fs::create_dir_all(&workspace).unwrap();
-    let dir = log::sessions_dir(&setup.home(), &doors::project(&workspace)).join(id);
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&workspace)).join(id);
     fs::create_dir_all(dir.join("artifacts")).unwrap();
     let first = json!({"kind": "session_started", "seq": 0,
         "payload": {"workspace": workspace,
@@ -73,7 +73,7 @@ fn setup() -> Setup {
 /// The workspace's project directory, as the command derives it.
 fn project(setup: &Setup) -> PathBuf {
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
-    log::sessions_dir(&setup.home(), &doors::project(&workspace))
+    log::sessions_dir(&setup.home(), &worktree::project(&workspace))
         .parent()
         .unwrap()
         .to_path_buf()
@@ -890,7 +890,7 @@ fn prune_under_a_git_redirect_judges_the_workspace_repository() {
         &["commit", "--quiet", "-m", "first"],
     );
     let decoy_canon = fs::canonicalize(&decoy).unwrap();
-    let decoy_project = log::sessions_dir(&setup.home(), &doors::project(&decoy_canon))
+    let decoy_project = log::sessions_dir(&setup.home(), &worktree::project(&decoy_canon))
         .parent()
         .unwrap()
         .to_path_buf();
@@ -1014,7 +1014,7 @@ fn prune_lists_and_removes_a_server_copy_no_project_record_names() {
     // Another repository approves the same `shared` declaration first:
     // its project record names the copy, from another project.
     let other = other_repo(&setup);
-    let other_project = log::sessions_dir(&setup.home(), &doors::project(&other))
+    let other_project = log::sessions_dir(&setup.home(), &worktree::project(&other))
         .parent()
         .unwrap()
         .to_path_buf();

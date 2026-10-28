@@ -58,7 +58,7 @@ fn quoted_key_spellings_canonicalize_in_the_layer_and_name_the_chip() {
 fn an_identity_equal_to_the_workspace_is_not_git() {
     let dir = fakes::TempDir::new("fiber-launch");
     let workspace = dir.path().to_path_buf();
-    // The identity path is canonical, as `doors::project` makes it.
+    // The identity path is canonical, as `worktree::project` makes it.
     let identity = workspace
         .canonicalize()
         .unwrap_or_else(|err| panic!("canonical: {err}"));

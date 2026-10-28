@@ -403,7 +403,7 @@ pub(crate) fn run_new(
             let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
             let workspace = std::env::current_dir()
                 .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+            let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
             // The point's session lives beside the child, or in the
             // recorded parent project when the continuation names one: a
             // workspace move, or a rewind to a point in another project.

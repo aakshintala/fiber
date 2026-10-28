@@ -947,7 +947,7 @@ fn a_git_redirect_keeps_scope_on_the_workspace_repository() {
             let decoy_canon = fs::canonicalize(&decoy).unwrap();
             let home = root.path().join("home");
             fs::create_dir_all(home.join("projects")).unwrap();
-            let expected = log::project_key(&doors::project(&workspace));
+            let expected = log::project_key(&worktree::project(&workspace));
             let home_str = home.to_str().unwrap().to_owned();
             let workspace_str = workspace.to_str().unwrap().to_owned();
             let decoy_git = decoy_canon.join(".git").to_str().unwrap().to_owned();
