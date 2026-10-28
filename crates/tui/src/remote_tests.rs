@@ -1192,7 +1192,9 @@ fn catalogue_reads_send_the_refresh_word() {
 
 #[test]
 fn catalogue_answers_decode_field_for_field() {
-    use crate::catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, Refresh};
+    use crate::catalogue::{
+        Catalogue, LeftOutGroup, LeftOutModel, ListAge, ModelEntry, Price, PriceTier, Refresh,
+    };
     use contract::events::Notice;
     let hub = Hub::new(Arc::new(Fake::new(vec![])));
     hub.remote.set_workspace(Some(PathBuf::from("/remote/ws")));
@@ -1216,7 +1218,16 @@ fn catalogue_answers_decode_field_for_field() {
                 ],
                 "notices": [{"code": "model_invalid", "message": "acme is stale"}],
                 "lists": [{"provider": "acme", "updated_ms": 1, "stale": false},
-                          {"provider": "other", "stale": true}]
+                          {"provider": "other", "stale": true}],
+                "left_out": [
+                    {"provider": "acme", "extension": "acme-ext",
+                     "file": "config/acme-ext.json", "setting": "api_key", "login": false,
+                     "models": [{"id": "m1", "name": "Acme One"}, {"id": "m2"}]},
+                    {"provider": "opencode",
+                     "extension": "github.com/aakshintala/fiber/providers/opencode",
+                     "file": "config/opencode.json", "setting": "workspace", "login": true,
+                     "models": [{"id": "m3"}]}
+                ]
             }),
             |r| r.models(Refresh::Cached),
         )
@@ -1284,7 +1295,36 @@ fn catalogue_answers_decode_field_for_field() {
                     stale: true,
                 },
             ],
-            left_out: Vec::new(),
+            left_out: vec![
+                LeftOutGroup {
+                    provider: "acme".to_owned(),
+                    extension: "acme-ext".to_owned(),
+                    file: "config/acme-ext.json".to_owned(),
+                    setting: "api_key".to_owned(),
+                    login: false,
+                    models: vec![
+                        LeftOutModel {
+                            id: "m1".to_owned(),
+                            name: Some("Acme One".to_owned()),
+                        },
+                        LeftOutModel {
+                            id: "m2".to_owned(),
+                            name: None,
+                        },
+                    ],
+                },
+                LeftOutGroup {
+                    provider: "opencode".to_owned(),
+                    extension: "github.com/aakshintala/fiber/providers/opencode".to_owned(),
+                    file: "config/opencode.json".to_owned(),
+                    setting: "workspace".to_owned(),
+                    login: true,
+                    models: vec![LeftOutModel {
+                        id: "m3".to_owned(),
+                        name: None,
+                    }],
+                },
+            ],
         }
     );
 }
@@ -1306,6 +1346,10 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
         .unwrap();
     assert!(catalogue.models.is_empty());
     assert!(catalogue.installable.is_empty());
+    assert!(
+        catalogue.left_out.is_empty(),
+        "a missing left_out key decodes empty"
+    );
     let installable = hub
         .call(
             "models",
@@ -1380,6 +1424,13 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
         (
             "notices with a legacy string element",
             json!({"models": [], "notices": ["stale"], "lists": []}),
+        ),
+        (
+            "a left_out element without its file",
+            json!({"models": [], "notices": [], "lists": [],
+                   "left_out": [{"provider": "acme", "extension": "acme-ext",
+                                 "setting": "api_key", "login": false,
+                                 "models": [{"id": "m1"}]}]}),
         ),
         ("a result that is not an object", json!([])),
     ] {

@@ -15,7 +15,9 @@ mod login;
 mod router;
 
 use crate::ThemeSetting;
-use crate::catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, Refresh};
+use crate::catalogue::{
+    Catalogue, LeftOutGroup, LeftOutModel, ListAge, ModelEntry, Price, PriceTier, Refresh,
+};
 use crate::configure::{
     BrowserLogin, Configure, ConfigureError, HostGap, HostSaved, KeyEdit, Layer, LoginShow,
     LoginTarget, LogoutRow, NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked,
@@ -478,15 +480,48 @@ fn decode_age(value: &Value) -> Option<ListAge> {
 }
 /// The hub's catalogue, whole or not at all: a missing or mistyped field
 /// anywhere fails the answer, so no partial catalogue is ever stored.
+/// One left-out model: its id, and its name only when the provider
+/// data names one.
+fn decode_left_out_model(value: &Value) -> Option<LeftOutModel> {
+    Some(LeftOutModel {
+        id: read!(value, "id")?,
+        name: optional!(value, "name")?,
+    })
+}
+
+/// One provider-and-setting group with no value. `file` is required
+/// on the wire: a missing or mistyped one fails the element, as
+/// `read!` does elsewhere in this decoder.
+fn decode_left_out(value: &Value) -> Option<LeftOutGroup> {
+    Some(LeftOutGroup {
+        provider: read!(value, "provider")?,
+        extension: read!(value, "extension")?,
+        file: read!(value, "file")?,
+        setting: read!(value, "setting")?,
+        login: read!(value, "login")?,
+        models: value
+            .get("models")?
+            .as_array()?
+            .iter()
+            .map(decode_left_out_model)
+            .collect::<Option<Vec<_>>>()?,
+    })
+}
+
 fn decode_models(value: &Value) -> Option<Catalogue> {
     Some(Catalogue {
         installable: match value.get("installable") {
             None => Vec::new(),
             Some(names) => serde_json::from_value(names.clone()).ok()?,
         },
-        // The grouped left-out wire lands with the hub in the next
-        // task; a missing key reads as empty, mirroring `installable`.
-        left_out: Vec::new(),
+        left_out: match value.get("left_out") {
+            None => Vec::new(),
+            Some(groups) => groups
+                .as_array()?
+                .iter()
+                .map(decode_left_out)
+                .collect::<Option<Vec<_>>>()?,
+        },
         models: value
             .get("models")?
             .as_array()?
