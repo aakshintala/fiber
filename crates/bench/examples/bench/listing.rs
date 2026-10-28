@@ -104,7 +104,7 @@ pub(crate) fn clone_sessions(
     seed: &str,
     copies: usize,
 ) -> Result<Vec<String>, String> {
-    let sessions = log::sessions_dir(home, &doors::project(workspace));
+    let sessions = log::sessions_dir(home, &worktree::project(workspace));
     let recent = home.join("recent.jsonl");
     let text = fs::read_to_string(&recent)
         .map_err(|err| format!("reading {}: {err}", recent.display()))?;

@@ -1222,7 +1222,7 @@ fn resume_readers_use_the_child_project_even_after_its_worktree_was_removed() {
     let workspace = root.path().join("repository");
     std::fs::create_dir(&workspace).unwrap();
     fakes::git::git(&workspace, &["init", "--quiet"]);
-    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
     let key_dir = sessions.parent().unwrap();
     let removed = key_dir.join("worktrees/s_child");
     let record = contract::shapes::Worktree {
@@ -1252,7 +1252,7 @@ fn resume_readers_use_the_child_project_even_after_its_worktree_was_removed() {
     ] {
         assert_eq!(
             super::delegate_sessions(&home, &other, &SessionId("s_unknown".into())).unwrap(),
-            log::sessions_dir(&home, &doors::project(&other))
+            log::sessions_dir(&home, &worktree::project(&other))
         );
     }
     assert_eq!(super::last_seq_reader(&home)(&workspace, &id), Ok(Some(7)));
@@ -1292,7 +1292,7 @@ fn missing_git_subworkspace_readers_find_the_logged_project_and_fail_closed() {
     let workspace = repository.join("subworkspace");
     std::fs::create_dir_all(&workspace).unwrap();
     fakes::git::git(&repository, &["init", "--quiet"]);
-    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
     let id = SessionId("s_removed_repository".into());
     write_log(
         &sessions,
@@ -1324,7 +1324,7 @@ fn missing_git_subworkspace_readers_find_the_logged_project_and_fail_closed() {
     std::fs::create_dir_all(&workspace).unwrap();
     assert_eq!(
         super::delegate_sessions(&home, &workspace, &id).unwrap(),
-        log::sessions_dir(&home, &doors::project(&workspace))
+        log::sessions_dir(&home, &worktree::project(&workspace))
     );
     assert_ne!(
         super::delegate_sessions(&home, &workspace, &id).unwrap(),
@@ -1362,7 +1362,7 @@ fn removed_worktree_readers_name_a_worktree_with_no_usable_project_key() {
 #[test]
 fn the_last_seq_seam_reads_the_last_complete_lines_seq() {
     let root = fakes::TempDir::new("dm-seq");
-    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
+    let sessions = log::sessions_dir(root.path(), &worktree::project(root.path()));
     write_log(&sessions, "s_seq", &[envelope(1), envelope(7)]);
     let last = super::last_seq_reader(root.path())(root.path(), &SessionId("s_seq".into()));
     assert_eq!(last, Ok(Some(7)));
@@ -1371,7 +1371,7 @@ fn the_last_seq_seam_reads_the_last_complete_lines_seq() {
 #[test]
 fn the_last_seq_seam_reads_an_empty_log_as_none() {
     let root = fakes::TempDir::new("dm-seq");
-    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
+    let sessions = log::sessions_dir(root.path(), &worktree::project(root.path()));
     write_log(&sessions, "s_empty", &[]);
     let last = super::last_seq_reader(root.path())(root.path(), &SessionId("s_empty".into()));
     assert_eq!(last, Ok(None));
@@ -1380,7 +1380,7 @@ fn the_last_seq_seam_reads_an_empty_log_as_none() {
 #[test]
 fn the_last_seq_seam_names_a_missing_log_in_its_reason() {
     let root = fakes::TempDir::new("dm-seq");
-    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
+    let sessions = log::sessions_dir(root.path(), &worktree::project(root.path()));
     std::fs::create_dir_all(&sessions).unwrap();
     let Err(reason) =
         super::last_seq_reader(root.path())(root.path(), &SessionId("s_missing".into()))
@@ -2223,7 +2223,7 @@ fn fork_call_log() -> Vec<serde_json::Value> {
 #[test]
 fn the_reader_points_just_before_the_calling_message_with_its_model() {
     let root = fakes::TempDir::new("dm-fork-point");
-    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
+    let sessions = log::sessions_dir(root.path(), &worktree::project(root.path()));
     point_log(&sessions, &fork_call_log());
     let forking = read_for(&sessions, Some("a_call")).unwrap();
     assert_eq!(
@@ -2243,7 +2243,7 @@ fn the_reader_points_just_before_the_calling_message_with_its_model() {
 #[test]
 fn the_reader_walks_the_outer_chain_to_its_root_call() {
     let root = fakes::TempDir::new("dm-fork-outer");
-    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
+    let sessions = log::sessions_dir(root.path(), &worktree::project(root.path()));
     point_log(
         &sessions,
         &[
@@ -2270,7 +2270,7 @@ fn the_reader_walks_the_outer_chain_to_its_root_call() {
 #[test]
 fn a_command_root_is_refused_as_invalid_arguments() {
     let root = fakes::TempDir::new("dm-fork-command");
-    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
+    let sessions = log::sessions_dir(root.path(), &worktree::project(root.path()));
     point_log(
         &sessions,
         &[
@@ -2310,7 +2310,7 @@ fn a_command_root_is_refused_as_invalid_arguments() {
 #[test]
 fn an_unreadable_ancestry_keeps_the_point_and_falls_back() {
     let root = fakes::TempDir::new("dm-fork-ancestry");
-    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
+    let sessions = log::sessions_dir(root.path(), &worktree::project(root.path()));
     point_log(
         &sessions,
         &[
@@ -2347,7 +2347,7 @@ fn an_unreadable_ancestry_keeps_the_point_and_falls_back() {
 #[test]
 fn own_log_failures_are_tool_errors() {
     let root = fakes::TempDir::new("dm-fork-own-log");
-    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
+    let sessions = log::sessions_dir(root.path(), &worktree::project(root.path()));
     std::fs::create_dir_all(&sessions).unwrap();
     // A missing log.
     let error = read_for(&sessions, Some("a_call")).unwrap_err();
@@ -2391,7 +2391,7 @@ fn own_log_failures_are_tool_errors() {
 #[test]
 fn no_calling_action_reads_the_latest_message_in_the_log() {
     let root = fakes::TempDir::new("dm-fork-no-action");
-    let sessions = log::sessions_dir(root.path(), &doors::project(root.path()));
+    let sessions = log::sessions_dir(root.path(), &worktree::project(root.path()));
     point_log(&sessions, &fork_call_log());
     let forking = read_for(&sessions, None).unwrap();
     assert_eq!(forking.point.seq, contract::Seq(11));

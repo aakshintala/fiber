@@ -230,7 +230,7 @@ fn select_candidates(
             }
         }
         if let super::Scope::Project(workspace) = scope {
-            let resolved = doors::resolve_project(workspace);
+            let resolved = worktree::resolve_project(workspace);
             if resolved.in_repository {
                 owned.push((log::project_key(&resolved.path), workspace.to_path_buf()));
             }
@@ -327,7 +327,7 @@ fn judge_identity(
         }
         Ok(_) => {}
     }
-    let resolved = doors::resolve_project(identity);
+    let resolved = worktree::resolve_project(identity);
     if log::project_key(&resolved.path) != owner {
         return outcome;
     }

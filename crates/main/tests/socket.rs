@@ -395,7 +395,7 @@ fn two_clients_see_the_log_while_ask_is_held() {
     );
     finish(running);
 
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let file = fs::read_to_string(sessions.join(&session_id).join("events.jsonl")).unwrap();
     let logged: Vec<Value> = file
         .lines()
@@ -577,7 +577,7 @@ fn session_status_carries_the_project_and_counts_full_connections() {
         |line| line["kind"] == "session_status" && line["payload"]["clients"] == 1,
     );
     // The durable lines equal the log so far.
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let file = fs::read_to_string(sessions.join(&session_id).join("events.jsonl")).unwrap();
     let logged: Vec<Value> = complete_lines(&file);
     assert_eq!(durable(&full_lines), logged);
@@ -1090,7 +1090,7 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
     drop(client);
     finish(running);
     // The durable lines equal the log.
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let file = fs::read_to_string(sessions.join(id).join("events.jsonl")).unwrap();
     let logged: Vec<Value> = file
         .lines()
@@ -1306,7 +1306,7 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
     drop(client);
     finish(running);
     // The durable lines equal the log.
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let file = fs::read_to_string(sessions.join(id).join("events.jsonl")).unwrap();
     let logged: Vec<Value> = file
         .lines()

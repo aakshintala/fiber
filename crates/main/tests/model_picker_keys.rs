@@ -82,7 +82,7 @@ fn shows(screen: &Grid, needle: &str) -> bool {
 /// construction are absent, never failures: a missing session dir or
 /// log reads as empty.
 fn session_model_changed(setup: &Setup) -> String {
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let mut switches = Vec::new();
     if let Ok(dirs) = fs::read_dir(&sessions) {
         for dir in dirs.filter_map(Result::ok) {
@@ -184,7 +184,7 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
         "the panel names the session model: {switched:?}"
     );
     // The session's log holds the switch, from the driver.
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let dirs: Vec<_> = fs::read_dir(&sessions)
         .unwrap()
         .map(|entry| entry.unwrap().path())

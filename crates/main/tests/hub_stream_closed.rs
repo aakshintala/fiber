@@ -153,7 +153,7 @@ fn a_hub_subscriber_gets_every_line_before_an_unreadable_one_then_stream_closed(
     // Damage A's log mid-page, as a full subscriber over a damaged log
     // does: one line overwritten with `x`s, every line on one page.
     let log_path =
-        log::sessions_dir(&setup.home(), &doors::project(&setup.workspace())).join(&id_a);
+        log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace())).join(&id_a);
     let events = log_path.join("events.jsonl");
     let whole = fs::read(&events).unwrap();
     let file_lines: Vec<&[u8]> = whole.split_inclusive(|b| *b == b'\n').collect();

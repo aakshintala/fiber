@@ -35,7 +35,7 @@ fn rows(home: &Path) -> Vec<Value> {
 /// directory.
 fn project_key(home: &Path, workspace: &Path) -> String {
     let _ = home;
-    log::project_key(&doors::project(workspace))
+    log::project_key(&worktree::project(workspace))
 }
 
 /// The `session_id` on the first stdout line of a run.
@@ -206,7 +206,7 @@ fn recent_skips_a_delegates_row() {
     let child = doors::mint("s_");
     delegate["session_id"] = json!(child);
     delegate["status"]["parent"] = json!(root);
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     fs::create_dir_all(sessions.join(&child)).unwrap();
     let mut file = fs::OpenOptions::new()
         .append(true)
@@ -408,7 +408,7 @@ fn a_killed_session_whose_listener_outlives_its_summary_connection_is_crashed() 
     feed(&watch);
     // A session killed mid-turn: its log has no `fiber_exited`.
     let id = doors::mint("s_");
-    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace())).join(&id);
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace())).join(&id);
     fs::create_dir_all(&dir).unwrap();
     fs::write(
         dir.join("events.jsonl"),

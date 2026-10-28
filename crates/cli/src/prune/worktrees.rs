@@ -464,7 +464,7 @@ pub(super) fn scope_keys(home: &Path, workspace: &Path) -> Vec<String> {
 /// every project hub-wide.
 pub(super) fn scope_keys_scoped(home: &Path, scope: super::Scope<'_>) -> Vec<String> {
     if let super::Scope::Project(workspace) = scope {
-        let resolved = doors::resolve_project(workspace);
+        let resolved = worktree::resolve_project(workspace);
         if resolved.in_repository {
             return vec![log::project_key(&resolved.path)];
         }

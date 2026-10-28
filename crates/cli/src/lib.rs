@@ -215,7 +215,7 @@ pub fn project_of(
     home: &Path,
     workspace: &Path,
 ) -> Result<(PathBuf, ::config::ProjectKey), CliError> {
-    let project = doors::project(workspace);
+    let project = worktree::project(workspace);
     let sessions = log::sessions_dir(home, &project);
     let key = ::config::ProjectKey::new(log::project_key(&project))?;
     Ok((sessions, key))

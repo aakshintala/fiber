@@ -91,7 +91,7 @@ fn has_started(dir: &Path, id: &str) -> bool {
 /// `session_started` event, before reading their ids: the event proves
 /// the session started, where the directory alone does not.
 fn wait_stored(setup: &support::Setup, count: usize) -> Vec<String> {
-    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let waiting = dir.clone();
     fakes::wait_until("the stored session start", setup.deadline, move || {
         stored_at(&waiting)
@@ -102,7 +102,7 @@ fn wait_stored(setup: &support::Setup, count: usize) -> Vec<String> {
 
 /// Asserts no session directory stands yet: the journey started nothing.
 fn assert_no_sessions(setup: &support::Setup, what: &str) {
-    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     assert!(
         stored_at(&dir).is_none_or(|ids| ids.is_empty()),
         "{what}: a session started unexpectedly"
