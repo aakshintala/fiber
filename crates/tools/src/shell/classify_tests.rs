@@ -1772,6 +1772,20 @@ fn every_supported_remote_form_yields_its_owner() {
 }
 
 #[test]
+fn a_hash_inside_a_quoted_remote_subsection_is_not_a_comment() {
+    let (_dir, workspace) = owner_workspace(
+        "fiber-shell-gh-quoted-hash-subsection",
+        "[remote \"origin # upstream\"]\n\turl = https://github.com/acme/app.git\n",
+    );
+    assert_own(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
 fn other_hosts_and_spellings_yield_no_owners() {
     for (index, url) in [
         "https://example.com/acme/app",
@@ -1978,12 +1992,7 @@ fn a_fifo_config_has_no_owners_without_blocking() {
     let (_dir, workspace) = acme_workspace("fiber-shell-gh-config-fifo");
     let config = workspace.join(".git").join("config");
     std::fs::remove_file(&config).unwrap();
-    rustix::fs::mkfifoat(
-        rustix::fs::CWD,
-        &config,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-    )
-    .unwrap();
+    fakes::fifo(&config);
     assert_foreign(
         "gh issue view 12",
         &workspace,
@@ -2182,6 +2191,32 @@ fn worktree_pointer_failures_have_no_owners() {
     let real = workspace.join(".git.real");
     std::fs::rename(workspace.join(".git"), &real).unwrap();
     std::os::unix::fs::symlink(&real, workspace.join(".git")).unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn a_commondir_directory_has_no_owners() {
+    let (_dir, workspace) = worktree_workspace(
+        "fiber-shell-gh-commondir-directory",
+        &remote_config("git@github.com:acme/app.git"),
+        &remote_config("git@github.com:acme/app.git"),
+    );
+    let gitdir = workspace
+        .join("..")
+        .join("repo")
+        .join(".git")
+        .join("worktrees")
+        .join("wt");
+    let pointer = gitdir.join("commondir");
+    std::fs::remove_file(&pointer).unwrap();
+    std::fs::create_dir(&pointer).unwrap();
+    // Only `!meta.is_file()` holds for this ordinary directory.
     assert_foreign(
         "gh issue view 12",
         &workspace,

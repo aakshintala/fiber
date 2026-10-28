@@ -266,10 +266,9 @@ fn gitdir_common(dir: &Path) -> Option<PathBuf> {
 fn commondir_common(gitdir: &Path) -> Option<PathBuf> {
     let pointer = gitdir.join("commondir");
     match std::fs::symlink_metadata(&pointer) {
-        Ok(meta) => {
-            if meta.is_symlink() || !meta.is_file() {
-                return None;
-            }
+        Ok(_) => {
+            // `read_pointer` opens with `NOFOLLOW` and accepts regular files
+            // only, so an extra metadata check would duplicate that boundary.
             let bytes = read_pointer(&pointer)?;
             let target = parse_pointer(&bytes, "")?;
             let joined = gitdir.join(target);
