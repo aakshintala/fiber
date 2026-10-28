@@ -4247,6 +4247,30 @@ mod stacked {
     }
 
     #[test]
+    fn swapped_view_open_matches_each_view_flag() {
+        // `ReleaseNotes` opens its session view on home with no session
+        // on screen, the one swapped view reachable there alone.
+        let mut app = short_home();
+        for ch in "/release-notes".chars() {
+            app.on_key(Key::Char(ch), now());
+        }
+        app.on_key(Key::Enter, now());
+        assert!(app.session_view_open());
+        open(&mut app, Surface::Notice);
+        let area = ratatui::layout::Rect::new(0, 0, 60, 12);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        // The drawn overlay covers the swapped view, so `frame_of` names
+        // that same slab instead of home's notice rows.
+        assert_eq!(
+            crate::view::frame_of(&app, Surface::Notice),
+            app.frames()
+                .slab_of(Surface::Notice)
+                .expect("the drawn notice overlay notes its slab"),
+        );
+    }
+
+    #[test]
     fn the_report_takes_the_wheel_over_the_quit_frame() {
         let mut app = session_app();
         open(&mut app, Surface::Report);
