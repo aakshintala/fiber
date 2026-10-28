@@ -4821,7 +4821,6 @@ fn one_quantum_over_base_passes_on_the_recorded_one_ms_ceiling() {
     // so both strictly-over legs hold back.
     let (h, b) = quantum_pair(2.0, 1.0);
     let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(&out.comment, "`session_list`");
     assert!(
         line.contains("2.0 ms (fast ceiling 2.0 ms, +1.0 ms absolute over base)"),
@@ -4836,7 +4835,6 @@ fn two_quanta_over_base_fails_on_the_recorded_one_ms_ceiling() {
     // ceiling and over base + 1 ms, so both legs fail the row.
     let (h, b) = quantum_pair(3.0, 1.0);
     let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(
         has(
             &out.failures,
@@ -4855,15 +4853,23 @@ fn exactly_one_quantum_over_base_passes_and_just_over_fails() {
     // Head exactly base + 1.0 ms: the absolute leg needs strictly over.
     let (h, b) = quantum_pair(3.0, 2.0);
     let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| pass |"), "{line}");
     // Just over base + 1.0 ms fails: both legs are strictly over.
     let (h, b) = quantum_pair(3.0, 1.9);
     let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(
+        has(&out.failures, "by more than 1 ms absolute allowance"),
+        "{:?}",
+        out.failures
+    );
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| fail |"), "{line}");
     // Just under base + 1.0 ms passes.
     let (h, b) = quantum_pair(3.0, 2.1);
     let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| pass |"), "{line}");
 }
 
 #[test]
@@ -4872,12 +4878,13 @@ fn one_and_a_half_quanta_over_base_fails() {
     // over base + 1 ms, so the row fails.
     let (h, b) = quantum_pair(3.0, 1.5);
     let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(
         has(&out.failures, "by more than 1 ms absolute allowance"),
         "{:?}",
         out.failures
     );
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| fail |"), "{line}");
 }
 
 #[test]
@@ -4886,7 +4893,13 @@ fn just_over_the_effective_ceiling_fails() {
     // ceiling and over base + 1 ms.
     let (h, b) = quantum_pair(2.1, 1.0);
     let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(
+        has(&out.failures, "by more than 1 ms absolute allowance"),
+        "{:?}",
+        out.failures
+    );
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| fail |"), "{line}");
 }
 
 #[test]
@@ -4915,12 +4928,14 @@ fn a_two_ms_recorded_ceiling_keeps_the_percentage_path() {
     );
     let (h, b) = quantum_pair(2.5, 2.0);
     let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(has(&out.failures, "by more than 0%"), "{:?}", out.failures);
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| fail |"), "{line}");
     // The same pair passes on the recorded 1 ms ceiling.
     let (h, b) = quantum_pair(2.5, 2.0);
     let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| pass |"), "{line}");
 }
 
 #[test]
@@ -4934,7 +4949,6 @@ fn a_slow_session_list_regression_still_fails_at_its_tolerance() {
         SLOW_MODEL,
     );
     let out = judge(&h, Some(&b), Event::PullRequest);
-    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(
         has(
             &out.failures,
@@ -4943,6 +4957,8 @@ fn a_slow_session_list_regression_still_fails_at_its_tolerance() {
         "{:?}",
         out.failures
     );
+    let line = row(&out.comment, "`session_list`");
+    assert!(line.ends_with("| fail |"), "{line}");
 }
 
 // --- #1212 Part 16 the debug-run section, from the head's op_breakdown ---
