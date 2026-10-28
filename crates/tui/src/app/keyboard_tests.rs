@@ -1536,6 +1536,7 @@ fn a_handled_run_sees_home_before_the_line_edit() {
     assert_eq!(press(&mut app, "home"), Effect::None);
     // The handler kept the cursor fixed: no built-in line edit ran.
     assert_eq!(app.input().position(), 2);
+    // docs/tui.md:2953-2966: an eligible run binding runs before every built-in early path; a handled run settles with nothing built in running.
     assert_eq!(*canned.runs.borrow(), vec![("home".to_owned(), false)]);
 }
 
@@ -1546,6 +1547,7 @@ fn an_unhandled_run_falls_through_to_the_home_line_edit() {
     type_text(&mut app, "ab");
     assert_eq!(press(&mut app, "home"), Effect::None);
     assert_eq!(app.input().position(), 0);
+    // docs/tui.md:2953-2966: an eligible run binding runs before every built-in early path; a handled run settles with nothing built in running.
     assert_eq!(*canned.runs.borrow(), vec![("home".to_owned(), false)]);
 }
 
@@ -1562,6 +1564,28 @@ fn an_unhandled_run_falls_through_and_drains_its_notice_once() {
     assert_eq!(app.input().position(), 0);
     assert_eq!(app.notice(), Some("keyed lost home"));
     assert_eq!(press(&mut app, "home"), Effect::None);
+    // docs/tui.md:2953-2966: an unhandled run falls through to the key map; drained notices settle before the fallthrough.
+    assert_eq!(app.notices().len(), 1);
+}
+
+#[test]
+fn a_handled_run_drains_its_notice_to_the_screen() {
+    let canned = Keyed::canned();
+    canned.run_handled.set(true);
+    canned
+        .pending
+        .borrow_mut()
+        .push(("extension_failed".into(), "keyed handled home".to_owned()));
+    let mut app = keyed_app(&canned);
+    type_text(&mut app, "ab");
+    // docs/tui.md:2953-2966: a handled `run` settles with nothing built in
+    // running; its drained notices reach the screen with the handled stroke.
+    assert_eq!(press(&mut app, "home"), Effect::None);
+    // The handler kept the cursor fixed: no built-in line edit ran, and the
+    // queued notice drained to the screen instead of being dropped.
+    assert_eq!(app.input().position(), 2);
+    assert_eq!(app.notice(), Some("keyed handled home"));
+    // docs/tui.md:2953-2966: drained notices settle with the handled stroke.
     assert_eq!(app.notices().len(), 1);
 }
 
@@ -1580,6 +1604,7 @@ fn run_skips_bare_typing_in_the_input_box() {
     assert_eq!(app.draft(), "a A");
     // A modified character still reaches the binding first.
     assert_eq!(press(&mut app, "ctrl+a"), Effect::None);
+    // docs/tui.md:2953-2966: an eligible run binding runs before every built-in early path; a handled run settles with nothing built in running.
     assert_eq!(*canned.runs.borrow(), vec![("ctrl+a".to_owned(), false)]);
 }
 
@@ -1622,6 +1647,7 @@ fn ordinary_keys_screen_presses_never_reach_a_binding() {
     assert!(canned.runs.borrow().is_empty());
     // Only Ctrl+C reaches the bindings below the screen.
     assert_eq!(press(&mut app, "ctrl+c"), Effect::None);
+    // docs/tui.md:2953-2966: an eligible run binding runs before every built-in early path; a handled run settles with nothing built in running.
     assert_eq!(*canned.runs.borrow(), vec![("ctrl+c".to_owned(), false)]);
 }
 
@@ -1669,6 +1695,7 @@ fn an_action_key_dispatches_through_on_key_without_settle() {
     let (effect, settle) = app.bindings_press(stroke("ctrl+q"), now());
     assert_eq!(effect, Effect::None);
     assert!(!settle);
+    // docs/tui.md:2953-2966: an action binding runs before the built-ins where the Bindings table lists it for the context on screen.
     assert_eq!(*canned.actions.borrow(), vec![("ctrl+q".to_owned(), false)]);
 }
 
@@ -1699,6 +1726,7 @@ fn an_action_action_dispatches_through_on_action_with_settle() {
     // The Action arm settles through the entry: only its dispatch sets
     // this flag after the run falls through.
     assert!(settle);
+    // docs/tui.md:2953-2966: an action binding runs before the built-ins where the Bindings table lists it for the context on screen.
     assert_eq!(*canned.actions.borrow(), vec![("ctrl+q".to_owned(), false)]);
 }
 
@@ -1715,6 +1743,7 @@ fn an_action_outside_its_context_does_not_dispatch() {
     let (effect, settle) = app.bindings_press(stroke("ctrl+q"), now());
     assert_eq!(effect, Effect::None);
     assert!(!settle);
+    // docs/tui.md:2953-2966: an action binding runs before the built-ins where the Bindings table lists it for the context on screen.
     assert_eq!(*canned.actions.borrow(), vec![("ctrl+q".to_owned(), false)]);
 }
 
@@ -1732,6 +1761,7 @@ fn a_search_only_action_dispatches_in_search() {
     // `search_next_prev/next` is the checked canonical Down event.
     let (_, settle) = app.bindings_press(stroke("ctrl+q"), now());
     assert!(!settle);
+    // docs/tui.md:2953-2966: an action binding runs before the built-ins where the Bindings table lists it for the context on screen.
     assert_eq!(*canned.actions.borrow(), vec![("ctrl+q".to_owned(), false)]);
 }
 
@@ -1757,20 +1787,24 @@ fn live_keys_edits_flip_the_owner_per_stroke() {
     canned.run_handled.set(true);
     let mut app = keyed_app(&canned);
     assert_eq!(press(&mut app, "ctrl+k"), Effect::None);
+    // docs/tui.md:2953-2966: an eligible run binding runs before every built-in early path; a handled run settles with nothing built in running.
     assert_eq!(*canned.runs.borrow(), vec![("ctrl+k".to_owned(), false)]);
     // A `/keys` edit person-binds the key: the adapter's live check sees
     // it from the next stroke, deactivating the binding with one notice.
     keyed(&mut app, &[("line_break", json!("ctrl+k"))]);
     assert_eq!(press(&mut app, "ctrl+k"), Effect::None);
     assert_eq!(app.draft(), "\n");
+    // docs/tui.md:2953-2966: an eligible run binding runs before every built-in early path; a handled run settles with nothing built in running.
     assert_eq!(
         *canned.runs.borrow(),
         vec![("ctrl+k".to_owned(), false), ("ctrl+k".to_owned(), true)]
     );
+    // docs/tui.md:3050-3053: a person-bound key stays theirs, with one notice naming the extension; lifting the binding hands the key back at once.
     assert_eq!(app.notices().len(), 1);
     // Removing the binding hands the key back at once.
     keyed(&mut app, &[]);
     assert_eq!(press(&mut app, "ctrl+k"), Effect::None);
+    // docs/tui.md:2953-2966: an eligible run binding runs before every built-in early path; a handled run settles with nothing built in running.
     assert_eq!(
         *canned.runs.borrow(),
         vec![
@@ -1779,6 +1813,7 @@ fn live_keys_edits_flip_the_owner_per_stroke() {
             ("ctrl+k".to_owned(), false),
         ]
     );
+    // docs/tui.md:3050-3053: a person-bound key stays theirs, with one notice naming the extension; lifting the binding hands the key back at once.
     assert_eq!(app.notices().len(), 1);
 }
 
@@ -1796,6 +1831,7 @@ fn person_ownership_holds_in_the_conversation() {
     // person's there too.
     keyed(&mut app, &[("line_break", json!("ctrl+k"))]);
     assert_eq!(press(&mut app, "ctrl+k"), Effect::None);
+    // docs/tui.md:2953-2966: an eligible run binding runs before every built-in early path; a handled run settles with nothing built in running.
     assert_eq!(*canned.runs.borrow(), vec![("ctrl+k".to_owned(), true)]);
 }
 
@@ -1806,4 +1842,57 @@ fn unchanged_defaults_hold_with_no_renderer() {
     assert_eq!(press(&mut app, "home"), Effect::None);
     assert_eq!(app.input().position(), 0);
     assert_eq!(press(&mut app, "ctrl+q"), Effect::None);
+}
+
+/// A renderer that keeps every key default: no `key_action` or `run_key`
+/// override, so dispatch through it proves the defaults bind no key.
+#[derive(Debug)]
+struct Defaulted;
+
+impl Renderer for Defaulted {
+    fn name(&self) -> &str {
+        "defaulted"
+    }
+
+    fn fills(&self, _slot: &str) -> bool {
+        false
+    }
+
+    fn render(
+        &self,
+        _ctx: &SessionCtx,
+        _slot: &str,
+        _input: &RendererInput<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&RendererInput<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        Decision::NotForSession {
+            extension: String::new(),
+            tui_version: String::new(),
+            half: SessionVersion::Unseen,
+        }
+    }
+}
+
+#[test]
+fn the_default_key_methods_bind_no_key() {
+    let defaulted = Rc::new(Defaulted);
+    let mut app = attached(80, 24);
+    app.install_renderer(defaulted.clone());
+    type_text(&mut app, "ab");
+    // docs/tui.md:2953-2966: with no binding the stroke falls through to the
+    // key map, so the built-in Home line edit still runs.
+    assert_eq!(press(&mut app, "home"), Effect::None);
+    assert_eq!(app.input().position(), 0);
+    // The defaults themselves bind no key, for either person flag.
+    let ctx = SessionCtx {
+        session_id: Some(contract::SessionId(SESSION.to_owned())),
+        halves: None,
+    };
+    assert_eq!(defaulted.key_action(&ctx, "home", false), None);
+    assert_eq!(defaulted.key_action(&ctx, "home", true), None);
+    assert_eq!(
+        defaulted.run_key(&ctx, "home", false),
+        KeyOutcome::NotHandled
+    );
 }

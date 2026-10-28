@@ -1144,6 +1144,7 @@ fn key_bindings_keep_registration_order_across_case() {
          fiber.key('Ctrl+O', { action = 'send' })",
     );
     assert!(rejected.is_empty(), "{rejected:?}");
+    // docs/tui.md:3060-3062: the first registration to canonicalize to a key wins; ctrl+o and Ctrl+O canonicalize apart (uppercase reads as Shift), so both keep registration order.
     assert_eq!(
         bindings
             .iter()

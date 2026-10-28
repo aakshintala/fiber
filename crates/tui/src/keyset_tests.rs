@@ -971,6 +971,7 @@ fn person_bound_keys_ignores_default_equal_unbound_and_invalid_entries() {
         user.insert((*id).to_owned(), value.clone());
     }
     let (_, notices) = keyset(&entries);
+    // docs/tui.md:1941-1954: each clash reverts with one notice; an invalid entry gives one notice and keeps its defaults.
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert!(person_bound_keys(&user).is_empty());
 }
@@ -983,6 +984,7 @@ fn person_bound_keys_reverts_a_person_plus_person_clash() {
         user.insert((*id).to_owned(), value.clone());
     }
     let (_, notices) = keyset(&entries);
+    // docs/tui.md:1941-1954: each clash reverts with one notice; an invalid entry gives one notice and keeps its defaults.
     assert!(!notices.is_empty());
     // Both sides revert to their defaults, so neither owns the key.
     assert!(person_bound_keys(&user).is_empty());
