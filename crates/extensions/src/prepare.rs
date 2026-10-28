@@ -134,7 +134,7 @@ fn run_step(
         // Ctrl-C at the terminal still reaches the step as it does today.
         own_group: false,
         #[cfg(test)]
-        stdout_read: None,
+        test_events: None,
     };
     let deadline = clock
         .now()
