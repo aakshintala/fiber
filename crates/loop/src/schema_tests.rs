@@ -125,6 +125,27 @@ fn an_extra_property_is_checked_against_its_schema() {
 }
 
 #[test]
+fn a_closed_object_schema_rejects_deadline_ms() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "command": {"type": "string"},
+            "timeout_ms": {"type": ["integer", "null"]}
+        },
+        "required": ["command", "timeout_ms"],
+        "additionalProperties": false
+    });
+    assert_eq!(
+        check(
+            &schema,
+            &json!({"command": "true", "timeout_ms": 10000, "deadline_ms": 10000})
+        ),
+        ["`/deadline_ms`: not allowed"]
+    );
+    assert!(check(&schema, &json!({"command": "true", "timeout_ms": 10000})).is_empty());
+}
+
+#[test]
 fn keywords_outside_the_subset_are_skipped() {
     let schema = json!({"type": "object", "properties": {"x": {"type": "uuid", "format": "z"}}});
     assert!(check(&schema, &json!({"x": 1, "y": 2})).is_empty());
