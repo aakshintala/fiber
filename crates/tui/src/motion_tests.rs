@@ -391,3 +391,67 @@ fn reduced_never_pulses() {
     reduced.ask_pulse(&waiting_row(wall));
     assert_eq!(reduced.take_wake(), None);
 }
+
+#[test]
+fn reduced_reports_its_flag() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    assert!(!motion(origin).reduced());
+    let mut reduced = motion(origin);
+    reduced.set_reduced(true);
+    assert!(reduced.reduced());
+    reduced.set_reduced(false);
+    assert!(!reduced.reduced());
+}
+
+#[test]
+fn an_animation_ask_is_its_last_tick_plus_its_interval() {
+    use crate::tick::TICK;
+    let origin = fakes::clock::FakeClock::new().origin();
+    let motion = motion(origin);
+    motion.ask_animate(origin, Duration::from_millis(500));
+    assert_eq!(
+        motion.take_wake(),
+        origin.checked_add(Duration::from_millis(500))
+    );
+    // A value below the tick floor asks at the floor: the clamp is
+    // idempotent with the adapter's normalization.
+    let mut floored = Motion::default();
+    floored.set_now(origin, 0);
+    floored.ask_animate(origin, Duration::from_millis(80));
+    assert_eq!(floored.take_wake(), origin.checked_add(TICK));
+}
+
+#[test]
+fn animation_asks_keep_the_earliest() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let motion = motion(origin);
+    // A later ask first: the earliest still wins.
+    motion.ask_animate(origin, Duration::from_millis(5_000));
+    motion.ask_animate(
+        origin
+            .checked_add(Duration::from_millis(100))
+            .expect("after the origin"),
+        Duration::from_millis(200),
+    );
+    assert_eq!(
+        motion.take_wake(),
+        origin.checked_add(Duration::from_millis(300))
+    );
+}
+
+#[test]
+fn an_animation_ask_silently_ignores_an_instant_overflow() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let motion = motion(origin);
+    motion.ask_animate(origin, Duration::MAX);
+    assert_eq!(motion.take_wake(), None);
+}
+
+#[test]
+fn an_animation_ask_is_silent_under_reduced_motion() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let mut reduced = motion(origin);
+    reduced.set_reduced(true);
+    reduced.ask_animate(origin, Duration::from_millis(500));
+    assert_eq!(reduced.take_wake(), None);
+}

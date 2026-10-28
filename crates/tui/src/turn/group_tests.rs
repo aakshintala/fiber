@@ -2095,6 +2095,91 @@ fn a_wide_gutter_shifts_extension_links_by_its_own_cells() {
 /// `<`, width 7 at step 100000's 7-cell gutter takes the gutter-plus-line
 /// branch, and the link shifts by seven; `<=` would cut the line away.
 /// Through a draw the gutter leaves the line nothing there, so the row is
+#[test]
+fn gutter_row_keeps_the_animated_tag() {
+    use crate::ext::anim::AnimKey;
+    let key = AnimKey::new(
+        crate::ext::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        "ledger_row",
+        7,
+        "test",
+        None,
+    );
+    let line = crate::ext::spans::FittedLine {
+        line: ratatui::text::Line::from(vec![ratatui::text::Span::raw("ab")]),
+        links: vec![],
+        pad: 0,
+        anim: Some(key.clone()),
+    };
+    let (_, text) = super::gutter_row("100000 ".to_owned(), 7, &line, 40);
+    assert_eq!(text.anim, Some(key));
+}
+
+#[test]
+fn an_animated_group_line_keeps_its_tag() {
+    use crate::ext::tests::AnimatedRenderer;
+    let fake = Rc::new(AnimatedRenderer::filling(
+        "group_line",
+        std::time::Duration::from_millis(500),
+        1,
+    ));
+    let handle = Handle::create();
+    handle.set(fake.clone() as Rc<dyn Renderer>);
+    let bound = Bound {
+        handle,
+        cache: Arc::new(Cache::default()),
+        page: crate::ext::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        ctx: crate::ext::SessionCtx {
+            session_id: Some(contract::SessionId("s".into())),
+            halves: None,
+        },
+        flat: false,
+    };
+    let t0 = fakes::clock::FakeClock::new().origin();
+    bound.cache.begin_anim_frame(Some(t0), false);
+    let (_, texts) = draw(&identity_group(), 40, Some(&bound));
+    // The animated summary row carries its item's tag through the
+    // direct push.
+    assert!(texts.first().expect("a summary row").anim.is_some());
+}
+
+#[test]
+fn animated_ledger_rows_keep_their_tags_through_the_gutter() {
+    use crate::ext::tests::AnimatedRenderer;
+    let fake = Rc::new(AnimatedRenderer::filling(
+        "ledger_row",
+        std::time::Duration::from_millis(500),
+        1,
+    ));
+    let handle = Handle::create();
+    handle.set(fake.clone() as Rc<dyn Renderer>);
+    let bound = Bound {
+        handle,
+        cache: Arc::new(Cache::default()),
+        page: crate::ext::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        ctx: crate::ext::SessionCtx {
+            session_id: Some(contract::SessionId("s".into())),
+            halves: None,
+        },
+        flat: false,
+    };
+    let t0 = fakes::clock::FakeClock::new().origin();
+    bound.cache.begin_anim_frame(Some(t0), false);
+    let (_, texts) = draw(&identity_group(), 40, Some(&bound));
+    // The catch-all animates every call row: each keeps its tag past
+    // the gutter.
+    assert!(texts.iter().skip(1).any(|text| text.anim.is_some()));
+}
+
 /// the gutter only with no links, while width 8 keeps the link (#2785).
 #[test]
 fn the_gutter_equal_width_keeps_the_fitted_line_and_its_link() {
@@ -2102,6 +2187,7 @@ fn the_gutter_equal_width_keeps_the_fitted_line_and_its_link() {
         line: ratatui::text::Line::from(vec![ratatui::text::Span::raw("ab")]),
         links: vec![(0..2, "https://example.com".to_owned())],
         pad: 0,
+        anim: None,
     };
     let (row, text) = super::gutter_row("100000 ".to_owned(), 7, &line, 7);
     assert_eq!(row.to_string(), "100000 ab");

@@ -122,6 +122,11 @@ pub(crate) struct Attention {
     announced: Mutex<BTreeMap<String, Announced>>,
     listeners: Mutex<Fanout>,
     stopped: AtomicBool,
+    /// Tests only: fails the next `listen` while live, so the
+    /// refused-registration path runs without an outside seam: `listen`
+    /// refuses only once stopped or when armed, and stopping the attention
+    /// would end the live hub the test needs, while no socket, starter,
+    /// clock or file seam fails one registration while live.
     #[cfg(test)]
     fail_listen: AtomicBool,
 }
@@ -171,6 +176,9 @@ impl Attention {
         lock(&self.listeners).broadcast(&line)
     }
 
+    /// Tests only: arms the `fail_listen` refusal, so the next `listen`
+    /// is refused; see the field for why no outside seam fails one
+    /// registration while live.
     #[cfg(test)]
     pub(crate) fn fail_next_listen(&self) {
         self.fail_listen.store(true, Ordering::SeqCst);
@@ -283,18 +291,6 @@ impl Attention {
 
     pub(crate) fn forget(&self, session: &str) {
         lock(&self.announced).remove(session);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn listeners(&self) -> usize {
-        lock(&self.listeners).ids().len()
-    }
-
-    /// How many retired writers still wait for joining: the fan-out's
-    /// count under the registry guard.
-    #[cfg(test)]
-    pub(crate) fn retired(&self) -> usize {
-        lock(&self.listeners).retired()
     }
 
     /// How many attention writers started, including retired ones: actual
