@@ -64,7 +64,10 @@ impl CredentialPair {
 
 /// One provider a Lua extension registered with `fiber.provider`.
 pub struct LuaProvider {
+    // For a process provider this supplies home, directory and clock only:
+    // no Lua provider file is loaded or called.
     extension: Arc<LuaExtension>,
+    pub(crate) process: Option<ProcessProvider>,
     name: String,
     models: Mutex<Option<Vec<ModelData>>>,
     /// One entry per stored credential and label, so a label switch gets
@@ -87,6 +90,13 @@ pub struct LuaProvider {
     /// A test's hold on a caller after it wakes and before it looks again.
     #[cfg(test)]
     woke: Mutex<Option<WokeHook>>,
+}
+
+/// The admitted process registration and the owner keeping its callbacks alive.
+pub(crate) struct ProcessProvider {
+    pub(crate) runtime: crate::runtime::Runtime,
+    pub(crate) runs: BTreeMap<String, crate::runtime::FunctionRef>,
+    pub(crate) owner: Arc<crate::process::ProcessExtension>,
 }
 
 /// A test's hold on a woken caller: `arrived` fires after the wake, and the
@@ -212,6 +222,7 @@ impl LuaProvider {
         let quotas = quota::Quotas::new(extension.clock());
         Arc::new(Self {
             extension,
+            process: None,
             name: name.into(),
             models: Mutex::default(),
             token: Mutex::default(),
@@ -255,7 +266,10 @@ impl LuaProvider {
 
     /// The functions `fiber.provider` registered for this provider, sorted.
     pub fn functions(&self) -> Result<Vec<String>, Error> {
-        self.extension.provider_functions(&self.name)
+        match &self.process {
+            Some(process) => Ok(process.runs.keys().cloned().collect()),
+            None => self.extension.provider_functions(&self.name),
+        }
     }
 
     /// Whether `fiber.provider` registered `function` for this provider.
@@ -271,6 +285,12 @@ impl LuaProvider {
     ) -> Result<Option<Arc<dyn Signer>>, Error> {
         let functions = self.functions()?;
         let credential = functions.iter().any(|f| f == "credential");
+        if self.process.is_some() && credential {
+            return Err(self.bad_return(
+                "credential",
+                "process credential scope is unavailable".into(),
+            ));
+        }
         let sign = functions.iter().any(|f| f == "sign");
         if !credential && !sign {
             return Ok(None);
@@ -441,6 +461,12 @@ impl LuaProvider {
     // token expires. Report a failed refresh as a notice if tokens are seen
     // expiring mid-session.
     pub fn token(self: &Arc<Self>, pair: &CredentialPair) -> Result<Secret, Error> {
+        if self.process.is_some() {
+            return Err(self.bad_return(
+                "credential",
+                "process credential scope is unavailable".into(),
+            ));
+        }
         Ok(self.current(pair)?.secret)
     }
 
@@ -546,6 +572,12 @@ impl LuaProvider {
     /// Fetches the cached credential as its callback's token, expiry and headers.
     /// The returned JSON contains secrets and is intended for the case runner.
     pub fn credential_value(self: &Arc<Self>, pair: &CredentialPair) -> Result<Value, Error> {
+        if self.process.is_some() {
+            return Err(self.bad_return(
+                "credential",
+                "process credential scope is unavailable".into(),
+            ));
+        }
         let token = self.current(pair)?;
         let headers: Map<String, Value> = token
             .headers
@@ -562,6 +594,11 @@ impl LuaProvider {
         self: &Arc<Self>,
         pair: &CredentialPair,
     ) -> Result<Secret, signing::Error> {
+        if self.process.is_some() {
+            return Err(signing::Error::Failed(
+                "process credential scope is unavailable".into(),
+            ));
+        }
         Ok(self.signing_token(pair)?.secret)
     }
 
@@ -714,6 +751,15 @@ impl LuaProvider {
     }
 
     pub(crate) fn call(&self, function: &'static str, arg: Value) -> Result<Value, Error> {
+        if let Some(process) = &self.process {
+            let Some(run) = process.runs.get(function) else {
+                return Err(self.bad_return(function, "function is not registered".into()));
+            };
+            return process
+                .runtime
+                .tool_run(run, arg, &support::cancel::Token::new())
+                .map(|value| value.unwrap_or(Value::Null));
+        }
         self.extension.provider_call(&self.name, function, arg)
     }
 

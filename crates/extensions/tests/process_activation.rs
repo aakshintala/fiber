@@ -23,6 +23,84 @@ use fakes::clock::FakeClock;
 use fakes::{CancelToken, Deadline, NoLock, ProcessFixture, Recorder, TempDir};
 use serde_json::{Map, Value, json};
 
+/// A process provider needs no Lua file and exposes only its registered
+/// callbacks (`docs/extensions.md`, "Process extensions"). Inspection and
+/// a missing callback do no work; a positive models call proves dispatch.
+#[test]
+fn process_provider_handles_inspect_without_calls_and_dispatch_models() {
+    let env = Env::new("fiber-process-provider");
+    let invoked = env.marker("models.json");
+    let mut steps = vec![json!({"read": {}})];
+    steps.extend(
+        register(
+            "fiber.provider",
+            "provider",
+            json!(["remote", {
+                "models": {"timeout": 5000, "run": true}
+            }]),
+        )
+        .as_array()
+        .unwrap()
+        .clone(),
+    );
+    steps.push(json!({"send": {"id": "ready", "command": "ready"}}));
+    steps.push(
+        json!({"read_until": {"path": "kind", "equals": "extension_request", "as": "request"}}),
+    );
+    steps.push(json!({"write_file": {"path": invoked, "value": {"$ref": "request"}}}));
+    steps.push(
+        json!({"send": {"id": "answer", "command": "reply", "args": {
+            "request_id": {"$ref": "request.payload.request_id"}, "result": []
+        }}}),
+    );
+    steps.push(json!({"loop": [{"read": {}}]}));
+    env.install_process(
+        "provider",
+        &json!({"providers": {"remote": []}}),
+        &json!(steps),
+    );
+    let session = env.load(ExtensionReason::New, 0);
+    let provider = session
+        .start_provider(
+            &env.config(),
+            FakeClock::new(),
+            Arc::new(NoLock),
+            "fiber.test/provider",
+            "remote",
+        )
+        .expect("a process registration supplies the provider without a Lua file");
+    assert_eq!(provider.functions().unwrap(), vec!["models"]);
+    assert!(!provider.registers("credential").unwrap());
+    assert!(
+        provider
+            .signer(extensions::CredentialPair {
+                credential: "remote".into(),
+                label: "default".into()
+            })
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        !invoked.exists(),
+        "inspection and no-signer admission run no callback"
+    );
+    let (sent, received) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        sent.send(provider.list_models(&extensions::ModelsArg::default()))
+            .unwrap();
+    });
+    let (models, returned) = Deadline::after(WAIT)
+        .recv_or_fail(&received, "process models callback")
+        .unwrap();
+    worker.join().unwrap();
+    assert!(models.is_empty());
+    assert_eq!(returned, json!([]));
+    let request = read_json_file(&invoked, "models request");
+    assert_eq!(request["payload"]["registration"], "provider");
+    assert_eq!(request["payload"]["key"], "models");
+    session.finish_processes(&CancelToken::new());
+}
+
 /// How long a test waits for the fixture's files before failing.
 const WAIT: Duration = Duration::from_secs(20);
 

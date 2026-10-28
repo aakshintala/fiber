@@ -120,6 +120,9 @@ pub struct SessionExtensions {
     /// order: the extension's name beside its provider.
     lua_providers: Vec<(String, Arc<LuaProvider>)>,
     provider_vms: Mutex<BTreeMap<String, Weak<LuaExtension>>>,
+    /// Process registrations remain available after routing releases its
+    /// initial provider handles; their owners retain the session services.
+    process_providers: BTreeMap<(String, String), Arc<LuaProvider>>,
     browser: Arc<crate::attend::SessionBrowser>,
     emitter: Mutex<Option<Arc<dyn contract::emit::Emit>>>,
     /// The session inbox sender the last `deliver_to` received, kept for
@@ -198,6 +201,7 @@ impl Default for SessionExtensions {
             watermark: Default::default(),
             lua_providers: Default::default(),
             provider_vms: Default::default(),
+            process_providers: Default::default(),
             browser: Default::default(),
             emitter: Default::default(),
             inbox: Default::default(),
@@ -1106,11 +1110,13 @@ impl SessionExtensions {
                     }
                 }
             }
-            // A process package folds its registrations into the session:
-            // a failed package stays out, with the failure's notice.
+            // Stage the directory for provider metadata before admission;
+            // a refused process package must not remain in the loaded set.
+            session.dirs.push((s.name.clone(), s.dir));
             if let Some(package) = &s.package
                 && !session.admit_process(&s.name, package, &mut chain, &settled.tools)
             {
+                drop(session.dirs.pop());
                 continue;
             }
             if let Some(opening) = s.manifest.opening {
@@ -1119,7 +1125,6 @@ impl SessionExtensions {
             if let Some(text) = s.prompt {
                 session.prompts.push((s.name.clone(), text));
             }
-            session.dirs.push((s.name.clone(), s.dir));
             session.loaded.push(LoadedExtension {
                 name: s.name,
                 version: s.version,
@@ -2031,6 +2036,37 @@ impl SessionExtensions {
             ));
         }
         let runtime = self.runtime.clone();
+        if !registry.providers().is_empty()
+            && let Some(live) = self.processes.iter().find(|live| live.name == name)
+        {
+            let Some((_, dir)) = self.dirs.iter().rev().find(|(owner, _)| owner == name) else {
+                return false;
+            };
+            let metadata = Arc::new(LuaExtension::new(
+                name,
+                dir,
+                &self.home,
+                Arc::clone(&live.services.clock),
+            ));
+            for (provider_name, entry) in registry.providers() {
+                let mut provider = LuaProvider::new(Arc::clone(&metadata), provider_name);
+                // `new` returns a unique handle. Bind the backend before
+                // publishing any clone to session or routing consumers.
+                let Some(handle) = Arc::get_mut(&mut provider) else {
+                    return false;
+                };
+                handle.process = Some(crate::lua_provider::ProcessProvider {
+                    runtime: runtime.clone(),
+                    runs: entry.runs.clone(),
+                    owner: Arc::clone(&live.owner),
+                });
+                self.process_providers.insert(
+                    (name.to_owned(), provider_name.clone()),
+                    Arc::clone(&provider),
+                );
+                self.lua_providers.push((name.to_owned(), provider));
+            }
+        }
         for (tool, entry) in registry.tools() {
             if settled_tools.contains(&(name.to_owned(), tool.clone())) {
                 self.tools.push((

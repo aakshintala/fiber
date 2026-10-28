@@ -59,6 +59,12 @@ impl LuaProvider {
         label: Option<&str>,
         method: LoginMethod,
     ) -> Result<LoggedIn, Error> {
+        if self.process.is_some() {
+            return Err(self.bad_return(
+                "credential",
+                "process login requires trusted credential scope, which is unavailable".into(),
+            ));
+        }
         self.extension.ensure_provider(&self.name)?;
         let slot: LoginSlot = Arc::new(Mutex::new(None));
         let inner: Result<LoggedIn, Error> = (|| {
@@ -102,6 +108,13 @@ impl LuaProvider {
     /// error, a later call fails without running, and a parked
     /// `host.oauth.callback` closes its listener. Idempotent.
     pub fn stop(&self) {
+        if let Some(process) = &self.process {
+            drop(
+                process
+                    .owner
+                    .finish(std::time::Duration::ZERO, &support::cancel::Token::new()),
+            );
+        }
         self.extension.dispose();
     }
 }
