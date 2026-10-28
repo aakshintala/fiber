@@ -21,7 +21,11 @@ mod exit;
 
 mod clear;
 
+mod delete;
+
 mod hooks_offer;
+
+use delete::DeleteCommand;
 
 /// A stop, delete or import waiting for its answer: a refusal becomes
 /// the row's note and a notice, an accepted delete drops the row, an
@@ -128,6 +132,10 @@ pub(super) struct Questions {
     /// The sessions `close` went out for from the quit question, with
     /// their close ids: a close never written keeps its resume line.
     closing: Vec<(SessionId, String)>,
+    /// `/delete` for the session on screen: its discovery, question and
+    /// confirmed stops, beside the asks they correlate. The module owns
+    /// the field; the rest of the app goes through its methods.
+    delete_command: DeleteCommand,
 }
 
 impl Questions {
@@ -189,7 +197,7 @@ impl App {
             return self.import_key(key);
         }
         match key {
-            Key::Enter => Some(self.send_delete()),
+            Key::Enter => Some(self.delete_question_enter()),
             Key::Esc => {
                 self.close_prompt();
                 Some(Effect::None)
@@ -229,8 +237,13 @@ impl App {
 
     /// Settles every delete waiting after a dropped connection: a
     /// delete is a hub command and is not resent, so each one settles
-    /// as unanswered, in id order. With no home it does nothing.
+    /// as unanswered, in id order, and the command's unanswered stops
+    /// end in its stop uncertainty. With no home it does nothing.
     pub(super) fn settle_deletes(&mut self) {
+        if self.home.is_none() {
+            return;
+        }
+        self.delete_command_disconnected();
         let Some(home) = self.home.as_ref() else {
             return;
         };
@@ -303,6 +316,9 @@ impl App {
             .as_ref()
             .and_then(|home| home.sessions.by_key(key))
             .map(|row| row.id.clone());
+        if id.is_some() {
+            self.close_delete_prompt();
+        }
         if let (Some(home), Some(id)) = (self.home.as_mut(), id) {
             home.questions.prompt = Some(Prompt::Delete {
                 id,
@@ -312,8 +328,12 @@ impl App {
         }
     }
 
-    /// Closes the foot's question, keeping the session.
+    /// Closes the foot's question, keeping the session. Esc on the
+    /// command's question cancels the command with it.
     fn close_prompt(&mut self) {
+        if self.command_owns_prompt() {
+            self.delete_command_cancel();
+        }
         if let Some(home) = self.home.as_mut() {
             home.questions.prompt = None;
         }
@@ -321,8 +341,12 @@ impl App {
 
     /// Closes the delete question, keeping the session: a
     /// `Prompt::Delete` only. The quit question and no prompt stay as
-    /// they are.
+    /// they are. The ✕ on the command's question cancels the command
+    /// with it.
     pub(super) fn close_delete_prompt(&mut self) {
+        if self.command_owns_prompt() {
+            self.delete_command_cancel();
+        }
         if let Some(home) = self.home.as_mut()
             && matches!(home.questions.prompt, Some(Prompt::Delete { .. }))
         {
@@ -416,20 +440,7 @@ impl App {
         if !self.outbox.is_up() {
             return Effect::None;
         }
-        let command = mint();
-        let line = match &expect {
-            None => json!({"id": command, "command": "delete", "args": {"session": id.0}}),
-            Some(expect) => json!({
-                "id": command,
-                "command": "delete",
-                "args": {
-                    "session": id.0,
-                    "cascade": true,
-                    "expect": expect.iter().map(|session| &session.0).collect::<Vec<_>>(),
-                },
-            }),
-        }
-        .to_string();
+        let (command, line) = delete_line(&id, expect.as_deref());
         if let Some(home) = self.home.as_mut() {
             home.questions.asks.insert(command, Ask::Delete(id));
         }
@@ -642,6 +653,7 @@ impl App {
                         }
                     }
                     if expect.len() > 1 {
+                        self.close_delete_prompt();
                         if let Some(home) = self.home.as_mut() {
                             home.questions.prompt = Some(Prompt::Delete {
                                 id,
@@ -663,16 +675,38 @@ impl App {
     /// Closes the foot's question when it asks about `id`: an answer for
     /// an older question leaves a newer one open.
     fn clear_prompt(&mut self, id: &SessionId) {
-        if let Some(home) = self.home.as_mut()
-            && home
-                .questions
+        let clears = self.home.as_ref().is_some_and(|home| {
+            home.questions
                 .prompt
                 .as_ref()
                 .is_some_and(|prompt| prompt.id() == Some(id))
-        {
+        });
+        if clears && self.command_owns_prompt() {
+            self.delete_command_cancel();
+        }
+        if clears && let Some(home) = self.home.as_mut() {
             home.questions.prompt = None;
         }
     }
+}
+
+/// Builds the existing delete command line and its correlation id.
+fn delete_line(id: &SessionId, expect: Option<&[SessionId]>) -> (String, String) {
+    let command = mint();
+    let line = match expect {
+        None => json!({"id": command, "command": "delete", "args": {"session": id.0}}),
+        Some(expect) => json!({
+            "id": command,
+            "command": "delete",
+            "args": {
+                "session": id.0,
+                "cascade": true,
+                "expect": expect.iter().map(|session| &session.0).collect::<Vec<_>>(),
+            },
+        }),
+    }
+    .to_string();
+    (command, line)
 }
 
 /// A refusal's code and message.

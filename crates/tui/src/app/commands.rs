@@ -310,6 +310,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_close,
     },
     CommandEntry {
+        name: "delete",
+        description: "Stops, then deletes the session on screen.",
+        hint: None,
+        run: run_delete,
+    },
+    CommandEntry {
         name: "feedback",
         description: "Writes a feedback report and prints its path and the issue link.",
         hint: Some("<description>"),
@@ -439,6 +445,10 @@ fn run_close(app: &mut App, rest: &str) -> Option<Effect> {
 
 fn run_clear(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.clear())
+}
+
+fn run_delete(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.delete_on_screen())
 }
 
 /// `/feedback`: with no description, asks for one by leaving the draft
@@ -700,9 +710,13 @@ impl App {
         // `route_key`, so a paste or a home-owned arrow reaching here
         // changes neither the draft nor the surface behind them. They run
         // ahead of the picker, the chip row and the draft, as their keys
-        // run ahead of every other key path.
+        // run ahead of every other key path. The delete question swallows
+        // edits too, over the attached session as on home.
         let top = self.top_surface();
-        if matches!(top, Surface::Quit | Surface::Clear | Surface::Report) {
+        if matches!(
+            top,
+            Surface::Quit | Surface::Clear | Surface::Report | Surface::DeleteQuestion
+        ) {
             return Effect::None;
         }
         // The reviewer setup takes every edit while it is on top: a paste
