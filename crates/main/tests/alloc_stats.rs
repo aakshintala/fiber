@@ -27,6 +27,7 @@ use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{KillGroup, Run, Setup, function_call, hello, is_status, spawn_watched, stream};
 
+// debt: duplicated binary-test harness helpers kept per RULE-1233-E (support/mod.rs read-only); extract into tests/support/mod.rs when a third copy appears or when a lane next has support/mod.rs in its admitted Files.
 // Parses stdout into one JSON value per line, skipping status lines.
 // This file's copy; every binary test file carries its own.
 impl From<std::process::Output> for Run {
