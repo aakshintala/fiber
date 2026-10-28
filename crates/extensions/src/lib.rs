@@ -13,6 +13,7 @@
 mod attend;
 #[cfg(test)]
 mod attend_tests;
+pub mod case;
 mod commands;
 mod extension_tools;
 mod first_party;
@@ -146,6 +147,12 @@ pub enum Error {
     /// Reading a manifest or a provider's data failed.
     #[error(transparent)]
     Config(#[from] ConfigError),
+    /// An extension case file is malformed.
+    #[error("{0}")]
+    Case(String),
+    /// Starting an extension case driver thread failed.
+    #[error("starting the case driver: {0}")]
+    CaseDriver(#[source] io::Error),
     /// Copying or moving an extension's files failed.
     #[error("{}: {source}", path.display())]
     Io {
@@ -588,6 +595,7 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Config(e) => e.code(),
+            Self::CaseDriver(_) => ErrorCode::IoFailed,
             Self::Io { .. } | Self::Pin { .. } | Self::ChangedWhileCopying { .. } => {
                 ErrorCode::IoFailed
             }
@@ -638,7 +646,7 @@ impl Error {
             | Self::NoContextWindow { .. } => ErrorCode::NoModel,
             Self::Unconfigured { .. } => ErrorCode::ModelUnconfigured,
             Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
-            Self::ScriptedStartOnly => ErrorCode::InvalidArguments,
+            Self::ScriptedStartOnly | Self::Case(_) => ErrorCode::InvalidArguments,
             Self::Credential(_) => ErrorCode::CredentialFailed,
             Self::RefreshRejected { .. } | Self::Unattended { .. } | Self::LoginTimedOut { .. } => {
                 ErrorCode::AuthenticationFailed
