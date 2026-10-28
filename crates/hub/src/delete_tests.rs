@@ -16,6 +16,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::thread;
 use std::time::Duration;
 
@@ -23,7 +24,7 @@ use contract::clock::Clock;
 use serde_json::json;
 
 use super::*;
-use crate::connection::serve_connection;
+use crate::connection::{Accept, serve_counted};
 use crate::fake::{FakeStarter, status};
 use crate::recent::{self, RecentRow};
 use crate::testkit::{args, id};
@@ -117,7 +118,13 @@ fn held_as_set(answer: &Value) -> BTreeSet<String> {
 fn over_the_wire(hub: &Arc<Hub>, line: &str) -> Value {
     let (a, b) = UnixStream::pair().unwrap();
     let serving = Arc::clone(hub);
-    thread::spawn(move || serve_connection(a, serving));
+    thread::spawn(
+        move || match serving.poll_accept(&a, &AtomicBool::new(false)) {
+            Accept::Counted(n) => serve_counted(a, serving, n),
+            Accept::Dropped => panic!("test connection stream could not be cloned"),
+            Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+        },
+    );
     b.set_read_timeout(Some(DEADLINE)).unwrap();
     (&b).write_all(format!("{line}\n").as_bytes()).unwrap();
     let mut read = BufReader::new(b);

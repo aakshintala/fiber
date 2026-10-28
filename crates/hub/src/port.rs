@@ -29,9 +29,6 @@ use frame::Incoming;
 mod frame;
 mod handshake;
 
-#[cfg(test)]
-use std::sync::MutexGuard;
-
 /// How long the signal path waits for the stopping closes to go out, well
 /// inside the 5 s bound from the signal to exit.
 pub(crate) const STOP_CLOSE_WAIT: Duration = Duration::from_secs(1);
@@ -104,17 +101,14 @@ impl Web {
         }
         sink.stream.write_all(&frame)
     }
-
-    #[cfg(test)]
-    fn hold(&self) -> MutexGuard<'_, Sink> {
-        connection::lock(&self.sink)
-    }
 }
 
 #[cfg(test)]
 impl Web {
     /// A websocket that stays as drained as built, for the stop answer's
-    /// wait: nothing pumps it, so `drained` never flips on its own.
+    /// wait: nothing pumps it, so `drained` never flips on its own. No
+    /// outside seam builds one without a live TCP peer: clients observe
+    /// only their own close.
     #[allow(clippy::unwrap_used, reason = "a test fake; a failure is the test's")]
     pub(crate) fn never_drained(drained: bool) -> Arc<Web> {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -463,7 +457,9 @@ fn refuse(
 
 /// Starts a `hub-ws-*` thread. In tests, `Hub::fail_spawn` refuses every
 /// spawn of the named thread, so the spawn-failure paths run with no outside
-/// seam.
+/// seam. Thread-spawn failure has no deterministic outside trigger:
+/// resource exhaustion cannot be staged per test. The pinned paths are
+/// degraded modes with wire effects, 1011 closes and `io_failed` answers.
 fn spawn(hub: &Hub, name: &'static str, run: impl FnOnce() + Send + 'static) -> io::Result<()> {
     #[cfg(not(test))]
     let _ = hub;

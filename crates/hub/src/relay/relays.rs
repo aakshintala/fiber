@@ -34,24 +34,40 @@ pub(crate) struct Relays {
     /// openers never publish two relays for one session (see #1462).
     pub(crate) gates: HashMap<String, Arc<Mutex<()>>>,
     /// Tests only: pauses after a transfer write, before its result returns.
+    /// It pauses the transfer with the relays lock held so the session can
+    /// answer in that gap, proving the timer cannot complete before the
+    /// transfer returns. The paused tests answer over the socket and
+    /// channels, never needing the held lock; no outside seam pauses the
+    /// transfer between the write and its result.
     #[cfg(test)]
     pub(crate) after_transfer_write: Option<Box<dyn FnOnce() + Send>>,
     /// Tests only: a one-shot pause in `route` between keeping a command
-    /// as sent and writing it, with the relays lock held.
+    /// as sent and writing it, with the relays lock held. The
+    /// stranded-command tests end the session in that gap, and the tripwire
+    /// asserts the gap never opens on replay-only paths. The forced party
+    /// ends the session over the socket, never needing the held lock; no
+    /// outside seam pauses `route` between the keep and the write.
     #[cfg(test)]
     pub(crate) before_command_write: Option<Box<dyn FnOnce() + Send>>,
     /// Tests only: a one-shot signal an opener calls after cloning its
     /// session's gate and dropping the relays lock, immediately before
-    /// blocking on the gate.
+    /// blocking on the gate. It marks the opener about to block so the
+    /// race test orders the two openers' holds; without the gate the second
+    /// never signals contention. No outside seam stages two openers onto
+    /// one gate on demand.
     #[cfg(test)]
     pub(crate) at_gate: Option<Box<dyn FnOnce() + Send>>,
     /// Tests only: a one-shot signal when `try_lock` sees another opener
-    /// holding the gate, before this opener blocks on it.
+    /// holding the gate, before this opener blocks on it. It signals the
+    /// contention the race test requires before the second opener blocks.
+    /// No outside seam forces two openers onto one gate on demand.
     #[cfg(test)]
     pub(crate) blocked_gate: Option<Box<dyn FnOnce() + Send>>,
     /// Tests only: a one-shot pause in `closed::on_end` after the decision
     /// and before the drop, taken under the relays lock and called with no
-    /// lock held.
+    /// lock held. It parks the closing relay between its loop's end and the
+    /// relays lock for the teardown race. Exiting the session acts before
+    /// the loop ends or after the lock is taken, never in the gap.
     #[cfg(test)]
     pub(crate) at_close: Option<Box<dyn FnOnce() + Send>>,
     /// Per session, the last `subscribe` it accepted, without its

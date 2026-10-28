@@ -549,7 +549,11 @@ fn a_spawn_failure_rollback_restarts_the_timer() {
     // What the accept loop does: count, then roll back when the serving
     // thread fails to spawn.
     let (counted, _peer) = UnixStream::pair().unwrap();
-    let n = hub.register(&counted).expect("the clone succeeds");
+    let n = match hub.poll_accept(&counted, &AtomicBool::new(false)) {
+        crate::connection::Accept::Counted(n) => n,
+        crate::connection::Accept::Dropped => panic!("the test connection clone failed"),
+        crate::connection::Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
     await_open_park(&clock, "after the count");
     clock.advance_when_parked(
         None,
@@ -616,7 +620,15 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
     let arrival = thread::spawn({
         let hub = Arc::clone(&hub);
         move || {
-            let n = hub.register(&counted);
+            let n = match hub.poll_accept(&counted, &AtomicBool::new(false)) {
+                crate::connection::Accept::Counted(n) => n,
+                crate::connection::Accept::Dropped => {
+                    panic!("the test connection clone failed")
+                }
+                crate::connection::Accept::Exiting => {
+                    panic!("fresh test hub unexpectedly exiting")
+                }
+            };
             b_tx.send(n).unwrap_or(());
         }
     });
@@ -649,8 +661,7 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&a_done, "the advance to finish its wake");
     let n = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&b_done, "the arrival to finish its wake")
-        .expect("the clone succeeds");
+        .recv_or_fail(&b_done, "the arrival to finish its wake");
     advance.join().expect("the advance thread joins");
     arrival.join().expect("the arrival thread joins");
     assert!(

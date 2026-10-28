@@ -50,8 +50,6 @@ use crate::retire::{AckOrder, Retire};
 
 #[cfg(test)]
 pub(crate) use ack::ack_parses;
-#[cfg(test)]
-pub(crate) use ack::acknowledges;
 pub(crate) use ack::{Ack, acknowledgement};
 use ack::{Settled, Verdict, kept_has, muted, settle};
 pub(crate) use relays::Relays;
@@ -1347,7 +1345,10 @@ struct RelayThread {
 
 /// Tests only: runs a relay thread as `attach` would, without an entry:
 /// the caller pushes the entry it reads. Each argument is one the relay
-/// owns, as in `attach`.
+/// owns, as in `attach`. The production `attach` derives its own entry
+/// state and cannot stage retiring states or `LiveUnreadable` targets;
+/// exposing `RelayThread` or `relay` to the sibling test modules would add
+/// new production seams, which the ticket forbids.
 #[cfg(test)]
 #[allow(
     clippy::too_many_arguments,
