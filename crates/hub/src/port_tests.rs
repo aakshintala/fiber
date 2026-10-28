@@ -15,6 +15,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::MutexGuard;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -358,6 +359,12 @@ fn helloed(port: u16, origin: Option<&str>) -> Ws {
 fn signal(hub: &Hub, got: &AtomicI32) {
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
+}
+
+impl Web {
+    fn hold(&self) -> MutexGuard<'_, Sink> {
+        lock(&self.sink)
+    }
 }
 
 /// Waits until the hub counts no client.

@@ -98,79 +98,136 @@ pub(crate) struct Hub {
     /// takes the shared gate instead (`docs/invocation.md`, "`rewind`
     /// starts a new session process").
     pub(crate) starting: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
-    /// Tests only: a one-shot pause run before `hub_hello` is sent.
+    /// Tests only: a one-shot pause run before `hub_hello` is sent. It
+    /// parks a connection between its attention registration and its
+    /// `hub_hello`, the window the waiting-attention delivery test needs.
+    /// No socket, starter, or clock the test controls pauses the hub
+    /// between those two steps of one serving thread.
     #[cfg(test)]
     pub(crate) before_hello: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: a one-shot pause before the next forwarded session line.
+    /// It parks the relay thread between the wait's end and the forward,
+    /// so the test stages the session state the forward must see. Sockets
+    /// and channels move session lines but cannot hold the thread on that
+    /// boundary.
     #[cfg(test)]
     pub(crate) before_forward: ForwardHook,
     /// Tests only: observes and pauses after the relay filters a session line.
+    /// It pauses the relay thread between the replay-filter decision and
+    /// the line's forward or drop, so the rewind choreography stages the
+    /// next line in that gap. No outside seam reaches inside the relay
+    /// thread between the decision and the write.
     #[cfg(test)]
     pub(crate) after_replay_filter: ReplayFilterHook,
     /// Tests only: a one-shot pause before an accepted `subscribe` is kept.
+    /// It pauses the relay thread between accepting a subscribe and keeping
+    /// it, so the resume choreography runs the reconnect while the
+    /// acceptance is still unrecorded. Ending or rewiring the session from
+    /// outside lands before the accept or after the keep, never in between.
     #[cfg(test)]
     pub(crate) before_accepted: ForwardHook,
-    /// Tests only: runs after a client command's route returns.
+    /// Tests only: runs after a client command's route returns. It pauses
+    /// the serving thread between the route's return and the
+    /// acknowledgement, so the test orders the acknowledgement against the
+    /// pass-on. No socket or starter pauses the serving thread between
+    /// those two steps.
     #[cfg(test)]
     pub(crate) after_relay: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: a one-shot pause in `route` after its opening is taken
-    /// and before the connect.
+    /// and before the connect. It pauses the opener in that gap so the
+    /// race choreography stages the session there. Closing the session
+    /// socket or exiting the session acts before the take or after the
+    /// connect, never in between.
     #[cfg(test)]
     pub(crate) before_open: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: a one-shot pause in `route` after the opener connects
-    /// and before the pending command is written.
+    /// and before the pending command is written. The stranded-command
+    /// tests end the session in that gap. No outside seam holds the opener
+    /// between the connect and the write.
     #[cfg(test)]
     pub(crate) after_connect: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: a one-shot hook in `route`'s resumed-session retry,
     /// after the retry connects and before its command is written. A test
     /// shuts the retry stream here so the retry write fails on every run.
+    /// No outside seam shuts the retry stream between the connect and the
+    /// write; the window spans two steps of one opener thread.
     #[cfg(test)]
     pub(crate) after_resume_connect: AfterResumeConnectHook,
-    /// Tests only: runs handing a queued command over, or clearing it.
+    /// Tests only: runs handing a queued command over, or clearing it. It
+    /// pauses the relay thread at the handover, so the choreography orders
+    /// the forwarded acknowledgement against the pass-on. No outside seam
+    /// reaches the handover between the relay thread's own steps.
     #[cfg(test)]
     pub(crate) on_pass_on: PassOnHook,
     /// Tests only: a one-shot pause run after the read loop ends and
     /// before the write shutdown, with its own mutex released: the forced
     /// overflow races hold it to order connection teardown against the
     /// bound report. No other race hook is required: queue fullness, EOF
-    /// and joins need none.
+    /// and joins need none. No outside seam holds the serving thread on
+    /// that boundary: closing the socket from outside ends the read loop
+    /// earlier or races the shutdown, but cannot pause the thread there.
     #[cfg(test)]
     pub(crate) before_disconnect_cleanup: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: a one-shot pause in admission after the increment and
-    /// before the flag load.
+    /// before the flag load. It orders the increment before a sessions
+    /// stop stored in the gap, so the start is refused. `FakeStarter`
+    /// parks only at admission, after the store, too late for this window.
     #[cfg(test)]
     pub(crate) between_admit_steps: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: a one-shot pause in a bare `stop` after the
-    /// acknowledgement is written and before the store.
+    /// acknowledgement is written and before the store. It holds the
+    /// serving thread there so the test asserts the store untouched. No
+    /// outside seam pauses the serving thread between those two writes.
     #[cfg(test)]
     pub(crate) bare_stop_pause: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: fired when a sessions-stop zero-wait first finds a
-    /// nonzero bind count.
+    /// nonzero bind count. It names the exact waiting thread the test's
+    /// clock advance must release; the fake clock cannot tell waiting
+    /// threads apart under load.
     #[cfg(test)]
     pub(crate) on_inflight_wait: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: fired on the serving thread when the sessions-stop
-    /// fan-out wait first parks with a session unconfirmed.
+    /// fan-out wait first parks with a session unconfirmed. It names the
+    /// exact parked serving thread the test must release; the fake clock
+    /// cannot disambiguate parked threads under load.
     #[cfg(test)]
     pub(crate) on_fanout_wait: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: fired on the serving thread after the sessions-stop
     /// scan lists `run/`, before any connect: a test starts or exits a
-    /// session in the window between enumeration and connect.
+    /// session in the window between enumeration and connect. No outside
+    /// seam pauses the hub's run between listing and fan-out: socket
+    /// removal or starter operations change the state but cannot force
+    /// this exact boundary.
     #[cfg(test)]
     pub(crate) on_scan_listed: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: fired when the Signal arm's flush wait first finds
-    /// `sessions_answering` above 0.
+    /// `sessions_answering` above 0. It names the exact flush wait the
+    /// test holds while it drives the serving thread's abort answer. No
+    /// socket, starter, or clock pauses the signal arm between the count
+    /// check and the answer.
     #[cfg(test)]
     pub(crate) on_abort_flush: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: fired on the serving thread after it sees the abort
-    /// and before it writes the answer.
+    /// and before it writes the answer. It holds the serving thread there
+    /// so the flush choreography lands in between. No outside seam reaches
+    /// the serving thread between those two steps.
     #[cfg(test)]
     pub(crate) before_abort_answer: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: names `hub-ws-*` threads whose spawns fail, so the
     /// port's spawn-failure paths run without an outside seam.
+    /// Thread-spawn failure has no deterministic outside trigger:
+    /// resource exhaustion cannot be staged per test without breaking the
+    /// harness itself. The pinned paths are degraded modes with wire
+    /// effects, 1011 closes and `io_failed` answers, not thrift.
     #[cfg(test)]
     pub(crate) fail_spawn: Mutex<Option<&'static str>>,
     /// Tests only: scripted process reads for the session-socket refusal
-    /// paths; production always reads the kernel.
+    /// paths; production always reads the kernel. The seam makes the
+    /// kernel report a false ancestry for the connecting peer, pinning the
+    /// session-caller and target-session refusal matrices. No outside seam
+    /// makes `getpeereid` or `/proc` report a false ancestry from the test
+    /// process: real session processes as callers would need live sessions
+    /// with forged logs, a new harness, not a seam.
     #[cfg(test)]
     pub(crate) test_read:
         Mutex<Option<std::sync::Arc<dyn support::peer::ProcessRead + Send + Sync>>>,
@@ -372,7 +429,11 @@ impl Hub {
         }
     }
 
-    /// Tests only: every websocket's shared sink, oldest first.
+    /// Tests only: every websocket's shared sink, oldest first. It lists
+    /// the port's live server-side sinks for the stop-answer wait. No
+    /// outside seam lists them: clients observe only their own close, and
+    /// the signal path collects them internally only after the test must
+    /// already hold one.
     #[cfg(test)]
     pub(crate) fn webs(&self) -> Vec<Arc<crate::port::Web>> {
         lock(&self.conns)
@@ -542,20 +603,26 @@ fn line_cap(hub: &Hub) -> usize {
 
 /// Tests only: a one-shot pause before the next forwarded session line:
 /// the line about to be written, and the relays, with no lock held.
+/// Shared by `before_forward` and `before_accepted`, which pause the
+/// forwarding path carrying the line and the relays.
 #[cfg(test)]
 type ForwardHook = Mutex<Option<Box<dyn FnOnce(&[u8], &Arc<Mutex<Relays>>) + Send>>>;
 
 /// Tests only: a one-shot pause after a session line's replay-filter decision.
+/// Carried by `after_replay_filter`, which pauses after the decision
+/// carrying the line and whether it was kept.
 #[cfg(test)]
 type ReplayFilterHook = Mutex<Option<Box<dyn FnOnce(&[u8], bool) + Send>>>;
 
-/// Tests only: a relay thread's handover hook.
+/// Tests only: a relay thread's handover hook. Carried by `on_pass_on`,
+/// which pauses the relay thread at the handover carrying what was passed on.
 #[cfg(test)]
 type PassOnHook = Mutex<Option<Box<dyn FnOnce(crate::retire::PassOn) + Send>>>;
 
 /// Tests only: a one-shot hook in `route`'s resumed-session retry, after
 /// the retry connects: the retry stream, shut down by the test so the
-/// retry write fails.
+/// retry write fails. Carried by `after_resume_connect`, which pauses the
+/// retry carrying the stream it must shut.
 #[cfg(test)]
 type AfterResumeConnectHook = Mutex<Option<Box<dyn FnOnce(&UnixStream) + Send>>>;
 /// What `poll_accept` decided for one accepted stream.
@@ -1692,7 +1759,10 @@ pub(crate) fn spawn(
 pub(crate) use support::lock;
 
 /// Locks an opener gate in tests, signaling only after `try_lock` proves
-/// another opener still holds it.
+/// another opener still holds it. It serializes the two `race_openers`
+/// jobs: the first holds its gate through reach-and-connect while the
+/// second signals contention and blocks. No outside seam stages two
+/// openers onto one session gate on demand.
 #[cfg(test)]
 pub(crate) fn lock_gate<'a>(
     gate: &'a Mutex<()>,
