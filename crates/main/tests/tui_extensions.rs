@@ -266,6 +266,60 @@ fn reload_rebuilds_a_timed_out_vm_from_changed_source() {
     quit(run);
 }
 #[test]
+fn animated_row_renders_frame_zero_then_stops() {
+    let setup = Setup::new();
+    configure(&setup, None);
+    install(
+        &setup,
+        "ticker",
+        "fiber.slot('ledger_row',{timeout=100,animate={interval_ms=120},render=function(input) return {lines={{{text='ANIM-FRAME-'..input.frame}}},animate=false} end})",
+        None,
+    );
+    let mut run = turn(&setup);
+    // The first paint draws frame 0 and stops: the binary renders the
+    // frame the adapter counts, then holds it.
+    run.wait_screen("animated still frame", |grid| {
+        grid.contents.contains("ANIM-FRAME-0")
+    });
+    quit(run);
+}
+#[test]
+fn reduced_motion_draws_the_animated_still_frame() {
+    let setup = Setup::new();
+    configure(&setup, None);
+    // `tui.reduced_motion` stills every animation (`docs/tui.md`, "Reduced
+    // motion"): the continuing renderer draws its still form. Stillness
+    // over time is pinned at crate level
+    // (`reduced_motion_stills_at_zero_and_reactivates_at_one`,
+    // `a_still_frame_takes_no_wake`); the binary proves the wiring, that
+    // the flag reaches the terminal and frame 0 draws.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model":"scripted/s.json","hub":{"idle_exit_ms":200},"tui":{"reduced_motion":true,"rail":{"shown":false},"panel":{"cards":[]}}}),
+    );
+    install(
+        &setup,
+        "ticker",
+        "fiber.slot('ledger_row',{timeout=100,animate={interval_ms=120},render=function(input) return {{{text='ANIM-FRAME-'..input.frame}}} end})",
+        None,
+    );
+    let mut run = turn(&setup);
+    // docs/tui.md:2974: under reduced motion the terminal draws frame 0
+    // once and makes no animation calls.
+    run.wait_screen("animated still frame", |grid| {
+        grid.contents.contains("ANIM-FRAME-0")
+    });
+    let grid = run.screen();
+    assert!(grid.contents.contains("ANIM-FRAME-0"), "{}", grid.contents);
+    assert_eq!(
+        grid.contents.matches("ANIM-FRAME-").count(),
+        grid.contents.matches("ANIM-FRAME-0").count(),
+        "every animated row still shows frame 0: {}",
+        grid.contents
+    );
+    quit(run);
+}
+#[test]
 fn renderer_error_draws_builtin_and_one_hook_notice() {
     let setup = Setup::new();
     configure(&setup, None);

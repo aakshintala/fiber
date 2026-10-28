@@ -283,6 +283,7 @@ impl Tool for DelegateSpawn {
                 effects: vec![Effect::Executes],
                 reversible: false,
                 paths: None,
+                confined: false,
             },
             // No subject: a rule matches this tool by name
             // (`docs/tools.md`, "What a tool declares").

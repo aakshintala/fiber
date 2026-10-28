@@ -170,6 +170,12 @@ fn session(
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
+        enabled: false,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: root.path().join("home"),
+    }));
     let (tools, _infos, _driver, _forget, images) = super::builtin_timed(
         fiber,
         &root.path().join("home"),
@@ -183,6 +189,7 @@ fn session(
         super::tests::skills(),
         timing,
         Default::default(),
+        sandbox,
     )
     .expect("the built-ins");
     (tools, images)
@@ -331,4 +338,37 @@ fn untimed_builtin_matches_with_no_timing_calls() {
     assert_eq!(tool_names, timed_names, "the same registration");
     fixture.finish(CALL_WITHIN);
     names.finish(CALL_WITHIN);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn sandbox_unavailable_reports_once_without_wall_clock() {
+    let dir = fakes::TempDir::new("fiber-timed-sandbox-unavailable");
+    let workspace = dir.path().to_path_buf();
+    let home_base = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let fiber_home = home_base.join(format!("fiber-timed-sandbox-{}", std::process::id()));
+    let denied = workspace.join("secret");
+    let settings = tools::SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: vec![denied.clone()],
+        fiber_home,
+    };
+    let first = tools::sandbox_check_available(&settings, &workspace).expect_err("overlap");
+    let second = tools::sandbox_check_available(&settings, &workspace).expect_err("overlap");
+    // The same named case twice, not the same reason string: the check
+    // takes no wall-clock time to repeat.
+    for unavailable in [&first, &second] {
+        assert_eq!(
+            *unavailable,
+            tools::SandboxUnavailable::DenyInsideWrite {
+                configured: denied.clone(),
+                overlapping: denied.clone(),
+                root: workspace.clone(),
+            }
+        );
+    }
 }

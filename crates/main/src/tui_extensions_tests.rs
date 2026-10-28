@@ -3,6 +3,32 @@ use super::*;
 use fakes::clock::FakeClock;
 use tui::ext::{AnswerDisposition, LedgerResult, TurnCardState, TurnGroupState};
 
+#[test]
+fn turn_card_message_entries_serialize_all_message_fields() {
+    let entry = tui::ext::TurnEntry::Message {
+        source: "session",
+        label: std::borrow::Cow::Borrowed("worker"),
+        text: "please check",
+        images: vec![tui::ext::PromptImage {
+            path: "image.png",
+            width: 12,
+            height: 8,
+        }],
+        ts: 1234,
+    };
+    assert_eq!(
+        entry_value(&entry),
+        json!({
+            "kind": "message",
+            "source": "session",
+            "label": "worker",
+            "text": "please check",
+            "images": [{"path": "image.png", "width": 12, "height": 8}],
+            "ts": 1234
+        })
+    );
+}
+
 fn fixture() -> (fakes::TempDir, Loader) {
     let dir = fakes::TempDir::new("fiber-tui-loader");
     let sources = config::Sources {
@@ -1261,6 +1287,227 @@ fn a_sessionless_adapter_sends_no_session_id_key() {
         panic!("a client-only renderer draws sessionless")
     };
     assert_eq!(lines[0][0].text, "none");
+}
+
+/// Renders frame `frame` of the `ledger_row` slot through the animated
+/// path, with an empty built-in fallback.
+fn render_frame(renderer: &dyn Renderer, ctx: &SessionCtx, frame: u64) -> (Decision, bool) {
+    let args = json!({});
+    let row = tui::ext::LedgerRow {
+        name: "shell",
+        arguments: &args,
+        state: CallState::Completed(LedgerResult {
+            exit: Some(0),
+            duration_ms: Some(1),
+            lines: 1,
+            changes: &[],
+            output: "",
+        }),
+        answer: None,
+        flat: false,
+    };
+    renderer.render_animated(
+        ctx,
+        "ledger_row",
+        &Input::LedgerRow(row),
+        80,
+        frame,
+        &|_, _| vec![],
+    )
+}
+
+#[test]
+fn registration_clamps_the_animation_interval_to_the_tick_floor() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "clamped",
+        None,
+        Some(
+            "fiber.slot('ledger_row',{timeout=100,animate={interval_ms=80},render=function() return {{{text='tick'}}} end})",
+        ),
+    );
+    package(
+        &loader,
+        "raw",
+        None,
+        Some(
+            "fiber.slot('group_line',{timeout=100,animate={interval_ms=500},render=function() return {{{text='tick'}}} end})",
+        ),
+    );
+    package(
+        &loader,
+        "still",
+        None,
+        Some(
+            "fiber.slot('prompt',{timeout=100,render=function(input) return {{{text=input.text}}} end})",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty());
+    // Below the floor stores the floor; at or above stores raw; absent
+    // stores none. The seam clamps defensively again at its dues.
+    assert_eq!(
+        renderer.animate_interval(&ctx(None), "ledger_row"),
+        Some(std::time::Duration::from_millis(120))
+    );
+    assert_eq!(
+        renderer.animate_interval(&ctx(None), "group_line"),
+        Some(std::time::Duration::from_millis(500))
+    );
+    assert_eq!(renderer.animate_interval(&ctx(None), "prompt"), None);
+}
+
+#[test]
+fn animated_calls_pass_frame_width_and_input_through() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('ledger_row',{timeout=100,animate={interval_ms=500},render=function(input,width) return {{{text=input.frame .. ':' .. width .. ':' .. input.session_id}}} end})",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty());
+    for frame in [0, 7] {
+        let (decision, continues) = render_frame(&*renderer, &ctx(None), frame);
+        let Decision::Draw { lines, .. } = decision else {
+            panic!("frame {frame} draws")
+        };
+        assert_eq!(lines[0][0].text, format!("{frame}:80:s"));
+        assert!(continues, "a plain list continues");
+    }
+}
+
+#[test]
+fn animated_returns_map_continue_and_stop() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('ledger_row',{timeout=100,animate={interval_ms=500},render=function(input) if input.frame == 0 then return {lines={{{text='first'}}},animate=false} end return {lines={{{text='next'}}}} end})",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty());
+    // `{ lines, animate = false }` draws once, then stops until its
+    // input changes; `{ lines }` continues.
+    let (stopped, continues) = render_frame(&*renderer, &ctx(None), 0);
+    let Decision::Draw { lines, .. } = stopped else {
+        panic!("the stopping frame draws")
+    };
+    assert_eq!(lines[0][0].text, "first");
+    assert!(!continues);
+    let (kept, continues) = render_frame(&*renderer, &ctx(None), 1);
+    let Decision::Draw { lines, .. } = kept else {
+        panic!("the continuing frame draws")
+    };
+    assert_eq!(lines[0][0].text, "next");
+    assert!(continues);
+}
+
+#[test]
+fn animated_wrong_shapes_fail_like_still_calls() {
+    for (name, returned) in [
+        ("truthy", "{lines={{{text='tick'}}},animate=true}"),
+        ("extra", "{lines={{{text='tick'}}},extra=1}"),
+        ("missing", "{animate=false}"),
+    ] {
+        let (_dir, loader) = fixture();
+        package(
+            &loader,
+            "a",
+            None,
+            Some(&format!(
+                "fiber.slot('ledger_row',{{timeout=100,animate={{interval_ms=500}},render=function() return {returned} end}})"
+            )),
+        );
+        let (renderer, notices) = loader.load();
+        assert!(notices.is_empty());
+        // Each wrong keyed shape fails exactly as a still wrong shape
+        // does, and stops: the VM refuses the call, never the draw.
+        let (decision, continues) = render_frame(&*renderer, &ctx(None), 3);
+        let Decision::Fail(failure) = decision else {
+            panic!("{name} fails")
+        };
+        assert_eq!(failure.kind, FailureKind::HookFailed, "{name}");
+        assert_eq!(failure.extension, "a");
+        assert!(!continues, "{name} stops");
+    }
+}
+
+#[test]
+fn animated_deadline_reports_typed_extension_failure_and_switches_off() {
+    // The animated path fails exactly as the still one does: past its
+    // declared timeout the frame is a typed failure that stops the
+    // item, and the extension stays off until rebuild.
+    let dir = fakes::TempDir::new("fiber-tui-animated-timeout");
+    let sources = config::Sources {
+        home: dir.path().join("home"),
+        workspace: dir.path().join("workspace"),
+        project: config::ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    };
+    std::fs::create_dir_all(&sources.home).unwrap();
+    std::fs::create_dir_all(&sources.workspace).unwrap();
+    let clock = FakeClock::new();
+    let loader = Loader::new(sources, clock.clone());
+    package(
+        &loader,
+        "slow",
+        None,
+        Some(
+            "fiber.slot('ledger_row',{timeout=100,animate={interval_ms=500},render=function() builtin() while true do end end})",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty());
+    let args = json!({});
+    let row = tui::ext::LedgerRow {
+        name: "shell",
+        arguments: &args,
+        state: CallState::Completed(LedgerResult {
+            exit: Some(0),
+            duration_ms: Some(1),
+            lines: 1,
+            changes: &[],
+            output: "",
+        }),
+        answer: None,
+        flat: false,
+    };
+    let input = Input::LedgerRow(row);
+    // The clock moves only inside the animated callback, once the
+    // renderer runs: past its declared timeout the frame is a typed
+    // failure that stops.
+    let over = |_: &Input<'_>, _: u16| {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
+        clock.advance(std::time::Duration::from_millis(100));
+        Vec::new()
+    };
+    let (decision, continues) =
+        renderer.render_animated(&ctx(None), "ledger_row", &input, 80, 0, &over);
+    let Decision::Fail(failure) = decision else {
+        panic!("overdue frame fails")
+    };
+    assert_eq!(failure.kind, FailureKind::ExtensionFailed);
+    assert_eq!(failure.extension, "slow");
+    assert!(!continues);
+    // Switched off until rebuild: a later frame never reaches it.
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "ledger_row"),
+        SlotSelection::Absent
+    );
+    assert!(!renderer.fills("ledger_row"));
+    let (decision, _) = renderer.render_animated(&ctx(None), "ledger_row", &input, 80, 1, &over);
+    assert!(matches!(decision, Decision::NotForSession { .. }));
 }
 
 #[test]

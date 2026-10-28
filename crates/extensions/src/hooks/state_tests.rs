@@ -513,6 +513,7 @@ fn dispatch(session: &SessionExtensions, point: &str) -> Vec<Context> {
             effects: Vec::new(),
             reversible: true,
             paths: None,
+            confined: false,
         },
     };
     match point {

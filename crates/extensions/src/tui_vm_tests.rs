@@ -9,7 +9,7 @@ use std::time::Duration;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use crate::tui_vm::{SLOT_NAMES, SLOT_PREFIXES, Span, TuiVm};
+use crate::tui_vm::{RenderOut, SLOT_NAMES, SLOT_PREFIXES, Span, TuiVm};
 use crate::{Error, ErrorCode};
 
 const MS: Duration = Duration::from_millis(1);
@@ -656,6 +656,241 @@ fn debug_names_the_extension_and_its_slots() {
     let shown = format!("{vm:?}");
     assert!(shown.contains("acme-badge"), "{shown}");
     assert!(shown.contains("notice"), "{shown}");
+}
+
+/// A VM with the one animated slot `notice`, timeout 100 ms and the raw
+/// interval 500 ms, drawn by `render`.
+fn animated(render: &str) -> (Arc<FakeClock>, TuiVm) {
+    vm(&format!(
+        "fiber.slot('notice', {{ timeout = 100, animate = {{ interval_ms = 500 }}, render = function(input, width) {render} end }})"
+    ))
+}
+
+/// Calls `notice` as frame `frame`, the seam's animated path.
+fn call_frame(vm: &mut TuiVm, input: &Value, frame: u64) -> Result<RenderOut, Error> {
+    vm.call_animated("notice", Some("s1"), input, 80, frame, &none)
+}
+
+/// Calls `notice` as frame `frame`, moving the clock by `by` from inside
+/// `builtin`: the render has started, and the clock moves only then.
+fn call_frame_advancing(
+    vm: &mut TuiVm,
+    clock: &FakeClock,
+    by: Duration,
+    frame: u64,
+) -> Result<RenderOut, Error> {
+    let advance = |_: &Value, _: u16| {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
+        clock.advance(by);
+        Vec::new()
+    };
+    vm.call_animated("notice", Some("s1"), &json!({}), 80, frame, &advance)
+}
+
+fn out_text(out: &RenderOut) -> String {
+    text(&out.lines)
+}
+
+#[test]
+fn animate_is_refused_unless_a_table_with_a_positive_whole_interval() {
+    for bad in [
+        "80",
+        "{ interval_ms = 0 }",
+        "{ interval_ms = -1 }",
+        "{ interval_ms = 1.5 }",
+        "{ interval_ms = '100' }",
+        "{ }",
+    ] {
+        let message = refused(&format!(
+            "fiber.slot('notice', {{ timeout = 100, animate = {bad}, render = function() end }})"
+        ));
+        assert!(
+            message.contains("notice") && message.contains("interval_ms"),
+            "{bad}: {message}"
+        );
+    }
+    // At the edge one millisecond registers.
+    let (_, vm) = vm(
+        "fiber.slot('notice', { timeout = 100, animate = { interval_ms = 1 }, \
+         render = function() end })",
+    );
+    assert_eq!(vm.animate("notice"), Some(MS));
+}
+
+#[test]
+fn animate_with_a_key_beside_interval_ms_is_refused() {
+    // docs/extensions.md:1507-1509: any other animate shape fails
+    // registration, naming the slot.
+    for bad in [
+        "{ interval_ms = 500, extra = 1 }",
+        "{ interval_ms = 500, [1] = 2 }",
+    ] {
+        let message = refused(&format!(
+            "fiber.slot('notice', {{ timeout = 100, animate = {bad}, render = function() end }})"
+        ));
+        assert!(
+            message.contains("notice") && message.contains("interval_ms"),
+            "{bad}: {message}"
+        );
+    }
+}
+
+#[test]
+fn an_interval_below_the_tick_floor_stores_the_raw_value() {
+    // No error here: the adapter normalizes to the 120 ms floor at
+    // registration, and the seam clamps its dues and asks.
+    let (_, vm) = vm(
+        "fiber.slot('notice', { timeout = 100, animate = { interval_ms = 80 }, \
+         render = function() end })",
+    );
+    assert_eq!(vm.animate("notice"), Some(80 * MS));
+}
+
+#[test]
+fn a_five_hundred_ms_interval_stores() {
+    let (_, vm) = animated("return {}");
+    assert_eq!(vm.animate("notice"), Some(500 * MS));
+}
+
+#[test]
+fn a_slot_without_animate_stores_none() {
+    let (_, vm) = notice("return {}");
+    assert_eq!(vm.animate("notice"), None);
+}
+
+#[test]
+fn the_frame_reaches_the_render_with_session_and_width() {
+    let (_, mut vm) = animated(
+        "return { { { text = input.frame .. ':' .. input.session_id .. ':' .. width } } }",
+    );
+    let out = call_frame(&mut vm, &json!({}), 3).unwrap();
+    assert_eq!(out_text(&out), "3:s1:80");
+    assert!(out.continues);
+}
+
+#[test]
+fn a_plain_call_accepts_keyed_renderer_results() {
+    let (_, mut vm) = notice("return { lines = { { { text = 'still' } } } }");
+    let lines = call(&mut vm, &json!({})).unwrap();
+    assert_eq!(text(&lines), "still");
+
+    let (_, mut vm) = notice("return { lines = { { { text = 'still' } } }, animate = false }");
+    let lines = call(&mut vm, &json!({})).unwrap();
+    assert_eq!(text(&lines), "still");
+}
+
+#[test]
+fn a_plain_call_sends_no_frame_key() {
+    let (_, mut vm) = notice("return { { { text = tostring(input.frame) } } }");
+    let lines = call(&mut vm, &json!({})).unwrap();
+    assert_eq!(text(&lines), "nil");
+}
+
+#[test]
+fn a_plain_animated_list_continues() {
+    let (_, mut vm) = animated("return { { { text = 'tick' } } }");
+    let out = call_frame(&mut vm, &json!({}), 0).unwrap();
+    assert_eq!(out_text(&out), "tick");
+    assert!(out.continues);
+}
+
+#[test]
+fn a_lines_table_continues() {
+    let (_, mut vm) = animated("return { lines = { { { text = 'tick' } } } }");
+    let out = call_frame(&mut vm, &json!({}), 7).unwrap();
+    assert_eq!(out_text(&out), "tick");
+    assert!(out.continues);
+}
+
+#[test]
+fn a_lines_table_with_animate_false_draws_then_stops() {
+    let (_, mut vm) = animated("return { lines = { { { text = 'still' } } }, animate = false }");
+    let out = call_frame(&mut vm, &json!({}), 7).unwrap();
+    assert_eq!(out_text(&out), "still");
+    assert!(!out.continues);
+}
+
+#[test]
+fn an_animate_value_other_than_false_is_a_wrong_shape() {
+    for animate in ["true", "0", "'no'", "{ }"] {
+        let (_, mut vm) = animated(&format!(
+            "return {{ lines = {{ {{ {{ text = 'tick' }} }} }}, animate = {animate} }}"
+        ));
+        let result = call_frame(&mut vm, &json!({}), 0);
+        let Err(Error::TuiShape(message)) = result else {
+            panic!("animate = {animate}: expected a shape error, got {result:?}");
+        };
+        assert!(message.contains("animate"), "{message}");
+        // A wrong shape leaves the VM on.
+        let again = call_frame(&mut vm, &json!({}), 0);
+        assert!(matches!(again, Err(Error::TuiShape(_))), "{again:?}");
+    }
+}
+
+#[test]
+fn a_keyed_return_without_lines_is_a_wrong_shape() {
+    let (_, mut vm) = animated("return { animate = false }");
+    assert!(matches!(
+        call_frame(&mut vm, &json!({}), 0),
+        Err(Error::TuiShape(_))
+    ));
+}
+
+#[test]
+fn a_keyed_return_with_non_list_lines_is_a_wrong_shape() {
+    let (_, mut vm) = animated("return { lines = 'tick' }");
+    assert!(matches!(
+        call_frame(&mut vm, &json!({}), 0),
+        Err(Error::TuiShape(_))
+    ));
+}
+
+#[test]
+fn a_keyed_return_with_an_extra_key_is_a_wrong_shape() {
+    for body in [
+        "return { lines = { { { text = 'tick' } } }, extra = 1 }",
+        "return { lines = { { { text = 'tick' } } }, animate = false, extra = 1 }",
+    ] {
+        let (_, mut vm) = animated(body);
+        let result = call_frame(&mut vm, &json!({}), 0);
+        assert!(
+            matches!(result, Err(Error::TuiShape(_))),
+            "{body}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn empty_lines_are_valid_and_empty() {
+    let (_, mut vm) = animated("return { lines = { } }");
+    let out = call_frame(&mut vm, &json!({}), 0).unwrap();
+    assert!(out.lines.is_empty());
+    assert!(out.continues);
+    let (_, mut vm) = animated("return { }");
+    let out = call_frame(&mut vm, &json!({}), 0).unwrap();
+    assert!(out.lines.is_empty());
+    assert!(out.continues);
+}
+
+#[test]
+fn a_non_table_animated_return_is_a_wrong_shape() {
+    let (_, mut vm) = animated("return 'text'");
+    assert!(matches!(
+        call_frame(&mut vm, &json!({}), 0),
+        Err(Error::TuiShape(_))
+    ));
+}
+
+#[test]
+fn an_animated_tick_past_its_deadline_switches_the_vm_off() {
+    let (clock, mut vm) = animated("builtin() while true do end");
+    let result = call_frame_advancing(&mut vm, &clock, 100 * MS, 0);
+    assert!(matches!(result, Err(Error::TuiTimeout)), "{result:?}");
+    let later = call_frame(&mut vm, &json!({}), 1);
+    assert!(matches!(later, Err(Error::TuiOff)), "{later:?}");
 }
 
 #[test]

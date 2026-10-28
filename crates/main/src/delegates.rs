@@ -159,7 +159,7 @@ impl Delegates {
             workspace: self.workspace.clone(),
             inherited: inherited_roots_reader(&self.sessions, &self.parent),
             events_for: Arc::new(move |workspace, id| {
-                let sessions = log::sessions_dir(&home, &doors::project(workspace));
+                let sessions = log::sessions_dir(&home, &worktree::project(workspace));
                 log::SessionDir::new(&sessions, id).events()
             }),
             clock: Arc::clone(&self.clock),
@@ -923,7 +923,7 @@ fn delegate_sessions(home: &Path, workspace: &Path, id: &SessionId) -> Result<Pa
                 return log::sessions_dir_for_key(home, &key)
                     .ok_or_else(|| format!("{key}: invalid logged project key"));
             }
-            Ok(log::sessions_dir(home, &doors::project(workspace)))
+            Ok(log::sessions_dir(home, &worktree::project(workspace)))
         }
     }
 }

@@ -335,7 +335,7 @@ that starts a session in that project, and, right-aligned and dim, the summed
 spend of its live sessions and "N ✓", the count of its exited sessions, which
 widens to home with focus on that project's first exited row.
 
-Each card is four rows on its own tint, inside ▄ and ▀ edges, with a ▌ stripe
+Each card is four rows on its state's tint (the theme's `card_*` roles), inside ▄ and ▀ edges, with a ▌ stripe
 on the left in the state's colour:
 
 ```
@@ -1011,7 +1011,7 @@ arrived after `sessions` was sent.
 
 ### Turns
 
-- **One card per turn.** The prompt that starts a turn floats above its card,
+- **One card per turn.** Only the person's prompt floats above its card,
   after a blank row, as a bubble on the right in the `prompt` tint, at most 72%
   of the width: the text padded one column on each side, a ▐ stripe in
   `accent` at its right edge, and "you 14:12" dim and right-aligned under it.
@@ -1025,6 +1025,16 @@ arrived after `sessions` was sent.
   spend during the turn included: "▣ completed · 38s · 12 calls · 18.2k tokens
   · $0.41 · $1.10 on subscription". A figure that is zero is left out, and a
   model with no price shows tokens only (`docs/model-routing.md`, "Cost").
+- **Non-driver messages stay in the card.** A non-driver input message sits
+  inside the card where it landed as a labelled rule. Start-input messages
+  open the card, before any entry, in the input's order. A Fiber message has a
+  muted `Fiber` label, a dim ` · <time> `, and dim text without one leading
+  `Fiber: `; a session message has its current name or id as a secondary
+  label, a dim ` · <time> ` and full-colour text; an extension message has its
+  name as a secondary label, a dim ` · <time> ` and full-colour text. Images
+  draw below text. A blank message draws only its labelled rule. A whole-turn
+  copy includes each message's label and text in draw order; the labelled
+  rule is decoration and is not copied.
 - **Replies lead, tool groups sit back.** Nothing inside the card is indented
   past its one-column padding: replies, summary lines, steering messages and
   answers all start at the same column. A tool group has no band of its own, and its summary line is dim
@@ -2397,8 +2407,12 @@ The roles, in order, with each built-in theme's values:
 | `scroll` | the scroll bar's thumb | `#808080` | `#b0b7bf` |
 | `background` | every cell of the conversation no surface covers | the terminal's background | `#ffffff` |
 | `panel` | the rail's and the panel's regions, the narrow layout's status line | `#0c0c11` | `#f6f8fa` |
-| `surface` | the input box, the panel's cards, the search box, a swapped view's top row, overlays | `#1a1a22` | `#eaeef2` |
+| `surface` | the input box, the panel's cards, the search box, a swapped view's top row, overlays, the rail's working cards | `#1a1a22` | `#eaeef2` |
 | `surface_raised` | the card on screen, a hovered card | `#3a3a4a` | `#d0d7de` |
+| `card_retrying` | a rail card in RETRYING | `#262014` | `#ebe5d9` |
+| `card_needs_input` | a rail card in NEEDS INPUT | `#241a10` | `#efe5db` |
+| `card_ready` | a rail card in READY or IDLE | `#121217` | `#e8e8ed` |
+| `card_crashed` | a rail card in CRASHED | `#201114` | `#eedfe2` |
 | `turn` | a turn's card | `#101017` | `#f3f5f8` |
 | `prompt` | the person's prompt bubble | `#343541` | `#dde3ea` |
 | `code` | code blocks | `#181821` | `#eff1f4` |
@@ -2674,7 +2688,7 @@ itself is a separate client of the hub, not a TUI extension.
 | `layout` | Where each region goes: the conversation, the panel, the working line, the steering queue, the input box, the status rows, and any region an extension adds |
 | `home` | Home |
 | `turn_card` | A turn's card and its ▣ line |
-| `prompt` | A person's prompt bubble |
+| `prompt` | Only a person's prompt bubble: a non-driver message never calls it |
 | `reply` | An assistant reply |
 | `group_line` | A tool group's summary line |
 | `ledger_row:<tool>` | A ledger row for the named tool |
@@ -2713,7 +2727,7 @@ runs inside it; `prompt` draws only when the card itself is built in.
 
 | Field | What it holds |
 |---|---|
-| `prompts` | The turn's prompts in order, each with the `prompt` slot's `text` and `images` (`path`, `width`, `height` in pixels) |
+| `prompts` | The turn's person's prompts in order — only `Origin::Driver` messages — each with the `prompt` slot's `text` and `images` (`path`, `width`, `height` in pixels) |
 | `entries` | The card's items in order, each tagged with a `kind` and carrying the slot input shown below |
 | `started` | When the turn started |
 | `calls` | How many model calls the turn made |
@@ -2727,12 +2741,17 @@ The entries carry these slot inputs and extra fields:
 |---|---|
 | `reply` | The `reply` input: `text` (Markdown included) |
 | `steer` | The `steer` input: `text`, `images`, `ts` |
+| `message` | `source` (`fiber`, `session` or `extension`), `label`, `text`, `images`, `ts` |
 | `group` | The `group_line` input, plus `cut` and `sections` |
 | `aside` | No slot: `{kind = "line", text}`, `{kind = "warning", message}`, or `{kind = "orphans", jobs, open}`; each job has `name` and `message` |
 | `band` | The `handoff_band` input: `trigger`, `ts`, `state`; a `done` state carries `before` and optional `after` context sizes |
 | `answers` | The `answers` input: `outcome`, `parts`, `note?`, `ts?`; each part has `header`, `text`, `skipped` |
 
-**`prompt`** draws a person's prompt bubble.
+A session message's `label` is the sender's current non-empty session name,
+when one is known, else its session id. An extension message's label is its
+extension name. An unknown `kind` is skipped.
+
+**`prompt`** draws only a person's prompt bubble: a non-driver message never calls it, and goes in `entries` as `message` instead.
 
 | Field | What it holds |
 |---|---|
@@ -2900,10 +2919,10 @@ built-in rather than drawing the row again.
   rules"). `tui` tests use a fake renderer.
 - **Each drawn item is cached** by its input and the width. Its spans name
   colour roles, which the theme resolves as the frame is written, so a theme
-  change runs no renderer. A renderer runs again only when its input or the
-  width changes, so an unchanged frame
-  calls no Lua and scrolling or searching costs what it costs for built-in
-  rows. The cache lives with the paging window and is dropped with its pages.
+  change runs no renderer. A renderer runs again only when its input, the width,
+  or an on-screen animated item's frame changes ("Animation"), so an unchanged
+  frame calls no Lua: one call per cache miss or frame advance, none on a hit.
+  The cache lives with the paging window and is dropped with its pages.
   The key also includes the page's session and index, the selected extension,
   and its session-half version when it has one. A change to any of these
   reruns the renderer; an unrelated session-half change does not. Failures
@@ -2955,17 +2974,36 @@ their own.
 
 ### Animation
 
-A renderer may declare `animate = { interval_ms }`. While its item is on
-screen and reduced motion is off, the terminal calls it again every interval
-with a `frame` count in its input. It stops when the item scrolls off, its
-view closes, or the extension stops it. Under reduced motion the renderer gets
-`frame = 0` once and is not called again, so every extension animation has a
-still form, as the glimmer does ("The working line"). A hidden animation costs
-nothing.
+A renderer may declare `animate = { interval_ms }`. For conversation items,
+the terminal calls it again when the item's frame advances, with `frame` in
+its input. The terminal uses one timer for all motion. It asks for a timer only
+while an animated item was painted in the previous frame. Intervals below 120
+ms use that floor instead.
+
+The terminal calls an item when at least one of its rows was painted in the
+previous frame. It may make one due call on the frame the item scrolls off.
+After that unpainted frame, it makes no further calls until the item is painted
+again. A swapped view that hides the conversation counts as an unpainted
+frame; the item resumes at its stored frame when the conversation returns.
+
+Frame 0 is the still form. Under reduced motion, the terminal draws frame 0
+once and makes no animation calls. When reduced motion ends, the next paint
+resumes at frame 1. A renderer that returns `animate = false` stays stopped
+until its input changes. A width change redraws a stopped item once at its
+stored frame, then uses the cached lines for that width. A dropped page starts
+again at frame 0. Closed draws such as search and counts do not advance or
+schedule animation. They use stored lines when available; on a miss, they may
+cache frame 0 without changing animation state.
+
+Notices that declare animation draw frame 0 once. They do not animate yet.
 
 An extension's own timers (`host.after`, `host.every`) are for work other than
 drawing. They wake the terminal whether or not anything is on screen, which is
 the extension author's cost to keep down.
+
+A renderer that errors or returns the wrong shape keeps its built-in fallback
+with no further calls until its input changes ("When an extension fails"),
+and a timeout switches the extension off as a still one does.
 
 ### When an extension fails
 
@@ -3004,11 +3042,17 @@ one tool, the input box, the layout, or one key.
 ## Performance
 
 The terminal holds the budgets in `docs/performance.md`: its idle memory, idle
-CPU and time to first frame. Attaching stays smooth because history is paged:
-the window reads the last page before the first frame and folds the whole log
-once after it, inside the fold-per-MiB budget. The budget is measured with no
-TUI extension installed; frame responsiveness evidence lands in the next
-checkin.
+CPU and time to first frame. The design keeps to them this way:
+
+- **Nothing runs while nothing happens.** With no turn, delegate or job running and
+  no animated item on screen, there is no timer: no frame, no byte written (an on-screen
+  animated item holds the timer, "Animation"). A still pointer sends nothing under hover.
+- **The first frame waits on nothing but the session's last page and loading TUI extensions.** Keyboard detection, the logo's image and session listing each arrive after it. The budget is measured with no TUI extension installed. Attaching stays smooth because history is paged: it reads the last page with `history` before the first frame, and folds the whole log once after it ("History and paging"), inside the fold-per-MiB budget (`docs/performance.md`, 15 ms per MiB). The pass takes about 12 ms per MiB of log on macOS arm64, so the scroll bar of a large session appears later than a small one's.
+- **Memory follows the window, not the session,** because history is paged.
+- **A frame redraws only the rows that changed.**
+- **Each frame is written inside synchronized output, mode 2026.** The first frame and frames drawn on resize are included; a terminal without support ignores the sequences.
+
+Frame responsiveness evidence lands in the next checkin.
 
 ## Configuration
 

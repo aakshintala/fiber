@@ -162,6 +162,7 @@ fn paint_replacement(
         return false;
     };
     if fitted.is_empty() {
+        // An empty replacement falls back to the built-in row.
         return false;
     }
     let count = fitted

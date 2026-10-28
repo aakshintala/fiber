@@ -48,7 +48,7 @@ fn run_details_call(shell: Shell, arguments: Map<String, Value>) -> contract::to
 fn nullable_optional_arguments_parse_as_absent() {
     let dir = fakes::TempDir::new("fiber-shell-nullable");
     let arguments = fakes::tool_args(json!({"command": "ls", "workdir": null, "timeout_ms": null,
-        "run_in_background": null, "tty": null, "monitor": null, "deadline_ms": null}));
+        "run_in_background": null, "tty": null, "monitor": null}));
     let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
     assert_eq!(parsed.command, "ls");
     assert_eq!(parsed.mode, Mode::Foreground);
@@ -65,8 +65,7 @@ fn nullable_optional_arguments_parse_as_absent() {
             "timeout_ms",
             "run_in_background",
             "tty",
-            "monitor",
-            "deadline_ms"
+            "monitor"
         ])
     );
     for (key, kind) in [
@@ -75,10 +74,22 @@ fn nullable_optional_arguments_parse_as_absent() {
         ("run_in_background", "boolean"),
         ("tty", "boolean"),
         ("monitor", "boolean"),
-        ("deadline_ms", "integer"),
     ] {
         assert_eq!(schema["properties"][key]["type"], json!([kind, "null"]));
     }
+    assert!(schema["properties"].get("deadline_ms").is_none());
+    assert_eq!(
+        schema["properties"]["timeout_ms"]["description"],
+        json!(
+            "How long the command may run, in milliseconds. The default is 600000; \
+             for a monitor, the default is 300000 and the maximum is 1800000 \
+             (600000 in a non-interactive run)."
+        )
+    );
+    assert!(tool.definition().description.contains(
+        "`timeout_ms` defaults to 600000, or to 300000 for a monitor. \
+             A monitor's maximum is 1800000, or 600000 in a non-interactive run."
+    ));
     for (overrides, mode, timeout) in [
         (json!({"monitor": true}), Mode::Monitor, 300_000),
         (
@@ -114,13 +125,36 @@ fn nullable_optional_arguments_parse_as_absent() {
         Some(ShellError::MonitorAlone)
     ));
     assert!(matches!(
-        refused(json!({"monitor": true, "timeout_ms": 0})),
-        Some(ShellError::MonitorTimeout)
+        refused(json!({"monitor": true, "timeout_ms": 600_001})),
+        Some(ShellError::DeadlineTooLong { .. })
     ));
-    assert!(matches!(
-        refused(json!({"deadline_ms": 0})),
-        Some(ShellError::DeadlineWithoutMonitor)
-    ));
+    // An ordinary command has no maximum: null, zero and past the monitor
+    // cap all parse.
+    for timeout in [Value::Null, json!(0), json!(1_000), json!(10_000_000)] {
+        let mut args = arguments.clone();
+        args.extend(json!({"timeout_ms": timeout}).as_object().unwrap().clone());
+        let parsed = parse(&args, dir.path(), 600_000).unwrap();
+        assert_eq!(parsed.mode, Mode::Foreground);
+        assert_eq!(parsed.timeout_ms, timeout.as_u64().unwrap_or(600_000));
+    }
+    // A monitor takes `timeout_ms` or the 5-minute default, up to the cap.
+    for (given, limit) in [
+        (Value::Null, 300_000),
+        (json!(0), 0),
+        (json!(1_000), 1_000),
+        (json!(600_000), 600_000),
+    ] {
+        let mut args = arguments.clone();
+        args.extend(
+            json!({"monitor": true, "timeout_ms": given})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let parsed = parse(&args, dir.path(), 600_000).unwrap();
+        assert_eq!(parsed.mode, Mode::Monitor);
+        assert_eq!(parsed.timeout_ms, limit);
+    }
 }
 
 #[test]
@@ -682,6 +716,13 @@ fn a_spawn_failure_is_tool_error_with_no_process() {
 #[test]
 fn execute_fails_when_the_program_does_not_exist() {
     let dir = fakes::TempDir::new("fiber-shell-missing");
+    let sandbox = super::sandbox::Settings {
+        enabled: false,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: std::path::PathBuf::new(),
+    };
+    let workspace = dir.path().to_path_buf();
     let err = super::command::execute(
         Path::new("/no/such/fiber-shell"),
         "true",
@@ -694,6 +735,8 @@ fn execute_fails_when_the_program_does_not_exist() {
         None,
         None,
         None,
+        &sandbox,
+        &workspace,
     );
     assert!(err.is_err());
 }
@@ -790,12 +833,8 @@ fn a_monitor_call_that_breaks_a_rule_never_starts() {
     };
     let cases = [
         (
-            with(&[("deadline_ms", json!(1_000))]),
-            "set `monitor: true`",
-        ),
-        (
-            with(&[("monitor", json!(true)), ("timeout_ms", json!(1_000))]),
-            "A monitor's limit is `deadline_ms`.",
+            with(&[("monitor", json!(true)), ("timeout_ms", json!(1_800_001))]),
+            "`timeout_ms` is more than 1800000, the longest a monitor may run here. Give 1800000 or less.",
         ),
         (
             with(&[("monitor", json!(true)), ("tty", json!(true))]),
@@ -804,10 +843,6 @@ fn a_monitor_call_that_breaks_a_rule_never_starts() {
         (
             with(&[("monitor", json!(true)), ("run_in_background", json!(true))]),
             "`monitor` cannot be combined",
-        ),
-        (
-            with(&[("monitor", json!(true)), ("deadline_ms", json!(1_800_001))]),
-            "more than 1800000",
         ),
     ];
     for (arguments, needle) in cases {
@@ -845,7 +880,7 @@ fn a_non_interactive_shell_allows_a_deadline_of_ten_minutes_at_most() {
         .with_jobs(jobs.clone())
         .non_interactive();
     let mut arguments = monitor_args(&format!("touch {}", marker.display()));
-    arguments.insert("deadline_ms".into(), json!(600_001));
+    arguments.insert("timeout_ms".into(), json!(600_001));
     let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     assert!(
@@ -867,15 +902,11 @@ fn a_deadline_at_the_limit_is_accepted() {
     let batch = Shell::new(dir.path().to_path_buf(), FakeClock::new())
         .with_jobs(jobs.clone())
         .non_interactive();
-    for (shell, deadline) in [(&interactive, 1_800_000), (&batch, 600_000)] {
+    for (shell, limit) in [(&interactive, 1_800_000), (&batch, 600_000)] {
         let mut arguments = monitor_args("exit 0");
-        arguments.insert("deadline_ms".into(), json!(deadline));
+        arguments.insert("timeout_ms".into(), json!(limit));
         let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
-        assert_ne!(
-            code(&output),
-            Some(ErrorCode::InvalidArguments),
-            "{deadline}"
-        );
+        assert_ne!(code(&output), Some(ErrorCode::InvalidArguments), "{limit}");
     }
 }
 
@@ -885,9 +916,9 @@ fn a_bare_wait_is_refused_for_a_monitor() {
     let marker = dir.path().join("marker");
     let jobs = fakes::jobs::FakeJobs::new(dir.path());
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
-    // A zero deadline, so a command that wrongly starts stops at once.
+    // A zero limit, so a command that wrongly starts stops at once.
     let mut arguments = monitor_args(&format!("sleep 30; touch {}", marker.display()));
-    arguments.insert("deadline_ms".into(), json!(0));
+    arguments.insert("timeout_ms".into(), json!(0));
     let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     assert!(text(&output).contains("jobs wait"), "{}", text(&output));
@@ -1178,4 +1209,99 @@ fn review_note_sees_a_reloaded_read_only_entry() {
     );
     *handle.lock().unwrap() = vec![("npm".to_owned(), Vec::new())];
     assert_eq!(noted(&shell, "ls && npm test"), None);
+}
+
+fn sandbox_handle_for_test(
+    name: &str,
+) -> std::sync::Arc<std::sync::Mutex<crate::shell::sandbox::Settings>> {
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let fiber_home = home.join(format!("fiber-shell-sandbox-{name}-{}", std::process::id()));
+    std::sync::Arc::new(std::sync::Mutex::new(crate::shell::sandbox::Settings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home,
+    }))
+}
+
+#[test]
+fn effects_sets_confined_for_an_enabled_linux_sandbox() {
+    let dir = fakes::TempDir::new("fiber-shell-effects-confined");
+    let workspace = dir.path().to_path_buf();
+    let shell = Shell::new(workspace.clone(), FakeClock::new());
+    let plain = effects(&shell, "echo hi");
+    assert!(!plain.declared.confined);
+    let sandbox = sandbox_handle_for_test("effects");
+    let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
+    let confined = effects(&shell, "echo hi");
+    #[cfg(target_os = "linux")]
+    assert!(confined.declared.confined);
+    #[cfg(not(target_os = "linux"))]
+    assert!(!confined.declared.confined);
+}
+
+#[test]
+fn effects_does_not_declare_confined_when_sandbox_setup_is_unavailable() {
+    // An unresolvable write grant leaves the call on the reviewed path.
+    let dir = fakes::TempDir::new("fiber-shell-effects-unappliable");
+    let workspace = dir.path().to_path_buf();
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(crate::shell::sandbox::Settings {
+        enabled: true,
+        allow_write: vec![dir.path().join("missing-write")],
+        deny_read: Vec::new(),
+        fiber_home: home.join(format!("fiber-shell-effects-fail-{}", std::process::id())),
+    }));
+    let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
+    let declared = effects(&shell, "echo hi");
+    assert!(!declared.declared.confined);
+}
+
+#[test]
+fn a_configured_direct_run_shares_the_sandbox_selection() {
+    let dir = fakes::TempDir::new("fiber-shell-run-confined");
+    let workspace = dir.path().to_path_buf();
+    let shell = Shell::new(workspace.clone(), FakeClock::new())
+        .with_sandbox(sandbox_handle_for_test("run"));
+    // A direct `run` derives its decision at spawn, like `effects` does: the
+    // same selection confines this call, and the driver's own shell stays
+    // unconfigured everywhere else.
+    let confined = effects(&shell, "echo hi");
+    #[cfg(target_os = "linux")]
+    assert!(confined.declared.confined);
+    #[cfg(not(target_os = "linux"))]
+    assert!(!confined.declared.confined);
+    let output = shell.run(&args("echo hi"), &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), None);
+    assert!(text(&output).starts_with("hi"), "a direct echo succeeds");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_confined_setup_never_runs_unconfined() {
+    let dir = fakes::TempDir::new("fiber-shell-run-confined-fail");
+    let workspace = dir.path().to_path_buf();
+    let marker = workspace.join("marker");
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let fiber_home = home.join(format!("fiber-shell-sandbox-fail-{}", std::process::id()));
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(crate::shell::sandbox::Settings {
+        enabled: true,
+        allow_write: vec![std::path::PathBuf::from("/nonexistent-fiber-sandbox-allow")],
+        deny_read: Vec::new(),
+        fiber_home,
+    }));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox);
+    let command = format!("touch {} && echo hi", marker.display());
+    let output = shell.run(&args(&command), &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), Some(contract::ErrorCode::ToolError));
+    assert!(!marker.is_file(), "no command runs after an apply failure");
 }

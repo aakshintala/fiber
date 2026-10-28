@@ -15,6 +15,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::MutexGuard;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -358,6 +359,12 @@ fn helloed(port: u16, origin: Option<&str>) -> Ws {
 fn signal(hub: &Hub, got: &AtomicI32) {
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
+}
+
+impl Web {
+    fn hold(&self) -> MutexGuard<'_, Sink> {
+        lock(&self.sink)
+    }
 }
 
 /// Waits until the hub counts no client.
@@ -1181,6 +1188,35 @@ fn an_out_pump_spawn_failure_disconnects_through_the_pair() {
     assert!(temp.log().contains("client_disconnected"));
 }
 
+/// Reads framed bytes from the TCP peer until `needle` arrives, under one
+/// deadline: the pump forwards each served line in order, so a missing
+/// needle fails by name instead of hanging the test. One scan runs at a
+/// time and each notify lands after the previous scan, so no scan can eat
+/// a later needle.
+fn await_tcp_needle(tcp_client: &mut TcpStream, needle: &[u8], what: &str) {
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let mut seen = Vec::new();
+    loop {
+        let left = deadline.left();
+        if left.is_zero() {
+            panic!("{what}");
+        }
+        tcp_client.set_read_timeout(Some(left)).unwrap();
+        let mut chunk = [0u8; 4096];
+        let n = match tcp_client.read(&mut chunk) {
+            Ok(0) => panic!("{what}: the stream closed"),
+            Ok(n) => n,
+            Err(error) => panic!("{what}: {error}"),
+        };
+        // The frame may split the needle across reads; the frames are
+        // short, so the whole prefix stays resident for one search.
+        seen.extend_from_slice(&chunk[..n]);
+        if seen.windows(needle.len()).any(|w| w == needle) {
+            return;
+        }
+    }
+}
+
 /// A `waiting` session status whose summary is `summary`.
 fn waiting_with(summary: &str) -> SessionStatus {
     let mut payload = status("n", "/w", "idle", None);
@@ -1231,9 +1267,14 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
     let sub_sock = hub_end.try_clone().unwrap();
     let closer_sock = hub_end.try_clone().unwrap();
     let retired_sock = hub_end.try_clone().unwrap();
-    let n = hub
-        .register(&hub_end)
-        .expect("the hub counts the connection");
+    // The test's own command endpoint: a clone of the bridge side, so its
+    // writes reach the served reader while the pump keeps the other end.
+    let mut status_end = bridge_end.try_clone().unwrap();
+    let n = match hub.poll_accept(&hub_end, &AtomicBool::new(false)) {
+        crate::connection::Accept::Counted(n) => n,
+        crate::connection::Accept::Dropped => panic!("the hub counts the connection"),
+        crate::connection::Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
     let serve_hub = Arc::clone(&hub);
     let serve_web = Arc::clone(&web);
     let (serve_tx, serve_rx) = mpsc::channel();
@@ -1253,10 +1294,23 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
         pump_lines(&pump_web, bridge_end);
         pump_tx.send(()).unwrap_or(());
     });
-    await_true("the connection to listen", {
-        let hub = Arc::clone(&hub);
-        move || hub.feed.attention.listeners() == 1
-    });
+    // A status answer runs after the served bridge registered and listened.
+    writeln!(
+        status_end,
+        "{}",
+        json!({"id": "c_ready", "command": "status", "args": {}})
+    )
+    .unwrap();
+    await_tcp_needle(&mut tcp_client, b"c_ready", "the status acknowledgement");
+    // One attention probe proves the writer started and the pump flows: the
+    // served bridge reads the probe back from the TCP side.
+    let probe = waiting_with("run probe");
+    drop(
+        hub.feed
+            .attention
+            .notify("s_00000000000000ee", None, &probe, false),
+    );
+    await_tcp_needle(&mut tcp_client, b"run probe", "the attention probe");
     // Saturate the TCP stream first: 16 KiB lines to the connection's own
     // listener until the bound removes it. The peer never reads, so TCP
     // must fill; the pump then stops draining the bridge, the bridge
@@ -1266,8 +1320,10 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
     // here. Each fill line is dropped unshut: only the unregister matters.
     let fill = Arc::new(AtomicU64::new(0));
     let filling = Arc::clone(&hub);
+    let fill_closers: Arc<Mutex<Vec<crate::feed::Closer>>> = Arc::new(Mutex::new(Vec::new()));
+    let fill_out = Arc::clone(&fill_closers);
     await_true("the bridge backpressure to fill", move || {
-        if filling.feed.attention.listeners() == 0 {
+        if !lock(&fill_out).is_empty() {
             return true;
         }
         let n = fill.fetch_add(1, Ordering::SeqCst);
@@ -1276,7 +1332,9 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
         }
         let session = format!("fill_{n:08}");
         let status = waiting_with(&"f".repeat(16 * 1024));
-        drop(
+        // Collected, not shut: only the unregister matters here, and the
+        // bridge stays alive for the subscriber below.
+        lock(&fill_out).extend(
             filling
                 .feed
                 .attention
@@ -1284,11 +1342,13 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
         );
         false
     });
-    assert_eq!(
-        hub.feed.attention.listeners(),
-        0,
+    let fill_closers = std::mem::take(&mut *lock(&fill_closers));
+    assert!(
+        !fill_closers.is_empty(),
         "the fill phase removed the connection listener at the bound"
     );
+    // Dropped without shutdown: the bridge stays alive.
+    drop(fill_closers);
     // A test-owned subscriber on a clone of the bridged socket, carrying
     // the websocket's shutdown like the connection's own registrations.
     let owned = Arc::new(Mutex::new(sub_sock));
@@ -1314,11 +1374,11 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
             .attention
             .notify("s_0000000000000000", None, &first, false),
     );
-    let drained = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let needle: &[u8] = b"run r0";
     let mut overlap = Vec::new();
     loop {
-        if drained.left().is_zero() {
+        if deadline.left().is_zero() {
             panic!("the TCP peer to drain the first small line");
         }
         let mut chunk = [0u8; 4096];
@@ -1386,11 +1446,6 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
         .expect("the Unix writer to block in its write");
     block_wait.join().expect("the block wait thread to join");
     crate::feed::close_connections(closers, UnixStream::shutdown);
-    assert_eq!(
-        hub.feed.attention.listeners(),
-        0,
-        "the overflow unregistered the listener"
-    );
     // The pump ends, the TCP side closes, and the served read loop
     // returns: a closer that shut only the Unix halves would leave the
     // pump and the TCP stream hanging.

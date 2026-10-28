@@ -1820,6 +1820,7 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
                     effects: vec![Effect::Reads],
                     reversible: true,
                     paths: None,
+                    confined: false,
                 },
                 subject: Some(String::new()),
                 prefix: None,

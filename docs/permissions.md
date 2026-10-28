@@ -34,6 +34,10 @@ Before a tool call runs, its tool declares that call's **effects**:
 | `executes` | runs a program |
 | `network` | sends or receives outside this machine |
 
+A call also carries whether it ran **confined**, inside the opt-in Linux
+sandbox ([Confinement](#confinement)). The log records it
+(`docs/events.md`, "Declared effects").
+
 A call declares every effect that applies, plus two qualifiers: whether it is
 **reversible**, and the **paths** it touches where it has any. A shell tool
 asked to run `git status` declares `reads`, reversible. Asked to run
@@ -174,7 +178,7 @@ changed variable needs a restart. A `credential_process` that
 `AWS_CONFIG_FILE`'s profiles name is not covered, nor is gcloud's Windows
 directory.
 
-Fiber does not confine tools ([Confinement](#confinement)), so without this
+A tool call runs with the account's full rights when the sandbox is off ([Confinement](#confinement)), so without this
 deny an agent's file read could retrieve the stored tokens. The macOS Keychain is not an
 alternative protection: any process running as the person can read a keychain
 item the same way Fiber would. Source: the archived tree's
@@ -201,20 +205,28 @@ extensions.
 ## Confinement
 
 Settled by
-[Does Fiber confine what tools can touch?](https://github.com/aakshintala/fiber/issues/30);
-that ticket's resolution holds the rationale and the rejected alternatives.
+[Does Fiber confine what tools can touch?](https://github.com/aakshintala/fiber/issues/30)
+and
+[permissions: an opt-in OS sandbox, and whether its commands skip the reviewer](https://github.com/aakshintala/fiber/issues/3027);
+those tickets' resolutions hold the rationale and the rejected alternatives.
 
-Fiber does not confine what a tool call can reach at the operating-system
-level. A program a tool starts runs with the account's full rights, on every
-platform. Everything on this page decides whether a call
-runs; nothing limits what it does once it runs.
+The opt-in Linux sandbox in #3027 is implemented in the current build. It
+is off by default and confines model-issued shell calls, not a person's own
+driver-shell commands, at the operating-system level under Fiber's own policy:
+Landlock plus seccomp; no srt, no bubblewrap. Calls remain reviewed; this
+slice adds no reviewer fast path. The Linux policy is `docs/sandbox.md`.
+
+A shell call runs with the account's full rights when the sandbox is off.
+Everything on this page decides whether a call runs; when the sandbox is
+off, nothing limits what it does once it runs.
 
 - Approving an `executes` call grants whatever the account can do. That
   includes Fiber home: an approved command can read `credentials/`, edit
   `rules`, or write an extension. Approving a call is trusting it, the same
-  boundary as installing an extension.
-- Isolation comes from outside Fiber: run it in a container or a virtual
-  machine.
+  boundary as installing an extension. A confined call is granted only its
+  sandbox instead.
+- Without the sandbox, isolation comes from outside Fiber: run it in a
+  container or a virtual machine.
 - A container protects the host from Fiber, not Fiber home from the agent.
   Fiber home inside the container is as reachable as it is outside one.
 

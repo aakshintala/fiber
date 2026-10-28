@@ -121,9 +121,11 @@ pub(crate) struct Fanout {
     list: Vec<Subscriber>,
     next: u64,
     retired: Vec<(Closer, JoinHandle<()>)>,
-    /// Tests only: refuses the next lazy writer spawn, so the
-    /// failed-spawn path runs without an outside seam: no socket outcome
-    /// fails a thread spawn on demand.
+    /// Tests only: refuses the next lazy writer spawn in `broadcast`, so
+    /// the failed-spawn path runs without an outside seam: thread-spawn
+    /// failure has no deterministic outside trigger, since resource
+    /// exhaustion cannot be staged per test and no socket outcome fails a
+    /// spawn on demand.
     #[cfg(test)]
     fail_spawn: AtomicBool,
     /// Successful writer starts, including retired ones: never decremented.
@@ -434,16 +436,12 @@ impl Fanout {
         ends
     }
 
-    /// Tests only: refuses the next lazy writer spawn in `broadcast`.
+    /// Tests only: arms the `fail_spawn` refusal, so the next lazy writer
+    /// spawn in `broadcast` is refused; see the field for why no outside
+    /// seam stages that failure.
     #[cfg(test)]
     pub(crate) fn fail_next_spawn(&self) {
         self.fail_spawn.store(true, Ordering::SeqCst);
-    }
-
-    /// Registered ids in registration order.
-    #[cfg(test)]
-    pub(crate) fn ids(&self) -> Vec<u64> {
-        self.list.iter().map(|sub| sub.id).collect()
     }
 
     /// Successful writer starts, including retired ones: never
@@ -452,14 +450,6 @@ impl Fanout {
     #[cfg(test)]
     pub(crate) fn started(&self) -> usize {
         self.started
-    }
-
-    /// How many retired writers still wait for joining. Test-only: a
-    /// retained shut-socket descriptor is invisible except through
-    /// descriptor exhaustion, so no outside seam observes its release.
-    #[cfg(test)]
-    pub(crate) fn retired(&self) -> usize {
-        self.retired.len()
     }
 }
 

@@ -89,13 +89,21 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// Waits for the test to release the admission lock (`what` names which
+/// wait), failing after `wait`. The probe arms below run on the loop's
+/// thread, so they call this instead of panicking in the closure.
+#[track_caller]
+fn released_after(release: &Mutex<mpsc::Receiver<()>>, what: &str, wait: Duration) {
+    Deadline::after(wait)
+        .recv(&lock(release))
+        .unwrap_or_else(|_| panic!("the test releases {what}"));
+}
+
+/// Waits for the test to release the admission lock (`what` names which
 /// wait), failing at [`DEADLINE`]. The probe arms below run on the loop's
 /// thread, so they call this instead of panicking in the closure.
 #[track_caller]
 fn released(release: &Mutex<mpsc::Receiver<()>>, what: &str) {
-    Deadline::after(DEADLINE)
-        .recv(&lock(release))
-        .unwrap_or_else(|_| panic!("the test releases {what}"));
+    released_after(release, what, DEADLINE);
 }
 
 fn wait_until_accept_waits() {
@@ -144,6 +152,16 @@ pub(crate) enum Probe {
     /// The first wait for the driver shells has returned: the session
     /// enters its answer phase next.
     FirstShellWaitDone,
+    /// `settle_answers`' owed wait returned: the readers stop and the cut
+    /// runs next, so a test holding here forces a reader to reserve inside
+    /// the cut window.
+    SettleWaitDone,
+    /// `settle_answers` saw a reader still dispatching after quieting the
+    /// readers and waits for it to finish before cutting what is owed.
+    DispatchWaitStarted,
+    /// `settle_answers` decided the cut and now waits the existing flush
+    /// margin for the cut writers.
+    CutWaitStarted,
     /// A writer saw STOP while the session is stopping and waits instead
     /// of ending.
     WriterParkedAtStop,
@@ -1481,6 +1499,7 @@ fn accept_waits_for_room_on_a_non_interrupted_error() {
 fn status(name: &str) -> Event {
     Event::SessionStatus(SessionStatus {
         name: name.to_owned(),
+        named: false,
         workspace: "/w".into(),
         parent: None,
         model: "m".into(),
@@ -2797,7 +2816,10 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
             lock(&resume_rx).recv().expect("the test resumes close");
         }
         Probe::ShellsWaiting => if let Ok(()) = waiting_tx.send(()) {},
-        Probe::SubscribeSeeded
+        Probe::SettleWaitDone
+        | Probe::DispatchWaitStarted
+        | Probe::CutWaitStarted
+        | Probe::SubscribeSeeded
         | Probe::SubscribeAcknowledged
         | Probe::PrinterStopQueued
         | Probe::MessageLocked
@@ -4858,7 +4880,10 @@ fn message_and_close_race_in_both_lock_orders() {
             }
             Probe::CloseLocked => if let Ok(()) = closed_tx.send(()) {},
             Probe::CommandReserved => {}
-            Probe::FirstShellWaitDone
+            Probe::SettleWaitDone
+            | Probe::DispatchWaitStarted
+            | Probe::CutWaitStarted
+            | Probe::FirstShellWaitDone
             | Probe::PrinterStopQueued
             | Probe::ShellsWaiting
             | Probe::SubscribeSeeded
@@ -4946,7 +4971,10 @@ fn message_and_close_race_in_both_lock_orders() {
                 released(&release, "the close");
             }
             Probe::CommandReserved => {}
-            Probe::MessageLocked
+            Probe::SettleWaitDone
+            | Probe::DispatchWaitStarted
+            | Probe::CutWaitStarted
+            | Probe::MessageLocked
             | Probe::FirstShellWaitDone
             | Probe::PrinterStopQueued
             | Probe::ShellsWaiting
@@ -6043,6 +6071,201 @@ fn a_reader_mid_dispatch_at_quiesce_is_answered_before_quiesce_returns() {
     close_within(session, opened.log);
 }
 
+/// `docs/invocation.md`, "What the hub speaks": a prompt the reader takes
+/// after close is refused `closing`, never cut `indeterminate`. `quiesce`
+/// with nothing owed returns from its owed wait at once; a reader that
+/// reserves a prompt id after that return but before the cut is still
+/// dispatching when the cut runs, so the cut must wait for its answer.
+/// At base the cut takes the reserved id and answers it `indeterminate`,
+/// and the reader's own `closing` answer is skipped.
+#[test]
+fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let (settle_tx, settle) = mpsc::channel();
+    let (hold_settle_tx, hold_settle) = mpsc::channel::<()>();
+    let hold_settle = Mutex::new(hold_settle);
+    let (reserved_tx, reserved) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    let release = Mutex::new(release);
+    let (dispatch_tx, dispatch) = mpsc::channel();
+    let (cut_wait_tx, cut_wait) = mpsc::channel();
+    // The subscription reservation predates the probe, so every
+    // `CommandReserved` below is the dispatched prompt.
+    let client = subscribed_client(&opened);
+    *super::lock(&gate.probe) = Some(Arc::new(move |point| match point {
+        Probe::SettleWaitDone => {
+            if let Ok(()) = settle_tx.send(()) {}
+            released(&hold_settle, "settle_answers");
+        }
+        Probe::CommandReserved => {
+            if let Ok(()) = reserved_tx.send(()) {}
+            released(&release, "the dispatching reader");
+        }
+        Probe::DispatchWaitStarted => if let Ok(()) = dispatch_tx.send(()) {},
+        Probe::CutWaitStarted => if let Ok(()) = cut_wait_tx.send(()) {},
+        Probe::FirstShellWaitDone
+        | Probe::PrinterStopQueued
+        | Probe::ShellsWaiting
+        | Probe::SubscribeSeeded
+        | Probe::SubscribeAcknowledged
+        | Probe::MessageLocked
+        | Probe::CloseLocked
+        | Probe::WriterParkedAtStop
+        | Probe::WriterPastEnd => {}
+    }));
+    let clock = Arc::clone(&opened.clock);
+    // The fake clock never moves before the reader finishes, so this is
+    // the same `until` the quiescer computes when it starts.
+    let start = clock.now();
+    let (done_tx, done) = mpsc::channel();
+    let session = opened.session;
+    let log = opened.log;
+    let quiescer = thread::spawn(move || {
+        session.quiesce();
+        if let Ok(()) = done_tx.send(()) {}
+        session
+    });
+    let quiescer_id = quiescer.thread().id();
+    // The owed wait returned with nothing owed: the cut runs as soon as the
+    // test releases it.
+    Deadline::after(DEADLINE)
+        .recv(&settle)
+        .expect("settle_answers reaches its cut");
+    // Admission closed when quiesce started, so the prompt the reader takes
+    // now is refused `closing` once it dispatches.
+    client
+        .send(r#"{"id":"c_p","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#)
+        .unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&reserved)
+        .expect("the reader reserves c_p before dispatching it");
+    // Release the cut (a) while the reader is still dispatching: the cut
+    // waits for the dispatch to finish before deciding what is owed.
+    hold_settle_tx.send(()).unwrap();
+    // The cut reaches its bounded reader wait while the dispatch is held.
+    Deadline::after(DEADLINE)
+        .recv(&dispatch)
+        .expect("settle_answers reaches the reader wait");
+    // The quiescer parks in the dispatch wait at `until`: the observed park
+    // proves it waits, and the immediate check proves it has not returned
+    // while the reader is held.
+    let until = start + super::GRACE;
+    assert!(
+        clock.await_parked(until, Deadline::after(DEADLINE)),
+        "settle_answers parks waiting for the dispatching reader"
+    );
+    assert!(
+        done.try_recv().is_err(),
+        "quiesce waits for the dispatching reader"
+    );
+    // Release the dispatching reader (b): its `closing` answer drains
+    // before the cut, so the cut finds nothing owed.
+    release_tx.send(()).unwrap();
+    // The cut-flush phase began: either the cut found nothing owed (or
+    // the writer already flushed) and quiesce returns on its own, or the
+    // quiescer parks at `until + CUT_FLUSH` for a cut the writer has not
+    // flushed yet.
+    Deadline::after(DEADLINE)
+        .recv(&cut_wait)
+        .expect("settle_answers reaches its cut flush");
+    let flush_at = until + super::CUT_FLUSH;
+    // The cut-flush wait is optional: when the writer flushed before
+    // `wait_cut`, quiesce returns without parking. Race the park against
+    // `done` so the done path finishes at once instead of waiting out the
+    // full park deadline.
+    let drive = Deadline::after(DEADLINE);
+    let mut finished_early = false;
+    let parked = loop {
+        if done.try_recv().is_ok() {
+            finished_early = true;
+            break false;
+        }
+        if clock.parked().contains(&Some(flush_at)) {
+            break true;
+        }
+        if drive.left().is_zero() {
+            if done.try_recv().is_ok() {
+                finished_early = true;
+                break false;
+            }
+            if clock.parked().contains(&Some(flush_at)) {
+                break true;
+            }
+            drive.recv_or_fail(&done, "quiesce returns once the dispatch is answered");
+            finished_early = true;
+            break false;
+        }
+        std::thread::yield_now();
+    };
+    if parked {
+        // Parked in the existing cut-flush wait: drive only its two
+        // existing bounds, first the grace to `until`, then the flush
+        // margin after the fresh re-park. The reader already finished,
+        // so no advance releases anything still dispatching. A flush
+        // that lands between the observations takes the completed path
+        // below instead of failing the advance.
+        match clock.try_advance_when_parked(
+            Some(flush_at),
+            Some(quiescer_id),
+            super::GRACE,
+            DEADLINE,
+        ) {
+            Ok(mark) => {
+                if clock.await_parked_since(&mark, Some(flush_at), Deadline::after(DEADLINE)) {
+                    match clock.try_advance_when_parked(
+                        Some(flush_at),
+                        Some(quiescer_id),
+                        super::CUT_FLUSH,
+                        DEADLINE,
+                    ) {
+                        Ok(_) => {}
+                        Err(fakes::clock::Miss::NoPark) => {}
+                        Err(miss) => panic!("the flush advance misses its re-park: {miss:?}"),
+                    }
+                }
+            }
+            Err(fakes::clock::Miss::NoPark) => {}
+            Err(miss) => panic!("the grace advance misses the cut-flush park: {miss:?}"),
+        }
+    }
+    if !finished_early {
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("quiesce returns once the dispatch is answered");
+    }
+    let session = quiescer.join().expect("the quiesce thread returns");
+    let answer = loop {
+        let line = recv(&client);
+        if matches!(
+            line["kind"].as_str(),
+            Some("command_accepted" | "command_rejected")
+        ) {
+            break line;
+        }
+    };
+    assert_eq!(support::command_id(&answer), Some("c_p"), "{answer:?}");
+    assert_eq!(answer["kind"], "command_rejected", "{answer:?}");
+    assert_eq!(support::rejection(&answer).0, "closing", "{answer:?}");
+    close_within(session, log);
+    // `docs/invocation.md`, "What the hub speaks", "Commands keep their order":
+    // every line a session reads gets exactly one answer on its connection
+    // before the session shuts it. The answer arrived before close, so count
+    // it with the lines that arrive after: exactly one answer, and it is
+    // `closing`, never cut.
+    let mut lines = vec![answer];
+    lines.extend(read_to_eof(&client));
+    let acks = acks_for(&lines, "c_p");
+    assert_eq!(
+        acks.len(),
+        1,
+        "one answer for the dispatched prompt: {lines:?}"
+    );
+    assert_eq!(acks[0]["kind"], "command_rejected", "{lines:?}");
+    assert_eq!(acks[0]["payload"]["code"], "closing", "{lines:?}");
+}
+
 /// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 /// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the close waits up to 2 seconds, then answers a command still running `indeterminate`, never replayed.
 #[test]
@@ -6512,13 +6735,33 @@ fn settle_answers_waits_for_the_flush_through_the_whole_margin() {
     let reader = thread::current().id();
     gate.accepted.track(reader);
     gate.accepted.reserve(&CommandId("c_1".into()));
-    let reading = thread::spawn(|| {});
+    let (id_tx, id_rx) = mpsc::channel::<u64>();
+    let (finish_tx, finish_rx) = mpsc::channel::<()>();
+    let (finished_tx, finished) = mpsc::channel::<()>();
+    let finishing = Arc::clone(&gate);
+    let reading = thread::spawn(move || {
+        let id = id_rx.recv().expect("the test publishes the reader");
+        // Finish only after quiet_readers: the test releases this once
+        // settle_answers notes it waits for the dispatching reader.
+        Deadline::after(DEADLINE)
+            .recv(&finish_rx)
+            .expect("the test releases the finish");
+        finishing.conns.finish(id);
+        if let Ok(()) = finished_tx.send(()) {}
+    });
     let id = gate
         .conns
         .push_reader(reading, Box::new(|| {}), Box::new(|| {}))
         .expect("the gate is running");
+    if let Ok(()) = id_tx.send(id) {}
     gate.conns.note_owed(id, reader);
     gate.conns.push_writer(id, thread::spawn(|| {}));
+    let (dispatch_tx, dispatch) = mpsc::channel();
+    *lock(&gate.probe) = Some(Arc::new(move |point| {
+        if point == Probe::DispatchWaitStarted
+            && let Ok(()) = dispatch_tx.send(())
+        {}
+    }));
     let until = clock.now() + super::GRACE;
     let (done_tx, done_rx) = mpsc::channel();
     let session = opened.session;
@@ -6531,6 +6774,15 @@ fn settle_answers_waits_for_the_flush_through_the_whole_margin() {
         "settle_answers waits for the owed answer"
     );
     clock.advance_when_parked(Some(until), None, super::GRACE, &Deadline::after(DEADLINE));
+    // The reader is still unfinished after quiet_readers, so settle_answers
+    // waits for it before cutting: release the finish outside the locks.
+    Deadline::after(DEADLINE)
+        .recv(&dispatch)
+        .expect("settle_answers waits for the reader to finish");
+    finish_tx.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the reader finished");
     // The grace passed with the answer still owed: the session cut it and
     // now waits the flush margin for the cut writer's flush.
     let parked = clock.await_parked(until + super::CUT_FLUSH, Deadline::after(DEADLINE));
@@ -6540,7 +6792,6 @@ fn settle_answers_waits_for_the_flush_through_the_whole_margin() {
     let session = Deadline::after(DEADLINE)
         .recv(&done_rx)
         .expect("the flush ends settle_answers");
-    gate.conns.finish(id);
     assert!(
         parked,
         "settle_answers waits for the cut flush through the whole margin"

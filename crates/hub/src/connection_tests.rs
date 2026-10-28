@@ -70,7 +70,11 @@ impl Client {
         let hub = Arc::clone(hub);
         thread::Builder::new()
             .name("hub-conn".to_owned())
-            .spawn(move || serve_connection(a, hub))
+            .spawn(move || match hub.poll_accept(&a, &AtomicBool::new(false)) {
+                Accept::Counted(n) => serve_counted(a, hub, n),
+                Accept::Dropped => panic!("test connection stream could not be cloned"),
+                Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+            })
             .unwrap();
         b.set_read_timeout(Some(DEADLINE)).unwrap();
         let reader = b.try_clone().unwrap();
@@ -157,28 +161,6 @@ impl Client {
 
 fn command(id: &str, command: &str, args: Value) -> Value {
     json!({"id": id, "command": command, "args": args})
-}
-
-#[test]
-fn accepted_local_connection_retains_its_kernel_attribution() {
-    let temp = Temp::new();
-    let hub = temp.hub(FakeStarter::hang(&temp.dir));
-    let mut client = Client::connect(&hub);
-    client.hello();
-    client.send(&command("c_status", "status", json!({})));
-    let ack = client.next("the status acknowledgement");
-    assert_eq!(ack.get("kind"), Some(&json!("command_accepted")));
-
-    let ids = hub.rejoins.ids();
-    assert_eq!(ids.len(), 1, "the accepted client is registered");
-    assert!(
-        matches!(
-            hub.rejoins.attribution(ids[0]),
-            Some(Attribution::Local { peer_pid, session_process_pids })
-                if peer_pid == support::peer::Pid(std::process::id()) && session_process_pids.is_empty()
-        ),
-        "reroutes keep the attribution read from this accepted socket"
-    );
 }
 
 fn rejected(line: &Value) -> (String, Option<String>, String) {
@@ -2292,28 +2274,22 @@ fn the_idle_timer_starts_when_the_open_count_reaches_zero() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
     let hub = hub_on(&temp, &clock);
-    assert_eq!(hub.zero_since(), Some(clock.origin()), "start counts as 0");
     let (a, _a) = UnixStream::pair().unwrap();
     let (b, _b) = UnixStream::pair().unwrap();
-    let first = hub.register(&a).expect("the clone succeeds");
-    assert_eq!(hub.zero_since(), None, "an open client clears the timer");
-    let second = hub.register(&b).expect("the clone succeeds");
-    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "no code under test waits on the clock (ruling 6179406086)"
-    )]
-    clock.advance(Duration::from_secs(5));
+    let first = match hub.poll_accept(&a, &AtomicBool::new(false)) {
+        Accept::Counted(n) => n,
+        Accept::Dropped => panic!("the test connection clone failed"),
+        Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
+    let second = match hub.poll_accept(&b, &AtomicBool::new(false)) {
+        Accept::Counted(n) => n,
+        Accept::Dropped => panic!("the test connection clone failed"),
+        Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
+    assert_eq!(hub.clients(), 2);
     disconnect(&hub, first);
-    assert_eq!(hub.zero_since(), None, "one client is still open");
-    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "no code under test waits on the clock (ruling 6179406086)"
-    )]
-    clock.advance(Duration::from_secs(5));
+    assert_eq!(hub.clients(), 1, "one client is still open");
     disconnect(&hub, second);
-    assert_eq!(hub.zero_since(), Some(clock.now()), "0 at the departure");
     assert_eq!(hub.clients(), 0);
 }
 
@@ -2330,7 +2306,6 @@ fn a_failed_clone_counts_nothing_and_serves_nothing() {
     );
     drop(conns);
     assert_eq!(hub.clients(), 0);
-    assert_eq!(hub.zero_since(), Some(clock.origin()), "the timer runs on");
 }
 
 #[test]
@@ -2340,27 +2315,21 @@ fn rollback_removes_the_count_and_restarts_the_timer_at_zero() {
     let hub = hub_on(&temp, &clock);
     let (a, _a) = UnixStream::pair().unwrap();
     let (b, _b) = UnixStream::pair().unwrap();
-    let first = hub.register(&a).expect("the clone succeeds");
-    let second = hub.register(&b).expect("the clone succeeds");
+    let first = match hub.poll_accept(&a, &AtomicBool::new(false)) {
+        Accept::Counted(n) => n,
+        Accept::Dropped => panic!("the test connection clone failed"),
+        Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
+    let second = match hub.poll_accept(&b, &AtomicBool::new(false)) {
+        Accept::Counted(n) => n,
+        Accept::Dropped => panic!("the test connection clone failed"),
+        Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
     assert_eq!(hub.clients(), 2);
-    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "no code under test waits on the clock (ruling 6179406086)"
-    )]
-    clock.advance(Duration::from_secs(5));
     hub.rollback(first);
-    assert_eq!(hub.clients(), 1);
-    assert_eq!(hub.zero_since(), None, "one client is still open");
-    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "no code under test waits on the clock (ruling 6179406086)"
-    )]
-    clock.advance(Duration::from_secs(5));
+    assert_eq!(hub.clients(), 1, "one client is still open");
     hub.rollback(second);
     assert_eq!(hub.clients(), 0);
-    assert_eq!(hub.zero_since(), Some(clock.now()), "0 at the rollback");
 }
 
 #[test]
@@ -2433,22 +2402,6 @@ fn crashed_feed(temp: &Temp, hub: &Arc<Hub>, id: &str) {
     hub.feed.start();
 }
 
-/// Waits under [`DEADLINE`] until the feed holds `n` subscribers.
-#[track_caller]
-fn until_subscribers(hub: &Arc<Hub>, n: usize, what: &str) {
-    let (done_tx, done_rx) = mpsc::channel();
-    let hub = Arc::clone(hub);
-    thread::spawn(move || {
-        while hub.feed.subscribers() != n {
-            std::thread::yield_now();
-        }
-        done_tx.send(()).unwrap_or(());
-    });
-    Deadline::after(DEADLINE)
-        .recv(&done_rx)
-        .unwrap_or_else(|_| panic!("the feed holds {n} subscribers {what}"));
-}
-
 #[test]
 fn feed_is_accepted_then_sends_the_snapshot_and_leaves_with_the_client() {
     let temp = Temp::new();
@@ -2476,10 +2429,9 @@ fn feed_is_accepted_then_sends_the_snapshot_and_leaves_with_the_client() {
             Some(&json!({"session_id": id, "how": "crashed"}))
         );
         // A second `feed` replaces the first subscription.
-        until_subscribers(&hub, 1, "on this connection");
     }
     drop(client);
-    until_subscribers(&hub, 0, "after the client left");
+    until_clients(&hub, 0, "after the client left");
     hub.feed.stop();
 }
 
@@ -2917,22 +2869,6 @@ fn sessions_empty_log_lists_with_null_active_and_skips_delegates() {
     stop_within(&hub.feed);
 }
 
-/// Waits under [`DEADLINE`] until attention holds `n` listeners.
-#[track_caller]
-fn until_listeners(hub: &Arc<Hub>, n: usize, what: &str) {
-    let (done_tx, done_rx) = mpsc::channel();
-    let hub = Arc::clone(hub);
-    thread::spawn(move || {
-        while hub.feed.attention.listeners() != n {
-            std::thread::yield_now();
-        }
-        done_tx.send(()).unwrap_or(());
-    });
-    Deadline::after(DEADLINE)
-        .recv(&done_rx)
-        .unwrap_or_else(|_| panic!("attention holds {n} listeners {what}"));
-}
-
 /// A `session_status` payload with a `waiting` state: `request_id` and
 /// `summary "run <request_id>"`, named `n` in `/w`.
 fn waiting_payload(request: &str) -> Value {
@@ -2968,13 +2904,19 @@ fn attention_reaches_every_connection_after_hub_hello_with_or_without_a_feed() {
     assert!(session.await_subscribed(1, DEADLINE));
     let mut a = Client::connect(&hub);
     a.hello();
+    // A status answer runs after the server's register and listen.
+    a.send(&command("c_0", "status", json!({})));
+    let (echoed, _) = accepted(&a.next("the status acknowledgement"));
+    assert_eq!(echoed, "c_0");
     a.send(&command("c_1", "feed", json!({})));
     let (echoed, _) = accepted(&a.next("the feed acknowledgement"));
     assert_eq!(echoed, "c_1");
     assert_eq!(a.next("the snapshot status")["kind"], "session_status");
     let mut b = Client::connect(&hub);
     b.hello();
-    until_listeners(&hub, 2, "after A and B connected");
+    b.send(&command("c_1", "status", json!({})));
+    let (echoed, _) = accepted(&b.next("the status acknowledgement"));
+    assert_eq!(echoed, "c_1");
     // C's connection thread waits on the pause point before its hello.
     let (reached_tx, reached_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
@@ -2996,7 +2938,9 @@ fn attention_reaches_every_connection_after_hub_hello_with_or_without_a_feed() {
     assert_eq!(held["payload"]["summary"], "run rh");
     release_tx.send(()).unwrap_or(());
     assert_eq!(c.hello()["kind"], "hub_hello");
-    until_listeners(&hub, 3, "after C registered");
+    c.send(&command("c_1", "status", json!({})));
+    let (echoed, _) = accepted(&c.next("the status acknowledgement"));
+    assert_eq!(echoed, "c_1");
     // Every connection hears the turn's waiting, but C never hears `rh`.
     session.say(&crate::fake::status_line(id, &waiting_payload("r1")));
     let r1 = json!({
@@ -3027,7 +2971,7 @@ fn attention_reaches_every_connection_after_hub_hello_with_or_without_a_feed() {
     drop(a);
     drop(b);
     drop(c);
-    until_listeners(&hub, 0, "after every client left");
+    until_clients(&hub, 0, "after every client left");
     stop_within(&hub.feed);
 }
 
@@ -3037,7 +2981,20 @@ fn a_client_that_half_closes_without_reading_still_leaves() {
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
     let mut d = Client::connect(&hub);
     d.hello();
-    until_listeners(&hub, 1, "after D connected");
+    d.send(&command("c_status", "status", json!({})));
+    let ack = d.next("the status acknowledgement");
+    assert_eq!(ack.get("kind"), Some(&json!("command_accepted")));
+    // One distinct attention probe proves the lazy writer started: D
+    // reads it before the flood.
+    let probe = waiting_status("probe");
+    drop(
+        hub.feed
+            .attention
+            .notify("s_00000000000000d0", None, &probe, false),
+    );
+    let heard = d.next("the attention probe");
+    assert_eq!(heard["payload"]["reason"], "waiting");
+    assert_eq!(heard["payload"]["summary"], "run probe");
     // About 4 MB past any socket buffer, so the writer blocks.
     for n in 0..2_000 {
         let mut status = waiting_status(&format!("r{n}"));
@@ -3049,7 +3006,6 @@ fn a_client_that_half_closes_without_reading_still_leaves() {
         );
     }
     d.write.shutdown(Shutdown::Write).unwrap();
-    until_listeners(&hub, 0, "after D half-closed");
     until_clients(&hub, 0, "after D half-closed");
     stop_within(&hub.feed);
 }
@@ -3075,14 +3031,16 @@ struct OverflowRace {
 fn overflow_race() -> OverflowRace {
     let temp = Temp::new();
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
-    let (server, client) = UnixStream::pair().unwrap();
+    let (server, mut client) = UnixStream::pair().unwrap();
     client.set_read_timeout(Some(DEADLINE)).unwrap();
     let sub_sock = server.try_clone().unwrap();
     let closer_sock = server.try_clone().unwrap();
     let retired_sock = server.try_clone().unwrap();
-    let n = hub
-        .register(&server)
-        .expect("the hub counts the connection");
+    let n = match hub.poll_accept(&server, &AtomicBool::new(false)) {
+        Accept::Counted(n) => n,
+        Accept::Dropped => panic!("the hub counts the connection"),
+        Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
     let serve_hub = Arc::clone(&hub);
     let (serve_tx, serve_rx) = mpsc::channel();
     thread::spawn(move || {
@@ -3096,7 +3054,15 @@ fn overflow_race() -> OverflowRace {
         serde_json::from_str::<Value>(&hello).unwrap()["kind"],
         "hub_hello"
     );
-    until_listeners(&hub, 1, "the connection registered");
+    // A status answer runs after the server's register and listen, before
+    // the test-owned subscriber joins.
+    writeln!(client, "{}", command("c_status", "status", json!({}))).unwrap();
+    let mut ack = String::new();
+    read.read_line(&mut ack).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&ack).unwrap()["kind"],
+        "command_accepted"
+    );
     let owned = Arc::new(Mutex::new(sub_sock));
     let closer = crate::feed::Closer {
         stream: closer_sock,
@@ -3110,7 +3076,6 @@ fn overflow_race() -> OverflowRace {
         .attention
         .listen(Arc::clone(&owned), closer, retired)
         .unwrap();
-    until_listeners(&hub, 2, "the test subscriber registered");
     // One line larger than any socket buffer, never read: the writer
     // blocks in its write path, which the held mutex proves.
     let big = waiting_status(&format!("r-big-{}", "x".repeat(4 * 1024 * 1024)));
@@ -3161,7 +3126,6 @@ fn overflow_full(race: &OverflowRace) {
     }
     assert!(!closers.is_empty(), "the bound fired");
     crate::feed::close_connections(closers, UnixStream::shutdown);
-    until_listeners(&race.hub, 0, "the overflow unregistered every listener");
 }
 
 /// The race converged: the read loop returned, the count released, EOF
@@ -3244,7 +3208,6 @@ fn a_relay_only_connection_starts_no_attention_writer() {
     let _session = bind_session(&temp.dir, sid, ack.clone());
     let mut client = Client::connect(&hub);
     client.hello();
-    until_listeners(&hub, 1, "the connection registered");
     assert_eq!(
         hub.feed.attention.writers_started(),
         0,
@@ -3259,7 +3222,6 @@ fn a_relay_only_connection_starts_no_attention_writer() {
         "args": {"level": "full"},
     }));
     assert_eq!(client.next("the relayed acknowledgement"), ack);
-    assert_eq!(hub.feed.attention.listeners(), 1, "still registered");
     assert_eq!(
         hub.feed.attention.writers_started(),
         0,

@@ -142,6 +142,26 @@ const SORT: &[Flag] = &[
     value("-t"),
 ];
 
+/// Only the flags that change numbering or layout: every other `nl` flag
+/// writes, pages, or otherwise leaves reading (`docs/tools.md`, "Shell",
+/// "Effects"). Each value flag takes a separate word or `--long=value`;
+/// an attached short value stays `executes`, as with `head -n10`.
+const NL: &[Flag] = &[
+    value("-b"),
+    value("--body-numbering"),
+    value("-n"),
+    value("--number-format"),
+    value("-w"),
+    value("--number-width"),
+    value("-s"),
+    value("--number-separator"),
+    value("-v"),
+    value("--starting-line-number"),
+    value("-i"),
+    value("--line-increment"),
+    flag("-ba"),
+];
+
 const GIT_STATUS: &[Flag] = &[
     flag("-s"),
     flag("-b"),
@@ -354,6 +374,8 @@ pub(super) const EXACT: &[&[&str]] = &[
     &["git", "branch", "--show-current"],
     &["git", "status"],
     &["git", "stash", "list"],
+    &["true"],
+    &[":"],
 ];
 
 /// Fiber's own read-only commands. The person's `shell.read_only` entries
@@ -482,6 +504,18 @@ pub(super) const COMMANDS: &[Command] = &[
     Command {
         name: "sort",
         flags: SORT,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: true,
+        prints: false,
+        counts: false,
+    },
+    // `nl` numbers lines: only the flags that change numbering or
+    // layout read, and every operand is a path, as with `cat`.
+    Command {
+        name: "nl",
+        flags: NL,
         paths: true,
         pattern: false,
         pattern_flags: &[],

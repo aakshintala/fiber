@@ -27,7 +27,7 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::connection::{Hub, lock, serve_connection};
+use crate::connection::{Accept, Hub, lock, serve_counted};
 use crate::fake::FakeStarter;
 use crate::feed::RUN_SCAN;
 use crate::testkit::{await_scanner, id, start, write_log};
@@ -174,7 +174,11 @@ impl Client {
         let hub = Arc::clone(hub);
         thread::Builder::new()
             .name("hub-conn".to_owned())
-            .spawn(move || serve_connection(a, hub))
+            .spawn(move || match hub.poll_accept(&a, &AtomicBool::new(false)) {
+                Accept::Counted(n) => serve_counted(a, hub, n),
+                Accept::Dropped => panic!("test connection stream could not be cloned"),
+                Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+            })
             .unwrap();
         b.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
         b.set_write_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
@@ -607,9 +611,25 @@ fn await_pass(done: &mpsc::Receiver<()>, what: &str) {
     );
 }
 
+/// Live `(id, relays)` pairs from the registry, pruning dead entries with
+/// the same upgrade-and-prune the removed test-only reader ran: the tests
+/// read the registry they drive, so the production type carries no
+/// test-only reader.
+fn live_pairs(conns: &Connections) -> Vec<(u64, Arc<Mutex<Relays>>)> {
+    let mut inner = lock(&conns.inner);
+    inner
+        .conns
+        .retain(|(_, writer, relays)| writer.upgrade().is_some() && relays.upgrade().is_some());
+    inner
+        .conns
+        .iter()
+        .filter_map(|(id, _, relays)| relays.upgrade().map(|relays| (*id, relays)))
+        .collect()
+}
+
 /// Waits, at most [`MUST_SUCCEED_WITHIN`] of real time, until the registry drops
 /// every connection: a scoped thread waits on the hub's tick, which
-/// `serve_connection` wakes after it unregisters, and this takes its
+/// `serve_counted` wakes after it unregisters, and this takes its
 /// notice with one `Deadline` receive. The fake clock never moves during the
 /// wait, so the bound is the channel's, never the clock's. Fails naming
 /// `what` when the deadline passes first.
@@ -621,7 +641,7 @@ fn await_unregistered(hub: &Hub, clock: &FakeClock, what: &str) {
         let given_up = &given_up;
         scope.spawn(move || {
             hub.tick.wait_for(clock, &mut |_| {
-                if hub.rejoins.ids().is_empty() || given_up.load(Ordering::SeqCst) {
+                if live_pairs(&hub.rejoins).is_empty() || given_up.load(Ordering::SeqCst) {
                     crate::tick::Wait::Done
                 } else {
                     crate::tick::Wait::Until(None)
@@ -636,7 +656,7 @@ fn await_unregistered(hub: &Hub, clock: &FakeClock, what: &str) {
         }
     });
     assert!(
-        hub.rejoins.ids().is_empty(),
+        live_pairs(&hub.rejoins).is_empty(),
         "the registry no longer holds it for {what}"
     );
 }
@@ -1154,9 +1174,39 @@ fn the_registry_forgets_an_unregistered_connection() {
     registry.register(2, &writer_b, &relays_b);
     registry.unregister(1);
     assert_eq!(
-        registry.ids(),
+        live_pairs(&registry)
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>(),
         vec![2],
         "the other connection is still swept"
+    );
+}
+
+/// An accepted local connection keeps the kernel attribution the accept
+/// read, for reroutes to reuse: the store path runs only under a real
+/// accepted socket, never under a fabricated refusal matrix.
+#[test]
+fn accepted_local_connection_retains_its_kernel_attribution() {
+    let temp = Temp::new();
+    let (hub, _clock) = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
+    client.send(&json!({"id": "c_status", "command": "status", "args": {}}));
+    let ack = client.next("the status acknowledgement");
+    assert_eq!(ack.get("kind"), Some(&json!("command_accepted")));
+    let pairs = live_pairs(&hub.rejoins);
+    let pair = pairs.first().expect("the accepted client is registered");
+    assert!(
+        matches!(
+            lock(&pair.1).attribution.clone(),
+            Some(crate::connection::Attribution::Local {
+                peer_pid,
+                session_process_pids
+            }) if peer_pid == support::peer::Pid(std::process::id())
+                && session_process_pids.is_empty()
+        ),
+        "reroutes keep the attribution read from this accepted socket"
     );
 }
 

@@ -206,7 +206,9 @@ impl Band {
         match rendered {
             Some(fitted) => {
                 // The replacement owns the band row whole, tint and
-                // edges included; the note below keeps its own.
+                // edges included; the note below keeps its own. Its
+                // animated tag rides along, so the paint pass marks the
+                // item visible.
                 for line in fitted.iter() {
                     out.push_text(
                         (line.line.clone(), None),
@@ -214,6 +216,7 @@ impl Band {
                             tail: line.pad,
                             links: line.links.clone(),
                             spin: writing.then_some(0),
+                            anim: line.anim.clone(),
                             ..RowText::plain()
                         },
                     );
@@ -380,7 +383,8 @@ impl Turn {
             | Entry::Steer(_)
             | Entry::Group(_)
             | Entry::Aside(_)
-            | Entry::Answers(_) => None,
+            | Entry::Answers(_)
+            | Entry::Message(_) => None,
         })
     }
 
@@ -490,7 +494,8 @@ pub(crate) fn sized(turns: &mut [Turn], line: &UsageRecorded) -> bool {
             | Entry::Steer(_)
             | Entry::Group(_)
             | Entry::Aside(_)
-            | Entry::Answers(_) => None,
+            | Entry::Answers(_)
+            | Entry::Message(_) => None,
         });
     match latest.map(|band| &mut band.state) {
         Some(State::Done {

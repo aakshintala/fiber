@@ -306,9 +306,17 @@ What is recorded:
 - **At `debug`, how long a timed operation takes:** one `op_timing` line
   when it ends, written by the one timer every timed place goes through
   (`log::diag::timed`). `data` holds `op`, the operation's name, and `ms`,
-  whole milliseconds; a tool's timers add `tool`, the tool's name. No other
-  field is recorded, and never an argument, a path or any content, as for
-  every line in `logs/`. At `info` the cost is one check of the level,
+  whole milliseconds; a tool's timers add `tool`, the tool's name. In an
+  `alloc-stats` build, and only when the timer ends on the thread that
+  started it, the line also carries `alloc_bytes`, bytes allocated during
+  the operation, `allocs`, the allocation count during the operation, and
+  `live_delta_bytes`, signed end-minus-start live bytes, negative when the
+  operation freed more than it allocated; a realloc contributes one
+  allocation of the new size to `allocs` and `alloc_bytes` and adjusts live
+  by the signed size difference. Otherwise the three fields are absent,
+  never zero, and a default build writes none. No other field is recorded,
+  and never an argument, a path or any content, as for every line in
+  `logs/`. At `info` the cost is one check of the level,
   except the monotonic reads taken before the configuration is read, when
   the level is not yet known: one to time `startup.config`, and two for
   each worktree created or recreated then. Those are the only extra costs

@@ -29,6 +29,7 @@ fn push_text_keeps_its_text() {
         links: Vec::new(),
         scopes: Vec::new(),
         spin: None,
+        anim: None,
     };
     rows.push_text(row("a"), text.clone());
     assert_eq!(rows.len(), 1);
@@ -254,6 +255,7 @@ fn on_surface_keeps_each_rows_text() {
             links: vec![(0..1, "https://x".to_owned())],
             scopes: Vec::new(),
             spin: None,
+            anim: None,
         },
     );
     rows.on_surface(
@@ -290,6 +292,7 @@ fn pad_prefixes_blank_cells_and_shifts_text_marks() {
             scopes: Vec::new(),
             spin: Some(0),
             join: Join::Break,
+            anim: None,
         },
     );
     rows.pad(0, 1, 20);
@@ -302,6 +305,66 @@ fn pad_prefixes_blank_cells_and_shifts_text_marks() {
     assert_eq!(texts[0].spin, Some(1));
     assert!(texts[0].decoration);
     let _ = Target::Group(1);
+}
+
+#[test]
+fn push_fitted_keeps_the_animated_tag_on_its_row() {
+    use crate::ext::anim::AnimKey;
+    use crate::ext::spans::FittedLine;
+    let key = AnimKey::new(
+        crate::ext::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        "thinking_line",
+        7,
+        "test",
+        None,
+    );
+    let line = FittedLine {
+        line: Line::raw("still"),
+        links: Vec::new(),
+        pad: 0,
+        anim: Some(key.clone()),
+    };
+    let mut rows = Rows::default();
+    rows.push_fitted(&line, None);
+
+    let (_, texts) = rows.into_parts();
+    // docs/tui.md:2968: a painted replacement row keeps its animation tag.
+    assert_eq!(texts.first().and_then(|text| text.anim.clone()), Some(key));
+}
+
+#[test]
+fn pad_keeps_the_animated_tag_on_every_piece() {
+    use crate::ext::anim::AnimKey;
+    let key = AnimKey::new(
+        crate::ext::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        "ledger_row",
+        7,
+        "test",
+        None,
+    );
+    let mut rows = Rows::default();
+    rows.push_text(
+        row("aaaa bbbb cccc dddd"),
+        RowText {
+            join: Join::WrapSpace,
+            anim: Some(key.clone()),
+            ..RowText::plain()
+        },
+    );
+    rows.pad(0, 1, 10);
+    let (_, texts) = rows.into_parts();
+    // The split row paints the same item on every piece, so each keeps
+    // its tag.
+    assert!(texts.len() > 1, "the row splits");
+    for text in &texts {
+        assert_eq!(text.anim, Some(key.clone()));
+    }
 }
 
 #[test]
@@ -777,6 +840,7 @@ fn pad_with_a_missing_text_row_leaves_the_rows() {
         scopes: Vec::new(),
         all_open: false,
         seam: None,
+        session_names: Default::default(),
     };
     out.pad(0, 1, 10);
     assert_eq!(out.rows.len(), 1);

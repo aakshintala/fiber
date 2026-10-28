@@ -9,6 +9,10 @@
 //! panic hook: one crash report under `crashes/` in Fiber home before the
 //! process aborts.
 
+#[cfg(any(test, feature = "alloc-stats"))]
+pub mod alloc_stats;
+#[cfg(test)]
+mod alloc_stats_tests;
 mod artifact;
 pub mod crash;
 mod delete;

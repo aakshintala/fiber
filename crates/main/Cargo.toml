@@ -8,12 +8,17 @@ publish.workspace = true
 name = "fiber"
 path = "src/main.rs"
 
+[features]
+alloc-stats = ["log/alloc-stats"]
+dhat-heap = ["dep:dhat"]
+
 [dependencies]
 clap.workspace = true
 clap_complete.workspace = true
 cli = { path = "../cli" }
 config = { path = "../config" }
 contract = { path = "../contract" }
+dhat = { version = "0.3", optional = true }
 doors = { path = "../doors" }
 extensions = { path = "../extensions" }
 hub = { path = "../hub" }
@@ -30,6 +35,7 @@ signal-hook.workspace = true
 support = { path = "../support" }
 tools = { path = "../tools" }
 tui = { path = "../tui" }
+worktree = { path = "../worktree" }
 
 [dev-dependencies]
 base64.workspace = true

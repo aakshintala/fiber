@@ -1002,3 +1002,121 @@ fn info_warn_and_error_lines_carry_no_data() {
         assert!(parsed.get("data").is_none(), "{line}");
     }
 }
+
+/// A guard dropped on another thread keeps `op` and `ms` and omits every
+/// allocation field: the fields need the starting thread's endpoint, and
+/// are absent there, never zero.
+#[test]
+fn cross_thread_timer_writes_no_alloc_fields() {
+    let home = Home::new("ld-timed-cross-drop");
+    let (inner, spy) = SpyClock::new();
+    let diag = debug_diag(&home, &spy);
+    let start = inner.now();
+    // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    inner.advance(Duration::from_millis(7));
+    let timer = timed(&diag, Op::ToolRun, Some("read"), Some(start)).expect("debug guard");
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let child = thread::Builder::new()
+        .name("log-test-cross-drop".to_owned())
+        .spawn(move || {
+            drop(timer);
+            done_tx.send(()).unwrap();
+        })
+        .unwrap();
+    Deadline::after(LIMIT).recv_or_fail(&done_rx, "cross-thread drop");
+    child.join().unwrap();
+    let line = op_line(&home, "hub.log");
+    assert_eq!(line["data"]["op"], "tool.run");
+    assert!(line["data"]["ms"].is_u64(), "ms: {line}");
+    assert!(
+        line["data"].get("alloc_bytes").is_none(),
+        "no alloc_bytes: {line}"
+    );
+    assert!(line["data"].get("allocs").is_none(), "no allocs: {line}");
+    assert!(
+        line["data"].get("live_delta_bytes").is_none(),
+        "no live_delta_bytes: {line}"
+    );
+}
+
+/// A guard stopped on another thread and dropped on its starting thread
+/// keeps `op` and `ms` and still omits every allocation field: a
+/// cross-thread stamp stores no snapshot, and the drop never repairs it.
+#[test]
+fn cross_thread_stop_then_parent_drop_writes_no_alloc_fields() {
+    let home = Home::new("ld-timed-cross-stop");
+    let (inner, spy) = SpyClock::new();
+    let diag = debug_diag(&home, &spy);
+    let start = inner.now();
+    // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    inner.advance(Duration::from_millis(7));
+    let timer = timed(&diag, Op::ToolRun, Some("read"), Some(start)).expect("debug guard");
+    let (stopped_tx, stopped_rx) = mpsc::channel::<Timer>();
+    let child = thread::Builder::new()
+        .name("log-test-cross-stop".to_owned())
+        .spawn(move || {
+            let mut timer = timer;
+            timer.stop();
+            stopped_tx.send(timer).unwrap();
+        })
+        .unwrap();
+    let timer = Deadline::after(LIMIT).recv_or_fail(&stopped_rx, "cross-thread stop");
+    child.join().unwrap();
+    drop(timer);
+    let line = op_line(&home, "hub.log");
+    assert_eq!(line["data"]["op"], "tool.run");
+    assert!(line["data"]["ms"].is_u64(), "ms: {line}");
+    assert!(
+        line["data"].get("alloc_bytes").is_none(),
+        "no alloc_bytes: {line}"
+    );
+    assert!(line["data"].get("allocs").is_none(), "no allocs: {line}");
+    assert!(
+        line["data"].get("live_delta_bytes").is_none(),
+        "no live_delta_bytes: {line}"
+    );
+}
+
+/// A guard dropped on its starting thread carries every allocation field
+/// together: `alloc_bytes`, `allocs` and `live_delta_bytes` are one
+/// flattened value, so the wire holds all three or none, never a partial
+/// set, and no nested `alloc` key leaks.
+#[cfg(feature = "alloc-stats")]
+#[test]
+fn same_thread_timer_writes_all_alloc_fields_together() {
+    let home = Home::new("ld-timed-same-alloc");
+    let (inner, spy) = SpyClock::new();
+    let diag = debug_diag(&home, &spy);
+    let start = inner.now();
+    // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    inner.advance(Duration::from_millis(7));
+    drop(timed(&diag, Op::ToolRun, Some("read"), Some(start)).expect("debug guard"));
+    let line = op_line(&home, "hub.log");
+    assert_eq!(line["data"]["op"], "tool.run");
+    assert!(line["data"]["ms"].is_u64(), "ms: {line}");
+    assert!(
+        line["data"]["alloc_bytes"].is_u64(),
+        "numeric alloc_bytes: {line}"
+    );
+    assert!(line["data"]["allocs"].is_u64(), "numeric allocs: {line}");
+    assert!(
+        line["data"]["live_delta_bytes"].is_i64(),
+        "numeric live_delta_bytes: {line}"
+    );
+    assert!(
+        line["data"].get("alloc").is_none(),
+        "flattened, no nested alloc: {line}"
+    );
+}

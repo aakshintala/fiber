@@ -121,6 +121,7 @@ fn declared(effects: &[Effect], paths: Option<&[&str]>) -> DeclaredEffects {
         effects: effects.to_vec(),
         reversible: false,
         paths: paths.map(|p| p.iter().map(|s| (*s).to_owned()).collect()),
+        confined: false,
     }
 }
 
@@ -447,6 +448,7 @@ fn judged(subject: &str) -> Effects {
             effects: vec![Effect::Executes],
             reversible: false,
             paths: None,
+            confined: false,
         },
         subject: Some(subject.into()),
         prefix: None,
@@ -705,6 +707,7 @@ fn reads() -> Effects {
             effects: vec![Effect::Reads],
             reversible: true,
             paths: None,
+            confined: false,
         },
         subject: Some(String::new()),
         prefix: None,
@@ -2371,6 +2374,7 @@ fn writes(paths: &[String]) -> Effects {
             effects: vec![Effect::Writes],
             reversible: false,
             paths: Some(paths.to_vec()),
+            confined: false,
         },
         subject: Some(String::new()),
         prefix: None,

@@ -132,6 +132,7 @@ impl contract::tool::Tool for CommandTool {
                 effects: vec![contract::shapes::Effect::Reads],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: None,
             prefix: None,

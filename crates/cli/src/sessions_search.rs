@@ -21,11 +21,11 @@ use crate::{CliError, with_dirs, write_line};
 /// directory: the shared scan's hits on stdout, its problems on stderr.
 pub fn search(text: &str, all: bool, json: bool) -> i32 {
     with_dirs(|home, workspace| {
-        let in_repository = doors::resolve_project(workspace).in_repository;
+        let in_repository = worktree::resolve_project(workspace).in_repository;
         run(
             home,
             workspace,
-            Arc::new(doors::project),
+            Arc::new(worktree::project),
             in_repository,
             text,
             all,

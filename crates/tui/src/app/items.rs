@@ -168,25 +168,24 @@ impl Items {
     /// The record for `job`, creating it with the next serial when it is
     /// new.
     fn record(&mut self, job: &JobId) -> &mut JobRecord {
-        if !self.jobs.contains_key(job) {
+        // `or_insert_with` runs only for a new job, so a serial is
+        // consumed exactly once per new job and never for an existing
+        // one.
+        self.jobs.entry(job.clone()).or_insert_with(|| {
             let serial = self.next_serial;
             self.next_serial = self.next_serial.saturating_add(1);
             self.by_serial.insert(serial, job.clone());
-            self.jobs.insert(
-                job.clone(),
-                JobRecord {
-                    serial,
-                    description: String::new(),
-                    output_path: String::new(),
-                    started_ts: 0,
-                    delegate: None,
-                    outcome: None,
-                    output: None,
-                    tty: false,
-                },
-            );
-        }
-        self.jobs.get_mut(job).unwrap_or_else(|| unreachable!())
+            JobRecord {
+                serial,
+                description: String::new(),
+                output_path: String::new(),
+                started_ts: 0,
+                delegate: None,
+                outcome: None,
+                output: None,
+                tty: false,
+            }
+        })
     }
 }
 
@@ -513,7 +512,8 @@ impl App {
     /// One key in a running `tty` job's view: every key but Esc and Ctrl+C
     /// is sent as `job_input` to the attached session, which owns the job.
     /// `None` for a finished job, a non-`tty` job, a delegate, a link that
-    /// is down, or a key with no bytes, so each falls through as today.
+    /// is down, or a key with no bytes, so each falls through to the
+    /// normal key handling.
     pub(super) fn item_job_key(&mut self, key: &Key) -> Option<Effect> {
         let text = keys::encode(key)?;
         self.item_job_send(text)
@@ -565,8 +565,8 @@ impl App {
         Some(Effect::Send(vec![line]))
     }
 
-    /// Enter in an item view: a `/` built-in runs on the attached session
-    /// as today; anything else goes to the open fiber delegate as `steer`.
+    /// Enter in an item view: a `/` built-in already ran in `on_enter`;
+    /// anything else goes to the open fiber delegate as `steer`.
     /// `None` outside an item view.
     pub(super) fn item_enter(&mut self) -> Option<Effect> {
         let open = self.items.open.as_ref()?;
@@ -725,19 +725,14 @@ impl App {
 
     /// The attached session's screen, for folding its lines.
     pub(super) fn attached_screen_mut(&mut self) -> &mut super::screen::Screen {
-        if self
-            .items
-            .open
-            .as_ref()
-            .is_some_and(|open| open.stashed.is_some())
-        {
-            self.items
-                .open
-                .as_mut()
-                .and_then(|open| open.stashed.as_mut())
-                .unwrap_or_else(|| unreachable!())
-        } else {
-            &mut self.screen
+        let Some(open) = self.items.open.as_mut() else {
+            return &mut self.screen;
+        };
+        // The stashed screen is showing exactly when it is present;
+        // otherwise the shown screen is the attached one.
+        match &mut open.stashed {
+            Some(stashed) => stashed,
+            None => &mut self.screen,
         }
     }
 

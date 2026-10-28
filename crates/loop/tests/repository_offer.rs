@@ -1101,6 +1101,7 @@ fn standing_ask() -> Event {
             effects: vec![Effect::Executes],
             reversible: true,
             paths: None,
+            confined: false,
         },
         step: AskStep::StandingAsk {
             standing_rule: StandingRule {

@@ -271,6 +271,20 @@ of 300 lines, of which Fiber draws the first 20 lines, and time each report
 from its write to the frame showing the scrolled rows; each row holds the
 slowest report's ms.
 
+Two opt-in profiling builds report memory per operation, and neither
+number is a budget. `cargo build --features alloc-stats` counts every
+allocation through a wrapper around `System`, and each `op_timing` line
+whose timer ends on its starting thread gains `alloc_bytes`, bytes
+allocated, `allocs`, the allocation count, and `live_delta_bytes`, signed
+end-minus-start live bytes (`docs/state.md`, "What each part holds").
+`cargo build --features dhat-heap` profiles the whole run's heap instead,
+writing `dhat-heap.json` at orderly exit with a backtrace for every
+allocation site, viewable with DHAT's `dh_view`; the two features cannot
+be combined, because each sets the global allocator. Allocation stats
+include diagnostic timer overhead on boxed timing paths:
+`Diag::timings()` boxes each `Timer` after `start_timer` returns, so that
+box's allocation and live bytes fall inside the measured operation.
+
 ## When a budget is exceeded
 
 An exact or memory budget fails the pull request from its first run. Its

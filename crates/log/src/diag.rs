@@ -107,6 +107,18 @@ struct Peak {
     peak_kib: u64,
 }
 
+/// The allocation metrics of an `op_timing` line in an `alloc-stats`
+/// build (`docs/state.md:306`): bytes allocated during the operation,
+/// the allocation count, and signed end-minus-start live bytes. The wire
+/// keeps the `alloc_bytes`, `allocs` and `live_delta_bytes` names.
+#[cfg(feature = "alloc-stats")]
+#[derive(serde::Serialize)]
+struct AllocMetrics {
+    alloc_bytes: u64,
+    allocs: u64,
+    live_delta_bytes: i64,
+}
+
 /// The `data` of an `op_timing` line: the operation, whole milliseconds,
 /// and the tool's name on a tool's timers. No other field is recorded,
 /// and never an argument, a path or any content.
@@ -116,6 +128,12 @@ struct TimingData<'a> {
     ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool: Option<&'a str>,
+    /// The operation's allocation metrics, present as one unit: an
+    /// `alloc-stats` build only, and only when the timer ends on the
+    /// thread that started it. Otherwise absent, never a partial set.
+    #[cfg(feature = "alloc-stats")]
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    alloc: Option<AllocMetrics>,
 }
 
 /// One lock across every diagnostic file in the process: a pair write
@@ -402,7 +420,10 @@ fn append_line<D: serde::Serialize>(
 /// with the whole milliseconds from `start` to the stamped end, or to
 /// the drop when never stopped: normal scope drop emits once, including
 /// an early return or a propagated error after entry. A failed write is
-/// silent and never changes the operation's result.
+/// silent and never changes the operation's result. In an `alloc-stats`
+/// build the line also carries allocation fields, but only when the
+/// timer ends on the thread that started it; otherwise they are absent,
+/// never zero.
 pub struct Timer {
     clock: Arc<dyn Clock>,
     logs: PathBuf,
@@ -417,6 +438,19 @@ pub struct Timer {
     /// across work its line must never cover, and written only on the
     /// path that made the call the span names.
     disarmed: bool,
+    /// The thread that started the timer: the allocation fields are
+    /// written only when the timer also ends there.
+    #[cfg(feature = "alloc-stats")]
+    start_thread: std::thread::ThreadId,
+    /// This thread's allocation totals as the timer started: the last
+    /// read of construction, so building the guard stays unmeasured.
+    #[cfg(feature = "alloc-stats")]
+    start_allocs: crate::alloc_stats::Snapshot,
+    /// This thread's allocation totals as `stop` stamped the end, on the
+    /// starting thread only: a stamped timer reuses this in `Drop` and
+    /// never snapshots again.
+    #[cfg(feature = "alloc-stats")]
+    end_allocs: Option<crate::alloc_stats::Snapshot>,
 }
 
 /// Starts an operation's timer on `diag`: the one function every timed
@@ -455,8 +489,14 @@ fn start_timer(
     if level != Level::Debug {
         return None;
     }
+    #[cfg(feature = "alloc-stats")]
+    let start_thread = std::thread::current().id();
     let start = started.unwrap_or_else(|| clock.now());
-    Some(Timer {
+    #[allow(
+        unused_mut,
+        reason = "only the alloc-stats build snapshots after construction"
+    )]
+    let mut timer = Timer {
         clock: Arc::clone(clock),
         logs: logs.to_owned(),
         process,
@@ -467,14 +507,48 @@ fn start_timer(
         start,
         end: None,
         disarmed: false,
-    })
+        #[cfg(feature = "alloc-stats")]
+        start_thread,
+        #[cfg(feature = "alloc-stats")]
+        start_allocs: crate::alloc_stats::Snapshot::default(),
+        #[cfg(feature = "alloc-stats")]
+        end_allocs: None,
+    };
+    #[cfg(feature = "alloc-stats")]
+    {
+        timer.start_allocs = crate::alloc_stats::snapshot();
+    }
+    Some(timer)
+}
+
+// Exempt: cargo-mutants' default-feature workspace job does not compile
+// this body, and the existing `alloc-stats` tests cover same-thread output
+// (`same_thread_timer_writes_all_alloc_fields_together`) and both
+// cross-thread omission cases (`cross_thread_timer_writes_no_alloc_fields`
+// and `cross_thread_stop_then_parent_drop_writes_no_alloc_fields`).
+#[cfg(feature = "alloc-stats")]
+#[cfg_attr(false, mutants::skip)]
+fn snapshot_on_starting_thread(
+    start_thread: std::thread::ThreadId,
+) -> Option<crate::alloc_stats::Snapshot> {
+    if std::thread::current().id() == start_thread {
+        Some(crate::alloc_stats::snapshot())
+    } else {
+        None
+    }
 }
 
 impl Timer {
     /// Stamps completion; the drop then emits with the stamped end. The
-    /// first stamp wins.
+    /// first stamp wins. In an `alloc-stats` build the end snapshot lands
+    /// only when the stamping thread started the timer; a stamp from
+    /// another thread stores none, and the drop never repairs it.
     pub fn stop(&mut self) {
         if self.end.is_none() {
+            #[cfg(feature = "alloc-stats")]
+            {
+                self.end_allocs = snapshot_on_starting_thread(self.start_thread);
+            }
             self.end = Some(self.clock.now());
         }
     }
@@ -501,6 +575,23 @@ impl Drop for Timer {
         if self.disarmed {
             return;
         }
+        // A stamped timer reuses its stored end snapshot and never
+        // snapshots again; an unstamped one snapshots here first, but
+        // only on its starting thread. Either way a cross-thread end
+        // leaves no snapshot, so the fields stay absent, never zero.
+        #[cfg(feature = "alloc-stats")]
+        let end_allocs = match self.end {
+            Some(_) => self.end_allocs,
+            None => snapshot_on_starting_thread(self.start_thread),
+        };
+        #[cfg(feature = "alloc-stats")]
+        let alloc = end_allocs.map(|end| AllocMetrics {
+            alloc_bytes: end
+                .alloc_bytes
+                .saturating_sub(self.start_allocs.alloc_bytes),
+            allocs: end.allocs.saturating_sub(self.start_allocs.allocs),
+            live_delta_bytes: end.live_bytes.saturating_sub(self.start_allocs.live_bytes),
+        });
         let end = self.end.unwrap_or_else(|| self.clock.now());
         // A clock that runs backwards contributes zero: no panic, and no
         // fabricated duration. A stamp from another clock reads zero too.
@@ -526,6 +617,8 @@ impl Drop for Timer {
                 op: self.op,
                 ms,
                 tool: self.tool.as_deref(),
+                #[cfg(feature = "alloc-stats")]
+                alloc,
             }),
         };
         append_line(&state.file, &self.logs, self.rotate_at, &line);

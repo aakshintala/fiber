@@ -62,7 +62,7 @@ fn context() -> Result<Context, i32> {
             )));
         }
     };
-    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
     Ok(Context {
         sessions,
         reads,
@@ -307,7 +307,7 @@ pub(crate) fn session_rewound(
         Ok(workspace) => workspace,
         Err(error) => return ask_failed(failed(ErrorCode::IoFailed, error)),
     };
-    let child_key = log::project_key(&doors::project(&child_workspace));
+    let child_key = log::project_key(&worktree::project(&child_workspace));
     match ancestor_key(&dir) {
         Ok(ancestor) if ancestor != child_key => {
             point.project = Some(ancestor);
@@ -428,8 +428,8 @@ fn session_moved(
             format!("{}: {error}", moved.workspace),
         ));
     }
-    let parent_key = log::project_key(&doors::project(&source));
-    let child_key = log::project_key(&doors::project(Path::new(&moved.workspace)));
+    let parent_key = log::project_key(&worktree::project(&source));
+    let child_key = log::project_key(&worktree::project(Path::new(&moved.workspace)));
     let point = Point {
         session_id: old.clone(),
         seq: moved.seq,

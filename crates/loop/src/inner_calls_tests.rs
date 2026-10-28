@@ -350,6 +350,7 @@ impl contract::tool::Tool for Inner {
                 effects: vec![contract::shapes::Effect::Reads],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: None,
             prefix: None,

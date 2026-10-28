@@ -51,6 +51,7 @@ fn real_sessions_answer_twice_with_their_latest_summary_and_parent() {
         .unwrap();
         let status = SessionStatus {
             name: format!("session {index}"),
+            named: false,
             workspace: format!("/w/{index}"),
             parent: (index == 1).then(|| ids[0].clone()),
             model: "m".into(),

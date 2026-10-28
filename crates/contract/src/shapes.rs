@@ -280,6 +280,9 @@ pub struct DeclaredEffects {
     /// The paths the call touches, where the tool declared them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paths: Option<Vec<String>>,
+    /// True when the call will run only inside the sandbox.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub confined: bool,
 }
 
 /// `tokens`: a model call's token counts.

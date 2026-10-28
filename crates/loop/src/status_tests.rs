@@ -339,12 +339,14 @@ fn the_name_is_the_first_prompt_whole_until_a_session_is_named() {
     w.finish();
     w.prompt("second");
     assert_eq!(w.status().name, "say hi\nthen bye");
+    assert!(!w.status().named);
     w.feed(
         "session_named",
         None,
         &json!({"name": "greeter", "by": "model"}),
     );
     assert_eq!(w.status().name, "greeter");
+    assert!(w.status().named);
     w.feed(
         "session_named",
         None,
@@ -358,6 +360,7 @@ fn the_name_is_the_first_prompt_whole_until_a_session_is_named() {
         &json!({"name": null, "by": "person"}),
     );
     assert_eq!(w.status().name, "say hi\nthen bye");
+    assert!(!w.status().named);
 }
 
 #[test]

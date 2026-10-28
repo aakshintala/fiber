@@ -234,6 +234,10 @@ pub(crate) struct Shown {
     /// The spinning marks drawn, each a line's index and its cell's
     /// column (`docs/tui.md`, "The working line").
     pub(crate) spins: Vec<SpinMark>,
+    /// The animated items drawn, each a line's index and its key
+    /// (`docs/tui.md`, "Animation"): only lines in range expose tags,
+    /// so an offscreen item never marks.
+    pub(crate) anims: Vec<AnimMark>,
     /// The pinned header, when the top row sits inside opened content.
     pub(crate) pin: Option<Pin>,
 }
@@ -241,6 +245,10 @@ pub(crate) struct Shown {
 /// A spinning mark: a line's index in [`Shown::lines`] and its cell's
 /// column in that line.
 pub(crate) type SpinMark = (usize, u16);
+
+/// An animated mark: a line's index in [`Shown::lines`] and its item's
+/// key in the animation schedule.
+pub(crate) type AnimMark = (usize, crate::ext::anim::AnimKey);
 
 /// What a page draws: as shown, or with every section open for the
 /// search (`docs/tui.md`, "Search": every match is counted at once).
@@ -324,6 +332,8 @@ pub(crate) struct Pages {
     /// pages' caches, and whether the screen reader drops every style.
     pub(crate) ext: crate::ext::Ext,
     halves: BTreeMap<SessionId, BTreeMap<String, String>>,
+    /// Actual names currently known for senders in this conversation.
+    session_names: Arc<HashMap<SessionId, String>>,
 }
 
 impl Pages {
@@ -356,6 +366,7 @@ impl Pages {
             recounts: 0,
             ext: crate::ext::Ext::default(),
             halves: BTreeMap::new(),
+            session_names: Arc::new(HashMap::new()),
         }
     }
 
@@ -367,7 +378,9 @@ impl Pages {
         let sizing = self.images.sizing;
         let handle = self.ext.handle;
         let flat = self.ext.flat;
+        let session_names = Arc::clone(&self.session_names);
         *self = Self::new(self.width);
+        self.session_names = session_names;
         self.fold.ledgers = ledgers;
         self.open.fold.ledgers = ledgers;
         self.zone = zone;
@@ -1069,7 +1082,20 @@ impl Pages {
         fresh.ext.flat = self.ext.flat;
         fresh.ext.cache = Arc::new(self.ext.cache.scratch_sharing_pending());
         fresh.halves = self.halves.clone();
+        fresh.session_names = Arc::clone(&self.session_names);
         fresh
+    }
+
+    /// Replaces sender labels and recounts resident pages whose visible text can change.
+    pub(crate) fn set_session_labels(&mut self, names: Arc<HashMap<SessionId, String>>) {
+        if *self.session_names == *names {
+            return;
+        }
+        self.session_names = names;
+        for at in 0..=self.residency.len() {
+            self.index.invalidate(at);
+        }
+        self.recount();
     }
 
     /// What `target` names on the fold, by the identity that survives a
@@ -1346,7 +1372,8 @@ impl Pages {
                 | Entry::Group(_)
                 | Entry::Aside(_)
                 | Entry::Band(_)
-                | Entry::Answers(_) => None,
+                | Entry::Answers(_)
+                | Entry::Message(_) => None,
             })
         })
     }
@@ -1433,6 +1460,7 @@ impl Pages {
         let mut lines = Vec::new();
         let mut turns = Vec::new();
         let mut spins = Vec::new();
+        let mut anims = Vec::new();
         let mut pin: Option<Pin> = None;
         let mut pin_done = false;
         let mut start = 0usize;
@@ -1465,6 +1493,23 @@ impl Pages {
                             let count = crate::view::rows(line.clone(), self.width);
                             (line, count, target)
                         }));
+                        // A line past the viewport exposes no tag: its
+                        // item is off screen, so it never advances or
+                        // asks.
+                        let mut off = start;
+                        for (at, text) in texts.iter().enumerate() {
+                            let count = lines
+                                .get(base.saturating_add(at))
+                                .map(|(_, count, _)| *count)
+                                .unwrap_or(0);
+                            if off.saturating_add(count) > top
+                                && off < end
+                                && let Some(key) = text.anim.clone()
+                            {
+                                anims.push((base.saturating_add(at), key));
+                            }
+                            off = off.saturating_add(count);
+                        }
                         turns.extend(
                             page_turns
                                 .into_iter()
@@ -1481,6 +1526,7 @@ impl Pages {
             lines,
             turns,
             spins,
+            anims,
             pin,
         }
     }
@@ -1603,6 +1649,7 @@ impl Pages {
     /// The resident pages' lines, in order.
     pub(crate) fn rows(&self) -> Vec<Row> {
         let mut out = Rows::default();
+        out.session_names = Arc::clone(&self.session_names);
         for (at, part) in self
             .residency
             .resident()
@@ -1804,6 +1851,7 @@ impl Pages {
             Draw::AllOpen => Rows::all_open(),
         }
         .with_seam(seam);
+        out.session_names = Arc::clone(&self.session_names);
         let mut turns = Vec::new();
         let mut asides = part
             .fold
@@ -1887,6 +1935,23 @@ impl Pages {
         }));
         let (rows, texts, sources) = out.into_sourced_parts();
         ((rows, texts, focus, turns), sources)
+    }
+
+    /// Recounts resident pages whose animated renderer changed its line
+    /// count during the last paint. Closed draws hit the stored frame and
+    /// never invoke or advance it.
+    pub(crate) fn recount_animated(&mut self) {
+        for page in self.ext.cache.take_changed_pages() {
+            let at = page.index;
+            let belongs = self
+                .index
+                .pages()
+                .get(at)
+                .is_some_and(|current| current.session == page.session);
+            if belongs && self.part(at).is_some() {
+                self.count(at);
+            }
+        }
     }
 
     /// Counts page `at`'s rows and focus stops from its cards, while it holds them.

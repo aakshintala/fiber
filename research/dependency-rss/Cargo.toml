@@ -48,6 +48,13 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tz-syste
 lopdf = { version = "0.45", default-features = false, optional = true }
 qrcode = { version = "0.14", default-features = false, optional = true }
 brush-parser = { version = "0.4", optional = true }
+# #3027's Linux shell sandbox. Same versions and default features Fiber
+# links (`Cargo.toml`, workspace dependencies); Linux-only syscalls, so a
+# non-Linux build of these features fails, which run.sh records.
+landlock = { version = "0.4.7", optional = true }
+seccompiler = { version = "0.5", optional = true }
+# Syscall numbers for the seccomp map, as in Fiber's shell sandbox.
+libc = { version = "0.2", optional = true }
 
 [features]
 # The shell completion scripts `fiber completion` prints, generated from a
@@ -77,6 +84,12 @@ flate2 = ["dep:flate2"]
 jiff = ["dep:jiff"]
 # The image child: counting a PDF's pages and cutting a page range.
 lopdf = ["dep:lopdf"]
+# #3027's Linux shell sandbox: Landlock policy construction shaped like the
+# shell tool's prepare(), applied in a re-executed child.
+landlock = ["dep:landlock"]
+# #3027's Linux shell sandbox: the socket-denying seccomp filter compilation
+# shaped like the shell tool's compile step, applied in a re-executed child.
+seccompiler = ["dep:seccompiler", "dep:libc"]
 # Shell recogniser candidate (research/shell-parser-cost): parse ten shell
 # commands and walk every node of each tree. tree-sitter-bash lives in the
 # standalone shell-ts/ crate instead: tree-sitter 0.27 and arborium-tree-sitter

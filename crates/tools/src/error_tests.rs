@@ -910,15 +910,6 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
         error.to_string(),
         "`monitor` cannot be combined with `run_in_background` or `tty`."
     );
-    let error = ShellError::MonitorTimeout;
-    assert_eq!(error.code(), ErrorCode::InvalidArguments);
-    assert_eq!(error.to_string(), "A monitor's limit is `deadline_ms`.");
-    let error = ShellError::DeadlineWithoutMonitor;
-    assert_eq!(error.code(), ErrorCode::InvalidArguments);
-    assert_eq!(
-        error.to_string(),
-        "`deadline_ms` is a monitor's deadline; set `monitor: true` with it."
-    );
     let error = ShellError::NoJobs;
     assert_eq!(error.code(), ErrorCode::InvalidArguments);
     assert_eq!(
@@ -939,7 +930,7 @@ fn a_deadline_past_the_session_longest_names_the_longest_twice() {
     assert_eq!(error.code(), ErrorCode::InvalidArguments);
     assert_eq!(
         error.to_string(),
-        "`deadline_ms` is more than 600000, the longest a monitor may run here. Give 600000 or less."
+        "`timeout_ms` is more than 600000, the longest a monitor may run here. Give 600000 or less."
     );
 }
 
@@ -961,6 +952,25 @@ fn a_command_that_cannot_start_or_be_reaped_is_a_tool_error() {
     );
     let root = ToolError::from(error);
     assert_eq!(root.code(), ErrorCode::ToolError);
+}
+
+#[test]
+fn a_sandbox_that_cannot_apply_is_a_tool_error_naming_the_cause() {
+    let error = ShellError::SandboxApply {
+        cause: "the sandbox is off".into(),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "The sandbox could not be applied: the sandbox is off."
+    );
+    // The named error maps to `ToolError` like any other spawn failure.
+    let root = ToolError::from(error);
+    assert_eq!(root.code(), ErrorCode::ToolError);
+    assert_eq!(
+        root.to_string(),
+        "The sandbox could not be applied: the sandbox is off."
+    );
 }
 
 #[test]

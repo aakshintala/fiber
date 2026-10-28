@@ -82,7 +82,7 @@ fn shows(screen: &Grid, needle: &str) -> bool {
 /// construction are absent, never failures: a missing session dir or
 /// log reads as empty.
 fn session_model_changed(setup: &Setup) -> String {
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let mut switches = Vec::new();
     if let Ok(dirs) = fs::read_dir(&sessions) {
         for dir in dirs.filter_map(Result::ok) {
@@ -184,7 +184,7 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
         "the panel names the session model: {switched:?}"
     );
     // The session's log holds the switch, from the driver.
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let dirs: Vec<_> = fs::read_dir(&sessions)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -375,6 +375,83 @@ fn clicking_the_thinking_chip_opens_the_picker_on_its_level_chips() {
         "only the level saved: {config}"
     );
     // The picker already closed on Enter, so the quit goes out at once.
+    run.write(b"\x03\x03");
+    run.wait_screen("the restored terminal", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+#[test]
+fn an_unset_host_notice_shows_model_unconfigured_not_model_invalid() {
+    let setup = Setup::new();
+    // A provider whose model's `base_url` names the `workspace`
+    // placeholder, which declares no environment variable and has no
+    // setting, so the terminal's own read leaves the model out with a
+    // `model_unconfigured` notice naming the model and the setting.
+    let source = setup.root.path().join("src");
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": ["https://{workspace}/v1"]}}),
+    );
+    support::write_json(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "placeholders": {"workspace": {}},
+            "models": [{"id": "alpha", "protocol": "openai-responses",
+                        "base_url": "https://{workspace}/v1", "context_window": 100000}],
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/alpha", "hub": {"idle_exit_ms": 200}}),
+    );
+    let mut run = Run::spawn(
+        &setup,
+        120,
+        32,
+        &[],
+        &[
+            ("TERM", "xterm-256color"),
+            ("FIBER_TEST_FAKE_KEY", "sk-test"),
+        ],
+    );
+    // The end of the first frame proves the input reader runs before
+    // the background catalogue read answers.
+    run.ready();
+    // The band shows the notice's code beside its message. The wait
+    // names the code and the message's start, which survives the
+    // 120-column truncation; notices fade after 10 seconds, so the
+    // wait catches the row rather than sleeping past it.
+    let screen = run.wait_screen("the model_unconfigured notice", |screen| {
+        shows(screen, "model_unconfigured") && shows(screen, "needs the setting `workspace`")
+    });
+    assert!(
+        shows(&screen, "model_unconfigured · The model `fake/alpha`"),
+        "the band shows the code with the message: {}",
+        screen.contents
+    );
+    assert!(
+        screen
+            .rows
+            .iter()
+            .all(|row| !(row.contains("model_invalid") && row.contains("fake/alpha"))),
+        "no model_invalid row carries it: {:?}",
+        screen.rows
+    );
     run.write(b"\x03\x03");
     run.wait_screen("the restored terminal", |screen| {
         !screen.alternate_screen && !screen.hide_cursor

@@ -162,6 +162,16 @@ impl App {
         &self.frames
     }
 
+    /// Whether a swapped view is open: the `/keys` screen, the
+    /// configuration view, the model picker or a session view, each of
+    /// which takes its view's place (`docs/tui.md`, "Swapped views").
+    pub(crate) fn swapped_view_open(&self) -> bool {
+        self.config_view_open()
+            || self.model_picker_open()
+            || self.keys_screen_open()
+            || self.session_view_open()
+    }
+
     /// The surfaces open now, topmost first, ending with the input box.
     pub(crate) fn top_surfaces(&self) -> Vec<Surface> {
         let open = [

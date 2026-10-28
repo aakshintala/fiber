@@ -604,15 +604,25 @@ fn only_an_acknowledgement_of_the_replayed_id_is_dropped() {
         bytes.push(b'\n');
         bytes
     };
-    assert!(acknowledges(&line("command_accepted", "c_hub"), "c_hub"));
-    assert!(acknowledges(&line("command_rejected", "c_hub"), "c_hub"));
-    assert!(!acknowledges(&line("command_accepted", "c_1"), "c_hub"));
-    assert!(!acknowledges(&line("session_status", "c_hub"), "c_hub"));
-    assert!(!acknowledges(b"not json\n", "c_hub"));
-    assert!(!acknowledges(
-        &serde_json::to_vec(&json!({"kind": "command_accepted", "payload": {}})).unwrap(),
-        "c_hub"
-    ));
+    assert!(
+        acknowledgement(&line("command_accepted", "c_hub")).is_some_and(|ack| ack.id == "c_hub")
+    );
+    assert!(
+        acknowledgement(&line("command_rejected", "c_hub")).is_some_and(|ack| ack.id == "c_hub")
+    );
+    assert!(
+        !acknowledgement(&line("command_accepted", "c_1")).is_some_and(|ack| ack.id == "c_hub")
+    );
+    assert!(
+        !acknowledgement(&line("session_status", "c_hub")).is_some_and(|ack| ack.id == "c_hub")
+    );
+    assert!(!acknowledgement(b"not json\n").is_some_and(|ack| ack.id == "c_hub"));
+    assert!(
+        !acknowledgement(
+            &serde_json::to_vec(&json!({"kind": "command_accepted", "payload": {}})).unwrap()
+        )
+        .is_some_and(|ack| ack.id == "c_hub")
+    );
 }
 
 /// Extracts the acknowledged command's id and verdict for assertions.
@@ -3210,4 +3220,142 @@ fn parse_typed_keeps_the_ack_on_wrong_typed_optionals() {
         "{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\"}, \"x\": 1e999}\n"
             .as_bytes(),
     );
+}
+
+/// A refused admission still answers the command already written to the
+/// new socket: the exclusive attach finds the live relay, so no thread
+/// ever reads the command, and the client must hear `session_not_found`
+/// instead of waiting with no reply.
+#[test]
+fn a_refused_admission_answers_the_pending_command() {
+    use std::io::{BufRead, BufReader};
+    use std::sync::{Arc, Mutex};
+    const SID: &str = "s_0123456789abcdef";
+
+    let held = fakes::TempDir::new("rr");
+    let hub = Arc::new(hub(&held));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let order = crate::connection::lock(&relays).order.clone();
+    order.enqueue(SID, "c_refused");
+    // A live relay for the session, so the exclusive admission below
+    // refuses: no production exclusive caller passes a command, but the
+    // written one still needs its answer on this arm.
+    {
+        let mut held = crate::connection::lock(&relays);
+        let epoch = held.mint();
+        let (live_writer, _live_peer) = UnixStream::pair().unwrap();
+        held.entries.push(Relay {
+            session: SID.to_owned(),
+            epoch,
+            writer: live_writer,
+            kept: Kept::default(),
+            replayed: Replayed::default(),
+            thread: None,
+            retiring: None,
+            target: RelayTarget::LiveUnreadable,
+        });
+    }
+    let (writer, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let (session, _session_peer) = UnixStream::pair().unwrap();
+    let command = json!({"id": "c_refused", "command": "reply", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let mut bytes = serde_json::to_vec(&command).unwrap();
+    bytes.push(b'\n');
+
+    attach(
+        SID,
+        session,
+        &hub,
+        &writer,
+        &relays,
+        None,
+        Some((contract::CommandId("c_refused".to_owned()), bytes, command)),
+        true,
+    );
+
+    let mut text = String::new();
+    BufReader::new(peer)
+        .read_line(&mut text)
+        .expect("the refused command is answered within the deadline");
+    let answer: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(answer["kind"], "command_rejected");
+    assert_eq!(answer["payload"]["code"], "session_not_found");
+    assert_eq!(answer["payload"]["command_id"], "c_refused");
+    assert_eq!(order.session_for("c_refused"), None);
+}
+
+/// A relay thread that never starts still answers the command already
+/// written to the session socket: `route` enqueues before `attach_inner`
+/// writes, so without an answer the client would wait with no reply.
+#[test]
+fn a_spawn_failure_answers_the_written_command() {
+    use std::io::{BufRead, BufReader};
+    use std::sync::{Arc, Mutex};
+    const SID: &str = "s_0123456789abcdef";
+
+    fn failing_spawner(
+        task: Box<dyn FnOnce() + Send>,
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
+        drop(task);
+        Err(std::io::Error::other("the relay thread never starts"))
+    }
+
+    let held = fakes::TempDir::new("rsf");
+    let hub = Arc::new(hub(&held));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let order = crate::connection::lock(&relays).order.clone();
+    order.enqueue(SID, "c_unspawned");
+    let (writer, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let (session, session_peer) = UnixStream::pair().unwrap();
+    session_peer
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
+    let command = json!({"id": "c_unspawned", "command": "reply", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let mut bytes = serde_json::to_vec(&command).unwrap();
+    bytes.push(b'\n');
+
+    attach_inner_with_spawner(
+        SID,
+        session,
+        &hub,
+        &writer,
+        &relays,
+        None,
+        Some((
+            contract::CommandId("c_unspawned".to_owned()),
+            bytes,
+            command,
+        )),
+        false,
+        None,
+        false,
+        failing_spawner,
+    );
+
+    // The command reached the session socket before the spawn failed.
+    let mut written = String::new();
+    BufReader::new(session_peer)
+        .read_line(&mut written)
+        .expect("the written command is readable within the deadline");
+    let sent: Value = serde_json::from_str(written.trim_end()).unwrap();
+    assert_eq!(sent["id"], "c_unspawned");
+    // The client still gets its answer.
+    let mut text = String::new();
+    BufReader::new(peer)
+        .read_line(&mut text)
+        .expect("the unspawned command is answered within the deadline");
+    let answer: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(answer["kind"], "command_rejected");
+    assert_eq!(answer["payload"]["code"], "session_not_found");
+    assert_eq!(answer["payload"]["command_id"], "c_unspawned");
+    assert_eq!(order.session_for("c_unspawned"), None);
 }

@@ -337,10 +337,10 @@ pub fn select_session(
     explicit: Option<SessionId>,
 ) -> Result<Option<SessionId>, Failure> {
     let Some(id) = explicit else {
-        let project = doors::project(workspace);
+        let project = worktree::project(workspace);
         let sessions = log::sessions_dir(home, &project);
         return Ok(log::most_recent(&sessions, &|started| {
-            doors::project(Path::new(started)) == project
+            worktree::project(Path::new(started)) == project
         }));
     };
     let usable = log::find_logged_session(home, &id)

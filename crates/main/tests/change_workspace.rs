@@ -104,7 +104,7 @@ fn session_log_path(setup: &Setup, id: &str) -> PathBuf {
 
 /// The project key of `dir`: the git common directory when `dir` is in a
 /// repository, else `dir` itself, canonicalized with slashes replaced, as
-/// `doors::project` plus `log::project_key` compute it.
+/// `worktree::project` plus `log::project_key` compute it.
 fn project_key_of(dir: &Path) -> String {
     let mut git = Command::new("git");
     git.arg("-C")
@@ -167,6 +167,18 @@ struct Hubbed {
     client: Option<Socket>,
     guards: Vec<SessionGuard>,
     home: PathBuf,
+    cleanup_failure: Option<String>,
+}
+
+/// Reaps `hub_proc` with its real deadline, then panics with `injected`
+/// when set: the holder test forces the cleanup-failure branch without
+/// racing a zero deadline's hub and watchdog waits.
+fn cleanup_hub(hub_proc: HubProc, injected: Option<String>) -> std::process::ExitStatus {
+    let status = hub_proc.kill_and_wait();
+    if let Some(message) = injected {
+        panic!("{message}");
+    }
+    status
 }
 
 impl Hubbed {
@@ -183,6 +195,7 @@ impl Hubbed {
             client: Some(client),
             guards,
             home: setup.home(),
+            cleanup_failure: None,
         }
     }
 
@@ -246,8 +259,13 @@ impl Hubbed {
 
     fn finish(self) {
         let Self {
-            hub, guards, home, ..
+            hub,
+            guards,
+            home,
+            cleanup_failure,
+            ..
         } = self;
+        let mut injected = cleanup_failure;
         for guard in guards {
             // A holder that outlives the wait is a session the hub
             // started and the test never closed through the hub: an
@@ -258,16 +276,26 @@ impl Hubbed {
             let waited =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| guard.wait_gone()));
             if let Err(payload) = waited {
-                hub.lock()
-                    .unwrap()
-                    .take()
-                    .expect("the hub ran")
-                    .kill_and_wait();
-                panic!(
-                    "{}\nworkspace {workspace} holders, last session lines:\n{}",
-                    payload_message(&payload),
-                    session_log_tails(&home).join("\n"),
+                // Capture the holder failure and tails before hub cleanup:
+                // a cleanup wait expiring must not replace them.
+                let original = payload_message(&payload);
+                let tails = session_log_tails(&home).join("\n");
+                let hub_proc = hub.lock().unwrap().take().expect("the hub ran");
+                let failure = injected.take();
+                let hub_waited =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        cleanup_hub(hub_proc, failure)
+                    }));
+                let mut message = format!(
+                    "{original}\nworkspace {workspace} holders, last session lines:\n{tails}"
                 );
+                if let Err(hub_payload) = hub_waited {
+                    message.push_str(&format!(
+                        "\nhub cleanup also failed: {}",
+                        payload_message(&hub_payload)
+                    ));
+                }
+                panic!("{message}");
             }
         }
         hub.lock()
@@ -374,6 +402,10 @@ fn finish_names_session_tails_when_a_holder_outlives_the_wait() {
         Deadline::after(std::time::Duration::ZERO),
         &held_text,
     ));
+    // Reap the real hub under its own deadline, then force the
+    // cleanup-failure branch with an injected panic: asserting a
+    // zero-deadline cleanup's location races the hub and watchdog waits.
+    hubbed.cleanup_failure = Some("injected hub cleanup failure".to_owned());
     let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hubbed.finish()));
     // Release the pipe the holder was blocked on, then reap it and its
     // group under the cleanup bound before asserting on the message, so
@@ -396,6 +428,11 @@ fn finish_names_session_tails_when_a_holder_outlives_the_wait() {
     assert!(message.contains("holding the workspace path"), "{message}");
     assert!(message.contains("session s_old"), "{message}");
     assert!(message.contains("\"moved\""), "{message}");
+    assert!(message.contains("hub cleanup also failed"), "{message}");
+    assert!(
+        message.contains("injected hub cleanup failure"),
+        "{message}"
+    );
 }
 
 /// Waits for `child`'s `session_started` on the client: the redirect

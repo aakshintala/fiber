@@ -43,6 +43,15 @@ const SHELL_COMMANDS: &[&str] = &[
 ];
 
 fn main() {
+    // A re-executed child for the Linux sandbox workloads below: the parent
+    // builds the policy and the child applies it, as the shell tool builds
+    // the policy before spawn and installs it between fork and exec.
+    // Exit 77 means the host cannot apply the policy; the parent keeps the
+    // construction figure either way.
+    #[cfg(target_os = "linux")]
+    if let Ok(which) = std::env::var("RSS_SANDBOX_CHILD") {
+        std::process::exit(sandbox_child(&which));
+    }
     #[cfg(any(feature = "image", feature = "image-fir"))]
     {
         if image_timing::handle_child_args() {
@@ -78,8 +87,7 @@ fn main() {
                             for word in debug
                                 .split(|c: char| !c.is_alphanumeric() && c != '_')
                                 .filter(|w| {
-                                    w.len() > 2
-                                        && w.starts_with(|c: char| c.is_ascii_uppercase())
+                                    w.len() > 2 && w.starts_with(|c: char| c.is_ascii_uppercase())
                                 })
                             {
                                 *kinds.entry(word.to_string()).or_insert(0usize) += 1;
@@ -953,10 +961,7 @@ fn main() {
                 "markdown",
                 include_str!("../highlight-fixtures/markdown.md"),
             ),
-            (
-                "python",
-                include_str!("../highlight-fixtures/python.py"),
-            ),
+            ("python", include_str!("../highlight-fixtures/python.py")),
             ("rust", include_str!("../highlight-fixtures/rust.rs")),
             ("sql", include_str!("../highlight-fixtures/sql.sql")),
             ("toml", include_str!("../highlight-fixtures/toml.toml")),
@@ -1033,6 +1038,128 @@ fn main() {
             black_box(h.highlight_line(l, &ss).unwrap());
         }
     }
+    #[cfg(all(target_os = "linux", feature = "landlock"))]
+    {
+        // The shell tool's prepare(): a BestEffort ABI-2 ruleset with
+        // path-beneath grants for the probe tree and the system temp dir,
+        // the way the sandbox grants the workspace and temp. A re-executed
+        // child applies it the way pre-exec install does.
+        let created = landlock_policy();
+        black_box(&created);
+        sandbox_child_runs("landlock");
+    }
+    #[cfg(all(target_os = "linux", feature = "seccompiler"))]
+    {
+        // The shell tool's seccomp compile: the socket-denying filter over
+        // the same seven syscalls. A re-executed child installs it the way
+        // pre-exec install does.
+        let program = seccomp_program();
+        black_box(program.len());
+        sandbox_child_runs("seccompiler");
+    }
+}
+
+/// Builds the Landlock ruleset shaped like the shell tool's prepare(): a
+/// BestEffort ABI-2 ruleset granting the probe tree and the system temp
+/// dir, the stand-ins for the workspace and temp grants.
+#[cfg(all(target_os = "linux", feature = "landlock"))]
+fn landlock_policy() -> landlock::RulesetCreated {
+    use landlock::{Access as _, Compatible as _, RulesetAttr as _, RulesetCreatedAttr as _};
+    let mut rules: Vec<landlock::PathBeneath<std::os::fd::OwnedFd>> = Vec::new();
+    for root in [
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        std::env::temp_dir(),
+    ] {
+        let file = std::fs::File::open(&root).expect("probe grant root opens");
+        rules.push(landlock::PathBeneath::new(
+            std::os::fd::OwnedFd::from(file),
+            landlock::AccessFs::from_all(landlock::ABI::V2),
+        ));
+    }
+    let mut created = landlock::Ruleset::default()
+        .set_compatibility(landlock::CompatLevel::BestEffort)
+        .handle_access(landlock::AccessFs::from_all(landlock::ABI::V2))
+        .expect("ruleset handles the full ABI-2 access set")
+        .create()
+        .expect("ruleset creates on a Landlock host");
+    for rule in rules {
+        created = created.add_rule(rule).expect("path grant adds");
+    }
+    created
+}
+
+/// Compiles the socket-denying seccomp filter shaped like the shell tool's
+/// compile step: the same seven syscalls map to errno, default allow.
+#[cfg(all(target_os = "linux", feature = "seccompiler"))]
+fn seccomp_program() -> seccompiler::BpfProgram {
+    use std::collections::BTreeMap;
+    let mut map: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BTreeMap::new();
+    for syscall in [
+        libc::SYS_socket,
+        libc::SYS_connect,
+        libc::SYS_bind,
+        libc::SYS_listen,
+        libc::SYS_accept,
+        libc::SYS_accept4,
+        libc::SYS_io_uring_setup,
+    ] {
+        map.insert(syscall, Vec::new());
+    }
+    let filter = seccompiler::SeccompFilter::new(
+        map,
+        seccompiler::SeccompAction::Allow,
+        seccompiler::SeccompAction::Errno(libc::EPERM as u32),
+        std::env::consts::ARCH
+            .try_into()
+            .expect("probe architecture has a seccomp target"),
+    )
+    .expect("seccomp filter compiles");
+    filter.try_into().expect("seccomp filter lowers to BPF")
+}
+
+/// Re-executes this probe with `RSS_SANDBOX_CHILD` set so the child applies
+/// the named policy, the way the shell tool installs the policy between
+/// fork and exec. Exit 77 from the child means the host cannot apply the
+/// policy; the parent warns and keeps the construction figure.
+#[cfg(all(
+    target_os = "linux",
+    any(feature = "landlock", feature = "seccompiler")
+))]
+fn sandbox_child_runs(which: &str) {
+    let exe = std::env::current_exe().expect("probe re-executes itself");
+    let status = std::process::Command::new(exe)
+        .env("RSS_SANDBOX_CHILD", which)
+        .status()
+        .expect("sandbox child runs");
+    match status.code() {
+        Some(0) => {}
+        Some(77) => eprintln!(
+            "probe: host cannot apply the {which} policy; keeping the construction figure"
+        ),
+        other => panic!("sandbox child for {which} exited with {other:?}"),
+    }
+}
+
+/// The re-executed child: rebuilds the named policy, applies it, and exits
+/// 0, or 77 when the host cannot apply it.
+#[cfg(target_os = "linux")]
+fn sandbox_child(which: &str) -> i32 {
+    #[cfg(feature = "landlock")]
+    if which == "landlock" {
+        return match landlock_policy().restrict_self() {
+            Ok(_) => 0,
+            Err(_) => 77,
+        };
+    }
+    #[cfg(feature = "seccompiler")]
+    if which == "seccompiler" {
+        return match seccompiler::apply_filter(&seccomp_program()) {
+            Ok(()) => 0,
+            Err(_) => 77,
+        };
+    }
+    let _ = which;
+    77
 }
 
 /// The connector from research/concurrency/cancel_ureq_connector: it keeps a

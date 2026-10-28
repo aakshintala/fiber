@@ -210,8 +210,9 @@ fn home_foot(
 
 impl App {
     /// Stores the launch description as home, keying prompt history by its
-    /// project as the run argument did. The app keeps today's screen, so
-    /// the jigs and every existing app test stay byte-identical.
+    /// project. It applies the launch's scope, rail, reduced-motion and
+    /// image sizing, syncs the project, and opens the picker when there
+    /// is no workspace.
     pub(crate) fn set_home(&mut self, launch: Launch) {
         self.set_reduced_motion(launch.reduced_motion);
         // A launch that saved the rail hidden starts with it hidden;
@@ -736,6 +737,7 @@ impl App {
                                         .collect()
                                 })
                                 .unwrap_or_default();
+                            self.session_labels(&rows);
                             if let Some(home) = self.home.as_mut() {
                                 home.sessions.recent(rows, first);
                                 home.refill_picker();
@@ -820,6 +822,7 @@ impl App {
                             home.left_after_attach = None;
                         }
                     }
+                    self.refresh_session_labels();
                     // The queued ask rides in home's outbox, drained by
                     // `home_outgoing`; while one is in flight it marks the
                     // project dirty instead. The status still reaches the
@@ -1322,6 +1325,7 @@ impl App {
             self.notices.push(&code, refusal(payload));
             return Vec::new();
         };
+        self.session_labels(&rows);
         if let Some(home) = self.home.as_mut() {
             home.sessions.scoped(rows);
             home.sessions.note_total(&project, total);
@@ -1449,8 +1453,8 @@ impl App {
         }
     }
 
-    /// The `start` args: the picked workspace on home, else the launch
-    /// workspace, and the launch directory as today. Bare `fiber`'s
+    /// The `start` args: with home, the picked workspace, else the launch
+    /// workspace; without home, the launch directory when set. Bare `fiber`'s
     /// `--model` and `-c` ride in `overrides`, normalized into the
     /// per-run layer (`docs/invocation.md`, "Sessions"). The new
     /// worktree switch adds `"worktree": true` only while it shows and

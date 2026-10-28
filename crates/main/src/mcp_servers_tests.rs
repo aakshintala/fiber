@@ -1151,6 +1151,12 @@ fn wired(
                 extension_tools,
                 None,
                 Default::default(),
+                std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
+                    enabled: false,
+                    allow_write: Vec::new(),
+                    deny_read: Vec::new(),
+                    fiber_home: home.clone(),
+                })),
             )
             .expect("the session builds")
         },
@@ -1268,6 +1274,12 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
                 Vec::new(),
                 None,
                 Default::default(),
+                std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
+                    enabled: false,
+                    allow_write: Vec::new(),
+                    deny_read: Vec::new(),
+                    fiber_home: home.clone(),
+                })),
             )
             .unwrap()
         },

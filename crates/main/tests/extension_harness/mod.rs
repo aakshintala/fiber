@@ -290,6 +290,8 @@ pub(crate) struct Socket {
     /// Context for the timeout dump, set once after connect at the sites
     /// that hold a session's stderr snapshot and log directory.
     diag: Option<crate::support::Diag>,
+    /// Optional extension marker directory appended to the existing timeout dump.
+    trace_dir: Option<PathBuf>,
     deadline: Deadline,
 }
 
@@ -308,6 +310,7 @@ impl Socket {
             write: Mutex::new(write),
             read: Mutex::new(BufReader::new(read)),
             diag: None,
+            trace_dir: None,
             deadline,
         })
     }
@@ -317,6 +320,27 @@ impl Socket {
     /// branch keeps the old message, so other `Socket` users are unaffected.
     pub(crate) fn set_diag(&mut self, diag: crate::support::Diag) {
         self.diag = Some(diag);
+    }
+
+    /// Appends optional extension marker files to this socket's timeout dump.
+    pub(crate) fn set_trace_dir(&mut self, path: PathBuf) {
+        self.trace_dir = Some(path);
+    }
+
+    fn timeout_report(&self, diag: &crate::support::Diag, what: &str, got: &[Value]) -> String {
+        let mut report = diag.report(what, got);
+        if let Some(dir) = &self.trace_dir {
+            report.push_str(&format!("\nextension hook markers ({}):", dir.display()));
+            for marker in ["entered", "returning"] {
+                let path = dir.join(format!("refused-steer-hook-{marker}"));
+                let contents = match fs::read_to_string(&path) {
+                    Ok(contents) => contents,
+                    Err(error) => format!("(could not read {}: {error})", path.display()),
+                };
+                report.push_str(&format!("\n{marker}: {contents}"));
+            }
+        }
+        report
     }
 
     /// Replaces the socket's deadline: a test that proved one wait expires
@@ -348,7 +372,7 @@ impl Socket {
                 Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
             }
             Err(error) if error.kind() == ErrorKind::TimedOut => match &self.diag {
-                Some(diag) => panic!("{}", diag.report(what, got)),
+                Some(diag) => panic!("{}", self.timeout_report(diag, what, got)),
                 None => panic!("waited until the deadline for {what}; got {got:?}"),
             },
             Err(error) => {

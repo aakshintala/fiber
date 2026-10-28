@@ -25,15 +25,9 @@ pub(crate) enum ShellError {
     /// `monitor` is combined with `run_in_background` or `tty`.
     #[error("`monitor` cannot be combined with `run_in_background` or `tty`.")]
     MonitorAlone,
-    /// `timeout_ms` is given with `monitor`, which takes `deadline_ms`.
-    #[error("A monitor's limit is `deadline_ms`.")]
-    MonitorTimeout,
-    /// `deadline_ms` is given without `monitor`.
-    #[error("`deadline_ms` is a monitor's deadline; set `monitor: true` with it.")]
-    DeadlineWithoutMonitor,
-    /// `deadline_ms` is past the longest a monitor may run in this session.
+    /// `timeout_ms` is past the longest a monitor may run in this session.
     #[error(
-        "`deadline_ms` is more than {max_ms}, the longest a monitor may run here. Give {max_ms} or less."
+        "`timeout_ms` is more than {max_ms}, the longest a monitor may run here. Give {max_ms} or less."
     )]
     DeadlineTooLong {
         /// The longest deadline in this session, in milliseconds.
@@ -54,6 +48,15 @@ pub(crate) enum ShellError {
         /// The spawn failure.
         #[source]
         source: io::Error,
+    },
+    /// The sandbox could not be applied at spawn, so the call never ran.
+    /// A reload that turned the sandbox off after the call was declared
+    /// confined, or a policy the kernel refused, ends here: never
+    /// unconfined, and never retried.
+    #[error("The sandbox could not be applied: {cause}.")]
+    SandboxApply {
+        /// Why the policy did not apply.
+        cause: String,
     },
     /// The command's process could not be reaped after its output closed.
     #[error("The command's process could not be reaped.")]
@@ -104,12 +107,12 @@ impl ShellError {
             Self::Arguments(error) => error.code(),
             Self::NotADirectory { .. }
             | Self::MonitorAlone
-            | Self::MonitorTimeout
-            | Self::DeadlineWithoutMonitor
             | Self::DeadlineTooLong { .. }
             | Self::NoJobs
             | Self::BareWait => ErrorCode::InvalidArguments,
-            Self::NotStarted { .. } | Self::NotReaped => ErrorCode::ToolError,
+            Self::NotStarted { .. } | Self::NotReaped | Self::SandboxApply { .. } => {
+                ErrorCode::ToolError
+            }
             Self::Indeterminate => ErrorCode::Indeterminate,
             Self::TimedOut { .. } | Self::DeadlinePassed { .. } => ErrorCode::Timeout,
             Self::Killed { .. } => ErrorCode::Signal,
