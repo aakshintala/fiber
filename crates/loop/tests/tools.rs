@@ -295,6 +295,260 @@ fn bad_arguments_fail_invalid_arguments_and_never_start() {
     assert!(results[3].0.contains("[1,2]"));
 }
 
+/// A `shell` tool whose schema takes a required string `command` and an
+/// optional integer `limit`.
+fn shell_tool() -> TestTool {
+    let mut tool = TestTool::reads("shell", "shell output");
+    tool.schema = Some(json!({
+        "type": "object",
+        "properties": {
+            "command": {"type": "string"},
+            "limit": {"type": "integer"}
+        },
+        "required": ["command"],
+        "additionalProperties": false
+    }));
+    tool
+}
+
+/// A `read` tool named `name`, whose schema takes a required string `path`
+/// and optional integers `offset` and `limit`.
+fn read_tool(name: &'static str) -> TestTool {
+    let mut tool = TestTool::reads(name, "file contents");
+    tool.schema = Some(json!({
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "offset": {"type": "integer"},
+            "limit": {"type": "integer"}
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    }));
+    tool
+}
+
+/// Read-shaped arguments the `shell` tool rejects: no `command`.
+fn read_shaped() -> Value {
+    json!({"path": "x.rs", "offset": 1, "limit": 20})
+}
+
+/// The field lines a `shell` call with [`read_shaped`] fails with, in no
+/// promised order: `docs/tools.md`, "Before a call runs", promises one line
+/// per bad field, not their order or count, so tests assert each line by
+/// containment.
+fn shell_field_lines() -> [&'static str; 3] {
+    [
+        "`/command`: missing",
+        "`/offset`: not allowed",
+        "`/path`: not allowed",
+    ]
+}
+
+/// Asserts `text` is a [`read_shaped`] schema failure with no suggestion: it
+/// holds each of [`shell_field_lines`] and no `These arguments fit` line.
+fn assert_shell_fields_without_suggestion(text: &str) {
+    for line in shell_field_lines() {
+        assert!(text.contains(line), "missing field line {line}: {text}");
+    }
+    assert!(
+        !text.contains("These arguments fit"),
+        "unexpected suggestion: {text}"
+    );
+}
+
+/// The event kinds of a one-call turn whose call fails its schema check: the
+/// reply's one request completes as `failed` without ever starting, and the
+/// turn's second reply ends it (`docs/loop.md`, "One step", "Tool calls that
+/// do not run" and "Ending a turn"; `docs/tools.md`, "Before a call runs").
+/// Pinning the whole list pins the one completion too (`docs/testing.md`,
+/// "Event streams").
+const ONE_FAILED_CALL_TURN: &[&str] = &[
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "tool_call_arguments_delta",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
+#[test]
+fn shell_call_with_read_shaped_arguments_names_the_matching_tool() {
+    // The model chose `shell` with `read`'s arguments (`docs/tools.md`,
+    // "Before a call runs"): the call still fails on `shell` and never
+    // runs, and the failure's last line names the one other tool whose
+    // schema fits what the model sent.
+    let shell = Arc::new(shell_tool());
+    let read = Arc::new(read_tool("read"));
+    let (_, lines) = turn(
+        vec![shell.clone(), read.clone()],
+        &[("shell", read_shaped())],
+    );
+    assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
+    let done = completed(&lines);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["status"], "failed");
+    assert_eq!(done[0].payload["error"]["code"], "invalid_arguments");
+    let text = text_first(done[0]);
+    for line in shell_field_lines() {
+        assert!(text.contains(line), "missing field line {line}: {text}");
+    }
+    // The suggestion is a last line naming the one match (`docs/tools.md`,
+    // "Before a call runs").
+    assert!(
+        text.ends_with("\nThese arguments fit `read`."),
+        "missing suggestion: {text}"
+    );
+    // The recorded call keeps the model's choice of tool.
+    let requested = lines
+        .iter()
+        .find(|l| l.kind == "tool_call_requested")
+        .unwrap();
+    assert_eq!(requested.payload["name"], "shell");
+    assert_eq!(requested.payload["arguments"], read_shaped());
+    // Neither the named tool nor the matching one runs, and the match
+    // never reaches the candidate's effects function.
+    assert!(shell.ran().is_empty());
+    assert!(read.ran().is_empty());
+    assert!(
+        !read
+            .trace
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|note| note == "effects read")
+    );
+}
+
+#[test]
+fn two_matching_tools_add_no_suggestion() {
+    // Two strict schemas fit what the model sent, so naming one would
+    // guess: the failure keeps only its field lines.
+    let shell = Arc::new(shell_tool());
+    let read = Arc::new(read_tool("read"));
+    let other = Arc::new(read_tool("read2"));
+    let (_, lines) = turn(
+        vec![shell.clone(), read.clone(), other.clone()],
+        &[("shell", read_shaped())],
+    );
+    assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
+    let done = completed(&lines);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["error"]["code"], "invalid_arguments");
+    assert_shell_fields_without_suggestion(text_first(done[0]));
+    assert!(shell.ran().is_empty());
+    assert!(read.ran().is_empty());
+    assert!(other.ran().is_empty());
+}
+
+#[test]
+fn only_a_permissive_schema_match_adds_no_suggestion() {
+    // A schema without `properties` matches every object and tells the
+    // model nothing, so it never counts as a match.
+    let shell = Arc::new(shell_tool());
+    let loose = Arc::new(TestTool::reads("loose", "loose output"));
+    let (_, lines) = turn(
+        vec![shell.clone(), loose.clone()],
+        &[("shell", read_shaped())],
+    );
+    assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
+    let done = completed(&lines);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["error"]["code"], "invalid_arguments");
+    assert_shell_fields_without_suggestion(text_first(done[0]));
+    assert!(shell.ran().is_empty());
+    assert!(loose.ran().is_empty());
+}
+
+#[test]
+fn an_effectively_deferred_match_adds_no_suggestion() {
+    // `read` fits what the model sent but is effectively deferred, so the
+    // request never declared it in full: no suggestion names it.
+    let shell = Arc::new(shell_tool());
+    let read = Arc::new(read_tool("read"));
+    let tools: Vec<Arc<dyn Tool>> = vec![shell.clone(), support::deferred(Arc::clone(&read))];
+    let factory: r#loop::ToolSearchFactory =
+        Arc::new(|_, _| Arc::new(TestTool::reads("tool_search", "found")) as Arc<dyn Tool>);
+    let mut session = Session::with_deferring_tools(
+        vec![
+            calls_reply("", &[("shell", read_shaped())]),
+            Scripted::text("Done."),
+        ],
+        tools,
+        factory,
+    );
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
+    // The preamble really did defer `read`: the suggestion is skipped
+    // because of the effective deferred set, not a schema miss.
+    let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
+    let read_row = built.payload["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "read")
+        .unwrap();
+    assert_eq!(read_row["deferred"], true);
+    let done = completed(&lines);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["error"]["code"], "invalid_arguments");
+    assert_shell_fields_without_suggestion(text_first(done[0]));
+    assert!(shell.ran().is_empty());
+    assert!(read.ran().is_empty());
+}
+
+#[test]
+fn a_match_only_after_repair_adds_no_suggestion() {
+    // The model sent `"20"` where `read` needs an integer, and only the
+    // repair for `shell` would make it valid: candidates are checked
+    // against what the model sent, not the repaired object.
+    let shell = Arc::new(shell_tool());
+    let read = Arc::new(read_tool("read"));
+    let sent = json!({"path": "x", "limit": "20"});
+    let (_, lines) = turn(
+        vec![shell.clone(), read.clone()],
+        &[("shell", sent.clone())],
+    );
+    assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
+    let requested = lines
+        .iter()
+        .find(|l| l.kind == "tool_call_requested")
+        .unwrap();
+    assert_eq!(
+        requested.payload["repaired"],
+        json!({"path": "x", "limit": 20})
+    );
+    let done = completed(&lines);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["error"]["code"], "invalid_arguments");
+    let text = text_first(done[0]);
+    for line in ["`/command`: missing", "`/path`: not allowed"] {
+        assert!(text.contains(line), "missing field line {line}: {text}");
+    }
+    assert!(
+        !text.contains("These arguments fit"),
+        "unexpected suggestion: {text}"
+    );
+    assert!(shell.ran().is_empty());
+    assert!(read.ran().is_empty());
+}
+
 #[test]
 fn repaired_arguments_are_recorded_run_and_sent_back_as_written() {
     let tool = Arc::new(TestTool::reads("get_weather", "Sunny."));
@@ -1259,6 +1513,77 @@ impl Tool for HostedSearch {
     ) -> contract::tool::Output {
         panic!("a hosted search is never run by Fiber");
     }
+}
+
+/// A hosted tool with a strict schema that fits [`read_shaped`]: the
+/// suggestion still skips it, since a hosted tool is sent as its type and
+/// name only, never as a full function definition (`docs/tools.md`,
+/// "Hosted by the provider").
+struct HostedRead;
+
+impl Tool for HostedRead {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "hosted_read".into(),
+            description: String::new(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "offset": {"type": "integer"},
+                    "limit": {"type": "integer"}
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+            deferred: false,
+            hosted: Some("hosted_read_20250101".into()),
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, Value>,
+    ) -> Result<contract::tool::Effects, EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+                confined: false,
+            },
+            subject: Some(String::new()),
+            prefix: None,
+            always_reviewed: false,
+            hosts: None,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        panic!("a hosted search is never run by Fiber");
+    }
+}
+
+#[test]
+fn a_hosted_match_adds_no_suggestion() {
+    // `hosted_read`'s schema fits what the model sent, but the request
+    // declared it as a hosted type and name only: no suggestion names it.
+    let shell = Arc::new(shell_tool());
+    let (_, lines) = turn(
+        vec![shell.clone(), Arc::new(HostedRead)],
+        &[("shell", read_shaped())],
+    );
+    assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
+    let done = completed(&lines);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["error"]["code"], "invalid_arguments");
+    assert_shell_fields_without_suggestion(text_first(done[0]));
+    assert!(shell.ran().is_empty());
 }
 
 fn search_call_block() -> Value {

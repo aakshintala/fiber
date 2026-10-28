@@ -1076,6 +1076,32 @@ impl Session {
         )
     }
 
+    /// As [`Session::with_tools`], but the model defers: the scripted
+    /// provider answers through the deferring wrapper and the loop builds
+    /// the search tool with `factory`, so a tool registered through
+    /// [`deferred`] is effectively deferred (`docs/tools.md`, "Tool search").
+    pub(crate) fn with_deferring_tools(
+        script: Vec<Scripted>,
+        tools: Vec<Arc<dyn Tool>>,
+        factory: r#loop::ToolSearchFactory,
+    ) -> Self {
+        let scripted = Arc::new(ScriptedProvider::new(script));
+        let provider = deferring(Arc::clone(&scripted));
+        let mut session = Self::assemble(
+            SessionId("s_test".into()),
+            provider,
+            Vec::new(),
+            tools,
+            unpriced(),
+            scripted,
+            Arc::new(TurnCancel::default()),
+            Vec::new(),
+            None,
+        );
+        session.looped = Some(session.looped.take().unwrap().tool_search(factory));
+        session
+    }
+
     /// As [`Session::with_cache_lifetime`], reaching the scripted provider
     /// through what `wrap` makes of it and the session's clock.
     pub(crate) fn wrapped(
