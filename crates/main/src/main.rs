@@ -3,6 +3,13 @@
 //! installed providers and the credential, and hands them to a door
 //! (`docs/invocation.md`). It holds no feature logic.
 
+#[cfg(all(feature = "alloc-stats", feature = "dhat-heap"))]
+compile_error!(
+    "fiber: the alloc-stats and dhat-heap features each set the global allocator; enable only one."
+);
+
+#[cfg(feature = "alloc-stats")]
+mod alloc_stats;
 mod builtin;
 mod case;
 mod cli;
@@ -88,6 +95,20 @@ use parts::{Parts, choose_reviewer, parts_with, per_run, reviewer_model};
 use routing::{Here, connect, connect_observed};
 use routing::{credential, lua_providers, scripted};
 
+/// The `alloc-stats` build counts every allocation through [`System`]:
+/// this static is the only global allocator, and it feeds the calling
+/// thread's `log` counters.
+#[cfg(feature = "alloc-stats")]
+#[global_allocator]
+static ALLOC: alloc_stats::Counting = alloc_stats::Counting;
+
+/// The `dhat-heap` build profiles the heap through `dhat`: this static is
+/// the only global allocator, and the `run` guard below writes the
+/// profile. Never in a shipped build (`docs/dependencies.md`).
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 fn main() -> ExitCode {
     ExitCode::from(u8::try_from(run()).unwrap_or(1))
 }
@@ -97,6 +118,11 @@ fn main() -> ExitCode {
     reason = "prints the usage sentence (docs/code-quality.md, \"Lints\")"
 )]
 fn run() -> i32 {
+    // A `dhat-heap` build profiles the whole run: the guard lives until
+    // `run` returns, so the profile covers every dispatch arm and the
+    // `dhat-heap.json` lands in the working directory at orderly exit.
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::builder().build();
     let fiber = std::env::current_exe().map_err(|error| format!("the running binary: {error}"));
     // Help and version print before anything reads the home, configuration,
     // credentials, or stdin.
