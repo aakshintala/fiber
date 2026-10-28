@@ -69,6 +69,9 @@ pub(crate) struct Parts {
     /// configuration and shared with the model shell (`docs/tools.md`,
     /// "Other command-line tools").
     pub(crate) shell_read_only: crate::settings::ShellReadOnly,
+    /// The person's Linux sandbox settings, read from the session's
+    /// configuration and shared with the model shell (`docs/sandbox.md`).
+    pub(crate) sandbox: crate::settings::SandboxHandle,
     /// Every configured `file` credential source, relative paths joined
     /// with the workspace the reader reads them from
     /// (`docs/permissions.md`, "Credentials").
@@ -477,6 +480,20 @@ pub(crate) fn parts_in(
     prompt.thinking = thinking;
     // The startup notices are written with the MCP notices, after
     // `fiber_started`.
+    let sandbox_settings = settings::sandbox_settings(&config, &home);
+    if sandbox_settings.enabled
+        && let Err(unavailable) = tools::sandbox_check_available(&sandbox_settings, &workspace)
+    {
+        // One notice names the unavailable case; deny/write overlap is a
+        // bad configuration, every other case a tool error
+        // (`docs/errors.md`, "Sandbox").
+        startup_notices.push(contract::events::Notice {
+            code: unavailable.code(),
+            message: format!("sandbox unavailable: {unavailable}"),
+            extension: None,
+        });
+    }
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(sandbox_settings));
     let mut mcp = mcp_servers::specs(&config)?;
     mcp.notices.splice(0..0, startup_notices);
     Ok(Parts {
@@ -513,6 +530,7 @@ pub(crate) fn parts_in(
         shell_read_only: std::sync::Arc::new(std::sync::Mutex::new(settings::shell_read_only(
             &config,
         ))),
+        sandbox,
         credential_files,
         locks,
         extensions,

@@ -231,6 +231,7 @@ impl Tool for SendMove {
                 effects: vec![contract::shapes::Effect::Reads],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,

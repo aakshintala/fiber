@@ -1225,6 +1225,7 @@ fn review_request(request_id: &str) -> Event {
             effects: vec![Effect::Executes],
             reversible: true,
             paths: None,
+            confined: false,
         },
         step: AskStep::Review {
             escalation: Some(Escalation::ConsecutiveBlocks {

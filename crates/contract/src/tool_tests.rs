@@ -61,6 +61,7 @@ impl Tool for EchoTool {
                 effects: vec![],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,

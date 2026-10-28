@@ -51,6 +51,7 @@ impl Hints {
             effects,
             reversible,
             paths: None,
+            confined: false,
         }
     }
 

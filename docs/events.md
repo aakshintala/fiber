@@ -199,8 +199,8 @@ both written to `artifacts/` and named by path.
 
 ### Declared effects
 
-Four keys, on `tool_call_started`, `permission_requested` and, for a reviewed call's decision that has no request, `permission_resolved`, in the
-vocabulary of `docs/permissions.md`, "Effects":
+Five keys, on `tool_call_started`, `permission_requested` and, for a reviewed call's decision that has no request, `permission_resolved`, in the
+vocabulary of `docs/permissions.md`, "Effects" and "Confinement":
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
@@ -208,6 +208,9 @@ vocabulary of `docs/permissions.md`, "Effects":
 | `reversible` | boolean | yes | whether the call is reversible |
 | `paths` | array of strings | no | the paths the call touches, where the tool declared them |
 | `always_reviewed` | boolean | no | true when the tool declared the call always reviewed (`docs/permissions.md`, "Effects"); omitted when false |
+| `confined` | boolean | no | the call runs only inside the sandbox; if the sandbox can't be applied at spawn, the call fails and nothing runs |
+
+Event order is unchanged: `tool_call_started` remains before execution and carries `confined: true` for a call Fiber will run only inside the sandbox. Read that as "every command this call ran, ran confined". It holds on spawn failure too, because nothing ran. If applying the sandbox fails at spawn, the call ends through the normal `tool_call_*` end event with an error naming the cause; a failed confined call is never rerun unconfined.
 
 ### `tokens`
 
@@ -640,6 +643,7 @@ the provider reports as in progress.
 | `reversible` | boolean | yes | as in "Declared effects" |
 | `paths` | array of strings | no | as in "Declared effects" |
 | `always_reviewed` | boolean | no | as in "Declared effects" |
+| `confined` | boolean | no | as in "Declared effects" |
 | `arguments` | object | no | the arguments that ran, when a `before_tool` hook rewrote them |
 | `changed_by` | `changed_by` | no | with `arguments` |
 
@@ -710,6 +714,7 @@ Durable. The envelope's `action_id` is the tool call.
 | `reversible` | boolean | yes | as in "Declared effects" |
 | `paths` | array of strings | no | as in "Declared effects" |
 | `always_reviewed` | boolean | no | as in "Declared effects" |
+| `confined` | boolean | no | as in "Declared effects" |
 | `step` | string | yes | which step of `docs/permissions.md`, "The order a call is judged in", raised it: `standing_ask` (3) or `review` (7); a closed set |
 | `standing_rule` | object | no | on `standing_ask`, the rule that asked: `scope` (`global` or `project`) and `prefix` (string) |
 | `escalation` | object | no | on `review`, why the reviewer handed the call to a person: `cause`, which is `consecutive_blocks`, `session_blocks` or `reviewer_failed`, a closed set; `reason` (string), the reviewer's reason for blocking this call, on the two block causes; `error` (`error`), on `reviewer_failed` |
@@ -734,6 +739,7 @@ Durable. The envelope's `action_id` is the tool call.
 | `paths` | array of strings | no | as in "Declared effects", with the keys above |
 | `hosts` | array of strings | no | on an `allow` decided by `person` or `reviewer`, the hosts the allowed call declared, which become known in the session (`docs/tools.md`, "Web fetch and web search", "Effects") |
 | `always_reviewed` | boolean | no | as in "Declared effects", with the keys above |
+| `confined` | boolean | no | as in "Declared effects", with the keys above |
 | `arguments` | object | no | the arguments the reviewer judged, when a `before_tool` hook rewrote them, with the keys above |
 | `changed_by` | `changed_by` | no | with `arguments`, with the keys above |
 

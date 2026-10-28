@@ -65,6 +65,7 @@ impl Tool for ProbeTool {
                 effects: vec![Effect::Reads],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: None,
             prefix: None,

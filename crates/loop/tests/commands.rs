@@ -188,6 +188,7 @@ impl Tool for SendTool {
                 effects: vec![Effect::Reads],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,

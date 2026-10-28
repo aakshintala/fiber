@@ -247,6 +247,7 @@ impl Tool for PathTool {
                 effects: vec![Effect::Reads],
                 reversible: true,
                 paths: Some(vec![path.clone()]),
+                confined: false,
             },
             subject: Some(path),
             prefix: None,
@@ -733,6 +734,7 @@ fn review_request(
             effects: vec![Effect::Reads],
             reversible: true,
             paths: Some(paths.iter().map(|path| (*path).to_owned()).collect()),
+            confined: false,
         },
         step: AskStep::Review {
             escalation: Some(Escalation::ConsecutiveBlocks {
@@ -1439,6 +1441,7 @@ impl Tool for AskTool {
                 effects: vec![Effect::Reads],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,

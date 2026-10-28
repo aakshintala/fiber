@@ -1122,3 +1122,96 @@ fn builtin_registers_the_web_search_it_is_given() {
     assert_eq!(registered.1.hosted, None);
     assert!(infos.iter().any(|info| info.name == "web_search"));
 }
+
+#[test]
+fn the_model_shell_carries_no_sandbox_when_off() {
+    let root = fakes::TempDir::new("fiber-builtin-sandbox-off");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (tools, _infos, _driver, _forget, _images) = super::builtin(
+        root.path().join("fiber-stub"),
+        &root.path().join("home"),
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        None,
+        &delegates(),
+        skills(),
+    )
+    .unwrap();
+    let shell = tools
+        .iter()
+        .find(|(_, tool)| tool.definition().name == "shell")
+        .expect("shell is registered");
+    let args = {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "command".into(),
+            serde_json::Value::String("echo hi".into()),
+        );
+        map
+    };
+    let effects = shell.1.effects(&args).unwrap();
+    assert!(!effects.declared.confined);
+}
+
+#[test]
+fn the_model_shell_marks_confined_when_on_and_available() {
+    let root = fakes::TempDir::new("fiber-builtin-sandbox-on");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let home_base = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let fiber_home = home_base.join(format!("fiber-builtin-sandbox-on-{}", std::process::id()));
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home,
+    }));
+    let (tools, _infos, _driver, _forget, _images) = super::builtin_timed(
+        root.path().join("fiber-stub"),
+        &root.path().join("home"),
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        None,
+        &delegates(),
+        skills(),
+        None,
+        Default::default(),
+        sandbox,
+    )
+    .unwrap();
+    let shell = tools
+        .iter()
+        .find(|(_, tool)| tool.definition().name == "shell")
+        .expect("shell is registered");
+    let args = {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "command".into(),
+            serde_json::Value::String("echo hi".into()),
+        );
+        map
+    };
+    let effects = shell.1.effects(&args).unwrap();
+    #[cfg(target_os = "linux")]
+    assert!(effects.declared.confined);
+    #[cfg(not(target_os = "linux"))]
+    assert!(!effects.declared.confined);
+}

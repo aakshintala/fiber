@@ -35,6 +35,9 @@ mod answer;
 mod asking;
 mod before_message;
 mod before_tool;
+#[cfg(test)]
+#[path = "call_effects_tests.rs"]
+mod call_effects_tests;
 mod calls;
 mod cancel;
 mod caps;

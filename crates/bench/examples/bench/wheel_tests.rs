@@ -183,6 +183,7 @@ fn tool_call_started_is_completed_with_no_effects() {
                 effects: Vec::new(),
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             arguments: None,
             changed_by: None,
