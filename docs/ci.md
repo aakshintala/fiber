@@ -313,6 +313,11 @@ On Linux x86_64 alone:
   label is read when the run's selection job runs, so a relabel takes effect
   at the next push or a whole-run rerun; rerunning only the failed job keeps
   the old reading.
+- each profiling feature built once, without running it:
+  `cargo check -p main --bins --tests --features alloc-stats` and
+  `cargo check -p main --bins --tests --features dhat-heap`, so neither
+  stops compiling unnoticed. The job's `timeout-minutes` is 10 to leave
+  room for the two uncached checks alongside `scripts/check`.
 
 One more Linux x86_64 job builds the release profile for the target that
 ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pull
