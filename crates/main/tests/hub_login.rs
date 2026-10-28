@@ -147,11 +147,36 @@ fn feed(client: &Socket) {
         "command_accepted"
     );
 }
-fn close(client: &Socket, session: &str, id: &str) {
+/// Closes `session` and returns every line read through its `fiber_exited`,
+/// so a caller waiting on the feed afterwards still sees a `session_left`
+/// that arrived first: the hub fans `session_left` out on one path while the
+/// closing session's `fiber_exited` arrives on another, in either order.
+fn close(client: &Socket, session: &str, id: &str) -> Vec<Value> {
     client.send(&json!({"id":id,"session_id":session,"command":"close"}).to_string());
     until(client, "fiber_exited after close", |line| {
         line["kind"] == "fiber_exited" && line["session_id"] == session
+    })
+}
+
+/// Whether `line` reports `session`'s feed departure.
+fn is_session_left(line: &Value, session: &str) -> bool {
+    line["kind"] == "session_left" && line["payload"]["session_id"] == session
+}
+
+/// The feed departure for `session` after [`close`]: `closed` holds the lines
+/// the close wait already read, so a `session_left` that arrived before
+/// `fiber_exited` is already in hand and only a later one is still waited
+/// for. Either arrival order leaves both signals observed, and the observed
+/// departure line is returned.
+fn left_after_close(client: &Socket, session: &str, closed: &[Value]) -> Value {
+    if let Some(left) = closed.iter().find(|line| is_session_left(line, session)) {
+        return left.clone();
+    }
+    let mut waited = until(client, "first session left the hub feed", |line| {
+        is_session_left(line, session)
     });
+    // The wait returns on its match, so the last line is the departure.
+    waited.pop().unwrap()
 }
 /// Returns whether the model turn already completed while waiting for its login notice.
 fn login_url(client: &Socket, oauth: &OauthServer) -> bool {
@@ -395,10 +420,8 @@ fn a_resumed_session_installs_live_attendance_and_login_notices() {
     refused(&setup, &server, &oauth);
     full(&client, &session, "c_full");
     refusal_snapshot(&client);
-    close(&client, &session, "c_close_first");
-    until(&client, "first session left the hub feed", |line| {
-        line["kind"] == "session_left" && line["payload"]["session_id"] == session
-    });
+    let closed = close(&client, &session, "c_close_first");
+    left_after_close(&client, &session, &closed);
     drop(client);
     let client = connect_hub(&setup, &hub);
     oauth.hold();
@@ -449,12 +472,12 @@ fn serve_close(peer: UnixStream, replies: Vec<Value>, done: mpsc::Sender<()>) {
     }
     let mut peer = peer;
     for reply in &replies {
-        if write!(peer, "{reply}\n").is_err() {
+        if writeln!(peer, "{reply}").is_err() {
             return;
         }
     }
     drop(peer);
-    let _ = done.send(());
+    done.send(()).unwrap_or(());
 }
 
 #[test]
@@ -471,17 +494,81 @@ fn a_session_left_sent_before_fiber_exited_sits_in_the_close_wait() {
             done_tx,
         );
     });
-    // The wait `close` performs: it keeps every line through `fiber_exited`,
-    // then drops what it kept with its return value.
-    client.send(&json!({"id":"c_close","session_id":session,"command":"close"}).to_string());
-    let closed = until(&client, "fiber_exited after close", |line| {
-        line["kind"] == "fiber_exited" && line["session_id"] == session
-    });
+    let closed = close(&client, session, "c_close");
     assert!(
         closed
             .iter()
             .any(|line| line["kind"] == "session_left" && line["payload"]["session_id"] == session),
         "the close wait read the feed's session_left before fiber_exited: {closed:?}"
+    );
+    let observed = left_after_close(&client, session, &closed);
+    assert_eq!(
+        observed["payload"]["session_id"],
+        json!(session),
+        "the departure already in hand is the session's own: {observed}"
+    );
+    deadline.recv_or_fail(&done_rx, "the peer answered the close");
+}
+
+#[test]
+fn a_session_left_sent_after_fiber_exited_is_waited_for_after_close() {
+    let deadline = Deadline::after(Duration::from_secs(10));
+    let (client_stream, peer_stream) = UnixStream::pair().unwrap();
+    let client = Socket::from(deadline, client_stream);
+    let session = "s1";
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        serve_close(
+            peer_stream,
+            vec![
+                fiber_exited_line(session),
+                json!({"kind":"notice","payload":{"code":"other"}}),
+                session_left_line(session),
+            ],
+            done_tx,
+        );
+    });
+    let closed = close(&client, session, "c_close");
+    assert!(
+        !closed
+            .iter()
+            .any(|line| line["kind"] == "session_left" && line["payload"]["session_id"] == session),
+        "fiber_exited arrived first, so the close wait holds no departure: {closed:?}"
+    );
+    let observed = left_after_close(&client, session, &closed);
+    assert_eq!(
+        observed["payload"]["session_id"],
+        json!(session),
+        "the waited-for departure is the session's own: {observed}"
+    );
+    deadline.recv_or_fail(&done_rx, "the peer answered the close");
+}
+
+#[test]
+fn a_session_left_for_another_session_does_not_end_the_wait() {
+    let deadline = Deadline::after(Duration::from_secs(10));
+    let (client_stream, peer_stream) = UnixStream::pair().unwrap();
+    let client = Socket::from(deadline, client_stream);
+    let session = "s1";
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        serve_close(
+            peer_stream,
+            vec![
+                session_left_line("s2"),
+                json!({"kind":"notice","payload":{"session_id":session}}),
+                fiber_exited_line(session),
+                session_left_line(session),
+            ],
+            done_tx,
+        );
+    });
+    let closed = close(&client, session, "c_close");
+    let observed = left_after_close(&client, session, &closed);
+    assert_eq!(
+        observed,
+        session_left_line(session),
+        "only the session's own departure ends the wait: {observed}"
     );
     deadline.recv_or_fail(&done_rx, "the peer answered the close");
 }
