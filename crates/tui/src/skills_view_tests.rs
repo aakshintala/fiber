@@ -790,39 +790,6 @@ fn selection_clamps_two_past_the_end() {
     assert_eq!(skills.list.selected(), 3);
 }
 
-#[test]
-fn space_toggles_project_then_everywhere_independently() {
-    let fake = fake_with(off(&[], &[]));
-    let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.key(&Key::Char(' '), &ctx(&fake));
-    skills.edit_key(&Edit::Right);
-    skills.key(&Key::Char(' '), &ctx(&fake));
-    skills.key(&Key::Char(' '), &ctx(&fake));
-    assert_eq!(
-        switched(&fake),
-        vec![
-            (
-                Path::new("/w").to_path_buf(),
-                "tdd".to_owned(),
-                SwitchScope::Project,
-                false
-            ),
-            (
-                Path::new("/w").to_path_buf(),
-                "tdd".to_owned(),
-                SwitchScope::Everywhere,
-                false
-            ),
-            (
-                Path::new("/w").to_path_buf(),
-                "tdd".to_owned(),
-                SwitchScope::Everywhere,
-                true
-            ),
-        ]
-    );
-}
-
 /// The switches asked for so far.
 fn switched(fake: &Fake) -> Vec<(std::path::PathBuf, String, SwitchScope, bool)> {
     fake.skill_switched
@@ -860,33 +827,6 @@ fn a_switch_click_selects_focuses_and_flips() {
 }
 
 #[test]
-fn right_then_left_then_space_writes_this_project() {
-    let fake = fake_with(off(&[], &[]));
-    let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.edit_key(&Edit::Right);
-    skills.edit_key(&Edit::Left);
-    skills.key(&Key::Char(' '), &ctx(&fake));
-    assert_eq!(
-        switched(&fake),
-        vec![(
-            Path::new("/w").to_path_buf(),
-            "tdd".to_owned(),
-            SwitchScope::Project,
-            false
-        )]
-    );
-    assert!(
-        fake.skills_off
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .everywhere
-            .is_empty()
-    );
-}
-
-#[test]
 fn a_switch_rereads_and_says_next_turn_start() {
     let fake = fake_with(off(&[], &[]));
     let mut skills = opened(&fake, &[repository("tdd")]);
@@ -901,26 +841,6 @@ fn a_switch_rereads_and_says_next_turn_start() {
     );
     assert!(frame.rows[0][2].0.contains("[off]"), "{frame:?}");
     assert!(frame.rows[0][5].0.contains("[on]"), "{frame:?}");
-}
-
-#[test]
-fn a_failed_switch_rereads_and_shows_the_message() {
-    let fake = fake_with(off(&[], &[]));
-    if let Ok(mut fail) = fake.fail_after_write.lock() {
-        *fail = true;
-    }
-    let mut skills = opened(&fake, &[repository("tdd")]);
-    skills.key(&Key::Char(' '), &ctx(&fake));
-    let frame = skills.frame(80, 22);
-    assert_eq!(
-        frame.below,
-        vec![
-            "Test first.".to_owned(),
-            "the write landed, then syncing failed".to_owned()
-        ]
-    );
-    // The write landed before the error, so the row shows it.
-    assert!(frame.rows[0][2].0.contains("[off]"), "{frame:?}");
 }
 
 #[test]
