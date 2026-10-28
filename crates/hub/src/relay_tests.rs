@@ -2958,6 +2958,17 @@ fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     *crate::connection::lock(&ended.hub.on_pass_on) = Some(Box::new(move |passed| {
         dropped_tx.send(passed).unwrap_or(());
     }));
+    // A partly written command is dropped with the rest: a disconnected
+    // client gets no `indeterminate` answer for it either.
+    ended.order.enqueue(END_SID, "c_p");
+    lock(&ended.kept).push((
+        "c_p".to_owned(),
+        json!({"id": "c_p", "command": "reply", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        KeptState::Partial,
+    ));
     ended.close_session();
     let passed = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&dropped_rx)
@@ -2965,7 +2976,7 @@ fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     assert!(matches!(passed, crate::retire::PassOn::Dropped(1)));
     assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
     assert!(ended.received_ids().is_empty());
-    for id in ["c_1", "c_2"] {
+    for id in ["c_1", "c_2", "c_p"] {
         assert_eq!(ended.order.session_for(id), None);
     }
     assert!(ended.kept.lock().unwrap().is_empty());

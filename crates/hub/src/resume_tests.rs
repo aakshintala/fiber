@@ -950,9 +950,14 @@ impl Client {
     }
 
     fn send(&mut self, id: &str, command: &str) {
+        self.send_to(id, SID, command);
+    }
+
+    /// Sends `command` for another session on this connection.
+    fn send_to(&mut self, id: &str, session: &str, command: &str) {
         let line = json!({
             "id": id,
-            "session_id": SID,
+            "session_id": session,
             "command": command,
             "args": {"level": "full"},
         });
@@ -3595,7 +3600,7 @@ fn a_rerouted_full_subscribe_to_an_exited_delegate_replays_and_releases_the_queu
 /// delivered again.
 #[test]
 fn a_cut_command_write_is_indeterminate_after_a_clean_exit() {
-    cut_write_case("fiber_exited");
+    cut_write_case(Some("fiber_exited"), CutAt::Body);
 }
 
 /// `docs/invocation.md`, "Lifecycle": a command the hub had started
@@ -3604,7 +3609,7 @@ fn a_cut_command_write_is_indeterminate_after_a_clean_exit() {
 /// delivered again.
 #[test]
 fn a_cut_command_write_is_indeterminate_after_a_rewind() {
-    cut_write_case("rewound");
+    cut_write_case(Some("rewound"), CutAt::Body);
 }
 
 /// `docs/invocation.md`, "Lifecycle": a command the hub had started
@@ -3613,16 +3618,121 @@ fn a_cut_command_write_is_indeterminate_after_a_rewind() {
 /// delivered again.
 #[test]
 fn a_cut_command_write_is_indeterminate_after_a_move() {
-    cut_write_case("moved");
+    cut_write_case(Some("moved"), CutAt::Body);
 }
 
-/// Cuts a live relay's next command write after its JSON body, before its
-/// line feed, then ends the session with `last` as its log's last line.
-/// The session reads nothing, but the hub cannot know that: the client
-/// gets exactly one `indeterminate` answer, and the command never runs
-/// on the session or reaches a resumed one.
-#[track_caller]
-fn cut_write_case(last: &str) {
+/// `docs/invocation.md`, "Lifecycle": a command the hub had started
+/// writing to the session when the write failed may have been read, so it
+/// is answered `indeterminate` however the session ends, and is never
+/// delivered again. A crash answers the same way, with the same text as
+/// any other ending: the command may have run either way.
+#[test]
+fn a_cut_command_write_is_indeterminate_after_a_crash() {
+    cut_write_case(None, CutAt::Body);
+}
+
+/// `docs/invocation.md`, "Lifecycle": even one accepted byte means the
+/// session may have read the command, so a write cut after its first
+/// byte is answered `indeterminate`, never retried.
+#[test]
+fn a_one_byte_command_write_is_indeterminate_after_a_clean_exit() {
+    cut_write_case(Some("fiber_exited"), CutAt::FirstByte);
+}
+
+/// `docs/invocation.md`, "Lifecycle": a command the hub had started
+/// writing to the session when the write failed may have been read, so it
+/// is answered `indeterminate`. On the opener path the hub answers at
+/// once, without resuming or retrying: the cut bytes reach no resumed
+/// session either.
+#[test]
+fn a_cut_command_write_is_indeterminate_on_first_attach() {
+    const OTHER: &str = "s_abcdef0123456789";
+    let temp = Temp::new();
+    temp.recorded();
+    let workspace = temp.workspace();
+    temp.write_lines(
+        OTHER,
+        &[
+            json!({
+                "kind": "session_started",
+                "seq": 0,
+                "session_id": OTHER,
+                "payload": {"workspace": workspace},
+            })
+            .to_string(),
+            "{}".to_owned(),
+        ],
+    );
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    // In the forward of the subscribe's acknowledgement, which runs on
+    // the relay thread: hand the test the relays, as the stranded-command
+    // test does. The hook below lives on the connection, so it also cuts
+    // the other session's opener write.
+    let (relays_tx, relays_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |_, relays| {
+        relays_tx.send(Arc::clone(relays)).unwrap_or(());
+    }));
+    client.subscribe("c_0", "summary");
+    assert_eq!(client.acknowledged("the subscribe"), "c_0");
+    let relays = Deadline::after(DEADLINE)
+        .recv(&relays_rx)
+        .expect("the forward ran");
+    // The other session has no relay: the opener attaches the command
+    // itself, and the cut fails its write after the JSON body. The torn
+    // fragment is a prompt with no handshake waiting, so it draws no
+    // answer.
+    crate::connection::lock(&relays).before_command_write = Some(Box::new(move |cap, bytes| {
+        *cap = Some(bytes.len() - 1);
+    }));
+    client.send_to("c_1", OTHER, "prompt");
+    let order = crate::connection::lock(&relays).order.clone();
+    // The attach's write runs before the session ends: the fake records
+    // the torn bytes, so the failure cannot be a zero-byte one.
+    assert!(
+        starter.await_received(2, DEADLINE),
+        "the cut bytes reached the session"
+    );
+    let line = client.next("the cut command's answer");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    assert_eq!(line["payload"]["code"], "indeterminate", "{line}");
+    assert_eq!(
+        line["payload"]["message"],
+        "The connection to the session failed while the command was being sent; the command may have run.",
+        "{line}"
+    );
+    assert_eq!(order.session_for("c_1"), None, "the answer left the queue");
+    // One resume per session, and none for the cut command's retry: the
+    // refused command is never resumed again.
+    let resumed = starter
+        .resumed()
+        .iter()
+        .filter(|(id, _)| id.0 == OTHER)
+        .count();
+    assert_eq!(resumed, 1, "the cut command is attached once");
+    assert!(
+        !received(&starter)
+            .iter()
+            .any(|(id, _)| id != "c_0" && id != "c_1"),
+        "no other command runs"
+    );
+    assert_eq!(
+        received(&starter)
+            .iter()
+            .filter(|(id, _)| id == "c_1")
+            .count(),
+        1,
+        "the cut command arrives once and is never delivered again"
+    );
+}
+
+/// `docs/invocation.md`, "Lifecycle": a command is delivered once. A
+/// write that accepted nothing reached no session, so the hub delivers
+/// it to the resumed session after the clean exit, as before.
+#[test]
+fn a_zero_byte_command_write_is_retried_after_a_clean_exit() {
     let temp = Temp::new();
     temp.recorded();
     let starter = FakeStarter::bind_and_hold(&temp.dir);
@@ -3640,15 +3750,83 @@ fn cut_write_case(last: &str) {
     let relays = Deadline::after(DEADLINE)
         .recv(&relays_rx)
         .expect("the forward ran");
-    // Cut the command write after its JSON body, before its line feed:
-    // the session's next line never completes, but the hub counted
-    // accepted bytes and cannot know the session read nothing.
-    crate::connection::lock(&relays).before_command_write = Some(Box::new(move |cap, bytes| {
-        *cap = Some(bytes.len() - 1);
+    // The write accepts nothing: the command reached no session.
+    crate::connection::lock(&relays).before_command_write = Some(Box::new(move |cap, _| {
+        *cap = Some(0);
     }));
     client.send("c_2", "reply");
     let order = crate::connection::lock(&relays).order.clone();
-    temp.append(last);
+    temp.append("fiber_exited");
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
+    assert_eq!(client.acknowledged("the retried command's answer"), "c_2");
+    assert_eq!(order.session_for("c_2"), None, "the answer left the queue");
+    assert_eq!(starter.resumed().len(), 2, "one resume for the retry");
+    assert_eq!(
+        received(&starter)
+            .iter()
+            .filter(|(id, _)| id == "c_2")
+            .count(),
+        1,
+        "the retried command runs once on the resumed session"
+    );
+}
+
+/// Where a cut write stops: after the JSON body, or after its first
+/// byte. Both accept bytes the session may have read.
+enum CutAt {
+    Body,
+    FirstByte,
+}
+
+/// Cuts a live relay's next command write, then ends the session with
+/// `last` as its log's last line, or with its log as it is for a crash.
+/// The cut command is a `prompt` with no handshake waiting, so its torn
+/// fragment draws no answer: the session records the bytes but runs
+/// nothing, and the drain's `indeterminate` refusal is the client's only
+/// line. The hub counted accepted bytes and cannot know the session read
+/// nothing, so the command is never retried or rerouted: the torn bytes
+/// arrive once, on the first connection only, and no session resumes for
+/// them.
+#[track_caller]
+fn cut_write_case(last: Option<&str>, cut: CutAt) {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    // In the forward of the subscribe's acknowledgement, which runs on
+    // the relay thread: hand the test the relays, as the stranded-command
+    // test does.
+    let (relays_tx, relays_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |_, relays| {
+        relays_tx.send(Arc::clone(relays)).unwrap_or(());
+    }));
+    client.subscribe("c_1", "summary");
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    let relays = Deadline::after(DEADLINE)
+        .recv(&relays_rx)
+        .expect("the forward ran");
+    // Cut the command write, after its JSON body or its first byte:
+    // the session's next line never completes, but the hub counted
+    // accepted bytes and cannot know the session read nothing.
+    crate::connection::lock(&relays).before_command_write = Some(Box::new(move |cap, bytes| {
+        *cap = Some(match cut {
+            CutAt::Body => bytes.len() - 1,
+            CutAt::FirstByte => 1,
+        });
+    }));
+    client.send("c_2", "prompt");
+    let order = crate::connection::lock(&relays).order.clone();
+    // The route's cut write runs before the session ends: the fake
+    // records the torn bytes, so ending it now cannot turn the failure
+    // into a zero-byte one.
+    assert!(
+        starter.await_received(2, DEADLINE),
+        "the cut bytes reached the session"
+    );
+    if let Some(last) = last {
+        temp.append(last);
+    }
     assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
     let line = client.next("the cut command's answer");
     assert_eq!(line["kind"], "command_rejected", "{line}");
@@ -3660,9 +3838,15 @@ fn cut_write_case(last: &str) {
         "{line}"
     );
     assert_eq!(order.session_for("c_2"), None, "the answer left the queue");
-    assert!(starter.resumed().is_empty(), "nothing is resumed");
-    assert!(
-        !received(&starter).iter().any(|(id, _)| id == "c_2"),
-        "the cut command never runs on the session"
+    // One resume: the subscribe's session start. The cut command resumes
+    // nothing and reaches no resumed session.
+    assert_eq!(starter.resumed().len(), 1, "nothing is resumed");
+    // Two lines arrived on the session, the subscribe and the torn
+    // fragment: the bytes arrived once and were never delivered again.
+    // Raw lines, not parsed ones: a mid-body fragment parses to nothing.
+    assert_eq!(
+        starter.received().len(),
+        2,
+        "the cut bytes arrive once and are never delivered again"
     );
 }

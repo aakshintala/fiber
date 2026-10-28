@@ -248,9 +248,18 @@ impl Relays {
                 return true;
             };
             lock(&entry.replayed).push(minted.clone());
-            let wrote = write_all(&entry.writer, &bytes).is_ok();
+            let outcome = write_all(&entry.writer, &bytes);
+            let wrote = outcome.is_ok();
             if !wrote {
-                lock(&entry.replayed).retain(|muted| *muted != minted);
+                // Bytes the failed replay accepted may still draw its
+                // acknowledgement: the replay stays muted so it cannot
+                // leak to the client. Only a write that accepted nothing
+                // removes the muted id.
+                if let Err(partial) = &outcome
+                    && partial.written == 0
+                {
+                    lock(&entry.replayed).retain(|muted| *muted != minted);
+                }
                 // The relay died with its socket: it keeps no more writes,
                 // but its thread still reads every buffered answer. The
                 // thread handle stays in the entry.

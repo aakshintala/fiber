@@ -357,6 +357,11 @@ const ENDED: &str = "The session ended before answering.";
 /// session left unanswered.
 const MAY_HAVE_RUN: &str = "The session ended before answering; the command may have run.";
 
+/// The sentence of the `indeterminate` answer for a command the hub had
+/// started writing to the session when the write failed: the session
+/// may have read it, however the session ended.
+pub(crate) const PARTIAL_WRITE_MAY_HAVE_RUN: &str = "The connection to the session failed while the command was being sent; the command may have run.";
+
 /// A command the relay sent and the session never answered: its id and its
 /// line.
 type Sent = Vec<(String, Map<String, Value>)>;
@@ -389,7 +394,10 @@ enum End {
 /// connection's end hands the command to the resumed session, which
 /// spends its one re-route there. After a `rewound` or `moved` they are
 /// dropped. After anything else the session may have run them: each is
-/// rejected `indeterminate` and never re-routed. Then everything queued
+/// rejected `indeterminate` and never re-routed. A command kept as
+/// partial had its write fail after accepting bytes the session may
+/// have read, so it is rejected `indeterminate` however the session
+/// ended, and is never routed again. Then everything queued
 /// unsent is passed on. Drops the entry only in the hold that saw the
 /// queue empty. A `closing` read after the client disconnected finds no
 /// entry: the queue is cleared and nothing is passed on.
@@ -412,17 +420,22 @@ pub(crate) fn drain(
     if let Some(before) = lock(&order.before_drain).take() {
         before();
     }
-    let (present, sent): (bool, Sent) = {
+    let (present, sent, partial): (bool, Sent, Sent) = {
         let held = lock(relays);
         let present = relay_slot(&held.entries, session, epoch).is_some();
         let mut kept = lock(kept);
-        let sent = kept
+        let sent: Sent = kept
             .iter()
             .filter(|(_, _, state)| *state == KeptState::Sent)
             .map(|(id, line, _)| (id.clone(), line.clone()))
             .collect();
-        kept.retain(|(_, _, state)| *state != KeptState::Sent);
-        (present, sent)
+        let partial: Sent = kept
+            .iter()
+            .filter(|(_, _, state)| *state == KeptState::Partial)
+            .map(|(id, line, _)| (id.clone(), line.clone()))
+            .collect();
+        kept.retain(|(_, _, state)| *state == KeptState::Queued);
+        (present, sent, partial)
     };
     if !sent.is_empty() {
         let ids: Vec<(String, String)> = sent
@@ -446,6 +459,29 @@ pub(crate) fn drain(
                         );
                     }
                 }
+            }
+        } else {
+            order.drop_ids(&ids);
+        }
+    }
+    // After the sent commands, in read order: a partial write follows
+    // every sent command on the relay, since the failure retires it.
+    if !partial.is_empty() {
+        let ids: Vec<(String, String)> = partial
+            .iter()
+            .map(|(id, _)| (session.to_owned(), id.clone()))
+            .collect();
+        if present && !client_gone {
+            for (id, _) in partial {
+                refuse(
+                    writer,
+                    hub,
+                    relays,
+                    session,
+                    &CommandId(id),
+                    &ErrorCode::Indeterminate,
+                    PARTIAL_WRITE_MAY_HAVE_RUN,
+                );
             }
         } else {
             order.drop_ids(&ids);
@@ -618,9 +654,11 @@ pub(crate) fn recover(
     from: Option<u64>,
     admit: Option<&crate::connection::Attribution>,
 ) {
+    // Only queued entries recover: a partial write may have reached
+    // the session, so it is never routed again.
     let queued: Vec<(String, Map<String, Value>)> = lock(&entry.kept)
         .iter()
-        .filter(|(_, _, state)| *state != KeptState::Sent)
+        .filter(|(_, _, state)| *state == KeptState::Queued)
         .map(|(queued, line, _)| (queued.clone(), line.clone()))
         .collect();
     drop(entry);
@@ -663,10 +701,12 @@ fn pump(
             // Only the leading unsent commands pass on: a sent command
             // ahead of them still waits for its acknowledgement, which is
             // forwarded first, so the replacement never answers a command
-            // before the acknowledgement that came ahead of it.
+            // before the acknowledgement that came ahead of it. A partial
+            // command ahead of them is answered where it is, never passed
+            // on.
             let leading = kept
                 .first()
-                .is_some_and(|(_, _, state)| *state != KeptState::Sent);
+                .is_some_and(|(_, _, state)| *state == KeptState::Queued);
             if !leading {
                 if finish && kept.is_empty() {
                     held.finish(session, epoch);
@@ -712,7 +752,7 @@ fn clear(session: &str, kept: &Kept, hub: &Arc<Hub>, relays: &Arc<Mutex<Relays>>
         let mut kept = lock(kept);
         let dropped = kept
             .iter()
-            .filter(|(_, _, state)| *state != KeptState::Sent)
+            .filter(|(_, _, state)| *state == KeptState::Queued)
             .count();
         kept.clear();
         dropped

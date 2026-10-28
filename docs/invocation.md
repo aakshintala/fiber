@@ -724,6 +724,7 @@ answered by the hub, by how the session ended:
 - After a clean exit (the log ends in `fiber_exited`) the session never read
   the command, so the hub treats it as a `closing` answer and delivers it to
   the resumed session, in the order the hub read it.
+- A command the hub had started writing to the session when the write failed may have been read, so it is rejected `indeterminate` however the session ends, and is never delivered again.
 - A command is delivered once. When the resumed session also ends without
   answering it, or answers it `closing`, the hub rejects it `closing`.
 - A client that disconnected has its commands dropped, never delivered.
