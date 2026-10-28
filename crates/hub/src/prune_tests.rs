@@ -15,7 +15,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, atomic::AtomicBool, mpsc};
 use std::thread;
 
 use contract::ErrorCode;
@@ -26,7 +26,7 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use crate::connection::{lock, serve_connection};
+use crate::connection::{Accept, lock, serve_counted};
 use crate::fake::{FakeMachine, FakeStarter};
 use crate::machine::{PruneFailure, PruneOutcome, ShowCode};
 use crate::testkit::{DEADLINE, args, hub, id};
@@ -42,7 +42,11 @@ fn exchange(machine: Arc<dyn crate::Machine>, commands: Vec<Value>) -> Vec<Value
     client.set_write_timeout(Some(DEADLINE)).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
-        serve_connection(server, hub);
+        match hub.poll_accept(&server, &AtomicBool::new(false)) {
+            Accept::Counted(n) => serve_counted(server, hub, n),
+            Accept::Dropped => panic!("test connection stream could not be cloned"),
+            Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+        }
         done.send(()).unwrap();
     });
     let mut reader = BufReader::new(client.try_clone().unwrap());
@@ -410,7 +414,11 @@ fn the_passed_callback_deletes_through_the_hubs_own_delete() {
     client.set_read_timeout(Some(DEADLINE)).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
-        serve_connection(server, hub);
+        match hub.poll_accept(&server, &AtomicBool::new(false)) {
+            Accept::Counted(n) => serve_counted(server, hub, n),
+            Accept::Dropped => panic!("test connection stream could not be cloned"),
+            Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+        }
         done.send(()).unwrap();
     });
     let mut reader = BufReader::new(client.try_clone().unwrap());
