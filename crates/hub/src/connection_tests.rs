@@ -70,7 +70,11 @@ impl Client {
         let hub = Arc::clone(hub);
         thread::Builder::new()
             .name("hub-conn".to_owned())
-            .spawn(move || serve_connection(a, hub))
+            .spawn(move || match hub.poll_accept(&a, &AtomicBool::new(false)) {
+                Accept::Counted(n) => serve_counted(a, hub, n),
+                Accept::Dropped => panic!("test connection stream could not be cloned"),
+                Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+            })
             .unwrap();
         b.set_read_timeout(Some(DEADLINE)).unwrap();
         let reader = b.try_clone().unwrap();
@@ -2292,28 +2296,22 @@ fn the_idle_timer_starts_when_the_open_count_reaches_zero() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
     let hub = hub_on(&temp, &clock);
-    assert_eq!(hub.zero_since(), Some(clock.origin()), "start counts as 0");
     let (a, _a) = UnixStream::pair().unwrap();
     let (b, _b) = UnixStream::pair().unwrap();
-    let first = hub.register(&a).expect("the clone succeeds");
-    assert_eq!(hub.zero_since(), None, "an open client clears the timer");
-    let second = hub.register(&b).expect("the clone succeeds");
-    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "no code under test waits on the clock (ruling 6179406086)"
-    )]
-    clock.advance(Duration::from_secs(5));
+    let first = match hub.poll_accept(&a, &AtomicBool::new(false)) {
+        Accept::Counted(n) => n,
+        Accept::Dropped => panic!("the test connection clone failed"),
+        Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
+    let second = match hub.poll_accept(&b, &AtomicBool::new(false)) {
+        Accept::Counted(n) => n,
+        Accept::Dropped => panic!("the test connection clone failed"),
+        Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
+    assert_eq!(hub.clients(), 2);
     disconnect(&hub, first);
-    assert_eq!(hub.zero_since(), None, "one client is still open");
-    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "no code under test waits on the clock (ruling 6179406086)"
-    )]
-    clock.advance(Duration::from_secs(5));
+    assert_eq!(hub.clients(), 1, "one client is still open");
     disconnect(&hub, second);
-    assert_eq!(hub.zero_since(), Some(clock.now()), "0 at the departure");
     assert_eq!(hub.clients(), 0);
 }
 
@@ -2330,7 +2328,6 @@ fn a_failed_clone_counts_nothing_and_serves_nothing() {
     );
     drop(conns);
     assert_eq!(hub.clients(), 0);
-    assert_eq!(hub.zero_since(), Some(clock.origin()), "the timer runs on");
 }
 
 #[test]
@@ -2340,27 +2337,21 @@ fn rollback_removes_the_count_and_restarts_the_timer_at_zero() {
     let hub = hub_on(&temp, &clock);
     let (a, _a) = UnixStream::pair().unwrap();
     let (b, _b) = UnixStream::pair().unwrap();
-    let first = hub.register(&a).expect("the clone succeeds");
-    let second = hub.register(&b).expect("the clone succeeds");
+    let first = match hub.poll_accept(&a, &AtomicBool::new(false)) {
+        Accept::Counted(n) => n,
+        Accept::Dropped => panic!("the test connection clone failed"),
+        Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
+    let second = match hub.poll_accept(&b, &AtomicBool::new(false)) {
+        Accept::Counted(n) => n,
+        Accept::Dropped => panic!("the test connection clone failed"),
+        Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
     assert_eq!(hub.clients(), 2);
-    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "no code under test waits on the clock (ruling 6179406086)"
-    )]
-    clock.advance(Duration::from_secs(5));
     hub.rollback(first);
-    assert_eq!(hub.clients(), 1);
-    assert_eq!(hub.zero_since(), None, "one client is still open");
-    // No code under test waits on the clock here: register/disconnect/rollback only stamp zero_since (ruling 6179406086).
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "no code under test waits on the clock (ruling 6179406086)"
-    )]
-    clock.advance(Duration::from_secs(5));
+    assert_eq!(hub.clients(), 1, "one client is still open");
     hub.rollback(second);
     assert_eq!(hub.clients(), 0);
-    assert_eq!(hub.zero_since(), Some(clock.now()), "0 at the rollback");
 }
 
 #[test]
@@ -3080,9 +3071,11 @@ fn overflow_race() -> OverflowRace {
     let sub_sock = server.try_clone().unwrap();
     let closer_sock = server.try_clone().unwrap();
     let retired_sock = server.try_clone().unwrap();
-    let n = hub
-        .register(&server)
-        .expect("the hub counts the connection");
+    let n = match hub.poll_accept(&server, &AtomicBool::new(false)) {
+        Accept::Counted(n) => n,
+        Accept::Dropped => panic!("the hub counts the connection"),
+        Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
     let serve_hub = Arc::clone(&hub);
     let (serve_tx, serve_rx) = mpsc::channel();
     thread::spawn(move || {

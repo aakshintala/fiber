@@ -162,14 +162,6 @@ pub(crate) fn ack_parses() -> usize {
     ACK_PARSES.with(|count| count.get())
 }
 
-/// Whether `line` is a session's `command_accepted` or `command_rejected`
-/// for `command_id`: tests only, since the relay thread drops replays
-/// through [`muted`].
-#[cfg(test)]
-pub(crate) fn acknowledges(line: &[u8], command_id: &str) -> bool {
-    acknowledgement(line).is_some_and(|ack| ack.id == command_id)
-}
-
 /// Whether `ack` is a subscription the hub sent again on this relay:
 /// its id is dropped from the shared list once, so a transferred
 /// level never leaks its acknowledgement to the client, while a later

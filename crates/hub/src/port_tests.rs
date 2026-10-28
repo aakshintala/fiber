@@ -15,6 +15,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::MutexGuard;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -358,6 +359,12 @@ fn helloed(port: u16, origin: Option<&str>) -> Ws {
 fn signal(hub: &Hub, got: &AtomicI32) {
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
+}
+
+impl Web {
+    fn hold(&self) -> MutexGuard<'_, Sink> {
+        lock(&self.sink)
+    }
 }
 
 /// Waits until the hub counts no client.
@@ -1231,9 +1238,11 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
     let sub_sock = hub_end.try_clone().unwrap();
     let closer_sock = hub_end.try_clone().unwrap();
     let retired_sock = hub_end.try_clone().unwrap();
-    let n = hub
-        .register(&hub_end)
-        .expect("the hub counts the connection");
+    let n = match hub.poll_accept(&hub_end, &AtomicBool::new(false)) {
+        crate::connection::Accept::Counted(n) => n,
+        crate::connection::Accept::Dropped => panic!("the hub counts the connection"),
+        crate::connection::Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+    };
     let serve_hub = Arc::clone(&hub);
     let serve_web = Arc::clone(&web);
     let (serve_tx, serve_rx) = mpsc::channel();
