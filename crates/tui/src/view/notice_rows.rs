@@ -165,7 +165,7 @@ fn paint_replacement(
     let animated = bound
         .handle
         .get()
-        .and_then(|renderer| renderer.animate_interval("notice"))
+        .and_then(|renderer| renderer.animate_interval(&bound.ctx, "notice"))
         .is_some();
     let Some(fitted) = (if animated {
         bound.paint_notice_lines(code, text, area.width)

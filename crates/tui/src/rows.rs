@@ -142,7 +142,7 @@ impl Rows {
     ) -> Option<Arc<Vec<FittedLine>>> {
         let seam = self.seam.as_ref()?;
         let renderer = seam.handle.get()?;
-        let result = match renderer.animate_interval(slot) {
+        let result = match renderer.animate_interval(&seam.ctx, slot) {
             // An animated slot draws through the animation schedule:
             // open paint advances, closed draws render at the stored
             // frame with no write and no mark.

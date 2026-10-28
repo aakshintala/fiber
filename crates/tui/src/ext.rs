@@ -225,10 +225,12 @@ pub trait Renderer: std::fmt::Debug {
         width: u16,
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> Decision;
-    /// The slot's effective animation interval, if the slot animates
-    /// (`docs/tui.md`, "Animation"). Still slots answer none, and keep
-    /// the cached `render` path.
-    fn animate_interval(&self, _slot: &str) -> Option<std::time::Duration> {
+    /// The slot's effective animation interval for the winning
+    /// extension, if it animates (`docs/tui.md`, "Animation"). Still
+    /// slots answer none, and keep the cached `render` path. The winner
+    /// depends on the session, so the context selects it, exactly as
+    /// `render` draws it.
+    fn animate_interval(&self, _ctx: &SessionCtx, _slot: &str) -> Option<std::time::Duration> {
         None
     }
     /// Lines for `slot` at frame `frame`, with whether the item keeps
@@ -277,7 +279,7 @@ impl Bound {
             text,
             flat: self.flat,
         });
-        if renderer.animate_interval("notice").is_some() {
+        if renderer.animate_interval(&self.ctx, "notice").is_some() {
             // An animated notice reads only stored lines here: closed
             // draws never invoke, advance, write, schedule or mark, even
             // while the frame is open. Only the paint path may call.
@@ -338,7 +340,7 @@ impl Bound {
             text,
             flat: self.flat,
         });
-        let interval = renderer.animate_interval("notice")?;
+        let interval = renderer.animate_interval(&self.ctx, "notice")?;
         let fitted = self.cache.lines_animated(
             self.page.clone(),
             "notice",

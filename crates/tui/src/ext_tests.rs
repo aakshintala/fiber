@@ -873,7 +873,7 @@ impl Renderer for AnimatedRenderer {
         }
     }
 
-    fn animate_interval(&self, _slot: &str) -> Option<std::time::Duration> {
+    fn animate_interval(&self, _ctx: &SessionCtx, _slot: &str) -> Option<std::time::Duration> {
         Some(self.interval)
     }
 
@@ -2053,7 +2053,11 @@ fn every_notice_field_is_in_the_key() {
 #[test]
 fn a_still_renderer_animates_nothing() {
     let fake = Fake;
-    assert_eq!(fake.animate_interval("ledger_row"), None);
+    let ctx = SessionCtx {
+        session_id: None,
+        halves: None,
+    };
+    assert_eq!(fake.animate_interval(&ctx, "ledger_row"), None);
     let base = base();
     let row = base_row(&base);
     let input = Input::LedgerRow(row);
@@ -2077,8 +2081,12 @@ fn a_still_renderer_animates_nothing() {
 fn an_animated_renderer_draws_its_frame_and_reports_its_interval() {
     use std::time::Duration;
     let fake = AnimatedRenderer::filling("ledger_row", Duration::from_millis(500), 2);
+    let interval_ctx = SessionCtx {
+        session_id: None,
+        halves: None,
+    };
     assert_eq!(
-        fake.animate_interval("ledger_row"),
+        fake.animate_interval(&interval_ctx, "ledger_row"),
         Some(Duration::from_millis(500))
     );
     assert!(fake.fills("ledger_row"));
