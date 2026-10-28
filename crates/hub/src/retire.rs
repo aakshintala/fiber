@@ -45,7 +45,7 @@ use contract::{CommandId, ErrorCode, SessionId};
 use serde_json::{Map, Value};
 
 use crate::connection::{Hub, lock};
-use crate::relay::{Ack, Kept, Relay, Relays, relay_slot};
+use crate::relay::{Ack, Kept, KeptState, Relay, Relays, relay_slot};
 
 /// Why a relay no longer takes writes: it saw the exited window, or a
 /// write to it failed.
@@ -418,10 +418,10 @@ pub(crate) fn drain(
         let mut kept = lock(kept);
         let sent = kept
             .iter()
-            .filter(|(_, _, sent)| *sent)
+            .filter(|(_, _, state)| *state == KeptState::Sent)
             .map(|(id, line, _)| (id.clone(), line.clone()))
             .collect();
-        kept.retain(|(_, _, sent)| !sent);
+        kept.retain(|(_, _, state)| *state != KeptState::Sent);
         (present, sent)
     };
     if !sent.is_empty() {
@@ -620,7 +620,7 @@ pub(crate) fn recover(
 ) {
     let queued: Vec<(String, Map<String, Value>)> = lock(&entry.kept)
         .iter()
-        .filter(|(_, _, sent)| !sent)
+        .filter(|(_, _, state)| *state != KeptState::Sent)
         .map(|(queued, line, _)| (queued.clone(), line.clone()))
         .collect();
     drop(entry);
@@ -664,7 +664,9 @@ fn pump(
             // ahead of them still waits for its acknowledgement, which is
             // forwarded first, so the replacement never answers a command
             // before the acknowledgement that came ahead of it.
-            let leading = kept.first().is_some_and(|(_, _, sent)| !sent);
+            let leading = kept
+                .first()
+                .is_some_and(|(_, _, state)| *state != KeptState::Sent);
             if !leading {
                 if finish && kept.is_empty() {
                     held.finish(session, epoch);
@@ -708,7 +710,10 @@ fn clear(session: &str, kept: &Kept, hub: &Arc<Hub>, relays: &Arc<Mutex<Relays>>
     #[cfg(test)]
     let dropped = {
         let mut kept = lock(kept);
-        let dropped = kept.iter().filter(|(_, _, sent)| !sent).count();
+        let dropped = kept
+            .iter()
+            .filter(|(_, _, state)| *state != KeptState::Sent)
+            .count();
         kept.clear();
         dropped
     };

@@ -56,10 +56,26 @@ pub(crate) use relays::Relays;
 
 /// The commands relayed on one session connection that the session has
 /// not acknowledged yet: each command id, its line without the
-/// `session_id`, and whether it was written to the socket, so a `closing`
+/// `session_id`, and how far its write got, so a `closing`
 /// answer can route it again and a retiring relay can pass on what it
 /// never wrote. Shared by the relay entry and its thread.
-pub(crate) type Kept = Arc<Mutex<Vec<(String, Map<String, Value>, bool)>>>;
+pub(crate) type Kept = Arc<Mutex<Vec<(String, Map<String, Value>, KeptState)>>>;
+
+/// How far a kept command's write got: queued but never written, fully
+/// written, or cut short by a failed write that may still have reached
+/// the session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeptState {
+    /// Queued on a retiring relay, never written.
+    Queued,
+    /// Fully written to the session socket.
+    Sent,
+    /// The write failed after accepting bytes the session may have read.
+    /// Staged by the red commit's regression tests; the fix commit wires
+    /// the production mapping.
+    #[allow(dead_code, reason = "staged for the fix commit")]
+    Partial,
+}
 
 /// The hub-minted `subscribe` ids whose acknowledgements one relay thread
 /// drops: the replay it sent again, and any level transferred onto its
@@ -564,7 +580,7 @@ pub(crate) fn route(
             // it on in the order it was read. Never written: the
             // session is exiting or gone.
             if let Some(entry) = held.entries.get(at) {
-                lock(&entry.kept).push((id.0.clone(), stripped.clone(), false));
+                lock(&entry.kept).push((id.0.clone(), stripped.clone(), KeptState::Queued));
             }
             return true;
         }
@@ -574,13 +590,13 @@ pub(crate) fn route(
         // this hold keeps until the write's result flips the entry.
         #[cfg(test)]
         let before_write = held.before_command_write.take();
+        #[cfg(test)]
+        let cap = command_cap(before_write, &bytes);
+        #[cfg(not(test))]
+        let cap = None;
         let sent = held.entries.get(at).is_some_and(|entry| {
-            lock(&entry.kept).push((id.0.clone(), stripped.clone(), true));
-            #[cfg(test)]
-            if let Some(before_write) = before_write {
-                before_write();
-            }
-            write_all(&entry.writer, &bytes).is_ok()
+            lock(&entry.kept).push((id.0.clone(), stripped.clone(), KeptState::Sent));
+            write_client_command(&entry.writer, &bytes, cap).is_ok()
         });
         if sent {
             return true;
@@ -596,7 +612,7 @@ pub(crate) fn route(
                 .iter_mut()
                 .find(|(kept, _, _)| *kept == id.0)
             {
-                queued.2 = false;
+                queued.2 = KeptState::Queued;
             }
             match entry.writer.shutdown(Shutdown::Write) {
                 Ok(()) | Err(_) => {}
@@ -913,7 +929,11 @@ fn replay_exited_delegate(
     }
     let order = lock(relays).order.clone();
     crate::retire::enqueue_new(&order, session, id, stripped);
-    let kept: Kept = Arc::new(Mutex::new(vec![(id.0.clone(), stripped.clone(), true)]));
+    let kept: Kept = Arc::new(Mutex::new(vec![(
+        id.0.clone(),
+        stripped.clone(),
+        KeptState::Sent,
+    )]));
     let mark = crate::rejoin::Mark::now(&hub.home, session);
     let (hub_end, preload_end) = match UnixStream::pair() {
         Ok(pair) => pair,
@@ -1308,7 +1328,7 @@ fn attach_inner_with_spawner(
     let kept: Kept = Arc::new(Mutex::new(
         command
             .as_ref()
-            .map(|(id, _, stripped)| (id.0.clone(), stripped.clone(), true))
+            .map(|(id, _, stripped)| (id.0.clone(), stripped.clone(), KeptState::Sent))
             .into_iter()
             .collect(),
     ));
@@ -1323,11 +1343,18 @@ fn attach_inner_with_spawner(
             return AttachOutcome::Stale;
         }
     };
-    if let Some((_, bytes, _)) = &command
-        && write_all(&stream, bytes).is_err()
-    {
-        drop(admission);
-        return AttachOutcome::Stale;
+    if let Some((_, bytes, _)) = &command {
+        // `attach_rejoin` passes no command, so this never runs while the
+        // rejoin guard holds the relays lock: taking the hook here cannot
+        // deadlock.
+        #[cfg(test)]
+        let cap = command_cap(lock(relays).before_command_write.take(), bytes);
+        #[cfg(not(test))]
+        let cap = None;
+        if write_client_command(&stream, bytes, cap).is_err() {
+            drop(admission);
+            return AttachOutcome::Stale;
+        }
     }
     let mut held = match admission {
         Some(held) => held,
@@ -1700,11 +1727,134 @@ fn line_bytes(line: &Map<String, Value>) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-fn write_all(stream: &UnixStream, bytes: &[u8]) -> std::io::Result<()> {
+/// What a failed write accepted before it failed: bytes the session may
+/// have read, and why the rest never went out. Staged by the red commit;
+/// the fix commit reads the accepted-byte count.
+#[allow(dead_code, reason = "staged for the fix commit")]
+struct PartialWrite {
+    /// Bytes accepted before the failure. Positive when the session may
+    /// have read the command, even when the whole buffer went out and
+    /// only the flush failed.
+    written: usize,
+    /// Why the rest never went out.
+    source: std::io::Error,
+}
+
+/// Counts the bytes the wrapped writer accepts, so a failed write
+/// reports how much of the command the session may have read.
+struct CountingWriter<'a, W: std::io::Write + ?Sized> {
+    inner: &'a mut W,
+    written: usize,
+}
+
+impl<W: std::io::Write + ?Sized> std::io::Write for CountingWriter<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match std::io::Write::write(&mut self.inner, buf) {
+            Ok(accepted) => {
+                self.written += accepted;
+                Ok(accepted)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut self.inner)
+    }
+}
+
+/// Writes `bytes` through `writer`, counting accepted bytes: success
+/// when the line and its flush both land, else how much went out first.
+/// A pause for the writer's `Interrupted` stays inside the write, as
+/// before.
+fn write_through(
+    writer: &mut (impl std::io::Write + ?Sized),
+    bytes: &[u8],
+) -> Result<(), PartialWrite> {
     // Pre-framed buffers carry their line feed; the writer takes the line.
     let line = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    let mut counting = CountingWriter {
+        inner: writer,
+        written: 0,
+    };
+    match support::framing::write_line(&mut counting, line) {
+        Ok(()) => Ok(()),
+        Err(source) => Err(PartialWrite {
+            written: counting.written,
+            source,
+        }),
+    }
+}
+
+/// Writes one framed line: the line without its feed, then the feed and a
+/// flush, in one buffer as before.
+fn write_all(stream: &UnixStream, bytes: &[u8]) -> Result<(), PartialWrite> {
     let mut out: &UnixStream = stream;
-    support::framing::write_line(&mut out, line)
+    write_through(&mut out, bytes)
+}
+
+/// Tests only: a writer that accepts at most `remaining` bytes, then
+/// fails: the cut-write tests cap the command write below the byte
+/// counter, so the counter observes the partial write.
+#[cfg(test)]
+struct CappedCommand<'a> {
+    inner: &'a UnixStream,
+    remaining: usize,
+}
+
+#[cfg(test)]
+impl std::io::Write for CappedCommand<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "the test cut the command write",
+            ));
+        }
+        let take = buf.len().min(self.remaining);
+        match std::io::Write::write(&mut self.inner, &buf[..take]) {
+            Ok(accepted) => {
+                self.remaining -= accepted;
+                Ok(accepted)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut self.inner)
+    }
+}
+
+/// Tests only: runs the one-shot command-write fault the test armed and
+/// returns the byte cap it names: `None` writes the whole command, as
+/// before.
+#[cfg(test)]
+fn command_cap(hook: Option<relays::BeforeCommandWrite>, bytes: &[u8]) -> Option<usize> {
+    let mut cap = None;
+    if let Some(hook) = hook {
+        hook(&mut cap, bytes);
+    }
+    cap
+}
+
+/// Writes one client command: the whole line, unless a test capped the
+/// write below the byte counter. Outside tests the cap is always `None`.
+fn write_client_command(
+    stream: &UnixStream,
+    bytes: &[u8],
+    cap: Option<usize>,
+) -> Result<(), PartialWrite> {
+    #[cfg(test)]
+    if let Some(limit) = cap {
+        let mut capped = CappedCommand {
+            inner: stream,
+            remaining: limit,
+        };
+        return write_through(&mut capped, bytes);
+    }
+    let _ = cap;
+    write_all(stream, bytes)
 }
 
 #[cfg(test)]

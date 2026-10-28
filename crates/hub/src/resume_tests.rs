@@ -2953,7 +2953,7 @@ fn a_command_routed_while_its_relay_drains_is_passed_on() {
     // In route, with c_3 kept as sent and not yet written: end the
     // session, then wait until the relay thread reaches its drain.
     let stopping = starter.clone();
-    crate::connection::lock(&relays).before_command_write = Some(Box::new(move || {
+    crate::connection::lock(&relays).before_command_write = Some(Box::new(move |_cap, _bytes| {
         assert!(stopping.stop(&sid(), DEADLINE), "the fake session ended");
         await_drain(&draining_rx);
     }));
@@ -3453,7 +3453,7 @@ fn a_full_subscribe_bypasses_a_live_relay_for_an_exited_delegate() {
         .expect("the forward ran");
     // The run ends after the live relay publishes.
     finished_delegate_log(&temp);
-    crate::connection::lock(&relays).before_command_write = Some(Box::new(|| {
+    crate::connection::lock(&relays).before_command_write = Some(Box::new(|_cap, _bytes| {
         panic!("the replay writes nothing to the session");
     }));
     crate::connection::lock(&relays).at_gate = Some(Box::new(|| {
@@ -3587,4 +3587,82 @@ fn a_rerouted_full_subscribe_to_an_exited_delegate_replays_and_releases_the_queu
         .recv(&done)
         .expect("the replayed acknowledgement released the queue");
     assert!(starter.resumed().is_empty(), "no process starts");
+}
+
+/// `docs/invocation.md`, "Lifecycle": a command the hub had started
+/// writing to the session when the write failed may have been read, so it
+/// is answered `indeterminate` however the session ends, and is never
+/// delivered again.
+#[test]
+fn a_cut_command_write_is_indeterminate_after_a_clean_exit() {
+    cut_write_case("fiber_exited");
+}
+
+/// `docs/invocation.md`, "Lifecycle": a command the hub had started
+/// writing to the session when the write failed may have been read, so it
+/// is answered `indeterminate` however the session ends, and is never
+/// delivered again.
+#[test]
+fn a_cut_command_write_is_indeterminate_after_a_rewind() {
+    cut_write_case("rewound");
+}
+
+/// `docs/invocation.md`, "Lifecycle": a command the hub had started
+/// writing to the session when the write failed may have been read, so it
+/// is answered `indeterminate` however the session ends, and is never
+/// delivered again.
+#[test]
+fn a_cut_command_write_is_indeterminate_after_a_move() {
+    cut_write_case("moved");
+}
+
+/// Cuts a live relay's next command write after its JSON body, before its
+/// line feed, then ends the session with `last` as its log's last line.
+/// The session reads nothing, but the hub cannot know that: the client
+/// gets exactly one `indeterminate` answer, and the command never runs
+/// on the session or reaches a resumed one.
+#[track_caller]
+fn cut_write_case(last: &str) {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    // In the forward of the subscribe's acknowledgement, which runs on
+    // the relay thread: hand the test the relays, as the stranded-command
+    // test does.
+    let (relays_tx, relays_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |_, relays| {
+        relays_tx.send(Arc::clone(relays)).unwrap_or(());
+    }));
+    client.subscribe("c_1", "summary");
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    let relays = Deadline::after(DEADLINE)
+        .recv(&relays_rx)
+        .expect("the forward ran");
+    // Cut the command write after its JSON body, before its line feed:
+    // the session's next line never completes, but the hub counted
+    // accepted bytes and cannot know the session read nothing.
+    crate::connection::lock(&relays).before_command_write = Some(Box::new(move |cap, bytes| {
+        *cap = Some(bytes.len() - 1);
+    }));
+    client.send("c_2", "reply");
+    let order = crate::connection::lock(&relays).order.clone();
+    temp.append(last);
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
+    let line = client.next("the cut command's answer");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_2", "{line}");
+    assert_eq!(line["payload"]["code"], "indeterminate", "{line}");
+    assert_eq!(
+        line["payload"]["message"],
+        "The connection to the session failed while the command was being sent; the command may have run.",
+        "{line}"
+    );
+    assert_eq!(order.session_for("c_2"), None, "the answer left the queue");
+    assert!(starter.resumed().is_empty(), "nothing is resumed");
+    assert!(
+        !received(&starter).iter().any(|(id, _)| id == "c_2"),
+        "the cut command never runs on the session"
+    );
 }

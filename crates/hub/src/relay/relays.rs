@@ -19,6 +19,11 @@ use crate::retire::{AckOrder, Retire};
 /// epoch and the hub-minted command id that identify it.
 pub(crate) type ReplayKey = (String, u64, String);
 
+/// Tests only: the one-shot fault a test arms in `route` between keeping
+/// a command as sent and writing it.
+#[cfg(test)]
+pub(crate) type BeforeCommandWrite = Box<dyn FnOnce(&mut Option<usize>, &[u8]) + Send>;
+
 /// A connection's relays, the last epoch minted on it, and the last
 /// `subscribe` each session accepted from it. Epochs are never reused for the
 /// connection's lifetime, so a stale relay thread never drops the entry of
@@ -41,14 +46,19 @@ pub(crate) struct Relays {
     /// transfer between the write and its result.
     #[cfg(test)]
     pub(crate) after_transfer_write: Option<Box<dyn FnOnce() + Send>>,
-    /// Tests only: a one-shot pause in `route` between keeping a command
-    /// as sent and writing it, with the relays lock held. The
+    /// Tests only: a one-shot fault in `route` between keeping a command
+    /// as sent and writing it, with the relays lock held. The closure
+    /// runs before the write and names how many bytes of the command
+    /// the writer accepts: `None` writes all, as today. The
     /// stranded-command tests end the session in that gap, and the tripwire
     /// asserts the gap never opens on replay-only paths. The forced party
     /// ends the session over the socket, never needing the held lock; no
-    /// outside seam pauses `route` between the keep and the write.
+    /// outside seam pauses `route` between the keep and the write. The
+    /// cut-write tests cap the write below the production byte counter,
+    /// so the counter observes the partial write. Replay writes never
+    /// consult this hook.
     #[cfg(test)]
-    pub(crate) before_command_write: Option<Box<dyn FnOnce() + Send>>,
+    pub(crate) before_command_write: Option<BeforeCommandWrite>,
     /// Tests only: a one-shot signal an opener calls after cloning its
     /// session's gate and dropping the relays lock, immediately before
     /// blocking on the gate. It marks the opener about to block so the
