@@ -234,13 +234,6 @@ fn dry_run(
     Ok(dry.sessions)
 }
 
-/// Whether `id` names a session the hub minted: `s_` plus 16 lowercase
-/// hex digits. The dry-run answer is trusted only when every id fits, so
-/// a malformed answer never prints a preview or asks a question.
-fn valid_session_id(id: &str) -> bool {
-    contract::is_minted_session_id(id)
-}
-
 /// Checks the dry-run answer before it prints or asks: `sessions` is a
 /// nonempty unique set containing the requested session and only minted
 /// ids, and `held` is a unique subset of it. Anything else is an
@@ -252,7 +245,7 @@ fn checked_dry_run(dry: &DryRun, target: &SessionId) -> Result<(), serde_json::E
     }
     let mut seen = BTreeSet::new();
     for id in &dry.sessions {
-        if !valid_session_id(&id.0) {
+        if !contract::is_minted_session_id(&id.0) {
             return Err(serde_json::Error::custom(format!(
                 "the dry run names an id the hub never mints: `{}`",
                 id.0
@@ -273,7 +266,7 @@ fn checked_dry_run(dry: &DryRun, target: &SessionId) -> Result<(), serde_json::E
     }
     let mut held = BTreeSet::new();
     for id in &dry.held {
-        if !valid_session_id(&id.0) {
+        if !contract::is_minted_session_id(&id.0) {
             return Err(serde_json::Error::custom(format!(
                 "the dry run holds an id the hub never mints: `{}`",
                 id.0

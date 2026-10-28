@@ -386,13 +386,44 @@ fn long_cascade_keeps_the_permanence_warning_on_the_first_frame() {
 #[test]
 fn held_sessions_follow_the_original_preview_order() {
     let target = SessionId(A.to_owned());
-    let result = json!({"sessions": [A, B], "held": [B, A]});
+    let result = json!({"sessions": [A, B], "held": [A, B]});
     let (sessions, held) = super::validated_sets(&result, &target).unwrap();
     assert_eq!(
         sessions,
         vec![SessionId(A.to_owned()), SessionId(B.to_owned())]
     );
     assert_eq!(held, vec![SessionId(A.to_owned()), SessionId(B.to_owned())]);
+}
+
+/// A `held` array in a different relative order than `sessions` is not
+/// the preview the hub checked: it is malformed like any other invalid
+/// answer, and opens no question.
+#[test]
+fn held_out_of_preview_order_is_rejected() {
+    for held in [json!([B, A]), json!([C, A, B]), json!([C, B, A])] {
+        let target = SessionId(A.to_owned());
+        let result = json!({"sessions": [A, B, C], "held": held});
+        assert!(
+            super::validated_sets(&result, &target).is_none(),
+            "out-of-order held is malformed: {held}"
+        );
+    }
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    let command = discovery(&mut app);
+    assert!(
+        app.on_line(accepted(
+            &command,
+            json!({"sessions": [A, B], "held": [B, A]})
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        app.notice(),
+        Some("Not deleted: the hub's preview was invalid. Nothing was deleted.")
+    );
+    assert!(!open(&app));
+    assert!(!frame(&app).contains("Delete "));
 }
 
 #[test]
@@ -1620,4 +1651,436 @@ fn exit_lines_exclude_sessions_whose_close_was_sent() {
         .cloned()
         .collect();
     assert!(gone.is_empty(), "{gone:?}");
+}
+
+/// Home draws the slash-owned question from the captured data, with its
+/// scroll, and Enter confirms the exact set: the screen is the command's
+/// question, not the row's delete rendering.
+#[test]
+fn slash_home_screen_shows_the_captured_question_and_its_scroll() {
+    let mut app = attached();
+    let ids: Vec<String> = (0..60u8).map(|n| format!("s_{n:016x}")).collect();
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let mut sessions = vec![A];
+    sessions.extend(refs.iter().take(60).copied());
+    let command = discovery(&mut app);
+    assert!(answer_discovery(&mut app, &command, &sessions, &[A]).is_empty());
+    app.go_home();
+    assert!(open(&app));
+    let screen = app.home_screen().unwrap_or_else(|| panic!("a home screen"));
+    assert_eq!(screen.question, Some(question(&app)));
+    assert_eq!(screen.question_scroll, 0);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    let scrolled = app.home_screen().unwrap_or_else(|| panic!("a home screen"));
+    assert_eq!(scrolled.question_scroll, 1);
+    assert_eq!(scrolled.question, Some(question(&app)));
+    let sent = sent(app.on_key(Key::Enter, now));
+    // Home Enter confirms the captured exact set: one stop for the held
+    // session, and the delete goes out once its exit lands.
+    let stopped = closes(&sent);
+    assert_eq!(stopped.len(), 1);
+    assert_eq!(stopped[0]["session_id"], A);
+    let out: Vec<Value> = app
+        .on_line(left(A, "exited"))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let gone = deletes(&out);
+    assert_eq!(gone.len(), 1, "home Enter confirms the captured exact set");
+    assert_eq!(
+        gone[0]["args"],
+        json!({"session": A, "cascade": true, "expect": sessions})
+    );
+}
+
+/// No slash question is returned or rendered once ownership is absent:
+/// off Home the command's frame stays hidden, and after another prompt
+/// replaces it on Home the screen shows no question.
+#[test]
+fn no_slash_home_question_without_ownership_or_after_replacement() {
+    let mut app = attached();
+    let command = discovery(&mut app);
+    answer_discovery(&mut app, &command, &[A], &[]);
+    assert!(app.delete_command_home_question().is_none());
+    app.go_home();
+    let shown = app
+        .delete_command_home_question()
+        .expect("the open question on home");
+    assert_eq!(shown.0, question(&app));
+    assert_eq!(
+        app.home_screen()
+            .unwrap_or_else(|| panic!("a home screen"))
+            .question,
+        Some(shown.0.clone())
+    );
+    app.on_line(working(A, "old work"));
+    assert_eq!(app.quit(), Effect::None);
+    assert!(app.quit_open());
+    assert!(app.delete_command_home_question().is_none());
+    assert_eq!(
+        app.home_screen()
+            .unwrap_or_else(|| panic!("a home screen"))
+            .question,
+        None
+    );
+}
+
+/// An accepted row-delete answer for another session clears only its own
+/// prompt: the slash-owned question stays open and the command still runs
+/// to its exact-set delete.
+#[test]
+fn an_unrelated_accepted_row_delete_leaves_the_slash_question_running() {
+    let mut app = attached();
+    let command = discovery(&mut app);
+    answer_discovery(&mut app, &command, &[A], &[A]);
+    assert!(open(&app));
+    app.home.as_mut().unwrap().questions.asks.insert(
+        "row-delete".to_owned(),
+        super::super::Ask::Delete(SessionId(D.to_owned())),
+    );
+    let _lines: Vec<String> = app.on_line(accepted("row-delete", json!({})));
+    assert!(open(&app));
+    assert!(frame(&app).contains("Delete old work"));
+    assert!(
+        matches!(
+            app.home.as_ref().unwrap().questions.delete_command.state,
+            State::Asked { .. }
+        ),
+        "the command was not cancelled"
+    );
+    let raw = confirm(&mut app);
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert_eq!(closes(&lines).len(), 1);
+    let gone = deletes(&fold_lines(&mut app, left(A, "exited")));
+    assert_eq!(gone.len(), 1);
+    assert_eq!(
+        gone[0]["args"],
+        json!({"session": A, "cascade": true, "expect": [A]})
+    );
+}
+
+/// A discovery answer for another command id changes nothing: no
+/// question, no stop or delete, and the real discovery still waits.
+#[test]
+fn a_discovery_answer_for_another_command_id_changes_nothing() {
+    let mut app = attached();
+    let command = discovery(&mut app);
+    assert!(
+        app.on_line(rejected(
+            "not-the-discovery",
+            "session_held",
+            "Session `s_aaaaaaaaaaaaaaaa` is held by another process."
+        ))
+        .is_empty()
+    );
+    assert!(!open(&app));
+    assert!(app.notice().is_none());
+    assert!(!frame(&app).contains("Delete "));
+    assert!(matches!(
+        app.home.as_ref().unwrap().questions.delete_command.state,
+        State::Discovering { command: ref waiting, .. } if *waiting == command
+    ));
+    assert!(answer_discovery(&mut app, &command, &[A], &[]).is_empty());
+    assert!(open(&app));
+}
+
+/// A connected confirmation sends exactly one exact-set delete and keeps
+/// an unrelated closing marker; the confirmed sessions leave `closing`.
+#[test]
+fn connected_confirm_sends_one_exact_delete_and_keeps_unrelated_closing() {
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    let command = discovery(&mut app);
+    assert!(answer_discovery(&mut app, &command, &[A, B], &[A]).is_empty());
+    app.home
+        .as_mut()
+        .unwrap()
+        .questions
+        .closing
+        .push((SessionId(D.to_owned()), "close-unrelated".to_owned()));
+    let raw = confirm(&mut app);
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert!(deletes(&lines).is_empty());
+    let gone = deletes(&fold_lines(&mut app, left(A, "exited")));
+    assert_eq!(gone.len(), 1);
+    assert_eq!(
+        gone[0]["args"],
+        json!({"session": A, "cascade": true, "expect": [A, B]})
+    );
+    assert_eq!(
+        app.home.as_ref().unwrap().questions.closing,
+        vec![(SessionId(D.to_owned()), "close-unrelated".to_owned())]
+    );
+}
+
+/// An offline confirmation sends nothing and keeps the question: the
+/// command waits for the link to return.
+#[test]
+fn offline_confirm_sends_nothing_and_keeps_the_question() {
+    let mut app = attached();
+    let command = discovery(&mut app);
+    assert!(answer_discovery(&mut app, &command, &[A], &[A]).is_empty());
+    assert!(open(&app));
+    app.disconnected();
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert!(open(&app));
+    assert!(frame(&app).contains("Delete old work"));
+    assert!(matches!(
+        app.home.as_ref().unwrap().questions.delete_command.state,
+        State::Asked { .. }
+    ));
+}
+
+/// Link loss during stopping suppresses the stopped session's resume
+/// line but restores the still-waiting sessions': the stopped row stays
+/// excluded from `closing`, while live rows outside it resume on exit.
+#[test]
+fn link_loss_during_stopping_suppresses_stopped_but_restores_waiting() {
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    app.on_line(live(C, "other"));
+    let command = discovery(&mut app);
+    assert!(answer_discovery(&mut app, &command, &[A], &[A]).is_empty());
+    let _raw = confirm(&mut app);
+    // B left with a quit marker that no exit path removes; C's quit
+    // marker names a live row. Neither belongs to the command.
+    assert!(fold_lines(&mut app, left(B, "exited")).is_empty());
+    app.home
+        .as_mut()
+        .unwrap()
+        .questions
+        .closing
+        .push((SessionId(B.to_owned()), "close-quit-b".to_owned()));
+    app.home
+        .as_mut()
+        .unwrap()
+        .questions
+        .closing
+        .push((SessionId(C.to_owned()), "close-quit-c".to_owned()));
+    app.disconnected();
+    assert_eq!(
+        app.notice(),
+        Some("Not deleted: the hub link dropped before old work stopped. Nothing was deleted.")
+    );
+    assert_eq!(
+        app.home.as_ref().unwrap().questions.closing,
+        vec![(SessionId(B.to_owned()), "close-quit-b".to_owned())]
+    );
+    let resumes = app.exit_lines();
+    assert!(resumes.iter().any(|line| line.contains(A)), "{resumes:?}");
+    assert!(resumes.iter().any(|line| line.contains(C)), "{resumes:?}");
+    assert!(deletes(&fold_lines(&mut app, left(A, "exited"))).is_empty());
+}
+
+/// A stop refusal names the row's title, and a row without one the id:
+/// no raw id leaks when a title exists, and no empty name leaks without one.
+#[test]
+fn stop_refusal_names_the_row_title_or_the_id_without_a_row() {
+    for (name, display) in [("forked", "forked"), ("", B)] {
+        let mut app = attached();
+        app.on_line(live(B, name));
+        let raw = asked(&mut app, &[A, B], &[A, B]);
+        let lines: Vec<Value> = raw
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_default())
+            .collect();
+        let refused = closes(&lines)
+            .into_iter()
+            .find(|line| line["session_id"] == B)
+            .unwrap_or_else(|| panic!("the fork's close"));
+        let id = refused["id"].as_str().unwrap_or_else(|| panic!("close id"));
+        assert!(
+            app.on_line(rejected(
+                id,
+                "session_not_found",
+                "Session `s_bbbbbbbbbbbbbbbb` does not exist"
+            ))
+            .is_empty()
+        );
+        assert_eq!(
+            app.notice(),
+            Some(
+                format!(
+                    "Stop refused for {display}: Session `s_bbbbbbbbbbbbbbbb` does not exist. Nothing was deleted."
+                )
+                .as_str()
+            )
+        );
+        assert!(!open(&app));
+    }
+}
+
+/// An unsent delete command id settles the exact delete as indeterminate
+/// exactly once: a repeat adds no second notice, an unrelated id settles
+/// nothing, and an ordinary row-delete ask stays pending.
+#[test]
+fn unsent_delete_command_id_settles_indeterminate_exactly_once() {
+    let mut app = attached();
+    let raw = asked(&mut app, &[A], &[]);
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let delete = deletes(&lines)
+        .into_iter()
+        .next()
+        .expect("the exact delete");
+    let delete_id = delete["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    let line = raw
+        .iter()
+        .find(|line| line.contains(&delete_id))
+        .unwrap_or_else(|| panic!("the delete line"))
+        .clone();
+    app.home.as_mut().unwrap().questions.asks.insert(
+        "row-delete".to_owned(),
+        super::super::Ask::Delete(SessionId(D.to_owned())),
+    );
+    let other = json!({"id": "other", "command": "delete", "args": {}}).to_string();
+    app.home_unsent(&[other]);
+    assert!(
+        matches!(
+            app.home.as_ref().unwrap().questions.delete_command.state,
+            State::Deleting { .. }
+        ),
+        "an unrelated id settles nothing"
+    );
+    assert!(app.notice().is_none());
+    app.home_unsent(std::slice::from_ref(&line));
+    assert_eq!(app.notice(), Some("Delete status unknown"));
+    assert!(matches!(
+        app.home.as_ref().unwrap().questions.delete_command.state,
+        State::Idle
+    ));
+    assert!(
+        !app.home
+            .as_ref()
+            .unwrap()
+            .questions
+            .asks
+            .contains_key(&delete_id),
+        "the settled ask is gone"
+    );
+    app.home_unsent(&[line]);
+    let unknown = app
+        .notices
+        .lines()
+        .iter()
+        .filter(|line| {
+            matches!(
+                line,
+                crate::app::NoticeLine::Notice { text, .. } if text == "Delete status unknown"
+            )
+        })
+        .count();
+    assert_eq!(unknown, 1, "the settlement never retries");
+    assert!(
+        app.home
+            .as_ref()
+            .unwrap()
+            .questions
+            .asks
+            .contains_key("row-delete"),
+        "the ordinary row-delete ask stays pending"
+    );
+}
+
+/// An unsent close id reports the ordered link-loss notice with no delete;
+/// an unrelated unsent id leaves the stopping sequence alone.
+#[test]
+fn unsent_close_id_reports_link_loss_without_a_delete() {
+    let mut app = attached();
+    let raw = asked(&mut app, &[A], &[A]);
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let close = closes(&lines).into_iter().next().expect("the stop");
+    let close_id = close["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("close id"))
+        .to_owned();
+    let line = raw
+        .iter()
+        .find(|line| line.contains(&close_id))
+        .unwrap_or_else(|| panic!("the close line"))
+        .clone();
+    let other = json!({"id": "other", "command": "close", "args": {}}).to_string();
+    app.home_unsent(&[other]);
+    assert!(
+        matches!(
+            app.home.as_ref().unwrap().questions.delete_command.state,
+            State::Stopping { .. }
+        ),
+        "an unrelated id settles nothing"
+    );
+    assert!(app.notice().is_none());
+    app.home_unsent(&[line]);
+    assert_eq!(
+        app.notice(),
+        Some("Not deleted: the hub link dropped before old work stopped. Nothing was deleted.")
+    );
+    assert!(matches!(
+        app.home.as_ref().unwrap().questions.delete_command.state,
+        State::Idle
+    ));
+    assert!(deletes(&fold_lines(&mut app, left(A, "exited"))).is_empty());
+}
+
+/// A refusal without usable `held` keeps the name captured when the
+/// question opened: a rename, or a `held` id outside the confirmed set,
+/// never changes it.
+#[test]
+fn refusal_without_usable_held_keeps_the_name_captured_at_the_question() {
+    // A rename between the question and the refusal.
+    let mut app = attached();
+    let _raw = asked(&mut app, &[A], &[A]);
+    let out = fold_lines(&mut app, left(A, "exited"));
+    let gone = deletes(&out);
+    assert_eq!(gone.len(), 1);
+    let delete = gone[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    app.on_line(live_since(A, "new work", 1));
+    assert!(
+        app.on_line(rejected(
+            &delete,
+            "session_held",
+            "Session `s_aaaaaaaaaaaaaaaa` is held by another process."
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        app.notice(),
+        Some("Not deleted: old work is running again. Nothing was deleted.")
+    );
+    // A `held` id outside the confirmed set, naming a live row.
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    let _raw = asked(&mut app, &[A], &[A]);
+    let out = fold_lines(&mut app, left(A, "exited"));
+    let gone = deletes(&out);
+    assert_eq!(gone.len(), 1);
+    let delete = gone[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"));
+    assert!(
+        app.on_line(rejected_with_held(delete, "held", &[B]))
+            .is_empty()
+    );
+    assert_eq!(
+        app.notice(),
+        Some("Not deleted: old work is running again. Nothing was deleted.")
+    );
 }

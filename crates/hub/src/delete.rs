@@ -195,24 +195,51 @@ fn session_dir(hub: &Hub, session: &SessionId) -> Option<PathBuf> {
 }
 
 /// A delete refusal: only a real `session_held` refusal carries the busy
-/// ids, in the order the hub checked them.
+/// ids, in the order the hub checked them. The variants keep it that way:
+/// a non-held refusal has no field for `held` at all.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct DeleteRefused {
-    /// The rejection code.
-    pub(crate) code: ErrorCode,
+pub(crate) enum DeleteRefused {
+    /// A real `session_held` refusal, with the busy ids in check order.
+    Held {
+        /// The rejection message, naming the first held session.
+        message: String,
+        /// Busy ids in check order.
+        held: Vec<String>,
+    },
+    /// Any other refusal: the generic shape, never carrying `held`.
+    Other(Refused),
+}
+
+impl DeleteRefused {
+    /// The rejection code: `session_held` for the held variant.
+    pub(crate) fn code(&self) -> ErrorCode {
+        match self {
+            Self::Held { .. } => ErrorCode::SessionHeld,
+            Self::Other(refused) => refused.code.clone(),
+        }
+    }
+
     /// The rejection message.
-    pub(crate) message: String,
-    /// Busy ids in check order, only for a real `session_held` refusal.
-    pub(crate) held: Option<Vec<String>>,
+    pub(crate) fn message(&self) -> &str {
+        match self {
+            Self::Held { message, .. } => message,
+            Self::Other(refused) => &refused.message,
+        }
+    }
+
+    /// The busy ids in check order, only for a real `session_held`
+    /// refusal.
+    pub(crate) fn held(&self) -> Option<&[String]> {
+        match self {
+            Self::Held { held, .. } => Some(held),
+            Self::Other(_) => None,
+        }
+    }
 }
 
 impl From<Refused> for DeleteRefused {
     fn from(refused: Refused) -> Self {
-        Self {
-            code: refused.code,
-            message: refused.message,
-            held: None,
-        }
+        Self::Other(refused)
     }
 }
 
@@ -220,10 +247,9 @@ impl From<Refused> for DeleteRefused {
 /// wording even when `held` names several ids. A later lock-probe failure
 /// still refuses `io_failed` instead, without deleting.
 fn held_refused(first: &str, held: Vec<String>) -> DeleteRefused {
-    DeleteRefused {
-        code: ErrorCode::SessionHeld,
+    DeleteRefused::Held {
         message: format!("Session `{first}` is held by another process."),
-        held: Some(held),
+        held,
     }
 }
 

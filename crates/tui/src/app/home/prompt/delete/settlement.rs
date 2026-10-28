@@ -16,17 +16,12 @@ impl App {
     /// retries. `None` when the answer is not this command's exact ask.
     pub(super) fn delete_command_delete_answer(
         &mut self,
-        id: &str,
         accepted: bool,
         payload: &Map<String, Value>,
     ) -> Option<Vec<String>> {
-        let (target, sessions, captured_name) = self.delete_deleting_sets(id)?;
+        let (target, sessions, captured_name) = self.delete_deleting_sets()?;
         if accepted {
-            let project = self
-                .home
-                .as_ref()
-                .and_then(|home| home.sessions.row(&target))
-                .map(|row| row.project.clone());
+            let project = self.delete_target_project(&target);
             if let Some(home) = self.home.as_mut() {
                 for session in &sessions {
                     home.sessions.remove(session);
@@ -41,13 +36,22 @@ impl App {
         let code = refusal_code(payload);
         let message = refusal(payload);
         if code == "session_held" {
-            let (first, more) = held_refusal_parts(payload, &target, &sessions);
-            let display = self
-                .home
-                .as_ref()
-                .and_then(|home| home.sessions.row(&first))
-                .map(crate::home::title)
-                .unwrap_or(captured_name);
+            // An invalid or missing `held` array names nothing new: the
+            // notice keeps the name captured when the question opened, so
+            // a rename in between never changes it.
+            let display = match held_refusal_parts(payload, &sessions) {
+                Some((first, more)) => {
+                    let name = self
+                        .home
+                        .as_ref()
+                        .and_then(|home| home.sessions.row(&first))
+                        .map(crate::home::title)
+                        .unwrap_or(captured_name);
+                    (name, more)
+                }
+                None => (captured_name, 0),
+            };
+            let (display, more) = display;
             let notice = if more == 0 {
                 format!("Not deleted: {display} is running again. Nothing was deleted.")
             } else {
@@ -60,11 +64,7 @@ impl App {
             return Some(Vec::new());
         }
         if code == "stale_request" {
-            let project = self
-                .home
-                .as_ref()
-                .and_then(|home| home.sessions.row(&target))
-                .map(|row| row.project.clone());
+            let project = self.delete_target_project(&target);
             let lines = self.ask_recent_first(project.as_deref());
             self.delete_command_finish(false);
             self.notices
@@ -73,11 +73,7 @@ impl App {
             return Some(lines);
         }
 
-        let project = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.row(&target))
-            .map(|row| row.project.clone());
+        let project = self.delete_target_project(&target);
         let lines = self.ask_recent_first(project.as_deref());
         self.delete_command_finish(true);
         self.notices
@@ -196,6 +192,14 @@ impl App {
         }
     }
 
+    /// The target's project, for the `recent` refresh after its rows go.
+    fn delete_target_project(&self, target: &SessionId) -> Option<String> {
+        self.home
+            .as_ref()
+            .and_then(|home| home.sessions.row(target))
+            .map(|row| row.project.clone())
+    }
+
     /// The delete's answer never arrived after its stops completed: the
     /// stop evidence stands but nothing confirms the removal.
     pub(super) fn delete_command_delete_unknown(&mut self) {
@@ -207,35 +211,28 @@ impl App {
 
 /// The refused delete's first busy id and how many more follow. The
 /// structured `held` field is trusted only as a complete, valid unique
-/// list; otherwise fall back to the target and single-session wording.
+/// subset of the confirmed set; otherwise `None`, and the caller falls
+/// back to the name captured when the question opened.
 fn held_refusal_parts(
     payload: &Map<String, Value>,
-    target: &SessionId,
     sessions: &[SessionId],
-) -> (SessionId, usize) {
-    let Some(held) = payload.get("held").and_then(Value::as_array) else {
-        return (target.clone(), 0);
-    };
+) -> Option<(SessionId, usize)> {
+    let held = payload.get("held").and_then(Value::as_array)?;
     let allowed: BTreeSet<&str> = sessions.iter().map(|session| session.0.as_str()).collect();
     if held.is_empty() {
-        return (target.clone(), 0);
+        return None;
     }
     let mut seen = BTreeSet::new();
     let mut ids = Vec::with_capacity(held.len());
     for value in held {
-        let Some(id) = value
+        let id = value
             .as_str()
-            .filter(|id| contract::is_minted_session_id(id))
-        else {
-            return (target.clone(), 0);
-        };
+            .filter(|id| contract::is_minted_session_id(id))?;
         if !seen.insert(id) || !allowed.contains(id) {
-            return (target.clone(), 0);
+            return None;
         }
         ids.push(id);
     }
-    match ids.first() {
-        Some(first) => (SessionId((*first).to_owned()), ids.len() - 1),
-        None => (target.clone(), 0),
-    }
+    ids.first()
+        .map(|first| (SessionId((*first).to_owned()), ids.len() - 1))
 }

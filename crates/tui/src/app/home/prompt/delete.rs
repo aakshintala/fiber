@@ -226,7 +226,7 @@ impl App {
     ) -> Option<Vec<String>> {
         if self.delete_deleting_command(id) {
             self.take_ask(id);
-            return self.delete_command_delete_answer(id, accepted, payload);
+            return self.delete_command_delete_answer(accepted, payload);
         }
         if self.delete_command_close(id, accepted, payload) {
             self.take_ask(id);
@@ -245,12 +245,9 @@ impl App {
             self.delete_command_malformed();
             return Some(Vec::new());
         };
-        let (sessions, held) = match validated_sets(result, &target) {
-            Ok(sets) => sets,
-            Err(_what) => {
-                self.delete_command_malformed();
-                return Some(Vec::new());
-            }
+        let Some((sessions, held)) = validated_sets(result, &target) else {
+            self.delete_command_malformed();
+            return Some(Vec::new());
         };
         // The answer opens the question only while its session is still
         // the attached one and no other question took the foot.
@@ -528,19 +525,20 @@ impl App {
         vec![line]
     }
 
-    /// The deleting command's confirmed sets, while its delete waits and
-    /// no home-row delete question is open.
-    fn delete_deleting_sets(&self, id: &str) -> Option<(SessionId, Vec<SessionId>, String)> {
+    /// The deleting command's confirmed sets, while its delete waits.
+    /// The only caller settles the exact delete answer the
+    /// [`delete_deleting_command`](App::delete_deleting_command) gate
+    /// already matched by id, so no second id check belongs here.
+    fn delete_deleting_sets(&self) -> Option<(SessionId, Vec<SessionId>, String)> {
         let home = self.home.as_ref()?;
         match &home.questions.delete_command.state {
             State::Deleting {
-                command,
                 target,
                 sessions,
                 name,
-            } if command == id => Some((target.clone(), sessions.clone(), name.clone())),
-            State::Deleting { .. }
-            | State::Idle
+                ..
+            } => Some((target.clone(), sessions.clone(), name.clone())),
+            State::Idle
             | State::Discovering { .. }
             | State::Asked { .. }
             | State::Stopping { .. } => None,
@@ -604,65 +602,62 @@ impl App {
     }
 }
 
-/// Whether `id` names a session the hub minted: `s_` plus 16 lowercase
-/// hex digits. The discovery answer is trusted only when every id fits,
-/// so a malformed answer never sends a stop or a real delete.
-fn minted(id: &str) -> bool {
-    contract::is_minted_session_id(id)
-}
-
 /// Checks the discovery answer before it opens a question: `sessions`
 /// is a nonempty unique set containing the attached session, and `held`
-/// is a unique subset of it. Anything else describes what was wrong.
-fn validated_sets(
-    result: &Value,
-    target: &SessionId,
-) -> Result<(Vec<SessionId>, Vec<SessionId>), String> {
-    let sessions = result
-        .get("sessions")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "named no sessions".to_owned())?;
+/// is a unique subset of it in the preview's relative order. Anything
+/// else is malformed: the caller shows the invalid-preview notice, and
+/// the invalid detail never reaches a person.
+fn validated_sets(result: &Value, target: &SessionId) -> Option<(Vec<SessionId>, Vec<SessionId>)> {
+    let sessions = result.get("sessions").and_then(Value::as_array)?;
     if sessions.is_empty() {
-        return Err("named no sessions".to_owned());
+        return None;
     }
     let mut seen = BTreeSet::new();
     let mut set = Vec::with_capacity(sessions.len());
     for id in sessions {
         let id = id.as_str().unwrap_or("");
-        if !minted(id) {
-            return Err(format!("named an id the hub never mints: `{id}`"));
+        if !contract::is_minted_session_id(id) {
+            return None;
         }
         if !seen.insert(id) {
-            return Err(format!("repeated a session: `{id}`"));
+            return None;
         }
         set.push(SessionId(id.to_owned()));
     }
     if !seen.contains(target.0.as_str()) {
-        return Err(format!("omits the session on screen: `{}`", target.0));
+        return None;
     }
-    let held = result
-        .get("held")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "named no held sessions".to_owned())?;
+    let held = result.get("held").and_then(Value::as_array)?;
     let mut held_seen = BTreeSet::new();
+    let mut held_order = Vec::with_capacity(held.len());
     for id in held {
         let id = id.as_str().unwrap_or("");
-        if !minted(id) {
-            return Err(format!("held an id the hub never mints: `{id}`"));
+        if !contract::is_minted_session_id(id) {
+            return None;
         }
         if !held_seen.insert(id) {
-            return Err(format!("repeated a held session: `{id}`"));
+            return None;
         }
         if !seen.contains(id) {
-            return Err(format!("holds a session it would not remove: `{id}`"));
+            return None;
         }
+        held_order.push(id);
     }
-    let held_set = set
+    let held_set: Vec<SessionId> = set
         .iter()
         .filter(|id| held_seen.contains(id.0.as_str()))
         .cloned()
         .collect();
-    Ok((set, held_set))
+    // The hub names `held` in the preview's order; a `held` array that
+    // disagrees with it relatively is not the preview the hub checked.
+    if held_set
+        .iter()
+        .map(|id| id.0.as_str())
+        .ne(held_order.iter().copied())
+    {
+        return None;
+    }
+    Some((set, held_set))
 }
 
 /// The command's delete question: the target and every session the

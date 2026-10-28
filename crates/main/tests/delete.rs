@@ -525,8 +525,15 @@ fn esc_keeps_the_live_session_for_a_second_prompt() {
         !kinds.contains(&"fiber_exited"),
         "no exit between the turns: {kinds:?}"
     );
-    // Each turn opens its one step before the assistant message
-    // (`docs/loop.md`, "One step").
+    // The prologue order the docs promise: `session_started` is the
+    // log's first line and `fiber_started` follows it in a new session
+    // (`docs/events.md`, "Process boundary"); `extensions_loaded` is
+    // written at each process start (`docs/events.md`,
+    // "`extensions_loaded`"); `preamble_built` follows
+    // `session_started` or `fiber_started` (`docs/events.md`,
+    // "`preamble_built`"); `opening_message` is written at session start
+    // (`docs/events.md`, "`opening_message`"). Each turn then opens its
+    // one step before the assistant message (`docs/loop.md`, "One step").
     assert_eq!(
         kinds,
         [

@@ -1075,11 +1075,11 @@ fn on_command(
         "delete" => match crate::delete::delete(hub, &line.args) {
             Ok(result) => answer(writer, hub, &line.id, Ok(result)),
             Err(refused) => {
-                let mut payload = rejection(Some(&line.id), &refused.code, &refused.message);
-                if let Some(held) = refused.held {
+                let mut payload = rejection(Some(&line.id), &refused.code(), refused.message());
+                if let Some(held) = refused.held() {
                     payload.insert(
                         "held".to_owned(),
-                        Value::Array(held.into_iter().map(Value::String).collect()),
+                        Value::Array(held.iter().cloned().map(Value::String).collect()),
                     );
                 }
                 send(writer, hub, "command_rejected", payload);
