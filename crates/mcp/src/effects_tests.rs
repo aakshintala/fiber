@@ -78,6 +78,7 @@ fn each_hint_combination_declares_its_effects() {
                 effects: effects.clone(),
                 reversible: *reversible,
                 paths: None,
+                confined: false,
             },
             "row: {name}",
         );
@@ -105,6 +106,7 @@ fn the_override_replaces_rather_than_merges() {
             effects: vec![Effect::Writes, Effect::Network],
             reversible: true,
             paths: None,
+            confined: false,
         }
     );
 }

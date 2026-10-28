@@ -682,6 +682,13 @@ fn a_spawn_failure_is_tool_error_with_no_process() {
 #[test]
 fn execute_fails_when_the_program_does_not_exist() {
     let dir = fakes::TempDir::new("fiber-shell-missing");
+    let sandbox = super::sandbox::Settings {
+        enabled: false,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: std::path::PathBuf::new(),
+    };
+    let workspace = dir.path().to_path_buf();
     let err = super::command::execute(
         Path::new("/no/such/fiber-shell"),
         "true",
@@ -694,6 +701,8 @@ fn execute_fails_when_the_program_does_not_exist() {
         None,
         None,
         None,
+        &sandbox,
+        &workspace,
     );
     assert!(err.is_err());
 }
@@ -1178,4 +1187,99 @@ fn review_note_sees_a_reloaded_read_only_entry() {
     );
     *handle.lock().unwrap() = vec![("npm".to_owned(), Vec::new())];
     assert_eq!(noted(&shell, "ls && npm test"), None);
+}
+
+fn sandbox_handle_for_test(
+    name: &str,
+) -> std::sync::Arc<std::sync::Mutex<crate::shell::sandbox::Settings>> {
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let fiber_home = home.join(format!("fiber-shell-sandbox-{name}-{}", std::process::id()));
+    std::sync::Arc::new(std::sync::Mutex::new(crate::shell::sandbox::Settings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home,
+    }))
+}
+
+#[test]
+fn effects_sets_confined_for_an_enabled_linux_sandbox() {
+    let dir = fakes::TempDir::new("fiber-shell-effects-confined");
+    let workspace = dir.path().to_path_buf();
+    let shell = Shell::new(workspace.clone(), FakeClock::new());
+    let plain = effects(&shell, "echo hi");
+    assert!(!plain.declared.confined);
+    let sandbox = sandbox_handle_for_test("effects");
+    let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
+    let confined = effects(&shell, "echo hi");
+    #[cfg(target_os = "linux")]
+    assert!(confined.declared.confined);
+    #[cfg(not(target_os = "linux"))]
+    assert!(!confined.declared.confined);
+}
+
+#[test]
+fn effects_does_not_declare_confined_when_sandbox_setup_is_unavailable() {
+    // An unresolvable write grant leaves the call on the reviewed path.
+    let dir = fakes::TempDir::new("fiber-shell-effects-unappliable");
+    let workspace = dir.path().to_path_buf();
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(crate::shell::sandbox::Settings {
+        enabled: true,
+        allow_write: vec![dir.path().join("missing-write")],
+        deny_read: Vec::new(),
+        fiber_home: home.join(format!("fiber-shell-effects-fail-{}", std::process::id())),
+    }));
+    let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
+    let declared = effects(&shell, "echo hi");
+    assert!(!declared.declared.confined);
+}
+
+#[test]
+fn a_configured_direct_run_shares_the_sandbox_selection() {
+    let dir = fakes::TempDir::new("fiber-shell-run-confined");
+    let workspace = dir.path().to_path_buf();
+    let shell = Shell::new(workspace.clone(), FakeClock::new())
+        .with_sandbox(sandbox_handle_for_test("run"));
+    // A direct `run` derives its decision at spawn, like `effects` does: the
+    // same selection confines this call, and the driver's own shell stays
+    // unconfigured everywhere else.
+    let confined = effects(&shell, "echo hi");
+    #[cfg(target_os = "linux")]
+    assert!(confined.declared.confined);
+    #[cfg(not(target_os = "linux"))]
+    assert!(!confined.declared.confined);
+    let output = shell.run(&args("echo hi"), &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), None);
+    assert!(text(&output).starts_with("hi"), "a direct echo succeeds");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_confined_setup_never_runs_unconfined() {
+    let dir = fakes::TempDir::new("fiber-shell-run-confined-fail");
+    let workspace = dir.path().to_path_buf();
+    let marker = workspace.join("marker");
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let fiber_home = home.join(format!("fiber-shell-sandbox-fail-{}", std::process::id()));
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(crate::shell::sandbox::Settings {
+        enabled: true,
+        allow_write: vec![std::path::PathBuf::from("/nonexistent-fiber-sandbox-allow")],
+        deny_read: Vec::new(),
+        fiber_home,
+    }));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox);
+    let command = format!("touch {} && echo hi", marker.display());
+    let output = shell.run(&args(&command), &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), Some(contract::ErrorCode::ToolError));
+    assert!(!marker.is_file(), "no command runs after an apply failure");
 }

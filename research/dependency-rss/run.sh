@@ -11,6 +11,13 @@ cd "$(dirname "$0")"
 FEATURES="serde_json ureq ratatui crossterm rusqlite mlua clap clap_complete thiserror signal-hook getrandom base64 ring rustix regex ignore search similar pulldown-cmark jsonschema syntect arborium image image-parts html5ever encoding_rs flate2 jiff lopdf qrcode brush-parser"
 # Every crate in the runtime table of docs/dependencies.md, built together.
 RUNTIME="serde_json ureq ratatui crossterm mlua clap clap_complete thiserror signal-hook getrandom base64 ring rustix search similar html5ever encoding_rs pulldown-cmark flate2 jiff qrcode"
+# #3027's Linux shell sandbox. The builds are attempted on every runner and
+# the outcome recorded per row below; they link into the shipped Linux
+# binary, so Linux's together build includes them and macOS's does not.
+SANDBOX_FEATURES="landlock seccompiler"
+if [ "$(uname)" != Darwin ]; then
+  RUNTIME="$RUNTIME landlock seccompiler"
+fi
 
 # crossterm needs a terminal, so every binary runs under script(1), which
 # gives it a pseudo-terminal. time(1) runs inside it and measures only the
@@ -50,8 +57,27 @@ hl_row() {
 }
 
 build() {
-  cargo build --release -q --target-dir "target/$1" ${2:+--features "$2"}
+  # The explicit return keeps a caller's `if bin=$(build ...)` honest:
+  # inside an if-condition the shell ignores `set -e`, so without it a
+  # failed cargo would fall through to the echo and report success with a
+  # binary that was never built.
+  cargo build --release -q --target-dir "target/$1" ${2:+--features "$2"} || return 1
   echo "target/$1/release/dependency-rss"
+}
+
+# One sandbox row: builds the feature and measures it like every other row.
+# When the build fails, as a Linux-only crate's does on macOS, the row
+# records what the attempt establishes instead of a figure.
+sandbox_row() {
+  f=$1
+  mkdir -p target
+  if bin=$(build "$f" "$f" 2>"target/$f-build-err.txt"); then
+    kib=$(median "$bin")
+    echo "| $f | $kib | $((kib - base)) | $(( $(wc -c < "$bin") / 1024 )) |"
+  else
+    err=$(grep -m1 "^error" "target/$f-build-err.txt" 2>/dev/null | tr -d '|' | cut -c1-160 || true)
+    echo "| $f | does not build on $(uname -sm): ${err:-build failed} | n/a | n/a |"
+  fi
 }
 
 # The image features read fixtures written by research/image-limits/gen.
@@ -70,6 +96,9 @@ for f in $FEATURES; do
   bin=$(build "$f" "$f")
   kib=$(median "$bin")
   echo "| $f | $kib | $((kib - base)) | $(( $(wc -c < "$bin") / 1024 )) |"
+done
+for f in $SANDBOX_FEATURES; do
+  sandbox_row "$f"
 done
 all=$(echo $RUNTIME | tr ' ' ',')
 bin=$(build runtime "$all")

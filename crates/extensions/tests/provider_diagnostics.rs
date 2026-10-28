@@ -592,6 +592,7 @@ fn tool_hooks_execute_without_timing() {
         effects: Vec::new(),
         paths: None,
         reversible: false,
+        confined: false,
     };
     let arguments = Map::new();
     let rewritten = fakes::within(

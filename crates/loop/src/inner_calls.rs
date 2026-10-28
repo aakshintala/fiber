@@ -470,6 +470,10 @@ impl crate::Loop {
         let worker_stream = Arc::clone(&stream);
         let worker_cancel = Arc::clone(&cancel);
         let worker_arguments = Arc::clone(&arguments);
+        // The exact prepared effects ride into the inner run, as they do
+        // into an outer one.
+        let effects = Arc::new(prepared.effects);
+        let worker_effects = Arc::clone(&effects);
         let tool = prepared.tool;
         let bound = tool.bound();
         // The entered inner run's worker context, gated like the outer
@@ -483,8 +487,9 @@ impl crate::Loop {
                     Some((diag, name)) => diag.timed_tool(contract::diag::Op::ToolRun, name),
                     None => None,
                 };
-                tool.run_asking(
+                tool.run_with_effects(
                     &worker_arguments,
+                    &worker_effects,
                     worker_cancel.as_ref(),
                     worker_stream.as_ref(),
                     worker_stream.as_ref(),
@@ -499,7 +504,7 @@ impl crate::Loop {
             stream,
             cancel,
             bound,
-            declared: prepared.effects.declared,
+            declared: effects.declared.clone(),
             arguments,
             rewritten: prepared.rewritten,
         });

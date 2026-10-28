@@ -76,6 +76,7 @@ impl Tool for Fixed {
                 effects: Vec::new(),
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,

@@ -581,6 +581,11 @@ fn samples() -> Vec<(&'static str, Value)> {
             "always_reviewed": true}),
         ),
         (
+            "tool_call_started",
+            json!({"effects": ["executes"], "reversible": false,
+            "confined": true}),
+        ),
+        (
             "tool_call_delta",
             json!({"text": "t", "details": {"pct": 5}}),
         ),
@@ -652,6 +657,11 @@ fn samples() -> Vec<(&'static str, Value)> {
             "reversible": false, "always_reviewed": true, "step": "review"}),
         ),
         (
+            "permission_requested",
+            json!({"request_id": "r", "effects": ["executes"],
+            "reversible": false, "confined": true, "step": "review"}),
+        ),
+        (
             "permission_resolved",
             json!({"request_id": "r", "decision": "allow",
             "decided_by": "reviewer", "reason": "r", "feedback": "f",
@@ -682,6 +692,13 @@ fn samples() -> Vec<(&'static str, Value)> {
             "hosts": ["https://example.com/"],
             "always_reviewed": true, "arguments": {"path": "b.txt"},
             "changed_by": ["ext"]}),
+        ),
+        (
+            "permission_resolved",
+            json!({"decision": "deny", "decided_by": "reviewer",
+            "reason": "no", "reviewer": {"model": "p/m", "stage": 1},
+            "effects": ["executes"], "reversible": false,
+            "confined": true}),
         ),
         (
             "interaction_requested",
@@ -1302,6 +1319,49 @@ fn a_reviewed_call_writes_always_reviewed_only_when_true() {
     };
     let written = Value::Object(Event::PermissionResolved(resolved).payload().unwrap());
     assert_eq!(written, base());
+}
+
+#[test]
+fn a_declared_effect_writes_confined_only_when_true() {
+    let base = || {
+        json!({"effects": ["executes"], "reversible": false,
+        "arguments": {"path": "/a"}})
+    };
+    let Some(Event::ToolCallStarted(started)) = read("tool_call_started", base()).unwrap() else {
+        panic!("not a tool_call_started");
+    };
+    assert!(!started.declared.confined);
+    let written = Value::Object(Event::ToolCallStarted(started).payload().unwrap());
+    assert_eq!(written.get("confined"), None);
+    let mut with_true = base();
+    with_true["confined"] = json!(true);
+    let Some(Event::ToolCallStarted(started)) =
+        read("tool_call_started", with_true.clone()).unwrap()
+    else {
+        panic!("not a tool_call_started");
+    };
+    assert!(started.declared.confined);
+    let written = Value::Object(Event::ToolCallStarted(started).payload().unwrap());
+    assert_eq!(written, with_true);
+    let mut with_false = base();
+    with_false["confined"] = json!(false);
+    let Some(Event::ToolCallStarted(started)) = read("tool_call_started", with_false).unwrap()
+    else {
+        panic!("not a tool_call_started");
+    };
+    assert!(!started.declared.confined);
+    let written = Value::Object(Event::ToolCallStarted(started).payload().unwrap());
+    assert_eq!(written, base());
+}
+
+#[test]
+fn a_pre_change_event_without_confined_reads_as_false() {
+    let payload = json!({"effects": ["executes"], "reversible": false,
+    "arguments": {"path": "/a"}});
+    let Some(Event::ToolCallStarted(started)) = read("tool_call_started", payload).unwrap() else {
+        panic!("not a tool_call_started");
+    };
+    assert!(!started.declared.confined);
 }
 
 #[test]

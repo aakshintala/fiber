@@ -346,6 +346,61 @@ pub(crate) fn refresh_shell_read_only(handle: &ShellReadOnly, config: &Config) {
     *support::lock(handle) = next;
 }
 
+/// The person's Linux sandbox settings as the shell confines them: one
+/// [`tools::SandboxSettings`] per session, shared with every [`tools::Shell`]
+/// clone so a reload can replace the contents without rebuilding the shell.
+pub(crate) type SandboxHandle = Arc<Mutex<tools::SandboxSettings>>;
+
+/// The person-only `sandbox.*` settings (`docs/configuration.md`, "Keys";
+/// `docs/sandbox.md`). The keys are person-only: a repository value is
+/// ignored with a notice before merging, so the checked merged configuration
+/// holds personal entries only. `~` expands to `$HOME`; defaults are off
+/// with empty lists.
+pub(crate) fn sandbox_settings(
+    config: &Config,
+    fiber_home: &std::path::Path,
+) -> tools::SandboxSettings {
+    use std::path::PathBuf;
+    fn expand(path: &str) -> PathBuf {
+        if let Some(rest) = path.strip_prefix("~/")
+            && let Some(home) = std::env::var_os("HOME")
+        {
+            return PathBuf::from(home).join(rest);
+        }
+        PathBuf::from(path)
+    }
+    tools::SandboxSettings {
+        enabled: config.flag("sandbox.enabled", None).unwrap_or_default(),
+        allow_write: config
+            .list("sandbox.allow_write", None)
+            .into_iter()
+            .map(|path| expand(&path))
+            .collect(),
+        deny_read: config
+            .list("sandbox.deny_read", None)
+            .into_iter()
+            .map(|path| expand(&path))
+            .collect(),
+        fiber_home: fiber_home.to_path_buf(),
+    }
+}
+
+/// Replaces the shared sandbox settings with the checked configuration's
+/// entries, so a reload applies the fresh settings without rebuilding the
+/// shell. Fiber home never changes mid-session, so the refresh keeps the
+/// handle's existing home and only replaces the person-only keys. The next
+/// settings are computed before the lock is taken; only the assignment runs
+/// under it. A poisoned lock is recovered.
+pub(crate) fn refresh_sandbox(handle: &SandboxHandle, config: &Config) {
+    let fiber_home = support::lock(handle).fiber_home.clone();
+    let next = sandbox_settings(config, &fiber_home);
+    *support::lock(handle) = next;
+}
+
 #[cfg(test)]
 #[path = "shell_read_only_tests.rs"]
 mod shell_read_only_tests;
+
+#[cfg(test)]
+#[path = "sandbox_tests.rs"]
+mod sandbox_tests;

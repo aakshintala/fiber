@@ -448,6 +448,18 @@ which paths it touches. Effects are what the loop reasons about; it never sees
 the call's arguments.
 _Avoid_: capability, permission, risk, category
 
+### Sandbox
+
+The opt-in operating-system sandbox a shell call runs inside on Linux when
+the `sandbox.*` keys turn it on: Landlock plus seccomp. Off by default.
+Calls remain reviewed. See `docs/sandbox.md`.
+_Avoid_: container, jail, seatbelt, landlock
+
+### Confined
+
+A call that runs in it.
+_Avoid_: sandboxed, jailed, isolated
+
 ### Reviewer
 
 The model asked whether a tool call may proceed. It is shown the human's

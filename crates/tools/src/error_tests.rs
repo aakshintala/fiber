@@ -964,6 +964,25 @@ fn a_command_that_cannot_start_or_be_reaped_is_a_tool_error() {
 }
 
 #[test]
+fn a_sandbox_that_cannot_apply_is_a_tool_error_naming_the_cause() {
+    let error = ShellError::SandboxApply {
+        cause: "the sandbox is off".into(),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "The sandbox could not be applied: the sandbox is off."
+    );
+    // The named error maps to `ToolError` like any other spawn failure.
+    let root = ToolError::from(error);
+    assert_eq!(root.code(), ErrorCode::ToolError);
+    assert_eq!(
+        root.to_string(),
+        "The sandbox could not be applied: the sandbox is off."
+    );
+}
+
+#[test]
 fn a_stopped_command_keeps_its_closing_line() {
     let error = ShellError::Indeterminate;
     assert_eq!(error.code(), ErrorCode::Indeterminate);
