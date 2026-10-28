@@ -180,7 +180,8 @@ fn check_available_linux(settings: &Settings, workspace: &Path) -> Result<(), Un
     }
     let resolved = resolve_denies(settings)?;
     for deny in &resolved {
-        for candidate in std::iter::once(&deny.configured).chain(deny.target.as_ref()) {
+        let lexical = normalize_absolute(&deny.configured);
+        for candidate in std::iter::once(&lexical).chain(deny.target.as_ref()) {
             for root in &writable {
                 if candidate.starts_with(root) {
                     return Err(Unavailable::DenyInsideWrite {

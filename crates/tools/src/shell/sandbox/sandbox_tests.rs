@@ -94,6 +94,50 @@ fn deny_inside_the_workspace_is_unavailable_naming_the_path() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn a_relative_deny_inside_the_workspace_is_unavailable() {
+    struct RestoreCwd(Option<PathBuf>);
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            if let Some(previous) = self.0.take() {
+                drop(std::env::set_current_dir(previous));
+            }
+        }
+    }
+    let dir = fixture("fiber-sandbox-relative-overlap");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    std::fs::write(workspace.join("secret"), "secret").expect("write secret");
+    let previous = std::env::current_dir().expect("read the working directory");
+    let _restore = RestoreCwd(Some(previous));
+    std::env::set_current_dir(dir.path()).expect("enter the fixture root");
+    let relative = PathBuf::from("workspace/secret");
+    let mut settings = workspace_settings(&dir.path().join("fiber-home"));
+    settings.deny_read.push(relative.clone());
+    let unavailable = check_available(&settings, &workspace).expect_err("overlap is unavailable");
+    let lexical = workspace.join("secret");
+    assert_eq!(
+        unavailable,
+        Unavailable::DenyInsideWrite {
+            configured: relative.clone(),
+            overlapping: lexical.clone(),
+            root: workspace.clone(),
+        }
+    );
+    assert_eq!(unavailable.code(), contract::ErrorCode::InvalidArguments);
+    let notice = unavailable.to_string();
+    assert!(
+        notice.contains(&*relative.to_string_lossy()),
+        "names the configured spelling in {notice}"
+    );
+    assert!(
+        notice.contains(&*lexical.to_string_lossy()),
+        "names the normalized path in {notice}"
+    );
+    assert!(notice.contains('\u{2192}'), "arrows in {notice}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn deny_inside_allow_write_is_unavailable() {
     let dir = fixture("fiber-sandbox-allow-overlap");
     let workspace = dir.path().join("workspace");
@@ -352,6 +396,60 @@ fn a_symlink_to_a_directory_denies_its_target_and_keeps_siblings() {
         through_link.status.is_some_and(|status| !status.success()),
         "the link itself stays unreadable"
     );
+    let other = fixture.confined("cat ../data/other");
+    assert!(other.status.is_some_and(|status| status.success()));
+    assert!(
+        matches!(other.output, super::super::command::Kept::Whole(ref bytes) if bytes == b"ok"),
+        "the target's sibling stays readable"
+    );
+    let sibling = fixture.confined("cat sibling");
+    assert!(sibling.status.is_some_and(|status| status.success()));
+    assert!(
+        matches!(sibling.output, super::super::command::Kept::Whole(ref bytes) if bytes == b"ok"),
+        "the home sibling stays readable"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_symlink_to_a_file_denies_both_paths_and_keeps_siblings() {
+    let dir = fixture("fiber-sandbox-file-link");
+    let home = dir.path().join("home");
+    let data = dir.path().join("data");
+    let workspace = dir.path().join("workspace");
+    let fiber_home = dir.path().join("fiber-home");
+    for directory in [&home, &data, &workspace] {
+        std::fs::create_dir_all(directory).expect("create fixture dir");
+    }
+    let secret = b"shh-file-secret";
+    std::fs::write(data.join("secret"), secret).expect("write target file");
+    std::fs::write(data.join("other"), "ok").expect("write data sibling");
+    std::fs::write(home.join("sibling"), "ok").expect("write home sibling");
+    std::os::unix::fs::symlink("../data/secret", home.join("link")).expect("link to the file");
+    let mut settings = workspace_settings(&fiber_home);
+    // The deny names the file symlink itself; the resolved target must stay
+    // unreadable by its real path as well as through the link.
+    settings.deny_read.push(home.join("link"));
+    let fixture = HomeFixture {
+        dir,
+        home,
+        workspace,
+        settings,
+    };
+    for command in ["cat link", "cat ../data/secret"] {
+        let denied = fixture.confined(command);
+        assert!(
+            denied.status.is_some_and(|status| !status.success()),
+            "{command} stays unreadable"
+        );
+        let super::super::command::Kept::Whole(bytes) = &denied.output else {
+            panic!("{command} keeps a small output whole");
+        };
+        assert!(
+            bytes.windows(secret.len()).all(|window| window != secret),
+            "{command} leaks no secret bytes"
+        );
+    }
     let other = fixture.confined("cat ../data/other");
     assert!(other.status.is_some_and(|status| status.success()));
     assert!(
