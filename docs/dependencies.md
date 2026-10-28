@@ -162,6 +162,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | all of the above together | | 9,048 | 7,892 | 5,297 | 155 | 8,290 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
 | lopdf | the image child: counting a PDF's pages and cutting a page range (`docs/tools.md`, "read") | 908 | 704 | 336 | 66 | 1,320 |
+| dhat | heap profiles behind the opt-in `dhat-heap` build; never in a shipped build | not measured | not measured | not measured | not measured | not measured |
 
 Notes:
 
@@ -281,6 +282,9 @@ Notes:
   (zune-jpeg, png, gif, image-webp, fast_image_resize, jpeg-encoder) are not
   used: jpeg-encoder's licence includes IJG, which is not on the allowed
   list.
+- dhat profiles the heap behind the opt-in `dhat-heap` build only; it is
+  never in a shipped build, so its figures read "not measured" and it adds
+  nothing to the "all of the above together" row.
 
 ### Root certificates
 
