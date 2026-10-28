@@ -118,6 +118,8 @@ fn catalogue_notices_show_under_their_own_codes() {
             }
         })
         .collect();
+    // Catalogue notices keep their push order, one row each, oldest first
+    // (`docs/tui.md`, "Notices").
     assert_eq!(
         codes,
         ["model_unconfigured", "extension_failed", "model_invalid"]

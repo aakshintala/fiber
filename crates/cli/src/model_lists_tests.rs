@@ -492,7 +492,10 @@ fn a_failed_refresh_is_a_notice_and_the_cached_list_stays() {
         "the text is unchanged: {failed:?}"
     );
     assert_eq!(failed.code, ErrorCode::ExtensionFailed);
-    assert_eq!(failed.extension.as_deref(), Some("acme"));
+    // The notice names the extension, not the provider
+    // (`docs/model-routing.md`, "Model discovery": an `extension_failed`
+    // notice names the extension).
+    assert_eq!(failed.extension.as_deref(), Some("acme-ext"));
 }
 
 #[test]

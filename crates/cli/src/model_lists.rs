@@ -145,7 +145,7 @@ fn cached_lists(
 /// Loads the Lua providers, refreshes them with `max_age`, joins every
 /// refresh, and drops the extensions before returning, so no VM stays
 /// resident. A joined list replaces its provider's; a failed refresh is
-/// one [`Notice`] with code `extension_failed` naming the provider, and
+/// one [`Notice`] with code `extension_failed` naming the extension, and
 /// the cached list stays.
 fn refreshed(
     config: &Config,
@@ -158,6 +158,14 @@ fn refreshed(
 ) {
     let loaded = load(config);
     notices.extend(providers.add_session(&loaded, config, run, lookup));
+    // A `StartedRefresh` names the provider; the notice names the
+    // extension that registered it (`docs/model-routing.md`, "Model
+    // discovery": an `extension_failed` notice names the extension).
+    let extension_of: std::collections::BTreeMap<&str, &str> = loaded
+        .lua_providers()
+        .iter()
+        .map(|(extension, provider)| (provider.name(), extension.as_str()))
+        .collect();
     let wanted: Vec<Arc<extensions::LuaProvider>> = loaded
         .lua_providers()
         .iter()
@@ -166,6 +174,11 @@ fn refreshed(
     for (name, handle) in
         extensions::refresh_lists(&wanted, providers, config, max_age, run, lookup)
     {
+        let extension = extension_of
+            .get(name.as_str())
+            .copied()
+            .unwrap_or(name.as_str())
+            .to_owned();
         match handle.join() {
             Ok(Ok(models)) => {
                 notices.extend(providers.set_models(&name, models));
@@ -173,14 +186,14 @@ fn refreshed(
             Ok(Err(error)) => {
                 notices.push(Notice {
                     code: ErrorCode::ExtensionFailed,
-                    extension: Some(name.clone()),
+                    extension: Some(extension.clone()),
                     message: format!("Could not refresh {name}'s model list: {error}"),
                 });
             }
             Err(_) => {
                 notices.push(Notice {
                     code: ErrorCode::ExtensionFailed,
-                    extension: Some(name.clone()),
+                    extension: Some(extension.clone()),
                     message: format!(
                         "Could not refresh {name}'s model list: the refresh did not answer."
                     ),

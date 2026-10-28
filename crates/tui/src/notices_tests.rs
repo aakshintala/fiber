@@ -464,6 +464,8 @@ fn catalogue_notices_show_under_their_own_codes_and_a_read_error_is_io_failed() 
             line @ NoticeLine::More(_) => panic!("a more row, not a notice: {line:?}"),
         })
         .collect();
+    // Catalogue notices keep their push order, one row each, oldest first
+    // (`docs/tui.md`, "Notices").
     assert_eq!(
         codes,
         ["model_unconfigured", "extension_failed", "model_invalid"]
@@ -477,7 +479,8 @@ fn catalogue_notices_show_under_their_own_codes_and_a_read_error_is_io_failed() 
     );
     app.on_models(Err("the lists could not be read".to_owned()));
     // Three rows already show, so the read error waits behind one
-    // `+N more` row; dismissing the oldest reveals it with its code.
+    // `+N more` row; dismissing the oldest reveals it with its code
+    // (`docs/tui.md`, "Notices": at most 3 show, then "+N more").
     assert_eq!(app.notices()[3], NoticeLine::More(1));
     app.dismiss_notice(0);
     assert_eq!(
