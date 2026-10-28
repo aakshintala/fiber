@@ -941,17 +941,26 @@ fn grouped_fill_gives_one_entry_per_provider_and_unset_setting() {
     let (notices, groups) = providers
         .fill_placeholders_grouped(&cfg, &|name| env.get(name).cloned())
         .unwrap();
-    let entries: Vec<(&str, &str, &[String])> = groups
+    let entries: Vec<(&str, &str, Vec<&str>)> = groups
         .iter()
-        .map(|group| (group.provider(), group.setting(), group.models()))
+        .map(|group| {
+            (
+                group.provider(),
+                group.setting(),
+                group
+                    .models()
+                    .iter()
+                    .map(|model| model.id.as_str())
+                    .collect(),
+            )
+        })
         .collect();
-    let ids = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
     assert_eq!(
         entries,
         [
-            ("a", "zone", ids(&["m"]).as_slice()),
-            ("b", "region", ids(&["r1", "both"]).as_slice()),
-            ("b", "workspace", ids(&["m1", "m2"]).as_slice()),
+            ("a", "zone", vec!["m"]),
+            ("b", "region", vec!["r1", "both"]),
+            ("b", "workspace", vec!["m1", "m2"]),
         ]
     );
     // Only the value that is not a host keeps its per-model notice.
@@ -966,12 +975,13 @@ fn grouped_fill_gives_one_entry_per_provider_and_unset_setting() {
           whose value is not a host."
         ]
     );
+    let owned = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
     assert_eq!(
         kept(&providers),
         [
-            ("a".to_owned(), vec![]),
-            ("b".to_owned(), ids(&["plain"])),
-            ("c".to_owned(), ids(&["m"])),
+            ("a".to_owned(), owned(&[])),
+            ("b".to_owned(), owned(&["plain"])),
+            ("c".to_owned(), owned(&["m"])),
         ]
     );
 }
