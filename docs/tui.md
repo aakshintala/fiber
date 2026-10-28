@@ -2955,6 +2955,17 @@ An extension's own timers (`host.after`, `host.every`) are for work other than
 drawing. They wake the terminal whether or not anything is on screen, which is
 the extension author's cost to keep down.
 
+An animation ticks on a shared floor: an interval below 120 ms fires at the
+floor instead. Each due tick needs the item painted in the previous frame:
+frame 0 draws the still form, and each due tick advances one frame. An item
+the paint skips holds its frame and asks for no wake. A stopped item
+(`animate = false`) holds until its input changes, a width change keeps the
+frame, and a dropped page restarts at frame 0. Closed draws (search, counts,
+measurement) read the stored frame without advancing or waking. A renderer
+that errors or returns the wrong shape keeps its built-in fallback with no
+further calls until its input changes ("When an extension fails"), and a
+timeout switches the extension off as a still one does.
+
 ### When an extension fails
 
 - **An error or a wrong shape** falls back to the built-in for that item. The
