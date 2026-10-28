@@ -88,6 +88,7 @@ pub(crate) fn session_forked(
     parent: Parent,
     depth: u32,
     prompt: String,
+    inherited: Vec<PathBuf>,
     adopted: Option<contract::shapes::Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
@@ -209,6 +210,7 @@ pub(crate) fn session_forked(
         }),
         context.reads,
         false,
+        inherited,
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),
@@ -358,6 +360,7 @@ pub(crate) fn session_rewound(
         }),
         context.reads,
         false,
+        Vec::new(),
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),
@@ -464,6 +467,7 @@ fn session_moved(
         }),
         context.reads,
         false,
+        Vec::new(),
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),

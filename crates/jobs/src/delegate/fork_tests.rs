@@ -8,7 +8,9 @@
     reason = "test code"
 )]
 
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 
 use contract::inbox::Delivery;
@@ -347,6 +349,40 @@ fn the_calling_action_reaches_the_point() {
     let seen = rig.seen_actions.lock().unwrap();
     assert_eq!(*seen, vec![None, Some(action)]);
     rig.registry.stop_delegates();
+}
+
+#[test]
+fn a_fork_reads_its_inherited_roots_at_launch() {
+    let rig = rig();
+    let mut forked = tool(&rig);
+    // Read at launch, not at wiring, like a spawn: the fork's point
+    // selects its conversation prefix through the launch start, never
+    // these roots.
+    let seen = Arc::new(Mutex::new(false));
+    let seen_in = Arc::clone(&seen);
+    forked.wiring.inherited = Arc::new(move || {
+        *seen_in.lock().unwrap() = true;
+        vec![PathBuf::from("/at-launch")]
+    });
+    let output = forked.run(
+        &arguments(),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    // Guard first: the child is already running, so arm its watchdog
+    // before any assertion that could fail and strand it.
+    let _watchdog = child_group(&rig);
+    assert!(output.error.is_none());
+    assert!(*seen.lock().unwrap(), "the roots are read at launch");
+    let launched = Deadline::after(DEADLINE)
+        .recv(&rig.launched)
+        .expect("the launcher ran");
+    assert_eq!(launched.added, [PathBuf::from("/at-launch")]);
+    assert!(
+        matches!(launched.start, Start::Fresh(Fresh::Fork { .. })),
+        "the point still rides the start"
+    );
+    assert_eq!(rig.registry.stop_delegates(), 1);
 }
 
 #[test]

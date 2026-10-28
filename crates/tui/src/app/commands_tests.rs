@@ -73,6 +73,28 @@ fn handoff_sends_its_instructions() {
 }
 
 #[test]
+fn add_dir_sends_add_directory_with_the_path() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/add-dir shared"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "add_directory");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(lines[0]["args"], json!({"path": "shared"}));
+    assert_eq!(app.draft(), "");
+}
+
+#[test]
+fn add_dir_without_a_path_shows_its_usage() {
+    let mut app = attached();
+    assert_eq!(enter(&mut app, "/add-dir"), Effect::None);
+    assert_eq!(app.draft(), "/add-dir ");
+    assert_eq!(
+        app.notice(),
+        Some("Add a folder after /add-dir, then press Enter.")
+    );
+}
+
+#[test]
 fn the_slash_list_shows_the_name_row() {
     let mut app = connected();
     type_text(&mut app, "/nam");

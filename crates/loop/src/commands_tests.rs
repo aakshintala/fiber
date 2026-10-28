@@ -13,7 +13,10 @@ use std::sync::{Arc, Mutex, mpsc};
 
 use contract::ErrorCode;
 use contract::SessionId;
+use contract::commands::AddDirectoryArgs;
 use contract::events::CommandInfo;
+use contract::inbox::{Ack, Answer};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use log::Log;
 
@@ -498,4 +501,342 @@ fn a_disabled_name_keeps_the_extension_command() {
     );
     assert_eq!(listed.rows, [extension("ship", "Ships.", "fx-ext")]);
     assert!(listed.notices.is_empty());
+}
+
+/// A loop on `tree` whose workspace is `top`, with its log.
+fn started(tree: &Tree) -> (Loop, Arc<Log>) {
+    let inputs = tree.inputs();
+    let log = Arc::new(
+        Log::create(&tree.root, SessionId("s_test".into()), inputs.clock.clone()).unwrap(),
+    );
+    let (_inbox, receiver) = mpsc::channel();
+    let looped = Loop::start(
+        Session {
+            log: Arc::clone(&log),
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: inputs,
+            inbox: receiver,
+            tools: Vec::new(),
+            permissions: Permissions {
+                workspace: tree.top().display().to_string(),
+                credentials: tree.home().join("credentials"),
+                credential_files: Vec::new(),
+                rules: Arc::new(fakes::NoRules),
+            },
+        },
+        None,
+    )
+    .unwrap();
+    (looped, log)
+}
+
+/// An acknowledgement recording its answer, failing the test past the
+/// deadline: every blocking wait carries one, so a bug fails instead of
+/// hanging.
+fn capture() -> (Ack, mpsc::Receiver<Answer>) {
+    let (tx, rx) = mpsc::channel();
+    (
+        Ack(Box::new(move |answer| {
+            drop(tx.send(answer));
+        })),
+        rx,
+    )
+}
+
+fn answered(rx: &mpsc::Receiver<Answer>) -> Answer {
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(rx)
+        .expect("the ack runs")
+}
+
+/// Every `directory_added` payload the loop's log holds, in order.
+fn added(tree: &Tree) -> Vec<String> {
+    log::read(&tree.root.join("s_test"))
+        .unwrap()
+        .into_iter()
+        .filter(|line| line.kind == "directory_added")
+        .map(|line| {
+            line.payload
+                .get("path")
+                .and_then(|path| path.as_str())
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn add_directory_writes_the_resolved_directory_and_accepts() {
+    let tree = Tree::new();
+    let shared = tree.root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    let resolved = shared.canonicalize().unwrap().display().to_string();
+    let (mut looped, _) = started(&tree);
+    let (ack, rx) = capture();
+    looped
+        .take_add_directory(
+            AddDirectoryArgs {
+                path: shared.display().to_string(),
+            },
+            ack,
+        )
+        .unwrap();
+    assert!(matches!(answered(&rx), Ok(None)));
+    assert_eq!(added(&tree), [resolved]);
+}
+
+#[test]
+fn add_directory_resolves_a_relative_path_against_the_workspace() {
+    let tree = Tree::new();
+    let shared = tree.root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    let resolved = shared.canonicalize().unwrap().display().to_string();
+    let (mut looped, _) = started(&tree);
+    let (ack, rx) = capture();
+    looped
+        .take_add_directory(
+            AddDirectoryArgs {
+                path: "../shared".into(),
+            },
+            ack,
+        )
+        .unwrap();
+    assert!(matches!(answered(&rx), Ok(None)));
+    // A relative path inside the workspace stays covered: no event.
+    let sub = tree.top().join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let (ack, rx) = capture();
+    looped
+        .take_add_directory(AddDirectoryArgs { path: "sub".into() }, ack)
+        .unwrap();
+    assert!(matches!(answered(&rx), Ok(None)));
+    assert_eq!(added(&tree), [resolved]);
+}
+
+#[test]
+fn add_directory_resolves_a_symlink_to_its_target() {
+    let tree = Tree::new();
+    let shared = tree.root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::os::unix::fs::symlink(&shared, tree.top().join("link")).unwrap();
+    let resolved = shared.canonicalize().unwrap().display().to_string();
+    let (mut looped, _) = started(&tree);
+    let (ack, rx) = capture();
+    looped
+        .take_add_directory(
+            AddDirectoryArgs {
+                path: "link".into(),
+            },
+            ack,
+        )
+        .unwrap();
+    assert!(matches!(answered(&rx), Ok(None)));
+    assert_eq!(added(&tree), [resolved]);
+}
+
+#[test]
+fn add_directory_rejects_a_missing_or_non_directory_path() {
+    for missing in [true, false] {
+        let tree = Tree::new();
+        let path = if missing {
+            tree.root.join("missing").display().to_string()
+        } else {
+            let file = tree.root.join("note.txt");
+            std::fs::write(&file, "hi").unwrap();
+            file.display().to_string()
+        };
+        let (mut looped, _) = started(&tree);
+        let (ack, rx) = capture();
+        looped
+            .take_add_directory(AddDirectoryArgs { path: path.clone() }, ack)
+            .unwrap();
+        let Err(rejection) = answered(&rx) else {
+            panic!("{path} was accepted");
+        };
+        assert_eq!(rejection.code, ErrorCode::InvalidArguments, "{path}");
+        assert!(added(&tree).is_empty(), "{path}");
+    }
+}
+
+#[test]
+fn add_directory_accepts_a_covered_path_without_an_event() {
+    let tree = Tree::new();
+    let sub = tree.top().join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let (mut looped, _) = started(&tree);
+    for path in [
+        tree.top().display().to_string(),
+        sub.display().to_string(),
+        "sub".to_owned(),
+    ] {
+        let (ack, rx) = capture();
+        looped
+            .take_add_directory(AddDirectoryArgs { path: path.clone() }, ack)
+            .unwrap();
+        assert!(matches!(answered(&rx), Ok(None)), "{path}");
+    }
+    assert!(added(&tree).is_empty());
+}
+
+#[test]
+fn add_directory_rejects_a_metadata_directory_and_anything_below_it() {
+    let tree = Tree::new();
+    let git = tree.root.join("outer").join(".git");
+    std::fs::create_dir_all(git.join("hooks")).unwrap();
+    let (mut looped, _) = started(&tree);
+    for path in [
+        git.display().to_string(),
+        git.join("hooks").display().to_string(),
+    ] {
+        let (ack, rx) = capture();
+        looped
+            .take_add_directory(AddDirectoryArgs { path: path.clone() }, ack)
+            .unwrap();
+        let Err(rejection) = answered(&rx) else {
+            panic!("{path} was accepted");
+        };
+        assert_eq!(rejection.code, ErrorCode::InvalidArguments, "{path}");
+    }
+    assert!(added(&tree).is_empty(), "no rejected root writes an event");
+}
+
+#[test]
+fn add_directory_treats_an_added_root_and_what_sits_below_it_as_covered() {
+    let tree = Tree::new();
+    let shared = tree.root.join("shared");
+    std::fs::create_dir_all(shared.join("sub")).unwrap();
+    let resolved = shared.canonicalize().unwrap().display().to_string();
+    let (mut looped, _) = started(&tree);
+    let (ack, rx) = capture();
+    looped
+        .take_add_directory(
+            AddDirectoryArgs {
+                path: resolved.clone(),
+            },
+            ack,
+        )
+        .unwrap();
+    assert!(matches!(answered(&rx), Ok(None)));
+    // The root itself and a path nested below it are already inside the
+    // boundary: accepted, with no further event (`docs/events.md`,
+    // "`directory_added`").
+    for path in [resolved.clone(), shared.join("sub").display().to_string()] {
+        let (ack, rx) = capture();
+        looped
+            .take_add_directory(AddDirectoryArgs { path: path.clone() }, ack)
+            .unwrap();
+        assert!(matches!(answered(&rx), Ok(None)), "{path}");
+    }
+    assert_eq!(added(&tree), [resolved]);
+}
+
+#[test]
+fn add_directory_writes_an_event_beside_an_added_root() {
+    let tree = Tree::new();
+    let shared = tree.root.join("shared");
+    let other = tree.root.join("other");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let (mut looped, _) = started(&tree);
+    let (ack, rx) = capture();
+    looped
+        .take_add_directory(
+            AddDirectoryArgs {
+                path: shared.display().to_string(),
+            },
+            ack,
+        )
+        .unwrap();
+    assert!(matches!(answered(&rx), Ok(None)));
+    // Beside the added root, outside the workspace: not covered, so the
+    // folder is added with its own event (`docs/events.md`,
+    // "`directory_added`").
+    let (ack, rx) = capture();
+    looped
+        .take_add_directory(
+            AddDirectoryArgs {
+                path: other.display().to_string(),
+            },
+            ack,
+        )
+        .unwrap();
+    assert!(matches!(answered(&rx), Ok(None)));
+    assert_eq!(
+        added(&tree),
+        [
+            shared.canonicalize().unwrap().display().to_string(),
+            other.canonicalize().unwrap().display().to_string()
+        ]
+    );
+}
+
+#[test]
+fn add_directory_adds_an_already_added_folder_only_once() {
+    let tree = Tree::new();
+    let shared = tree.root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    let resolved = shared.canonicalize().unwrap().display().to_string();
+    let (mut looped, _) = started(&tree);
+    for _ in 0..2 {
+        let (ack, rx) = capture();
+        looped
+            .take_add_directory(
+                AddDirectoryArgs {
+                    path: shared.display().to_string(),
+                },
+                ack,
+            )
+            .unwrap();
+        assert!(matches!(answered(&rx), Ok(None)));
+    }
+    assert_eq!(added(&tree), [resolved]);
+}
+
+#[test]
+fn a_fork_root_missing_from_its_prefix_keeps_the_normal_add_message() {
+    let tree = Tree::new();
+    let shared = tree.root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    let resolved = shared.canonicalize().unwrap();
+    let (mut looped, _) = started(&tree);
+    looped
+        .seed_inherited(vec![shared], false)
+        .expect("the fork records its post-point root");
+    let lines = log::read(&tree.root.join("s_test")).unwrap();
+    let added = lines
+        .iter()
+        .find(|line| line.kind == "directory_added")
+        .unwrap();
+    assert!(added.payload.get("inherited").is_none());
+    let conversation = crate::conversation::rebuild(&lines, "fake/model").unwrap();
+    assert!(conversation.iter().any(|item| {
+        matches!(item, contract::provider::Input::User { text, .. } if text.contains(&resolved.display().to_string()))
+    }));
+}
+
+#[test]
+fn seed_inherited_writes_each_new_root_as_the_loops_own_event() {
+    let tree = Tree::new();
+    let shared = tree.root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    let resolved = shared.canonicalize().unwrap();
+    let (mut looped, _) = started(&tree);
+    // A covered root writes nothing, and a root removed since the
+    // parent folded it is skipped: only the new root becomes an event.
+    looped
+        .seed_inherited(
+            vec![tree.top(), tree.root.join("missing"), shared.clone()],
+            true,
+        )
+        .unwrap();
+    assert_eq!(added(&tree), [resolved.display().to_string()]);
+    // Seeding again writes nothing more: the loop's own event covers
+    // the root now.
+    looped.seed_inherited(vec![shared], true).unwrap();
+    assert_eq!(added(&tree).len(), 1);
 }

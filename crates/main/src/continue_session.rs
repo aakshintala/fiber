@@ -106,6 +106,7 @@ pub(crate) fn session_continues(
         None,
         reads,
         supervised,
+        Vec::new(),
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),
