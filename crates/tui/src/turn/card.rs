@@ -432,6 +432,15 @@ impl Message {
     }
 }
 
+/// Whether the labelled rule draws its rule cells: with no dashes the
+/// span would hold no rule characters and copy no text.
+// With no dashes the rule span is empty, so drawing it changes no cell
+// and the copied logical text keeps the label and body unchanged.
+#[cfg_attr(false, mutants::skip)]
+fn has_rule(dashes: usize) -> bool {
+    dashes > 0
+}
+
 /// Draws one non-driver message as a labelled rule and its text/images.
 fn message_rows(
     message: &Message,
@@ -466,7 +475,7 @@ fn message_rows(
             Style::default().add_modifier(Modifier::DIM),
         ));
     }
-    if dashes > 0 {
+    if has_rule(dashes) {
         spans.push(Span::styled(
             "─".repeat(dashes),
             crate::theme::style(Role::Rule),

@@ -709,6 +709,17 @@ impl App {
         lines
     }
 
+    /// Whether `name` changes the visible label for `id`: a repeated
+    /// same-name status changes no rendered label, so the check only
+    /// skips a redundant copy-on-write update and label refresh.
+    // A same-name status redraws nothing: `Pages::set_session_labels`
+    // returns when the name maps are equal, so always refreshing would
+    // draw the same rows.
+    #[cfg_attr(false, mutants::skip)]
+    fn label_changed(names: &HashMap<SessionId, String>, id: &SessionId, name: &str) -> bool {
+        names.get(id).map(String::as_str) != Some(name)
+    }
+
     fn observe_session_status(&mut self, envelope: &Envelope) {
         if envelope.kind != "session_status" {
             return;
@@ -719,12 +730,15 @@ impl App {
         let name = (status.named && !status.name.is_empty()).then_some(status.name);
         let names = Arc::make_mut(&mut self.session_names);
         let changed = match name {
-            Some(name) if names.get(&envelope.session_id) != Some(&name) => {
-                names.insert(envelope.session_id.clone(), name);
-                true
+            Some(name) => {
+                if Self::label_changed(names, &envelope.session_id, &name) {
+                    names.insert(envelope.session_id.clone(), name);
+                    true
+                } else {
+                    false
+                }
             }
             None => names.remove(&envelope.session_id).is_some(),
-            Some(_) => false,
         };
         if changed {
             self.refresh_session_labels();

@@ -294,6 +294,55 @@ fn a_feed_status_names_the_sender_only_when_it_is_named() {
     );
 }
 
+#[test]
+fn an_unnamed_home_row_with_a_display_name_still_labels_by_sender_id() {
+    let mut app = home_with(80, 24, launch());
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let lines: Vec<Value> = commands(app.on_line(hello()));
+    let recent = lines
+        .iter()
+        .find(|line| line["command"] == "recent")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("recent id: {lines:?}"))
+        .to_owned();
+    // The row's status carries a display name but does not name the
+    // sender: only an actual name labels it, so the message falls back
+    // to the sender id (`docs/tui.md`, "Turns").
+    let unnamed_row = json!({
+        "session_id": "s_bbbbbbbbbbbbbbbb", "ts": 0, "project": "other",
+        "workspace": "/o", "name": "worker", "how": "exited",
+        "status": {
+            "name": "first prompt row", "named": false, "workspace": "/o", "project": "other",
+            "state": "idle",
+            "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        },
+    });
+    let out = app.on_line(accepted(&recent, json!({"sessions": [unnamed_row]})));
+    let scoped: Vec<Value> = commands(out)
+        .into_iter()
+        .filter(|line| line["command"] == "recent")
+        .collect();
+    // A project that first appears earns one scoped `recent` ask
+    // (`docs/tui.md`, "Home", "The session list").
+    assert_eq!(scoped.len(), 1, "the new project earns one scoped ask");
+    app.on_line(turn_with_sender_message("s_aaaaaaaaaaaaaaaa"));
+    let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
+    assert!(
+        texts
+            .iter()
+            .any(|line| line.contains(&format!("{SENDER} · "))),
+        "the sender id labels the message: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|line| line.contains("first prompt row")),
+        "an unnamed status names nothing: {texts:?}"
+    );
+}
+
 /// A `turn_started` in `session` carrying the sender's message beside
 /// the driver's.
 fn turn_with_sender_message(session: &str) -> Line {

@@ -1390,6 +1390,42 @@ fn message_entries_keep_each_source_label_and_timestamp() {
 }
 
 #[test]
+fn a_wrapped_session_message_copies_as_its_original_words() {
+    let sender = "s_bbbbbbbbbbbbbbbb";
+    let body = "please check the wiring in the corner cabinet on the third floor and report back before Friday";
+    let mut cards = fresh();
+    feed(
+        &mut cards,
+        "turn_started",
+        None,
+        json!({"input": [
+            {"type": "message", "source": "driver", "content": [{"type": "text", "text": "go"}]},
+            {"type": "message", "source": "session", "from_session_id": sender,
+             "content": [{"type": "text", "text": body}]}
+        ]}),
+    );
+    done(&mut cards);
+    let (rows, texts, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    // The body is wider than the card, so no one drawn row holds it
+    // whole: the wrapped rows join with their dropped spaces, and the
+    // copied logical text keeps the original words
+    // (`docs/tui.md`, "Selection and copy").
+    assert!(
+        shown.iter().all(|row| !row.contains(body)),
+        "the body wraps across rows: {shown:?}"
+    );
+    let copied: Vec<String> = crate::logical::logical(&rows, &texts)
+        .into_iter()
+        .map(|line| line.text)
+        .collect();
+    assert!(
+        copied.contains(&body.to_owned()),
+        "the wrapped body copies as its original words: {copied:?}"
+    );
+}
+
+#[test]
 fn a_mid_turn_non_driver_message_is_not_drawn_as_bold_steer() {
     let mut cards = fresh();
     start(&mut cards, "go");

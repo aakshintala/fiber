@@ -372,6 +372,7 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
 
     let mut run = support::pty::Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
+    let from = run.output().len();
     run.write(b"first\r");
     run.wait_screen("the first answered turn", |grid| {
         grid.contents.contains("Hello.")
@@ -388,6 +389,10 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
     run.wait_screen("the fetched 10% remaining quota share", |grid| {
         grid.contents.contains("10%")
     });
+    // The reply draws while the first turn is still running, so the
+    // second prompt waits for its completed card: sent earlier, it
+    // would steer the first turn instead of starting the second.
+    run.turn_finished(from);
     run.write(b"second\r");
     let shown = run.wait_screen("the second turn's Fiber quota notice", |grid| {
         grid.contents.contains("Fiber")
