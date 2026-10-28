@@ -1498,9 +1498,16 @@ impl App {
     fn refresh_image_sizing(&mut self) {
         let inline = self.inline_images();
         let cell = self.cell;
+        // The converter is available when the launch names the running
+        // executable, so a stored JPEG or WebP converts to PNG before
+        // Kitty transmission (`docs/tui.md`, "Images").
+        let converts = self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.launch.fiber.is_some());
         let sizing_of = |flat: bool| {
             if inline && !flat {
-                crate::image::Sizing::Inline { cell }
+                crate::image::Sizing::Inline { cell, converts }
             } else {
                 crate::image::Sizing::Text
             }

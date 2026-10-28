@@ -301,6 +301,7 @@ fn identity(input: &Input) -> String {
     match input {
         Input::Hub(Line::Session(line)) => line.kind.clone(),
         Input::Hub(Line::Hub(line)) => line.kind.clone(),
+        Input::Converted { .. } => panic!("a hub line, not another input"),
         Input::Bytes(_)
         | Input::Connected(..)
         | Input::ConnectFailed(_)
