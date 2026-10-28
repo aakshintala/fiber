@@ -9,7 +9,9 @@ use std::time::Duration;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use crate::tui_vm::{RenderOut, SLOT_NAMES, SLOT_PREFIXES, Span, TuiVm};
+use crate::tui_vm::{
+    KeyBinding, KeyForm, KeyRejection, RenderOut, SLOT_NAMES, SLOT_PREFIXES, Span, TuiVm,
+};
 use crate::{Error, ErrorCode};
 
 const MS: Duration = Duration::from_millis(1);
@@ -64,6 +66,18 @@ fn call(vm: &mut TuiVm, input: &Value) -> Result<Vec<Vec<Span>>, Error> {
     vm.call("notice", Some("s1"), input, 80, &none)
 }
 
+/// Moves the clock by `by`, from inside a callback the VM is running:
+/// the callback has started, and the clock moves only then. The suite's
+/// one raw clock move; no code under test waits on the clock
+/// (ruling 6179406086).
+fn tick(clock: &FakeClock, by: Duration) {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(by);
+}
+
 /// Calls `notice`, moving the clock by `by` from inside `builtin`: the
 /// render has started, and the clock moves only then.
 fn call_advancing(
@@ -72,14 +86,33 @@ fn call_advancing(
     by: Duration,
 ) -> Result<Vec<Vec<Span>>, Error> {
     let advance = |_: &Value, _: u16| {
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "no code under test waits on the clock (ruling 6179406086)"
-        )]
-        clock.advance(by);
+        tick(clock, by);
         Vec::new()
     };
     vm.call("notice", Some("s1"), &json!({}), 80, &advance)
+}
+
+/// Runs the `raw` binding, moving the clock by `by` from inside `ticked`:
+/// the handler has started, and the clock moves only then.
+fn run_advancing(
+    vm: &mut TuiVm,
+    clock: Arc<FakeClock>,
+    raw: &str,
+    by: Duration,
+) -> Result<bool, Error> {
+    vm.lua()
+        .globals()
+        .set(
+            "ticked",
+            vm.lua()
+                .create_function(move |_, ()| {
+                    tick(&clock, by);
+                    Ok(())
+                })
+                .unwrap(),
+        )
+        .unwrap();
+    vm.run_key(raw, "s1")
 }
 
 fn text(lines: &[Vec<Span>]) -> String {
@@ -904,4 +937,326 @@ fn a_sessionless_call_sends_no_session_id_key() {
         .call("notice", Some("s1"), &json!({}), 80, &none)
         .unwrap();
     assert_eq!(text(&lines), "s1");
+}
+
+/// The key rejections `source` records: the load succeeds, holding no
+/// binding for the bad registration.
+fn rejections(source: &str) -> (Vec<KeyBinding>, Vec<KeyRejection>) {
+    let (_, vm) = vm(source);
+    (vm.key_bindings(), vm.key_rejections())
+}
+
+/// Runs the `raw` binding for session `s1`.
+fn run(vm: &mut TuiVm, raw: &str) -> Result<bool, Error> {
+    vm.run_key(raw, "s1")
+}
+
+#[test]
+fn fiber_key_registers_a_run_binding() {
+    let (bindings, rejected) =
+        rejections("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })");
+    assert!(rejected.is_empty(), "{rejected:?}");
+    assert_eq!(
+        bindings,
+        vec![KeyBinding {
+            raw: "ctrl+o".to_owned(),
+            form: KeyForm::Run { timeout: 100 * MS },
+        }]
+    );
+}
+
+#[test]
+fn fiber_key_registers_action_bindings_with_and_without_a_variant() {
+    let (bindings, rejected) = rejections(
+        "fiber.key('alt+h', { action = 'move_word', variant = 'left' })\n\
+         fiber.key('ctrl+n', { action = 'new_session' })",
+    );
+    assert!(rejected.is_empty(), "{rejected:?}");
+    assert_eq!(
+        bindings,
+        vec![
+            KeyBinding {
+                raw: "alt+h".to_owned(),
+                form: KeyForm::Action {
+                    id: "move_word".to_owned(),
+                    variant: Some("left".to_owned()),
+                },
+            },
+            KeyBinding {
+                raw: "ctrl+n".to_owned(),
+                form: KeyForm::Action {
+                    id: "new_session".to_owned(),
+                    variant: None,
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn fiber_key_with_a_non_string_key_records_no_raw() {
+    for name in ["5", "nil"] {
+        let (bindings, rejected) = rejections(&format!(
+            "fiber.key({name}, {{ timeout = 100, run = function() end }})"
+        ));
+        assert!(bindings.is_empty(), "{name}: {bindings:?}");
+        assert_eq!(rejected.len(), 1, "{name}: {rejected:?}");
+        assert_eq!(rejected[0].raw, None, "{name}: {rejected:?}");
+        assert!(rejected[0].reason.contains("key"), "{name}: {rejected:?}");
+    }
+}
+
+#[test]
+fn fiber_key_with_a_non_table_spec_is_rejected() {
+    for spec in ["5", "nil", "'run'"] {
+        let (bindings, rejected) = rejections(&format!("fiber.key('ctrl+o', {spec})"));
+        assert!(bindings.is_empty(), "{spec}: {bindings:?}");
+        assert_eq!(rejected.len(), 1, "{spec}: {rejected:?}");
+        assert_eq!(rejected[0].raw.as_deref(), Some("ctrl+o"));
+    }
+}
+
+#[test]
+fn fiber_key_with_neither_run_nor_action_is_rejected() {
+    let (bindings, rejected) = rejections("fiber.key('ctrl+o', {})");
+    assert!(bindings.is_empty());
+    assert_eq!(rejected.len(), 1);
+    assert!(rejected[0].reason.contains("run") && rejected[0].reason.contains("action"));
+}
+
+#[test]
+fn fiber_key_with_both_run_and_action_is_rejected() {
+    let (bindings, rejected) =
+        rejections("fiber.key('ctrl+o', { timeout = 100, run = function() end, action = 'send' })");
+    assert!(bindings.is_empty());
+    assert_eq!(rejected.len(), 1);
+    assert!(rejected[0].reason.contains("run") && rejected[0].reason.contains("action"));
+}
+
+#[test]
+fn fiber_key_with_a_missing_or_invalid_timeout_names_timeout() {
+    for timeout in ["nil", "0", "-1", "1.5", "'100'"] {
+        let (bindings, rejected) = rejections(&format!(
+            "fiber.key('ctrl+o', {{ timeout = {timeout}, run = function() end }})"
+        ));
+        assert!(bindings.is_empty(), "{timeout}: {bindings:?}");
+        assert_eq!(rejected.len(), 1, "{timeout}: {rejected:?}");
+        assert!(
+            rejected[0].reason.contains("timeout"),
+            "{timeout}: {rejected:?}"
+        );
+    }
+    let (bindings, rejected) =
+        rejections("fiber.key('ctrl+o', { run = function() return true end })");
+    assert!(bindings.is_empty());
+    assert_eq!(rejected.len(), 1);
+    assert!(rejected[0].reason.contains("timeout"), "{rejected:?}");
+}
+
+#[test]
+fn fiber_key_with_a_non_function_run_is_rejected() {
+    let (bindings, rejected) = rejections("fiber.key('ctrl+o', { timeout = 100, run = 'yes' })");
+    assert!(bindings.is_empty());
+    assert_eq!(rejected.len(), 1);
+    assert!(rejected[0].reason.contains("run"), "{rejected:?}");
+}
+
+#[test]
+fn fiber_key_with_an_action_and_a_timeout_names_timeout() {
+    let (bindings, rejected) =
+        rejections("fiber.key('alt+h', { action = 'move_word', variant = 'left', timeout = 100 })");
+    assert!(bindings.is_empty());
+    assert_eq!(rejected.len(), 1);
+    assert!(rejected[0].reason.contains("timeout"), "{rejected:?}");
+}
+
+#[test]
+fn fiber_key_with_a_run_and_a_variant_names_variant() {
+    let (bindings, rejected) = rejections(
+        "fiber.key('ctrl+o', { timeout = 100, run = function() end, variant = 'left' })",
+    );
+    assert!(bindings.is_empty());
+    assert_eq!(rejected.len(), 1);
+    assert!(rejected[0].reason.contains("variant"), "{rejected:?}");
+}
+
+#[test]
+fn fiber_key_with_a_non_string_action_or_variant_is_rejected() {
+    let (bindings, rejected) = rejections("fiber.key('ctrl+o', { action = 5 })");
+    assert!(bindings.is_empty());
+    assert_eq!(rejected.len(), 1);
+    assert!(rejected[0].reason.contains("action"), "{rejected:?}");
+    let (bindings, rejected) =
+        rejections("fiber.key('alt+h', { action = 'move_word', variant = 5 })");
+    assert!(bindings.is_empty());
+    assert_eq!(rejected.len(), 1);
+    assert!(rejected[0].reason.contains("variant"), "{rejected:?}");
+}
+
+#[test]
+fn fiber_key_with_clear_then_quit_is_rejected() {
+    let (bindings, rejected) = rejections("fiber.key('ctrl+q', { action = 'clear_then_quit' })");
+    assert!(bindings.is_empty());
+    assert_eq!(rejected.len(), 1);
+    assert!(
+        rejected[0].reason.contains("clear_then_quit"),
+        "{rejected:?}"
+    );
+}
+
+#[test]
+fn fiber_key_with_a_duplicate_raw_name_keeps_the_first() {
+    let (bindings, rejected) = rejections(
+        "fiber.key('ctrl+o', { timeout = 100, run = function() return true end })\n\
+         fiber.key('ctrl+o', { timeout = 200, run = function() return false end })",
+    );
+    assert_eq!(rejected.len(), 1, "{rejected:?}");
+    assert_eq!(rejected[0].raw.as_deref(), Some("ctrl+o"));
+    assert!(rejected[0].reason.contains("twice"), "{rejected:?}");
+    assert_eq!(
+        bindings,
+        vec![KeyBinding {
+            raw: "ctrl+o".to_owned(),
+            form: KeyForm::Run { timeout: 100 * MS },
+        }]
+    );
+}
+
+#[test]
+fn key_bindings_keep_registration_order_across_case() {
+    let (bindings, rejected) = rejections(
+        "fiber.key('ctrl+o', { action = 'toggle_ledgers' })\n\
+         fiber.key('Ctrl+O', { action = 'send' })",
+    );
+    assert!(rejected.is_empty(), "{rejected:?}");
+    assert_eq!(
+        bindings
+            .iter()
+            .map(|binding| binding.raw.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ctrl+o", "Ctrl+O"]
+    );
+}
+
+#[test]
+fn fiber_slot_with_a_key_field_refuses_the_load() {
+    let message =
+        refused("fiber.slot('notice', { timeout = 100, key = 'ctrl+o', render = function() end })");
+    assert!(message.contains("key"), "{message}");
+}
+
+#[test]
+fn fiber_key_after_load_is_a_lua_error_and_registers_nothing() {
+    let (_, mut vm) =
+        notice("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })");
+    let result = call(&mut vm, &json!({}));
+    assert!(matches!(result, Err(Error::TuiLua(_))), "{result:?}");
+    assert!(vm.key_bindings().is_empty());
+    assert!(vm.key_rejections().is_empty());
+}
+
+#[test]
+fn run_key_returns_true_only_for_true() {
+    for (body, handled) in [
+        ("return true", true),
+        ("return false", false),
+        ("return nil", false),
+        ("return", false),
+    ] {
+        let (_, mut vm) = vm(&format!(
+            "fiber.key('ctrl+o', {{ timeout = 100, run = function() {body} end }})"
+        ));
+        assert_eq!(run(&mut vm, "ctrl+o").unwrap(), handled, "{body}");
+    }
+}
+
+#[test]
+fn run_key_on_an_action_only_or_unknown_key_is_not_handled() {
+    let (_, mut vm) = vm(
+        "fiber.key('alt+h', { action = 'move_word', variant = 'left' })\n\
+         fiber.key('ctrl+o', { timeout = 100, run = function() return true end })",
+    );
+    assert_eq!(run(&mut vm, "alt+h").unwrap(), false);
+    assert_eq!(run(&mut vm, "ctrl+z").unwrap(), false);
+    // Neither call notifies or switches the VM off.
+    assert!(vm.key_rejections().is_empty());
+    assert_eq!(run(&mut vm, "ctrl+o").unwrap(), true);
+}
+
+#[test]
+fn run_key_with_a_wrong_shape_is_a_shape() {
+    for body in ["return 5", "return 'handled'", "return {}"] {
+        let (_, mut vm) = vm(&format!(
+            "fiber.key('ctrl+o', {{ timeout = 100, run = function() {body} end }})"
+        ));
+        assert!(
+            matches!(run(&mut vm, "ctrl+o"), Err(Error::TuiShape(_))),
+            "{body}"
+        );
+        // A wrong shape leaves the VM on.
+        assert!(matches!(run(&mut vm, "ctrl+o"), Err(Error::TuiShape(_))));
+    }
+}
+
+#[test]
+fn run_key_with_a_lua_error_or_yield_is_a_lua_error() {
+    let (_, mut vm) = vm(
+        "fiber.key('ctrl+o', { timeout = 100, run = function() error('boom') end })\n\
+         fiber.key('ctrl+p', { timeout = 100, run = function() coroutine.yield() end })",
+    );
+    let Err(Error::TuiLua(message)) = run(&mut vm, "ctrl+o") else {
+        panic!("expected a Lua error");
+    };
+    assert!(message.contains("boom"), "{message}");
+    let Err(Error::TuiLua(message)) = run(&mut vm, "ctrl+p") else {
+        panic!("expected a Lua error");
+    };
+    assert!(message.contains("host call"), "{message}");
+    // An error leaves the VM on.
+    assert!(matches!(run(&mut vm, "ctrl+o"), Err(Error::TuiLua(_))));
+}
+
+#[test]
+fn run_key_receives_only_the_session_id() {
+    let (_, mut vm) = vm("fiber.key('ctrl+o', { timeout = 100, \
+         run = function(input) return input.session_id == 's1' and input.key == nil end })");
+    assert_eq!(run(&mut vm, "ctrl+o").unwrap(), true);
+}
+
+#[test]
+fn a_run_that_finishes_before_its_deadline_is_handled() {
+    let (clock, mut vm) =
+        vm("fiber.key('ctrl+o', { timeout = 100, run = function() ticked() return true end })");
+    assert_eq!(
+        run_advancing(&mut vm, clock, "ctrl+o", 99 * MS).unwrap(),
+        true
+    );
+}
+
+#[test]
+fn a_run_at_or_past_its_deadline_is_a_timeout() {
+    let (clock, mut timed) =
+        vm("fiber.key('ctrl+o', { timeout = 100, run = function() ticked() return true end })");
+    let timed_out = run_advancing(&mut timed, clock.clone(), "ctrl+o", 100 * MS);
+    assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
+    let later = run(&mut timed, "ctrl+o");
+    assert!(matches!(later, Err(Error::TuiOff)), "{later:?}");
+    let (fresh_clock, mut fresh) =
+        vm("fiber.key('ctrl+o', { timeout = 100, run = function() ticked() return true end })");
+    let past = run_advancing(&mut fresh, fresh_clock, "ctrl+o", 101 * MS);
+    assert!(matches!(past, Err(Error::TuiTimeout)), "{past:?}");
+}
+
+#[test]
+fn a_fresh_load_works_after_a_timeout() {
+    let source =
+        "fiber.key('ctrl+o', { timeout = 100, run = function() ticked() return true end })";
+    let (clock, mut timed) = vm(source);
+    let timed_out = run_advancing(&mut timed, clock, "ctrl+o", 100 * MS);
+    assert!(matches!(timed_out, Err(Error::TuiTimeout)), "{timed_out:?}");
+    let (_, mut again) = vm(source);
+    assert_eq!(
+        run_advancing(&mut again, FakeClock::new(), "ctrl+o", Duration::ZERO).unwrap(),
+        true
+    );
 }
