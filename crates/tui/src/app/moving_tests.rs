@@ -11,11 +11,11 @@ use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
 use super::super::{App, Effect};
+use crate::app::testkit::{SESSION, hello, session_line};
 use crate::home::Launch;
 use crate::link::Line;
 use crate::mouse::TargetId;
 
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const WALL: u64 = 1_700_000_000_000;
 
 /// An app with home state, attached to [`SESSION`], at 80x24.
@@ -34,30 +34,6 @@ fn app() -> App {
     app
 }
 
-/// A hub `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
-}
-
-/// One session envelope.
-fn session_line(kind: &str, payload: Value, action: Option<&str>, ts: u64) -> Line {
-    Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
-        session_id: contract::SessionId(SESSION.to_owned()),
-        ts,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: action.map(|id| contract::ActionId(id.to_owned())),
-        seq: None,
-        payload: payload.as_object().cloned().unwrap_or_default(),
-    })
-}
-
 /// A `session_status` for the attached session in `state`.
 fn status(state: Value) -> Line {
     let mut payload = json!({
@@ -71,18 +47,22 @@ fn status(state: Value) -> Line {
     for (key, value) in state.as_object().cloned().unwrap_or_default() {
         payload[key] = value;
     }
-    session_line("session_status", payload, None, 0)
+    session_line(SESSION, "session_status", payload, None)
 }
 
 /// A turn running since `ts` milliseconds.
 fn running(app: &mut App, ts: u64) {
-    app.on_line(session_line(
+    let Line::Session(mut env) = session_line(
+        SESSION,
         "turn_started",
         json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
         None,
-        ts,
-    ));
+    ) else {
+        unreachable!("shared session_line builds a session envelope");
+    };
+    env.ts = ts;
+    app.on_line(Line::Session(env));
 }
 
 /// The attached session's feed row reads `state`.
@@ -313,16 +293,16 @@ fn the_retry_clears_when_the_call_gets_through() {
         let mut app = app();
         fed(&mut app, json!({"state": "streaming"}));
         running(&mut app, 0);
-        app.on_line(session_line("step_started", json!({}), None, 0));
+        app.on_line(session_line(SESSION, "step_started", json!({}), None));
         app.on_line(session_line(
+            SESSION,
             "retry_scheduled",
             json!({"code": "rate_limited", "attempt": 2,
                 "delay_ms": 1_000, "last_attempt": 4}),
             Some("a_m"),
-            0,
         ));
         assert!(app.working_line().is_some_and(|line| line.retry.is_some()));
-        app.on_line(session_line(kind, payload, action, 0));
+        app.on_line(session_line(SESSION, kind, payload, action));
         if kind == "turn_completed" {
             // The turn ended with the call: no line, no retry.
             assert!(app.working_line().is_none(), "{kind}");
