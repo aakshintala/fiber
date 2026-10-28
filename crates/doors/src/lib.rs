@@ -138,9 +138,3 @@ pub fn exit_before_session(failure: Failure, out: &mut dyn Write, err: &mut dyn 
 }
 
 pub use support::mint;
-
-// debt: Part 7 of #1700 removes this re-export and rewrites the five held
-// call sites onto `worktree` directly: `crates/cli/src/sessions.rs`,
-// `crates/cli/src/sessions_tests.rs`, `crates/main/tests/delete.rs`,
-// `crates/bench/examples/bench/wheel.rs` and `crates/main/tests/journeys.rs`.
-pub use worktree::{Project, project, resolve_project};
