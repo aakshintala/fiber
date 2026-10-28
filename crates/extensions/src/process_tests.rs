@@ -5253,20 +5253,42 @@ impl HeldGroupMember {
 
     /// Reaps the member once, within one deadline: the group TERM already
     /// ended it, so the reap returns at once. A member that outlives the
-    /// TERM is named, since only a survivor outlives it.
+    /// TERM is named, since only a survivor outlives it. The waiter owns
+    /// the child, so a timeout KILLs it by pid and joins the waiter: the
+    /// join reaps the child before the panic, leaving no running process
+    /// or zombie behind.
     fn reap(&mut self, what: &str) {
+        self.reap_with(what, WITHIN);
+    }
+
+    /// [`reap`](HeldGroupMember::reap) with its deadline as a parameter, so
+    /// a test can force the timeout branch without waiting out [`WITHIN`].
+    fn reap_with(&mut self, what: &str, wait: Duration) {
         let mut child = self.child.take().expect("the held member reaps once");
         let (pid, pgid) = (self.pid, self.pgid);
         let (done, finished) = std::sync::mpsc::channel();
-        std::thread::spawn(move || match done.send(child.wait()) {
+        let waiter = std::thread::spawn(move || match done.send(child.wait()) {
             Ok(()) | Err(_) => {}
         });
-        match fakes::Deadline::after(WITHIN).recv(&finished) {
-            Ok(Ok(_)) => {}
+        match fakes::Deadline::after(wait).recv(&finished) {
+            Ok(Ok(_)) => match waiter.join() {
+                Ok(()) | Err(_) => {}
+            },
             Ok(Err(error)) => {
+                match waiter.join() {
+                    Ok(()) | Err(_) => {}
+                }
                 panic!("reaping held member {pid} of group {pgid} failed: {error}")
             }
-            Err(_) => panic!("waited {WITHIN:?} for {what} (held member {pid} of group {pgid})"),
+            Err(_) => {
+                match fakes::kill_pid(pid, "KILL") {
+                    Ok(_) | Err(_) => {}
+                }
+                match waiter.join() {
+                    Ok(()) | Err(_) => {}
+                }
+                panic!("waited {wait:?} for {what} (held member {pid} of group {pgid})")
+            }
         }
     }
 }
@@ -5341,6 +5363,46 @@ fn finish_terms_the_whole_group_despite_a_held_pipe() {
         "waited {WITHIN:?} for group {pgid} to empty after the group TERM",
     );
     assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// A reap whose member outlives its deadline still cleans up: the timeout
+/// KILLs the member and reaps it before panicking, so neither a running
+/// process nor a zombie survives the failure.
+#[test]
+fn held_group_member_reap_timeout_kills_and_reaps_before_panicking() {
+    // A group of the test's own: a `sleep` leader gives the held member a
+    // group to join, and no TERM is ever sent, so the member outlives the
+    // short deadline and the reap takes its timeout branch.
+    let mut leader = std::process::Command::new("sleep")
+        .arg("60")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .expect("a group leader starts");
+    let mut held = HeldGroupMember::spawn(leader.id());
+    let pid = held.pid;
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        held.reap_with(
+            "the held group member to outlive its deadline",
+            Duration::from_millis(100),
+        );
+    }));
+    assert!(
+        outcome.is_err(),
+        "a member that outlives its deadline panics"
+    );
+    assert!(
+        !fakes::pid_alive(pid),
+        "a timed-out reap leaves no running process or zombie behind"
+    );
+    match fakes::kill_pid(leader.id(), "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    match leader.wait() {
+        Ok(_) | Err(_) => {}
+    }
 }
 
 /// The retire peer: it answers one delivery, reads its answer's fate,
