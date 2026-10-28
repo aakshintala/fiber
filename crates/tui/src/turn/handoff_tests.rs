@@ -888,6 +888,40 @@ fn done_with_note() -> super::Band {
 }
 
 #[test]
+fn an_animated_handoff_band_keeps_its_tag() {
+    use crate::ext::tests::AnimatedRenderer;
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling(
+        "handoff_band",
+        std::time::Duration::from_millis(500),
+        1,
+    ));
+    let handle = crate::ext::Handle::create();
+    handle.set(fake.clone() as std::rc::Rc<dyn crate::ext::Renderer>);
+    let bound = crate::ext::Bound {
+        handle,
+        cache: std::sync::Arc::new(crate::ext::cache::Cache::default()),
+        page: crate::ext::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        ctx: crate::ext::SessionCtx {
+            session_id: Some(contract::SessionId("s".into())),
+            halves: None,
+        },
+        flat: false,
+    };
+    let t0 = fakes::clock::FakeClock::new().origin();
+    bound.cache.begin_anim_frame(Some(t0), false);
+    let band = super::Band::new(1, "automatic".to_owned(), TEA);
+    let mut out = crate::rows::Rows::default().with_seam(bound);
+    band.rows(40, &jiff::tz::TimeZone::UTC, &mut out);
+    let (_, texts) = out.into_parts();
+    // The animated band row carries its item's tag through the direct
+    // push.
+    assert!(texts.first().expect("a band row").anim.is_some());
+}
+
+#[test]
 fn a_handoff_band_replacement_draws_instead_of_the_band_row() {
     let band = super::Band::new(1, "automatic".to_owned(), TEA);
     let fake = replaced();

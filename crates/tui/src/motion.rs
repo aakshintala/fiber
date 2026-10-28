@@ -48,6 +48,12 @@ impl Motion {
         self.reduced = reduced;
     }
 
+    /// Whether motion stays still: animations hold their still form and
+    /// ask for no wake.
+    pub(crate) fn reduced(&self) -> bool {
+        self.reduced
+    }
+
     /// This frame's spinner: still under reduced motion and with no time
     /// set. Reads the frame and asks for nothing.
     pub(crate) fn spinner(&self) -> &'static str {
@@ -62,6 +68,19 @@ impl Motion {
             .get(usize::try_from(frame % 10).unwrap_or(0))
             .copied()
             .unwrap_or(STILL)
+    }
+
+    /// Asks for the animated item's next frame: its last tick plus its
+    /// effective interval. Nothing under reduced motion. Idempotent with
+    /// the adapter's normalization: a raw value below the tick floor
+    /// asks at the floor.
+    pub(crate) fn ask_animate(&self, last: Instant, interval: Duration) {
+        if self.reduced {
+            return;
+        }
+        if let Some(at) = last.checked_add(crate::ext::anim::effective_interval(interval)) {
+            self.ask(at);
+        }
     }
 
     /// Asks for the next frame's boundary. Nothing under reduced motion

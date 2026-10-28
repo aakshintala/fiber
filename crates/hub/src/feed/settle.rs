@@ -70,6 +70,9 @@ impl Feed {
         false
     }
 
+    /// Tests only: runs the `settle_pause` handshake between the `done()`
+    /// check and the park in `wait_for`; see the field on `Feed` for the
+    /// window no outside seam lands a change inside.
     #[cfg(test)]
     fn pause_after_check(&self, _guard: &MutexGuard<'_, ()>) {
         let Some(pause) = lock(&self.settle_pause).take() else {

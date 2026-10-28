@@ -14,6 +14,9 @@ impl App {
     /// elapsed times and animation agree. The loop calls it once per
     /// input, and once before the first frame.
     pub(crate) fn set_now(&mut self, now: Instant, wall_ms: u64) {
+        // A changed animated line count requests one corrective frame;
+        // recount after the previous frame has closed, before laying out.
+        self.screen.pages_mut().recount_animated();
         self.motion.set_now(now, wall_ms);
         self.set_wall(wall_ms);
     }
@@ -25,10 +28,18 @@ impl App {
 
     /// The earliest wake the frame asked for, leaving none behind: what
     /// the loop arms the tick with after the draw. The earliest of the
-    /// motion wake, the reconciler's retry wake and the notices wake.
+    /// motion wake, a one-shot layout correction, the reconciler's retry
+    /// wake and the notices wake. Animation dues fold into motion first.
     pub(crate) fn take_wake(&self) -> Option<Instant> {
+        self.anim_asks();
         [
             self.motion.take_wake(),
+            self.pages()
+                .ext
+                .cache
+                .has_changed_pages()
+                .then(|| self.motion.now_instant())
+                .flatten(),
             self.items_wake(),
             self.rewind_wake(),
             self.notices.notices_wake(),
@@ -36,6 +47,15 @@ impl App {
         .into_iter()
         .flatten()
         .min()
+    }
+
+    /// Folds the painted animations' dues into the motion wake: each
+    /// animated item on screen asks its next frame at its last tick plus
+    /// its interval, and the loop arms the earliest ask after the frame.
+    fn anim_asks(&self) {
+        for (last, interval) in self.pages().ext.cache.anim_dues() {
+            self.motion.ask_animate(last, interval);
+        }
     }
 
     /// Whether spinners, the glimmer and the pulse stay still. Home sets

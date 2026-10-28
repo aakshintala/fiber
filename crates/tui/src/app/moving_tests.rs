@@ -330,6 +330,105 @@ fn jobs_alone_ask_nothing() {
 }
 
 #[test]
+fn an_animated_notice_uses_its_still_form_without_an_animation_wake() {
+    use crate::ext::tests::AnimatedRenderer;
+    let clock = FakeClock::new();
+    let origin = clock.origin();
+    let mut app = app();
+    app.push_notice("io_failed", "a read failed".to_owned());
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling(
+        "notice",
+        Duration::from_millis(500),
+        1,
+    ));
+    app.install_renderer(fake.clone());
+    app.set_now(origin, WALL);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    // The notice uses frame 0, but its animation does not contribute a
+    // wake. Any wake belongs to the notice's existing fade behavior.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2983: notices draw frame 0 once.
+    assert_ne!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(500))
+    );
+}
+
+#[test]
+fn an_animation_due_joins_the_wake_minimum() {
+    use crate::ext::anim::AnimKey;
+    let clock = FakeClock::new();
+    let origin = clock.origin();
+    let mut app = app();
+    app.set_now(origin, WALL);
+    // A painted animation due on the resident cache.
+    let cache = app.pages().ext.cache.clone();
+    let input = crate::ext::Input::Notice(crate::ext::Notice {
+        code: "io_failed",
+        text: "x",
+        flat: false,
+    });
+    cache.begin_anim_frame(Some(origin), false);
+    let fitted = cache
+        .lines_animated(
+            crate::ext::cache::PageKey::home(),
+            "notice",
+            "animated-test",
+            None,
+            &input,
+            80,
+            Duration::from_millis(500),
+            |frame| {
+                assert_eq!(frame, 0);
+                (
+                    crate::ext::Decision::Draw {
+                        extension: "animated-test".into(),
+                        lines: vec![vec![crate::ext::RawSpan {
+                            text: "anim".into(),
+                            ..crate::ext::RawSpan::default()
+                        }]],
+                    },
+                    true,
+                )
+            },
+        )
+        .expect("frame 0");
+    let key: AnimKey = fitted
+        .first()
+        .expect("one line")
+        .anim
+        .clone()
+        .expect("tagged");
+    cache.mark_painted(&[key]);
+    // With no other moving item, the animation alone asks for its next
+    // frame.
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(500))
+    );
+    // The spinner's ask: the next frame boundary, earlier than the
+    // animation's next frame. The earliest wake wins.
+    app.motion().ask_frame();
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(120))
+    );
+}
+
+#[test]
+fn a_still_frame_takes_no_wake() {
+    let clock = FakeClock::new();
+    let mut app = app();
+    app.set_now(clock.origin(), WALL);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    // Nothing painted, nothing moving: no wake, no timer.
+    assert_eq!(app.take_wake(), None);
+}
+
+#[test]
 fn the_banner_replaces_the_line() {
     let mut app = app();
     fed(&mut app, json!({"state": "streaming"}));

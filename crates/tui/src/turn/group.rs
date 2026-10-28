@@ -496,6 +496,8 @@ impl Group {
         match rendered {
             Some(fitted) => {
                 // The running replacement spins like the built-in line.
+                // Its animated tag rides along, so the paint pass marks
+                // the item visible.
                 for line in fitted.iter() {
                     out.push_text(
                         (line.line.clone(), target),
@@ -503,6 +505,7 @@ impl Group {
                             tail: line.pad,
                             links: line.links.clone(),
                             spin,
+                            anim: line.anim.clone(),
                             ..RowText::plain()
                         },
                     );
@@ -1018,6 +1021,9 @@ fn gutter_row(
             RowText {
                 tail: line.pad,
                 links,
+                // The gutter precedes the line, so its item's tag rides
+                // along: a split row still marks its item visible.
+                anim: line.anim.clone(),
                 ..RowText::plain()
             },
         )

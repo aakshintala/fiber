@@ -2066,6 +2066,366 @@ fn a_click_on_a_notice_cross_removes_that_row() {
 
 /// Renders `app` at `width` by `height` with the pointer at `pointer`,
 /// returning the buffer and the click targets.
+/// An app with a completed tool turn and an animated `group_line`
+/// drawing three rows a frame, installed after the content counted: the
+/// first paint draws frame 0. The summary replacement sits at the top,
+/// so a short following viewport cuts or drops it by height alone.
+fn animated_summary() -> (App, std::rc::Rc<crate::ext::tests::AnimatedRenderer>) {
+    use crate::ext::tests::AnimatedRenderer;
+    let mut app = empty();
+    tool_turn(&mut app);
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling(
+        "group_line",
+        std::time::Duration::from_millis(500),
+        3,
+    ));
+    app.install_renderer(fake.clone());
+    (app, fake)
+}
+
+/// The summary's renderer adds one line on each successive frame.
+fn growing_animated_summary() -> (App, std::rc::Rc<crate::ext::tests::AnimatedRenderer>) {
+    use crate::ext::tests::AnimatedRenderer;
+    let mut app = empty();
+    tool_turn(&mut app);
+    let fake = std::rc::Rc::new(AnimatedRenderer::growing(
+        "group_line",
+        std::time::Duration::from_millis(500),
+        1,
+    ));
+    app.install_renderer(fake.clone());
+    (app, fake)
+}
+
+/// A synthetic instant `millis` after `origin`.
+fn later(origin: std::time::Instant, millis: u64) -> std::time::Instant {
+    origin
+        .checked_add(std::time::Duration::from_millis(millis))
+        .expect("after the origin")
+}
+
+/// Paints the conversation at `height` in frame time `at`: opens the
+/// animation frame, paints, and returns the buffer.
+fn paint_conversation(app: &App, at: std::time::Instant, height: u16) -> Buffer {
+    app.pages().ext.cache.begin_anim_frame(Some(at), false);
+    let area = Rect::new(0, 0, WIDTH, height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    conversation_rows(app, area, &mut buf, &mut targets);
+    buf
+}
+
+/// The animated summary's first page row and the counted total, for the
+/// tool turn at width 60: heights below cut or drop the summary by row
+/// arithmetic, and every test proves its premise on the buffer.
+fn summary_geometry() -> (usize, usize) {
+    let (app, _) = animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let full = paint_conversation(&app, t0, 40);
+    let body = text(&full);
+    assert!(body.contains("anim0-2"), "{body}");
+    let total = app.scroll().1;
+    assert!(total <= 40, "the turn fits the full viewport");
+    let y = body
+        .lines()
+        .position(|row| row.contains("anim0-0"))
+        .expect("the animated row shows");
+    (y.saturating_sub(40 - total), total)
+}
+
+#[test]
+fn an_offscreen_item_never_advances_or_asks() {
+    // A twin app fixes the geometry: this app's first paint is
+    // already offscreen, so the item is never marked.
+    let (start, total) = summary_geometry();
+    let (app, fake) = animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    // The viewport starts past the summary's last row: the short paint
+    // draws without it, and the buffer proves the premise.
+    let height =
+        u16::try_from(total.saturating_sub(start).saturating_sub(3)).expect("a short viewport");
+    assert!(height >= 1, "room stays below the summary");
+    let shown = paint_conversation(&app, t0, height);
+    let body = text(&shown);
+    assert!(!body.contains("anim"), "{body}");
+    // At most the initial still render: the item drew once for the
+    // draw, was never marked, and asks for no wake.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    assert_eq!(app.take_wake(), None);
+    paint_conversation(&app, later(t0, 500), height);
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2968: calls follow paint in the previous frame.
+    assert_eq!(app.take_wake(), None);
+}
+
+#[test]
+fn a_partially_painted_item_stays_active_with_dues() {
+    let (app, fake) = animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    // The full paint draws all three animated rows at frame 0.
+    let full = paint_conversation(&app, t0, 40);
+    let body = text(&full);
+    assert!(body.contains("anim0-0"), "{body}");
+    assert!(body.contains("anim0-2"), "{body}");
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    assert_eq!(
+        app.take_wake(),
+        Some(later(t0, 500)),
+        "frame 0 painted and marked"
+    );
+    // A viewport starting inside the summary still paints the item: it
+    // advances at its due tick and asks its next frame.
+    let total = app.scroll().1;
+    let y = body
+        .lines()
+        .position(|row| row.contains("anim0-0"))
+        .expect("the animated row shows");
+    let start = y.saturating_sub(40 - total);
+    let height =
+        u16::try_from(total.saturating_sub(start).saturating_sub(1)).expect("a cut viewport");
+    let t1 = later(t0, 500);
+    let cut = paint_conversation(&app, t1, height);
+    let body = text(&cut);
+    assert!(!body.contains("anim1-0"), "{body}");
+    assert!(body.contains("anim1-1"), "{body}");
+    assert!(body.contains("anim1-2"), "{body}");
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2968: calls follow paint in the previous frame.
+    assert_eq!(app.take_wake(), Some(later(t1, 500)));
+}
+
+#[test]
+fn a_changed_frame_line_count_recounts_before_the_corrective_paint() {
+    let (mut app, fake) = growing_animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let wall = 1_000;
+    app.set_now(t0, wall);
+    let before = app.scroll().1;
+    let first = paint_conversation(&app, t0, 40);
+    assert!(text(&first).contains("anim0-0"));
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    assert_eq!(app.take_wake(), Some(later(t0, 500)));
+
+    let t1 = later(t0, 500);
+    app.set_now(t1, wall + 500);
+    let second = paint_conversation(&app, t1, 40);
+    assert!(text(&second).contains("anim1-1"));
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2962: the renderer is called again when the frame advances.
+    // The paint changed the page's line count. The immediate correction
+    // is earlier than the next animation due.
+    assert_eq!(app.take_wake(), Some(t1));
+
+    app.set_now(t1, wall + 500);
+    assert_eq!(app.scroll().1, before + 1);
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2962: the renderer is called again when the frame advances.
+}
+
+#[test]
+fn a_scrolled_off_item_resumes_without_restarting() {
+    let (app, fake) = animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let full = paint_conversation(&app, t0, 40);
+    let body = text(&full);
+    assert!(body.contains("anim0-0"), "{body}");
+    assert_eq!(app.take_wake(), Some(later(t0, 500)));
+    // Scrolled off: the next paint advances once on its previous
+    // paint, then holds with no due.
+    let total = app.scroll().1;
+    let y = body
+        .lines()
+        .position(|row| row.contains("anim0-0"))
+        .expect("the animated row shows");
+    let start = y.saturating_sub(40 - total);
+    let height =
+        u16::try_from(total.saturating_sub(start).saturating_sub(3)).expect("a short viewport");
+    assert!(height >= 1, "room stays below the summary");
+    let t1 = later(t0, 500);
+    let away = paint_conversation(&app, t1, height);
+    let body = text(&away);
+    assert!(!body.contains("anim"), "{body}");
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
+    assert_eq!(app.take_wake(), None);
+    // Back on screen: hits its stored frame with no recall, and the
+    // next due tick continues the counter instead of restarting it.
+    let t2 = later(t0, 1000);
+    let back = paint_conversation(&app, t2, 40);
+    let body = text(&back);
+    assert!(body.contains("anim1-0"), "{body}");
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
+    assert_eq!(app.take_wake(), Some(later(t1, 500)));
+    let t3 = later(t0, 1500);
+    let onward = paint_conversation(&app, t3, 40);
+    let body = text(&onward);
+    assert!(body.contains("anim2-0"), "{body}");
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1, 2]); // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
+}
+
+#[test]
+fn a_swapped_view_suppresses_calls_until_it_closes() {
+    let (mut app, fake) = animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    // The full conversation paint draws frame 0 and asks its next frame.
+    let area = Rect::new(0, 0, WIDTH, 40);
+    app.set_now(t0, 1_000);
+    let mut full = Buffer::empty(area);
+    let _ = render(&app, area, &mut full, None);
+    let body = text(&full);
+    assert!(body.contains("anim0-0"), "{body}");
+    // docs/tui.md:2974: frame 0 is the still form.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(app.take_wake(), Some(later(t0, 500)));
+    // A swapped view hides the conversation: nothing paints, so no call
+    // follows and no wake is asked, on every hidden frame.
+    app.open_config_view(crate::app::ConfigView::Settings);
+    for (millis, wall) in [(500, 1_500), (1000, 2_000)] {
+        let at = later(t0, millis);
+        app.set_now(at, wall);
+        let mut hidden = Buffer::empty(area);
+        let _ = render(&app, area, &mut hidden, None);
+        let body = text(&hidden);
+        assert!(!body.contains("anim"), "{body}");
+        // docs/tui.md:2971: a swapped view that hides the conversation
+        // counts as an unpainted frame.
+        assert_eq!(fake.frames.borrow().clone(), vec![0]);
+        assert_eq!(app.take_wake(), None);
+    }
+    // Closing returns the conversation: the stored frame draws with no
+    // recall, and the next due tick continues the counter.
+    let _ = app.on_key(Key::Esc, later(t0, 1000));
+    assert!(!app.config_view_open());
+    let t3 = later(t0, 1500);
+    app.set_now(t3, 2_500);
+    let mut back = Buffer::empty(area);
+    let _ = render(&app, area, &mut back, None);
+    let body = text(&back);
+    assert!(body.contains("anim0-0"), "{body}");
+    // docs/tui.md:2972: the item resumes at its stored frame when the
+    // conversation returns.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    // The stored paint changes nothing: the due still names the last tick.
+    assert_eq!(app.take_wake(), Some(later(t0, 500)));
+    let t4 = later(t0, 2000);
+    app.set_now(t4, 3_000);
+    let mut onward = Buffer::empty(area);
+    let _ = render(&app, area, &mut onward, None);
+    let body = text(&onward);
+    assert!(body.contains("anim1-0"), "{body}");
+    // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]);
+}
+
+#[test]
+fn one_visible_animated_row_marks_its_item_painted() {
+    let (mut app, _) = animated_summary();
+    let (start, _) = summary_geometry();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    app.set_size(WIDTH, 1);
+    app.jump(start.saturating_add(1));
+    app.set_now(t0, 1_700_000_000_000);
+
+    let shown = paint_conversation(&app, t0, 1);
+    let body = text(&shown);
+    assert!(body.contains("anim0-1"), "{body}");
+    assert!(
+        !body.contains("anim0-0") && !body.contains("anim0-2"),
+        "{body}"
+    );
+    // docs/tui.md:2968: a painted row advances and asks for its next frame.
+    assert_eq!(app.take_wake(), Some(later(t0, 500)));
+}
+
+#[test]
+fn recount_ignores_a_stale_session_for_a_resident_page_index() {
+    let (mut app, _) = animated_summary();
+    let cache = app.pages().ext.cache.clone();
+    let stale = crate::ext::cache::PageKey {
+        session: contract::SessionId("stale-session".into()),
+        index: 0,
+    };
+    let input = crate::ext::Input::Notice(crate::ext::Notice {
+        code: "io_failed",
+        text: "stale page",
+        flat: false,
+    });
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let draw = |at, count| {
+        cache.begin_anim_frame(Some(at), false);
+        let lines = cache
+            .lines_animated(
+                stale.clone(),
+                "notice",
+                "test",
+                None,
+                &input,
+                20,
+                std::time::Duration::from_millis(500),
+                |frame| {
+                    (
+                        crate::ext::Decision::Draw {
+                            extension: "test".into(),
+                            lines: (0..count)
+                                .map(|_| {
+                                    vec![crate::ext::RawSpan {
+                                        text: format!("frame {frame}"),
+                                        ..crate::ext::RawSpan::default()
+                                    }]
+                                })
+                                .collect(),
+                        },
+                        true,
+                    )
+                },
+            )
+            .expect("the frame draws");
+        let key = lines
+            .first()
+            .expect("one animated line")
+            .anim
+            .clone()
+            .expect("the animation tag");
+        cache.mark_painted(&[key]);
+        cache.anim_dues();
+    };
+    draw(t0, 1);
+    draw(later(t0, 500), 2);
+    assert!(cache.has_changed_pages());
+
+    crate::work::take();
+    app.set_now(later(t0, 1000), 1_700_000_001_000);
+
+    // A stale page identity cannot recount the resident session's page.
+    assert_eq!(crate::work::take().page_counts, 0);
+}
+
+#[test]
+fn shown_exposes_animation_tags_only_for_in_range_items() {
+    let (app, _) = animated_summary();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let full = paint_conversation(&app, t0, 40);
+    let body = text(&full);
+    let total = app.scroll().1;
+    let y = body
+        .lines()
+        .position(|row| row.contains("anim0-0"))
+        .expect("the animated row shows");
+    let start = y.saturating_sub(40 - total);
+    assert_eq!(app.take_wake(), Some(later(t0, 500)));
+    // The full range exposes one tag per animated row, all one item.
+    // docs/tui.md:2968: only rows painted in the previous frame are exposed.
+    let shown = app.shown(0, 40);
+    assert_eq!(shown.anims.len(), 3, "one tag per animated row");
+    let boundary = app.shown(start.saturating_add(1), 1);
+    // docs/tui.md:2968: only a row inside the viewport is exposed as painted.
+    assert_eq!(
+        boundary.anims.len(),
+        1,
+        "the row at the exclusive end is hidden"
+    );
+    let first = shown.anims.first().expect("a tag").1.clone();
+    assert!(shown.anims.iter().all(|(_, key)| key == &first));
+    // Past the item exposes none; starting inside exposes the rest.
+    assert!(app.shown(start.saturating_add(3), 40).anims.is_empty());
+    assert_eq!(app.shown(start.saturating_add(1), 40).anims.len(), 2);
+}
+
 fn pointed(
     app: &mut App,
     width: u16,
