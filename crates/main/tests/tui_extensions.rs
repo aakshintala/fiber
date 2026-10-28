@@ -266,6 +266,42 @@ fn reload_rebuilds_a_timed_out_vm_from_changed_source() {
     quit(run);
 }
 #[test]
+fn animated_row_renders_frame_zero_then_stops() {
+    let setup = Setup::new();
+    configure(&setup, None);
+    install(
+        &setup,
+        "ticker",
+        "fiber.slot('ledger_row',{timeout=100,animate={interval_ms=120},render=function(input) return {lines={{{text='ANIM-FRAME-'..input.frame}}},animate=false} end})",
+        None,
+    );
+    let mut run = turn(&setup);
+    // The first paint draws frame 0 and stops: the binary renders the
+    // frame the adapter counts, then holds it.
+    run.wait_screen("animated still frame", |grid| {
+        grid.contents.contains("ANIM-FRAME-0")
+    });
+    quit(run);
+}
+#[test]
+fn animated_row_advances_frames_on_the_tick() {
+    let setup = Setup::new();
+    configure(&setup, None);
+    install(
+        &setup,
+        "ticker",
+        "fiber.slot('ledger_row',{timeout=100,animate={interval_ms=120},render=function(input) return {{{text='ANIM-FRAME-'..input.frame}}} end})",
+        None,
+    );
+    let mut run = turn(&setup);
+    // Past the first frame the screen shows a nonzero count: the binary
+    // advances while the row stays painted.
+    run.wait_screen("animated frame advances", |grid| {
+        grid.contents.contains("ANIM-FRAME-") && !grid.contents.contains("ANIM-FRAME-0")
+    });
+    quit(run);
+}
+#[test]
 fn renderer_error_draws_builtin_and_one_hook_notice() {
     let setup = Setup::new();
     configure(&setup, None);
