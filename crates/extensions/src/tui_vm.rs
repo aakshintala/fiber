@@ -303,7 +303,7 @@ impl TuiVm {
     pub fn call(
         &mut self,
         slot: &str,
-        session_id: &str,
+        session_id: Option<&str>,
         input: &Value,
         width: u16,
         builtin: &dyn Fn(&Value, u16) -> Vec<Vec<Span>>,
@@ -318,10 +318,15 @@ impl TuiVm {
             return Err(Error::TuiShape("input must be an object".to_owned()));
         };
         let mut object = object.clone();
-        object.insert(
-            "session_id".to_owned(),
-            Value::String(session_id.to_owned()),
-        );
+        // A sessionless call sends no `session_id` key and Lua reads
+        // nil: no previous session's identity is reused and no empty or
+        // synthetic id is sent.
+        if let Some(session_id) = session_id {
+            object.insert(
+                "session_id".to_owned(),
+                Value::String(session_id.to_owned()),
+            );
+        }
         // JSON null is nil, so an absent field and a null one read alike.
         let options = SerializeOptions::new()
             .serialize_none_to_null(false)

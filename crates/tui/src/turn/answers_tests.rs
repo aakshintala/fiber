@@ -812,8 +812,8 @@ fn answers_draw_bold_and_skipped_and_the_note_draws_bold() {
 
 #[test]
 fn a_declined_form_draws_one_dim_row_and_no_rule() {
+    // (`docs/tui.md`, "The slots", `answers`: a declined form draws its dim row.)
     let rows = drawn(&super::Answered::declined(), 80, &jiff::tz::TimeZone::UTC);
-    assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].style, dim());
     assert_eq!(
         spans(&rows[0]),
@@ -946,4 +946,187 @@ fn a_declined_page_loaded_from_history_draws_the_same_row() {
     pages.load(&contract::SessionId(SESSION.to_owned()), &history);
     assert!(pages.part(0).is_some(), "the first page loaded again");
     assert_eq!(pages.rows(), live);
+}
+
+#[test]
+fn the_answers_entry_carries_given_or_declined() {
+    use crate::ext::TurnAnswers;
+    let given = super::Answered::Given {
+        parts: vec![crate::format::AnswerParts {
+            header: "Base".to_owned(),
+            text: "main".to_owned(),
+            skipped: false,
+        }],
+        note: Some("go".to_owned()),
+        ts: 7,
+    };
+    let TurnAnswers::Given { parts, note, ts } = given.turn_entry() else {
+        panic!("a given entry");
+    };
+    // (`docs/tui.md`, "The slots", `answers`: each question's part, in field order.)
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].header, "Base");
+    assert_eq!(
+        parts[0].disposition,
+        crate::ext::AnswerDisposition::Answered { text: "main" }
+    );
+    assert_eq!(note, Some("go"));
+    assert_eq!(ts, 7);
+    let skipped = super::Answered::Given {
+        parts: vec![crate::format::AnswerParts {
+            header: "Base".to_owned(),
+            text: "skipped".to_owned(),
+            skipped: true,
+        }],
+        note: None,
+        ts: 7,
+    };
+    let TurnAnswers::Given { parts, .. } = skipped.turn_entry() else {
+        panic!("a skipped entry");
+    };
+    assert_eq!(parts[0].disposition, crate::ext::AnswerDisposition::Skipped);
+    let declined = super::Answered::Declined;
+    assert!(matches!(declined.turn_entry(), TurnAnswers::Declined));
+}
+
+/// An answered form's rows through a seam drawing `fake`.
+fn seamed(
+    answered: &super::Answered,
+    width: u16,
+    fake: &std::rc::Rc<crate::ext::tests::SlotRenderer>,
+    flat: bool,
+) -> Vec<crate::turn::Row> {
+    let mut out =
+        crate::rows::Rows::default().with_seam(crate::ext::tests::seam(fake, "s", 0, flat));
+    answered.rows(width, &jiff::tz::TimeZone::UTC, &mut out);
+    out.into_parts().0
+}
+
+fn replaced() -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    std::rc::Rc::new(SlotRenderer::filling(
+        &["answers"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    ))
+}
+
+#[test]
+fn an_answers_replacement_draws_instead_of_the_form() {
+    let fake = replaced();
+    let rows = seamed(&answered_at(1_000), 40, &fake, false);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow()[0].1, "answers");
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|row| row.contains("you answered")),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn a_declined_replacement_draws_instead_of_the_dim_row() {
+    let fake = replaced();
+    let rows = seamed(&super::Answered::Declined, 40, &fake, false);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|row| row.contains("declined")),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn an_answers_decorator_draws_the_built_in_form_under_its_badge() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["answers"],
+        SlotScript::Decorate {
+            badge: vec![vec![raw("BADGE")]],
+            trim: 5,
+        },
+    ));
+    let rows = seamed(&answered_at(1_000), 40, &fake, false);
+    assert_eq!(fake.builtins.borrow().as_slice(), &[35]);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("BADGE")),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|row| row.contains("you answered")),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn an_answers_error_falls_back_with_one_failure() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["answers"],
+        SlotScript::Fail {
+            kind: FailureKind::HookFailed,
+            message: "boom".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    for _ in 0..2 {
+        let mut out = crate::rows::Rows::default().with_seam(bound.clone());
+        answered_at(1_000).rows(40, &jiff::tz::TimeZone::UTC, &mut out);
+        let shown: Vec<String> = out
+            .into_parts()
+            .0
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect();
+        assert!(
+            shown.iter().any(|row| row.contains("you answered")),
+            "{shown:?}"
+        );
+    }
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(
+        fake.calls.borrow().len(),
+        1,
+        "the failure calls nothing again"
+    );
+    let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "answers");
+    assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
+}
+
+#[test]
+fn a_flat_answers_replacement_drops_every_style() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use ratatui::style::Style;
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["answers"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "custom".into(),
+            bold: true,
+            fg: Some("accent".into()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let rows = seamed(&answered_at(1_000), 40, &fake, true);
+    // (`docs/tui.md`, "How a TUI extension runs": in screen-reader mode the terminal drops every style.)
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("custom")), "{shown:?}");
+    for (line, _) in &rows {
+        for span in &line.spans {
+            assert_eq!(span.style, Style::default(), "{span:?}");
+        }
+    }
 }

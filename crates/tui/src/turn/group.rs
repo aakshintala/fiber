@@ -10,7 +10,10 @@ use serde_json::Value;
 
 use super::target_id;
 use crate::app::Target;
-use crate::ext::{Input, LedgerRow, RowError, Status};
+use crate::ext::{
+    CallState, GroupLine, Input, LedgerResult, LedgerRow, PromptImage, RowError, TurnCall,
+    TurnCallResult, TurnFailed, TurnGroup, TurnGroupState, TurnSection, TurnStreaming, TurnThought,
+};
 use crate::format::{Kind, Kinds, count, dim, heading, kind, label, opened, summary};
 use crate::rows::{RowText, Rows};
 use crate::theme::{Role, style};
@@ -338,35 +341,11 @@ impl Group {
         kinds
     }
 
-    /// Its lines. A group with no call is its thinking, one line
-    /// a block; otherwise a summary line, and the ledger when open. The
-    /// summary line is one row in `width` cells, whatever runs: the dot,
-    /// the kinds in their fixed order, and, right-aligned, the group's
-    /// duration and ▸ while closed or ▾ while open. What does not fit is
-    /// cut with "…", so the duration and the toggle stay put. A call's
-    /// images draw as their one line each under its ledger row
-    /// (`docs/tui.md`, "Images").
-    pub(crate) fn rows(
-        &self,
-        running: bool,
-        width: u16,
-        layout: &crate::image::Layout,
-        out: &mut Rows,
-    ) {
-        // A group with no call is its thinking, streaming or ended: a
-        // thinking-only group never draws a summary row, even while the
-        // model thinks (`docs/tui.md`, "Thinking").
-        if !self.has_ledger() && self.streaming.is_empty() {
-            for thought in self.thoughts() {
-                thought_rows(thought, "", width, out);
-            }
-            return;
-        }
-        // The body: the kinds with ", thought …", then each joined by
-        // " · ": the failed model call count, the in-flight targets while
-        // running, and the streaming thought's heading. Dim throughout,
-        // the heading italic too (`docs/tui.md`, "Tool groups and the
-        // ledger", "Turns").
+    /// The summary row's spans at `width`: the kinds with the failed and
+    /// flight detail, the running dot, and the right-aligned duration
+    /// and toggle; none when the body is empty. The seam's built-in and
+    /// the row below share them.
+    fn summary_spans(&self, running: bool, width: u16) -> Option<Vec<Span<'static>>> {
         let mut body: Vec<Span<'static>> = self.kinds().summary();
         let join = |body: &mut Vec<Span<'static>>| {
             if !body.is_empty() {
@@ -411,10 +390,6 @@ impl Group {
                 ));
             }
         }
-        // An empty body draws no row, as before.
-        if body.is_empty() {
-            return;
-        }
         // A running group's dot spins on the working line's tick in the
         // attention colour; a finished group's dot is dim, as is the
         // whole line (`docs/tui.md`, "The working line", "Turns").
@@ -425,6 +400,9 @@ impl Group {
             left.push(dim_span("●".to_owned()));
         }
         left.push(dim_span(" ".to_owned()));
+        // An empty body draws no row, as before: check before `left` takes
+        // the body, since the body does not copy.
+        let empty = body.is_empty();
         left.extend(body);
         // The duration and the toggle, right-aligned and dim. The toggle
         // follows the ledger's draw, not a search draw's (`docs/tui.md`,
@@ -435,6 +413,9 @@ impl Group {
             crate::format::duration(self.last.saturating_sub(self.first)),
             if draws { "▾" } else { "▸" },
         ))];
+        if empty {
+            return None;
+        }
         // The row fills `width` exactly; what does not fit is cut from
         // the left part with "…", so the right part keeps its columns.
         let max = usize::from(width);
@@ -458,26 +439,86 @@ impl Group {
             row.extend(right);
             fit(row, max)
         };
-        // A running summary line carries its spinner's cell: the draw
-        // site spins it on the working line's tick, so keyed and keyless
-        // running groups both move (`docs/tui.md`, "The working line").
-        let text = if running {
-            RowText {
-                spin: Some(0),
-                ..RowText::plain()
+        Some(row)
+    }
+
+    /// Its lines. A group with no call is its thinking, one line
+    /// a block; otherwise a summary line, and the ledger when open. The
+    /// summary line is one row in `width` cells, whatever runs: the dot,
+    /// the kinds in their fixed order, and, right-aligned, the group's
+    /// duration and ▸ while closed or ▾ while open. What does not fit is
+    /// cut with "…", so the duration and the toggle stay put. A call's
+    /// images draw as their one line each under its ledger row
+    /// (`docs/tui.md`, "Images"). A bound `group_line` renderer replaces
+    /// the summary line; the ledger still draws below it.
+    pub(crate) fn rows(
+        &self,
+        running: bool,
+        width: u16,
+        layout: &crate::image::Layout,
+        out: &mut Rows,
+    ) {
+        // A group with no call is its thinking, streaming or ended: a
+        // thinking-only group never draws a summary row, even while the
+        // model thinks (`docs/tui.md`, "Thinking").
+        if !self.has_ledger() && self.streaming.is_empty() {
+            for thought in self.thoughts() {
+                thought_rows(thought, "", width, out);
             }
-        } else {
-            RowText::plain()
+            return;
+        }
+        // An empty summary draws no row and consults no renderer, as
+        // before.
+        let Some(spans) = self.summary_spans(running, width) else {
+            return;
         };
-        // A row exactly `inner` wide is never split, and the spin column
-        // moves with the card's pad.
-        out.push_text(
-            (
-                Line::from(row),
-                self.key.as_deref().map(|key| Target::Group(target_id(key))),
-            ),
-            text,
-        );
+        let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
+        let input = self.group_line_input(running, flat);
+        let wrapped = Input::GroupLine(input);
+        let builtin = |input: &Input<'_>, w: u16| {
+            let Input::GroupLine(_) = input else {
+                return Vec::new();
+            };
+            vec![crate::ext::spans::from_ratatui(
+                &self.summary_spans(running, w).unwrap_or_default(),
+            )]
+        };
+        let target = self.key.as_deref().map(|key| Target::Group(target_id(key)));
+        let rendered = match out.fills_for("group_line") {
+            crate::ext::SlotSelection::Draw { extension } => {
+                out.ext_lines("group_line", &extension, &wrapped, width, &builtin)
+            }
+            crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => None,
+        };
+        // The spin a running line carries, so the draw site spins its
+        // first cell on the working line's tick.
+        let spin = running.then_some(0);
+        match rendered {
+            Some(fitted) => {
+                // The running replacement spins like the built-in line.
+                for line in fitted.iter() {
+                    out.push_text(
+                        (line.line.clone(), target),
+                        RowText {
+                            tail: line.pad,
+                            links: line.links.clone(),
+                            spin,
+                            ..RowText::plain()
+                        },
+                    );
+                }
+            }
+            None => {
+                out.push_text(
+                    (Line::from(spans), target),
+                    RowText {
+                        spin,
+                        ..RowText::plain()
+                    },
+                );
+            }
+        }
+        let draws = self.open || self.calls().any(|call| call.asking);
         // An open approval shows its call whatever the group's own state.
         // A group with no key has no target, and draws as it is on a
         // search draw too: a match there is one nothing could reveal
@@ -538,7 +579,9 @@ impl Group {
                 // what follows it with the width less the gutter drawn.
                 let after_gutter = width.saturating_sub(gutter_shift);
                 let builtin = |input: &Input<'_>, w: u16| {
-                    let Input::LedgerRow(built) = input;
+                    let Input::LedgerRow(built) = input else {
+                        return Vec::new();
+                    };
                     vec![crate::ext::spans::from_ratatui(&self.builtin_row(built, w))]
                 };
                 let wrapped = Input::LedgerRow(input);
@@ -571,11 +614,10 @@ impl Group {
                         }
                     }
                     None => {
-                        let Input::LedgerRow(built) = &wrapped;
                         let row = fit(
                             {
                                 let mut row = vec![dim_span(gutter)];
-                                row.extend(self.builtin_row(built, after_gutter));
+                                row.extend(self.builtin_row(&input, after_gutter));
                                 row
                             },
                             max,
@@ -592,29 +634,222 @@ impl Group {
         }
     }
 
+    /// One call inlined in a card or group-line entry: everything the
+    /// ledger row reads, with the opened detail an open call reads.
+    /// Statuses, errors and answers come from [`Self::ledger_input`],
+    /// so the entries and the ledger never disagree.
+    fn turn_call<'a>(&self, call: &'a Call) -> TurnCall<'a> {
+        // The first non-empty line, else "done": the borrowed twin of
+        // [`first_result_line`].
+        let first = call
+            .content()
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("done");
+        let row = self.ledger_input(call, first, false);
+        let images = call
+            .images
+            .iter()
+            .map(|part| PromptImage {
+                path: &part.path,
+                width: part.width,
+                height: part.height,
+            })
+            .collect::<Vec<_>>();
+        let content = call.content();
+        let state = match row.state {
+            CallState::Pending => CallState::Pending,
+            CallState::Running => CallState::Running,
+            CallState::Unknown => CallState::Unknown,
+            CallState::Completed(result) => CallState::Completed(TurnCallResult {
+                exit: result.exit,
+                duration_ms: result.duration_ms,
+                lines: result.lines,
+                changes: result.changes,
+                output: result.output,
+                content,
+                images,
+            }),
+            CallState::Failed { result, error } => CallState::Failed {
+                result: TurnCallResult {
+                    exit: result.exit,
+                    duration_ms: result.duration_ms,
+                    lines: result.lines,
+                    changes: result.changes,
+                    output: result.output,
+                    content,
+                    images,
+                },
+                error,
+            },
+            CallState::Denied { result, .. } => CallState::Denied {
+                result: TurnCallResult {
+                    exit: result.exit,
+                    duration_ms: result.duration_ms,
+                    lines: result.lines,
+                    changes: result.changes,
+                    output: result.output,
+                    content,
+                    images,
+                },
+                detail: call.headline(),
+            },
+            CallState::Cancelled(result) => CallState::Cancelled(TurnCallResult {
+                exit: result.exit,
+                duration_ms: result.duration_ms,
+                lines: result.lines,
+                changes: result.changes,
+                output: result.output,
+                content,
+                images,
+            }),
+        };
+        TurnCall {
+            name: row.name,
+            arguments: row.arguments,
+            state,
+            answer: row.answer,
+            open: call.open,
+            asking: call.asking,
+        }
+    }
+
+    /// Its card entry: the summary line's fields with the ledger's
+    /// sections. `running` is the turn running with this as its open
+    /// group. A cut group maps to [`TurnGroupState::Cut`] even when the
+    /// caller still names it running.
+    pub(crate) fn turn_entry(&self, running: bool) -> TurnGroup<'_> {
+        let state = if self.cut {
+            TurnGroupState::Cut
+        } else if running {
+            TurnGroupState::Running
+        } else {
+            TurnGroupState::Finished
+        };
+        TurnGroup {
+            first: self.first,
+            last: self.last,
+            state,
+            open: self.open,
+            sections: self
+                .sections
+                .iter()
+                .map(|section| TurnSection {
+                    step: section.step,
+                    thoughts: section
+                        .thoughts
+                        .iter()
+                        .map(|thought| TurnThought {
+                            text: &thought.text,
+                            started: thought.started,
+                            ended: thought.ended,
+                            open: thought.open,
+                        })
+                        .collect(),
+                    calls: section
+                        .calls
+                        .iter()
+                        .map(|call| self.turn_call(call))
+                        .collect(),
+                    failed: section
+                        .failed
+                        .iter()
+                        .map(|(code, attempt)| TurnFailed {
+                            code,
+                            attempt: *attempt,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            streaming: self
+                .streaming
+                .iter()
+                .map(|streaming| TurnStreaming {
+                    message: &streaming.message,
+                    index: streaming.index,
+                    name: streaming.name.as_deref(),
+                    text: &streaming.text,
+                })
+                .collect(),
+        }
+    }
+
+    /// Its group-line entry: the summary line's aggregates, flattened
+    /// across the sections in order. `running` is the turn running with
+    /// this as its open group.
+    pub(crate) fn group_line_input(&self, running: bool, flat: bool) -> GroupLine<'_> {
+        GroupLine {
+            running,
+            calls: self
+                .sections
+                .iter()
+                .flat_map(|section| section.calls.iter())
+                .map(|call| self.turn_call(call))
+                .collect(),
+            streaming: self
+                .streaming
+                .iter()
+                .map(|streaming| TurnStreaming {
+                    message: &streaming.message,
+                    index: streaming.index,
+                    name: streaming.name.as_deref(),
+                    text: &streaming.text,
+                })
+                .collect(),
+            thoughts: self
+                .thoughts()
+                .map(|thought| TurnThought {
+                    text: &thought.text,
+                    started: thought.started,
+                    ended: thought.ended,
+                    open: thought.open,
+                })
+                .collect(),
+            failed: self
+                .sections
+                .iter()
+                .flat_map(|section| section.failed.iter())
+                .map(|(code, attempt)| TurnFailed {
+                    code,
+                    attempt: *attempt,
+                })
+                .collect(),
+            first: self.first,
+            last: self.last,
+            open: self.open,
+            flat,
+        }
+    }
+
     /// A call's renderer input: everything the built-in row reads, folded
     /// from its events, without the step's gutter. A started call of a cut
     /// turn has status unknown; a failed call carries its headline's code
     /// and message.
     fn ledger_input<'a>(&self, call: &'a Call, output: &'a str, flat: bool) -> LedgerRow<'a> {
-        let status = match call.status {
-            Some(CallStatus::Completed) => Status::Completed,
-            Some(CallStatus::Failed) => Status::Failed,
-            Some(CallStatus::Denied) => Status::Denied,
-            Some(CallStatus::Cancelled) => Status::Cancelled,
-            None if self.cut && call.has_started() => Status::Unknown,
-            None if call.has_started() => Status::Running,
-            None => Status::Pending,
+        let result = LedgerResult {
+            exit: call.exit,
+            duration_ms: call.duration_ms(),
+            lines: call.lines,
+            changes: &call.changes,
+            output,
         };
-        let error = match call.status {
-            Some(CallStatus::Failed) => Some(match call.headline().split_once(": ") {
-                Some((code, message)) => RowError { code, message },
-                None => RowError {
-                    code: "",
-                    message: call.headline(),
+        let state = match call.status {
+            Some(CallStatus::Completed) => CallState::Completed(result),
+            Some(CallStatus::Failed) => CallState::Failed {
+                result,
+                error: match call.headline().split_once(": ") {
+                    Some((code, message)) => RowError { code, message },
+                    None => RowError {
+                        code: "",
+                        message: call.headline(),
+                    },
                 },
-            }),
-            _ => None,
+            },
+            Some(CallStatus::Denied) => CallState::Denied { result, detail: () },
+            Some(CallStatus::Cancelled) => CallState::Cancelled(result),
+            None if self.cut && call.has_started() => CallState::Unknown,
+            None if call.has_started() => CallState::Running,
+            None => CallState::Pending,
         };
         let answer = call
             .asked
@@ -624,13 +859,7 @@ impl Group {
         LedgerRow {
             name: &call.name,
             arguments: &call.arguments,
-            status,
-            exit: call.exit,
-            duration_ms: call.duration_ms(),
-            lines: call.lines,
-            changes: &call.changes,
-            error,
-            output,
+            state,
             answer,
             flat,
         }
@@ -644,12 +873,14 @@ impl Group {
         let kind = kind(row.name, row.arguments);
         // The glyph: what the call is doing, or how it ended. A
         // call that started and never completed may have run.
-        let (glyph, glyph_style) = match row.status {
-            Status::Completed => ("✓", style(Role::Success)),
-            Status::Cancelled => ("⊘", Style::default().add_modifier(Modifier::DIM)),
-            Status::Failed | Status::Denied => ("✗", Style::default().add_modifier(Modifier::DIM)),
-            Status::Unknown => ("?", style(Role::Attention)),
-            Status::Pending | Status::Running => ("○", style(Role::Attention)),
+        let (glyph, glyph_style) = match row.state {
+            CallState::Completed(_) => ("✓", style(Role::Success)),
+            CallState::Cancelled(_) => ("⊘", Style::default().add_modifier(Modifier::DIM)),
+            CallState::Failed { .. } | CallState::Denied { .. } => {
+                ("✗", Style::default().add_modifier(Modifier::DIM))
+            }
+            CallState::Unknown => ("?", style(Role::Attention)),
+            CallState::Pending | CallState::Running => ("○", style(Role::Attention)),
         };
         let result = self.builtin_result(row);
         // Past the gutter, the glyph, one space and nine of
@@ -686,37 +917,36 @@ impl Group {
         if let Some(answer) = row.answer {
             return vec![dim_span(answer.to_owned())];
         }
-        match row.status {
-            Status::Unknown => {
+        let completed = match row.state {
+            CallState::Unknown => {
                 return vec![dim_span("? may have run; not run again".to_owned())];
             }
-            Status::Pending | Status::Running => {
+            CallState::Pending | CallState::Running => {
                 if matches!(kind(row.name, row.arguments), Kind::Ask(_)) {
                     return vec![Span::styled("waiting on you", style(Role::Attention))];
                 }
                 return vec![Span::styled("running", style(Role::Attention))];
             }
-            Status::Cancelled => return vec![dim_span("cancelled".to_owned())],
-            Status::Denied => return vec![dim_span("denied".to_owned())],
-            Status::Failed => {
-                let headline = match row.error {
-                    Some(error) if !error.message.is_empty() => {
-                        if error.code.is_empty() {
-                            error.message.to_owned()
-                        } else {
-                            format!("{}: {}", error.code, error.message)
-                        }
+            CallState::Cancelled(_) => return vec![dim_span("cancelled".to_owned())],
+            CallState::Denied { .. } => return vec![dim_span("denied".to_owned())],
+            CallState::Failed { result, error } => {
+                let headline = if !error.message.is_empty() {
+                    if error.code.is_empty() {
+                        error.message.to_owned()
+                    } else {
+                        format!("{}: {}", error.code, error.message)
                     }
-                    _ => row.output.to_owned(),
+                } else {
+                    result.output.to_owned()
                 };
                 return vec![dim_span(headline)];
             }
-            Status::Completed => {}
-        }
+            CallState::Completed(result) => result,
+        };
         if matches!(kind(row.name, row.arguments), Kind::Edit | Kind::Write)
-            && !row.changes.is_empty()
+            && !completed.changes.is_empty()
         {
-            let (added, removed) = row.changes.iter().fold((0u64, 0u64), |(a, r), c| {
+            let (added, removed) = completed.changes.iter().fold((0u64, 0u64), |(a, r), c| {
                 (a.saturating_add(c.added), r.saturating_add(c.removed))
             });
             return vec![
@@ -726,14 +956,14 @@ impl Group {
             ];
         }
         match kind(row.name, row.arguments) {
-            Kind::Read => vec![dim_span(count(row.lines, "line", "lines"))],
-            Kind::Search => vec![dim_span(count(row.lines, "match", "matches"))],
-            Kind::List => vec![dim_span(count(row.lines, "path", "paths"))],
-            Kind::Shell if row.exit.is_some() => {
-                let exit = row.exit.unwrap_or(0);
+            Kind::Read => vec![dim_span(count(completed.lines, "line", "lines"))],
+            Kind::Search => vec![dim_span(count(completed.lines, "match", "matches"))],
+            Kind::List => vec![dim_span(count(completed.lines, "path", "paths"))],
+            Kind::Shell if completed.exit.is_some() => {
+                let exit = completed.exit.unwrap_or(0);
                 vec![dim_span(format!(
                     "exit {exit} · {}",
-                    count(row.lines, "line", "lines")
+                    count(completed.lines, "line", "lines")
                 ))]
             }
             Kind::Edit
@@ -742,7 +972,7 @@ impl Group {
             | Kind::Delegate
             | Kind::Jobs
             | Kind::Ask(_)
-            | Kind::Other => vec![dim_span(row.output.to_owned())],
+            | Kind::Other => vec![dim_span(completed.output.to_owned())],
         }
     }
 }
@@ -843,14 +1073,9 @@ pub(super) fn fit(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
     out
 }
 
-/// A thought's row after `gutter`, dim and italic, cut to `width` with
-/// "…", and its text when open: "○ Thinking: <latest heading>" while
-/// the thought streams, "+ Thought: <first heading> · <span>" once
-/// ended. With no gutter the row is a thinking-only group's line, without
-/// the "○ ". An opened thought's text sits eight columns in inside the
-/// ledger and at the line's own indent outside it (`docs/tui.md`,
-/// "Thinking", "Tool groups and the ledger").
-fn thought_rows(thought: &Thought, gutter: &str, width: u16, out: &mut Rows) {
+/// A thought's row spans after `gutter`, cut to `width` with "…": the
+/// seam's built-in and the row below share them.
+fn thought_row(thought: &Thought, gutter: &str, width: u16) -> Vec<Span<'static>> {
     let max = usize::from(width);
     let row = match thought.ended {
         None => {
@@ -888,7 +1113,59 @@ fn thought_rows(thought: &Thought, gutter: &str, width: u16, out: &mut Rows) {
             spans
         }
     };
-    out.push((Line::from(fit(row, max)), Some(Target::Thought(thought.id))));
+    fit(row, max)
+}
+
+/// A thought's row after `gutter`, dim and italic, cut to `width` with
+/// "…", and its text when open: "○ Thinking: <latest heading>" while
+/// the thought streams, "+ Thought: <first heading> · <span>" once
+/// ended. With no gutter the row is a thinking-only group's line, without
+/// the "○ ". An opened thought's text sits eight columns in inside the
+/// ledger and at the line's own indent outside it (`docs/tui.md`,
+/// "Thinking", "Tool groups and the ledger"). A bound `thinking_line`
+/// renderer replaces the row; an empty result draws no row and opens
+/// no body.
+fn thought_rows(thought: &Thought, gutter: &str, width: u16, out: &mut Rows) {
+    let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
+    let input = crate::ext::ThinkingLine {
+        text: &thought.text,
+        started: thought.started,
+        ended: thought.ended,
+        open: thought.open,
+        flat,
+    };
+    let wrapped = Input::ThinkingLine(input);
+    let builtin = |input: &Input<'_>, w: u16| {
+        let Input::ThinkingLine(_) = input else {
+            return Vec::new();
+        };
+        vec![crate::ext::spans::from_ratatui(&thought_row(
+            thought, gutter, w,
+        ))]
+    };
+    let rendered = match out.fills_for("thinking_line") {
+        crate::ext::SlotSelection::Draw { extension } => {
+            out.ext_lines("thinking_line", &extension, &wrapped, width, &builtin)
+        }
+        crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => None,
+    };
+    match rendered {
+        Some(fitted) => {
+            // An empty result draws no row and opens no body.
+            if fitted.is_empty() {
+                return;
+            }
+            for line in fitted.iter() {
+                out.push_fitted(line, Some(Target::Thought(thought.id)));
+            }
+        }
+        None => {
+            out.push((
+                Line::from(thought_row(thought, gutter, width)),
+                Some(Target::Thought(thought.id)),
+            ));
+        }
+    }
     if out.open_scope(Target::Thought(thought.id), thought.open) {
         let indent = if gutter.is_empty() { "" } else { INDENT };
         opened(&thought.text, indent, out);
