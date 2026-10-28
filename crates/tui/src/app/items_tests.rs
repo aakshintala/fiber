@@ -137,7 +137,7 @@ fn delegate_gate_notice_redraw_and_reload_reach_both_screens() {
         fake.calls
             .borrow()
             .iter()
-            .any(|session| session == DELEGATE_A)
+            .any(|session| session.as_deref() == Some(DELEGATE_A))
     );
     let parent_recounts = app.attached_screen().pages().recounts;
     let delegate_recounts = app.screen.pages().recounts;

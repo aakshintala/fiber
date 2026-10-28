@@ -140,3 +140,191 @@ fn push_and_set_invalidate_the_table_answer() {
     assert!(!clone.has_table());
     assert!(!shared.has_table());
 }
+
+/// The reply's rows through a seam drawing `fake`.
+fn seamed(
+    reply: &Reply,
+    width: u16,
+    fake: &std::rc::Rc<crate::ext::tests::SlotRenderer>,
+    flat: bool,
+) -> Vec<crate::turn::Row> {
+    let mut out =
+        crate::rows::Rows::default().with_seam(crate::ext::tests::seam(fake, "s", 0, flat));
+    reply.rows(width, &mut out);
+    out.into_parts().0
+}
+
+fn replaced() -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    std::rc::Rc::new(SlotRenderer::filling(
+        &["reply"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    ))
+}
+
+#[test]
+fn a_reply_replacement_draws_instead_of_the_text() {
+    let reply = Reply::new("Hello.".to_owned(), 7);
+    let fake = replaced();
+    let rows = seamed(&reply, 40, &fake, false);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow()[0].1, "reply");
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    assert!(!shown.iter().any(|row| row.contains("Hello")), "{shown:?}");
+}
+
+#[test]
+fn a_reply_replacement_keeps_link_cells_and_non_text_padding() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let reply = Reply::new("original".to_owned(), 8);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["reply"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "abc".to_owned(),
+            link: Some("https://example.com".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let mut out =
+        crate::rows::Rows::default().with_seam(crate::ext::tests::seam(&fake, "s", 0, false));
+    reply.rows(10, &mut out);
+    let (rows, texts) = out.into_parts();
+
+    // (`docs/tui.md`, "What a renderer returns": linked cells stay selectable, and the fit's pad is not text.)
+    assert_eq!(rows[0].0.to_string(), "abc       ");
+    assert_eq!(texts[0].tail, 7);
+    assert_eq!(
+        texts[0].links,
+        vec![(0..3, "https://example.com".to_owned())]
+    );
+}
+
+#[test]
+fn a_reply_decorator_draws_the_built_in_text_under_its_badge() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let reply = Reply::new("Hello.".to_owned(), 7);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["reply"],
+        SlotScript::Decorate {
+            badge: vec![vec![raw("BADGE")]],
+            trim: 5,
+        },
+    ));
+    let rows = seamed(&reply, 40, &fake, false);
+    assert_eq!(fake.builtins.borrow().as_slice(), &[35]);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("BADGE")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|row| row.contains("Hello")), "{shown:?}");
+}
+
+#[test]
+fn a_reply_error_falls_back_with_one_failure() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let reply = Reply::new("Hello.".to_owned(), 7);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["reply"],
+        SlotScript::Fail {
+            kind: FailureKind::HookFailed,
+            message: "boom".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    for _ in 0..2 {
+        let mut out = crate::rows::Rows::default().with_seam(bound.clone());
+        reply.rows(40, &mut out);
+        let shown: Vec<String> = out
+            .into_parts()
+            .0
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect();
+        assert!(shown.iter().any(|row| row.contains("Hello")), "{shown:?}");
+    }
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(
+        fake.calls.borrow().len(),
+        1,
+        "the failure calls nothing again"
+    );
+    let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "reply");
+    assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
+}
+
+#[test]
+fn a_reply_timeout_lists_one_extension_failed() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let reply = Reply::new("Hello.".to_owned(), 7);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["reply"],
+        SlotScript::Fail {
+            kind: FailureKind::ExtensionFailed,
+            message: "slow".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    let mut out = crate::rows::Rows::default().with_seam(bound.clone());
+    reply.rows(40, &mut out);
+    let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].1.kind, FailureKind::ExtensionFailed);
+}
+
+#[test]
+fn a_reply_replacement_carries_no_copy_target() {
+    let reply = Reply::new("```sh\necho hi\n```".to_owned(), 7);
+    // The built-in places one copy target on the code block's header.
+    let mut plain = crate::rows::Rows::default();
+    reply.rows(40, &mut plain);
+    let (built, _) = plain.into_parts();
+    assert!(
+        built
+            .iter()
+            .any(|(_, target)| matches!(target, Some(crate::app::Target::Copy { .. }))),
+        "the built-in names its code block"
+    );
+    let fake = replaced();
+    let rows = seamed(&reply, 40, &fake, false);
+    assert!(!rows.is_empty());
+    for (line, target) in &rows {
+        assert_eq!(*target, None, "{line:?} keeps no copy target");
+    }
+}
+
+#[test]
+fn a_flat_reply_replacement_drops_every_style() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use ratatui::style::Style;
+    let reply = Reply::new("Hello.".to_owned(), 7);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["reply"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "custom".into(),
+            bold: true,
+            fg: Some("accent".into()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let rows = seamed(&reply, 40, &fake, true);
+    // (`docs/tui.md`, "How a TUI extension runs": in screen-reader mode the terminal drops every style.)
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("custom")), "{shown:?}");
+    for (line, _) in &rows {
+        for span in &line.spans {
+            assert_eq!(span.style, Style::default(), "{span:?}");
+        }
+    }
+}

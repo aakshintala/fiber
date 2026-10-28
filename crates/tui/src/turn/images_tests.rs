@@ -445,3 +445,191 @@ fn steer_rows_draw_each_line_with_no_indent() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0.to_string(), "▣ s.png · 640×480");
 }
+
+/// A seam drawing `fake`, and the rows `prompt` draws through it.
+fn seamed(
+    prompt: &super::Prompt,
+    layout: &Layout,
+    width: u16,
+    fake: &std::rc::Rc<crate::ext::tests::SlotRenderer>,
+    flat: bool,
+) -> (Vec<crate::turn::Row>, Vec<crate::rows::RowText>) {
+    let mut out =
+        crate::rows::Rows::default().with_seam(crate::ext::tests::seam(fake, "s", 0, flat));
+    bubble_rows(prompt, width, layout, &mut out);
+    out.into_parts()
+}
+
+fn replaced() -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    std::rc::Rc::new(SlotRenderer::filling(
+        &["prompt"],
+        SlotScript::Replace(vec![vec![raw("custom")], vec![raw("second")]]),
+    ))
+}
+
+#[test]
+fn a_prompt_replacement_draws_instead_of_the_bubble() {
+    let prompt = prompt_of(&session(), &[text("hi")]);
+    let fake = replaced();
+    let (rows, _) = seamed(&prompt, &Layout::default(), 40, &fake, false);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow()[0].1, "prompt");
+    assert_eq!(fake.calls.borrow()[0].2, 40);
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    assert!(!shown.iter().any(|row| row.contains("hi")), "{shown:?}");
+}
+
+#[test]
+fn a_prompt_decorator_draws_the_built_in_text_under_its_badge() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let prompt = prompt_of(&session(), &[text("hi")]);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["prompt"],
+        SlotScript::Decorate {
+            badge: vec![vec![raw("BADGE")]],
+            trim: 5,
+        },
+    ));
+    let (rows, _) = seamed(&prompt, &Layout::default(), 40, &fake, false);
+    assert_eq!(fake.builtins.borrow().as_slice(), &[35]);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("BADGE")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|row| row.contains("hi")), "{shown:?}");
+}
+
+#[test]
+fn a_prompt_error_falls_back_with_one_failure() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let prompt = prompt_of(&session(), &[text("hi")]);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["prompt"],
+        SlotScript::Fail {
+            kind: FailureKind::HookFailed,
+            message: "boom".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    let draw = || {
+        let mut out = crate::rows::Rows::default().with_seam(bound.clone());
+        bubble_rows(&prompt, 40, &Layout::default(), &mut out);
+        out.into_parts().0
+    };
+    let rows = draw();
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("hi")), "{shown:?}");
+    let rows = draw();
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("hi")), "{shown:?}");
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(
+        fake.calls.borrow().len(),
+        1,
+        "the failure calls nothing again"
+    );
+    let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "prompt");
+    assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
+}
+
+#[test]
+fn a_prompt_timeout_lists_one_extension_failed() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let prompt = prompt_of(&session(), &[text("hi")]);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["prompt"],
+        SlotScript::Fail {
+            kind: FailureKind::ExtensionFailed,
+            message: "slow".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    let mut out = crate::rows::Rows::default().with_seam(bound.clone());
+    bubble_rows(&prompt, 40, &Layout::default(), &mut out);
+    let (rows, _) = out.into_parts();
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("hi")), "{shown:?}");
+    let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].1.kind, FailureKind::ExtensionFailed);
+}
+
+#[test]
+fn a_single_image_prompt_keeps_its_target_on_every_replacement_line() {
+    let prompt = prompt_of(&session(), &[text("see"), image("artifacts/a.png")]);
+    let layout = noted(&["artifacts/a.png"]);
+    let fake = replaced();
+    let (rows, _) = seamed(&prompt, &layout, 40, &fake, false);
+    // (`docs/tui.md`, "The slots": a `prompt` replacement keeps a single image's target on every line.)
+    assert!(!rows.is_empty());
+    let id = layout.id(&session(), "artifacts/a.png").expect("noted");
+    for (line, target) in &rows {
+        assert_eq!(*target, Some(Target::Image(id)), "{line:?}");
+    }
+}
+
+#[test]
+fn a_multi_image_prompt_drops_image_targets() {
+    let prompt = prompt_of(
+        &session(),
+        &[
+            text("see"),
+            image("artifacts/a.png"),
+            image("artifacts/b.png"),
+        ],
+    );
+    let layout = noted(&["artifacts/a.png", "artifacts/b.png"]);
+    let fake = replaced();
+    let (rows, _) = seamed(&prompt, &layout, 40, &fake, false);
+    // (`docs/tui.md`, "The slots": a `prompt` replacement drops targets for several images.)
+    assert!(!rows.is_empty());
+    for (line, target) in &rows {
+        assert_eq!(*target, None, "{line:?} keeps no image target");
+    }
+    // The built-in still places one target per image line.
+    let mut out = Rows::default();
+    bubble_rows(&prompt, 40, &layout, &mut out);
+    let (rows, _) = out.into_parts();
+    let targets: Vec<_> = rows.iter().filter_map(|(_, target)| *target).collect();
+    // Each image is one clickable line (`docs/tui.md`, "Images"), so
+    // two image lines carry two targets.
+    assert_eq!(targets.len(), 2);
+}
+
+#[test]
+fn a_flat_prompt_replacement_drops_every_style() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use ratatui::style::Style;
+    let prompt = prompt_of(&session(), &[text("hi")]);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["prompt"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "custom".into(),
+            bold: true,
+            fg: Some("accent".into()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let (rows, _) = seamed(&prompt, &Layout::default(), 40, &fake, true);
+    // (`docs/tui.md`, "How a TUI extension runs": in screen-reader mode the terminal drops every style.)
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("custom")), "{shown:?}");
+    for (line, _) in &rows {
+        for span in &line.spans {
+            assert_eq!(span.style, Style::default(), "{span:?}");
+        }
+    }
+}
