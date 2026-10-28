@@ -625,8 +625,10 @@ a click on it returns too. The views are:
   all" toggle on Tab. Typing filters the list on every letter: each
   space-separated word of the query must match, in order but not
   necessarily next to each other and ignoring case, the model's provider,
-  id or display name. The filter keeps the list's order and only drops
-  rows. Backspace removes a letter; Esc clears the query first and closes
+  id or display name. A left-out count row matches the same way, against
+  each left-out model's provider, id or display name, and shows only the
+  matched count; no row shows when none matches. The filter keeps the
+  list's order and only drops rows. Backspace removes a letter; Esc clears the query first and closes
   the picker on the next press. Enter with nothing focused does nothing and
   leaves the picker open; it installs only a row ↓ or a click has focused.
   Ctrl+L opens it, as `/model` does. It draws from the cached
@@ -641,7 +643,16 @@ a click on it returns too. The views are:
   while every model shows, and "⟳ refresh all" dim at the right end. Each
   provider is a section, a blank row between them: the provider's name dim,
   then "· updated 2m ago" dim, or "⟳ refreshing" and a spinner in
-  `attention` while its list refreshes. Each model takes two rows. The first
+  `attention` while its list refreshes. In the choosing picker, a provider
+  with models left out for a placeholder with no value shows one count row
+  after its heading and before its models, indented four columns and
+  uniformly dim: "2 models need workspace: run `fiber login acme`", or "1
+  model needs api_key: set it in `config/acme-ext.json`" naming the supplied
+  file when the provider's data declares a `credential_label`. The row never
+  focuses and takes no clicks; it shows under "show all" too, and never in
+  `/thinking` or `/scoped-models`. Under `scoped_models` with "show all"
+  off, a provider with no scoped installed model shows no section and no
+  count row. Each model takes two rows. The first
   is the model's id in `accent`, each role dim in brackets ("[reviewer]"),
   "● current" bold in `accent` on the session's model, "· scoped" dim on a
   scoped model while every model shows, then its input and output prices per
@@ -664,8 +675,8 @@ a click on it returns too. The views are:
   model's chips. A model chosen for this session only gets a third row,
   "ⓢ this session only · nothing saved" dim. While a query is typed, the
   characters of each id it matched are underlined and bold; a query that
-  matches no model and no not-installed row shows one line, "No models
-  match" dim, and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
+  matches no model, no not-installed row and no left-out model shows one
+  line, "No models match" dim, and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
   Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
 
   Below the last provider section, after a blank row, the choosing picker
@@ -674,8 +685,8 @@ a click on it returns too. The views are:
   `accent`, " · not installed" dim. The scripted provider is never listed
   (`docs/model-routing.md`, "The scripted provider"), and `/thinking` and
   `/scoped-models` list none. Typing filters these rows by provider name as it
-  filters models, and a query that matches no model and no row still shows the
-  one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
+  filters models, and a query that matches no model, no row and no left-out
+  model still shows the one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
   walk the models and then these rows; no row is focused until ↓ or a click
   puts it there, so Enter with no row focused does what it does with none
   listed (a query that hides every model focuses nothing). The focused row
