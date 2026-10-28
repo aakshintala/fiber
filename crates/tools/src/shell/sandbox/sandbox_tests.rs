@@ -3,12 +3,17 @@
 //! need Landlock or a confined spawn run only on Linux; the unavailable
 //! variants they assert never arise elsewhere.
 
+#[cfg(target_os = "linux")]
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
 use std::sync::mpsc;
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
-use super::{Settings, Unavailable, check_available, denied_paths};
+#[cfg(target_os = "linux")]
+use super::denied_paths;
+use super::{Settings, Unavailable, check_available};
 
 /// A fixture root under the owner's home, not the temp dir: the sandbox
 /// grants the temp dir as writable, so a deny beneath it would overlap and
