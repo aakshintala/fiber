@@ -144,6 +144,10 @@ pub(crate) enum Probe {
     /// The first wait for the driver shells has returned: the session
     /// enters its answer phase next.
     FirstShellWaitDone,
+    /// `settle_answers`' owed wait returned: the readers stop and the cut
+    /// runs next, so a test holding here forces a reader to reserve inside
+    /// the cut window.
+    SettleWaitDone,
     /// A writer saw STOP while the session is stopping and waits instead
     /// of ending.
     WriterParkedAtStop,
@@ -2797,7 +2801,8 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
             lock(&resume_rx).recv().expect("the test resumes close");
         }
         Probe::ShellsWaiting => if let Ok(()) = waiting_tx.send(()) {},
-        Probe::SubscribeSeeded
+        Probe::SettleWaitDone
+        | Probe::SubscribeSeeded
         | Probe::SubscribeAcknowledged
         | Probe::PrinterStopQueued
         | Probe::MessageLocked
@@ -4858,7 +4863,8 @@ fn message_and_close_race_in_both_lock_orders() {
             }
             Probe::CloseLocked => if let Ok(()) = closed_tx.send(()) {},
             Probe::CommandReserved => {}
-            Probe::FirstShellWaitDone
+            Probe::SettleWaitDone
+            | Probe::FirstShellWaitDone
             | Probe::PrinterStopQueued
             | Probe::ShellsWaiting
             | Probe::SubscribeSeeded
@@ -4946,7 +4952,8 @@ fn message_and_close_race_in_both_lock_orders() {
                 released(&release, "the close");
             }
             Probe::CommandReserved => {}
-            Probe::MessageLocked
+            Probe::SettleWaitDone
+            | Probe::MessageLocked
             | Probe::FirstShellWaitDone
             | Probe::PrinterStopQueued
             | Probe::ShellsWaiting
@@ -6041,6 +6048,102 @@ fn a_reader_mid_dispatch_at_quiesce_is_answered_before_quiesce_returns() {
         .expect("quiesce returns once the answer is written");
     let session = quiesced.join().expect("the quiesce thread returns");
     close_within(session, opened.log);
+}
+
+/// `docs/invocation.md`, "What the hub speaks": a prompt the reader takes
+/// after close is refused `closing`, never cut `indeterminate`. `quiesce`
+/// with nothing owed returns from its owed wait at once; a reader that
+/// reserves a prompt id after that return but before the cut is still
+/// dispatching when the cut runs, so the cut must wait for its answer.
+/// At base the cut takes the reserved id and answers it `indeterminate`,
+/// and the reader's own `closing` answer is skipped.
+#[test]
+fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let (settle_tx, settle) = mpsc::channel();
+    let (hold_settle_tx, hold_settle) = mpsc::channel::<()>();
+    let hold_settle = Mutex::new(hold_settle);
+    let (reserved_tx, reserved) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    let release = Mutex::new(release);
+    let armed = Arc::new(AtomicBool::new(false));
+    let probe_armed = Arc::clone(&armed);
+    *super::lock(&gate.probe) = Some(Arc::new(move |point| match point {
+        Probe::SettleWaitDone => {
+            if let Ok(()) = settle_tx.send(()) {}
+            released(&hold_settle, "settle_answers");
+        }
+        Probe::CommandReserved if probe_armed.load(Ordering::SeqCst) => {
+            if let Ok(()) = reserved_tx.send(()) {}
+            released(&release, "the dispatching reader");
+        }
+        Probe::CommandReserved
+        | Probe::FirstShellWaitDone
+        | Probe::PrinterStopQueued
+        | Probe::ShellsWaiting
+        | Probe::SubscribeSeeded
+        | Probe::SubscribeAcknowledged
+        | Probe::MessageLocked
+        | Probe::CloseLocked
+        | Probe::WriterParkedAtStop
+        | Probe::WriterPastEnd => {}
+    }));
+    let client = subscribed_client(&opened);
+    let (done_tx, done) = mpsc::channel();
+    let session = opened.session;
+    let log = opened.log;
+    let quiescer = thread::spawn(move || {
+        session.quiesce();
+        if let Ok(()) = done_tx.send(()) {}
+        session
+    });
+    // The owed wait returned with nothing owed: the cut runs as soon as the
+    // test releases it.
+    Deadline::after(DEADLINE)
+        .recv(&settle)
+        .expect("settle_answers reaches its cut");
+    // Admission closed when quiesce started, so the prompt the reader takes
+    // now is refused `closing` once it dispatches.
+    armed.store(true, Ordering::SeqCst);
+    client
+        .send(r#"{"id":"c_p","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#)
+        .unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&reserved)
+        .expect("the reader reserves c_p before dispatching it");
+    // Release the cut while the reader is still dispatching: at base the cut
+    // takes the reserved id and answers it `indeterminate`.
+    hold_settle_tx.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("quiesce returns once the cut is flushed");
+    let session = quiescer.join().expect("the quiesce thread returns");
+    // The reader's own `closing` answer arrives after the cut took the id,
+    // so the writer skips it: the wire keeps only the cut's answer.
+    release_tx.send(()).unwrap();
+    armed.store(false, Ordering::SeqCst);
+    let answer = loop {
+        let line = recv(&client);
+        if matches!(
+            line["kind"].as_str(),
+            Some("command_accepted" | "command_rejected")
+        ) {
+            break line;
+        }
+    };
+    assert_eq!(support::command_id(&answer), Some("c_p"), "{answer:?}");
+    assert_eq!(answer["kind"], "command_rejected", "{answer:?}");
+    assert_eq!(support::rejection(&answer).0, "closing", "{answer:?}");
+    close_within(session, log);
+    let lines = read_to_eof(&client);
+    let acks = acks_for(&lines, "c_p");
+    assert_eq!(
+        acks.len(),
+        1,
+        "one answer for the dispatched prompt: {lines:?}"
+    );
 }
 
 /// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.

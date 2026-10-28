@@ -691,6 +691,8 @@ impl Session {
         #[cfg(test)]
         self.gate.note(tests::Probe::FirstShellWaitDone);
         self.gate.accepted.wait_owed(clock, until);
+        #[cfg(test)]
+        self.gate.note(tests::Probe::SettleWaitDone);
         // The reader stop is the last step before the cut: once every
         // answer owed is on its connection, the readers stop reading
         // another line.
