@@ -3022,25 +3022,19 @@ fn tail_open_prepared(
                             Full::Hung => {}
                             Full::ManualReplay => {
                                 // The hub's own accept is redundant beside
-                                // the accept the test feeds itself: hold it
-                                // on the test's release instead of writing
-                                // it at once, then deliver the hub-built
-                                // envelope over a direct channel send, so
-                                // the test forces it into the batch window
-                                // it names. The wait runs off the read
-                                // loop, which keeps draining the loop's
+                                // the accept the test feeds itself: wait out
+                                // the test's release, then signal done while
+                                // sending nothing, so the choreographed pass
+                                // stays single-sourced. The wait runs off the
+                                // read loop, which keeps draining the loop's
                                 // `commands` writes.
-                                let (release, done, direct) = ack_gate
+                                let (release, done, _) = ack_gate
                                     .take()
                                     .unwrap_or_else(|| panic!("one manual replay per open"));
-                                let value = session_ack(&id, json!({}));
-                                let gated: contract::Envelope = serde_json::from_value(value)
-                                    .unwrap_or_else(|err| panic!("manual ack: {err}"));
                                 std::thread::Builder::new()
                                     .name("manual-ack".to_owned())
                                     .spawn(move || {
                                         release.recv().unwrap_or(());
-                                        direct.send(Input::Hub(Line::Session(gated))).unwrap_or(());
                                         done.send(()).unwrap_or(());
                                     })
                                     .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -3590,9 +3584,8 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         .pop()
         .unwrap_or_else(|| panic!("a preview frame"));
     assert!(first.contains("quokkas"), "{first}");
-    // Drain first: the hub's own ack may still sit queued, and the
-    // worker must see exactly one pass, this ack, then the replay.
-    while open.rx.try_recv().is_ok() {}
+    // No drain: the hub's own ack stays gated until released, so the
+    // worker sees exactly one pass, this ack, then the replay.
     let raise_id = open
         .seen
         .lock()
