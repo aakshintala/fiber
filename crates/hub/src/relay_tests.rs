@@ -604,15 +604,25 @@ fn only_an_acknowledgement_of_the_replayed_id_is_dropped() {
         bytes.push(b'\n');
         bytes
     };
-    assert!(acknowledges(&line("command_accepted", "c_hub"), "c_hub"));
-    assert!(acknowledges(&line("command_rejected", "c_hub"), "c_hub"));
-    assert!(!acknowledges(&line("command_accepted", "c_1"), "c_hub"));
-    assert!(!acknowledges(&line("session_status", "c_hub"), "c_hub"));
-    assert!(!acknowledges(b"not json\n", "c_hub"));
-    assert!(!acknowledges(
-        &serde_json::to_vec(&json!({"kind": "command_accepted", "payload": {}})).unwrap(),
-        "c_hub"
-    ));
+    assert!(
+        acknowledgement(&line("command_accepted", "c_hub")).is_some_and(|ack| ack.id == "c_hub")
+    );
+    assert!(
+        acknowledgement(&line("command_rejected", "c_hub")).is_some_and(|ack| ack.id == "c_hub")
+    );
+    assert!(
+        !acknowledgement(&line("command_accepted", "c_1")).is_some_and(|ack| ack.id == "c_hub")
+    );
+    assert!(
+        !acknowledgement(&line("session_status", "c_hub")).is_some_and(|ack| ack.id == "c_hub")
+    );
+    assert!(!acknowledgement(b"not json\n").is_some_and(|ack| ack.id == "c_hub"));
+    assert!(
+        !acknowledgement(
+            &serde_json::to_vec(&json!({"kind": "command_accepted", "payload": {}})).unwrap()
+        )
+        .is_some_and(|ack| ack.id == "c_hub")
+    );
 }
 
 /// Extracts the acknowledged command's id and verdict for assertions.

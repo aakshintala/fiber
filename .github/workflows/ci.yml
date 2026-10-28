@@ -183,8 +183,9 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).lint
     runs-on: ubuntu-24.04
-    # Median 55 s, slowest passing run of the last 25 69 s; the 5-minute floor covers twice it.
-    timeout-minutes: 5
+    # Median 55 s, slowest passing run of the last 25 69 s; the two uncached
+    # feature checks below ride alongside scripts/check, so the bound is 10 minutes.
+    timeout-minutes: 10
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps:
@@ -197,6 +198,10 @@ jobs:
           tool: cargo-deny,cargo-about
       - name: scripts/check, the platform-independent checks
         run: scripts/check --base "$BASE" --shared-only
+      - name: alloc-stats profiling build
+        run: cargo check -p main --bins --tests --features alloc-stats
+      - name: dhat-heap profiling build
+        run: cargo check -p main --bins --tests --features dhat-heap
       - name: cargo-deny licences, sources and bans
         run: cargo deny check licenses sources bans
       # No install-action tool installs actionlint, so this downloads the release

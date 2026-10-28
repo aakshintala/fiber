@@ -251,7 +251,7 @@ a poll driver that is the clock's only mover uses
 `FakeClock::advance` and `advance_marked` calls are banned outside
 `crates/fakes` by `clippy.toml` `disallowed-methods`; the clock's own
 `support::clock` implementation and self-tests are exempt, as are
-`CaseClock` calls in `crates/main/src/case`. Each kept raw site carries
+`CaseClock` calls in `extensions::case`. Each kept raw site carries
 its own
 allowance with its reason, never a file-wide one: no code under test waits on
 the clock (comment 6179406086), a panic-handler release that re-raises the

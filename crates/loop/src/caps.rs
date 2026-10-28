@@ -76,6 +76,18 @@ impl Tool for Capped {
         self.inner.run_asking(arguments, cancel, emit, ask)
     }
 
+    fn run_with_effects(
+        &self,
+        arguments: &Map<String, Value>,
+        effects: &Effects,
+        cancel: &dyn Cancel,
+        emit: &dyn Emit,
+        ask: &dyn Ask,
+    ) -> Output {
+        self.inner
+            .run_with_effects(arguments, effects, cancel, emit, ask)
+    }
+
     fn bound(&self) -> Bound {
         self.bound
     }

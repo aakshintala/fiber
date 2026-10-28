@@ -55,6 +55,15 @@ pub(crate) enum ShellError {
         #[source]
         source: io::Error,
     },
+    /// The sandbox could not be applied at spawn, so the call never ran.
+    /// A reload that turned the sandbox off after the call was declared
+    /// confined, or a policy the kernel refused, ends here: never
+    /// unconfined, and never retried.
+    #[error("The sandbox could not be applied: {cause}.")]
+    SandboxApply {
+        /// Why the policy did not apply.
+        cause: String,
+    },
     /// The command's process could not be reaped after its output closed.
     #[error("The command's process could not be reaped.")]
     NotReaped,
@@ -109,7 +118,9 @@ impl ShellError {
             | Self::DeadlineTooLong { .. }
             | Self::NoJobs
             | Self::BareWait => ErrorCode::InvalidArguments,
-            Self::NotStarted { .. } | Self::NotReaped => ErrorCode::ToolError,
+            Self::NotStarted { .. } | Self::NotReaped | Self::SandboxApply { .. } => {
+                ErrorCode::ToolError
+            }
             Self::Indeterminate => ErrorCode::Indeterminate,
             Self::TimedOut { .. } | Self::DeadlinePassed { .. } => ErrorCode::Timeout,
             Self::Killed { .. } => ErrorCode::Signal,

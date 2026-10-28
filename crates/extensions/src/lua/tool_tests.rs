@@ -114,6 +114,7 @@ fn a_tool_registers_its_description_schema_effects_and_timeout() {
                     effects: vec![Effect::Reads, Effect::Network],
                     reversible: true,
                     paths: Some(vec!["note.txt".to_owned()]),
+                    confined: false,
                 },
                 hosts: None,
             }),
@@ -413,6 +414,7 @@ fn effects_from_reads_each_shape_and_refuses_each_bad_one() {
                 effects: Vec::new(),
                 reversible: false,
                 paths: None,
+                confined: false,
             },
             None,
         ))
@@ -428,6 +430,7 @@ fn effects_from_reads_each_shape_and_refuses_each_bad_one() {
                 effects: vec![Effect::Writes, Effect::Executes],
                 reversible: true,
                 paths: Some(Vec::new()),
+                confined: false,
             },
             None,
         ))
@@ -806,6 +809,7 @@ fn effects_from_reads_hosts_beside_the_effects() {
         effects: vec![Effect::Network],
         reversible: true,
         paths: None,
+        confined: false,
     };
     assert_eq!(
         effects_from(&json!({"effects": ["network"], "reversible": true})),

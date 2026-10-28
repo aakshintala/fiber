@@ -5,6 +5,8 @@
 use super::super::{App, Effect};
 use crate::catalogue::{Catalogue, ModelEntry};
 use crate::home::Launch;
+use contract::ErrorCode;
+use contract::events::Notice;
 use std::path::PathBuf;
 
 /// An app on home at 80x24.
@@ -50,7 +52,11 @@ fn catalogue() -> Catalogue {
     Catalogue {
         installable: Vec::new(),
         models: vec![entry("acme/m1")],
-        notices: vec!["a cached provider is gone".to_owned()],
+        notices: vec![Notice {
+            code: ErrorCode::ModelInvalid,
+            message: "a cached provider is gone".to_owned(),
+            extension: None,
+        }],
         lists: Vec::new(),
     }
 }
@@ -76,22 +82,53 @@ fn a_read_error_is_one_notice_and_keeps_the_catalogue() {
 }
 
 #[test]
-fn catalogue_notices_are_pushed_once_per_read() {
+fn catalogue_notices_show_under_their_own_codes() {
     let mut app = home();
     let catalogue = Catalogue {
         installable: Vec::new(),
         models: vec![entry("acme/m1")],
-        notices: vec!["first".to_owned(), "second".to_owned()],
+        notices: vec![
+            Notice {
+                code: ErrorCode::ModelUnconfigured,
+                message: "a host is missing".to_owned(),
+                extension: None,
+            },
+            Notice {
+                code: ErrorCode::ExtensionFailed,
+                message: "the refresh failed".to_owned(),
+                extension: Some("acme".to_owned()),
+            },
+            Notice {
+                code: ErrorCode::ModelInvalid,
+                message: "a cached list is bad".to_owned(),
+                extension: None,
+            },
+        ],
         lists: Vec::new(),
     };
     app.on_models(Ok(catalogue.clone()));
-    assert_eq!(app.notices().len(), 2);
-    assert_eq!(app.notice(), Some("second"));
-    assert_eq!(first_code(&app), "model_invalid");
+    assert_eq!(app.notices().len(), 3);
+    let codes: Vec<String> = app
+        .notices()
+        .iter()
+        .map(|line| match line {
+            crate::app::NoticeLine::Notice { code, .. } => code.clone(),
+            line @ crate::app::NoticeLine::More(_) => {
+                panic!("a more row, not a notice: {line:?}")
+            }
+        })
+        .collect();
+    // Catalogue notices keep their push order, one row each, oldest first
+    // (`docs/tui.md`, "Notices").
+    assert_eq!(
+        codes,
+        ["model_unconfigured", "extension_failed", "model_invalid"]
+    );
+    assert_eq!(app.notice(), Some("a cached list is bad"));
     // A second identical read adds no rows: the same code with the same
     // text while stacked dedupes (#2843: event repeats fade as one row).
     app.on_models(Ok(catalogue));
-    assert_eq!(app.notices().len(), 2);
+    assert_eq!(app.notices().len(), 3);
 }
 
 use std::time::Instant;

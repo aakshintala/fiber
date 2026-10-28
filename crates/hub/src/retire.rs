@@ -66,16 +66,27 @@ pub(crate) struct AckOrder {
     inner: Mutex<Inner>,
     changed: Condvar,
     /// Tests only: a one-shot pause at `drain`'s start, before any lock:
-    /// the point where the drain waits for `route`'s write outcome.
+    /// the point where the drain waits for `route`'s write outcome. It
+    /// pauses the relay thread at the top of its drain step so the test
+    /// stages the acknowledgement in that gap. No outside seam parks the
+    /// thread there: the test would have to win a scheduling race against
+    /// the freshly spawned thread on every run.
     #[cfg(test)]
     pub(crate) before_drain: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: a one-shot signal at the top of the relay thread's
-    /// read loop, before `read_until`, where the thread holds no lock.
+    /// read loop, before `read_until`, where the thread holds no lock. It
+    /// pauses the relay thread at the top of its read step so the hook
+    /// observes the acknowledgement after it is recorded and in order. The
+    /// test would otherwise have to win a scheduling race against the
+    /// freshly spawned thread on every run.
     #[cfg(test)]
     pub(crate) before_read: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: a one-shot signal at `wait_rerouted`'s entry, before
     /// any lock: the point where a retiring relay waits for what it
-    /// re-routed to be answered.
+    /// re-routed to be answered. It pauses the retiring relay at the top
+    /// of its wait step so the test stages the answer in that gap. No
+    /// outside seam parks the thread there; winning the race against the
+    /// spawned thread on every run is not deterministic.
     #[cfg(test)]
     pub(crate) before_wait_rerouted: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }

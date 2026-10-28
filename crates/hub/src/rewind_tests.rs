@@ -14,7 +14,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -26,7 +26,7 @@ use serde_json::{Map, Value, json};
 use super::*;
 use crate::Started;
 use crate::Starter;
-use crate::connection::serve_connection;
+use crate::connection::{Accept, serve_counted};
 use crate::fake::{FakeStarter, Handshake, failure};
 use crate::start::START_DEADLINE;
 use crate::testkit::{id, write_log};
@@ -669,7 +669,11 @@ impl Client {
         let hub = Arc::clone(hub);
         thread::Builder::new()
             .name("hub-conn".to_owned())
-            .spawn(move || serve_connection(a, hub))
+            .spawn(move || match hub.poll_accept(&a, &AtomicBool::new(false)) {
+                Accept::Counted(n) => serve_counted(a, hub, n),
+                Accept::Dropped => panic!("test connection stream could not be cloned"),
+                Accept::Exiting => panic!("fresh test hub unexpectedly exiting"),
+            })
             .unwrap();
         b.set_read_timeout(Some(DEADLINE)).unwrap();
         let reader = b.try_clone().unwrap();
@@ -1199,7 +1203,7 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
     let (first_tx, first_rx) = mpsc::channel();
     *lock(&hub.before_forward) = Some(Box::new(move |line, _| {
         first_tx
-            .send(crate::relay::acknowledges(line, "c_earlier"))
+            .send(crate::relay::acknowledgement(line).is_some_and(|ack| ack.id == "c_earlier"))
             .unwrap_or(());
     }));
     let retiring_thread = crate::relay::spawn_for_test(

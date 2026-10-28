@@ -202,6 +202,20 @@ fn hub_models_lists_the_hub_catalogue_and_none_of_the_clients() {
     let client = Rig::new("fiber-hub-models-client");
     install_data(&hub.home, "acme-ext", "acme", &["m1", "m2"], &json!({}));
     install_data(&client.home, "zed-ext", "zed", &["z1"], &json!({}));
+    // An extension written for another API loads no provider: its
+    // notice rides the answer as a `code` and `message` object, with
+    // `extension` naming it.
+    install_extension(
+        &hub.home,
+        "extensions/old-ext",
+        json!({
+            "name": "old-ext",
+            "version": "v1.0.0",
+            "fiber": "0.1.0",
+            "api": extensions::API + 1,
+        }),
+        &[],
+    );
     let seam = Seam::new(hub.home.clone());
     let catalogue = result(&seam, "models", json!({"workspace": hub.workspace}));
     assert_eq!(references(&catalogue), ["acme/m1", "acme/m2"]);
@@ -210,7 +224,19 @@ fn hub_models_lists_the_hub_catalogue_and_none_of_the_clients() {
         json!([{"provider": "acme", "stale": true}]),
         "no cached copy: no time, and stale"
     );
-    assert!(catalogue["notices"].is_array());
+    assert_eq!(
+        catalogue["notices"],
+        json!([{
+            "code": "extension_incompatible",
+            "message": format!(
+                "`old-ext` was written for extension API {}, and this Fiber speaks API {}.",
+                extensions::API + 1,
+                extensions::API,
+            ),
+            "extension": "old-ext",
+        }]),
+        "one notice object with its extension: {catalogue:?}"
+    );
 }
 
 /// A model with a cost carries its price field for field; a model with

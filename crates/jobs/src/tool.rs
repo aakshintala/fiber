@@ -120,6 +120,7 @@ fn effects_of(action: Action) -> Effects {
             effects,
             reversible,
             paths: None,
+            confined: false,
         },
         subject: Some(String::new()),
         prefix: None,

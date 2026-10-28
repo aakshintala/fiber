@@ -227,6 +227,7 @@ impl Fixture {
             diag: parts.diag,
             names: Mutex::new(Vec::new()),
             shell_read_only: parts.shell_read_only.clone(),
+            sandbox: parts.sandbox.clone(),
             servers: Arc::new(empty.servers),
             artifacts: rig.workspace.join("artifacts"),
             images: Arc::new(DummyImages),
@@ -1438,6 +1439,7 @@ fn assemble(base: &State, started: mcp::Started) -> State {
         diag: Arc::clone(&base.diag),
         names: Mutex::new(Vec::new()),
         shell_read_only: base.shell_read_only.clone(),
+        sandbox: base.sandbox.clone(),
         servers: Arc::new(started.servers),
         artifacts: base.artifacts.clone(),
         images: Arc::clone(&base.images),
@@ -2807,5 +2809,36 @@ fn a_fake_server_entry_captures_stderr_in_its_directory() {
         args[3],
         json!(fake.dir.display().to_string()),
         "the directory rides as $1: {args:?}"
+    );
+}
+
+#[test]
+fn install_replaces_the_shared_sandbox_settings() {
+    let fixture = Fixture::new();
+    fixture
+        .rig
+        .write_global(&json!({"model":"scripted/s.json", "sandbox": {"enabled": true}}));
+    let prepared = fixture.prepare();
+    assert!(
+        !fixture.state.sandbox.lock().unwrap().enabled,
+        "a prepared reload changes nothing before it installs"
+    );
+    (prepared.installed)();
+    assert!(fixture.state.sandbox.lock().unwrap().enabled);
+}
+
+#[test]
+fn sandbox_handles_are_isolated_between_sessions() {
+    let first = Fixture::new();
+    let second = Fixture::new();
+    first
+        .rig
+        .write_global(&json!({"model":"scripted/s.json", "sandbox": {"enabled": true}}));
+    let prepared = first.prepare();
+    (prepared.installed)();
+    assert!(first.state.sandbox.lock().unwrap().enabled);
+    assert!(
+        !second.state.sandbox.lock().unwrap().enabled,
+        "a reload in one session leaves the other session's sandbox alone"
     );
 }

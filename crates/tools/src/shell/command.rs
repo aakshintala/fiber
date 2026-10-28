@@ -126,6 +126,8 @@ pub(crate) fn execute(
     jobs: Option<&dyn Jobs>,
     spill: Option<SpillConfig>,
     matches: Option<&Path>,
+    sandbox_settings: &super::sandbox::Settings,
+    sandbox_workspace: &Path,
 ) -> Result<Ran, std::io::Error> {
     execute_inner(
         program,
@@ -139,17 +141,41 @@ pub(crate) fn execute(
         jobs,
         spill,
         matches,
+        sandbox_settings,
+        sandbox_workspace,
         support::group::alive,
         Path::new("ps"),
+        super::sandbox::install,
     )
 }
 
 /// The execution with the group probe and the member-query program
 /// injected, so a test can force the probe to lag the reap and point the
 /// listing at a fixture. Production passes the real probe and bare `ps`.
+/// Marks a spawn failure as a sandbox-apply failure: the shell maps it to
+/// `ShellError::SandboxApply` instead of `NotStarted`, so a policy the
+/// kernel refused never reads as a missing program. Built in the parent,
+/// where formatting and allocation are allowed.
+#[derive(Debug)]
+pub(crate) struct SandboxApply {
+    /// Why the policy did not apply.
+    pub cause: String,
+}
+
+impl std::fmt::Display for SandboxApply {
+    // This private marker is downcast to recover its cause; the user-facing
+    // message is built by `ShellError::SandboxApply`, not this formatter.
+    #[cfg_attr(false, mutants::skip)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "The sandbox could not be applied: {}.", self.cause)
+    }
+}
+
+impl std::error::Error for SandboxApply {}
+
 #[allow(
     clippy::too_many_arguments,
-    reason = "spawn, the deadline, the move policy, the spill and the injected probe are one call"
+    reason = "spawn, the deadline, the move policy, the spill, the sandbox and the injected probe are one call"
 )]
 fn execute_inner(
     program: &Path,
@@ -163,8 +189,11 @@ fn execute_inner(
     jobs: Option<&dyn Jobs>,
     spill: Option<SpillConfig>,
     matches: Option<&Path>,
+    sandbox_settings: &super::sandbox::Settings,
+    sandbox_workspace: &Path,
     alive: fn(u32) -> bool,
     ps: &Path,
+    install: fn(&mut super::sandbox::Prepared) -> Result<(), i32>,
 ) -> Result<Ran, std::io::Error> {
     let tty = policy == MovePolicy::Terminal;
     let mut cmd = Command::new(program);
@@ -197,8 +226,82 @@ fn execute_inner(
     if let Some(path) = matches {
         cmd.env(crate::search::matches::MATCHES_ENV, path);
     }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (install, sandbox_settings, sandbox_workspace);
+    // A setup failure aborts spawn before it starts: the shell maps the
+    // marker to a sandbox-apply failure, so the call never runs unconfined.
+    // A disabled sandbox skips the policy and runs as before; an enabled
+    // one that cannot apply fails instead of falling back to unconfined.
+    #[cfg(target_os = "linux")]
+    let prepared = if sandbox_settings.enabled {
+        match super::sandbox::check_available(sandbox_settings, sandbox_workspace) {
+            Err(unavailable) => {
+                return Err(std::io::Error::other(SandboxApply {
+                    cause: unavailable.to_string(),
+                }));
+            }
+            Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace) {
+                Ok(prepared) => Some(prepared),
+                Err(cause) => {
+                    return Err(std::io::Error::other(SandboxApply { cause }));
+                }
+            },
+        }
+    } else {
+        None
+    };
     support::group::detach(&mut cmd, tty);
-    let (child, listing) = support::group::spawn(&mut cmd)?;
+    // The close-on-exec sentinel: the child writes the raw errno here when
+    // the policy does not apply, and the parent reads it after a spawn
+    // failure to tell an apply failure from an exec failure.
+    #[cfg(target_os = "linux")]
+    let mut sentinel_parent: Option<std::os::unix::net::UnixStream> = None;
+    #[cfg(target_os = "linux")]
+    if let Some(prepared) = prepared {
+        let (parent, child) = std::os::unix::net::UnixStream::pair()?;
+        set_cloexec(&parent)?;
+        set_cloexec(&child)?;
+        sentinel_parent = Some(parent);
+        let mut policy = prepared;
+        #[allow(
+            unsafe_code,
+            reason = "installs the prepared Linux policy between fork and exec"
+        )]
+        // SAFETY: The closure runs between fork and exec, so it only runs
+        // syscalls: Landlock `restrict_self` and seccomp `apply_filter` on a
+        // policy prepared before fork. Success performs no allocation: the
+        // ruleset is consumed through the borrowed policy and the seccomp
+        // program only borrowed, never moved or freed. A failure writes the
+        // raw errno to the sentinel, without formatting or allocation, and
+        // returns it, so spawn aborts and the command never runs unconfined.
+        // See docs/code-quality.md, "Unsafe".
+        unsafe {
+            use std::os::unix::process::CommandExt as _;
+            cmd.pre_exec(move || {
+                if let Err(code) = install(&mut policy) {
+                    write_errno(&child, code);
+                    return Err(std::io::Error::from_raw_os_error(code));
+                }
+                Ok(())
+            });
+        }
+    }
+    let (child, listing) = match support::group::spawn(&mut cmd) {
+        Ok(started) => started,
+        Err(error) => {
+            // Drop the parent-held pre_exec closure before waiting for the
+            // sentinel. It owns the child stream; without closing that peer,
+            // a failed write would leave the reader waiting forever.
+            drop(cmd);
+            #[cfg(target_os = "linux")]
+            if let Some(parent) = sentinel_parent
+                && let Some(marker) = read_sentinel(parent)
+            {
+                return Err(marker);
+            }
+            return Err(error.into());
+        }
+    };
     // The parent drops every write end, or every secondary, so EOF arrives
     // when the last holder exits.
     drop(cmd);
@@ -285,6 +388,61 @@ fn execute_inner(
             cap: OUTPUT_CAP,
             spill,
         }))),
+    }
+}
+
+/// Marks a socket as close-on-exec, so the sentinel never leaks into the
+/// command. Runs in the parent before fork, where syscalls may fail with an
+/// `io::Error`.
+#[cfg(target_os = "linux")]
+fn set_cloexec(stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
+    use rustix::fd::AsFd as _;
+    let fd = stream.as_fd();
+    let flags = rustix::io::fcntl_getfd(fd)?;
+    rustix::io::fcntl_setfd(fd, flags.union(rustix::io::FdFlags::CLOEXEC))?;
+    Ok(())
+}
+
+/// Writes the raw errno to the sentinel: one `write` syscall, no
+/// allocation, no formatting. Best effort: the parent reads whatever
+/// arrived before EOF.
+#[cfg(target_os = "linux")]
+#[allow(
+    unsafe_code,
+    reason = "writes the raw errno to the sentinel between fork and exec"
+)]
+fn write_errno(child: &std::os::unix::net::UnixStream, code: i32) {
+    use std::os::unix::io::AsRawFd as _;
+    let bytes = code.to_ne_bytes();
+    // SAFETY: `child` is our own just-created socket, open for writing; the
+    // pointer and length name a stack array that outlives the call. One
+    // syscall, no allocation.
+    let _ = unsafe {
+        libc::write(
+            child.as_raw_fd(),
+            bytes.as_ptr() as *const libc::c_void,
+            bytes.len(),
+        )
+    };
+}
+
+/// Reads the sentinel after a spawn failure: four bytes mean the child
+/// reported a policy-apply errno, and the failure is a sandbox-apply
+/// failure; EOF means the child wrote nothing and the failure is an exec
+/// failure. The child has exited, closing its end, so this cannot block:
+/// no live process holds the write end.
+#[cfg(target_os = "linux")]
+fn read_sentinel(parent: std::os::unix::net::UnixStream) -> Option<std::io::Error> {
+    use std::io::Read as _;
+    let mut parent = parent;
+    let mut bytes = [0u8; 4];
+    if parent.read_exact(&mut bytes).is_ok() {
+        let code = i32::from_ne_bytes(bytes);
+        Some(std::io::Error::other(SandboxApply {
+            cause: std::io::Error::from_raw_os_error(code).to_string(),
+        }))
+    } else {
+        None
     }
 }
 

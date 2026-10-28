@@ -18,6 +18,7 @@ fn declared(effects: Vec<Effect>, paths: Option<Vec<&str>>) -> DeclaredEffects {
         effects,
         reversible: false,
         paths: paths.map(|paths| paths.iter().map(|p| (*p).to_owned()).collect()),
+        confined: false,
     }
 }
 
@@ -666,6 +667,7 @@ fn credential_paths_match_inside_the_directory_and_fail_closed() {
                 effects: vec![Effect::Reads],
                 reversible: true,
                 paths,
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,

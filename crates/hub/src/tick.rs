@@ -21,7 +21,10 @@ pub(crate) struct Tick {
     held: Mutex<()>,
     moved: Condvar,
     /// Told once of the next wake or stop-store: when it finds `held`
-    /// taken, or else once its notify has returned.
+    /// taken, or else once its notify has returned. The signal proves a
+    /// woken thread executed while the tick guard was held; joining the
+    /// woken thread would deadlock on the very hold the test needs. No
+    /// outside seam observes wake execution.
     #[cfg(test)]
     pub(crate) attempt: Mutex<Option<Sender<()>>>,
 }
@@ -47,7 +50,8 @@ impl Tick {
     /// Tells the armed sender at once when `held` is taken, and otherwise
     /// returns it to be told after the wait. Shared by [`Tick::wake`] and
     /// the stop-store's arrival signal, which reports before the hold
-    /// instead of after a notify.
+    /// instead of after a notify. Reporting at once proves the woken
+    /// thread reached the held lock, not that it was merely unscheduled.
     pub(crate) fn tell_if_contended(&self) -> Option<Sender<()>> {
         let attempt = lock(&self.attempt).take()?;
         if matches!(

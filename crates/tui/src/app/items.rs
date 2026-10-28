@@ -512,7 +512,8 @@ impl App {
     /// One key in a running `tty` job's view: every key but Esc and Ctrl+C
     /// is sent as `job_input` to the attached session, which owns the job.
     /// `None` for a finished job, a non-`tty` job, a delegate, a link that
-    /// is down, or a key with no bytes, so each falls through as today.
+    /// is down, or a key with no bytes, so each falls through to the
+    /// normal key handling.
     pub(super) fn item_job_key(&mut self, key: &Key) -> Option<Effect> {
         let text = keys::encode(key)?;
         self.item_job_send(text)
@@ -564,8 +565,8 @@ impl App {
         Some(Effect::Send(vec![line]))
     }
 
-    /// Enter in an item view: a `/` built-in runs on the attached session
-    /// as today; anything else goes to the open fiber delegate as `steer`.
+    /// Enter in an item view: a `/` built-in already ran in `on_enter`;
+    /// anything else goes to the open fiber delegate as `steer`.
     /// `None` outside an item view.
     pub(super) fn item_enter(&mut self) -> Option<Effect> {
         let open = self.items.open.as_ref()?;

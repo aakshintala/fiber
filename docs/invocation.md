@@ -1219,7 +1219,7 @@ required unless marked optional; unknown keys, wrong types and explicit
 | `login_targets` | none | `targets`, objects with `name` and `kind` (`key`, `browser` or `secret`) |
 | `store_key` | `name`, `key` (strings), `label` (string, optional) | `path` (string, relative to Fiber home) and `replaced` (boolean), as `fiber login` stores it; the key is never returned or logged |
 | `reviewer_models` | `name` (string) | `models` (array of strings), optional `selected` (string), and `notices` (array of strings), from the hub's installed provider |
-| `models` | `workspace` (string), `refresh` (string, optional: `cached`, `stale` or `every`; default `cached`) | `models`, `notices`, `lists` and `installable`, the hub's installed models as the terminal's picker lists them: a `models` element holds `reference`, `provider`, `id`, optional `name`, `levels`, optional `default_level` and `configured`, `roles`, and optional `price` (`micros_per_mtok`, `input`, `output`, `tiers`); a `lists` element holds `provider`, optional `updated_ms` and `stale`; `installable` (array of strings) names each first-party provider no installed extension declares, sorted; `cached` starts no extension, `stale` and `every` refresh the lists first (with and without the age check) |
+| `models` | `workspace` (string), `refresh` (string, optional: `cached`, `stale` or `every`; default `cached`) | `models`, `notices`, `lists` and `installable`, the hub's installed models as the terminal's picker lists them: a `models` element holds `reference`, `provider`, `id`, optional `name`, `levels`, optional `default_level` and `configured`, `roles`, and optional `price` (`micros_per_mtok`, `input`, `output`, `tiers`); a `lists` element holds `provider`, optional `updated_ms` and `stale`; a `notices` element holds `code`, `message` and optional `extension`, naming the extension the notice concerns; `installable` (array of strings) names each first-party provider no installed extension declares, sorted; `cached` starts no extension, `stale` and `every` refresh the lists first (with and without the age check) |
 | `install_provider` | `workspace`, `provider` (strings) | `installed` and `summary` (arrays of strings) and `login` (array of objects): the first-party package serving `provider` installed as `fiber extension install` installs it, without asking; `installed` names each extension put in place, `summary` holds the lines "What an install shows" gives (`docs/extensions.md`), and `login` holds an object per provider it registered whose key is missing (`provider`) or could not be read (`provider` and `error`, string), for `fiber login <name>`; the configuration of `workspace` must load, or nothing is fetched; a provider no first-party package serves is rejected `invalid_arguments`, and a failed install installs nothing and is rejected with its code |
 | `blocking_hooks` | `workspace` (absolute string), `overrides` (array of strings, optional; absent means empty) | `names` (array of strings): sorted blocking hook names from the merged, repository-filtered configuration with the exact ordered overrides; empty when the hooks package is installed, even disabled or unloadable, or the filtered gate has no named blockers; configuration and listing errors retain their code and message |
 | `install_hooks` | none | empty result (`{}`): installs `hooks` globally into the hub's home as unflagged `fiber extension install hooks`, without asking; a failed plan or commit installs nothing and retains its original error code and message |
@@ -1306,8 +1306,11 @@ to session artifacts.
   `pairing_code`, `devices` and `revoke` are answered on the port as on the
   local socket. Limiting them to the hub's machine would stop no one holding a
   token, since a device token is already a shell on the hub's account and a
-  session's shell reaches the local socket; it would only stop a person whose
-  one device is a phone from adding a second. Detection is the control
+  session's shell reaches the local socket; only a shell call that
+  successfully runs confined on Linux cannot reach Fiber's local socket
+  (`docs/sandbox.md`). The Linux sandbox denies all sockets. An
+  unavailable-sandbox fallback retains today's socket access. It would only
+  stop a person whose one device is a phone from adding a second. Detection is the control
   instead. Each pairing and each revocation is written to the hub's
   diagnostic log (`docs/state.md`, "What each part holds") and sent to every
   connected client as a `device_changed` line (`docs/events.md`, "The

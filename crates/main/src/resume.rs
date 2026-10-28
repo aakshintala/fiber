@@ -502,6 +502,7 @@ fn resumed_session(
         resolve,
         web_search,
         shell_read_only,
+        sandbox,
         repository,
         ..
     } = parts;
@@ -588,6 +589,7 @@ fn resumed_session(
         extensions.tools(),
         timing.clone(),
         shell_read_only.clone(),
+        sandbox.clone(),
     )?;
     let delegates = std::sync::Arc::new(delegates);
     let forget = Arc::clone(&session_servers.forget);
@@ -698,6 +700,7 @@ fn resumed_session(
         log.clone(),
         diag.clone(),
         shell_read_only,
+        sandbox,
         std::sync::Arc::new(std::sync::Mutex::new(repository)),
         commands_sync,
     );
