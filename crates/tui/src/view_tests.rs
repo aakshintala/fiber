@@ -2313,6 +2313,89 @@ fn a_swapped_view_suppresses_calls_until_it_closes() {
 }
 
 #[test]
+fn one_visible_animated_row_marks_its_item_painted() {
+    let (mut app, _) = animated_summary();
+    let (start, _) = summary_geometry();
+    let t0 = fakes::clock::FakeClock::new().origin();
+    app.set_size(WIDTH, 1);
+    app.jump(start.saturating_add(1));
+    app.set_now(t0, 1_700_000_000_000);
+
+    let shown = paint_conversation(&app, t0, 1);
+    let body = text(&shown);
+    assert!(body.contains("anim0-1"), "{body}");
+    assert!(
+        !body.contains("anim0-0") && !body.contains("anim0-2"),
+        "{body}"
+    );
+    // docs/tui.md:2968: a painted row advances and asks for its next frame.
+    assert_eq!(app.take_wake(), Some(later(t0, 500)));
+}
+
+#[test]
+fn recount_ignores_a_stale_session_for_a_resident_page_index() {
+    let (mut app, _) = animated_summary();
+    let cache = app.pages().ext.cache.clone();
+    let stale = crate::ext::cache::PageKey {
+        session: contract::SessionId("stale-session".into()),
+        index: 0,
+    };
+    let input = crate::ext::Input::Notice(crate::ext::Notice {
+        code: "io_failed",
+        text: "stale page",
+        flat: false,
+    });
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let draw = |at, count| {
+        cache.begin_anim_frame(Some(at), false);
+        let lines = cache
+            .lines_animated(
+                stale.clone(),
+                "notice",
+                "test",
+                None,
+                &input,
+                20,
+                std::time::Duration::from_millis(500),
+                |frame| {
+                    (
+                        crate::ext::Decision::Draw {
+                            extension: "test".into(),
+                            lines: (0..count)
+                                .map(|_| {
+                                    vec![crate::ext::RawSpan {
+                                        text: format!("frame {frame}"),
+                                        ..crate::ext::RawSpan::default()
+                                    }]
+                                })
+                                .collect(),
+                        },
+                        true,
+                    )
+                },
+            )
+            .expect("the frame draws");
+        let key = lines
+            .first()
+            .expect("one animated line")
+            .anim
+            .clone()
+            .expect("the animation tag");
+        cache.mark_painted(&[key]);
+        cache.anim_dues();
+    };
+    draw(t0, 1);
+    draw(later(t0, 500), 2);
+    assert!(cache.has_changed_pages());
+
+    crate::work::take();
+    app.set_now(later(t0, 1000), 1_700_000_001_000);
+
+    // A stale page identity cannot recount the resident session's page.
+    assert_eq!(crate::work::take().page_counts, 0);
+}
+
+#[test]
 fn shown_exposes_animation_tags_only_for_in_range_items() {
     let (app, _) = animated_summary();
     let t0 = fakes::clock::FakeClock::new().origin();
@@ -2328,6 +2411,13 @@ fn shown_exposes_animation_tags_only_for_in_range_items() {
     // The full range exposes one tag per animated row, all one item.
     let shown = app.shown(0, 40);
     assert_eq!(shown.anims.len(), 3, "one tag per animated row");
+    let boundary = app.shown(start.saturating_add(1), 1);
+    // docs/tui.md:2968: only a row inside the viewport is exposed as painted.
+    assert_eq!(
+        boundary.anims.len(),
+        1,
+        "the row at the exclusive end is hidden"
+    );
     let first = shown.anims.first().expect("a tag").1.clone();
     assert!(shown.anims.iter().all(|(_, key)| key == &first));
     // Past the item exposes none; starting inside exposes the rest.

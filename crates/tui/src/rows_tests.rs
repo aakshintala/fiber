@@ -308,6 +308,34 @@ fn pad_prefixes_blank_cells_and_shifts_text_marks() {
 }
 
 #[test]
+fn push_fitted_keeps_the_animated_tag_on_its_row() {
+    use crate::ext::anim::AnimKey;
+    use crate::ext::spans::FittedLine;
+    let key = AnimKey::new(
+        crate::ext::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        "thinking_line",
+        7,
+        "test",
+        None,
+    );
+    let line = FittedLine {
+        line: Line::raw("still"),
+        links: Vec::new(),
+        pad: 0,
+        anim: Some(key.clone()),
+    };
+    let mut rows = Rows::default();
+    rows.push_fitted(&line, None);
+
+    let (_, texts) = rows.into_parts();
+    // docs/tui.md:2968: a painted replacement row keeps its animation tag.
+    assert_eq!(texts.first().and_then(|text| text.anim.clone()), Some(key));
+}
+
+#[test]
 fn pad_keeps_the_animated_tag_on_every_piece() {
     use crate::ext::anim::AnimKey;
     let key = AnimKey::new(

@@ -298,27 +298,6 @@ impl Cache {
                 );
                 self.store_frame(&key, width, drawn.0, true)
             }
-            Some(state)
-                if state.kind == AnimKind::Stopped
-                    || (state.kind == AnimKind::Reduced && reduced) =>
-            {
-                if let Some(hit) = self.stored_entry(&key, width) {
-                    return Some(hit);
-                }
-                // On demand only: the still form drew once, and a width
-                // change re-renders it at its stored frame — always 0
-                // for reduced motion — without advancing.
-                let drawn = self.draw_frame(
-                    &fail_key,
-                    &key,
-                    extension,
-                    input_flat,
-                    width,
-                    state.frame,
-                    call,
-                )?;
-                self.store_frame(&key, width, drawn.0, false)
-            }
             Some(state) => {
                 let due = now
                     .checked_duration_since(state.last)

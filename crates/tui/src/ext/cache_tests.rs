@@ -1112,6 +1112,7 @@ fn an_animated_paint_starts_at_frame_zero() {
     let t0 = origin();
     cache.begin_anim_frame(Some(t0), false);
     let fitted = paint(&cache, &row, 20, &answers).expect("a painted line");
+    assert_eq!(crate::work::take().renderer_calls, 1);
     assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     assert!(text_of(&fitted).starts_with("f0"), "{fitted:?}");
     assert!(fitted.first().expect("one line").anim.is_some());
@@ -1493,6 +1494,170 @@ fn a_dropped_page_restarts_its_counter_at_zero() {
     cache.begin_anim_frame(Some(at(t0, 1000)), false);
     let fresh = paint(&cache, &row, 20, &answers).expect("a fresh frame 0");
     assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 0]); // docs/tui.md:2978: a dropped page starts again at frame 0.
+    assert!(text_of(&fresh).starts_with("f0"), "{fresh:?}");
+}
+
+#[test]
+fn dropping_a_page_drops_only_its_animated_entries() {
+    let cache = Cache::default();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    for page in [page(0), page(1)] {
+        cache
+            .lines_animated(
+                page,
+                "ledger_row",
+                "test",
+                None,
+                &row,
+                20,
+                ANIM_INTERVAL,
+                |frame| {
+                    (
+                        Decision::Draw {
+                            extension: "test".into(),
+                            lines: vec![vec![raw(&format!("f{frame}"))]],
+                        },
+                        true,
+                    )
+                },
+            )
+            .expect("a frame");
+    }
+    // docs/tui.md:2978: a dropped page starts again at frame 0.
+    assert!(
+        cache
+            .animated_lines(page(0), "ledger_row", "test", None, &row, 20)
+            .is_some()
+    );
+    assert!(
+        cache
+            .animated_lines(page(1), "ledger_row", "test", None, &row, 20)
+            .is_some()
+    );
+
+    cache.drop_page(page(0));
+
+    assert!(
+        cache
+            .animated_lines(page(0), "ledger_row", "test", None, &row, 20)
+            .is_none()
+    );
+    assert!(
+        cache
+            .animated_lines(page(1), "ledger_row", "test", None, &row, 20)
+            .is_some()
+    );
+}
+
+#[test]
+fn dropping_a_page_resets_its_animated_line_count() {
+    let cache = Cache::default();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    let draw = |now, count| {
+        cache.begin_anim_frame(Some(now), false);
+        let lines = cache
+            .lines_animated(
+                page(0),
+                "ledger_row",
+                "test",
+                None,
+                &row,
+                20,
+                ANIM_INTERVAL,
+                |frame| {
+                    (
+                        Decision::Draw {
+                            extension: "test".into(),
+                            lines: (0..count)
+                                .map(|_| vec![raw(&format!("f{frame}"))])
+                                .collect(),
+                        },
+                        true,
+                    )
+                },
+            )
+            .expect("a frame");
+        cache.mark_painted(&[tag_of(&lines)]);
+        cache.anim_dues();
+    };
+    draw(t0, 1);
+    draw(at(t0, 500), 2);
+    assert_eq!(cache.take_changed_pages(), vec![page(0)]);
+
+    cache.drop_page(page(0));
+    draw(at(t0, 1000), 1);
+
+    // A dropped page starts with no old line-count baseline (`docs/tui.md:2978`).
+    assert!(
+        !cache.has_changed_pages(),
+        "a dropped page has no old baseline"
+    );
+}
+
+#[test]
+fn dropping_a_page_clears_its_painted_mark() {
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    cache.drop_page(page(0));
+
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let fresh = paint(&cache, &row, 20, &answers).expect("a fresh frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2978: a dropped page starts again at frame 0.
+    assert!(text_of(&fresh).starts_with("f0"), "{fresh:?}");
+    // docs/tui.md:2968: only a painted item asks for another frame.
+    assert!(
+        cache.anim_dues().is_empty(),
+        "the new item was not marked painted"
+    );
+}
+
+#[test]
+fn a_non_memoized_failure_drops_animation_state() {
+    let cache = Cache::default();
+    let answers = AnimAnswers::new();
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let first = paint(&cache, &row, 20, &answers).expect("frame 0");
+    cache.mark_painted(&[tag_of(&first)]);
+    cache.anim_dues();
+
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let failure = cache.lines_animated(
+        page(0),
+        "ledger_row",
+        "test",
+        None,
+        &row,
+        20,
+        ANIM_INTERVAL,
+        |frame| {
+            answers.frames.borrow_mut().push(frame);
+            (Decision::Fail(failed("other", "not memoized")), false)
+        },
+    );
+    assert!(failure.is_none());
+    assert!(
+        cache.take_failures().is_empty(),
+        "another extension is not memoized"
+    );
+    cache.anim_dues();
+
+    cache.begin_anim_frame(Some(at(t0, 1000)), false);
+    let fresh = paint(&cache, &row, 20, &answers).expect("a fresh frame 0");
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 0]); // docs/tui.md:2989: a failure drops the active animation state.
     assert!(text_of(&fresh).starts_with("f0"), "{fresh:?}");
 }
 
