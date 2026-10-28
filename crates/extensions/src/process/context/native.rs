@@ -21,7 +21,9 @@ impl NativeHostServices {
     /// deadline plus the grace as its backstop, answering the status
     /// with the body's bytes, redacted exactly as the Lua half redacts.
     /// The body reads as a bytes position. A call with no deadline
-    /// waits without a backstop, as a timer's does.
+    /// waits without a backstop, as a timer's does. With a script the
+    /// reply comes from the case alone, exactly as the Lua half consults
+    /// it: a scripted miss never falls through to native I/O.
     fn http(
         &self,
         method: &str,
@@ -30,31 +32,48 @@ impl NativeHostServices {
         body: Option<Vec<u8>>,
         callback: &CallbackContext,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
+        let request = crate::host::HttpRequest {
+            method: method.to_owned(),
+            url: url.to_owned(),
+            headers,
+            body,
+            timeout: None,
+        };
+        if let Some(script) = &self.host_script {
+            // The script answers alone, as in Lua: no native I/O follows.
+            let (status, bytes) = script.http(request.case_value())?;
+            return Ok(Some(Self::http_answer(status, bytes)));
+        }
         // The grace the Lua scheduler adds to the declared timeout.
         const GRACE: Duration = Duration::from_secs(1);
         let timeout = callback
             .deadline
             .map(|end| end.saturating_duration_since(self.clock.now()) + GRACE);
-        let (status, bytes) = crate::host::perform(&crate::host::HttpRequest {
-            method: method.to_owned(),
-            url: url.to_owned(),
-            headers,
-            body,
-            timeout,
-        })?;
+        let request = crate::host::HttpRequest { timeout, ..request };
+        let (status, bytes) = crate::host::perform(&request)?;
+        Ok(Some(Self::http_answer(status, bytes)))
+    }
+
+    /// Shapes a `host.http` answer: the status with the body's bytes, the
+    /// body reading as a bytes position.
+    fn http_answer(status: u16, bytes: Vec<u8>) -> Value {
         let mut answer = Map::new();
         answer.insert("status".to_owned(), Value::from(status));
         answer.insert(
             "body".to_owned(),
             Value::String(crate::host::admission::encode_bytes(&bytes)),
         );
-        Ok(Some(Value::Object(answer)))
+        Value::Object(answer)
     }
 
     /// Runs `host.exec`: the child in its group, stopped when the
     /// request ends, logging `extension_exec` outside a tool request.
     /// The run's bytes read as bytes positions. A refused start writes
     /// no line; a stop ends the group without stopping anything else.
+    /// With a script the reply comes from the case alone, exactly as the
+    /// Lua half consults it: a scripted miss never falls through to
+    /// native I/O, and a scripted hang parks on the injected clock until
+    /// the callback's deadline, as a real run does.
     #[allow(clippy::too_many_arguments, reason = "one decoded call's fields")]
     fn exec(
         &self,
@@ -72,6 +91,62 @@ impl NativeHostServices {
         // An absent working directory is the workspace; a relative one
         // joins it, and an absolute one is used as given, as in Lua.
         let cwd = context.workspace.join(cwd);
+        if let Some(script) = &self.host_script {
+            // The script answers alone, as in Lua: no native I/O follows.
+            let request = crate::host::exec::ExecRequest {
+                program: program.to_owned(),
+                args: args.clone(),
+                cwd: cwd.clone(),
+                env,
+                input,
+                cap: crate::host::fs::PROCESS_READ_CAP,
+                own_group: true,
+                #[cfg(test)]
+                test_events: None,
+            };
+            let case_value = request.case_value();
+            let (index, outcome) = script.exec(case_value.clone());
+            return match outcome {
+                Err(failed) => Err(failed),
+                Ok(crate::host::script::ExecReply::Completed {
+                    end,
+                    stdout,
+                    stderr,
+                }) => {
+                    let (exit_code, signal) = match end {
+                        crate::host::script::ExecEnd::Code(code) => (Some(code), None),
+                        crate::host::script::ExecEnd::Signal(number) => {
+                            (None, Some(support::group::signal_name(number)))
+                        }
+                    };
+                    Ok(Some(Self::exec_answer(
+                        exit_code,
+                        signal,
+                        stdout.into_bytes(),
+                        stderr.into_bytes(),
+                    )))
+                }
+                Ok(crate::host::script::ExecReply::Hang) => match callback.deadline {
+                    // A process that never exits: the worker parks on the
+                    // case clock until the callback's deadline, as a real
+                    // run parks on the injected clock, then the timeout
+                    // answers. A hang without a deadline has no bound, as
+                    // in Lua.
+                    Some(until) => {
+                        script.hang_matched(index, &case_value, until);
+                        script.park_hang(self.clock.as_ref(), until, &stopped);
+                        Err((
+                            contract::ErrorCode::Timeout,
+                            format!("host.exec: {program}: the command timed out"),
+                        ))
+                    }
+                    None => Err((
+                        contract::ErrorCode::IoFailed,
+                        "host.exec: a scripted hang needs a callback deadline".to_owned(),
+                    )),
+                },
+            };
+        }
         let ran = crate::host::exec::run(
             &crate::host::exec::ExecRequest {
                 program: program.to_owned(),
@@ -104,22 +179,38 @@ impl NativeHostServices {
                 },
             ));
         }
+        Ok(Some(Self::exec_answer(
+            ran.exit_code,
+            ran.signal,
+            ran.stdout,
+            ran.stderr,
+        )))
+    }
+
+    /// Shapes a `host.exec` answer: the exit code or signal with the run's
+    /// bytes, each stream reading as a bytes position.
+    fn exec_answer(
+        exit_code: Option<i32>,
+        signal: Option<String>,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    ) -> Value {
         let mut answer = Map::new();
-        if let Some(code) = ran.exit_code {
+        if let Some(code) = exit_code {
             answer.insert("exit_code".to_owned(), Value::from(code));
         }
-        if let Some(signal) = ran.signal {
+        if let Some(signal) = signal {
             answer.insert("signal".to_owned(), Value::String(signal));
         }
         answer.insert(
             "stdout".to_owned(),
-            Value::String(crate::host::admission::encode_bytes(&ran.stdout)),
+            Value::String(crate::host::admission::encode_bytes(&stdout)),
         );
         answer.insert(
             "stderr".to_owned(),
-            Value::String(crate::host::admission::encode_bytes(&ran.stderr)),
+            Value::String(crate::host::admission::encode_bytes(&stderr)),
         );
-        Ok(Some(Value::Object(answer)))
+        Value::Object(answer)
     }
 
     /// Fires `stop` when `cancel` fires, bridging the token to the
@@ -158,7 +249,8 @@ impl NativeHostServices {
         arguments: Value,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
-        let Some(runner) = &self.tool_runner else {
+        let runner = support::lock(&self.tool_runner).clone();
+        let Some(runner) = runner else {
             return Err((
                 contract::ErrorCode::InvalidArguments,
                 "host.tool: called outside a running tool call".to_owned(),
@@ -196,7 +288,8 @@ impl NativeHostServices {
         request: contract::model::HostModelRequest,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
-        let Some(model) = &self.model else {
+        let model = support::lock(&self.model).clone();
+        let Some(model) = model else {
             return Err((
                 contract::ErrorCode::Closing,
                 "host.model: the session is closing".to_owned(),
@@ -258,7 +351,8 @@ impl NativeHostServices {
         timeout: Duration,
         _run: bool,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
-        let Some(delegate) = &self.delegate else {
+        let delegate = support::lock(&self.delegate).clone();
+        let Some(delegate) = delegate else {
             return Err((
                 contract::ErrorCode::Closing,
                 "host.delegate: the session is closing".to_owned(),
@@ -276,30 +370,82 @@ impl NativeHostServices {
         Ok(Some(Value::String(id.0.clone())))
     }
 
-    /// Reads `host.config.get`: without a session there is no config to
-    /// read, so the call fails naming the missing session, exactly as
-    /// the Lua half fails without one.
-    fn config_get(&self, key: &str) -> Result<Option<Value>, (contract::ErrorCode, String)> {
-        let _ = key;
-        Err((
-            contract::ErrorCode::InvalidArguments,
-            "host.config.get: this extension has no session".to_owned(),
-        ))
+    /// Reads `host.config.get`: the session's merged settings for the
+    /// calling extension. Without a session there is no config to read,
+    /// so the call fails naming the missing session, exactly as the Lua
+    /// half fails without one.
+    fn config_get(
+        &self,
+        context: &ProcessContext,
+        key: &str,
+    ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
+        let session = support::lock(&self.session);
+        let Some(session) = session.as_ref() else {
+            return Err((
+                contract::ErrorCode::InvalidArguments,
+                "host.config.get: this extension has no session".to_owned(),
+            ));
+        };
+        let repo: Vec<&str> = session.repo_settings.iter().map(String::as_str).collect();
+        match session
+            .config
+            .extensions()
+            .get(&context.extension, &repo, key)
+        {
+            Ok(value) => Ok(value),
+            Err(error) => Err(Self::coded("get", key, error)),
+        }
     }
 
-    /// Writes `host.config.set`: without a session there is nothing to
-    /// write, so the call fails naming the missing session.
+    /// Writes `host.config.set`: one key in the calling extension's
+    /// settings, in the named scope. Without a session there is nothing
+    /// to write, so the call fails naming the missing session.
     fn config_set(
         &self,
+        context: &ProcessContext,
         key: &str,
         value: Value,
         scope: ConfigScope,
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
-        let _ = (key, value, scope);
-        Err((
-            contract::ErrorCode::InvalidArguments,
-            "host.config.set: this extension has no session".to_owned(),
-        ))
+        let scope = match scope {
+            ConfigScope::Machine => config::Scope::Machine,
+            ConfigScope::Project => config::Scope::Project,
+        };
+        let mut session = support::lock(&self.session);
+        let Some(session) = session.as_mut() else {
+            return Err((
+                contract::ErrorCode::InvalidArguments,
+                "host.config.set: this extension has no session".to_owned(),
+            ));
+        };
+        match session
+            .config
+            .extensions_mut()
+            .set(&context.extension, scope, key, value)
+        {
+            Ok(()) => Ok(None),
+            Err(error) => Err(Self::coded("set", key, error)),
+        }
+    }
+
+    /// A settings failure as the Lua half raises it: an unparseable key
+    /// or one the layer may not take is an error in the calling code, and
+    /// anything the files did is the registry's own coded failure.
+    fn coded(op: &str, key: &str, error: config::ConfigError) -> (contract::ErrorCode, String) {
+        use config::ConfigError;
+        if matches!(error, ConfigError::Override { .. }) {
+            (
+                contract::ErrorCode::InvalidArguments,
+                format!("host.config.{op}: `{key}` is not a dotted key"),
+            )
+        } else if matches!(error, ConfigError::Refused { .. }) {
+            (
+                contract::ErrorCode::InvalidArguments,
+                format!("host.config.{op}: {error}"),
+            )
+        } else {
+            (error.code(), format!("host.config.{op}: {error}"))
+        }
     }
 
     /// Reads `host.secret`: the manifest's declared names from the home,
@@ -394,13 +540,25 @@ impl NativeHostServices {
     }
 
     /// The `host.fs` handle for `context`: the workspace, the folded
-    /// data directories and the process read bound.
+    /// data directories and the process read bound, holding the session's
+    /// path locks for locked calls when a session is wired.
     fn fs(&self, context: &ProcessContext) -> crate::host::fs::Fs {
-        crate::host::fs::Fs::for_process(
-            context.workspace.clone(),
-            context.data_dirs.machine.clone(),
-            context.data_dirs.project.clone(),
-        )
+        let session = support::lock(&self.session);
+        let locks = session.as_ref().map(|session| Arc::clone(&session.locks));
+        drop(session);
+        match locks {
+            Some(locks) => crate::host::fs::Fs::for_process_with_locks(
+                context.workspace.clone(),
+                context.data_dirs.machine.clone(),
+                context.data_dirs.project.clone(),
+                locks,
+            ),
+            None => crate::host::fs::Fs::for_process(
+                context.workspace.clone(),
+                context.data_dirs.machine.clone(),
+                context.data_dirs.project.clone(),
+            ),
+        }
     }
 
     /// Reads `host.fs.read`: the file's bytes, answered as a bytes
@@ -631,8 +789,10 @@ impl ProcessHostServices for NativeHostServices {
             HostOperation::FsMkdir { path, lock } => self.fs_mkdir(context, &path, lock),
             HostOperation::FsRemove { path, lock } => self.fs_remove(context, &path, lock),
             HostOperation::FsRename { from, to, lock } => self.fs_rename(context, &from, &to, lock),
-            HostOperation::ConfigGet { key } => self.config_get(&key),
-            HostOperation::ConfigSet { key, value, scope } => self.config_set(&key, value, scope),
+            HostOperation::ConfigGet { key } => self.config_get(context, &key),
+            HostOperation::ConfigSet { key, value, scope } => {
+                self.config_set(context, &key, value, scope)
+            }
             HostOperation::Secret { name } => self.secret(context, &name),
             HostOperation::DataDir { scope } => {
                 Ok(Some(Value::String(self.data_dir(context, scope))))

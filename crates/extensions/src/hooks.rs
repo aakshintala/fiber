@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 use support::lock;
 
 use config::Config;
@@ -14,7 +15,7 @@ use contract::ErrorCode;
 use contract::Seq;
 use contract::clock::Clock;
 use contract::diag::{DebugLog, HookChain, Op, Timing};
-use contract::events::{Class, Event, LoadedExtension, Notice};
+use contract::events::{Class, Event, ExtensionReason, LoadedExtension, Notice};
 use contract::files::PathLock;
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeHandoffAnswer,
@@ -148,6 +149,19 @@ pub struct SessionExtensions {
     diagnostics: Option<Arc<dyn DebugLog>>,
     /// Whether any hook registered at any point.
     any: bool,
+    /// One live process owner per started process extension, in load
+    /// order: what the session forwards live events to, replays stored
+    /// lines to and shuts down at session end.
+    processes: Vec<ProcessLive>,
+    /// The last forwarded durable `seq` per live process owner, keyed by
+    /// extension name: seeded from the start context's cursor, advancing
+    /// as each line forwards. A line at or below the cursor never
+    /// forwards twice.
+    forwarded: Mutex<BTreeMap<String, u64>>,
+    /// The session's latest `session_start` reason: what a restart
+    /// resends in its hello. Set at activation, updated on every
+    /// `session_start`.
+    latest_reason: Mutex<ExtensionReason>,
     /// The session's extension commands, built once from the same final names.
     commands: SessionCommands,
     /// The tools the session declares, each beside its extension's name.
@@ -197,6 +211,9 @@ impl Default for SessionExtensions {
             timing: Default::default(),
             diagnostics: Default::default(),
             any: Default::default(),
+            processes: Default::default(),
+            forwarded: Default::default(),
+            latest_reason: Mutex::new(ExtensionReason::New),
             commands: Default::default(),
             tools: Default::default(),
             search_backend: Default::default(),
@@ -309,6 +326,48 @@ pub struct WatcherError {
     pub message: String,
 }
 
+/// Where one session extension's data directories come from: Fiber home
+/// and the session's project, joined with the extension's slug at load,
+/// exactly as the Lua half locates them.
+#[derive(Debug, Clone)]
+pub struct DataDirBases {
+    /// Fiber home, anchoring `extensions/<slug>/` machine directories.
+    pub home: PathBuf,
+    /// The session's project, anchoring `projects/<key>/<slug>/` data.
+    pub project: config::ProjectKey,
+}
+
+/// What a session activation starts process extensions with: the
+/// session's identity, why it started, its workspace, where its data
+/// directories come from, the driver once the session opened it, and the
+/// log cursor captured before the first process started.
+#[derive(Clone)]
+pub struct StartContext {
+    /// The session's id, as `extension_hello` carries it.
+    pub session_id: contract::SessionId,
+    /// Why the session started, resent after a restart.
+    pub reason: ExtensionReason,
+    /// The session's execution workspace, resolving relative paths.
+    pub workspace: PathBuf,
+    /// Where the extension's data directories come from.
+    pub data_dirs: DataDirBases,
+    /// What answers ordinary driver commands: `None` while the session
+    /// has not opened one yet, installed on the live owners after.
+    pub drive: Option<Arc<dyn contract::extension::Drive>>,
+    /// The log cursor captured before the first process started: each
+    /// owner's durable cursor starts here.
+    pub event_cursor: u64,
+}
+
+/// One started process extension the session owns: its name, its live
+/// owner, its late-bound session services and its finish allowance.
+struct ProcessLive {
+    name: String,
+    owner: Arc<crate::process::ProcessExtension>,
+    services: Arc<crate::process::context::NativeHostServices>,
+    exit_timeout: Duration,
+}
+
 /// The watcher's one argument: its `kind` beside its `payload`, serialized
 /// once per event (`run` receives `{"kind": ..., "payload": ...}`).
 fn watcher_arg(event: &Event) -> Value {
@@ -368,6 +427,7 @@ impl SessionExtensions {
             crate::host::state::StateRegistry::new(seed),
             crate::RepositorySet::default(),
             BTreeSet::new(),
+            None,
         )
     }
 
@@ -392,7 +452,57 @@ impl SessionExtensions {
             crate::host::state::StateRegistry::new(seed),
             repository,
             BTreeSet::new(),
+            None,
         )
+    }
+
+    /// Loads extensions for a live session, starting process extensions:
+    /// each process child runs with the start context's identity, reason,
+    /// workspace, data directories and folded state, answering through
+    /// session-backed services. The load waits for each child's `ready`
+    /// under its startup allowance before admitting it; a child that
+    /// misses it is left out with a notice, and a required miss carries
+    /// the required code the composition gate fails the session with.
+    /// `restart` names the lazy extensions to start, as a reload passes.
+    pub fn load_session(
+        home: &Path,
+        config: &Config,
+        clock: Arc<dyn Clock>,
+        locks: Arc<dyn PathLock>,
+        host: Option<Arc<crate::host::script::HostScript>>,
+        seed: StateSeed,
+        repository: crate::RepositorySet,
+        start: StartContext,
+        restart: BTreeSet<String>,
+    ) -> Self {
+        let session = Self::load_registry(
+            home,
+            config,
+            clock,
+            locks,
+            host,
+            crate::host::state::StateRegistry::new(seed),
+            repository,
+            restart,
+            Some(&start),
+        );
+        *lock(&session.latest_reason) = start.reason;
+        session
+    }
+
+    /// The session's latest `session_start` reason: what a restart
+    /// resends in its hello.
+    pub fn latest_reason(&self) -> ExtensionReason {
+        *lock(&self.latest_reason)
+    }
+
+    /// Records the session's latest `session_start` reason on the set
+    /// and every live process owner, before the hook chain runs.
+    pub(crate) fn record_start_reason(&self, reason: ExtensionReason) {
+        *lock(&self.latest_reason) = reason;
+        for live in &self.processes {
+            live.owner.update_reason(reason);
+        }
     }
 
     /// Reloads extensions over the session's live state without closing it.
@@ -412,6 +522,7 @@ impl SessionExtensions {
             self.state.clone(),
             crate::RepositorySet::default(),
             self.started_lazy(),
+            None,
         )
     }
 
@@ -465,6 +576,7 @@ impl SessionExtensions {
             self.state.clone(),
             repository,
             self.started_lazy(),
+            None,
         )
     }
 
@@ -532,6 +644,7 @@ impl SessionExtensions {
         state: Arc<crate::host::state::StateRegistry>,
         repository: crate::RepositorySet,
         restart: BTreeSet<String>,
+        start: Option<&StartContext>,
     ) -> Self {
         let mut session = Self {
             runtime: Runtime::new(Arc::clone(&clock)),
@@ -642,6 +755,27 @@ impl SessionExtensions {
             // (`docs/extensions.md`, "Process extensions"). Only its data
             // providers need declaring, as for a Lua extension.
             if manifest.process.is_some() {
+                // A session activation starts the child; every other load
+                // only reads the package, as before.
+                if let Some(start) = start {
+                    Self::start_process(
+                        &mut session,
+                        &clock,
+                        &locks,
+                        config,
+                        home,
+                        &host,
+                        start,
+                        name,
+                        version,
+                        slug,
+                        dir,
+                        manifest,
+                        prompt,
+                        &mut started,
+                    );
+                    continue;
+                }
                 // A process package loads through the package seam on the
                 // session's runtime, so its references resolve where the
                 // session dispatches them. A package the seam refuses is
@@ -1010,6 +1144,201 @@ impl SessionExtensions {
         session
     }
 
+    /// Starts one process package for a session activation: the child
+    /// runs with the start context's identity, reason, workspace, data
+    /// directories and folded state, answering through session-backed
+    /// services. The pump runs on its own thread while the load waits
+    /// for `ready` under the extension's startup allowance; a child that
+    /// misses it is reaped and left out, required ones failing the
+    /// session at the composition gate. An optional package with no
+    /// program loads empty, as without a session.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one candidate's activation carries the loader's context"
+    )]
+    fn start_process(
+        session: &mut Self,
+        clock: &Arc<dyn Clock>,
+        locks: &Arc<dyn PathLock>,
+        config: &Config,
+        home: &Path,
+        host: &Option<Arc<crate::host::script::HostScript>>,
+        start: &StartContext,
+        name: String,
+        version: String,
+        slug: String,
+        dir: PathBuf,
+        manifest: config::Manifest,
+        prompt: Option<String>,
+        started: &mut Vec<Started>,
+    ) {
+        let Some(process) = manifest.process.as_ref() else {
+            return;
+        };
+        let required = process.required;
+        let exit_timeout = Duration::from_millis(process.exit_timeout_ms);
+        let store = session.state.store(&name);
+        let project = config.extensions().project().clone();
+        let data_dirs = contract::events::ExtensionDataDirs {
+            machine: config::extension_data_dir(&start.data_dirs.home, &slug)
+                .display()
+                .to_string(),
+            project: config::project_data_dir(&start.data_dirs.home, &project, &slug)
+                .display()
+                .to_string(),
+        };
+        let mut folded = Map::new();
+        for key in store.keys() {
+            if let Some(value) = store.get(&key) {
+                folded.insert(key, value);
+            }
+        }
+        let context = crate::process::context::ProcessContext {
+            session_id: start.session_id.clone(),
+            reason: start.reason,
+            workspace: start.workspace.clone(),
+            data_dirs,
+            state: folded,
+            extension: name.clone(),
+            home: home.to_path_buf(),
+        };
+        let services = Arc::new(crate::process::context::NativeHostServices {
+            runtime: session.runtime.clone(),
+            state: Arc::clone(&store),
+            clock: Arc::clone(clock),
+            browser: Arc::clone(&session.browser) as Arc<dyn crate::oauth::Browser>,
+            model: Mutex::new(None),
+            delegate: Mutex::new(None),
+            tool_runner: Mutex::new(None),
+            secrets: manifest.secrets.clone(),
+            host_script: host.clone(),
+            session: Mutex::new(Some(crate::host::Session {
+                config: config.clone(),
+                repo_settings: manifest.repo_settings.clone(),
+                locks: Arc::clone(locks),
+            })),
+        });
+        let package = match crate::package::Package::load_process_with(
+            crate::package::PackageOptions {
+                dir: dir.clone(),
+                clock: Arc::clone(clock),
+            },
+            session.runtime.clone(),
+            context,
+            services.clone(),
+            store,
+            start.drive.clone(),
+        ) {
+            Ok(package) => package,
+            Err(error) => {
+                Self::process_failed(session, &name, &(error.code(), error.to_string()), required);
+                return;
+            }
+        };
+        let Some(owner) = package.extension().cloned() else {
+            started.push(Started {
+                name,
+                version,
+                slug,
+                dir,
+                manifest,
+                prompt,
+                extension: None,
+                package: Some(package),
+                declared: None,
+                commands: Vec::new(),
+                tools: Vec::new(),
+                backends: Vec::new(),
+                providers: Vec::new(),
+                lazy: None,
+            });
+            return;
+        };
+        let pump = Arc::clone(&owner);
+        let pumped = std::thread::Builder::new()
+            .name(format!("process pump {name}"))
+            .spawn(
+                move || {
+                    while matches!(pump.pump_once(), crate::process::Pumped::Handled) {}
+                },
+            );
+        if pumped.is_err() {
+            // The child runs with nobody pumping it: shut it down bounded
+            // and leave it out, as a wedged startup.
+            let _ = owner.finish(Duration::ZERO, &support::cancel::Token::new());
+            Self::process_failed(
+                session,
+                &name,
+                &(
+                    ErrorCode::IoFailed,
+                    format!("{name}: Fiber could not pump the process extension"),
+                ),
+                required,
+            );
+            return;
+        }
+        // The thread ends when the child closes; the shutdown below owns
+        // the child from here, and `finish_processes` reaps it at the end.
+        let _ = pumped;
+        let allowance = config
+            .get(&format!("extensions.\"{name}\".startup_timeout_ms"), None)
+            .and_then(|(value, _)| value.as_u64())
+            .unwrap_or(5000);
+        let deadline = clock.now() + Duration::from_millis(allowance);
+        if let Err(error) = owner.await_ready(Some(deadline), &support::cancel::Token::new()) {
+            // The wedged child may ignore end of input, so the shutdown
+            // escalates through TERM to KILL under the manifest's exit
+            // allowance; no descendant outlives the load.
+            let _ = owner.finish(exit_timeout, &support::cancel::Token::new());
+            // The deadline path already killed the child; reap it and join
+            // its threads, since the failed owner never reaches the
+            // session's finish list.
+            let live = owner.transport();
+            let _ = live.wait_exit();
+            live.join();
+            Self::process_failed(session, &name, &error, required);
+            return;
+        }
+        started.push(Started {
+            name: name.clone(),
+            version,
+            slug,
+            dir,
+            manifest,
+            prompt,
+            extension: None,
+            package: Some(package),
+            declared: None,
+            commands: Vec::new(),
+            tools: Vec::new(),
+            backends: Vec::new(),
+            providers: Vec::new(),
+            lazy: None,
+        });
+        session.processes.push(ProcessLive {
+            name: name.clone(),
+            owner,
+            services,
+            exit_timeout,
+        });
+        lock(&session.forwarded).insert(name, start.event_cursor);
+    }
+
+    /// Records a process startup failure: the extension is left out with
+    /// the failure's notice, and a required miss carries the required
+    /// code the composition gate fails the session with.
+    fn process_failed(session: &mut Self, name: &str, error: &(ErrorCode, String), required: bool) {
+        let (code, message) = error;
+        let code = if required {
+            ErrorCode::ExtensionRequiredFailed
+        } else {
+            code.clone()
+        };
+        session
+            .notices
+            .push(notice(code, message.clone(), Some(name)));
+    }
+
     /// One provider per `fiber.provider` registration, in provider-name
     /// order: the extension's name beside its provider.
     pub fn lua_providers(&self) -> &[(String, Arc<LuaProvider>)] {
@@ -1207,8 +1536,11 @@ impl SessionExtensions {
     /// watcher with a delivery queued or running — a watcher that falls
     /// behind loses ephemeral events — while a durable one always queues,
     /// never losing one. On `Some` seq the cursor of every watcher offered
-    /// advances to it; an ephemeral offer carries none. No-op when the
-    /// session holds no watchers.
+    /// advances to it; an ephemeral offer carries none. Watchers of live
+    /// process owners fan out through [`SessionExtensions::deliver_event`]
+    /// instead, which tracks their owner's durable cursor first: each
+    /// watcher still runs exactly once per offer. No-op when the session
+    /// holds no watchers.
     pub fn deliver(&self, event: &Event, seq: Option<Seq>) {
         self.observe_delegate(event);
         if self.watchers.is_empty() {
@@ -1224,6 +1556,9 @@ impl SessionExtensions {
             if !watcher.kinds.iter().any(|kind| kind == event.kind()) {
                 continue;
             }
+            if self.processes.iter().any(|live| live.name == watcher.name) {
+                continue;
+            }
             if ephemeral && self.runtime.is_watcher_busy(&watcher.watcher) {
                 continue;
             }
@@ -1236,6 +1571,80 @@ impl SessionExtensions {
                 cursors.insert((watcher.name.clone(), watcher.index), seq);
             }
         }
+    }
+
+    /// Forwards one live session event to every live process owner, in
+    /// arrival order: each owner's durable cursor advances past durable
+    /// lines whether or not any watcher wants the kind, and only matching
+    /// watcher callbacks dispatch, as Lua's kinds filter does. Ephemeral
+    /// skips a busy watcher, as [`SessionExtensions::deliver`] does.
+    pub fn deliver_event(&self, event: &Event, seq: Option<Seq>) {
+        self.observe_delegate(event);
+        self.forward_process(event, seq.map(|seq| seq.0));
+    }
+
+    /// Replays one stored durable line to every live process owner, in
+    /// sequence order: a line at or below an owner's cursor never
+    /// forwards twice. Unknown lines are skipped, as the log drain does.
+    pub fn deliver_line(&self, line: &contract::Envelope) {
+        let Some(seq) = line.seq else {
+            return;
+        };
+        let Ok(Some(event)) = Event::from_envelope(line) else {
+            return;
+        };
+        self.forward_process(&event, Some(seq.0));
+    }
+
+    /// Forwards `event` to each live process owner's matching watchers,
+    /// advancing each owner's durable cursor past `seq`: the per-owner
+    /// stream position replay resumes from. A `None` seq forwards live
+    /// ephemeral events without moving any cursor.
+    fn forward_process(&self, event: &Event, seq: Option<u64>) {
+        if self.processes.is_empty() {
+            return;
+        }
+        let ephemeral = event.class() == Class::Ephemeral;
+        let arg = watcher_arg(event);
+        let mut forwarded = lock(&self.forwarded);
+        for live in &self.processes {
+            if let Some(seq) = seq {
+                if seq <= forwarded.get(&live.name).copied().unwrap_or(0) {
+                    continue;
+                }
+                forwarded.insert(live.name.clone(), seq);
+            }
+            for watcher in self
+                .watchers
+                .iter()
+                .filter(|watcher| watcher.name == live.name)
+            {
+                if !watcher.kinds.iter().any(|kind| kind == event.kind()) {
+                    continue;
+                }
+                if ephemeral && self.runtime.is_watcher_busy(&watcher.watcher) {
+                    continue;
+                }
+                let _ = self.runtime.push_watcher(&watcher.watcher, arg.clone());
+            }
+        }
+    }
+
+    /// Shuts every live process owner down: the in-flight requests drain
+    /// first under each manifest's own finish allowance, and a failure
+    /// collects for the exit report, never a notice.
+    pub fn finish_processes(&self, cancel: &dyn contract::tool::Cancel) -> Vec<WatcherError> {
+        let mut errors = Vec::new();
+        for live in &self.processes {
+            if let Err((code, message)) = live.owner.finish(live.exit_timeout, cancel) {
+                errors.push(WatcherError {
+                    extension: live.name.clone(),
+                    callback: "finish".to_owned(),
+                    message: format!("{code:?}: {message}"),
+                });
+            }
+        }
+        errors
     }
 
     /// Records the log end when the subscription is registered: what an
@@ -1406,17 +1815,27 @@ impl SessionExtensions {
         }
     }
 
-    /// Hands the in-process driver to every extension's `host.drive`.
+    /// Hands the in-process driver to every extension's `host.drive`:
+    /// Lua VMs take it directly, live process owners take it before any
+    /// dispatch reaches them, as the late installation their spawn orders.
     pub fn drive_to(&self, drive: Arc<dyn contract::extension::Drive>) {
         for extension in &self.lua {
             extension.set_driver(Arc::clone(&drive));
         }
+        for live in &self.processes {
+            live.owner.set_drive(Arc::clone(&drive));
+        }
     }
 
-    /// Hands the session's model to every extension's `host.model`.
+    /// Hands the session's model to every extension's `host.model`: Lua
+    /// VMs take it directly, live process owners through their late-born
+    /// services, before any dispatch reaches them.
     pub fn model_to(&self, model: Arc<dyn contract::model::HostModel>) {
         for extension in &self.lua {
             extension.set_model(Arc::clone(&model));
+        }
+        for live in &self.processes {
+            *lock(&live.services.model) = Some(Arc::clone(&model));
         }
     }
 
@@ -1439,10 +1858,14 @@ impl SessionExtensions {
     /// Hands the session's delegate starter to every extension's
     /// `host.delegate`, then stops the running delegates of extensions no
     /// longer loaded: at session start nothing runs, so nothing stops, and
-    /// on a reload a dropped extension's delegates end cancelled.
+    /// on a reload a dropped extension's delegates end cancelled. Live
+    /// process owners take the starter through their late-bound services.
     pub fn delegate_to(&self, delegate: Arc<dyn contract::extension::HostDelegate>) {
         for extension in &self.lua {
             extension.set_delegate(Arc::clone(&delegate));
+        }
+        for live in &self.processes {
+            *lock(&live.services.delegate) = Some(Arc::clone(&delegate));
         }
         let loaded: Vec<String> = self.loaded_names();
         delegate.retain(&loaded);

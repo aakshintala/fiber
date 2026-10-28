@@ -19,6 +19,20 @@ impl Current {
     pub(crate) fn swap(&self, extensions: Arc<SessionExtensions>) {
         *support::lock(&self.0) = extensions;
     }
+
+    /// Forwards one live session event to the current set: each live
+    /// process owner reads the envelope first, then the watcher fan-out
+    /// runs. Resolving per event keeps a reload's swap ordered with no
+    /// second subscription.
+    pub(crate) fn deliver_event(
+        &self,
+        event: &contract::events::Event,
+        seq: Option<contract::Seq>,
+    ) {
+        let current = self.get();
+        current.deliver_event(event, seq);
+        current.deliver(event, seq);
+    }
 }
 
 use contract::hook::Hooks;
@@ -116,8 +130,9 @@ pub(crate) fn missing_hooks(
 
 /// Registers the session's one watcher fan-out on `log`: every event
 /// appended from now on — durable and ephemeral, from every source — is
-/// offered to the current set's `deliver` with its seq, in the one place
-/// all session lines pass through. The offer resolves the set per event,
+/// offered to the current set with its seq, in the one place all session
+/// lines pass through: live process owners read the envelope first, then
+/// the watcher fan-out runs. The offer resolves the set per event,
 /// so after a reload's `swap` the fan-out reaches the reloaded set with
 /// no second subscription and no ordering gap. While a shutdown code is
 /// set the offers skip: when a signal stops Fiber, no watcher runs.
@@ -136,7 +151,7 @@ pub(crate) fn subscribe(
         if cancel.shutdown_code().is_some() {
             return;
         }
-        current.get().deliver(event, line.seq);
+        current.deliver_event(event, line.seq);
     }))
 }
 

@@ -338,6 +338,23 @@ impl Fs {
         }
     }
 
+    /// The `host.fs` handle for a process extension with a session: as
+    /// above, holding the session's path locks for locked calls.
+    pub(crate) fn for_process_with_locks(
+        workspace: PathBuf,
+        machine_dir: String,
+        project_dir: String,
+        locks: Arc<dyn PathLock>,
+    ) -> Self {
+        Self {
+            workspace,
+            locks: Some(locks),
+            machine_dir: Some(PathBuf::from(machine_dir)),
+            project_dir: Some(PathBuf::from(project_dir)),
+            memory_cap: PROCESS_READ_CAP,
+        }
+    }
+
     /// The absolute path `raw` names: a relative path joins the workspace,
     /// an absolute path is used as given, and `~` is not expanded.
     fn absolute(&self, raw: &[u8]) -> PathBuf {

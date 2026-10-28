@@ -2,7 +2,7 @@
 //! (`docs/architecture.md`): the parts a door runs, composed once from
 //! configuration, the installed providers and the credential.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -105,22 +105,14 @@ pub(crate) fn per_run(model: Option<String>, overrides: Vec<String>) -> Vec<Stri
         .collect()
 }
 
-/// Fiber home, configuration, the chosen model, its credential and its
-/// provider: everything a failure of which leaves no session. `overrides`
-/// is the per-run layer: `model=<m>` from `--model` first, then each `-c`,
-/// so a later entry wins. `recorded` is the resumed session's model, from the log's last
-/// `preamble_built` or `model_changed`: the fallback when the per-run layer
-/// names no model, before configuration's default. `recorded_credential`
-/// is its credential label: `--credential` on a resume, else the recorded
-/// one; each beats configuration (`docs/model-routing.md`, "Choosing the
-/// model"). A log with no recorded model uses the per-run layer, then the
-/// configured default. A model or label that no longer resolves fails before
-/// any line is written.
+/// As [`parts_in`], for the Fiber home and workspace the environment
+/// names: a live session composes process extensions under its launch
+/// identity.
 #[allow(
     clippy::too_many_arguments,
     reason = "one entry composition: the recorded model, credential, thinking, clock, host, reads and diagnostic process"
 )]
-pub(crate) fn parts_with<'a>(
+pub(crate) fn parts_with_session<'a>(
     overrides: Vec<String>,
     recorded: Option<&str>,
     recorded_credential: impl Into<crate::credential::Labels<'a>>,
@@ -131,11 +123,12 @@ pub(crate) fn parts_with<'a>(
     process: log::diag::Process,
     seed: extensions::StateSeed,
     repository: session_extensions::RepositoryScope,
+    launch: SessionLaunch,
 ) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
         .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-    parts_in(
+    parts_in_session(
         home,
         workspace,
         overrides,
@@ -149,16 +142,13 @@ pub(crate) fn parts_with<'a>(
         process,
         seed,
         repository,
+        launch,
     )
 }
 
-/// As [`parts_with`], for the Fiber home `home` and the workspace
-/// `workspace` rather than the environment's. `agents_home` is the skills
-/// directory the prompt reads; the test passes `None` so the host's skills
-/// cannot overflow the fixture model's context.
 #[allow(
-    clippy::too_many_arguments,
-    reason = "one composition of the session's parts: homes, model choice, clock, runner host and diagnostic process"
+    dead_code,
+    reason = "the model/inspection/test entry; live sessions compose through parts_in_session"
 )]
 pub(crate) fn parts_in(
     home: PathBuf,
@@ -174,6 +164,184 @@ pub(crate) fn parts_in(
     process: log::diag::Process,
     seed: extensions::StateSeed,
     repository: session_extensions::RepositoryScope,
+) -> Result<Parts, Failure> {
+    parts_inner(
+        home,
+        workspace,
+        overrides,
+        recorded,
+        labels,
+        recorded_thinking,
+        clock,
+        host,
+        agents_home,
+        reads,
+        process,
+        seed,
+        repository,
+        None,
+    )
+}
+
+/// What a live session composes with beyond [`parts_in`]: the session's
+/// id, why it started and the log cursor captured before its processes
+/// started. Process activation waits and admits under this identity; a
+/// required miss fails the composition before any line is written.
+pub(crate) struct SessionLaunch {
+    /// The session's id, as `extension_hello` carries it.
+    pub id: contract::SessionId,
+    /// Why the session started, resent after a restart.
+    pub reason: contract::events::ExtensionReason,
+    /// The log cursor captured before the first process started.
+    pub event_cursor: u64,
+}
+
+/// As [`parts_in`], for a live session: process extensions start under
+/// the launch identity, and a required miss abandons what started and
+/// fails the composition. Model, inspection and test callers keep using
+/// [`parts_in`], which never manufactures session context.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one composition of the session's parts: homes, model choice, clock, runner host and diagnostic process"
+)]
+pub(crate) fn parts_in_session(
+    home: PathBuf,
+    workspace: PathBuf,
+    overrides: Vec<String>,
+    recorded: Option<&str>,
+    labels: crate::credential::Labels<'_>,
+    recorded_thinking: Option<ThinkingLevel>,
+    clock: Arc<dyn contract::clock::Clock>,
+    host: Option<Arc<extensions::HostScript>>,
+    agents_home: Option<PathBuf>,
+    reads: Arc<switch::Reads>,
+    process: log::diag::Process,
+    seed: extensions::StateSeed,
+    repository: session_extensions::RepositoryScope,
+    launch: SessionLaunch,
+) -> Result<Parts, Failure> {
+    parts_inner(
+        home,
+        workspace,
+        overrides,
+        recorded,
+        labels,
+        recorded_thinking,
+        clock,
+        host,
+        agents_home,
+        reads,
+        process,
+        seed,
+        repository,
+        Some(launch),
+    )
+}
+
+/// Settles one composition step for a live session: a failure after
+/// process activation abandons what started, bounded, so no descendant
+/// outlives the failed composition. Model, inspection and test paths
+/// pass no launch and settle unchanged.
+fn settle<T>(
+    result: Result<T, Failure>,
+    extensions: &extensions::SessionExtensions,
+    launch: &Option<SessionLaunch>,
+) -> Result<T, Failure> {
+    result.map_err(|error| {
+        if launch.is_some() {
+            let _ = extensions.finish_processes(&support::cancel::Token::new());
+        }
+        error
+    })
+}
+
+/// Loads the session's extensions: without a launch, the registry-only
+/// load model, inspection and test callers use; with one, the session
+/// load that starts process extensions under the launch identity. A
+/// required process miss abandons what started and fails the composition
+/// before any session line is written, as a required MCP server does.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one extension load: homes, model choice, clock, runner host and launch identity"
+)]
+fn load_session_extensions(
+    home: &PathBuf,
+    workspace: &PathBuf,
+    project: &config::ProjectKey,
+    config: &Config,
+    clock: Arc<dyn contract::clock::Clock>,
+    locks: Arc<dyn contract::files::PathLock>,
+    host: Option<Arc<extensions::HostScript>>,
+    seed: extensions::StateSeed,
+    set: extensions::RepositorySet,
+    launch: &Option<SessionLaunch>,
+) -> Result<extensions::SessionExtensions, Failure> {
+    let Some(launch) = launch else {
+        return Ok(extensions::SessionExtensions::load_repository(
+            home, config, clock, locks, host, seed, set,
+        ));
+    };
+    let start = extensions::StartContext {
+        session_id: launch.id.clone(),
+        reason: launch.reason,
+        workspace: workspace.clone(),
+        data_dirs: extensions::DataDirBases {
+            home: home.clone(),
+            project: project.clone(),
+        },
+        drive: None,
+        event_cursor: launch.event_cursor,
+    };
+    let set = extensions::SessionExtensions::load_session(
+        home,
+        config,
+        clock,
+        locks,
+        host,
+        seed,
+        set,
+        start,
+        BTreeSet::new(),
+    );
+    if let Some(notice) = set
+        .notices()
+        .into_iter()
+        .find(|notice| notice.code == contract::ErrorCode::ExtensionRequiredFailed)
+    {
+        let _ = set.finish_processes(&support::cancel::Token::new());
+        return Err(Failure {
+            code: contract::ErrorCode::ExtensionRequiredFailed,
+            message: format!(
+                "{}: {}",
+                notice.extension.unwrap_or_default(),
+                notice.message
+            ),
+            retry_after_ms: None,
+            provider: None,
+        });
+    }
+    Ok(set)
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one composition of the session's parts: homes, model choice, clock, runner host and diagnostic process"
+)]
+fn parts_inner(
+    home: PathBuf,
+    workspace: PathBuf,
+    overrides: Vec<String>,
+    recorded: Option<&str>,
+    labels: crate::credential::Labels<'_>,
+    recorded_thinking: Option<ThinkingLevel>,
+    clock: Arc<dyn contract::clock::Clock>,
+    host: Option<Arc<extensions::HostScript>>,
+    agents_home: Option<PathBuf>,
+    reads: Arc<switch::Reads>,
+    process: log::diag::Process,
+    seed: extensions::StateSeed,
+    repository: session_extensions::RepositoryScope,
+    launch: Option<SessionLaunch>,
 ) -> Result<Parts, Failure> {
     let (sessions, project) = ::cli::project_of(&home, &workspace)?;
     // The one monotonic read the `startup.config` timer starts from,
@@ -238,24 +406,35 @@ pub(crate) fn parts_in(
     startup_notices.extend(notices);
     let locks = Arc::new(tools::PathLocks::new());
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
-    let mut extensions = extensions::SessionExtensions::load_repository(
+    let mut extensions = load_session_extensions(
         &home,
+        &workspace,
+        &project,
         &config,
         Arc::clone(&clock),
         session_locks,
         host,
         seed,
         set,
-    );
+        &launch,
+    )?;
     drop(extensions_timing);
     // A required repository extension that did not load fails the start
     // before any session line is written.
-    session_extensions::required(&extensions)?;
+    settle(
+        session_extensions::required(&extensions),
+        &extensions,
+        &launch,
+    )?;
     // Declared hooks with no extension to run them and any `blocking`
     // entry fail the start closed, so a guard never fails open. The hooks
     // gate reads the session's filtered repository contribution, so an
     // unapproved entry stays withheld.
-    session_extensions::missing_hooks(&config, &extensions)?;
+    settle(
+        session_extensions::missing_hooks(&config, &extensions),
+        &extensions,
+        &launch,
+    )?;
     // The session's diagnostics, installed after load and before any
     // provider work: at debug the installed writer observes eligible
     // provider HTTP and times non-tool hook chains, and the retained sink
@@ -279,8 +458,11 @@ pub(crate) fn parts_in(
         reads.credential(command, timeout, &*clock)
     };
     let lookup = placeholders::lookup(&home, &providers, clock.as_ref());
-    let (naming, notices) =
-        lua_providers::add_lua(&extensions, &mut providers, &config, &run, &lookup)?;
+    let (naming, notices) = settle(
+        lua_providers::add_lua(&extensions, &mut providers, &config, &run, &lookup),
+        &extensions,
+        &launch,
+    )?;
     startup_notices.extend(notices);
     scripted::prepare(&mut providers, &config, recorded);
     let owners = (extensions.lua_providers().iter())
@@ -304,42 +486,58 @@ pub(crate) fn parts_in(
     // The per-run layer first (`--model`, then `-c model=`), then the
     // recorded model, then configuration's `model`
     // (`docs/model-routing.md`, "Choosing the model").
-    let model = providers
-        .choose(recorded, &config)
-        .map_err(|e| failed(e.code(), e))?;
-    let context_window = settings::context_window(model.model, &model.reference())?;
-    let label = labels.label(&config, model.provider)?;
+    let model = settle(
+        providers
+            .choose(recorded, &config)
+            .map_err(|e| failed(e.code(), e)),
+        &extensions,
+        &launch,
+    )?;
+    let context_window = settle(
+        settings::context_window(model.model, &model.reference()),
+        &extensions,
+        &launch,
+    )?;
+    let label = settle(labels.label(&config, model.provider), &extensions, &launch)?;
     let lua = providers.lua(&model.provider.name);
-    let lua_providers::Access { key, signer, .. } = scripted::access(model.provider, || {
-        lua_providers::session_credential(lua, model.provider, &label, || {
-            if let Some(asked) = labels.asked {
-                let listed = config.credentials().labels(model.provider);
-                if !listed.iter().any(|label| label == asked) {
-                    return Err(crate::credential::no_label(
-                        &model.provider.name,
-                        asked,
-                        &listed,
-                    ));
+    let lua_providers::Access { key, signer, .. } = settle(
+        scripted::access(model.provider, || {
+            lua_providers::session_credential(lua, model.provider, &label, || {
+                if let Some(asked) = labels.asked {
+                    let listed = config.credentials().labels(model.provider);
+                    if !listed.iter().any(|label| label == asked) {
+                        return Err(crate::credential::no_label(
+                            &model.provider.name,
+                            asked,
+                            &listed,
+                        ));
+                    }
                 }
-            }
-            crate::credential::session_credential(&config, model.provider, Some(&label), &run)
-                .map(|(_, key)| key)
-        })
-        .map(|read| lua_providers::Access::new(lua, read))
-    })?;
+                crate::credential::session_credential(&config, model.provider, Some(&label), &run)
+                    .map(|(_, key)| key)
+            })
+            .map(|read| lua_providers::Access::new(lua, read))
+        }),
+        &extensions,
+        &launch,
+    )?;
     let session_credential = (key.clone(), signer.clone());
     let here = Here {
         workspace: workspace.clone(),
         clock: Arc::clone(&clock),
         cache_diagnostics: config.flag("cache.diagnostics", None).unwrap_or_default(),
     };
-    let (provider, observe) = connect_observed(
-        model,
-        key,
-        signer,
-        lua.map(|lua| (lua, label.as_str())),
-        &here,
-        &diagnostics(&diag),
+    let (provider, observe) = settle(
+        connect_observed(
+            model,
+            key,
+            signer,
+            lua.map(|lua| (lua, label.as_str())),
+            &here,
+            &diagnostics(&diag),
+        ),
+        &extensions,
+        &launch,
     )?;
     // The credentials read at startup, seeding `Switching`'s keys: the
     // session's entry first, so a reviewer on its provider reuses them.
@@ -423,15 +621,19 @@ pub(crate) fn parts_in(
         &model.reference(),
         &mut startup_notices,
     );
-    let thinking = settings::thinking(
-        model.thinking,
-        recorded_thinking,
-        &config,
-        model.model,
-        &model.reference(),
-        &mut startup_notices,
-    )
-    .map_err(|e| failed(e.code, e.message))?;
+    let thinking = settle(
+        settings::thinking(
+            model.thinking,
+            recorded_thinking,
+            &config,
+            model.model,
+            &model.reference(),
+            &mut startup_notices,
+        )
+        .map_err(|e| failed(e.code, e.message)),
+        &extensions,
+        &launch,
+    )?;
     let loader = switch::Loader {
         extensions: Arc::clone(&extensions),
         clock: Arc::clone(&clock),
@@ -494,7 +696,7 @@ pub(crate) fn parts_in(
         });
     }
     let sandbox = std::sync::Arc::new(std::sync::Mutex::new(sandbox_settings));
-    let mut mcp = mcp_servers::specs(&config)?;
+    let mut mcp = settle(mcp_servers::specs(&config), &extensions, &launch)?;
     mcp.notices.splice(0..0, startup_notices);
     Ok(Parts {
         sources: Sources {

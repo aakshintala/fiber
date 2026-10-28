@@ -21,11 +21,21 @@ use crate::Error;
 mod tests;
 
 /// Runs every `session_start` hook, in order: each is shown the same input
-/// and every return is kept, in run order.
+/// and every return is kept, in run order. Before the chain runs, the
+/// mapped latest reason is recorded on the session and every live process
+/// owner, so a restart after handoff resends the handoff reason.
 pub(super) fn session_start(
     session: &SessionExtensions,
     start: &SessionStart<'_>,
 ) -> ContextAnswer {
+    let reason = match start.reason {
+        StartReason::Start => contract::events::ExtensionReason::New,
+        StartReason::Resume => contract::events::ExtensionReason::Resume,
+        StartReason::Fork => contract::events::ExtensionReason::Fork,
+        StartReason::Rewind => contract::events::ExtensionReason::Rewind,
+        StartReason::Handoff => contract::events::ExtensionReason::Handoff,
+    };
+    session.record_start_reason(reason);
     run_additive(
         session,
         &session.lifecycle.session_start,

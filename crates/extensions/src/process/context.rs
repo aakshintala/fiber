@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Map, Value};
@@ -19,9 +19,9 @@ use contract::tool::Cancel;
 use crate::host::admission::CallbackContext;
 
 /// What one process extension runs as: the first `extension_hello` line's
-/// payload, and the context every native host call reads.
+/// payload, and the context every native host call reads. The session
+/// activates the owner at load, so the context is live from construction.
 #[derive(Debug, Clone)]
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct ProcessContext {
     /// The session's id, as `extension_hello` carries it.
     pub session_id: contract::SessionId,
@@ -39,7 +39,6 @@ pub(crate) struct ProcessContext {
     pub home: PathBuf,
 }
 
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl ProcessContext {
     /// The `extension_hello` payload: the session's identity, why it
     /// started, its workspace, the extension's data directories and its
@@ -58,6 +57,12 @@ impl ProcessContext {
     /// stands in the session.
     pub(crate) fn refold(&mut self, state: Map<String, Value>) {
         self.state = state;
+    }
+
+    /// Records the session's latest start reason, resent after a restart
+    /// with the state as it stands in the session.
+    pub(crate) fn set_reason(&mut self, reason: contract::events::ExtensionReason) {
+        self.reason = reason;
     }
 }
 
@@ -353,7 +358,9 @@ pub(crate) trait ProcessHostServices: Send + Sync {
 /// The production host services: shared native operations behind the
 /// trait, with the session's services present only when the session
 /// wired them. Without a session, service-backed calls fail exactly as
-/// the Lua half fails without one.
+/// the Lua half fails without one. The session installs the late-bound
+/// services (model, delegate, driver) after the child spawns, before any
+/// session dispatches to it; the mutexes hold that handoff.
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct NativeHostServices {
     /// Emits the session-visible lines: exec, status, widget, message,
@@ -365,14 +372,21 @@ pub(crate) struct NativeHostServices {
     pub clock: Arc<dyn contract::clock::Clock>,
     /// Opens URLs and serves the OAuth callback.
     pub browser: Arc<dyn crate::oauth::Browser>,
-    /// Runs model requests; absent without a session.
-    pub model: Option<Arc<dyn contract::model::HostModel>>,
-    /// Starts delegates; absent without a session.
-    pub delegate: Option<Arc<dyn contract::extension::HostDelegate>>,
-    /// Runs inner tools; absent without a session.
-    pub tool_runner: Option<Arc<dyn ToolRunner>>,
+    /// Runs model requests; installed by the session after spawn.
+    pub model: Mutex<Option<Arc<dyn contract::model::HostModel>>>,
+    /// Starts delegates; installed by the session after spawn.
+    pub delegate: Mutex<Option<Arc<dyn contract::extension::HostDelegate>>>,
+    /// Runs inner tools; installed by the session after spawn.
+    pub tool_runner: Mutex<Option<Arc<dyn ToolRunner>>>,
     /// The manifest's declared secret names.
     pub secrets: Vec<String>,
+    /// Answers scripted host calls before any real effect: set for case
+    /// runs, absent in live sessions, exactly as the Lua half consults it.
+    pub host_script: Option<Arc<crate::host::script::HostScript>>,
+    /// The session's configuration, settings and path locks behind
+    /// `host.config` and locked `host.fs`: `None` without a session, when
+    /// those calls fail naming the missing session.
+    pub session: Mutex<Option<crate::host::Session>>,
 }
 
 /// How long one parked wait rests before re-reading its end condition.

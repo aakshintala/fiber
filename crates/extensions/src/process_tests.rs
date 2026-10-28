@@ -3746,10 +3746,12 @@ fn production_services(
         state: store,
         clock,
         browser: Arc::new(ClosedBrowser),
-        model: None,
-        delegate: None,
-        tool_runner: None,
+        model: std::sync::Mutex::new(None),
+        delegate: std::sync::Mutex::new(None),
+        tool_runner: std::sync::Mutex::new(None),
         secrets: Vec::new(),
+        host_script: None,
+        session: std::sync::Mutex::new(None),
     })
 }
 

@@ -16,8 +16,8 @@ use log::Log;
 use r#loop::Loop;
 
 use crate::{
-    Parts, ask_failed, ask_permissions, cli, failed, finish, late_emit, mcp_servers, parts_with,
-    run_turn, session_extensions, shutdown,
+    Parts, ask_failed, ask_permissions, cli, failed, finish, late_emit, mcp_servers,
+    parts_with_session, run_turn, session_extensions, shutdown,
 };
 
 thread_local! {
@@ -438,7 +438,7 @@ pub(crate) fn run_new(
                 }
             }
             .map_err(|error| failed(error.code(), error))?;
-            parts_with(
+            parts_with_session(
                 Vec::new(),
                 folded.model.as_deref(),
                 folded.credential.as_deref(),
@@ -449,11 +449,23 @@ pub(crate) fn run_new(
                 process,
                 seed,
                 crate::session_extensions::RepositoryScope::default(),
+                crate::parts::SessionLaunch {
+                    id: id.clone(),
+                    reason: match &start.how {
+                        r#loop::Continuation::Fork { .. } => {
+                            contract::events::ExtensionReason::Fork
+                        }
+                        r#loop::Continuation::Rewind { .. } => {
+                            contract::events::ExtensionReason::Rewind
+                        }
+                    },
+                    event_cursor: 0,
+                },
             )?
         }
         None => {
             let overrides_for_fix = overrides.clone();
-            parts_with(
+            parts_with_session(
                 overrides,
                 None,
                 None,
@@ -464,6 +476,11 @@ pub(crate) fn run_new(
                 process,
                 extensions::StateSeed::new(),
                 crate::session_extensions::RepositoryScope::default(),
+                crate::parts::SessionLaunch {
+                    id: id.clone(),
+                    reason: contract::events::ExtensionReason::New,
+                    event_cursor: 0,
+                },
             )
             .map_err(|failure| ::cli::with_fix(failure, &overrides_for_fix))?
         }

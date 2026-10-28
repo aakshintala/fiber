@@ -33,7 +33,8 @@ pub(crate) mod transport;
 /// driver commands go through the `Drive` seam. Requests ride the shared
 /// request table: stream items ordered one at a time, tool calls
 /// concurrent, and one retirement seam for replies, deadlines and cancels.
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+/// The session activates the owner at load, so the dead_code allowance is
+/// gone: construction, pumping and shutdown are live paths.
 pub(crate) struct ProcessExtension {
     shared: Arc<Shared>,
 }
@@ -70,7 +71,6 @@ pub(crate) struct Launch {
 
 /// What the owner's threads share: the extension's identity, its runtime
 /// and registry, its request table and pipes, and what answers its calls.
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct Shared {
     owner: String,
     runtime: Runtime,
@@ -79,7 +79,9 @@ pub(crate) struct Shared {
     /// The live child behind a lock, so the one restart swaps it while a
     /// pump holds only its own clone and never blocks a swap.
     transport: Mutex<Arc<transport::Transport>>,
-    drive: Option<Arc<dyn contract::extension::Drive>>,
+    /// What answers its driver commands, behind a lock so the session
+    /// installs the driver after spawn and before any dispatch reaches it.
+    drive: Mutex<Option<Arc<dyn contract::extension::Drive>>>,
     services: Arc<dyn context::ProcessHostServices>,
     pub(crate) oauth: oauth::FileCredential,
     pub(crate) state: Arc<crate::host::state::ExtensionState>,
@@ -145,7 +147,6 @@ pub(crate) enum Pumped {
     Closed(transport::CloseReason),
 }
 
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl ProcessExtension {
     /// Starts the launched program for its owner: the child runs in the
     /// launch's workspace, and `extension_hello` is the first complete
@@ -176,7 +177,7 @@ impl ProcessExtension {
                 registry,
                 table: Arc::new(requests::Table::new()),
                 transport: Mutex::new(Arc::new(transport)),
-                drive,
+                drive: Mutex::new(drive),
                 services,
                 oauth,
                 state,
@@ -203,11 +204,6 @@ impl ProcessExtension {
         Ok(extension)
     }
 
-    /// The extension's name.
-    pub(crate) fn owner(&self) -> &str {
-        &self.shared.owner
-    }
-
     /// Whether `ready` arrived: registrations stand only before it.
     pub(crate) fn is_ready(&self) -> bool {
         self.shared.ready.load(std::sync::atomic::Ordering::SeqCst)
@@ -222,6 +218,19 @@ impl ProcessExtension {
         cancel: &dyn contract::tool::Cancel,
     ) -> Result<(), (contract::ErrorCode, String)> {
         lifecycle::await_ready(&self.shared, &self.shared.ready, deadline, cancel)
+    }
+
+    /// Records the session's latest start reason in the hello context,
+    /// resent after a restart with the state as it stands in the session.
+    pub(crate) fn update_reason(&self, reason: contract::events::ExtensionReason) {
+        support::lock(&self.shared.context).set_reason(reason);
+    }
+
+    /// Installs the session's driver for ordinary driver commands: the
+    /// session calls this after spawn and before any dispatch reaches the
+    /// child, matching the Lua half's late driver installation.
+    pub(crate) fn set_drive(&self, drive: Arc<dyn contract::extension::Drive>) {
+        *support::lock(&self.shared.drive) = Some(drive);
     }
 
     /// Shuts the owner down: no new dispatches past this point, the
@@ -293,13 +302,12 @@ impl ProcessExtension {
     /// Retires the generation at the process seam: pending requests end
     /// stale, and the next request mints under a new generation. Reload
     /// uses this; death uses the lifecycle, which also counts the child.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     pub(crate) fn retire(&self) {
         self.shared.table.retire();
-    }
-
-    /// The request table, for attributing calls and retiring generations.
-    pub(crate) fn table(&self) -> &Arc<requests::Table> {
-        &self.shared.table
     }
 
     /// The shared owner, for tests that mint requests, send lines and
@@ -317,6 +325,10 @@ impl ProcessExtension {
     }
 
     /// The runtime, resolving generation-keyed references.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     pub(crate) fn runtime(&self) -> &Runtime {
         &self.shared.runtime
     }
@@ -324,6 +336,10 @@ impl ProcessExtension {
     /// Dispatches the stream item behind `func`: hooks, watcher
     /// deliveries and commands, one at a time in arrival order. Resolves
     /// the reference first, so a stale generation never runs.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     pub(crate) fn dispatch_stream(
         &self,
         func: &FunctionRef,
@@ -355,6 +371,10 @@ impl ProcessExtension {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     fn dispatch_stream_after_admission(
         &self,
         func: &FunctionRef,
@@ -420,6 +440,10 @@ impl ProcessExtension {
     /// several can be outstanding and a long tool never holds up the
     /// stream. Resolves the reference first, so a stale generation never
     /// runs.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     pub(crate) fn dispatch_tool(
         &self,
         func: &FunctionRef,
@@ -446,6 +470,10 @@ impl ProcessExtension {
     /// `run_request` does: the stream gate first for stream items, then
     /// the line, then the reply, the deadline, the cancel or the hang
     /// guard, whichever is first.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     fn send_request(
         &self,
         dispatch: requests::Dispatch,
@@ -534,7 +562,7 @@ impl ProcessExtension {
         command: String,
         args: serde_json::Map<String, Value>,
     ) {
-        let Some(driver) = self.shared.drive.clone() else {
+        let Some(driver) = support::lock(&self.shared.drive).clone() else {
             self.answer_rejected(
                 &id,
                 ErrorCode::Closing,
@@ -567,6 +595,10 @@ impl ProcessExtension {
     /// The returned family is the call's admission snapshot: a restart
     /// after the runtime check cannot turn an admitted call stale by
     /// replacing the registry before dispatch uses it.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     fn resolve_family(&self, func: &FunctionRef) -> Result<Option<Family>, Error> {
         let family = self.family_of(func);
         self.shared.runtime.resolve(func)?;
@@ -575,6 +607,10 @@ impl ProcessExtension {
 
     /// Which registered family `func` names, for dispatching it as a
     /// stream item, a tool or a nested function.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     fn family_of(&self, func: &FunctionRef) -> Option<Family> {
         let registry = support::lock(&self.shared.registry);
         for ((point, _), reference) in registry.hook_runs() {

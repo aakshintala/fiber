@@ -670,6 +670,10 @@ pub(crate) struct Dispatch {
 
 impl Dispatch {
     /// One ordered stream item: a hook, a watcher delivery or a command.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     pub(crate) fn stream(
         func: &FunctionRef,
         ran_by: String,
@@ -689,6 +693,10 @@ impl Dispatch {
     }
 
     /// One tool call: concurrent with everything.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     pub(crate) fn tool(func: &FunctionRef, ran_by: String, args: Value, timeout: Duration) -> Self {
         Self {
             kind: RequestKind::Tool,

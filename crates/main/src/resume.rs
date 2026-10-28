@@ -455,7 +455,7 @@ fn resumed_session(
         &log::history(dir.path()).map_err(|error| failed(error.code(), error))?,
     )
     .map_err(|error| failed(error.code(), error))?;
-    let mut parts = crate::parts_with(
+    let mut parts = crate::parts_with_session(
         overrides,
         folded.model.as_deref(),
         crate::credential::Labels::new(credential.as_deref(), folded.credential.as_deref()),
@@ -468,6 +468,11 @@ fn resumed_session(
         crate::session_extensions::RepositoryScope {
             workspace: Some(std::path::PathBuf::from(&folded.workspace)),
             skipped: folded.skipped(),
+        },
+        crate::parts::SessionLaunch {
+            id: id.clone(),
+            reason: contract::events::ExtensionReason::Resume,
+            event_cursor: log.count(),
         },
     )?;
     // The session directory's log: the opening message's

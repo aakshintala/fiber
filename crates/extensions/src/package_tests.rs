@@ -282,6 +282,9 @@ fn load_process(
         super::runtime::Runtime::new(clock),
         process_context(&dir),
         services.clone(),
+        super::host::state::StateRegistry::new(contract::hook::StateSeed::new())
+            .store("fiber.test/proc"),
+        None,
     )
     .expect("the manifest program starts");
     // A watcher stops and kills a wedged peer once the bound passes,
@@ -415,6 +418,9 @@ fn load_process_without_a_program_leaves_an_optional_extension_out() {
         Arc::new(FakeServices {
             calls: std::sync::Mutex::new(Vec::new()),
         }),
+        super::host::state::StateRegistry::new(contract::hook::StateSeed::new())
+            .store("fiber.test/proc"),
+        None,
     )
     .expect("an optional extension loads without its program");
     assert!(package.extension().is_none());
@@ -440,6 +446,9 @@ fn load_process_without_a_program_fails_a_required_extension() {
         Arc::new(FakeServices {
             calls: std::sync::Mutex::new(Vec::new()),
         }),
+        super::host::state::StateRegistry::new(contract::hook::StateSeed::new())
+            .store("fiber.test/proc"),
+        None,
     );
     assert!(
         outcome.is_err(),

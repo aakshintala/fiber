@@ -34,7 +34,7 @@ pub struct PackageOptions {
 pub struct Package {
     manifest: config::Manifest,
     registry: Option<Arc<Mutex<Registry>>>,
-    extension: Option<super::process::ProcessExtension>,
+    extension: Option<Arc<super::process::ProcessExtension>>,
 }
 
 impl Package {
@@ -100,17 +100,18 @@ impl Package {
     /// Starts the manifest-declared process behind the seam: the same
     /// manifest checks as [`Package::load`], then the child runs with
     /// `context` as its hello and answers through `services`. A manifest
-    /// with no process loads with no owner, as `load` does.
-    /// `PackageOptions` stays `{ dir, clock }`: no session activation.
-    #[allow(
-        dead_code,
-        reason = "asserted by tests; the package seam keeps it for process owners"
-    )]
+    /// with no process loads with no owner, as `load` does. The session
+    /// passes its own folded state store and driver: the child never
+    /// opens a standalone store and never runs driverless.
+    /// `PackageOptions` stays `{ dir, clock }`: the context carries what
+    /// the session activates.
     pub(crate) fn load_process_with(
         options: PackageOptions,
         runtime: Runtime,
         context: super::process::context::ProcessContext,
         services: Arc<dyn super::process::context::ProcessHostServices>,
+        state: Arc<super::host::state::ExtensionState>,
+        drive: Option<Arc<dyn contract::extension::Drive>>,
     ) -> Result<Arc<Package>, Error> {
         let clock = Arc::clone(&options.clock);
         let dir = options.dir.clone();
@@ -131,8 +132,6 @@ impl Package {
             dir.join(program)
         };
         // Refresh resolves stored pairs from the home credential files.
-        // State opens on a standalone store; the session folds its state
-        // into the store.
         let home = context.home.clone();
         let extension = super::process::ProcessExtension::start(super::process::Launch {
             owner: package.manifest.name.clone(),
@@ -141,10 +140,10 @@ impl Package {
             program,
             args: process.args.clone(),
             context,
-            drive: None,
+            drive,
             services,
             oauth: super::process::oauth::FileCredential::new(home),
-            state: super::host::state::StateRegistry::standalone().store(&package.manifest.name),
+            state,
             clock,
             limits: super::process::transport::Limits::default(),
         });
@@ -152,7 +151,7 @@ impl Package {
         // owner for the session to start; a required one fails the
         // package, as a required MCP server does.
         let extension = match extension {
-            Ok(extension) => Some(extension),
+            Ok(extension) => Some(Arc::new(extension)),
             Err(_source) if !process.required => {
                 return Ok(Arc::new(Package {
                     manifest: package.manifest.clone(),
@@ -215,10 +214,9 @@ impl Package {
     }
 
     /// The started process owner, when the package started one behind
-    /// the seam. The package tests pump it; the session owns it when
-    /// wired.
-    #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
-    pub(crate) fn extension(&self) -> Option<&super::process::ProcessExtension> {
+    /// the seam. The package tests pump it; the session shares ownership
+    /// when wired, so the owner outlives any single holder.
+    pub(crate) fn extension(&self) -> Option<&Arc<super::process::ProcessExtension>> {
         self.extension.as_ref()
     }
 }
