@@ -443,13 +443,13 @@ fn a_repository_debug_level_writes_no_tool_timing() {
     assert!(op_lines(&setup).is_empty());
 }
 
-/// An `openai-responses` stream calling `shell` with `true`: it declares
-/// `executes`, so step 7 reviews it.
+/// An `openai-responses` stream calling `shell` with `touch
+/// .fiber-review-marker`: it declares `executes`, so step 7 reviews it.
 fn shell_true_call() -> fakes::Response {
     let events = [
         json!({"type": "response.output_item.done", "item": {
             "type": "function_call", "id": "fc_1", "call_id": "call_1",
-            "name": "shell", "arguments": "{\"command\":\"true\"}"}}),
+            "name": "shell", "arguments": "{\"command\":\"touch .fiber-review-marker\"}"}}),
         json!({"type": "response.completed", "response": {
             "id": "resp_1", "status": "completed",
             "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}}}),
@@ -508,7 +508,7 @@ fn a_debug_review_times_one_stage_with_permission_and_run() {
         &json!({"model": "syn/sess", "diagnostics": {"level": "debug"}}).to_string(),
     );
     let run = setup.run_with_env(
-        &["ask", "--model", "syn/sess", "Run true."],
+        &["ask", "--model", "syn/sess", "Touch the marker."],
         &[("SYN_API_KEY", "sk-test-syn")],
     );
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -705,7 +705,7 @@ fn a_debug_escalation_times_two_stages_and_the_wait() {
         &json!({
             "id": "c_start",
             "command": "start",
-            "args": {"workspace": workspace, "content": [{"type": "text", "text": "Run true."}]},
+            "args": {"workspace": workspace, "content": [{"type": "text", "text": "Touch the marker."}]},
         }),
     );
     let started = support::recv(&client, "the start acknowledgement");
