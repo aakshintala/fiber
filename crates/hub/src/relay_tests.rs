@@ -3016,3 +3016,150 @@ fn an_indeterminate_answer_from_the_session_is_forwarded_and_never_routed() {
     assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
 }
+
+/// A refused admission still answers the command already written to the
+/// new socket: the exclusive attach finds the live relay, so no thread
+/// ever reads the command, and the client must hear `session_not_found`
+/// instead of waiting with no reply.
+#[test]
+fn a_refused_admission_answers_the_pending_command() {
+    use std::io::{BufRead, BufReader};
+    use std::sync::{Arc, Mutex};
+    const SID: &str = "s_0123456789abcdef";
+
+    let held = fakes::TempDir::new("rr");
+    let hub = Arc::new(hub(&held));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let order = crate::connection::lock(&relays).order.clone();
+    order.enqueue(SID, "c_refused");
+    // A live relay for the session, so the exclusive admission below
+    // refuses: no production exclusive caller passes a command, but the
+    // written one still needs its answer on this arm.
+    {
+        let mut held = crate::connection::lock(&relays);
+        let epoch = held.mint();
+        let (live_writer, _live_peer) = UnixStream::pair().unwrap();
+        held.entries.push(Relay {
+            session: SID.to_owned(),
+            epoch,
+            writer: live_writer,
+            kept: Kept::default(),
+            replayed: Replayed::default(),
+            thread: None,
+            retiring: None,
+            target: RelayTarget::LiveUnreadable,
+        });
+    }
+    let (writer, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let (session, _session_peer) = UnixStream::pair().unwrap();
+    let command = json!({"id": "c_refused", "command": "reply", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let mut bytes = serde_json::to_vec(&command).unwrap();
+    bytes.push(b'\n');
+
+    attach(
+        SID,
+        session,
+        &hub,
+        &writer,
+        &relays,
+        None,
+        Some((contract::CommandId("c_refused".to_owned()), bytes, command)),
+        true,
+    );
+
+    let mut text = String::new();
+    BufReader::new(peer)
+        .read_line(&mut text)
+        .expect("the refused command is answered within the deadline");
+    let answer: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(answer["kind"], "command_rejected");
+    assert_eq!(answer["payload"]["code"], "session_not_found");
+    assert_eq!(answer["payload"]["command_id"], "c_refused");
+    assert_eq!(order.session_for("c_refused"), None);
+    assert_eq!(
+        crate::connection::lock(&relays).entries.len(),
+        1,
+        "the refused attach publishes no relay"
+    );
+}
+
+/// A relay thread that never starts still answers the command already
+/// written to the session socket: `route` enqueues before `attach_inner`
+/// writes, so without an answer the client would wait with no reply.
+#[test]
+fn a_spawn_failure_answers_the_written_command() {
+    use std::io::{BufRead, BufReader};
+    use std::sync::{Arc, Mutex};
+    const SID: &str = "s_0123456789abcdef";
+
+    fn failing_spawner(
+        task: Box<dyn FnOnce() + Send>,
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
+        drop(task);
+        Err(std::io::Error::other("the relay thread never starts"))
+    }
+
+    let held = fakes::TempDir::new("rsf");
+    let hub = Arc::new(hub(&held));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let order = crate::connection::lock(&relays).order.clone();
+    order.enqueue(SID, "c_unspawned");
+    let (writer, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let (session, session_peer) = UnixStream::pair().unwrap();
+    session_peer
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
+    let command = json!({"id": "c_unspawned", "command": "reply", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let mut bytes = serde_json::to_vec(&command).unwrap();
+    bytes.push(b'\n');
+
+    attach_inner_with_spawner(
+        SID,
+        session,
+        &hub,
+        &writer,
+        &relays,
+        None,
+        Some((
+            contract::CommandId("c_unspawned".to_owned()),
+            bytes,
+            command,
+        )),
+        false,
+        None,
+        false,
+        failing_spawner,
+    );
+
+    // The command reached the session socket before the spawn failed.
+    let mut written = String::new();
+    BufReader::new(session_peer)
+        .read_line(&mut written)
+        .expect("the written command is readable within the deadline");
+    let sent: Value = serde_json::from_str(written.trim_end()).unwrap();
+    assert_eq!(sent["id"], "c_unspawned");
+    // The client still gets its answer.
+    let mut text = String::new();
+    BufReader::new(peer)
+        .read_line(&mut text)
+        .expect("the unspawned command is answered within the deadline");
+    let answer: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(answer["kind"], "command_rejected");
+    assert_eq!(answer["payload"]["code"], "session_not_found");
+    assert_eq!(answer["payload"]["command_id"], "c_unspawned");
+    assert_eq!(order.session_for("c_unspawned"), None);
+    assert!(
+        crate::connection::lock(&relays).entries.is_empty(),
+        "the unspawned attach publishes no relay"
+    );
+}
