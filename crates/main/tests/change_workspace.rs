@@ -166,6 +166,7 @@ struct Hubbed {
     hub: Arc<Mutex<Option<HubProc>>>,
     client: Option<Socket>,
     guards: Vec<SessionGuard>,
+    home: PathBuf,
 }
 
 impl Hubbed {
@@ -181,6 +182,7 @@ impl Hubbed {
             hub,
             client: Some(client),
             guards,
+            home: setup.home(),
         }
     }
 
@@ -243,9 +245,30 @@ impl Hubbed {
     }
 
     fn finish(self) {
-        let Self { hub, guards, .. } = self;
+        let Self {
+            hub, guards, home, ..
+        } = self;
         for guard in guards {
-            guard.wait_gone();
+            // A holder that outlives the wait is a session the hub
+            // started and the test never closed through the hub: an
+            // idle one hears no close once the hub below is dead, so
+            // the wait names each session's last line with the timeout
+            // instead of failing on the bare wait.
+            let workspace = guard.workspace.clone();
+            let waited =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| guard.wait_gone()));
+            if let Err(payload) = waited {
+                hub.lock()
+                    .unwrap()
+                    .take()
+                    .expect("the hub ran")
+                    .kill_and_wait();
+                panic!(
+                    "{}\nworkspace {workspace} holders, last session lines:\n{}",
+                    payload_message(&payload),
+                    session_log_tails(&home).join("\n"),
+                );
+            }
         }
         hub.lock()
             .unwrap()
@@ -253,6 +276,126 @@ impl Hubbed {
             .expect("the hub ran")
             .kill_and_wait();
     }
+}
+
+/// A caught panic's message: the workspace wait panics with a formatted
+/// string, so either string shape reads.
+fn payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_owned()
+    } else {
+        "the wait failed without a message".to_owned()
+    }
+}
+
+/// The last complete line of every session log under `home`, oldest
+/// session first: the workspace wait already names its holders' pids
+/// and command lines, and these tails name what each session was doing
+/// when it stopped answering.
+fn session_log_tails(home: &Path) -> Vec<String> {
+    let mut tails = Vec::new();
+    let Ok(projects) = fs::read_dir(home.join("projects")) else {
+        return tails;
+    };
+    for project in projects.flatten() {
+        let Ok(sessions) = fs::read_dir(project.path().join("sessions")) else {
+            continue;
+        };
+        for session in sessions.flatten() {
+            let path = session.path().join("events.jsonl");
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            if let Some(last) = complete_lines(&text).pop() {
+                let id = session.file_name().to_string_lossy().into_owned();
+                tails.push(format!("session {id}: {last}"));
+            }
+        }
+    }
+    tails.sort();
+    tails
+}
+
+#[test]
+fn finish_names_session_tails_when_a_holder_outlives_the_wait() {
+    let setup = Setup::new();
+    // A holder whose command line carries the workspace: `exec -a`
+    // names argv[0], which the workspace wait matches. It blocks
+    // copying its stdin pipe, which the test holds open, so the
+    // guard's timeout is decided by the pipe staying open, never by
+    // the clock.
+    let held = setup.root.path().join("held");
+    let held_text = held.to_string_lossy().into_owned();
+    let mut spawned = Command::new("bash");
+    spawned
+        .args(["-c", &format!("exec -a 'holder {held_text}' cat")])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // The guarded group helper: its own process group, reaped below,
+    // with a watchdog killing the group if the test dies first.
+    let (mut holder, watchdog) = spawn_watched(&mut spawned);
+    let stdin = holder.stdin.take().expect("the holder keeps stdin piped");
+    let group = holder.id();
+    // The guard's first listing must see the holder: a short wait armed
+    // before the holder appears would pass with nothing to wait on,
+    // instead of timing out on the live holder.
+    loop {
+        if fakes::matching(&held_text)
+            .unwrap_or_default()
+            .contains(&group)
+        {
+            break;
+        }
+        assert!(
+            !setup.deadline.left().is_zero(),
+            "waited until the deadline for the holder to appear"
+        );
+        thread::yield_now();
+    }
+    // One planted session log, ending `moved`: the failure names its
+    // last line with the wait.
+    let dir = setup
+        .home()
+        .join("projects")
+        .join("p1")
+        .join("sessions")
+        .join("s_old");
+    fs::create_dir_all(&dir).unwrap();
+    let first = serde_json::to_string(&json!({"kind": "session_started"})).unwrap();
+    let moved = serde_json::to_string(&json!({"kind": "moved"})).unwrap();
+    fs::write(dir.join("events.jsonl"), format!("{first}\n{moved}\n")).unwrap();
+    let mut hubbed = Hubbed::new(&setup, &[]);
+    // The holder has been confirmed above; an expired deadline forces
+    // the diagnostic path without waiting for wall-clock time.
+    hubbed.guards.push(SessionGuard::arm(
+        Deadline::after(std::time::Duration::ZERO),
+        &held_text,
+    ));
+    let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hubbed.finish()));
+    // Release the pipe the holder was blocked on, then reap it and its
+    // group under the cleanup bound before asserting on the message, so
+    // no zombie outlives the test.
+    drop(stdin);
+    let cleanup = setup.deadline.cleanup_phase();
+    let (done, reaped) = mpsc::channel();
+    thread::spawn(move || done.send(holder.wait()).unwrap());
+    match cleanup.recv(&reaped) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited until the cleanup deadline to reap the holder"),
+    };
+    assert!(
+        fakes::group_empties(group, cleanup),
+        "the holder left a process in its group behind"
+    );
+    watchdog.stand_down(cleanup);
+    let message = payload_message(&finished.expect_err("a live holder outlives the short wait"));
+    assert!(message.contains(&held_text), "{message}");
+    assert!(message.contains("holding the workspace path"), "{message}");
+    assert!(message.contains("session s_old"), "{message}");
+    assert!(message.contains("\"moved\""), "{message}");
 }
 
 /// Waits for `child`'s `session_started` on the client: the redirect
