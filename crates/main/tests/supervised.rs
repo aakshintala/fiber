@@ -685,5 +685,12 @@ fn a_supervised_resume_stays_unanswerable() {
         "a resumed supervised turn sends no attention: {lines:?}"
     );
     close_and_wait(&resumed, &id);
-    stop_hub(&hub, guard);
+    // Sessions first: no live session may auto-start a new hub after the
+    // hub is gone, orphaning `fiber hub serve` past the test.
+    guard.wait_gone();
+    hub.lock()
+        .unwrap()
+        .take()
+        .expect("the hub ran")
+        .kill_and_wait();
 }
