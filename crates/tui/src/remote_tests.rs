@@ -1388,6 +1388,23 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
 }
 
 #[test]
+fn decode_models_reads_object_notices_with_code_and_message() {
+    let value = json!({
+        "models": [],
+        "notices": [{"code": "model_unconfigured",
+                     "message": "The model `fake/alpha` needs the setting `workspace`"}],
+        "lists": [],
+    });
+    let catalogue = decode_models(&value).expect("object notices decode");
+    assert_eq!(catalogue.notices.len(), 1);
+    assert!(
+        catalogue.notices[0].contains("fake/alpha"),
+        "{:?}",
+        catalogue.notices
+    );
+}
+
+#[test]
 fn catalogue_rejection_keeps_the_hub_message() {
     use crate::catalogue::Refresh;
     let hub = Hub::new(Arc::new(Fake::new(vec![])));
