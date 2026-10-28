@@ -13,6 +13,24 @@ fn page(index: usize) -> PageKey {
         index,
     }
 }
+
+#[test]
+fn home_key_never_equals_a_real_page_key() {
+    let home = PageKey::home();
+    for key in [
+        page(0),
+        PageKey {
+            session: contract::SessionId(String::new()),
+            index: 0,
+        },
+        PageKey {
+            session: contract::SessionId("s".into()),
+            index: usize::MAX,
+        },
+    ] {
+        assert_ne!(home, key);
+    }
+}
 fn decision(call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>) -> Decision {
     match call() {
         Ok(lines) => Decision::Draw {
@@ -23,7 +41,10 @@ fn decision(call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>) -> Decisi
     }
 }
 
-use crate::ext::{Failure, Input, LedgerRow, RawSpan, Status};
+use crate::ext::{
+    AnswerDisposition, CallState, CardPrompt, Failure, Input, LedgerResult, LedgerRow, Prompt,
+    PromptImage, RawSpan, ReplyText, ThinkingLine, TurnCard, TurnCardState, TurnEnded,
+};
 
 fn raw(text: &str) -> RawSpan {
     RawSpan {
@@ -36,13 +57,13 @@ fn input<'a>(name: &'a str, output: &'a str, arguments: &'a serde_json::Value) -
     Input::LedgerRow(LedgerRow {
         name,
         arguments,
-        status: Status::Completed,
-        exit: None,
-        duration_ms: None,
-        lines: 0,
-        changes: &[],
-        error: None,
-        output,
+        state: CallState::Completed(LedgerResult {
+            exit: None,
+            duration_ms: None,
+            lines: 0,
+            changes: &[],
+            output,
+        }),
         answer: None,
         flat: false,
     })
@@ -148,6 +169,7 @@ fn a_wrong_shape_is_a_cached_failure_listed_once() {
     assert!(draw().is_none());
     assert_eq!(calls.get(), 1);
     let listed = cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": the failure is cached against the item's input.)
     assert_eq!(listed.len(), 1);
     assert_eq!(listed.first().expect("one failure").0, "ledger_row");
     let failure = listed.first().expect("one failure").1.clone();
@@ -177,6 +199,7 @@ fn an_error_is_listed_once_and_a_hit_lists_nothing() {
             .is_none()
     );
     let listed = cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": the failure is cached against the item's input.)
     assert_eq!(listed.len(), 1);
     assert_eq!(
         listed.first().expect("one failure"),
@@ -376,7 +399,9 @@ fn the_counter_matches_the_renderer_calls() {
 mod context_regressions {
 
     use super::{Cache, PageKey};
-    use crate::ext::{Decision, Failure, FailureKind, Input, LedgerRow, RawSpan, Status};
+    use crate::ext::{
+        CallState, Decision, Failure, FailureKind, Input, LedgerResult, LedgerRow, RawSpan,
+    };
     use std::cell::Cell;
 
     fn page(session: &str, index: usize) -> PageKey {
@@ -389,13 +414,13 @@ mod context_regressions {
         Input::LedgerRow(LedgerRow {
             name: "shell",
             arguments,
-            status: Status::Completed,
-            exit: None,
-            duration_ms: None,
-            lines: 0,
-            changes: &[],
-            error: None,
-            output: "done",
+            state: CallState::Completed(LedgerResult {
+                exit: None,
+                duration_ms: None,
+                lines: 0,
+                changes: &[],
+                output: "done",
+            }),
             answer: None,
             flat: false,
         })
@@ -461,7 +486,7 @@ mod context_regressions {
         let row = input(&args);
         for version in ["v1", "v2"] {
             let ctx = SessionCtx {
-                session_id: contract::SessionId("s".into()),
+                session_id: Some(contract::SessionId("s".into())),
                 halves: Some(
                     [("other".to_owned(), version.to_owned())]
                         .into_iter()
@@ -712,4 +737,290 @@ mod context_regressions {
                 .is_some()
         );
     }
+}
+
+/// A card input with one reply entry: the scroll/search cache tests draw
+/// this twice and count one renderer call.
+fn card(running: bool) -> TurnCard<'static> {
+    TurnCard {
+        prompts: vec![CardPrompt {
+            text: "go",
+            images: vec![PromptImage {
+                path: "a.png",
+                width: 10,
+                height: 8,
+            }],
+        }],
+        entries: vec![crate::ext::TurnEntry::Reply { text: "ok" }],
+        started: 1,
+        calls: 0,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: std::collections::BTreeMap::new(),
+                output: 0,
+            },
+            cost: None,
+            subscription_cost: 0.0,
+        },
+        state: if running {
+            TurnCardState::Running
+        } else {
+            TurnCardState::Ended(TurnEnded::Completed { ended_ts: 0 })
+        },
+        flat: false,
+    }
+}
+
+fn prompt_input(text: &'static str) -> Input<'static> {
+    Input::Prompt(Prompt {
+        text,
+        images: Vec::new(),
+        flat: false,
+    })
+}
+
+fn reply_input(text: &'static str) -> Input<'static> {
+    Input::Reply(ReplyText { text, flat: false })
+}
+
+fn thought_input(text: &'static str, open: bool) -> Input<'static> {
+    Input::ThinkingLine(ThinkingLine {
+        text,
+        started: 1,
+        ended: Some(2),
+        open,
+        flat: false,
+    })
+}
+
+fn card_input(running: bool) -> Input<'static> {
+    Input::TurnCard(card(running))
+}
+
+fn group_line_input(running: bool) -> Input<'static> {
+    Input::GroupLine(crate::ext::GroupLine {
+        running,
+        calls: Vec::new(),
+        streaming: Vec::new(),
+        thoughts: Vec::new(),
+        failed: Vec::new(),
+        first: 1,
+        last: 2,
+        open: false,
+        flat: false,
+    })
+}
+
+fn steer_input(text: &'static str) -> Input<'static> {
+    Input::Steer(crate::ext::Steer {
+        text,
+        images: Vec::new(),
+        ts: 1,
+        flat: false,
+    })
+}
+
+fn answers_input(note: Option<&'static str>) -> Input<'static> {
+    Input::Answers(crate::ext::Answers {
+        answers: crate::ext::TurnAnswers::Given {
+            parts: vec![crate::ext::TurnAnswerPart {
+                header: "Base",
+                disposition: AnswerDisposition::Answered { text: "main" },
+            }],
+            note,
+            ts: 1,
+        },
+        flat: false,
+    })
+}
+
+fn handoff_input(trigger: &'static str) -> Input<'static> {
+    Input::HandoffBand(crate::ext::HandoffBand {
+        trigger,
+        ts: 1,
+        state: crate::ext::TurnBandState::Done(crate::ext::TurnSizes {
+            before: 1,
+            after: Some(2),
+        }),
+        flat: false,
+    })
+}
+
+fn error_input(message: &'static str) -> Input<'static> {
+    Input::ErrorLine(crate::ext::ErrorLine {
+        code: contract::ErrorCode::IoFailed,
+        message,
+        provider: None,
+        flat: false,
+    })
+}
+
+fn notice_input(text: &'static str) -> Input<'static> {
+    Input::Notice(crate::ext::Notice {
+        code: "io_failed",
+        text,
+        flat: false,
+    })
+}
+
+/// Draws `row` at `width`, counting renderer calls.
+fn draw_counted<'a>(
+    cache: &Cache,
+    slot: &str,
+    row: &'a Input<'a>,
+    width: u16,
+    calls: &Cell<usize>,
+    answer: Result<Vec<Vec<RawSpan>>, Failure>,
+) -> Option<std::sync::Arc<Vec<crate::ext::spans::FittedLine>>> {
+    cache.lines(page(0), slot, "test", None, row, width, || {
+        decision(|| {
+            calls.set(calls.get().saturating_add(1));
+            answer.clone()
+        })
+    })
+}
+
+fn drawn(text: &str) -> Result<Vec<Vec<RawSpan>>, Failure> {
+    Ok(vec![vec![raw(text)]])
+}
+
+#[test]
+fn each_new_slot_caches_by_input_and_width() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let arguments = serde_json::json!({});
+    let _ = &arguments;
+    let cases: Vec<(&str, Input<'_>, Input<'_>)> = vec![
+        ("prompt", prompt_input("go"), prompt_input("stop")),
+        ("reply", reply_input("ok"), reply_input("changed")),
+        (
+            "thinking_line",
+            thought_input("plan", false),
+            thought_input("plan", true),
+        ),
+        ("turn_card", card_input(false), card_input(true)),
+        (
+            "group_line",
+            group_line_input(false),
+            group_line_input(true),
+        ),
+        ("steer", steer_input("wait"), steer_input("stop")),
+        ("answers", answers_input(Some("go")), answers_input(None)),
+        (
+            "handoff_band",
+            handoff_input("automatic"),
+            handoff_input("the model handed off"),
+        ),
+        ("error_line", error_input("down"), error_input("up")),
+        ("notice", notice_input("down"), notice_input("up")),
+    ];
+    for (slot, first, second) in &cases {
+        let before = calls.get();
+        assert!(
+            draw_counted(&cache, slot, first, 20, &calls, drawn("hi")).is_some(),
+            "{slot} draws"
+        );
+        assert!(
+            draw_counted(&cache, slot, first, 20, &calls, drawn("hi")).is_some(),
+            "{slot} hits"
+        );
+        // A renderer runs again only when its input or the width
+        // changes (`docs/tui.md`, "How a TUI extension runs").
+        assert_eq!(calls.get(), before + 1, "{slot} hits the cache");
+        assert!(
+            draw_counted(&cache, slot, first, 24, &calls, drawn("hi")).is_some(),
+            "{slot} draws at a new width"
+        );
+        // The width rides the entry key beside the input
+        // (`docs/tui.md`, "How a TUI extension runs").
+        assert_eq!(calls.get(), before + 2, "{slot} keys the width");
+        assert!(
+            draw_counted(&cache, slot, second, 20, &calls, drawn("hi")).is_some(),
+            "{slot} draws a new input"
+        );
+        // The key covers the slot and every field
+        // (`docs/tui.md`, "How a TUI extension runs").
+        assert_eq!(calls.get(), before + 3, "{slot} keys the input");
+    }
+}
+
+#[test]
+fn each_new_slot_failure_holds_without_width() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let cases: Vec<(&str, Input<'_>)> = vec![
+        ("prompt", prompt_input("go")),
+        ("reply", reply_input("ok")),
+        ("thinking_line", thought_input("plan", false)),
+        ("turn_card", card_input(false)),
+        ("group_line", group_line_input(false)),
+        ("steer", steer_input("wait")),
+        ("answers", answers_input(Some("go"))),
+        ("handoff_band", handoff_input("automatic")),
+        ("error_line", error_input("down")),
+        ("notice", notice_input("down")),
+    ];
+    for (slot, row) in &cases {
+        let before = calls.get();
+        let fail = || draw_counted(&cache, slot, row, 20, &calls, Err(failed("test", "boom")));
+        assert!(fail().is_none(), "{slot} falls back");
+        assert!(fail().is_none(), "{slot} recalls nothing");
+        assert!(
+            draw_counted(&cache, slot, row, 24, &calls, Err(failed("test", "boom"))).is_none(),
+            "{slot} holds across widths"
+        );
+        // The failure key holds without the width
+        // (`docs/tui.md`, "How a TUI extension runs").
+        assert_eq!(calls.get(), before + 1, "{slot} calls once");
+        let listed = cache.take_failures();
+        // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+        assert_eq!(listed.len(), 1, "{slot} lists its failure once");
+        assert_eq!(listed[0].0, *slot);
+    }
+}
+
+#[test]
+fn a_new_slot_wrong_shape_is_listed_once() {
+    crate::work::take();
+    let cache = Cache::default();
+    let row = prompt_input("go");
+    let wrong = || {
+        cache.lines(page(0), "prompt", "test", None, &row, 20, || {
+            decision(|| {
+                Ok(vec![vec![RawSpan {
+                    text: "hi".to_owned(),
+                    fg: Some("nope".to_owned()),
+                    ..RawSpan::default()
+                }]])
+            })
+        })
+    };
+    assert!(wrong().is_none());
+    assert!(wrong().is_none());
+    let listed = cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "prompt");
+}
+
+#[test]
+fn scroll_and_search_redraws_hit() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let row = card_input(false);
+    for _ in 0..2 {
+        assert!(
+            draw_counted(&cache, "turn_card", &row, 20, &calls, drawn("hi")).is_some(),
+            "a redraw hits"
+        );
+    }
+    // Scrolling or searching costs what it costs for built-in rows:
+    // no new renderer call (`docs/tui.md`, "How a TUI extension runs").
+    assert_eq!(calls.get(), 1, "scrolling and searching call Lua once");
+    assert_eq!(crate::work::take().renderer_calls, 1);
 }

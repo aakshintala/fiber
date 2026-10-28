@@ -280,3 +280,28 @@ fn no_color_keeps_the_prompt_bare_and_its_rows() {
     assert!(painted[1].contains("hi"), "{painted:?}");
     assert!(!painted[1].contains('│'), "{painted:?}");
 }
+
+/// The prompt input's text draws through the bubble's rows: the seam in
+/// `images::bubble_rows` replaces this text with the extension's lines.
+#[test]
+fn the_prompt_text_draws_through_the_bubble() {
+    use crate::turn::images::Prompt;
+    let prompt = Prompt {
+        text: "go".to_owned(),
+        images: Vec::new(),
+    };
+    let input = crate::ext::Prompt {
+        text: &prompt.text,
+        images: Vec::new(),
+        flat: false,
+    };
+    assert_eq!(input.text, "go");
+    let mut out = Rows::default();
+    rows(&prompt.text, 40, &mut out);
+    let (shown, _) = out.into_parts();
+    assert!(
+        shown
+            .iter()
+            .any(|(line, _)| line.to_string().contains("go"))
+    );
+}
