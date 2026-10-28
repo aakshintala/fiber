@@ -439,6 +439,7 @@ impl Connection {
                 | Input::HooksOfferNames { .. }
                 | Input::HooksInstalled { .. }
                 | Input::Login { .. }
+                | Input::Converted { .. }
                 | Input::Files { .. }) => self.push_stash(other),
             }
         }

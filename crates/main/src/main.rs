@@ -1144,6 +1144,10 @@ fn terminal(
     if let doors::hub::Target::Listed { name, .. } = &target {
         launch = launch::remote(launch, name);
     }
+    // The converter runs this executable again: its path, when the run
+    // knows one, rides the launch so JPEG and WebP convert before Kitty
+    // transmission (`docs/tui.md`, "Images").
+    launch.fiber = fiber.as_ref().ok().cloned();
     let connect: tui::Connect = Box::new(move || {
         connect_hub(&home, &target, &fiber, hub_clock.as_ref()).map_err(io::Error::other)
     });
