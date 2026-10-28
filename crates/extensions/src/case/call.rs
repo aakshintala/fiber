@@ -11,51 +11,49 @@ use contract::clock::Clock;
 use serde_json::{Value, json};
 use support::clock::{Manual, Sleep};
 
+use super::Verdict;
 use super::format::{Call, CallCase, CallOperation, CallOutcome};
-use super::run::{malformed, report};
 
-/// Runs a provider call without creating a session.
-pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Clock>) -> i32 {
+/// Runs a provider call without creating a session and returns its verdict.
+pub fn run_call(case: CallCase, process_clock: Arc<dyn Clock>) -> Verdict {
     let mut provider_name = None;
     for step in &case.steps {
         if let CallOperation::Invoke { call, .. } = &step.operation {
             if let Err(error) = ready(call) {
-                return malformed(&name, &[error]);
+                return malformed_verdict(vec![error]);
             }
             if provider_name
                 .as_ref()
                 .is_some_and(|name| name != &call.provider)
             {
-                return malformed(
-                    &name,
-                    &["calls: all calls must use one provider".to_owned()],
-                );
+                return malformed_verdict(vec![
+                    "calls: all calls must use one provider".to_owned(),
+                ]);
             }
             provider_name = Some(call.provider.clone());
         }
     }
     let Some(provider_name) = provider_name else {
-        return malformed(
-            &name,
-            &["calls: at least one provider call is required".to_owned()],
-        );
+        return malformed_verdict(vec![
+            "calls: at least one provider call is required".to_owned(),
+        ]);
     };
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
-        Err(error) => return report(&name, &[error.to_string()]),
+        Err(error) => return failure_verdict(vec![error.to_string()]),
     };
-    let installed = match extensions::list(&home, process_clock.as_ref()) {
+    let installed = match crate::list(&home, process_clock.as_ref()) {
         Ok(listing) => listing.installed,
-        Err(error) => return report(&name, &[error.to_string()]),
+        Err(error) => return failure_verdict(vec![error.to_string()]),
     };
     if let Err(error) = write_credentials(&home, &case.credentials) {
-        return report(&name, &[error]);
+        return failure_verdict(vec![error]);
     }
-    let data = match extensions::Providers::load(&home) {
+    let data = match crate::Providers::load(&home) {
         Ok((providers, _)) => providers.data(&provider_name),
-        Err(error) => return report(&name, &[error.to_string()]),
+        Err(error) => return failure_verdict(vec![error.to_string()]),
     };
-    let host = extensions::HostScript::new(case.host.http, case.host.exec, case.host.oauth);
+    let host = crate::HostScript::new(case.host.http, case.host.exec, case.host.oauth);
     let case_clock = Manual::with_sleep(Sleep::Waits);
     let clock: Arc<dyn Clock> = case_clock.clone();
     let extension = match provider_extension(
@@ -68,17 +66,14 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
     ) {
         Some(extension) => extension,
         None => {
-            return report(
-                &name,
-                &[format!(
-                    "call.provider: no installed package registers provider `{}`",
-                    provider_name
-                )],
-            );
+            return failure_verdict(vec![format!(
+                "call.provider: no installed package registers provider `{}`",
+                provider_name
+            )]);
         }
     };
-    let provider = extensions::LuaProvider::new(extension, provider_name);
-    let mut pair = extensions::CredentialPair::for_provider(&data, "default");
+    let provider = crate::LuaProvider::new(extension, provider_name);
+    let mut pair = crate::CredentialPair::for_provider(&data, "default");
     let mut failures = Vec::new();
     let mut advances = Some(case.clock);
     for (index, step) in case.steps.into_iter().enumerate() {
@@ -178,14 +173,26 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
             .iter()
             .map(|entry| format!("unmet host call: {entry}")),
     );
-    report(&name, &failures)
+    failure_verdict(failures)
+}
+
+fn failure_verdict(failures: Vec<String>) -> Verdict {
+    if failures.is_empty() {
+        Verdict::Pass
+    } else {
+        Verdict::Fail(failures)
+    }
+}
+
+fn malformed_verdict(failures: Vec<String>) -> Verdict {
+    Verdict::Malformed(failures)
 }
 
 const CALL_WAIT: Duration = super::run::UNTIL_WAIT;
 
 fn invoke(
-    provider: &Arc<extensions::LuaProvider>,
-    pair: &mut extensions::CredentialPair,
+    provider: &Arc<crate::LuaProvider>,
+    pair: &mut crate::CredentialPair,
     home: &Path,
     ready: Ready,
 ) -> Result<Value, Value> {
@@ -274,7 +281,7 @@ fn invoke(
     }
 }
 
-fn extension_error(error: extensions::Error) -> Value {
+fn extension_error(error: crate::Error) -> Value {
     json!({"code": error.code(), "message": error.to_string()})
 }
 
@@ -329,7 +336,7 @@ fn compare_credential(expected: &Value, actual: &Value, exact: bool) -> Result<(
     if exact && !same_json_shape(expected, actual) {
         return Err("stored value differs from the expected whole value".to_owned());
     }
-    extensions::json_matches(expected, actual)
+    crate::json_matches(expected, actual)
 }
 
 fn same_json_shape(expected: &Value, actual: &Value) -> bool {
@@ -351,7 +358,7 @@ fn same_json_shape(expected: &Value, actual: &Value) -> bool {
 }
 
 struct CaseBrowser(bool);
-impl extensions::Browser for CaseBrowser {
+impl crate::Browser for CaseBrowser {
     fn open(&self, _: &str) {}
     fn show(&self, _: &str, _: &str) {}
     fn attended(&self) -> bool {
@@ -364,18 +371,18 @@ impl extensions::Browser for CaseBrowser {
 /// provider name can differ from its own name, and the case runs inside
 /// the package under test (`docs/testing.md`, "Testing an extension").
 fn provider_extension(
-    installed: &[extensions::Installed],
+    installed: &[crate::Installed],
     provider: &str,
     home: &Path,
     clock: &Arc<dyn Clock>,
-    host: &Arc<extensions::HostScript>,
+    host: &Arc<crate::HostScript>,
     attended: bool,
-) -> Option<Arc<extensions::LuaExtension>> {
-    let extension_for = |package: &extensions::Installed| {
+) -> Option<Arc<crate::LuaExtension>> {
+    let extension_for = |package: &crate::Installed| {
         let dir = config::extensions_dir(home).join(config::dir_name(&package.name));
-        let deps = extensions::dep_dirs(home, &dir, &package.depends, false);
+        let deps = crate::dep_dirs(home, &dir, &package.depends, false);
         Arc::new(
-            extensions::LuaExtension::new(
+            crate::LuaExtension::new(
                 package.name.clone(),
                 dir,
                 home.to_path_buf(),
@@ -409,14 +416,14 @@ fn provider_extension(
 #[derive(Debug)]
 enum Ready {
     Cost(CostArgs),
-    Models(extensions::ModelsArg),
+    Models(crate::ModelsArg),
     Quota {
         label: Option<String>,
         key: Option<String>,
     },
     Credential(Option<String>),
     Login {
-        method: extensions::LoginMethod,
+        method: crate::LoginMethod,
         label: Option<String>,
     },
     Sign {
@@ -473,8 +480,8 @@ fn credential_args(call: &Call) -> Result<Ready, String> {
                 return Err("call.arg: login takes method and label".to_owned());
             }
             let method = match map.get("method").and_then(Value::as_str) {
-                Some("browser") => extensions::LoginMethod::Browser,
-                Some("device") => extensions::LoginMethod::Device,
+                Some("browser") => crate::LoginMethod::Browser,
+                Some("device") => crate::LoginMethod::Device,
                 _ => return Err("call.arg.method: expected browser or device".to_owned()),
             };
             Ok(Ready::Login { method, label })
@@ -521,7 +528,7 @@ fn credential_args(call: &Call) -> Result<Ready, String> {
 /// `models` takes an object with only an optional `key` and
 /// `placeholders`, as `quota` takes `key`: what `models()` receives. A
 /// null key is no key; `placeholders` maps each name to its host.
-fn models_args(value: &Value) -> Result<extensions::ModelsArg, String> {
+fn models_args(value: &Value) -> Result<crate::ModelsArg, String> {
     let map = value
         .as_object()
         .ok_or("call.arg: models expects an object")?;
@@ -552,7 +559,7 @@ fn models_args(value: &Value) -> Result<extensions::ModelsArg, String> {
             return Err("call.arg.placeholders: expected an object of strings".to_owned());
         }
     };
-    Ok(extensions::ModelsArg { key, placeholders })
+    Ok(crate::ModelsArg { key, placeholders })
 }
 
 /// `quota` takes an object with only an optional `label` and `key`, as
@@ -617,11 +624,11 @@ fn cost_args(value: &Value) -> Result<CostArgs, String> {
 /// Compares a provider result against the call case's one expected outcome.
 fn compare_result(outcome: &CallOutcome, actual: Result<Value, Value>) -> Vec<String> {
     match (outcome, actual) {
-        (CallOutcome::Returns(expected), Ok(actual)) => extensions::json_matches(expected, &actual)
+        (CallOutcome::Returns(expected), Ok(actual)) => crate::json_matches(expected, &actual)
             .err()
             .map(|reason| vec![format!("returns: {reason}")])
             .unwrap_or_default(),
-        (CallOutcome::Error(expected), Err(actual)) => extensions::json_matches(expected, &actual)
+        (CallOutcome::Error(expected), Err(actual)) => crate::json_matches(expected, &actual)
             .err()
             .map(|reason| vec![format!("error.{reason}")])
             .unwrap_or_default(),
