@@ -348,7 +348,7 @@ fn an_animated_notice_uses_its_still_form_without_an_animation_wake() {
     crate::view::render(&app, area, &mut buf, None);
     // The notice uses frame 0, but its animation does not contribute a
     // wake. Any wake belongs to the notice's existing fade behavior.
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2979: notices draw frame 0 once.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2983: notices draw frame 0 once.
     assert_ne!(
         app.take_wake(),
         origin.checked_add(Duration::from_millis(500))

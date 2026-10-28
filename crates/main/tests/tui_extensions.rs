@@ -319,7 +319,7 @@ fn reduced_motion_holds_the_animated_still_frame() {
         None,
     );
     let mut run = turn(&setup);
-    // docs/tui.md:2970: under reduced motion the terminal draws frame 0
+    // docs/tui.md:2974: under reduced motion the terminal draws frame 0
     // once and makes no animation calls.
     run.wait_screen("animated still frame", |grid| {
         grid.contents.contains("ANIM-FRAME-0")
@@ -365,7 +365,7 @@ fn idle_terminal_with_no_animation_writes_no_bytes() {
         ),
         "the idle pause ran its full interval"
     );
-    // docs/tui.md:3028: with no turn, delegate or job running, there is no
+    // docs/tui.md:3032: with no turn, delegate or job running, there is no
     // timer: no frame, no byte written.
     assert_eq!(run.output().len(), before, "the idle terminal wrote bytes");
     quit(run);

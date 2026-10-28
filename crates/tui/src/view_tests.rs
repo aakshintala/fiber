@@ -2150,10 +2150,10 @@ fn an_offscreen_item_never_advances_or_asks() {
     assert!(!body.contains("anim"), "{body}");
     // At most the initial still render: the item drew once for the
     // draw, was never marked, and asks for no wake.
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     assert_eq!(app.take_wake(), None);
     paint_conversation(&app, later(t0, 500), height);
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2964: calls follow paint in the previous frame.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2968: calls follow paint in the previous frame.
     assert_eq!(app.take_wake(), None);
 }
 
@@ -2166,7 +2166,7 @@ fn a_partially_painted_item_stays_active_with_dues() {
     let body = text(&full);
     assert!(body.contains("anim0-0"), "{body}");
     assert!(body.contains("anim0-2"), "{body}");
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     assert_eq!(
         app.take_wake(),
         Some(later(t0, 500)),
@@ -2188,7 +2188,7 @@ fn a_partially_painted_item_stays_active_with_dues() {
     assert!(!body.contains("anim1-0"), "{body}");
     assert!(body.contains("anim1-1"), "{body}");
     assert!(body.contains("anim1-2"), "{body}");
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2964: calls follow paint in the previous frame.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2968: calls follow paint in the previous frame.
     assert_eq!(app.take_wake(), Some(later(t1, 500)));
 }
 
@@ -2201,21 +2201,21 @@ fn a_changed_frame_line_count_recounts_before_the_corrective_paint() {
     let before = app.scroll().1;
     let first = paint_conversation(&app, t0, 40);
     assert!(text(&first).contains("anim0-0"));
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     assert_eq!(app.take_wake(), Some(later(t0, 500)));
 
     let t1 = later(t0, 500);
     app.set_now(t1, wall + 500);
     let second = paint_conversation(&app, t1, 40);
     assert!(text(&second).contains("anim1-1"));
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2958: the renderer is called again when the frame advances.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2962: the renderer is called again when the frame advances.
     // The paint changed the page's line count. The immediate correction
     // is earlier than the next animation due.
     assert_eq!(app.take_wake(), Some(t1));
 
     app.set_now(t1, wall + 500);
     assert_eq!(app.scroll().1, before + 1);
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2958: the renderer is called again when the frame advances.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2962: the renderer is called again when the frame advances.
 }
 
 #[test]
@@ -2241,7 +2241,7 @@ fn a_scrolled_off_item_resumes_without_restarting() {
     let away = paint_conversation(&app, t1, height);
     let body = text(&away);
     assert!(!body.contains("anim"), "{body}");
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2966: one scroll-off call, then resume at the stored frame.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
     assert_eq!(app.take_wake(), None);
     // Back on screen: hits its stored frame with no recall, and the
     // next due tick continues the counter instead of restarting it.
@@ -2249,13 +2249,13 @@ fn a_scrolled_off_item_resumes_without_restarting() {
     let back = paint_conversation(&app, t2, 40);
     let body = text(&back);
     assert!(body.contains("anim1-0"), "{body}");
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2966: one scroll-off call, then resume at the stored frame.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
     assert_eq!(app.take_wake(), Some(later(t1, 500)));
     let t3 = later(t0, 1500);
     let onward = paint_conversation(&app, t3, 40);
     let body = text(&onward);
     assert!(body.contains("anim2-0"), "{body}");
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1, 2]); // docs/tui.md:2966: one scroll-off call, then resume at the stored frame.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1, 2]); // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
 }
 
 #[test]
@@ -2269,7 +2269,7 @@ fn a_swapped_view_suppresses_calls_until_it_closes() {
     let _ = render(&app, area, &mut full, None);
     let body = text(&full);
     assert!(body.contains("anim0-0"), "{body}");
-    // docs/tui.md:2970: frame 0 is the still form.
+    // docs/tui.md:2974: frame 0 is the still form.
     assert_eq!(fake.frames.borrow().clone(), vec![0]);
     assert_eq!(app.take_wake(), Some(later(t0, 500)));
     // A swapped view hides the conversation: nothing paints, so no call
@@ -2282,7 +2282,7 @@ fn a_swapped_view_suppresses_calls_until_it_closes() {
         let _ = render(&app, area, &mut hidden, None);
         let body = text(&hidden);
         assert!(!body.contains("anim"), "{body}");
-        // docs/tui.md:2967: a swapped view that hides the conversation
+        // docs/tui.md:2971: a swapped view that hides the conversation
         // counts as an unpainted frame.
         assert_eq!(fake.frames.borrow().clone(), vec![0]);
         assert_eq!(app.take_wake(), None);
@@ -2297,7 +2297,7 @@ fn a_swapped_view_suppresses_calls_until_it_closes() {
     let _ = render(&app, area, &mut back, None);
     let body = text(&back);
     assert!(body.contains("anim0-0"), "{body}");
-    // docs/tui.md:2968: the item resumes at its stored frame when the
+    // docs/tui.md:2972: the item resumes at its stored frame when the
     // conversation returns.
     assert_eq!(fake.frames.borrow().clone(), vec![0]);
     // The stored paint changes nothing: the due still names the last tick.
@@ -2308,7 +2308,7 @@ fn a_swapped_view_suppresses_calls_until_it_closes() {
     let _ = render(&app, area, &mut onward, None);
     let body = text(&onward);
     assert!(body.contains("anim1-0"), "{body}");
-    // docs/tui.md:2966: one scroll-off call, then resume at the stored frame.
+    // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
     assert_eq!(fake.frames.borrow().clone(), vec![0, 1]);
 }
 

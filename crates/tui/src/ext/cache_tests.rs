@@ -1112,7 +1112,7 @@ fn an_animated_paint_starts_at_frame_zero() {
     let t0 = origin();
     cache.begin_anim_frame(Some(t0), false);
     let fitted = paint(&cache, &row, 20, &answers).expect("a painted line");
-    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     assert!(text_of(&fitted).starts_with("f0"), "{fitted:?}");
     assert!(fitted.first().expect("one line").anim.is_some());
     // A repaint in the same frame hits: no call before the paint and
@@ -1121,7 +1121,7 @@ fn an_animated_paint_starts_at_frame_zero() {
     assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
     cache.begin_anim_frame(Some(t0), false);
     let again = paint(&cache, &row, 20, &answers).expect("a painted line");
-    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     assert_eq!(text_of(&again), text_of(&fitted));
 }
 
@@ -1140,14 +1140,14 @@ fn an_animated_item_advances_only_when_due_and_painted() {
     // Before the interval the paint hits its stored frame: no call.
     cache.begin_anim_frame(Some(at(t0, 100)), false);
     let early = paint(&cache, &row, 20, &answers).expect("stored frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     assert_eq!(text_of(&early), text_of(&first));
     cache.mark_painted(&[tag_of(&early)]);
     assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
     // At the interval the paint advances: frame 1, last moves.
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     let second = paint(&cache, &row, 20, &answers).expect("frame 1");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2964: calls follow paint in the previous frame.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2968: calls follow paint in the previous frame.
     assert!(text_of(&second).starts_with("f1"), "{second:?}");
     cache.mark_painted(&[tag_of(&second)]);
     assert_eq!(cache.anim_dues(), vec![(at(t0, 500), ANIM_INTERVAL)]);
@@ -1167,7 +1167,7 @@ fn an_unmarked_draw_never_advances_or_schedules() {
     assert!(cache.anim_dues().is_empty());
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     let still = paint(&cache, &row, 20, &answers).expect("stored frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     assert!(text_of(&still).starts_with("f0"), "{still:?}");
     assert!(cache.anim_dues().is_empty());
 }
@@ -1193,7 +1193,7 @@ fn an_absent_item_holds_no_due_then_resumes_without_restarting() {
     // counter resumes instead of restarting.
     cache.begin_anim_frame(Some(at(t0, 1500)), false);
     let back = paint(&cache, &row, 20, &answers).expect("stored frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     assert_eq!(text_of(&back), text_of(&first));
     cache.mark_painted(&[tag_of(&back)]);
     // The stored paint changes nothing: the due still names the last
@@ -1201,7 +1201,7 @@ fn an_absent_item_holds_no_due_then_resumes_without_restarting() {
     assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
     cache.begin_anim_frame(Some(at(t0, 2000)), false);
     let second = paint(&cache, &row, 20, &answers).expect("frame 1");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2966: one scroll-off call, then resume at the stored frame.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
     assert!(text_of(&second).starts_with("f1"), "{second:?}");
 }
 
@@ -1216,7 +1216,7 @@ fn a_stopped_item_hits_stored_lines_until_its_input_changes() {
     let t0 = origin();
     cache.begin_anim_frame(Some(t0), false);
     let first = paint(&cache, &row, 20, &answers).expect("the stopping draw");
-    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     // Stopped: repaints hit with no recall, and ask for no wake.
     for millis in [500, 1000, 1500] {
         cache.begin_anim_frame(Some(at(t0, millis)), false);
@@ -1225,12 +1225,12 @@ fn a_stopped_item_hits_stored_lines_until_its_input_changes() {
         cache.mark_painted(&[tag_of(&still)]);
         assert!(cache.anim_dues().is_empty(), "stopped at {millis} ms");
     }
-    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2972: `animate = false` stays stopped until the input changes.
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2976: `animate = false` stays stopped until the input changes.
     // A changed input starts a fresh item at frame 0.
     let other = input("shell", "second", &arguments);
     cache.begin_anim_frame(Some(at(t0, 2000)), false);
     paint(&cache, &other, 20, &answers).expect("a fresh frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2972: `animate = false` stays stopped until the input changes.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2976: `animate = false` stays stopped until the input changes.
 }
 
 #[test]
@@ -1246,15 +1246,15 @@ fn a_stopped_item_is_not_recalled_for_a_width_change_alone() {
     paint(&cache, &row, 20, &answers).expect("the stopping draw");
     // The width change itself recalls nothing.
     cache.drop_entries();
-    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     // On demand it re-renders at its stored frame without advancing.
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     let narrow = paint(&cache, &row, 24, &answers).expect("stored frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2973: a width change redraws a stopped item at its stored frame.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2977: a width change redraws a stopped item at its stored frame.
     assert!(text_of(&narrow).starts_with("f0"), "{narrow:?}");
     cache.begin_anim_frame(Some(at(t0, 1000)), false);
     paint(&cache, &row, 24, &answers).expect("stored lines");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2973: a width change redraws a stopped item at its stored frame.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2977: a width change redraws a stopped item at its stored frame.
 }
 
 #[test]
@@ -1271,7 +1271,7 @@ fn a_stopped_item_redraws_at_its_stored_frame_after_advancing() {
     assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     let second = paint(&cache, &row, 20, &answers).expect("frame 1");
-    // docs/tui.md:2958: the terminal calls the renderer again when the
+    // docs/tui.md:2962: the terminal calls the renderer again when the
     // frame advances, with the count in its input.
     assert_eq!(answers.frames.borrow().clone(), vec![0, 1]);
     cache.mark_painted(&[tag_of(&second)]);
@@ -1280,18 +1280,18 @@ fn a_stopped_item_redraws_at_its_stored_frame_after_advancing() {
     answers.stop.set(true);
     cache.begin_anim_frame(Some(at(t0, 1000)), false);
     let third = paint(&cache, &row, 20, &answers).expect("frame 2 stops");
-    // docs/tui.md:2972: a renderer that returns `animate = false` stays
+    // docs/tui.md:2976: a renderer that returns `animate = false` stays
     // stopped until its input changes.
     assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 2]);
     assert!(text_of(&third).starts_with("f2"), "{third:?}");
     cache.mark_painted(&[tag_of(&third)]);
     assert!(cache.anim_dues().is_empty());
     // A width change re-renders at the stored frame 2, not at frame 0.
-    // docs/tui.md:2973: a width change redraws a stopped item once at its
+    // docs/tui.md:2977: a width change redraws a stopped item once at its
     // stored frame.
     cache.begin_anim_frame(Some(at(t0, 1500)), false);
     let narrow = paint(&cache, &row, 24, &answers).expect("stored frame 2");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 2, 2]); // docs/tui.md:2973: a width change redraws a stopped item at its stored frame.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 2, 2]); // docs/tui.md:2977: a width change redraws a stopped item at its stored frame.
     assert!(text_of(&narrow).starts_with("f2"), "{narrow:?}");
 }
 
@@ -1310,14 +1310,14 @@ fn a_width_change_recalls_at_the_stored_frame_then_advances() {
     // markers and due unchanged.
     cache.begin_anim_frame(Some(at(t0, 100)), false);
     let recalled = paint(&cache, &row, 24, &answers).expect("stored frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2958: a width change alone advances nothing; the stored frame draws again.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2962: a width change alone advances nothing; the stored frame draws again.
     assert!(text_of(&recalled).starts_with("f0"), "{recalled:?}");
     cache.mark_painted(&[tag_of(&recalled)]);
     assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
     // At the interval the recalled item advances.
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     let second = paint(&cache, &row, 24, &answers).expect("frame 1");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1]); // docs/tui.md:2958: a width change alone advances nothing; the stored frame draws again.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1]); // docs/tui.md:2962: a width change alone advances nothing; the stored frame draws again.
     assert!(text_of(&second).starts_with("f1"), "{second:?}");
 }
 
@@ -1332,7 +1332,7 @@ fn a_new_frame_evicts_older_entries_at_every_width() {
     cache.begin_anim_frame(Some(t0), false);
     let wide = paint(&cache, &row, 20, &answers).expect("frame 0");
     let narrow = paint(&cache, &row, 24, &answers).expect("frame 0 again");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2974: frame 0 is the still form.
     cache.mark_painted(&[tag_of(&wide), tag_of(&narrow)]);
     assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
     assert!(
@@ -1344,7 +1344,7 @@ fn a_new_frame_evicts_older_entries_at_every_width() {
     // entry at every width: only the latest frame is kept.
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     paint(&cache, &row, 20, &answers).expect("frame 1");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1]); // docs/tui.md:2958: the renderer is called again when the frame advances.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1]); // docs/tui.md:2962: the renderer is called again when the frame advances.
     assert!(
         cache
             .animated_lines(page(0), "ledger_row", "test", None, &row, 20)
@@ -1431,12 +1431,12 @@ fn drop_entries_preserves_markers() {
     // and advances to frame 2 on schedule.
     cache.begin_anim_frame(Some(at(t0, 600)), false);
     let recalled = paint(&cache, &row, 20, &answers).expect("stored frame 1");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 1]); // docs/tui.md:2958: the renderer is called again when the frame advances.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 1]); // docs/tui.md:2962: the renderer is called again when the frame advances.
     assert!(text_of(&recalled).starts_with("f1"), "{recalled:?}");
     cache.mark_painted(&[tag_of(&recalled)]);
     cache.begin_anim_frame(Some(at(t0, 1000)), false);
     let third = paint(&cache, &row, 20, &answers).expect("frame 2");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 1, 2]); // docs/tui.md:2958: the renderer is called again when the frame advances.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 1, 2]); // docs/tui.md:2962: the renderer is called again when the frame advances.
     assert!(text_of(&third).starts_with("f2"), "{third:?}");
 }
 
@@ -1464,7 +1464,7 @@ fn clear_drops_animation_state() {
     // Cleared state restarts at frame 0.
     cache.begin_anim_frame(Some(at(t0, 1000)), false);
     let fresh = paint(&cache, &row, 20, &answers).expect("a fresh frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 0]); // docs/tui.md:2970: a fresh item starts at frame 0.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 0]); // docs/tui.md:2974: a fresh item starts at frame 0.
     assert!(text_of(&fresh).starts_with("f0"), "{fresh:?}");
 }
 
@@ -1492,7 +1492,7 @@ fn a_dropped_page_restarts_its_counter_at_zero() {
     // page.
     cache.begin_anim_frame(Some(at(t0, 1000)), false);
     let fresh = paint(&cache, &row, 20, &answers).expect("a fresh frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 0]); // docs/tui.md:2974: a dropped page starts again at frame 0.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1, 0]); // docs/tui.md:2978: a dropped page starts again at frame 0.
     assert!(text_of(&fresh).starts_with("f0"), "{fresh:?}");
 }
 
@@ -1511,13 +1511,13 @@ fn reduced_motion_stills_at_zero_and_reactivates_at_one() {
     // Reduced motion stills at frame 0 at the next paint, once.
     cache.begin_anim_frame(Some(at(t0, 500)), true);
     let still = paint(&cache, &row, 20, &answers).expect("the still form");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2970: reduced motion draws frame 0 once, then resumes at frame 1.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2974: reduced motion draws frame 0 once, then resumes at frame 1.
     assert!(text_of(&still).starts_with("f0"), "{still:?}");
     cache.mark_painted(&[tag_of(&still)]);
     assert!(cache.anim_dues().is_empty(), "a still asks for no wake");
     cache.begin_anim_frame(Some(at(t0, 1000)), true);
     let again = paint(&cache, &row, 20, &answers).expect("stored still");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2970: reduced motion draws frame 0 once, then resumes at frame 1.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2974: reduced motion draws frame 0 once, then resumes at frame 1.
     assert_eq!(text_of(&again), text_of(&still));
     cache.mark_painted(&[tag_of(&again)]);
     assert!(cache.anim_dues().is_empty());
@@ -1525,14 +1525,14 @@ fn reduced_motion_stills_at_zero_and_reactivates_at_one() {
     // established the counter, which resumes rather than resetting.
     cache.begin_anim_frame(Some(at(t0, 1500)), false);
     let second = paint(&cache, &row, 20, &answers).expect("frame 1");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1]); // docs/tui.md:2970: reduced motion draws frame 0 once, then resumes at frame 1.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1]); // docs/tui.md:2974: reduced motion draws frame 0 once, then resumes at frame 1.
     assert!(text_of(&second).starts_with("f1"), "{second:?}");
     cache.mark_painted(&[tag_of(&second)]);
     assert_eq!(cache.anim_dues(), vec![(at(t0, 1500), ANIM_INTERVAL)]);
     // Reduced on again stills at frame 0 at the next paint.
     cache.begin_anim_frame(Some(at(t0, 2000)), true);
     let restilled = paint(&cache, &row, 20, &answers).expect("the still form");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1, 0]); // docs/tui.md:2970: reduced motion draws frame 0 once, then resumes at frame 1.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 1, 0]); // docs/tui.md:2974: reduced motion draws frame 0 once, then resumes at frame 1.
     assert!(text_of(&restilled).starts_with("f0"), "{restilled:?}");
     cache.mark_painted(&[tag_of(&restilled)]);
     assert!(cache.anim_dues().is_empty());
@@ -1549,13 +1549,13 @@ fn flat_does_not_still_or_restart_animation() {
     // Flat affects row fitting, not the single reduced-motion source.
     cache.begin_anim_frame(Some(t0), false);
     let first = paint(&cache, &row, 20, &answers).expect("frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     cache.mark_painted(&[tag_of(&first)]);
     assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
 
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     let second = paint(&cache, &row, 20, &answers).expect("frame 1 after flat");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2958: the schedule advances on paint and due alone.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2962: the schedule advances on paint and due alone.
     assert!(text_of(&second).starts_with("f1"), "{second:?}");
 }
 
@@ -1603,13 +1603,13 @@ fn an_interval_below_the_tick_floor_fires_at_the_floor() {
         cache.anim_dues();
     };
     painted(&cache, t0);
-    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2970: frame 0 is the still form.
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
     // At 80 ms the raw interval is not due: the floor holds still.
     painted(&cache, at(t0, 80));
-    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2961: intervals below 120 ms use that floor.
+    assert_eq!(answers.frames.borrow().clone(), vec![0]); // docs/tui.md:2965: intervals below 120 ms use that floor.
     // At 120 ms the floor is due: the item advances.
     painted(&cache, at(t0, 120));
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2961: intervals below 120 ms use that floor.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2965: intervals below 120 ms use that floor.
 }
 
 #[test]
@@ -1623,12 +1623,12 @@ fn a_renderer_failure_memoizes_and_stops_the_animation() {
     let t0 = origin();
     cache.begin_anim_frame(Some(t0), false);
     assert!(paint(&cache, &row, 20, &answers).is_none());
-    assert_eq!(answers.frames.borrow().len(), 1); // docs/tui.md:2985: a failure stops calls until the input changes.
+    assert_eq!(answers.frames.borrow().len(), 1); // docs/tui.md:2989: a failure stops calls until the input changes.
     // The failure is cached against the input: no call until it
     // changes, and no wake for a stopped item.
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     assert!(paint(&cache, &row, 20, &answers).is_none());
-    assert_eq!(answers.frames.borrow().len(), 1); // docs/tui.md:2985: a failure stops calls until the input changes.
+    assert_eq!(answers.frames.borrow().len(), 1); // docs/tui.md:2989: a failure stops calls until the input changes.
     assert!(cache.anim_dues().is_empty());
     let listed = cache.take_failures();
     assert_eq!(listed.len(), 1);
@@ -1638,7 +1638,7 @@ fn a_renderer_failure_memoizes_and_stops_the_animation() {
     let other = input("shell", "second", &arguments);
     cache.begin_anim_frame(Some(at(t0, 1000)), false);
     paint(&cache, &other, 20, &answers).expect("a fresh frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2985: a failure stops calls until the input changes.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2989: a failure stops calls until the input changes.
 }
 
 #[test]
@@ -1736,7 +1736,7 @@ fn closed_draws_cache_the_still_or_stored_frame_without_animation_state() {
     let first = closed().expect("frame 0");
     let second = closed().expect("cached frame 0");
     let old_width = paint(&cache, &row, 24, &answers).expect("frame 0 at new width");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2975: closed draws cache frame 0 without changing animation state.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0]); // docs/tui.md:2979: closed draws cache frame 0 without changing animation state.
     assert_eq!(text_of(&first), text_of(&second));
     assert!(text_of(&old_width).starts_with("f0"), "{old_width:?}");
     assert!(cache.anim_dues().is_empty());
@@ -1745,12 +1745,12 @@ fn closed_draws_cache_the_still_or_stored_frame_without_animation_state() {
     let t0 = origin();
     cache.begin_anim_frame(Some(t0), false);
     let fresh = paint(&cache, &row, 20, &answers).expect("a fresh frame 0");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0]); // docs/tui.md:2975: closed draws cache frame 0 without changing animation state.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0]); // docs/tui.md:2979: closed draws cache frame 0 without changing animation state.
     cache.mark_painted(&[tag_of(&fresh)]);
     assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
     cache.begin_anim_frame(Some(at(t0, 500)), false);
     let advanced = paint(&cache, &row, 20, &answers).expect("frame 1");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1]); // docs/tui.md:2975: closed draws cache frame 0 without changing animation state.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1]); // docs/tui.md:2979: closed draws cache frame 0 without changing animation state.
     cache.mark_painted(&[tag_of(&advanced)]);
     cache.anim_dues();
 
@@ -1758,10 +1758,10 @@ fn closed_draws_cache_the_still_or_stored_frame_without_animation_state() {
     // width that was cached before the item began animating.
     let stored = closed().expect("stored frame 1");
     assert!(text_of(&stored).starts_with("f1"), "{stored:?}");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1]); // docs/tui.md:2975: closed draws cache frame 0 without changing animation state.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1]); // docs/tui.md:2979: closed draws cache frame 0 without changing animation state.
     let other = paint(&cache, &row, 24, &answers).expect("stored frame 1 at new width");
     assert!(text_of(&other).starts_with("f1"), "{other:?}");
-    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1, 1]); // docs/tui.md:2975: closed draws cache frame 0 without changing animation state.
+    assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1, 1]); // docs/tui.md:2979: closed draws cache frame 0 without changing animation state.
 }
 
 /// A notice seam holding `fake` on page 0.
@@ -1820,7 +1820,7 @@ fn an_animated_notice_draws_its_cached_frame_zero_still() {
     let first = bound
         .notice_lines("io_failed", "x", 20)
         .expect("frame-0 still");
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2979: notices draw frame 0 once.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2983: notices draw frame 0 once.
     assert_eq!(first.len(), 1);
     // A later paint uses the same ordinary input-and-width cache entry;
     // the notice does not create schedule state or request a timer.
@@ -1829,6 +1829,6 @@ fn an_animated_notice_draws_its_cached_frame_zero_still() {
         .notice_lines("io_failed", "x", 20)
         .expect("cached still");
     assert_eq!(text_of(&first), text_of(&second));
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2979: notices draw frame 0 once.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2983: notices draw frame 0 once.
     assert!(bound.cache.anim_dues().is_empty());
 }
