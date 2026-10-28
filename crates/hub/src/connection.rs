@@ -121,6 +121,11 @@ pub(crate) struct Hub {
     /// and before the pending command is written.
     #[cfg(test)]
     pub(crate) after_connect: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot hook in `route`'s resumed-session retry,
+    /// after the retry connects and before its command is written. A test
+    /// shuts the retry stream here so the retry write fails on every run.
+    #[cfg(test)]
+    pub(crate) after_resume_connect: AfterResumeConnectHook,
     /// Tests only: runs handing a queued command over, or clearing it.
     #[cfg(test)]
     pub(crate) on_pass_on: PassOnHook,
@@ -263,6 +268,8 @@ impl Hub {
             before_open: Mutex::new(None),
             #[cfg(test)]
             after_connect: Mutex::new(None),
+            #[cfg(test)]
+            after_resume_connect: Mutex::new(None),
             #[cfg(test)]
             on_pass_on: Mutex::new(None),
             #[cfg(test)]
@@ -562,6 +569,12 @@ type ReplayFilterHook = Mutex<Option<Box<dyn FnOnce(&[u8], bool) + Send>>>;
 /// Tests only: a relay thread's handover hook.
 #[cfg(test)]
 type PassOnHook = Mutex<Option<Box<dyn FnOnce(crate::retire::PassOn) + Send>>>;
+
+/// Tests only: a one-shot hook in `route`'s resumed-session retry, after
+/// the retry connects: the retry stream, shut down by the test so the
+/// retry write fails.
+#[cfg(test)]
+type AfterResumeConnectHook = Mutex<Option<Box<dyn FnOnce(&UnixStream) + Send>>>;
 /// What `poll_accept` decided for one accepted stream.
 pub(crate) enum Accept {
     /// Counted under the connection lock: serve it as `n`.

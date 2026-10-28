@@ -1235,11 +1235,20 @@ fn a_command_written_before_the_teardown_needs_no_resume() {
         .expect("the exiting process accepts the opener");
     release.send(()).unwrap_or(());
     // The socket stays open past the write: answer as a live session
-    // would, and hold it.
-    accepted.set_read_timeout(Some(DEADLINE)).unwrap();
-    let mut reader = BufReader::new(accepted.try_clone().unwrap());
-    let mut text = String::new();
-    reader.read_line(&mut text).unwrap();
+    // would, and hold it. The read blocks on its own thread; the test
+    // takes the command through one deadline (`docs/testing.md`, "Waits
+    // and timeouts").
+    let read_end = accepted.try_clone().unwrap();
+    let (command_tx, command_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut text = String::new();
+        let outcome = BufReader::new(read_end).read_line(&mut text).map(|_| text);
+        command_tx.send(outcome).unwrap_or(());
+    });
+    let text = Deadline::after(DEADLINE)
+        .recv(&command_rx)
+        .expect("the hub writes the command to the open socket")
+        .expect("the command line reads");
     let command: Value = serde_json::from_str(&text).unwrap();
     let id = command["id"].as_str().unwrap().to_owned();
     writeln!(
@@ -1298,6 +1307,67 @@ fn a_stale_write_with_no_session_to_resume_is_refused_with_the_resume_code() {
     assert!(
         starter.resumed().is_empty(),
         "no session started: the workspace is gone"
+    );
+}
+
+/// A retry whose resumed socket goes stale before the write is refused
+/// `closing`: the resumed session ended without answering, so the hub
+/// answers for it instead of leaving the command unanswered
+/// (`docs/invocation.md`, "Lifecycle"). The hook shuts the retry stream
+/// down, so the retry write fails on every run; without the refusal the
+/// client would wait past its deadline.
+#[test]
+fn a_retry_on_a_stale_resumed_socket_is_refused_closing() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    assert_exited_log_complete(&temp);
+    let exiting = exiting_socket(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    let (connected, release) = pause_between_connect_and_write(&hub);
+    // Shut the resumed session's socket down before the retry writes:
+    // the retry connects, then its write fails.
+    *crate::connection::lock(&hub.after_resume_connect) = Some(Box::new(|stream: &UnixStream| {
+        stream.shutdown(std::net::Shutdown::Both).unwrap_or(());
+    }));
+    client.send("c_1", "reply");
+    Deadline::after(DEADLINE)
+        .recv(&connected)
+        .expect("the opener connects to the exiting socket");
+    let accepted = Deadline::after(DEADLINE)
+        .recv(&exiting.accepted)
+        .expect("the exiting process accepts the opener");
+    // The full teardown lands before the first write: the write fails,
+    // so the hub resumes the exited session once and retries there.
+    drop(accepted);
+    release.send(()).unwrap_or(());
+    // The listener still accepts while the log ends in `fiber_exited`:
+    // the hub waits the exiting process out instead of answering.
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
+        "the hub waits out the exiting process"
+    );
+    assert!(starter.resumed().is_empty());
+    exiting.teardown.send(()).unwrap_or(());
+    Deadline::after(DEADLINE)
+        .recv(&exiting.torn_down)
+        .expect("the exiting socket is torn down");
+    temp.clock
+        .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
+    // The retry connected, then its write failed on the shut socket: the
+    // command is refused `closing`, never left unanswered.
+    let line = client.next("the refusal");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    assert_eq!(line["payload"]["code"], "closing", "{line}");
+    assert_eq!(starter.resumed().len(), 1, "one resume for the command");
+    assert!(
+        received(&starter).is_empty(),
+        "no command reached the resumed session"
     );
 }
 
