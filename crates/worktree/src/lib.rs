@@ -1,5 +1,6 @@
-//! Creates, inspects and removes the git worktrees sessions and delegates run in, by
-//! running the `git` program (`docs/architecture.md`).
+//! Creates, inspects and removes the git worktrees sessions and delegates run in,
+//! and resolves a launch directory to its project, by running the `git`
+//! program (`docs/architecture.md`).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -348,6 +349,8 @@ mod tests;
 
 mod create;
 mod list;
+mod project;
 
 pub use create::{Created, commits_beyond, create, recreate};
 pub use list::{Listed, list};
+pub use project::{Project, project, resolve_project};
