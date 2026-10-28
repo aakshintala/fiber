@@ -55,6 +55,7 @@ pub(crate) fn started() -> Event {
             effects: Vec::new(),
             reversible: true,
             paths: None,
+            confined: false,
         },
         arguments: None,
         changed_by: None,
@@ -91,6 +92,7 @@ pub(crate) fn standing_request(request_id: &str) -> Event {
             effects: vec![Effect::Executes],
             reversible: true,
             paths: None,
+            confined: false,
         },
         step: AskStep::StandingAsk {
             standing_rule: StandingRule {

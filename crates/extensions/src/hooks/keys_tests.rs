@@ -307,6 +307,7 @@ fn ask_full(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
                 effects: vec![Effect::Reads],
                 reversible: false,
                 paths: Some(vec!["/r/a".into()]),
+                confined: false,
             };
             session
                 .before_tool(&BeforeToolCall {
@@ -412,6 +413,7 @@ fn ask_plain(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
                 effects: Vec::new(),
                 reversible: false,
                 paths: None,
+                confined: false,
             };
             session
                 .before_tool(&BeforeToolCall {

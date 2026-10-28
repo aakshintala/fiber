@@ -42,7 +42,7 @@ impl App {
     /// attached one: stored as the Delegates card's row, and taken (true),
     /// so it never becomes a home row (`docs/tui.md`, "The panel":
     /// "Delegates are not on the rail"). The attached session's own
-    /// status, parented or not, folds as today.
+    /// status falls through to the normal fold, parented or not.
     pub(super) fn delegate_status(&mut self, envelope: &Envelope) -> bool {
         let parented = envelope
             .payload

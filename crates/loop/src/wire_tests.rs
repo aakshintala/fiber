@@ -66,6 +66,7 @@ impl Tool for ExecTool {
                 effects: vec![Effect::Executes],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: None,
             prefix: None,

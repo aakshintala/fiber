@@ -260,6 +260,23 @@ impl Conns {
         }
     }
 
+    /// Waits, up to `until`, for every live reader to finish the line it
+    /// is dispatching. A reader that is still dispatching when the grace
+    /// passes is cut `indeterminate` by the caller, so the bound is the
+    /// same `until` the owed wait used: no new duration, no restarted
+    /// clock. Parks on the `writers` condvar that [`Conns::finish`]
+    /// already notifies, and never joins a reader. The caller reaches this
+    /// method after quieting readers; with none unfinished, it returns at
+    /// once.
+    pub(super) fn wait_readers_finished(&self, clock: &dyn Clock, until: Instant) {
+        let mut state = lock(&self.state);
+        while clock.now() < until && state.live.iter().any(|(_, live)| !live.finished) {
+            // The guard is held into the condvar wait; `None` relocks.
+            state = support::clock::park(clock, Some(until), None, &self.writers, state, |_| false)
+                .unwrap_or_else(|| lock(&self.state));
+        }
+    }
+
     /// Waits until `until` for a connection's writer to finish, for
     /// [`Session::close`]: a writer blocked in `write` holds the close
     /// past the grace, and the cut past the flush margin.
