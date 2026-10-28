@@ -691,7 +691,8 @@ fn cascading_delete_waits_for_live_parent_exit_not_delegate_feed_row() {
         )])
     })
     .unwrap();
-    for (name, server) in [("pa", &server_parent)] {
+    {
+        let (name, server) = ("pa", &server_parent);
         let source = setup.root.path().join(format!("src-{name}"));
         let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
         manifest["providers"] = Value::Object(
