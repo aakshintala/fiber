@@ -571,6 +571,10 @@ impl<'de> Deserialize<'de> for Validate {
         struct ValidateVisitor;
         impl<'de> Visitor<'de> for ValidateVisitor {
             type Value = Validate;
+            // Exempt: serde_json never calls `expecting` through the
+            // `Option`-returning parse, so its text observes nothing and
+            // its mutants change no behaviour.
+            #[cfg_attr(false, mutants::skip)]
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("any value")
             }

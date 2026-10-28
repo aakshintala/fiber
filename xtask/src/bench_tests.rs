@@ -1845,22 +1845,31 @@ fn fold_incomparable_base_stays_advisory() {
 #[test]
 fn fold_rate_ceiling_must_parse() {
     // The bound reads from the ceiling cell like every other check: a
-    // non-finite cell fails the configuration instead of gating on it.
-    let out = judge_doc(
-        &doc_with(
-            "| Terminal attaching, fold per MiB of session log | 15 ms per MiB |",
-            "| Terminal attaching, fold per MiB of session log | 1e999 ms per MiB |",
-        ),
-        &head(),
-        Some(&base()),
-        Event::PullRequest,
-    );
-    assert!(
-        has(&out.failures, "xtask/src/bench/judge.rs"),
-        "{:?}",
-        out.failures
-    );
-    assert!(has(&out.failures, "rate ceiling"), "{:?}", out.failures);
+    // cell that is not a number, and a number so large it parses past
+    // finite, both fail the configuration instead of gating.
+    let huge = format!("{} ms per MiB", "9".repeat(400));
+    for cell in ["1e999 ms per MiB".to_owned(), huge] {
+        let out = judge_doc(
+            &doc_with(
+                "| Terminal attaching, fold per MiB of session log | 15 ms per MiB |",
+                &format!("| Terminal attaching, fold per MiB of session log | {cell} |"),
+            ),
+            &head(),
+            Some(&base()),
+            Event::PullRequest,
+        );
+        assert_eq!(out.failures.len(), 2, "{cell}: {:?}", out.failures);
+        assert!(
+            has(&out.failures, "xtask/src/bench/judge.rs"),
+            "{cell}: {:?}",
+            out.failures
+        );
+        assert!(
+            has(&out.failures, "rate ceiling"),
+            "{cell}: {:?}",
+            out.failures
+        );
+    }
 }
 
 #[test]
