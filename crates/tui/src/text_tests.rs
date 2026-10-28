@@ -1,8 +1,8 @@
 //! Tests for the text helpers.
 
 use super::{
-    char_width, controls_to_space, cut, cut_left, fit, paste_clean, printable, strip_controls,
-    to_u16, width,
+    char_width, controls_to_space, cut, cut_left, paste_clean, printable, strip_controls, to_u16,
+    width,
 };
 
 #[test]
@@ -94,25 +94,6 @@ fn cut_left_keeps_the_end_behind_an_ellipsis() {
     assert_eq!(cut_left("abc", 3), "abc");
     // A wide character that would cross the edge is left out.
     assert_eq!(cut_left("日本語", 4), "…語");
-}
-
-#[test]
-fn fit_fills_exactly_the_columns() {
-    assert_eq!(fit("ab", 5), "ab   ");
-    assert_eq!(fit("abcdefg", 5), "abcd…");
-    assert_eq!(fit("abcde", 5), "abcde");
-    assert_eq!(fit("abcdefg", 0), "");
-    assert_eq!(width(&fit(&"\u{3042}".repeat(10), 20)), 20);
-    assert_eq!(fit(&"\u{3042}".repeat(10), 20), "\u{3042}".repeat(10));
-    assert_eq!(
-        fit(&"\u{3042}".repeat(11), 20),
-        format!("{}… ", "\u{3042}".repeat(9))
-    );
-    assert_eq!(width(&fit(&"\u{3042}".repeat(11), 20)), 20);
-    let combining = "e\u{301}".repeat(20);
-    assert_eq!(width(&combining), 20);
-    assert_eq!(fit(&combining, 20), combining);
-    assert_eq!(width(&fit("\u{1F389}", 20)), 20);
 }
 
 #[test]
