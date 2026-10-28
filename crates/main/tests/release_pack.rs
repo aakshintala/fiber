@@ -2,7 +2,8 @@
 //! publishes" and "Cutting a release"): fixture trees pack into plain-ustar
 //! archives with beside-it `.sha256` files, and the draft-publish-last flow
 //! runs against the stubbed `gh` under `release_pack_fixture/bin`, so no
-//! request reaches the network. Every run carries the test's one deadline.
+//! request reaches the network. Each `Pack` run carries the test's one
+//! deadline; each `Release` run makes its own deadline for its wait alone.
 
 #![allow(
     clippy::unwrap_used,
@@ -19,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use fakes::ustar::sha256;
 use support::{Deadline, Output};
@@ -786,9 +788,9 @@ fn host_target() -> &'static str {
 }
 
 /// A fixture release served over loopback HTTP, installed with
-/// `scripts/install.sh` and driven with the installed binary, all under
-/// the test's one deadline. The addresses stay on loopback: no `git` and
-/// no network beyond the fixture take part.
+/// `scripts/install.sh` and driven with the installed binary, each wait
+/// under a deadline made for that wait alone. The addresses stay on
+/// loopback: no `git` and no network beyond the fixture take part.
 struct Release {
     setup: support::Setup,
     server: fakes::ProviderServer,
@@ -809,7 +811,10 @@ impl Release {
     }
 
     /// Runs `tool` with `args` and each of `env`, in its own process
-    /// group with stdio piped, and waits for it under the deadline.
+    /// group with stdio piped, and waits for it under a deadline made
+    /// for this wait alone. Each run awaits the last run's answer, so
+    /// the runs are separate waits: one shared deadline would sum every
+    /// run's time against a single budget.
     #[track_caller]
     fn run(&self, tool: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut command = Command::new(tool);
@@ -831,7 +836,7 @@ impl Release {
             .stderr(Stdio::piped());
         run_watched(
             &mut command,
-            self.setup.deadline,
+            Deadline::start(),
             &format!("{} to exit", tool.display()),
         )
     }
@@ -1067,6 +1072,24 @@ fn install_sh_serves_the_target_and_refuses_a_mismatch() {
         json.get("version").and_then(serde_json::Value::as_str),
         Some(VERSION)
     );
+}
+
+/// Each install waits under its own budget: with the shared setup budget
+/// spent the way suite load spends it, the target still installs.
+/// `docs/testing.md`, "Waits and timeouts": receives separated by an
+/// action whose answer the next one awaits are separate waits, and a
+/// wait's deadline is made once, before its first receive.
+#[test]
+fn installs_keep_their_own_wait_budget_when_the_shared_one_is_spent() {
+    let mut release = Release::serve();
+    // Suite load, deterministically: the shared setup budget holds
+    // nothing, so a wait on its remainder expires at once. The zero
+    // cleanup budget leaves the kill's reap unobserved, so the failure
+    // names the install.sh wait with the group still closing instead of
+    // the sighting's reaped line.
+    release.setup.deadline = Deadline::after(Duration::ZERO);
+    let good = release.install(&[("FIBER_VERSION", VERSION)]);
+    assert_eq!(good.code, Some(0), "{}", good.stderr);
 }
 
 #[test]
