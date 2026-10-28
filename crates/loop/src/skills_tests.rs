@@ -15,6 +15,7 @@ use contract::ErrorCode;
 use contract::events::{CommandInfo, SkillListed, SkillSource};
 use contract::shapes::ContentPart;
 use fakes::clock::FakeClock;
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 
 use super::{
     Cache, Found, commands, discover, discover_cached, entry, expand, listing, size_notice,
@@ -1248,22 +1249,28 @@ fn a_raced_skill_read_does_not_pin_the_torn_header() {
         .unwrap();
     let mut cache = Cache::default();
     let target = path.display().to_string();
-    // Pre-stat edge, read-return edge, hook-rewrite edge, post-stat edge:
-    // the read returns the torn bytes and the rewrite lands before the
-    // post-stat, so the post-stat is the final one.
-    crate::read_stat::arm(&target, {
-        let path = path.clone();
-        move || {
-            std::fs::write(&path, final_text).unwrap();
-            std::fs::File::options()
-                .write(true)
-                .open(&path)
-                .unwrap()
-                .set_modified(final_mtime)
-                .unwrap();
-        }
+    // Pre-stat edge, read-return edge, held hook edge, post-stat edge:
+    // the worker reads the torn bytes and parks; the test writes the
+    // final content before releasing it, so the post-stat is final.
+    let first = std::thread::scope(|scope| {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let waiter = scope.spawn(|| {
+            crate::read_stat::arm(&target, entered_tx, release_rx);
+            cached(&tree, &mut cache)
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the skill read reached its read edge");
+        std::fs::write(&path, final_text).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(final_mtime)
+            .unwrap();
+        let _sent = release_tx.send(());
+        waiter.join().expect("the hooked skill read ends")
     });
-    let first = cached(&tree, &mut cache);
     assert!(
         names(&first).is_empty(),
         "this turn serves the torn Invalid: {:?}",

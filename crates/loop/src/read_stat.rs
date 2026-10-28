@@ -7,24 +7,42 @@ use crate::changes::{Stat, stat_of};
 
 #[cfg(test)]
 thread_local! {
-    /// A rewrite the test runs at the helper's hook edge, bound to one
-    /// path: the race then happens on every run. Consumed only when the
-    /// site path equals its target, so neighbouring reads pass through.
-    /// Same-thread only; inert when unarmed and confined to test builds.
+    /// The held pause the test arms at the helper's hook edge, bound to
+    /// one path: the race then happens on every run. Consumed only when
+    /// the site path equals its target, so neighbouring reads pass
+    /// through. Thread-local: the worker thread running the hooked
+    /// operation arms it, so the test thread's waits never see it.
+    /// Inert when unarmed and confined to test builds.
     #[allow(
         clippy::type_complexity,
-        reason = "one test-only slot holding a target plus a rewrite; a named type would only rename it"
+        reason = "one test-only slot holding a target plus a held pause; a named type would only rename it"
     )]
     static HOOK: std::cell::RefCell<Option<(String, Box<dyn FnOnce()>)>> =
         std::cell::RefCell::new(None);
 }
 
-/// Arms the one-shot hook for `target`: the next helper call on that path
-/// runs `rewrite` at its hook edge, then clears the slot.
+/// Arms the one-shot held pause for `target`: the next helper call on that
+/// path signals `entered` at its hook edge and blocks on `release` until
+/// the test releases it, then clears the slot. Call inside the worker
+/// thread that runs the hooked operation: the slot is thread-local, so an
+/// arm on the test thread never reaches the worker. The test thread waits
+/// on `entered` with a `Deadline`, rewrites the file, then releases;
+/// dropping the release sender unblocks the worker too, so a test that
+/// fails still ends the wait.
 #[cfg(test)]
-pub(crate) fn arm(target: &str, rewrite: impl FnOnce() + 'static) {
+pub(crate) fn arm(
+    target: &str,
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+) {
     HOOK.with(|slot| {
-        *slot.borrow_mut() = Some((target.to_owned(), Box::new(rewrite)));
+        *slot.borrow_mut() = Some((
+            target.to_owned(),
+            Box::new(move || {
+                let _sent = entered.send(());
+                let _released = release.recv();
+            }),
+        ));
     });
 }
 
@@ -36,7 +54,10 @@ pub(crate) fn disarm() {
     });
 }
 
-/// Runs the armed rewrite when `path` equals its target, then clears it.
+/// Runs the armed held pause when `path` equals its target, then clears
+/// it: signals the test thread and blocks until the test releases it.
+/// Dropping the release sender unblocks the wait, so a failing test still
+/// ends it.
 #[cfg(test)]
 fn run_hook(path: &str) {
     let matched =

@@ -18,6 +18,7 @@ use contract::events::{DirectoryAdded, Event, InstructionReason, InstructionSent
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::{Envelope, Seq, SessionId};
 use fakes::clock::FakeClock;
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 
 use super::{State, apply, clean, unified_diff};
 use crate::opening;
@@ -2424,17 +2425,23 @@ fn a_raced_adopt_does_not_pin_the_torn_content() {
     write(&file, torn);
     set_mtime(&file, 1_000);
     let target = file.display().to_string();
-    // Pre-stat edge, read-return edge, hook-rewrite edge, post-stat edge:
-    // the adopt reads the torn bytes and the rewrite lands before the
-    // post-stat, so the post-stat is the final one.
-    crate::read_stat::arm(&target, {
-        let file = file.clone();
-        move || {
-            write(&file, final_text);
-            set_mtime(&file, 2_000);
-        }
+    // Pre-stat edge, read-return edge, held hook edge, post-stat edge:
+    // the worker reads the torn bytes and parks; the test rewrites to
+    // the final content before releasing it, so the post-stat is final.
+    let out = std::thread::scope(|scope| {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let waiter = scope.spawn(|| {
+            crate::read_stat::arm(&target, entered_tx, release_rx);
+            state.check(&*fake)
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the adopt reached its read edge");
+        write(&file, final_text);
+        set_mtime(&file, 2_000);
+        let _sent = release_tx.send(());
+        waiter.join().expect("the hooked adopt ends")
     });
-    let out = state.check(&*fake);
     assert_eq!(out.files.len(), 1);
     assert_eq!(out.files[0].reason, InstructionReason::Created);
     assert_eq!(out.files[0].content.as_deref(), Some(torn));
@@ -2472,17 +2479,23 @@ fn a_raced_call_completed_does_not_pin_the_torn_content() {
     write(&file, torn);
     set_mtime(&file, 1_000);
     let target = file.display().to_string();
-    // Pre-stat edge, read-return edge, hook-rewrite edge, post-stat edge:
-    // the re-read returns the torn bytes and the rewrite lands before
-    // the post-stat.
-    crate::read_stat::arm(&target, {
-        let file = file.clone();
-        move || {
-            write(&file, final_text);
-            set_mtime(&file, 2_000);
-        }
+    // Pre-stat edge, read-return edge, held hook edge, post-stat edge:
+    // the worker re-reads the torn bytes and parks; the test rewrites
+    // to the final content before releasing it.
+    let own = std::thread::scope(|scope| {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let waiter = scope.spawn(|| {
+            crate::read_stat::arm(&target, entered_tx, release_rx);
+            state.call_completed(&workspace, &declared(Some(&["AGENTS.md"])))
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the own edit reached its read edge");
+        write(&file, final_text);
+        set_mtime(&file, 2_000);
+        let _sent = release_tx.send(());
+        waiter.join().expect("the hooked own edit ends")
     });
-    let own = state.call_completed(&workspace, &declared(Some(&["AGENTS.md"])));
     assert_eq!(own.len(), 1);
     assert_eq!(own[0].content.as_deref(), Some(torn));
     for line in &own {
@@ -2520,17 +2533,23 @@ fn a_raced_take_queued_does_not_pin_the_torn_content() {
     let own = state.call_completed(&workspace, &declared(Some(&["sub/notes.txt"])));
     assert!(own.is_empty());
     let target = file.display().to_string();
-    // Pre-stat edge, read-return edge, hook-rewrite edge, post-stat edge:
-    // the flush re-reads the torn bytes and the rewrite lands before the
-    // post-stat.
-    crate::read_stat::arm(&target, {
-        let file = file.clone();
-        move || {
-            write(&file, final_text);
-            set_mtime(&file, 2_000);
-        }
+    // Pre-stat edge, read-return edge, held hook edge, post-stat edge:
+    // the worker flush re-reads the torn bytes and parks; the test
+    // rewrites to the final content before releasing it.
+    let queued = std::thread::scope(|scope| {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let waiter = scope.spawn(|| {
+            crate::read_stat::arm(&target, entered_tx, release_rx);
+            state.take_queued()
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the flush reached its read edge");
+        write(&file, final_text);
+        set_mtime(&file, 2_000);
+        let _sent = release_tx.send(());
+        waiter.join().expect("the hooked flush ends")
     });
-    let queued = state.take_queued();
     assert_eq!(queued.len(), 1);
     let Event::InstructionFile(line) = &queued[0] else {
         panic!("queued a subdirectory line");
@@ -2561,18 +2580,25 @@ fn a_rewrite_between_the_pre_stat_and_the_read_is_reported_at_the_next_check() {
     write(&file, "pre\n");
     set_mtime(&file, 1_000);
     let target = file.display().to_string();
-    // Pre-stat edge, hook-rewrite edge, read-return edge: the opening
-    // build stats the pre content, then reads the torn rewrite.
-    crate::read_stat::arm(&target, {
-        let file = file.clone();
-        move || {
-            write(&file, torn);
-            set_mtime(&file, 2_000);
-        }
-    });
+    // Pre-stat edge, held hook edge, read-return edge: the worker stats
+    // the pre content and parks; the test writes the torn rewrite before
+    // releasing it, so the opening reads the torn content.
     let fake = clock();
     let prompt = inputs(&home, &fake);
-    let collected = opening::collect(&prompt, &workspace);
+    let collected = std::thread::scope(|scope| {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let waiter = scope.spawn(|| {
+            crate::read_stat::arm(&target, entered_tx, release_rx);
+            opening::collect(&prompt, &workspace)
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the opening reached its stat edge");
+        write(&file, torn);
+        set_mtime(&file, 2_000);
+        let _sent = release_tx.send(());
+        waiter.join().expect("the hooked opening ends")
+    });
     assert!(
         collected
             .message
@@ -2616,19 +2642,26 @@ fn a_rewrite_between_the_section_pre_stat_and_read_is_reported_at_the_next_check
     write(&section, "pre\n");
     set_mtime(&section, 1_000);
     let target = section.display().to_string();
-    // Pre-stat edge, hook-rewrite edge, read-return edge through the
-    // section-file baseline.
-    crate::read_stat::arm(&target, {
-        let section = section.clone();
-        move || {
-            write(&section, torn);
-            set_mtime(&section, 2_000);
-        }
-    });
+    // Pre-stat edge, held hook edge, read-return edge through the
+    // section-file baseline: the worker stats pre and parks; the test
+    // writes the torn rewrite before releasing it.
     let fake = clock();
     let sections = vec![("ext".to_owned(), vec![section.clone()], None)];
     let prompt = sectioned_inputs(&home, &fake, sections);
-    let collected = opening::collect(&prompt, &workspace);
+    let collected = std::thread::scope(|scope| {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let waiter = scope.spawn(|| {
+            crate::read_stat::arm(&target, entered_tx, release_rx);
+            opening::collect(&prompt, &workspace)
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the section opening reached its stat edge");
+        write(&section, torn);
+        set_mtime(&section, 2_000);
+        let _sent = release_tx.send(());
+        waiter.join().expect("the hooked section opening ends")
+    });
     assert!(
         collected.message.extension_sections.iter().any(|sent| {
             sent.extension == "ext"
