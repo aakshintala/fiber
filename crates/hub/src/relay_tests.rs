@@ -2423,6 +2423,8 @@ fn the_relay_parses_each_session_line_once() {
         line(&format!(
             r#"{{"kind":"command_accepted","ts":1,"schema_version":1,"payload":{{"command_id":"c_rw","result":{{"new_session_id":"{NEXT}"}}}}}}"#
         )),
+        // A line the typed pass rejects still counts its one pass.
+        line(r#"{"kind":"command_accepted","ts":1,"payload":{"command_id":"#),
     ];
     // Every line is written, and the session half dropped, before the
     // relay starts reading, so the count never depends on its timing.
@@ -2499,8 +2501,8 @@ fn the_relay_parses_each_session_line_once() {
     join_within_deadline(thread);
     assert_eq!(
         Deadline::after(DEADLINE).recv(&count_rx).ok(),
-        Some(6),
-        "the relay parses each session line once"
+        Some(7),
+        "the relay parses each session line once, failed parses included"
     );
 }
 
@@ -3066,8 +3068,18 @@ fn parse_typed_takes_the_last_duplicate_key() {
     // Duplicate keys resolve last-wins, at the top level and inside the
     // nested `payload` and `result`: the replayed kind loses.
     typed_parity(b"{\"kind\": \"session_status\", \"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\"}}\n");
+    typed_parity(b"{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c_old\"}, \"payload\": {\"command_id\": \"c\"}}\n");
     typed_parity(b"{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c_old\", \"command_id\": \"c\"}}\n");
+    typed_parity(b"{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\", \"result\": {\"last_seq\": 7}, \"result\": {\"last_seq\": 41}}}\n");
     typed_parity(b"{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\", \"result\": {\"last_seq\": 7, \"last_seq\": 41}}}\n");
+    assert_eq!(
+        super::ack::parse_typed(
+            b"{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\", \"result\": {\"last_seq\": 7, \"last_seq\": 41}}}\n"
+        )
+        .and_then(|ack| ack.last_seq),
+        Some(41),
+        "the last duplicate wins"
+    );
     typed_none(b"{\"kind\": \"command_accepted\", \"kind\": \"session_status\", \"payload\": {\"command_id\": \"c\"}}\n");
 }
 

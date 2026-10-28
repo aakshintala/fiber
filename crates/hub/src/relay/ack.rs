@@ -3,7 +3,10 @@
 //! relay replaces with an opening boundary at full.
 
 use contract::SessionId;
+use serde::Deserialize;
+use serde::de::{Deserializer, MapAccess, Visitor};
 use serde_json::{Map, Value};
+use std::fmt;
 
 use super::{Kept, Replayed, valid_session_id};
 use crate::connection::{Hub, lock};
@@ -89,64 +92,522 @@ pub(crate) struct Ack {
 }
 
 pub(crate) fn acknowledgement(line: &[u8]) -> Option<Ack> {
-    let line = parse_line(line)?;
-    let kind = line.get("kind").and_then(Value::as_str)?;
-    if !matches!(kind, "command_accepted" | "command_rejected") {
-        return None;
-    }
-    let payload = line.get("payload")?;
-    let id = payload.get("command_id").and_then(Value::as_str)?;
-    let verdict = if kind == "command_accepted" {
-        Verdict::Accepted
-    } else if payload.get("code").and_then(Value::as_str) == Some("closing") {
-        Verdict::Closing
-    } else {
-        Verdict::Rejected
-    };
-    let rewound = if kind == "command_accepted" {
-        payload
-            .get("result")
-            .and_then(|result| result.get("new_session_id"))
-            .and_then(Value::as_str)
-            .filter(|next| valid_session_id(next))
-            .map(|next| SessionId(next.to_owned()))
-    } else {
-        None
-    };
-    let last_seq = match verdict {
-        Verdict::Accepted => payload
-            .get("result")
-            .and_then(|result| result.get("last_seq"))
-            .and_then(Value::as_u64),
-        Verdict::Rejected | Verdict::Closing => None,
-    };
-    Some(Ack {
-        id: id.to_owned(),
-        verdict,
-        rewound,
-        last_seq,
-    })
+    parse_typed(line)
 }
 
-/// One map-only typed pass over the relayed line's bytes into `Ack`, with
-/// no `Value` tree. It returns `Some` exactly when `acknowledgement`
-/// returns `Some`, with equal fields.
-#[cfg(test)]
+/// One map-only typed pass over the relayed line's bytes into `Ack`,
+/// with no `Value` tree. A custom visitor reads the acknowledgement's
+/// keys and skips every other value in place, so a wrong-typed optional
+/// reads as absent instead of losing the whole `Ack`, while a malformed
+/// value still rejects the line.
 pub(crate) fn parse_typed(line: &[u8]) -> Option<Ack> {
-    let _ = line;
-    None
-}
-
-/// The one full parse of a relayed session line: every full parse in the
-/// relay module and `retire.rs` goes through it, so the counted-work test
-/// counts through it.
-fn parse_line(line: &[u8]) -> Option<Value> {
     #[cfg(test)]
     ACK_PARSES.with(|count| count.set(count.get().saturating_add(1)));
-    serde_json::from_slice(line).ok()
+    serde_json::from_slice::<RawAck>(line).ok()?.into_ack()
 }
 
-// Counts the full parses of relayed lines, on the calling thread: the
+/// The acknowledgement's keys as the line carries them: every optional
+/// reads leniently, so a wrong-typed value is absent, never an error.
+struct RawAck {
+    kind: Option<String>,
+    payload: Option<RawPayload>,
+}
+
+struct RawPayload {
+    command_id: Option<String>,
+    code: LenientString,
+    result: Option<RawResult>,
+}
+
+struct RawResult {
+    last_seq: Option<LenientU64>,
+    new_session_id: LenientString,
+}
+
+/// A string the line may carry under another type: present only when it
+/// is one.
+#[derive(Clone, Default)]
+struct LenientString(Option<String>);
+
+/// A sequence number the line may carry under another type: present only
+/// when it is one.
+#[derive(Clone, Copy, Default)]
+struct LenientU64(Option<u64>);
+
+impl<'de> Deserialize<'de> for RawAck {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct AckVisitor;
+        impl<'de> Visitor<'de> for AckVisitor {
+            type Value = RawAck;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a relayed line object")
+            }
+            fn visit_map<A>(self, mut map: A) -> Result<RawAck, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut kind = None;
+                let mut payload = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "kind" => kind = map.next_value()?,
+                        "payload" => payload = map.next_value()?,
+                        _ => {
+                            map.next_value::<Validate>()?;
+                        }
+                    }
+                }
+                Ok(RawAck { kind, payload })
+            }
+        }
+        deserializer.deserialize_map(AckVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for RawPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct PayloadVisitor;
+        impl<'de> Visitor<'de> for PayloadVisitor {
+            type Value = RawPayload;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("an acknowledgement payload object")
+            }
+            fn visit_map<A>(self, mut map: A) -> Result<RawPayload, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut command_id = None;
+                let mut code = LenientString::default();
+                let mut result = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "command_id" => command_id = map.next_value()?,
+                        "code" => code = map.next_value()?,
+                        "result" => result = map.next_value()?,
+                        _ => {
+                            map.next_value::<Validate>()?;
+                        }
+                    }
+                }
+                Ok(RawPayload {
+                    command_id,
+                    code,
+                    result,
+                })
+            }
+        }
+        deserializer.deserialize_map(PayloadVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for RawResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ResultVisitor;
+        impl<'de> Visitor<'de> for ResultVisitor {
+            type Value = RawResult;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("an acknowledgement result object")
+            }
+            fn visit_map<A>(self, mut map: A) -> Result<RawResult, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut last_seq = None;
+                let mut new_session_id = LenientString::default();
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "last_seq" => last_seq = map.next_value()?,
+                        "new_session_id" => new_session_id = map.next_value()?,
+                        _ => {
+                            map.next_value::<Validate>()?;
+                        }
+                    }
+                }
+                Ok(RawResult {
+                    last_seq,
+                    new_session_id,
+                })
+            }
+            // A result under any other type carries no sequence and
+            // starts nothing.
+            fn visit_unit<E>(self) -> Result<RawResult, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RawResult::empty())
+            }
+            fn visit_none<E>(self) -> Result<RawResult, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RawResult::empty())
+            }
+            fn visit_some<D>(self, deserializer: D) -> Result<RawResult, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Deserialize::deserialize(deserializer)
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<RawResult, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RawResult::empty())
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<RawResult, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RawResult::empty())
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<RawResult, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RawResult::empty())
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<RawResult, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RawResult::empty())
+            }
+            fn visit_str<E>(self, _: &str) -> Result<RawResult, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RawResult::empty())
+            }
+            fn visit_string<E>(self, _: String) -> Result<RawResult, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RawResult::empty())
+            }
+            fn visit_seq<A>(self, mut seq: A) -> Result<RawResult, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                while seq.next_element::<Validate>()?.is_some() {}
+                Ok(RawResult::empty())
+            }
+        }
+        deserializer.deserialize_any(ResultVisitor)
+    }
+}
+
+impl RawResult {
+    fn empty() -> Self {
+        RawResult {
+            last_seq: None,
+            new_session_id: LenientString::default(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for LenientString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StringVisitor;
+        impl<'de> Visitor<'de> for StringVisitor {
+            type Value = LenientString;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string")
+            }
+            fn visit_str<E>(self, value: &str) -> Result<LenientString, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientString(Some(value.to_owned())))
+            }
+            fn visit_string<E>(self, value: String) -> Result<LenientString, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientString(Some(value)))
+            }
+            fn visit_unit<E>(self) -> Result<LenientString, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientString::default())
+            }
+            fn visit_none<E>(self) -> Result<LenientString, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientString::default())
+            }
+            fn visit_some<D>(self, deserializer: D) -> Result<LenientString, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Deserialize::deserialize(deserializer)
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<LenientString, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientString::default())
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<LenientString, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientString::default())
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<LenientString, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientString::default())
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<LenientString, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientString::default())
+            }
+            fn visit_seq<A>(self, mut seq: A) -> Result<LenientString, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                while seq.next_element::<Validate>()?.is_some() {}
+                Ok(LenientString::default())
+            }
+            fn visit_map<A>(self, mut map: A) -> Result<LenientString, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                while map.next_key::<&str>()?.is_some() {
+                    map.next_value::<Validate>()?;
+                }
+                Ok(LenientString::default())
+            }
+        }
+        deserializer.deserialize_any(StringVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for LenientU64 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct SeqVisitor;
+        impl<'de> Visitor<'de> for SeqVisitor {
+            type Value = LenientU64;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a sequence number")
+            }
+            fn visit_u64<E>(self, value: u64) -> Result<LenientU64, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientU64(Some(value)))
+            }
+            fn visit_none<E>(self) -> Result<LenientU64, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientU64::default())
+            }
+            fn visit_some<D>(self, deserializer: D) -> Result<LenientU64, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Deserialize::deserialize(deserializer)
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<LenientU64, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientU64::default())
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<LenientU64, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientU64::default())
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<LenientU64, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientU64::default())
+            }
+            fn visit_str<E>(self, _: &str) -> Result<LenientU64, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientU64::default())
+            }
+            fn visit_string<E>(self, _: String) -> Result<LenientU64, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientU64::default())
+            }
+            fn visit_unit<E>(self) -> Result<LenientU64, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientU64::default())
+            }
+            fn visit_seq<A>(self, mut seq: A) -> Result<LenientU64, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                while seq.next_element::<Validate>()?.is_some() {}
+                Ok(LenientU64::default())
+            }
+            fn visit_map<A>(self, mut map: A) -> Result<LenientU64, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                while map.next_key::<&str>()?.is_some() {
+                    map.next_value::<Validate>()?;
+                }
+                Ok(LenientU64::default())
+            }
+        }
+        deserializer.deserialize_any(SeqVisitor)
+    }
+}
+
+/// An unknown value the line carries: read for real and dropped, so a
+/// malformed value rejects the line exactly where the full parse did. A
+/// skipping ignore would not validate escapes or number range.
+struct Validate;
+
+impl<'de> Deserialize<'de> for Validate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ValidateVisitor;
+        impl<'de> Visitor<'de> for ValidateVisitor {
+            type Value = Validate;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("any value")
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<Validate, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Validate)
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<Validate, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Validate)
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<Validate, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Validate)
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<Validate, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Validate)
+            }
+            fn visit_str<E>(self, _: &str) -> Result<Validate, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Validate)
+            }
+            fn visit_string<E>(self, _: String) -> Result<Validate, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Validate)
+            }
+            fn visit_unit<E>(self) -> Result<Validate, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Validate)
+            }
+            fn visit_seq<A>(self, mut seq: A) -> Result<Validate, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                while seq.next_element::<Validate>()?.is_some() {}
+                Ok(Validate)
+            }
+            fn visit_map<A>(self, mut map: A) -> Result<Validate, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                while map.next_key::<String>()?.is_some() {
+                    map.next_value::<Validate>()?;
+                }
+                Ok(Validate)
+            }
+        }
+        deserializer.deserialize_any(ValidateVisitor)
+    }
+}
+
+impl RawAck {
+    fn into_ack(self) -> Option<Ack> {
+        let kind = self.kind?;
+        if !matches!(kind.as_str(), "command_accepted" | "command_rejected") {
+            return None;
+        }
+        let payload = self.payload?;
+        let id = payload.command_id?;
+        let verdict = if kind == "command_accepted" {
+            Verdict::Accepted
+        } else if payload.code.0.as_deref() == Some("closing") {
+            Verdict::Closing
+        } else {
+            Verdict::Rejected
+        };
+        let rewound = if kind == "command_accepted" {
+            payload
+                .result
+                .as_ref()
+                .and_then(|result| result.new_session_id.0.clone())
+                .filter(|next| valid_session_id(next))
+                .map(SessionId)
+        } else {
+            None
+        };
+        let last_seq = match verdict {
+            Verdict::Accepted => payload
+                .result
+                .as_ref()
+                .and_then(|result| result.last_seq)
+                .and_then(|lenient| lenient.0),
+            Verdict::Rejected | Verdict::Closing => None,
+        };
+        Some(Ack {
+            id,
+            verdict,
+            rewound,
+            last_seq,
+        })
+    }
+}
+
+// Counts the typed passes over relayed lines, on the calling thread: the
 // parse's result is consumed inside the relay thread, and no client-visible
 // line differs between one parse and five, so nothing outside can count it.
 // Test-only; non-test builds never call it.
@@ -155,7 +616,7 @@ thread_local! {
     static ACK_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many full parses of relayed lines the calling thread has made
+/// How many typed passes over relayed lines the calling thread has made
 /// (`docs/testing.md`, "a test of how much work something does counts the
 /// work"). The counted-work test reads it on the relay thread.
 #[cfg(test)]
