@@ -1314,6 +1314,7 @@ and an expiry wakes the loop even with no input.
 | `history_loading` | condition | History lands for the pending turn. |
 | `hook_failed` | event | Fades 10 s after it shows. |
 | `hub_version` | event | Fades 10 s after it shows. |
+| `indeterminate` | event | Fades 10 s after it shows. |
 | `instructions_large` | event | Fades 10 s after it shows. |
 | `invalid_arguments` | event | Fades 10 s after it shows. |
 | `io_failed` | event | Fades 10 s after it shows. |

@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/app/home/prompt/delete_tests.rs
+expression: frame(&app)
+---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    no live sessions
+▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
+
+w +  0 live · $0.00
+  exited · 1
+   ○ old work                                s_aaaaaaaaaaaaaaaa · $0.00 · 0s ago
+
+
+
+
+
+
+
+
+
+  ⚠ session_has_dependents · Delete failed: Session `s_aaaaaaaaaaaaaaaa` has … ✕
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ › █? for shortcuts
+▌
+▌ [w]  [test/model]  [thinking: default]  Enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+Enter opens the focused session, or starts one from the box · ↑↓ move · Delete s

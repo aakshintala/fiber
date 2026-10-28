@@ -1108,6 +1108,29 @@ fn hub_delete_refuses_successful_dry_run_with_held_before_asking() {
 }
 
 #[test]
+fn hub_delete_reports_the_first_held_session_in_preview_order() {
+    let (out, err, got, _, sent) = run_delete_listed(
+        &[
+            sessions_answer(&[HUB_ROOT, HUB_FORK]),
+            dry_answer_with_held(&[HUB_ROOT, HUB_FORK], &[HUB_FORK, HUB_ROOT]),
+        ],
+        HUB_ROOT,
+        true,
+        false,
+        true,
+        Unread,
+    );
+    let error = got.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!("Session `{HUB_ROOT}` is held by another process.")
+    );
+    assert_eq!(out, "");
+    assert_eq!(err, "");
+    assert_eq!(sent.len(), 2);
+}
+
+#[test]
 fn hub_delete_malformed_held_answer_fails_before_printing_or_asking() {
     let malformed = json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
         "payload": {"command_id": "c_delete", "result": {"sessions": [HUB_ROOT], "held": "bad"}}});
@@ -1169,7 +1192,9 @@ fn hub_delete_rejects_unminted_dry_run_ids() {
         "11111111111111a1",
         "../s_11111111111111a1",
     ] {
-        bad_dry_run_is_unusable(dry_answer(&[id]));
+        // Keep the requested session present so rejecting an unminted
+        // cascade id cannot pass merely because the target is missing.
+        bad_dry_run_is_unusable(dry_answer(&[HUB_ROOT, id]));
     }
 }
 

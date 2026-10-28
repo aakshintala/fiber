@@ -340,8 +340,11 @@ impl App {
         // The delete question names the session and everything
         // `--cascade` would add; the frame wraps and scrolls it. The
         // command's question draws over the attached session instead.
+        let command_question = self.delete_command_home_question();
         let (question, question_scroll) = match home.questions.prompt() {
-            Some(Prompt::Delete { .. }) if self.command_owns_prompt() => (None, 0),
+            Some(Prompt::Delete { .. }) if self.command_owns_prompt() => command_question
+                .map(|(question, scroll)| (Some(question), scroll))
+                .unwrap_or((None, 0)),
             Some(Prompt::Delete { id, expect, scroll }) => (
                 home.sessions.row(id).map(|row| match expect {
                     None => delete_line(row),
@@ -628,7 +631,6 @@ impl App {
                         _ => return Some(Vec::new()),
                     };
                     let exited = SessionId(id.to_owned());
-                    self.delete_command_note_session_left(&exited, how == Left::Exited);
                     // An exit for the attached session arrived after the
                     // attach: the session is dead, so quitting owes it no
                     // resume line. An exited row from before the attach
@@ -656,7 +658,7 @@ impl App {
                     }
                     // The command's confirmed stops retire here: only an
                     // exit permits its one delete.
-                    lines.extend(self.delete_command_session_left(&exited, how == Left::Exited));
+                    lines.extend(self.delete_command_session_left(&exited));
                     Some(lines)
                 }
                 "command_accepted" | "command_rejected" => {

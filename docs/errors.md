@@ -346,7 +346,7 @@ the lines that carry it.
 | `hook_unapproved` | exit, driver command (`rewind`) | a repository's required hook is not approved; run `fiber approve` in the repository | — |
 | `http_error` | extension call, tool call | `web_fetch` got a status other than 2xx, was redirected more than 10 times, or was redirected to a URL it cannot parse | — |
 | `hub_version` | notice | the hub runs another Fiber version or commit than this terminal (`docs/tui.md`, "Notices") | event |
-| `indeterminate` | tool call, job, driver command, hub command | Fiber cannot tell whether the call completed | — |
+| `indeterminate` | tool call, job, driver command, hub command, notice | Fiber cannot tell whether the call completed, or a `/delete` whose delete got no answer or whose line write failed ambiguously | event |
 | `invalid_arguments` | driver command, hub command, extension call, tool call, notice | the arguments failed the tool's schema or checks, or a driver or hub command's `args` (`docs/invocation.md`, "Driver commands" and "The hub") | event |
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason | — |
 | `io_failed` | exit, driver command, hub command, extension call, notice | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path; or Fiber could not install its signal handlers, and the message starts `signals:`; or the terminal could not start its input reader, and the message starts `terminal:`; or the hub could not start the worker thread for a file search or a device login, or the file search worker stopped; the message says which | event |

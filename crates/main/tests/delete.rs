@@ -464,6 +464,12 @@ fn no_session_delete_shows_the_shared_notice() {
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let mut run = Run::spawn(&setup, COLS, ROWS, &[], &[]);
     run.ready();
+    // `ready` means the first frame drew, not that the Hub link is up;
+    // offline `/delete` is deliberately a no-op and preserves the draft.
+    let hub_log = setup.home().join("logs").join("hub.log");
+    fakes::wait_until("the terminal's Hub connection", setup.deadline, move || {
+        fs::read_to_string(&hub_log).is_ok_and(|log| log.contains("client_connected"))
+    });
     run.write(b"/delete\r");
     let notice = run.wait_screen("the no-session notice", |grid| {
         grid.contents.contains("No session on screen.")
@@ -599,8 +605,8 @@ fn delete_after_stop_completion_removes_the_parent_and_its_forks() {
 /// A fork held at confirm time refuses the whole delete at its stop: the
 /// live parent leaves exited on the feed, then the hub refuses the held
 /// fork's close as `session_held`, so no delete goes out. The refusal
-/// names the running fork, both directories stay, and the attached
-/// screen stays.
+/// uses the captured target name because the held fork has no feed row,
+/// both directories stay, and the command settles on Home.
 #[test]
 fn held_fork_refusal_keeps_both_sessions() {
     let setup = Setup::new();
@@ -628,22 +634,23 @@ fn held_fork_refusal_keeps_both_sessions() {
             && line["payload"]["how"] == "exited"
     });
     // The delete's exact-set refusal carries the structured `held`
-    // data: the busy fork is named in the notice. The full notice is
-    // `Not deleted: {b} is running again. Nothing was deleted.`
-    // (`delete.rs`, "Not deleted"; the refusal's `session_held` code).
+    // data. The held fork has no feed or recent row, so its display uses
+    // the captured target name: `Not deleted: run it is running again.
+    // Nothing was deleted.` (`delete.rs`, "Not deleted"; the refusal's
+    // `session_held` code).
     let refused = run.wait_screen("the held refusal", |grid| {
         grid.contents.contains("session_held")
             && grid.contents.contains("Not deleted:")
-            && grid.contents.contains(&format!("{b} is running again"))
+            && grid.contents.contains("run it is running again")
             && grid.contents.contains("Nothing was deleted")
     });
     assert!(refused.contents.contains("session_held"));
     assert!(refused.contents.contains("Not deleted:"));
-    assert!(refused.contents.contains(&format!("{b} is running again")));
+    assert!(refused.contents.contains("run it is running again"));
     assert!(refused.contents.contains("Nothing was deleted"));
     assert!(
-        refused.contents.contains("turns"),
-        "the attached screen stays"
+        refused.contents.contains("no live sessions"),
+        "the refused command settles on Home"
     );
     assert!(session_dir(&setup, &a).exists(), "the stopped parent stays");
     assert!(b_dir.exists(), "the held fork stays");

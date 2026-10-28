@@ -221,7 +221,11 @@ fn dry_run(
     )?;
     let dry = serde_json::from_value::<DryRun>(result).map_err(CliError::SessionsAnswer)?;
     checked_dry_run(&dry, id).map_err(CliError::SessionsAnswer)?;
-    if let Some(held) = dry.held.first() {
+    if let Some(held) = dry
+        .sessions
+        .iter()
+        .find(|session| dry.held.contains(session))
+    {
         return Err(CliError::Rejected {
             code: ErrorCode::SessionHeld,
             message: format!("Session `{}` is held by another process.", held.0),
@@ -234,11 +238,7 @@ fn dry_run(
 /// hex digits. The dry-run answer is trusted only when every id fits, so
 /// a malformed answer never prints a preview or asks a question.
 fn valid_session_id(id: &str) -> bool {
-    let hex = id.strip_prefix("s_").unwrap_or("");
-    hex.len() == 16
-        && hex
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    contract::is_minted_session_id(id)
 }
 
 /// Checks the dry-run answer before it prints or asks: `sessions` is a

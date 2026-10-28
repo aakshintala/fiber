@@ -16,6 +16,7 @@ impl App {
     /// the terminal exits without asking. Opening the question clears
     /// the armed Ctrl+C.
     pub(crate) fn quit(&mut self) -> Effect {
+        self.close_delete_prompt();
         if self.home.is_none() || self.working().is_empty() {
             return Effect::Quit;
         }
@@ -73,6 +74,7 @@ impl App {
             sessions.iter().filter(|id| working.contains(id)).count(),
             self.elsewhere(&sessions),
         );
+        self.close_delete_prompt();
         if let Some(home) = self.home.as_mut() {
             home.questions.prompt = Some(Prompt::CloseAll { sessions, counts });
         }
@@ -136,6 +138,7 @@ impl App {
         let name = crate::home::title(row);
         let working = self.working().contains(&id);
         let elsewhere = self.elsewhere(std::slice::from_ref(&id)) > 0;
+        self.close_delete_prompt();
         if let Some(home) = self.home.as_mut() {
             home.questions.prompt = Some(Prompt::Stop {
                 id,
