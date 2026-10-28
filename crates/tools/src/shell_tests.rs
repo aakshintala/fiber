@@ -1260,6 +1260,7 @@ fn a_configured_direct_run_shares_the_sandbox_selection() {
     assert!(text(&output).starts_with("hi"), "a direct echo succeeds");
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_failed_confined_setup_never_runs_unconfined() {
     let dir = fakes::TempDir::new("fiber-shell-run-confined-fail");
