@@ -1408,7 +1408,11 @@ pub(super) fn judge(
                         ModelInfo::FewRuns { class, .. } => {
                             line.result = "advisory";
                             let why = model_advisory(head_cpu, &info);
-                            let (ceil, _) = class_limit(&gates, class);
+                            let (recorded, _) = class_limit(&gates, class);
+                            // The advisory line names the same effective
+                            // ceiling the gate judges: a recorded ceiling
+                            // under 2 ms shows the 2.0 ms floor.
+                            let ceil = recorded.max(2.0);
                             line.head = format!(
                                 "{head_value:.1} ms ({} ceiling {ceil:.1} ms; {why})",
                                 class_name(class)
@@ -1420,9 +1424,24 @@ pub(super) fn judge(
                             line.head = format!("{head_value:.1} ms ({why})");
                         }
                         ModelInfo::Eligible { class } => {
-                            let (ceiling, tolerance) = class_limit(&gates, class);
+                            let (recorded, tolerance) = class_limit(&gates, class);
                             let tolerance = tolerance.unwrap_or(0.0);
-                            line.head = gated_shown(head_value, class, ceiling, tolerance);
+                            // A recorded class ceiling under 2 ms gates on
+                            // an effective 2.0 ms ceiling with a 1.0 ms
+                            // absolute allowance over the base, so one tick
+                            // of runner jitter on a 1 ms row passes while a
+                            // real regression still fails both strictly-over
+                            // legs. No other row takes this path.
+                            let quantum = recorded < 2.0;
+                            let ceiling = recorded.max(2.0);
+                            line.head = if quantum {
+                                format!(
+                                    "{head_value:.1} ms ({} ceiling {ceiling:.1} ms, +1.0 ms absolute over base)",
+                                    class_name(class)
+                                )
+                            } else {
+                                gated_shown(head_value, class, ceiling, tolerance)
+                            };
                             let base_value = match base {
                                 Base::Ok(results)
                                     if results.metrics.contains_key(id)
@@ -1445,17 +1464,38 @@ pub(super) fn judge(
                                 }
                                 _ => {
                                     let base_median = base_value.unwrap_or(0.0);
-                                    match timing_fails(head_value, base_median, ceiling, tolerance)
-                                    {
-                                        Err(e) => failures.push(format!("{id}: {e}")),
-                                        Ok(true) => {
+                                    if quantum {
+                                        let bound = base_median + 1.0;
+                                        if !bound.is_finite() {
                                             failures.push(format!(
-                                        "{OVER}median {head_value:.1} ms of {id} is over {ceiling:.1} ms {} ceiling and over base {base_median:.1} ms by more than {tolerance}%",
+                                                "{id}: relative bound 1 ms over base {base_median} overflows: cannot judge the timing"
+                                            ));
+                                        } else if head_value > ceiling && head_value > bound {
+                                            failures.push(format!(
+                                        "{OVER}median {head_value:.1} ms of {id} is over {ceiling:.1} ms {} ceiling and over base {base_median:.1} ms by more than 1 ms absolute allowance",
                                         class_name(class)
                                     ));
                                             line.breached_row = remeasured_row(id);
                                         }
-                                        Ok(false) => {}
+                                    } else {
+                                        match timing_fails(
+                                            head_value,
+                                            base_median,
+                                            ceiling,
+                                            tolerance,
+                                        ) {
+                                            Err(e) => {
+                                                failures.push(format!("{id}: {e}"));
+                                            }
+                                            Ok(true) => {
+                                                failures.push(format!(
+                                            "{OVER}median {head_value:.1} ms of {id} is over {ceiling:.1} ms {} ceiling and over base {base_median:.1} ms by more than {tolerance}%",
+                                            class_name(class)
+                                        ));
+                                                line.breached_row = remeasured_row(id);
+                                            }
+                                            Ok(false) => {}
+                                        }
                                     }
                                 }
                             }
