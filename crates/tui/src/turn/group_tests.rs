@@ -11,7 +11,7 @@ use serde_json::json;
 use super::{Call, CallResult, Group, Section, Streaming, Thought, Timing};
 use crate::app::Target;
 use crate::ext::cache::Cache;
-use crate::ext::{Bound, Failure, Handle, Input, RawSpan, Renderer, Status as ExtStatus};
+use crate::ext::{Bound, CallState, Failure, Handle, Input, RawSpan, Renderer, TurnGroupState};
 use crate::theme::Role;
 
 #[test]
@@ -1665,7 +1665,7 @@ fn seam(fake: &Rc<Fake>, flat: bool) -> Bound {
             index: 0,
         },
         ctx: crate::ext::SessionCtx {
-            session_id: contract::SessionId("s".into()),
+            session_id: Some(contract::SessionId("s".into())),
             halves: None,
         },
         flat,
@@ -1959,6 +1959,7 @@ fn a_decorator_draws_the_built_in_row_plus_its_badge() {
         format!("    1 {built_text} +{}", " ".repeat(80 - taken))
     );
     // One render, one cache miss: the built-in call touches no cache.
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by its input and the width.)
     assert_eq!(fake.calls.borrow().len(), 1);
     assert_eq!(crate::work::take().renderer_calls, 1);
 }
@@ -2191,6 +2192,7 @@ fn a_bad_render_falls_back_to_the_built_in_row() {
             .iter()
             .filter(|row| matches!(row.1, Some(Target::Call(_))))
             .count();
+        // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by its input and the width.)
         assert_eq!(fake.calls.borrow().len(), ledger);
     }
 }
@@ -2271,20 +2273,13 @@ fn ledger_input_folds_the_call_events() {
     let row = group.ledger_input(&pending, "", false);
     assert_eq!(row.name, "shell");
     assert_eq!(row.arguments, &json!({"command": "sleep 1"}));
-    assert_eq!(row.status, ExtStatus::Pending);
-    assert_eq!(row.exit, None);
-    assert_eq!(row.duration_ms, None);
-    assert_eq!(row.lines, 0);
-    assert!(row.changes.is_empty());
-    assert_eq!(row.error, None);
-    assert_eq!(row.output, "");
+    assert!(matches!(row.state, CallState::Pending));
     assert_eq!(row.answer, None);
     assert!(!row.flat);
     // A started call with no completion is running.
     let running = running_call(2, "shell", json!({"command": "sleep 1"}));
     let row = group.ledger_input(&running, "", false);
-    assert_eq!(row.status, ExtStatus::Running);
-    assert_eq!(row.duration_ms, None);
+    assert!(matches!(row.state, CallState::Running));
     // A completed shell carries its exit and its lines.
     let done = Call {
         timing: Timing::Took(2500),
@@ -2292,11 +2287,13 @@ fn ledger_input_folds_the_call_events() {
     };
     let output = super::first_result_line(done.content());
     let row = group.ledger_input(&done, &output, false);
-    assert_eq!(row.status, ExtStatus::Completed);
-    assert_eq!(row.exit, Some(0));
-    assert_eq!(row.lines, 2);
-    assert_eq!(row.duration_ms, Some(2500));
-    assert_eq!(row.output, "ok");
+    let CallState::Completed(result) = row.state else {
+        panic!("a completed call carries its result");
+    };
+    assert_eq!(result.exit, Some(0));
+    assert_eq!(result.lines, 2);
+    assert_eq!(result.duration_ms, Some(2500));
+    assert_eq!(result.output, "ok");
     // A failed call's headline splits at the first ": " into its
     // code and message.
     let failed = with_content(
@@ -2305,39 +2302,38 @@ fn ledger_input_folds_the_call_events() {
     );
     let output = super::first_result_line(failed.content());
     let row = group.ledger_input(&failed, &output, false);
-    assert_eq!(row.status, ExtStatus::Failed);
-    assert_eq!(
-        row.error,
-        Some(crate::ext::RowError {
-            code: "nonzero_exit",
-            message: "x: y",
-        })
-    );
-    assert_eq!(row.output, "out");
+    let CallState::Failed { result, error } = row.state else {
+        panic!("a failed call carries its result and error");
+    };
+    assert_eq!((error.code, error.message), ("nonzero_exit", "x: y"));
+    assert_eq!(result.output, "out");
     // A failed call with no headline names no code: the row ends
     // with its output.
     let bare = with_content(with_headline(failed_call(5), ""), "boom\nsecond");
     let output = super::first_result_line(bare.content());
     let row = group.ledger_input(&bare, &output, false);
-    assert_eq!(row.status, ExtStatus::Failed);
-    assert_eq!(
-        row.error,
-        Some(crate::ext::RowError {
-            code: "",
-            message: "",
-        })
-    );
-    assert_eq!(row.output, "boom");
-    // A denied call and a cancelled call carry no error: the built-in
-    // row names the denial and the cancellation itself.
-    for (call, status) in [
-        (denied_call(6), ExtStatus::Denied),
-        (cancelled_call(7), ExtStatus::Cancelled),
-    ] {
+    let CallState::Failed { result, error } = row.state else {
+        panic!("a failed call carries its result and error");
+    };
+    assert_eq!((error.code, error.message), ("", ""));
+    assert_eq!(result.output, "boom");
+    // A denied call and a cancelled call carry their result without an
+    // error: the built-in row names the denial and the cancellation
+    // itself.
+    for (call, denied) in [(denied_call(6), true), (cancelled_call(7), false)] {
         let output = super::first_result_line(call.content());
         let row = group.ledger_input(&call, &output, false);
-        assert_eq!(row.status, status);
-        assert_eq!(row.error, None);
+        match row.state {
+            CallState::Denied { .. } => assert!(denied),
+            CallState::Cancelled(_) => assert!(!denied),
+            CallState::Pending
+            | CallState::Running
+            | CallState::Unknown
+            | CallState::Completed(_)
+            | CallState::Failed { .. } => {
+                panic!("a denied or cancelled call carries its result")
+            }
+        }
     }
     // A started call of a cut turn may have run: its status is
     // unknown.
@@ -2346,7 +2342,7 @@ fn ledger_input_folds_the_call_events() {
         ..Group::default()
     };
     let row = cut.ledger_input(&running, "", false);
-    assert_eq!(row.status, ExtStatus::Unknown);
+    assert!(matches!(row.state, CallState::Unknown));
     // An answered form carries the person's answer.
     let answered = answered_ask_call(8);
     let output = super::first_result_line(answered.content());
@@ -2360,11 +2356,14 @@ fn ledger_input_folds_the_call_events() {
     let edit = edit_call(10, "e.rs", 2, 1);
     let output = super::first_result_line(edit.content());
     let row = group.ledger_input(&edit, &output, true);
-    assert_eq!(row.status, ExtStatus::Completed);
+    let CallState::Completed(result) = row.state else {
+        panic!("a completed edit carries its result");
+    };
     assert!(row.flat);
-    assert_eq!(row.changes.len(), 1);
-    assert_eq!(row.changes[0].added, 2);
-    assert_eq!(row.changes[0].removed, 1);
+    // (`docs/tui.md`, "Extension seams": a ledger row receives the call's `changes`.)
+    assert_eq!(result.changes.len(), 1);
+    assert_eq!(result.changes[0].added, 2);
+    assert_eq!(result.changes[0].removed, 1);
 }
 
 /// An extension link's range moves right by the six gutter cells, on
@@ -2433,4 +2432,456 @@ fn the_drawn_text_is_the_span_texts_plus_the_pad() {
     assert_eq!(texts[0].tail, 20 - 7);
     assert_eq!(&text[..text.len() - texts[0].tail as usize], "    1 X");
     assert!(texts[0].links.is_empty());
+}
+
+/// A thinking-only group holding `thought`: no call, so no summary row.
+fn thinking_group(thought: Thought) -> Group {
+    Group {
+        sections: vec![Section {
+            step: 1,
+            thoughts: vec![thought],
+            ..Section::default()
+        }],
+        ..Group::default()
+    }
+}
+
+/// The thinking-only group's rows through a seam drawing `fake`.
+fn draw_thinking(
+    group: &Group,
+    width: u16,
+    fake: &std::rc::Rc<crate::ext::tests::SlotRenderer>,
+    flat: bool,
+) -> (Vec<super::super::Row>, Vec<crate::rows::RowText>) {
+    let mut out =
+        crate::rows::Rows::default().with_seam(crate::ext::tests::seam(fake, "s", 0, flat));
+    group.rows(false, width, &crate::image::Layout::default(), &mut out);
+    out.into_parts()
+}
+
+fn thinking_replaced() -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    std::rc::Rc::new(SlotRenderer::filling(
+        &["thinking_line"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    ))
+}
+
+#[test]
+fn a_running_group_line_replacement_keeps_its_link_pad_and_spinner() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let group = identity_group();
+    let fake = Rc::new(SlotRenderer::filling(
+        &["group_line"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "go".to_owned(),
+            link: Some("https://example.com".to_owned()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let seam = crate::ext::tests::seam(&fake, "s", 0, false);
+    let mut out = crate::rows::Rows::default().with_seam(seam);
+    group.rows(true, 60, &crate::image::Layout::default(), &mut out);
+    let (rows, texts) = out.into_parts();
+
+    // (`docs/tui.md`, "What a renderer returns": linked cells and pad; "The working line": a running group spins.)
+    assert!(rows[0].0.to_string().starts_with("go"));
+    assert_eq!(texts[0].tail, 58);
+    assert_eq!(
+        texts[0].links,
+        vec![(0..2, "https://example.com".to_owned())]
+    );
+    assert_eq!(texts[0].spin, Some(0));
+}
+
+#[test]
+fn a_group_line_replacement_draws_instead_of_the_summary() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let group = identity_group();
+    let fake = Rc::new(SlotRenderer::filling(
+        &["group_line"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    ));
+    let seam = crate::ext::tests::seam(&fake, "s", 0, false);
+    let mut out = crate::rows::Rows::default().with_seam(seam);
+    group.rows(false, 60, &crate::image::Layout::default(), &mut out);
+    let (rows, _) = out.into_parts();
+
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow()[0].1, "group_line");
+    let summary = rows[0].0.to_string();
+    assert!(summary.starts_with("custom"), "{summary:?}");
+    assert!(
+        !summary.contains('▾'),
+        "the built-in summary was replaced: {summary:?}"
+    );
+    assert!(matches!(rows[0].1.as_ref(), Some(Target::Group(_))));
+}
+
+#[test]
+fn a_thinking_replacement_draws_with_the_thoughts_target() {
+    let group = thinking_group(Thought {
+        id: 3,
+        action: "t3".to_owned(),
+        text: "Plan.".to_owned(),
+        started: 1,
+        ended: Some(2),
+        ..Thought::default()
+    });
+    let fake = thinking_replaced();
+    let (rows, _) = draw_thinking(&group, 40, &fake, false);
+    // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(fake.calls.borrow()[0].1, "thinking_line");
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("custom")),
+        "{shown:?}"
+    );
+    assert!(!shown.iter().any(|row| row.contains("Plan")), "{shown:?}");
+    for (line, target) in &rows {
+        assert_eq!(*target, Some(Target::Thought(3)), "{line:?}");
+    }
+}
+
+#[test]
+fn a_thinking_decorator_draws_the_built_in_line_under_its_badge() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let group = thinking_group(Thought {
+        id: 3,
+        action: "t3".to_owned(),
+        text: "Plan.".to_owned(),
+        started: 1,
+        ended: Some(2),
+        ..Thought::default()
+    });
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["thinking_line"],
+        SlotScript::Decorate {
+            badge: vec![vec![raw("BADGE")]],
+            trim: 5,
+        },
+    ));
+    let (rows, _) = draw_thinking(&group, 40, &fake, false);
+    assert_eq!(fake.builtins.borrow().as_slice(), &[35]);
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("BADGE")),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|row| row.contains("+ Thought")),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn an_empty_thinking_result_draws_no_row_and_no_opened_body() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let group = thinking_group(Thought {
+        id: 3,
+        action: "t3".to_owned(),
+        text: "Plan the fix.\nSecond line.".to_owned(),
+        started: 1,
+        ended: Some(2),
+        open: true,
+    });
+    // The built-in draws the row and the opened body.
+    let (built, _) = draw_thinking(
+        &group,
+        40,
+        &std::rc::Rc::new(SlotRenderer::filling(&[], SlotScript::default())),
+        false,
+    );
+    assert!(built.len() > 1, "the built-in opens the body");
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["thinking_line"],
+        SlotScript::Replace(Vec::new()),
+    ));
+    let (rows, _) = draw_thinking(&group, 40, &fake, false);
+    // (`docs/tui.md`, "The slots", `thinking_line`: an empty result draws no row and no opened body.)
+    assert_eq!(rows, vec![], "an empty result opens nothing");
+}
+
+#[test]
+fn a_thinking_error_falls_back_with_one_failure() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let group = thinking_group(Thought {
+        id: 3,
+        action: "t3".to_owned(),
+        text: "Plan.".to_owned(),
+        started: 1,
+        ended: Some(2),
+        ..Thought::default()
+    });
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["thinking_line"],
+        SlotScript::Fail {
+            kind: FailureKind::HookFailed,
+            message: "boom".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    for _ in 0..2 {
+        let mut out = crate::rows::Rows::default().with_seam(bound.clone());
+        group.rows(false, 40, &crate::image::Layout::default(), &mut out);
+        let shown: Vec<String> = out
+            .into_parts()
+            .0
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect();
+        assert!(shown.iter().any(|row| row.contains("Plan")), "{shown:?}");
+    }
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(
+        fake.calls.borrow().len(),
+        1,
+        "the failure calls nothing again"
+    );
+    let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "thinking_line");
+    assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
+}
+
+#[test]
+fn a_thinking_timeout_lists_one_extension_failed() {
+    use crate::ext::FailureKind;
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let group = thinking_group(Thought {
+        id: 3,
+        action: "t3".to_owned(),
+        text: "Plan.".to_owned(),
+        started: 1,
+        ended: Some(2),
+        ..Thought::default()
+    });
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["thinking_line"],
+        SlotScript::Fail {
+            kind: FailureKind::ExtensionFailed,
+            message: "slow".into(),
+        },
+    ));
+    let bound = crate::ext::tests::seam(&fake, "s", 0, false);
+    let mut out = crate::rows::Rows::default().with_seam(bound.clone());
+    group.rows(false, 40, &crate::image::Layout::default(), &mut out);
+    let listed = bound.cache.take_failures();
+    // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].1.kind, FailureKind::ExtensionFailed);
+}
+
+#[test]
+fn a_flat_thinking_replacement_drops_every_style() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    use ratatui::style::Style;
+    let group = thinking_group(Thought {
+        id: 3,
+        action: "t3".to_owned(),
+        text: "Plan.".to_owned(),
+        started: 1,
+        ended: Some(2),
+        ..Thought::default()
+    });
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["thinking_line"],
+        SlotScript::Replace(vec![vec![crate::ext::RawSpan {
+            text: "custom".into(),
+            italic: true,
+            fg: Some("accent".into()),
+            ..crate::ext::RawSpan::default()
+        }]]),
+    ));
+    let (rows, _) = draw_thinking(&group, 40, &fake, true);
+    // (`docs/tui.md`, "How a TUI extension runs": in screen-reader mode the terminal drops every style.)
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert!(shown.iter().any(|row| row.contains("custom")), "{shown:?}");
+    for (line, _) in &rows {
+        for span in &line.spans {
+            assert_eq!(span.style, Style::default(), "{span:?}");
+        }
+    }
+}
+
+/// The card entry of `group`, with `running` as the turn computes it.
+fn entry_of(group: &Group, running: bool) -> crate::ext::TurnGroup<'_> {
+    group.turn_entry(running)
+}
+
+/// A cut group is cut however the caller names running: `Cut` wins
+/// over the running flag, and only an uncut open group runs.
+#[test]
+fn a_cut_group_wins_over_the_running_flag() {
+    use crate::ext::TurnGroupState;
+    for (cut, running, expected) in [
+        (false, false, TurnGroupState::Finished),
+        (false, true, TurnGroupState::Running),
+        (true, false, TurnGroupState::Cut),
+        (true, true, TurnGroupState::Cut),
+    ] {
+        let group = Group {
+            cut,
+            ..Group::default()
+        };
+        let entry = entry_of(&group, running);
+        assert_eq!(entry.state, expected, "cut {cut} running {running}");
+    }
+}
+
+#[test]
+fn the_card_entry_carries_the_summary_line_fields() {
+    let group = Group {
+        key: Some("a_0".to_owned()),
+        first: 1,
+        last: 2,
+        open: true,
+        cut: true,
+        sections: vec![Section {
+            step: 3,
+            ..Section::default()
+        }],
+        streaming: vec![Streaming {
+            message: "m".to_owned(),
+            index: 1,
+            name: Some("shell".to_owned()),
+            text: "arg".to_owned(),
+        }],
+    };
+    let entry = entry_of(&group, true);
+    assert_eq!((entry.first, entry.last), (1, 2));
+    // A cut group maps to Cut even when the caller still names it
+    // running: the two flags cannot both hold.
+    assert_eq!(entry.state, TurnGroupState::Cut);
+    assert!(entry.open);
+    // (`docs/tui.md`, "The slots", `turn_card`: a group entry carries the ledger's sections.)
+    assert!(!entry.sections.is_empty());
+    assert_eq!(entry.sections[0].step, 3);
+    // (`docs/tui.md`, "The slots", `group_line`: the calls the model is still emitting.)
+    assert_eq!(entry.streaming.len(), 1);
+    assert_eq!(entry.streaming[0].message, "m");
+    assert_eq!(entry.streaming[0].index, 1);
+    assert_eq!(entry.streaming[0].name, Some("shell"));
+    assert_eq!(entry.streaming[0].text, "arg");
+    // The cut stands however the caller names running.
+    assert_eq!(entry_of(&group, false).state, TurnGroupState::Cut);
+}
+
+#[test]
+fn the_card_entry_maps_every_call_status() {
+    fn status_of(call: &crate::ext::TurnCall<'_>) -> &'static str {
+        match &call.state {
+            CallState::Pending => "pending",
+            CallState::Running => "running",
+            CallState::Unknown => "unknown",
+            CallState::Completed(_) => "completed",
+            CallState::Failed { .. } => "failed",
+            CallState::Denied { .. } => "denied",
+            CallState::Cancelled(_) => "cancelled",
+        }
+    }
+    for (status, expected) in [
+        (Some(CallStatus::Completed), "completed"),
+        (Some(CallStatus::Failed), "failed"),
+        (Some(CallStatus::Denied), "denied"),
+        (Some(CallStatus::Cancelled), "cancelled"),
+    ] {
+        let group = Group {
+            sections: vec![Section {
+                step: 1,
+                calls: vec![Call {
+                    status,
+                    ..running_call(1, "read", json!({"path": "a.rs"}))
+                }],
+                ..Section::default()
+            }],
+            ..Group::default()
+        };
+        let entry = entry_of(&group, false);
+        assert_eq!(status_of(&entry.sections[0].calls[0]), expected);
+    }
+    // A call that never started reads pending.
+    let group = Group {
+        sections: vec![Section {
+            step: 1,
+            calls: vec![Call {
+                id: 1,
+                action: "a_1".to_owned(),
+                name: "read".to_owned(),
+                arguments: json!({"path": "a.rs"}),
+                ..Call::default()
+            }],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let entry = entry_of(&group, false);
+    assert_eq!(status_of(&entry.sections[0].calls[0]), "pending");
+    // A started call of a cut turn has status unknown.
+    let group = Group {
+        cut: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![running_call(1, "read", json!({"path": "a.rs"}))],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let entry = entry_of(&group, false);
+    assert_eq!(status_of(&entry.sections[0].calls[0]), "unknown");
+    // The same call on a whole turn reads running.
+    let group = Group {
+        sections: vec![Section {
+            step: 1,
+            calls: vec![running_call(1, "read", json!({"path": "a.rs"}))],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let entry = entry_of(&group, false);
+    assert_eq!(status_of(&entry.sections[0].calls[0]), "running");
+}
+
+#[test]
+fn the_card_entry_carries_the_opened_detail() {
+    let group = Group {
+        sections: vec![Section {
+            step: 1,
+            calls: vec![Call {
+                result: Some(Box::new(CallResult {
+                    headline: "nonzero_exit: x: y".to_owned(),
+                    content: "\nfirst\nsecond".to_owned(),
+                    ..CallResult::default()
+                })),
+                status: Some(CallStatus::Failed),
+                timing: Timing::Started(0),
+                open: true,
+                asking: true,
+                ..running_call(1, "shell", json!({"command": "ls"}))
+            }],
+            failed: vec![("rate_limited".to_owned(), 1)],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let entry = entry_of(&group, false);
+    let call = &entry.sections[0].calls[0];
+    assert_eq!(call.headline(), "nonzero_exit: x: y");
+    let CallState::Failed { result, error } = &call.state else {
+        panic!("a failed call carries its result and error");
+    };
+    assert_eq!(result.content, "\nfirst\nsecond");
+    // The output is the first non-empty line, else done.
+    assert_eq!(result.output, "first");
+    assert!(call.open);
+    assert!(call.asking);
+    assert_eq!((error.code, error.message), ("nonzero_exit", "x: y"));
+    // (`docs/tui.md`, "The slots", `group_line`: the retried model calls, each with its code and attempt.)
+    assert_eq!(entry.sections[0].failed.len(), 1);
+    assert_eq!(entry.sections[0].failed[0].code, "rate_limited");
+    assert_eq!(entry.sections[0].failed[0].attempt, 1);
 }

@@ -10,7 +10,7 @@ use contract::clock::Clock;
 use extensions::{Span, TuiVm};
 use serde_json::{Value, json};
 use tui::ext::{Decision, FailureKind, Load, Renderer, SessionCtx, SessionVersion, SlotSelection};
-use tui::{Failure, RawSpan, RendererInput as Input, Status};
+use tui::{CallState, Failure, RawSpan, RendererInput as Input};
 
 pub(crate) struct Loader {
     sources: config::Sources,
@@ -303,11 +303,13 @@ impl Renderer for Composite {
                 .map(|line| line.into_iter().map(to_vm).collect())
                 .collect()
         };
-        match candidate
-            .vm
-            .borrow_mut()
-            .call(slot, &ctx.session_id.0, &value, width, &built)
-        {
+        match candidate.vm.borrow_mut().call(
+            slot,
+            ctx.session_id.as_ref().map(|id| id.0.as_str()),
+            &value,
+            width,
+            &built,
+        ) {
             Ok(lines) => Decision::Draw {
                 extension,
                 lines: lines
@@ -336,17 +338,345 @@ impl Renderer for Composite {
 }
 
 fn input_value(input: &Input<'_>) -> Value {
-    let Input::LedgerRow(row) = input;
-    let status = match row.status {
-        Status::Pending => "pending",
-        Status::Running => "running",
-        Status::Completed => "completed",
-        Status::Failed => "failed",
-        Status::Denied => "denied",
-        Status::Cancelled => "cancelled",
-        Status::Unknown => "unknown",
+    match input {
+        Input::LedgerRow(row) => ledger_value(row),
+        Input::TurnCard(card) => turn_card_value(card),
+        Input::Prompt(prompt) => {
+            json!({"text": prompt.text, "images": images_value(&prompt.images), "flat": prompt.flat})
+        }
+        Input::Reply(reply) => json!({"text": reply.text, "flat": reply.flat}),
+        Input::ThinkingLine(line) => {
+            json!({"text": line.text, "started": line.started, "ended": line.ended, "open": line.open, "flat": line.flat})
+        }
+        Input::GroupLine(line) => json!({
+            "running": line.running,
+            "calls": line.calls.iter().map(call_value).collect::<Vec<_>>(),
+            "streaming": line.streaming.iter().map(streaming_value).collect::<Vec<_>>(),
+            "thoughts": line.thoughts.iter().map(thought_value).collect::<Vec<_>>(),
+            "failed": line.failed.iter().map(failed_value).collect::<Vec<_>>(),
+            "first": line.first,
+            "last": line.last,
+            "open": line.open,
+            "flat": line.flat,
+        }),
+        Input::Steer(steer) => {
+            json!({"text": steer.text, "images": images_value(&steer.images), "ts": steer.ts, "flat": steer.flat})
+        }
+        Input::Answers(answers) => match &answers.answers {
+            tui::ext::TurnAnswers::Given { parts, note, ts } => json!({
+                "outcome": "given",
+                "parts": parts.iter().map(answer_part_value).collect::<Vec<_>>(),
+                "note": note,
+                "ts": ts,
+                "flat": answers.flat,
+            }),
+            tui::ext::TurnAnswers::Declined => json!({
+                "outcome": "declined",
+                "parts": Vec::<Value>::new(),
+                "note": Value::Null,
+                "ts": Value::Null,
+                "flat": answers.flat,
+            }),
+        },
+        Input::HandoffBand(band) => {
+            json!({
+                "trigger": band.trigger,
+                "ts": band.ts,
+                "state": band_state_value(&band.state),
+                "flat": band.flat,
+            })
+        }
+        Input::ErrorLine(line) => json!({
+            "code": code_value(&line.code),
+            "message": line.message,
+            "provider": line.provider.map(|provider| json!({"name": provider.name, "status": provider.status, "message": provider.message})).unwrap_or(Value::Null),
+            "flat": line.flat,
+        }),
+        Input::Notice(notice) => {
+            json!({"code": notice.code, "text": notice.text, "flat": notice.flat})
+        }
+    }
+}
+
+fn code_value(code: &contract::ErrorCode) -> Value {
+    serde_json::to_value(code).unwrap_or(Value::Null)
+}
+
+fn streaming_value(streaming: &tui::ext::TurnStreaming<'_>) -> Value {
+    json!({"message": streaming.message, "index": streaming.index, "name": streaming.name, "text": streaming.text})
+}
+
+fn thought_value(thought: &tui::ext::TurnThought<'_>) -> Value {
+    json!({"text": thought.text, "started": thought.started, "ended": thought.ended, "open": thought.open})
+}
+
+fn failed_value(failed: &tui::ext::TurnFailed<'_>) -> Value {
+    json!({"code": failed.code, "attempt": failed.attempt})
+}
+
+fn answer_part_value(part: &tui::ext::TurnAnswerPart<'_>) -> Value {
+    match &part.disposition {
+        tui::ext::AnswerDisposition::Skipped => {
+            json!({"header": part.header, "text": "skipped", "skipped": true})
+        }
+        tui::ext::AnswerDisposition::Answered { text } => {
+            json!({"header": part.header, "text": text, "skipped": false})
+        }
+    }
+}
+
+/// The Lua status word for a call state.
+fn call_status_str<R, D>(state: &CallState<'_, R, D>) -> &'static str {
+    match state {
+        CallState::Pending => "pending",
+        CallState::Running => "running",
+        CallState::Unknown => "unknown",
+        CallState::Completed(_) => "completed",
+        CallState::Failed { .. } => "failed",
+        CallState::Denied { .. } => "denied",
+        CallState::Cancelled(_) => "cancelled",
+    }
+}
+
+fn ledger_value(row: &tui::ext::LedgerRow<'_>) -> Value {
+    let status = call_status_str(&row.state);
+    let (exit, duration_ms, lines, changes, error, output) = match &row.state {
+        CallState::Pending | CallState::Running | CallState::Unknown => (
+            Value::Null,
+            Value::Null,
+            json!(0),
+            json!(Vec::<Value>::new()),
+            Value::Null,
+            json!("done"),
+        ),
+        CallState::Completed(result) | CallState::Cancelled(result) => (
+            json!(result.exit),
+            json!(result.duration_ms),
+            json!(result.lines),
+            json!(result.changes),
+            Value::Null,
+            json!(result.output),
+        ),
+        CallState::Failed { result, error } => (
+            json!(result.exit),
+            json!(result.duration_ms),
+            json!(result.lines),
+            json!(result.changes),
+            json!({"code": error.code, "message": error.message}),
+            json!(result.output),
+        ),
+        CallState::Denied { result, .. } => (
+            json!(result.exit),
+            json!(result.duration_ms),
+            json!(result.lines),
+            json!(result.changes),
+            Value::Null,
+            json!(result.output),
+        ),
     };
-    json!({"name": row.name, "arguments": row.arguments, "status": status, "exit": row.exit, "duration_ms": row.duration_ms, "lines": row.lines, "changes": row.changes, "error": row.error.map(|error| json!({"code": error.code, "message": error.message})), "output": row.output, "answer": row.answer, "flat": row.flat})
+    json!({"name": row.name, "arguments": row.arguments, "status": status, "exit": exit, "duration_ms": duration_ms, "lines": lines, "changes": changes, "error": error, "output": output, "answer": row.answer, "flat": row.flat})
+}
+
+fn images_value(images: &[tui::ext::PromptImage<'_>]) -> Value {
+    images
+        .iter()
+        .map(|image| json!({"path": image.path, "width": image.width, "height": image.height}))
+        .collect()
+}
+
+/// A band's state as Lua reads it: `writing`, `done` with its context
+/// sizes, or `unchanged` with `cancelled` (`docs/tui.md`, "The slots",
+/// `handoff_band`).
+fn band_state_value(state: &tui::ext::TurnBandState) -> Value {
+    match state {
+        tui::ext::TurnBandState::Writing => json!({"kind": "writing"}),
+        tui::ext::TurnBandState::Done(sizes) => {
+            json!({"kind": "done", "before": sizes.before, "after": sizes.after})
+        }
+        tui::ext::TurnBandState::Unchanged { cancelled } => {
+            json!({"kind": "unchanged", "cancelled": cancelled})
+        }
+    }
+}
+
+/// How a turn ended as Lua reads it: the outcome with its timestamp,
+/// and on a failure the error (`docs/tui.md`, "The slots", `turn_card`).
+fn ended_value(ended: &tui::ext::TurnEnded<'_>) -> Value {
+    let (outcome, ts, error) = match ended {
+        tui::ext::TurnEnded::Completed { ended_ts } => ("completed", ended_ts, Value::Null),
+        tui::ext::TurnEnded::Interrupted { ended_ts } => ("interrupted", ended_ts, Value::Null),
+        tui::ext::TurnEnded::Failed { ended_ts, error } => (
+            "failed",
+            ended_ts,
+            error
+                .as_ref()
+                .map(|error| {
+                    json!({
+                        "code": code_value(&error.code),
+                        "message": error.message,
+                    })
+                })
+                .unwrap_or(Value::Null),
+        ),
+        tui::ext::TurnEnded::CutShort { ended_ts } => ("cut short", ended_ts, Value::Null),
+    };
+    json!({"outcome": outcome, "ended_ts": ts, "error": error})
+}
+
+fn turn_card_value(card: &tui::ext::TurnCard<'_>) -> Value {
+    let (ended, running) = match &card.state {
+        tui::ext::TurnCardState::Running => (Value::Null, true),
+        tui::ext::TurnCardState::Ended(ended) => (ended_value(ended), false),
+    };
+    json!({
+        "prompts": card.prompts.iter().map(|prompt| json!({"text": prompt.text, "images": images_value(&prompt.images)})).collect::<Vec<_>>(),
+        "entries": card.entries.iter().map(entry_value).collect::<Vec<_>>(),
+        "started": card.started,
+        "calls": card.calls,
+        "usage": &card.usage,
+        "ended": ended,
+        "running": running,
+        "flat": card.flat,
+    })
+}
+
+fn entry_value(entry: &tui::ext::TurnEntry<'_>) -> Value {
+    match entry {
+        tui::ext::TurnEntry::Reply { text } => json!({"kind": "reply", "text": text}),
+        tui::ext::TurnEntry::Steer { text, images, ts } => {
+            json!({"kind": "steer", "text": text, "images": images_value(images), "ts": ts})
+        }
+        tui::ext::TurnEntry::Group(group) => {
+            let (running, cut) = match group.state {
+                tui::ext::TurnGroupState::Running => (true, false),
+                tui::ext::TurnGroupState::Finished => (false, false),
+                tui::ext::TurnGroupState::Cut => (false, true),
+            };
+            json!({
+                "kind": "group",
+                "first": group.first,
+                "last": group.last,
+                "running": running,
+                "open": group.open,
+                "cut": cut,
+                "sections": group.sections.iter().map(|section| json!({
+                    "step": section.step,
+                    "thoughts": section.thoughts.iter().map(thought_value).collect::<Vec<_>>(),
+                    "calls": section.calls.iter().map(call_value).collect::<Vec<_>>(),
+                    "failed": section.failed.iter().map(failed_value).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+                "streaming": group.streaming.iter().map(streaming_value).collect::<Vec<_>>(),
+            })
+        }
+        tui::ext::TurnEntry::Aside(aside) => aside_value(aside),
+        tui::ext::TurnEntry::Band(band) => {
+            json!({
+                "kind": "band",
+                "trigger": band.trigger,
+                "ts": band.ts,
+                "state": band_state_value(&band.state),
+            })
+        }
+        tui::ext::TurnEntry::Answers(answers) => match answers {
+            tui::ext::TurnAnswers::Given { parts, note, ts } => json!({
+                "kind": "answers",
+                "outcome": "given",
+                "parts": parts.iter().map(answer_part_value).collect::<Vec<_>>(),
+                "note": note,
+                "ts": ts,
+            }),
+            tui::ext::TurnAnswers::Declined => json!({
+                "kind": "answers",
+                "outcome": "declined",
+                "parts": Vec::<Value>::new(),
+                "note": Value::Null,
+                "ts": Value::Null,
+            }),
+        },
+    }
+}
+
+fn call_value(call: &tui::ext::TurnCall<'_>) -> Value {
+    let status = call_status_str(&call.state);
+    let headline = call.headline();
+    let (exit, duration_ms, lines, changes, error, output, content, images) = match &call.state {
+        CallState::Pending | CallState::Running | CallState::Unknown => (
+            Value::Null,
+            Value::Null,
+            json!(0),
+            json!(Vec::<Value>::new()),
+            Value::Null,
+            json!("done"),
+            String::new(),
+            json!(Vec::<Value>::new()),
+        ),
+        CallState::Completed(result) | CallState::Cancelled(result) => (
+            json!(result.exit),
+            json!(result.duration_ms),
+            json!(result.lines),
+            json!(result.changes),
+            Value::Null,
+            json!(result.output),
+            result.content.to_owned(),
+            images_value(&result.images),
+        ),
+        CallState::Failed { result, error } => (
+            json!(result.exit),
+            json!(result.duration_ms),
+            json!(result.lines),
+            json!(result.changes),
+            json!({"code": error.code, "message": error.message}),
+            json!(result.output),
+            result.content.to_owned(),
+            images_value(&result.images),
+        ),
+        CallState::Denied { result, .. } => (
+            json!(result.exit),
+            json!(result.duration_ms),
+            json!(result.lines),
+            json!(result.changes),
+            Value::Null,
+            json!(result.output),
+            result.content.to_owned(),
+            images_value(&result.images),
+        ),
+    };
+    json!({
+        "name": call.name,
+        "arguments": call.arguments,
+        "status": status,
+        "exit": exit,
+        "duration_ms": duration_ms,
+        "lines": lines,
+        "changes": changes,
+        "error": error,
+        "output": output,
+        "headline": headline,
+        "content": content,
+        "answer": call.answer,
+        "images": images,
+        "open": call.open,
+        "asking": call.asking,
+    })
+}
+
+fn aside_value(aside: &tui::ext::TurnAside<'_>) -> Value {
+    match aside {
+        tui::ext::TurnAside::Line { text } => {
+            json!({"kind": "aside", "aside": {"kind": "line", "text": text}})
+        }
+        tui::ext::TurnAside::Warning { message } => {
+            json!({"kind": "aside", "aside": {"kind": "warning", "message": message}})
+        }
+        tui::ext::TurnAside::Orphans { jobs, open } => json!({
+            "kind": "aside",
+            "aside": {
+                "kind": "orphans",
+                "jobs": jobs.iter().map(|job| json!({"name": job.name, "message": job.message})).collect::<Vec<_>>(),
+                "open": open,
+            },
+        }),
+    }
 }
 
 fn to_vm(span: RawSpan) -> Span {
