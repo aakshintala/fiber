@@ -1,7 +1,6 @@
 //! Binary-level test that rail cards tint by state (`docs/tui.md`, "The
 //! rail"): two live sessions in different states draw different card
-//! backgrounds. At base every card draws on `surface`, so this fails
-//! there: both backgrounds resolve to the same 256-colour entry.
+//! backgrounds.
 
 #![allow(
     clippy::unwrap_used,
@@ -108,11 +107,6 @@ fn rail_cards_tint_by_state() {
     let retry = tint(&grid, "retry work");
     assert_eq!(steady, SURFACE_256, "the working card's tint");
     assert_eq!(retry, RETRYING_256, "the retrying card's tint");
-    assert_ne!(
-        steady, retry,
-        "cards in different states draw different tints"
-    );
-
     // The hub exits on its own once the terminal quits: release the held
     // turn and close the working session. The terminal's own session
     // stays live in the launch workspace until it quits, so the quit
