@@ -4890,6 +4890,21 @@ fn just_over_the_effective_ceiling_fails() {
 }
 
 #[test]
+fn effective_ceiling_equality_does_not_fail_when_base_leg_is_over() {
+    // Head 2.0 ms equals the 2.0 ms effective ceiling while standing
+    // more than 1.0 ms over the 0.5 ms base: the ceiling leg needs
+    // strictly over, so equality alone holds the row back from failing.
+    let (h, b) = quantum_pair(2.0, 0.5);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    let line = row(&out.comment, "`session_list`");
+    assert!(
+        line.contains("2.0 ms (fast ceiling 2.0 ms, +1.0 ms absolute over base)"),
+        "{line}"
+    );
+    assert!(line.ends_with("| pass |"), "{line}");
+}
+
+#[test]
 fn a_two_ms_recorded_ceiling_keeps_the_percentage_path() {
     // A recorded ceiling of exactly 2.0 ms is not under 2 ms, so the
     // quantum floor does not apply: head 2.5 ms over a 2.0 ms base fails
