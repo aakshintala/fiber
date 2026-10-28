@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use contract::shapes::Effect;
 use contract::tool::Effects;
@@ -212,7 +212,7 @@ fn refused_redirects_execute() {
 }
 
 fn classified(command: &str) -> Effects {
-    classify(command, Path::new("/work"), &[])
+    classify(command, Path::new("/work"), Path::new("/work"), &[])
 }
 
 fn configured(name: &str, flags: &[&str]) -> (String, Vec<String>) {
@@ -223,11 +223,11 @@ fn configured(name: &str, flags: &[&str]) -> (String, Vec<String>) {
 }
 
 fn classified_with(command: &str, entries: &[(String, Vec<String>)]) -> Effects {
-    classify(command, Path::new("/work"), entries)
+    classify(command, Path::new("/work"), Path::new("/work"), entries)
 }
 
 fn classified_in(command: &str, workdir: &Path, entries: &[(String, Vec<String>)]) -> Effects {
-    classify(command, workdir, entries)
+    classify(command, Path::new("/work"), workdir, entries)
 }
 
 fn assert_configured_reads(command: &str, entries: &[(String, Vec<String>)], paths: &[&str]) {
@@ -1547,7 +1547,7 @@ fn cd_chain(count: usize) -> String {
 }
 
 fn noted(command: &str) -> Option<String> {
-    super::not_shown_read_only(command, Path::new("/work"), &[])
+    super::not_shown_read_only(command, Path::new("/work"), Path::new("/work"), &[])
 }
 
 #[test]
@@ -1626,4 +1626,855 @@ fn an_oversize_call_has_no_note() {
     let over = format!("echo {}", "a".repeat(9_996));
     assert!(over.len() > super::super::syntax::MAX_COMMAND_BYTES);
     assert_eq!(noted(&over), None);
+}
+
+// The `gh` own-owner fast path (`docs/tools.md`, "Shell", "Effects"): a
+// `gh` read whose every named repository belongs to an owner of the
+// session workspace's `github.com` remotes declares `reads` with the paths
+// it declares today, instead of the reviewed `network` declaration.
+
+/// A session workspace whose `.git/config` holds `config`: the trust
+/// anchor the own-owner check reads, never the call's `workdir`.
+fn owner_workspace(name: &str, config: &str) -> (fakes::TempDir, PathBuf) {
+    let dir = fakes::TempDir::new(name);
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(workspace.join(".git")).unwrap();
+    std::fs::write(workspace.join(".git").join("config"), config).unwrap();
+    (dir, workspace)
+}
+
+/// A workspace config with one `github.com` remote.
+fn remote_config(url: &str) -> String {
+    format!("[remote \"origin\"]\n\turl = {url}\n")
+}
+
+/// A workspace whose `origin` is `git@github.com:acme/app.git`.
+fn acme_workspace(name: &str) -> (fakes::TempDir, PathBuf) {
+    owner_workspace(name, &remote_config("git@github.com:acme/app.git"))
+}
+
+/// The `name` operand resolved against `workspace`, as the classifier
+/// declares operand paths today.
+fn workspace_path(workspace: &Path, name: &str) -> String {
+    workspace.join(name).to_str().unwrap().to_owned()
+}
+
+fn assert_own(command: &str, workspace: &Path, workdir: &Path, paths: Vec<String>) {
+    let effects = classify(command, workspace, workdir, &[]);
+    assert_eq!(effects.declared.effects, vec![Effect::Reads], "{command}");
+    assert!(effects.declared.reversible, "{command}");
+    assert!(effects.hosts.is_none(), "{command}");
+    assert_eq!(effects.declared.paths, Some(paths), "{command}");
+}
+
+fn assert_foreign(
+    command: &str,
+    workspace: &Path,
+    workdir: &Path,
+    entries: &[(String, Vec<String>)],
+    paths: Vec<String>,
+) {
+    let effects = classify(command, workspace, workdir, entries);
+    assert_eq!(effects.declared.effects, vec![Effect::Network], "{command}");
+    assert_eq!(
+        effects.hosts,
+        Some(vec!["https://api.github.com/".to_owned()]),
+        "{command}"
+    );
+    assert_eq!(effects.declared.paths, Some(paths), "{command}");
+}
+
+fn assert_foreign_effect(command: &str, workspace: &Path, workdir: &Path) {
+    let effects = classify(command, workspace, workdir, &[]);
+    assert_eq!(effects.declared.effects, vec![Effect::Network], "{command}");
+    assert_eq!(
+        effects.hosts,
+        Some(vec!["https://api.github.com/".to_owned()]),
+        "{command}"
+    );
+}
+
+#[test]
+fn own_reads_take_the_fast_path() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-own");
+    // No repository named: `gh` resolves it from the workspace's remotes.
+    assert_own(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "12")],
+    );
+    // A named repository owned by a workspace remote owner.
+    assert_own(
+        "gh pr view 3 --repo acme/other",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "3")],
+    );
+    // A GitHub URL operand names its repository by owner alone.
+    assert_own(
+        "gh pr view https://github.com/acme/app/pull/3",
+        &workspace,
+        &workspace,
+        vec![workspace_path(
+            &workspace,
+            "https://github.com/acme/app/pull/3",
+        )],
+    );
+}
+
+#[test]
+fn foreign_repos_keep_the_reviewed_network_declaration() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-foreign");
+    assert_foreign(
+        "gh issue view 12 --repo evil/app",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+    assert_foreign(
+        "gh pr view https://github.com/evil/app",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "https://github.com/evil/app")],
+    );
+}
+
+#[test]
+fn every_supported_remote_form_yields_its_owner() {
+    let mut configs: Vec<String> = [
+        "git@github.com:acme/app.git",
+        "git@github.com:acme/app",
+        "https://github.com/acme/app",
+        "https://github.com/acme/app.git",
+        "https://github.com/acme/app/pull/3",
+        "ssh://git@github.com/acme/app",
+        "ssh://git@github.com/acme/app.git",
+        "HTTPS://GITHUB.COM/ACME/APP",
+        "git@github.com:acme/app # the team's repo",
+    ]
+    .iter()
+    .map(|url| remote_config(url))
+    .collect();
+    // A second remote under another name counts the same.
+    configs.push("[remote \"origin\"]\n\turl = https://example.com/acme/app.git\n[remote \"upstream\"]\n\turl = https://github.com/acme/other.git\n".to_owned());
+    for (index, config) in configs.iter().enumerate() {
+        let (_dir, workspace) = owner_workspace(&format!("fiber-shell-gh-form-{index}"), config);
+        assert_own(
+            "gh issue view 12",
+            &workspace,
+            &workspace,
+            vec![workspace_path(&workspace, "12")],
+        );
+    }
+}
+
+#[test]
+fn other_hosts_and_spellings_yield_no_owners() {
+    for (index, url) in [
+        "https://example.com/acme/app",
+        "http://github.com/acme/app",
+        "https://evilgithub.com/acme/app",
+        "https://github.com.evil.com/acme/app",
+        "https://github.com:443/acme/app",
+        "https://user@github.com/acme/app",
+        "https://github.com/acme",
+        "https://github.com/",
+        "https://github.com",
+        "git@github.com:acme",
+        "git@other.com:acme/app",
+        "GIT@github.com:acme/app",
+        "ssh://github.com/acme/app",
+        "ssh://git@github.com:22/acme/app",
+        "git://github.com/acme/app",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (_dir, workspace) = owner_workspace(
+            &format!("fiber-shell-gh-noform-{index}"),
+            &remote_config(url),
+        );
+        assert_foreign(
+            "gh issue view 12",
+            &workspace,
+            &workspace,
+            &[],
+            vec![workspace_path(&workspace, "12")],
+        );
+    }
+}
+
+#[test]
+fn a_workspace_without_a_github_remote_has_no_owners() {
+    // No repository at all.
+    let bare_dir = fakes::TempDir::new("fiber-shell-gh-norepo");
+    let bare = bare_dir.path().join("ws");
+    std::fs::create_dir_all(&bare).unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &bare,
+        &bare,
+        &[],
+        vec![workspace_path(&bare, "12")],
+    );
+    // A config with no remotes.
+    let (_dir, core) = owner_workspace(
+        "fiber-shell-gh-core",
+        "[core]\n\trepositoryformatversion = 0\n",
+    );
+    assert_foreign(
+        "gh issue view 12",
+        &core,
+        &core,
+        &[],
+        vec![workspace_path(&core, "12")],
+    );
+    // A non-GitHub remote.
+    let (_dir, other) = owner_workspace(
+        "fiber-shell-gh-other",
+        &remote_config("https://example.com/acme/app.git"),
+    );
+    assert_foreign(
+        "gh issue view 12",
+        &other,
+        &other,
+        &[],
+        vec![workspace_path(&other, "12")],
+    );
+    // A `pushurl` without a `url` contributes nothing.
+    let (_dir, push) = owner_workspace(
+        "fiber-shell-gh-pushurl",
+        "[remote \"origin\"]\n\tpushurl = git@github.com:acme/app.git\n",
+    );
+    assert_foreign(
+        "gh issue view 12",
+        &push,
+        &push,
+        &[],
+        vec![workspace_path(&push, "12")],
+    );
+    // An `include.path` target is never followed, even when it names an owner.
+    let include_dir = fakes::TempDir::new("fiber-shell-gh-include");
+    let included = include_dir.path().join("extra.config");
+    std::fs::write(&included, remote_config("git@github.com:acme/app.git")).unwrap();
+    let workspace = include_dir.path().join("ws");
+    std::fs::create_dir_all(workspace.join(".git")).unwrap();
+    std::fs::write(
+        workspace.join(".git").join("config"),
+        format!("[include]\n\tpath = {}\n", included.to_str().unwrap()),
+    )
+    .unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn a_malformed_config_has_no_owners() {
+    for (index, config) in [
+        "not a config {{{",
+        "[unclosed",
+        "url = git@github.com:acme/app.git",
+        "[remote \"origin\"]\nurl = \"unterminated",
+        "[remote \"origin\"]\nurl = \"git@github.com:acme/app\" junk",
+        "[remote \"origin\"]\nurl = git@github.com:acme/app.git\0",
+        "[remote \"origin\"]\nurl = git@github.com:acme/app.git\n[include",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (_dir, workspace) =
+            owner_workspace(&format!("fiber-shell-gh-malformed-{index}"), config);
+        assert_foreign(
+            "gh issue view 12",
+            &workspace,
+            &workspace,
+            &[],
+            vec![workspace_path(&workspace, "12")],
+        );
+    }
+    // A non-UTF8 config cannot be parsed.
+    let (_dir, utf8) = owner_workspace("fiber-shell-gh-utf8", "[core]\n");
+    std::fs::write(
+        utf8.join(".git").join("config"),
+        b"[remote \"origin\"]\n\turl = \xff\n",
+    )
+    .unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &utf8,
+        &utf8,
+        &[],
+        vec![workspace_path(&utf8, "12")],
+    );
+    // A directory where the config belongs cannot be read.
+    let (_dir, is_dir) = owner_workspace("fiber-shell-gh-configdir", "[core]\n");
+    std::fs::remove_file(is_dir.join(".git").join("config")).unwrap();
+    std::fs::create_dir_all(is_dir.join(".git").join("config")).unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &is_dir,
+        &is_dir,
+        &[],
+        vec![workspace_path(&is_dir, "12")],
+    );
+}
+
+#[test]
+fn the_config_size_cap_holds_at_64_kib() {
+    for (size, reads) in [(65_535, true), (65_536, true), (65_537, false)] {
+        let (_dir, workspace) = acme_workspace(&format!("fiber-shell-gh-size-{size}"));
+        let base = std::fs::read(workspace.join(".git").join("config")).unwrap();
+        let pad = size - base.len() - 2;
+        let config = format!("{}#{}\n", String::from_utf8(base).unwrap(), "x".repeat(pad));
+        assert_eq!(config.len(), size, "{size}");
+        std::fs::write(workspace.join(".git").join("config"), config).unwrap();
+        if reads {
+            assert_own(
+                "gh issue view 12",
+                &workspace,
+                &workspace,
+                vec![workspace_path(&workspace, "12")],
+            );
+        } else {
+            assert_foreign(
+                "gh issue view 12",
+                &workspace,
+                &workspace,
+                &[],
+                vec![workspace_path(&workspace, "12")],
+            );
+        }
+    }
+}
+
+/// A worktree checkout: `checkout/.git` names `gitdir: .../wt`, whose
+/// `commondir` names the common directory holding `common_config`, while
+/// the gitdir's own config holds `gitdir_config`.
+fn worktree_workspace(
+    name: &str,
+    common_config: &str,
+    gitdir_config: &str,
+) -> (fakes::TempDir, PathBuf) {
+    let dir = fakes::TempDir::new(name);
+    let root = dir.path().join("ws");
+    let common_dir = root.join("repo").join(".git");
+    let gitdir = common_dir.join("worktrees").join("wt");
+    std::fs::create_dir_all(&gitdir).unwrap();
+    std::fs::write(common_dir.join("config"), common_config).unwrap();
+    std::fs::write(gitdir.join("config"), gitdir_config).unwrap();
+    std::fs::write(
+        gitdir.join("commondir"),
+        format!("{}\n", common_dir.to_str().unwrap()),
+    )
+    .unwrap();
+    let checkout = root.join("checkout");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join(".git"), "gitdir: ../repo/.git/worktrees/wt\n").unwrap();
+    (dir, checkout)
+}
+
+#[test]
+fn a_worktree_reads_the_common_directory_config() {
+    // A named repository tells which config counts: the common one names
+    // acme while the gitdir names evil, so only the acme name reads.
+    let (_dir, workspace) = worktree_workspace(
+        "fiber-shell-gh-worktree",
+        &remote_config("git@github.com:acme/app.git"),
+        &remote_config("git@github.com:evil/app.git"),
+    );
+    assert_own(
+        "gh issue view 12 --repo acme/app",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "12")],
+    );
+    assert_foreign(
+        "gh issue view 12 --repo evil/app",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+    // And the reverse: an owned gitdir config never qualifies the common one.
+    let (_dir, workspace) = worktree_workspace(
+        "fiber-shell-gh-worktree-gitdir",
+        &remote_config("git@github.com:evil/app.git"),
+        &remote_config("git@github.com:acme/app.git"),
+    );
+    assert_own(
+        "gh issue view 12 --repo evil/app",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "12")],
+    );
+    assert_foreign(
+        "gh issue view 12 --repo acme/app",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn worktree_pointer_failures_have_no_owners() {
+    // A `commondir` file past 512 bytes.
+    let (_dir, workspace) = worktree_workspace(
+        "fiber-shell-gh-commondir-size",
+        &remote_config("git@github.com:acme/app.git"),
+        &remote_config("git@github.com:acme/app.git"),
+    );
+    let gitdir = workspace
+        .join("..")
+        .join("repo")
+        .join(".git")
+        .join("worktrees")
+        .join("wt");
+    let target = std::fs::read(gitdir.join("commondir")).unwrap();
+    let mut over = String::from_utf8(target).unwrap();
+    over.pop();
+    while over.len() < 513 {
+        over.push('/');
+    }
+    over.push('\n');
+    assert_eq!(over.len(), 514);
+    std::fs::write(gitdir.join("commondir"), &over).unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+    // A symlinked `commondir` file.
+    let (_dir, workspace) = worktree_workspace(
+        "fiber-shell-gh-commondir-link",
+        &remote_config("git@github.com:acme/app.git"),
+        &remote_config("git@github.com:acme/app.git"),
+    );
+    let gitdir = workspace
+        .join("..")
+        .join("repo")
+        .join(".git")
+        .join("worktrees")
+        .join("wt");
+    let real = gitdir.join("commondir.real");
+    std::fs::rename(gitdir.join("commondir"), &real).unwrap();
+    std::os::unix::fs::symlink(&real, gitdir.join("commondir")).unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+    // A `commondir` target outside version control.
+    let (_dir, workspace) = worktree_workspace(
+        "fiber-shell-gh-commondir-outside",
+        &remote_config("git@github.com:acme/app.git"),
+        &remote_config("git@github.com:acme/app.git"),
+    );
+    let gitdir = workspace
+        .join("..")
+        .join("repo")
+        .join(".git")
+        .join("worktrees")
+        .join("wt");
+    let elsewhere = workspace.join("..").join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(
+        elsewhere.join("config"),
+        remote_config("git@github.com:acme/app.git"),
+    )
+    .unwrap();
+    std::fs::write(
+        gitdir.join("commondir"),
+        format!("{}\n", elsewhere.to_str().unwrap()),
+    )
+    .unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+    // A symlinked `.git` file.
+    let (_dir, workspace) = worktree_workspace(
+        "fiber-shell-gh-gitfile-link",
+        &remote_config("git@github.com:acme/app.git"),
+        &remote_config("git@github.com:acme/app.git"),
+    );
+    let real = workspace.join(".git.real");
+    std::fs::rename(workspace.join(".git"), &real).unwrap();
+    std::os::unix::fs::symlink(&real, workspace.join(".git")).unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn the_gitfile_size_cap_holds_at_512_bytes() {
+    let (_dir, workspace) = worktree_workspace(
+        "fiber-shell-gh-gitfile-size",
+        &remote_config("git@github.com:acme/app.git"),
+        &remote_config("git@github.com:acme/app.git"),
+    );
+    let base = "gitdir: ../repo/.git/worktrees/wt";
+    for (size, reads) in [(511, true), (512, true), (513, false)] {
+        let content = format!("{base}{}\n", "/".repeat(size - 1 - base.len()));
+        assert_eq!(content.len(), size, "{size}");
+        std::fs::write(workspace.join(".git"), &content).unwrap();
+        if reads {
+            assert_own(
+                "gh issue view 12",
+                &workspace,
+                &workspace,
+                vec![workspace_path(&workspace, "12")],
+            );
+        } else {
+            assert_foreign(
+                "gh issue view 12",
+                &workspace,
+                &workspace,
+                &[],
+                vec![workspace_path(&workspace, "12")],
+            );
+        }
+    }
+}
+
+#[test]
+fn an_unnamed_read_needs_the_workspace_root_and_no_cd() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-unnamed");
+    let sub = workspace.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    // Another workdir stays reviewed even with no `cd`.
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &sub,
+        &[],
+        vec![workspace_path(&sub, "12")],
+    );
+    // Any `cd` keeps an unnamed read reviewed, wherever the `cd` stands.
+    assert_foreign_effect("cd sub && gh issue view 12", &workspace, &workspace);
+    assert_foreign_effect("gh issue view 12 && cd sub", &workspace, &workspace);
+    // A named repository is judged by its name alone: another workdir or a
+    // `cd` changes nothing.
+    assert_own(
+        "gh issue view 12 --repo acme/app",
+        &workspace,
+        &sub,
+        vec![workspace_path(&sub, "12")],
+    );
+    assert_own(
+        "cd sub && gh issue view 12 --repo acme/app",
+        &workspace,
+        &workspace,
+        vec![sub.to_str().unwrap().to_owned(), workspace_path(&sub, "12")],
+    );
+    // An explicit `.` workdir is the workspace root.
+    assert_own(
+        "gh issue view 12",
+        &workspace,
+        &workspace.join("."),
+        vec![format!("{}/./12", workspace.to_str().unwrap())],
+    );
+    // The constructed escape: a workdir whose own clone names an attacker
+    // owner never widens the workspace's owners.
+    let (_evil, evil) = owner_workspace(
+        "fiber-shell-gh-escape",
+        &remote_config("git@github.com:evil/app.git"),
+    );
+    assert_foreign(
+        "gh issue view 1 --repo evil/app",
+        &workspace,
+        &evil,
+        &[],
+        vec![workspace_path(&evil, "1")],
+    );
+    assert_foreign(
+        "gh issue view 1",
+        &workspace,
+        &evil,
+        &[],
+        vec![workspace_path(&evil, "1")],
+    );
+}
+
+#[test]
+fn search_and_configured_entries_keep_network() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-search");
+    // A list query can name another repository through `repo:`, so any
+    // `--search` or `-S` keeps the reviewed path even with an own `--repo`.
+    for command in [
+        "gh issue list --repo acme/app --search x",
+        "gh pr list --repo acme/app --search=x",
+        "gh pr list --repo acme/app -S x",
+        "gh issue list -S x --repo acme/app",
+        "gh issue list --repo acme/app --search repo:evil/other",
+    ] {
+        assert_foreign(
+            command,
+            &workspace,
+            &workspace,
+            &[],
+            vec![workspace.to_str().unwrap().to_owned()],
+        );
+    }
+    // A `--search` word consumed as another flag's value is no query: the
+    // call resolves its repository from the workspace's remotes.
+    assert_own(
+        "gh pr list --state --search",
+        &workspace,
+        &workspace,
+        vec![workspace.to_str().unwrap().to_owned()],
+    );
+    // A configured `gh` entry keeps `network`: only the built-in reads
+    // qualify, because Fiber knows their flags and operands.
+    let status = [configured("gh pr status", &["--json="])];
+    assert_foreign(
+        "gh pr status 123",
+        &workspace,
+        &workspace,
+        &status,
+        vec![workspace_path(&workspace, "123")],
+    );
+    // `-S` takes its query as its value, so a bare `-S` is not read-only.
+    for command in ["gh pr list -S", "gh pr list --search"] {
+        let effects = classify(command, &workspace, &workspace, &[]);
+        assert_eq!(
+            effects.declared.effects,
+            vec![Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+}
+
+#[test]
+fn a_repo_flag_consumed_as_a_value_stays_reviewed() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-consumed");
+    // `--json` consumes `--repo`, so the call names nothing: the `123`
+    // operand alone would read as unnamed, but the consumed flag forces
+    // the reviewed path.
+    assert_foreign(
+        "gh pr view --json --repo 123",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "123")],
+    );
+    assert_foreign(
+        "gh pr view --json --repo",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace.to_str().unwrap().to_owned()],
+    );
+}
+
+#[test]
+fn repo_value_forms_name_their_owner_or_fail_closed() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-repovalue");
+    for command in [
+        "gh pr view 3 -R acme/other",
+        "gh pr view 3 --repo=acme/other",
+        "gh pr view 3 --repo ACME/other",
+    ] {
+        assert_own(
+            command,
+            &workspace,
+            &workspace,
+            vec![workspace_path(&workspace, "3")],
+        );
+    }
+    for command in [
+        "gh pr view 3 --repo evil/other",
+        "gh pr view 3 --repo=evil/other",
+        "gh pr view 3 --repo v",
+        "gh pr view 3 --repo=",
+        "gh pr view 3 --repo acme/",
+        "gh pr view 3 --repo /other",
+    ] {
+        assert_foreign(
+            command,
+            &workspace,
+            &workspace,
+            &[],
+            vec![workspace_path(&workspace, "3")],
+        );
+    }
+    // A host-bearing `--repo` value reaches past the default endpoint, so
+    // the call stays `executes` as before.
+    for command in [
+        "gh pr view 3 --repo h/o/r",
+        "gh pr view 3 --repo=github.corp/o/r",
+    ] {
+        let effects = classify(command, &workspace, &workspace, &[]);
+        assert_eq!(
+            effects.declared.effects,
+            vec![Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+}
+
+#[test]
+fn a_positional_repo_reference_is_never_an_unnamed_default() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-positional");
+    // `owner/repo` names a repository outside the ticket's named forms, so
+    // it keeps the reviewed path even for a workspace owner.
+    assert_foreign(
+        "gh repo view acme/app",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "acme/app")],
+    );
+    // With no operand the repository resolves from the workspace's remotes.
+    assert_own(
+        "gh repo view",
+        &workspace,
+        &workspace,
+        vec![workspace.to_str().unwrap().to_owned()],
+    );
+    // A qualifying GitHub URL operand is judged by its owner.
+    assert_own(
+        "gh repo view https://github.com/acme/app",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "https://github.com/acme/app")],
+    );
+    assert_foreign(
+        "gh repo view https://github.com/evil/app",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "https://github.com/evil/app")],
+    );
+}
+
+#[test]
+fn url_operand_failures_keep_the_reviewed_path() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-urloperand");
+    // Only an `https://github.com/<owner>/<repo>/...` operand names its
+    // repository: every other operand with a slash keeps the reviewed
+    // path instead of passing as an unnamed default.
+    for operand in [
+        "https://evil.com/acme/app",
+        "https://github.com:443/acme/app",
+        "https://user@github.com/acme/app",
+        "http://github.com/acme/app",
+        "https://github.com/acme",
+        "https://github.com/",
+        "https://github.com",
+        "ssh://git@github.com/acme/app",
+        "git@github.com:acme/app",
+    ] {
+        let command = format!("gh pr view {operand}");
+        assert_foreign(
+            &command,
+            &workspace,
+            &workspace,
+            &[],
+            vec![workspace_path(&workspace, operand)],
+        );
+    }
+}
+
+#[test]
+fn mixed_stages_fold_toward_review() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-mixed");
+    assert_own(
+        "gh issue view 1 --repo acme/app && ls",
+        &workspace,
+        &workspace,
+        vec![
+            workspace_path(&workspace, "1"),
+            workspace.to_str().unwrap().to_owned(),
+        ],
+    );
+    assert_foreign(
+        "gh issue view 1 --repo acme/app && gh pr view 2 --repo evil/other",
+        &workspace,
+        &workspace,
+        &[],
+        vec![
+            workspace_path(&workspace, "1"),
+            workspace_path(&workspace, "2"),
+        ],
+    );
+}
+
+#[test]
+fn a_workspace_inside_a_repository_uses_that_repository() {
+    let dir = fakes::TempDir::new("fiber-shell-gh-nested");
+    let root = dir.path().join("ws");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(
+        root.join(".git").join("config"),
+        remote_config("git@github.com:acme/app.git"),
+    )
+    .unwrap();
+    let workspace = root.join("sub");
+    std::fs::create_dir_all(&workspace).unwrap();
+    assert_own(
+        "gh issue view 7",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "7")],
+    );
+}
+
+#[test]
+fn an_own_read_keeps_the_declared_paths_without_a_host() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-paths");
+    assert_own(
+        "gh pr view 123 --json number,title --comments --repo acme/other",
+        &workspace,
+        &workspace,
+        vec![workspace_path(&workspace, "123")],
+    );
+}
+
+#[test]
+fn rejected_gh_forms_still_execute_with_owners_present() {
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-rejected");
+    for command in [
+        "gh",
+        "gh api repos/acme/app",
+        "gh pr merge 123",
+        "gh pr view 123 --web",
+        "gh pr view -- x",
+        "gh -R acme/app pr view 123",
+        "gh issue close 123",
+        "gh repo clone acme/app",
+        "gh auth status",
+        "gh run watch 123",
+        "GH_REPO=acme/app gh issue view 12",
+        "GH_HOST=example.com gh pr view 123",
+    ] {
+        let effects = classify(command, &workspace, &workspace, &[]);
+        assert_eq!(
+            effects.declared.effects,
+            vec![Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
 }

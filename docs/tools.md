@@ -707,9 +707,30 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - `gh pr view`, `gh pr list`, `gh pr diff`, `gh pr checks`, `gh issue view`,
   `gh issue list`, `gh repo view`, `gh run view` and `gh run list` are
   read-only, each with only its listed flags, such as `--json`,
-  `--comments` and `--repo` for `gh pr view`. `gh api` and `curl` declare
-  `executes`: a flag such as `-f` turns a `gh api` read into a write, and a
-  GraphQL query can carry a mutation.
+  `--comments` and `--repo` for `gh pr view`. Such a read declares
+  `network` with the default host, unless it is own: every repository it
+  names belongs to an owner, an account or organisation, of one of the
+  session workspace repository's `github.com` remotes, and then it declares
+  `reads` with the paths it names. A read names its repository with
+  `--repo`/`-R owner/repo`, with a `https://github.com/owner/repo/...`
+  operand, or by naming none, so `gh` resolves it from the workspace's
+  remotes; any other slash-bearing positional operand keeps the reviewed
+  path. An unnamed read is own only when the call's `workdir` is the
+  workspace root and the command holds no `cd`, while a named read is
+  judged by its name alone whatever `workdir` or `cd` says. Owners come
+  from the common directory's git config: the nearest `.git` at or above
+  the workspace root, or the common directory a worktree's `gitdir:` and
+  `commondir` pointers name. The classifier reads at most 64 KiB of config
+  and never follows `include.path`, counting only `remote.<name>.url`
+  values on `github.com` in the HTTPS and SSH forms, matched
+  case-insensitively. A longer, unreadable or unparsable config, a
+  workspace outside a git repository, a remote on another host, and a
+  `.git` or `commondir` pointer past 512 bytes, symlinked, or pointing
+  outside version control all leave no owners, so every `gh` read stays
+  reviewed. A list read with `--search` or `-S`, and any `gh` entry from
+  `shell.read_only`, is never own. `gh api` and `curl` declare `executes`:
+  a flag such as `-f` turns a `gh api` read into a write, and a GraphQL
+  query can carry a mutation.
 - When some commands in a call are read-only and others are not, the
   reviewer's prompt for that call names the ones that were not, as
   ``Not shown read-only: `npm test` ``. The reviewer still gets the whole
