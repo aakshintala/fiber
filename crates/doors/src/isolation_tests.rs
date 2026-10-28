@@ -23,9 +23,9 @@ use contract::{ErrorCode, SessionId};
 use log::Log;
 
 use super::{RecreateError, isolate, same_worktree};
-use crate::project;
 use fakes::Deadline;
 use fakes::git::git;
+use worktree::project;
 
 /// One budget for the whole wait: setup, the code under test and the
 /// assertions run on one thread under one deadline (`docs/testing.md`,

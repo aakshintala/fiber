@@ -44,7 +44,7 @@ fn allow_rule(setup: &Setup, rule: serde_json::Value) {
 
 /// The ids of the sessions stored under the workspace, sorted.
 fn stored(setup: &Setup) -> Vec<String> {
-    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     stored_at(&dir).unwrap_or_else(|| panic!("session directory {} does not exist", dir.display()))
 }
 
@@ -65,7 +65,7 @@ fn stored_at(dir: &std::path::Path) -> Option<Vec<String>> {
 
 /// Waits for exactly `count` sessions to be stored before reading their ids.
 fn wait_stored(setup: &Setup, count: usize) -> Vec<String> {
-    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     fakes::wait_until("the stored session rows", setup.deadline, move || {
         stored_at(&dir).is_some_and(|ids| ids.len() == count)
     });
@@ -235,7 +235,7 @@ fn a_refused_clear_start_keeps_the_old_session_on_screen() {
     let workspace = setup.workspace();
     // Preserve the canonical project identity: after the rename, macOS
     // cannot resolve the old path's `/var` symlink to `/private/var`.
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(&workspace));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&workspace));
     let moved = workspace.with_file_name("w-moved");
     fs::rename(&workspace, &moved).unwrap();
     run.write(b"/clear\r");

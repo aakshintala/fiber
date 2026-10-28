@@ -73,7 +73,7 @@ impl Setup {
     }
 
     fn sessions(&self) -> PathBuf {
-        log::sessions_dir(&self.home(), &doors::project(&self.workspace()))
+        log::sessions_dir(&self.home(), &worktree::project(&self.workspace()))
     }
 
     fn session(&self, id: &str, from: Option<&str>, ts: u64) -> PathBuf {

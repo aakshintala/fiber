@@ -279,7 +279,7 @@ fn a_commands_own_sanitize_after_hook_fails_without_leaking_the_output() {
     assert!(completed.get("artifact").is_none());
     assert!(!setup.workspace().join("guard-ran").exists());
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
-    let sessions_dir = log::sessions_dir(&setup.home(), &doors::project(&workspace));
+    let sessions_dir = log::sessions_dir(&setup.home(), &worktree::project(&workspace));
     // Check while live too: closing an idle session need not retain its directory.
     assert!(!support::on_disk(&sessions_dir).contains(secret));
     send(&client, r#"{"id":"c_close","command":"close"}"#);

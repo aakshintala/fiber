@@ -1158,7 +1158,7 @@ fn terminal(
             report_clock.as_ref(),
         )
     });
-    let identity = doors::project(&workspace);
+    let identity = worktree::project(&workspace);
     let mut launch = launch::launch(
         workspace,
         &identity,

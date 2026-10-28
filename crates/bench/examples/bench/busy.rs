@@ -444,7 +444,7 @@ pub(crate) fn until_stdout(
 
 /// The session's log, parsed.
 pub(crate) fn read_log(home: &Home, id: &str) -> Result<Vec<(usize, Value)>, String> {
-    let path = log::sessions_dir(&home.home(), &doors::project(&home.workspace()))
+    let path = log::sessions_dir(&home.home(), &worktree::project(&home.workspace()))
         .join(id)
         .join("events.jsonl");
     let text =

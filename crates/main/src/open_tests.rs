@@ -130,7 +130,7 @@ fn listed_name(target: &doors::hub::Target) -> Option<&str> {
 /// The configuration `target_in` loads for `home` and `workspace`, so
 /// the notice test reads the same file the target test does.
 fn loaded_config(home: &Path, workspace: &Path) -> config::Config {
-    let project = config::ProjectKey::new(log::project_key(&doors::project(workspace))).unwrap();
+    let project = config::ProjectKey::new(log::project_key(&worktree::project(workspace))).unwrap();
     config::Config::load(config::Sources {
         home: home.to_path_buf(),
         workspace: workspace.to_path_buf(),
