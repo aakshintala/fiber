@@ -368,8 +368,10 @@ fn finish_names_session_tails_when_a_holder_outlives_the_wait() {
     let moved = serde_json::to_string(&json!({"kind": "moved"})).unwrap();
     fs::write(dir.join("events.jsonl"), format!("{first}\n{moved}\n")).unwrap();
     let mut hubbed = Hubbed::new(&setup, &[]);
+    // The holder has been confirmed above; an expired deadline forces
+    // the diagnostic path without waiting for wall-clock time.
     hubbed.guards.push(SessionGuard::arm(
-        Deadline::after(std::time::Duration::from_millis(100)),
+        Deadline::after(std::time::Duration::ZERO),
         &held_text,
     ));
     let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hubbed.finish()));
