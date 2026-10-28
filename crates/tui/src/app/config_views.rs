@@ -833,7 +833,9 @@ impl App {
             Open::Tools(tools) => {
                 tools.frame(self.config_view_width(), self.reload_cost().as_deref())
             }
-            Open::Skills(skills) => skills.frame(self.config_view_height()),
+            Open::Skills(skills) => {
+                skills.frame(self.config_view_width(), self.config_view_height())
+            }
             Open::Mcp(mcp) => mcp.frame(usage),
             Open::Credential(picker) => picker.frame(),
             Open::Doctor(doctor) => doctor.frame(),
