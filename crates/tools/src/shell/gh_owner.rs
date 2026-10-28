@@ -236,35 +236,13 @@ fn common_dir(start: &Path) -> Option<PathBuf> {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => return None,
         }
-        if is_bare(&current) {
+        if super::git::is_bare(&current) {
             return None;
         }
         if !current.pop() {
             return None;
         }
     }
-}
-
-/// Whether `dir` is a bare repository: it holds `HEAD` as a file with
-/// `objects/` and `refs/` beside it, and no `.git` (the caller checked). A
-/// marker that exists as a symlink counts exactly as a real file or
-/// directory does, as the git repository guards hold.
-fn is_bare(dir: &Path) -> bool {
-    marker_file(&dir.join("HEAD"))
-        && marker_dir(&dir.join("objects"))
-        && marker_dir(&dir.join("refs"))
-}
-
-/// Whether a bare marker exists as a file. A symlink counts exactly as a
-/// real file does.
-fn marker_file(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() || meta.is_symlink())
-}
-
-/// Whether a bare marker exists as a directory. A symlink counts exactly
-/// as a real directory does; a regular file does not count.
-fn marker_dir(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir() || meta.is_symlink())
 }
 
 /// The common directory for a `.git` file naming `gitdir: <path>`: the
@@ -341,13 +319,21 @@ fn read_pointer(path: &Path) -> Option<Vec<u8>> {
 }
 
 /// At most `bound + 1` bytes of `path`: `None` when the file cannot be
-/// read, so the caller fails closed. A symlinked file is refused before it
-/// is opened, so the read never follows one.
+/// read, so the caller fails closed. The file is opened without following
+/// a trailing symlink, and the opened descriptor must be a regular file
+/// before a byte is read, so a swap between check and open cannot redirect
+/// the read and a FIFO cannot block the classifier.
 fn read_bounded(path: &Path, bound: usize) -> Option<Vec<u8>> {
-    if std::fs::symlink_metadata(path).ok()?.is_symlink() {
+    use rustix::fs::OFlags;
+    let flags = OFlags::RDONLY
+        .union(OFlags::NOFOLLOW)
+        .union(OFlags::CLOEXEC)
+        .union(OFlags::NONBLOCK);
+    let fd: std::os::fd::OwnedFd = rustix::fs::open(path, flags, rustix::fs::Mode::empty()).ok()?;
+    let file = std::fs::File::from(fd);
+    if !file.metadata().ok()?.is_file() {
         return None;
     }
-    let file = std::fs::File::open(path).ok()?;
     let mut bytes = Vec::new();
     file.take(bound as u64 + 1).read_to_end(&mut bytes).ok()?;
     Some(bytes)
@@ -393,16 +379,15 @@ fn parse_config(text: &str) -> Option<BTreeSet<String>> {
             return None;
         };
         let (key, value) = split_key(line)?;
+        let value = parse_value(value)?;
         if name == "remote"
             && section
                 .as_ref()
                 .is_some_and(|(_, sub)| sub.as_ref().is_some_and(|sub| !sub.is_empty()))
             && key.eq_ignore_ascii_case("url")
+            && let Some(owner) = remote_owner(&value)
         {
-            let value = parse_value(value)?;
-            if let Some(owner) = remote_owner(&value) {
-                owners.insert(owner);
-            }
+            owners.insert(owner);
         }
     }
     Some(owners)

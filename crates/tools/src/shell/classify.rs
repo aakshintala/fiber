@@ -435,7 +435,7 @@ fn networked(
     if !is_gh(words) {
         return Outcome::Reads(paths);
     }
-    if repo_selects_host(words) {
+    if repo_selects_host(words, gh_entry) {
         return Outcome::Executes;
     }
     let Some(entry) = gh_entry else {
@@ -450,18 +450,57 @@ fn networked(
 /// Whether a `--repo`/`-R` value in a `gh` call names a host:
 /// `HOST/OWNER/REPO` reaches past the default endpoint, so the call is
 /// reviewed. A bare `OWNER/REPO`, or a value with no slash, cannot name
-/// one. A `--repo` word consumed as another flag's value keeps its
-/// own meaning, but such a call is reviewed too: it stays fail-closed.
-fn repo_selects_host(words: &[Word]) -> bool {
-    words
-        .iter()
-        .any(|word| word.cooked.strip_prefix("--repo=").is_some_and(has_host))
-        || words.windows(2).any(|pair| {
-            let [flag, value] = pair else {
-                return false;
-            };
-            (flag.cooked == "--repo" || flag.cooked == "-R") && has_host(&value.cooked)
-        })
+/// one. Only a `--repo`/`-R` in flag position counts: a word another flag
+/// consumed keeps its own meaning there, so `gh pr view --json --repo
+/// h/o/r` stays `network` instead of tripping the host check.
+fn repo_selects_host(words: &[Word], gh_entry: Option<&Command>) -> bool {
+    let Some(entry) = gh_entry else {
+        return words
+            .iter()
+            .any(|word| word.cooked.strip_prefix("--repo=").is_some_and(has_host))
+            || words.windows(2).any(|pair| {
+                let [flag, value] = pair else {
+                    return false;
+                };
+                (flag.cooked == "--repo" || flag.cooked == "-R") && has_host(&value.cooked)
+            });
+    };
+    let mut rest = words.iter().skip(entry.name.split(' ').count());
+    let mut ended = false;
+    while let Some(word) = rest.next() {
+        match entry::word_at(word, ended, entry) {
+            entry::WordAt::EndFlags => ended = true,
+            entry::WordAt::Flag => {
+                if let Some(value) = word.cooked.strip_prefix("--repo=")
+                    && entry
+                        .flags
+                        .iter()
+                        .any(|flag| flag.takes_value && flag.spelling == "--repo")
+                    && has_host(value)
+                {
+                    return true;
+                }
+                if word.cooked.contains('=') {
+                    continue;
+                }
+                let Some(flag) = entry.flags.iter().find(|flag| flag.spelling == word.cooked)
+                else {
+                    continue;
+                };
+                if !flag.takes_value {
+                    continue;
+                }
+                let Some(value) = rest.next() else {
+                    return false;
+                };
+                if (word.cooked == "--repo" || word.cooked == "-R") && has_host(&value.cooked) {
+                    return true;
+                }
+            }
+            entry::WordAt::Operand(_) => {}
+        }
+    }
+    false
 }
 
 /// Whether a `--repo`/`-R` value holds a host part: more than

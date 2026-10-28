@@ -59,7 +59,7 @@ pub(super) fn repository_ok(dir: &Path) -> bool {
 /// `objects/` and `refs/` beside it, and no `.git` (the caller checked).
 /// A marker that exists as a symlink is unsafe, so it counts exactly as
 /// a real file or directory does.
-fn is_bare(dir: &Path) -> bool {
+pub(super) fn is_bare(dir: &Path) -> bool {
     marker_file(&dir.join("HEAD"))
         && marker_dir(&dir.join("objects"))
         && marker_dir(&dir.join("refs"))

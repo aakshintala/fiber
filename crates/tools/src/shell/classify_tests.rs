@@ -1928,6 +1928,72 @@ fn a_malformed_config_has_no_owners() {
 }
 
 #[test]
+fn a_malformed_value_outside_a_remote_url_has_no_owners() {
+    // Every config value is validated, not just `remote.*.url`: a valid
+    // remote beside an unterminated quoted value elsewhere still fails
+    // closed, per `docs/tools.md` ("unparsable config").
+    for (index, config) in [
+        "[core]\n\tfoo = \"unterminated\n[remote \"origin\"]\n\turl = git@github.com:acme/app.git\n",
+        "[remote \"origin\"]\n\turl = git@github.com:acme/app.git\n[core]\n\tbar = \"bad\\q\"\n",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (_dir, workspace) = owner_workspace(
+            &format!("fiber-shell-gh-outside-value-{index}"),
+            config,
+        );
+        assert_foreign(
+            "gh issue view 12",
+            &workspace,
+            &workspace,
+            &[],
+            vec![workspace_path(&workspace, "12")],
+        );
+    }
+}
+
+#[test]
+fn a_symlinked_config_has_no_owners() {
+    // `read_bounded` opens without following a trailing symlink, so a
+    // config swapped for a link to an owned config still leaves no owners.
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-config-link");
+    let config = workspace.join(".git").join("config");
+    let real = workspace.join(".git").join("config.real");
+    std::fs::rename(&config, &real).unwrap();
+    std::os::unix::fs::symlink(&real, &config).unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
+fn a_fifo_config_has_no_owners_without_blocking() {
+    // A FIFO where the config belongs cannot block classification: the
+    // open requires a regular file before reading a byte.
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-config-fifo");
+    let config = workspace.join(".git").join("config");
+    std::fs::remove_file(&config).unwrap();
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &config,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .unwrap();
+    assert_foreign(
+        "gh issue view 12",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "12")],
+    );
+}
+
+#[test]
 fn the_config_size_cap_holds_at_64_kib() {
     for (size, reads) in [(65_535, true), (65_536, true), (65_537, false)] {
         let (_dir, workspace) = acme_workspace(&format!("fiber-shell-gh-size-{size}"));
@@ -2399,25 +2465,63 @@ fn url_operand_failures_keep_the_reviewed_path() {
 
 #[test]
 fn mixed_stages_fold_toward_review() {
+    // `docs/tools.md`, "Shell", "Effects" promises the paths each stage
+    // names, not their order, so mixed stages assert membership.
     let (_dir, workspace) = acme_workspace("fiber-shell-gh-mixed");
-    assert_own(
+    let effects = classify(
         "gh issue view 1 --repo acme/app && ls",
         &workspace,
         &workspace,
-        vec![
+        &[],
+    );
+    assert_eq!(effects.declared.effects, vec![Effect::Reads]);
+    assert_eq!(
+        BTreeSet::from_iter(effects.declared.paths.unwrap_or_default()),
+        BTreeSet::from([
             workspace_path(&workspace, "1"),
             workspace.to_str().unwrap().to_owned(),
-        ],
+        ]),
     );
-    assert_foreign(
+    let effects = classify(
         "gh issue view 1 --repo acme/app && gh pr view 2 --repo evil/other",
         &workspace,
         &workspace,
         &[],
-        vec![
+    );
+    assert_eq!(effects.declared.effects, vec![Effect::Network]);
+    assert_eq!(
+        effects.hosts,
+        Some(vec!["https://api.github.com/".to_owned()]),
+    );
+    assert_eq!(
+        BTreeSet::from_iter(effects.declared.paths.unwrap_or_default()),
+        BTreeSet::from([
             workspace_path(&workspace, "1"),
             workspace_path(&workspace, "2"),
-        ],
+        ]),
+    );
+}
+
+#[test]
+fn a_repo_word_consumed_as_a_value_does_not_select_a_host() {
+    // Only a `--repo`/`-R` in flag position trips the host check: `--json`
+    // consumes the following `--repo`, so `h/o/r` is an operand and the
+    // call stays `network` instead of becoming `executes`. A consumed
+    // `--repo=` likewise names no host: with no operand left, the read
+    // resolves from the workspace and stays `reads`.
+    let (_dir, workspace) = acme_workspace("fiber-shell-gh-consumed-repo");
+    assert_foreign(
+        "gh pr view --json --repo h/o/r",
+        &workspace,
+        &workspace,
+        &[],
+        vec![workspace_path(&workspace, "h/o/r")],
+    );
+    assert_own(
+        "gh pr view --json --repo=h/o/r",
+        &workspace,
+        &workspace,
+        vec![workspace.to_str().unwrap().to_owned()],
     );
 }
 
