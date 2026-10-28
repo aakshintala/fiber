@@ -223,7 +223,8 @@ fn orphans<'a>(
             | Entry::Steer(_)
             | Entry::Group(_)
             | Entry::Band(_)
-            | Entry::Answers(_) => None,
+            | Entry::Answers(_)
+            | Entry::Message(_) => None,
         });
     fold.asides
         .iter_mut()
