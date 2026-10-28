@@ -868,6 +868,53 @@ fn a_full_subscribe_in_the_post_close_exit_window_resumes_while_the_log_exists()
 }
 
 #[test]
+fn a_finish_after_the_exited_session_is_removed_sends_no_second_close() {
+    // The forced order for #3533: the probe's close exits the session,
+    // the test waits out the close-caused exit and the session processes,
+    // the retired session's directory is removed, and only then `finish`
+    // runs, so the finish subscribe deterministically names a removed
+    // session. The finish must return without sending `c_finish` instead
+    // of panicking on `session_not_found`.
+    //
+    // The removal stands in for the race the suite hit twice (see #3533):
+    // a subscribe for a session the hub cannot serve is refused
+    // `session_not_found` (`crates/hub/src/relay.rs`, the failed write in
+    // `attach_inner`, and `crates/hub/src/resume.rs`, the log lookup in
+    // `attempt`). Awaiting the exit alone lets the hub settle and resume
+    // instead, so the removal is forced here the way a prune between the
+    // exit and the finish would.
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe(&first, "c_sub", &id);
+    // Resume past the ask run's exit so the session idles: the probe's
+    // close then causes a fresh exit of its own.
+    first.send(&command("c_after", &id, "tools", &json!({})));
+    until(&first, "c_after's acknowledgement", |line| {
+        is_answer(line, "c_after")
+    });
+    let running = world.session_pids();
+    assert!(!running.is_empty(), "the resumed run is a session process");
+    let probe = world.client();
+    subscribe(&probe, "c_probe_sub", &id);
+    probe.send(&close(&id));
+    let mut closed = until(&probe, "the close acknowledgement", |line| {
+        is_answer(line, "c_close")
+    });
+    let ack = closed.pop().expect("the acknowledgement ends the wait");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    until(&probe, "the close-caused exit", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    world.await_exit(&running);
+    fs::remove_dir_all(support::session_dir(&world.setup, &id))
+        .expect("the retired session's directory removes");
+    drop(probe);
+    drop(first);
+    world.finish();
+}
+
+#[test]
 fn a_finish_without_a_close_leaves_no_session_running() {
     // The session runs idle with the ask run's exit already in its log: a
     // fresh subscribe replays that exit while the session lives, so an exit
