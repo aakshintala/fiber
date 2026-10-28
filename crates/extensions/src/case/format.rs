@@ -5,53 +5,58 @@ use std::path::Path;
 use contract::ErrorCode;
 use serde_json::{Map, Value};
 
+/// The injected validator for a session case's script bytes.
+type ScriptCheck<'a> = dyn Fn(&Path, &[u8]) -> Result<(), String> + 'a;
+
 /// One parsed extension case: a session case or a provider call case.
 /// The two kinds are variants, so a case cannot carry both a prompt and a
 /// call, and a call case cannot carry both a return and an error
 /// (`docs/code-quality.md`, "Types").
-pub(crate) enum Case {
+pub enum Case {
+    /// A session driven by the case runner.
     Session(SessionCase),
+    /// A scripted extension call sequence.
     Call(CallCase),
 }
 
 /// A session case: the script, the first input and the expected event lines.
-pub(crate) struct SessionCase {
+pub struct SessionCase {
     /// The optional display name, defaulted by the caller from the file stem.
-    pub(crate) name: Option<String>,
+    pub name: Option<String>,
     /// Inline model steps.
-    pub(crate) script: Value,
+    pub script: Value,
     /// The first input: a prompt or an extension command.
-    pub(crate) input: Input,
+    pub input: Input,
     /// Global configuration written into the case's temporary Fiber home.
-    pub(crate) config: Option<Value>,
+    pub config: Option<Value>,
     /// Extension settings written into the case's temporary Fiber home,
     /// one global settings file per extension name.
-    pub(crate) settings: Option<Value>,
+    pub settings: Option<Value>,
     /// Scripted extension host calls.
-    pub(crate) host: Host,
+    pub host: Host,
     /// Advances on the case clock, in order.
-    pub(crate) clock: Vec<ClockAdvance>,
+    pub clock: Vec<ClockAdvance>,
     /// The event after which the child closes the session.
-    pub(crate) until: Option<Selector>,
+    pub until: Option<Selector>,
     /// Durable event lines expected from the session.
-    pub(crate) expect: Vec<Value>,
+    pub expect: Vec<Value>,
     /// Whether a person is attached to the case.
-    pub(crate) attended: bool,
+    pub attended: bool,
 }
 
 /// An extension command a session case sends instead of a prompt: the
 /// command name and the text after it, which defaults to the empty string.
 #[derive(Clone)]
-pub(crate) struct CaseCommand {
+pub struct CaseCommand {
     /// The extension command name.
-    pub(crate) name: String,
+    pub name: String,
     /// The text typed after the name.
-    pub(crate) text: String,
+    pub text: String,
 }
 
 /// The first input of a session case: one variant, so a case cannot carry
 /// both a prompt and a command (`docs/code-quality.md`, "Types").
-pub(crate) enum Input {
+pub enum Input {
     /// The first prompt, starting a model turn.
     Prompt(String),
     /// An extension command, sent after `extensions_loaded` with no turn.
@@ -59,9 +64,9 @@ pub(crate) enum Input {
 }
 
 /// A provider call case: the call and its one expected outcome.
-pub(crate) struct CallCase {
+pub struct CallCase {
     /// The optional display name, defaulted by the caller from the file stem.
-    pub(crate) name: Option<String>,
+    pub name: Option<String>,
     /// Ordered calls and credential barriers sharing one provider.
     pub(crate) steps: Vec<CallStep>,
     /// Stored credentials to seed before the first call.
@@ -98,34 +103,34 @@ pub(crate) enum CallOutcome {
 
 /// Replies supplied to extension host calls.
 #[derive(Default)]
-pub(crate) struct Host {
+pub struct Host {
     /// HTTP replies in request order.
-    pub(crate) http: Vec<extensions::HttpEntry>,
+    pub http: Vec<crate::HttpEntry>,
     /// Exec replies in request order.
-    pub(crate) exec: Vec<extensions::ExecEntry>,
+    pub exec: Vec<crate::ExecEntry>,
     /// OAuth calls in order.
-    pub(crate) oauth: Vec<Value>,
+    pub oauth: Vec<Value>,
 }
 
 /// One manual clock advance, optionally anchored to an event line.
-pub(crate) struct ClockAdvance {
+pub struct ClockAdvance {
     /// The durable event that authorizes this advance, when present.
-    pub(crate) after: Option<Selector>,
+    pub after: Option<Selector>,
     /// The positive number of milliseconds to advance.
-    pub(crate) advance_ms: u64,
+    pub advance_ms: u64,
     /// The 1-based `host.exec` entry the advance waits to match as a hang.
     /// The runner holds the advance until that entry matches, so the advance
     /// lands on the hang's park instead of an earlier wait.
-    pub(crate) hang: Option<usize>,
+    pub hang: Option<usize>,
 }
 
 /// An event kind and its 1-based occurrence.
 #[derive(Clone)]
-pub(crate) struct Selector {
+pub struct Selector {
     /// The event kind to find.
-    pub(crate) kind: String,
+    pub kind: String,
     /// The occurrence to find, defaulting to the first.
-    pub(crate) nth: usize,
+    pub nth: usize,
 }
 
 /// A provider callback invocation.
@@ -140,7 +145,15 @@ pub(crate) struct Call {
 
 impl Case {
     /// Parses a JSON case file and reports the first malformed field.
-    pub(crate) fn parse(path: &Path, bytes: &[u8]) -> Result<Self, String> {
+    pub fn parse(
+        path: &Path,
+        bytes: &[u8],
+        check_script: &ScriptCheck<'_>,
+    ) -> Result<Self, crate::Error> {
+        Self::parse_inner(path, bytes, check_script).map_err(crate::Error::Case)
+    }
+
+    fn parse_inner(path: &Path, bytes: &[u8], check_script: &ScriptCheck) -> Result<Self, String> {
         let value: Value = serde_json::from_slice(bytes)
             .map_err(|error| format!("{}: invalid JSON: {error}", path.display()))?;
         let map = value
@@ -250,8 +263,7 @@ impl Case {
                 .ok_or_else(|| "script: required for a session case".to_owned())?;
             let script_bytes = serde_json::to_vec(script_value)
                 .map_err(|error| format!("script: cannot encode: {error}"))?;
-            provider::scripted::Script::parse(path, &script_bytes)
-                .map_err(|error| format!("script: {error}"))?;
+            check_script(path, &script_bytes).map_err(|error| format!("script: {error}"))?;
             let input = match (prompt, command) {
                 (Some(_), Some(_)) => {
                     return Err("prompt and command cannot be used in the same case".to_owned());
@@ -347,10 +359,7 @@ const CASE_FIELDS: &[&str] = &[
     "attended",
 ];
 
-fn parse_calls(
-    value: Option<&Value>,
-    exec: &[extensions::ExecEntry],
-) -> Result<Vec<CallStep>, String> {
+fn parse_calls(value: Option<&Value>, exec: &[crate::ExecEntry]) -> Result<Vec<CallStep>, String> {
     let entries = value
         .and_then(Value::as_array)
         .ok_or("calls: expected a non-empty list")?;
@@ -521,7 +530,7 @@ fn parse_host(value: Option<&Value>) -> Result<Host, String> {
     Ok(Host { http, exec, oauth })
 }
 
-fn parse_http(value: &Value, index: usize) -> Result<extensions::HttpEntry, String> {
+fn parse_http(value: &Value, index: usize) -> Result<crate::HttpEntry, String> {
     let prefix = format!("host.http[{}]", index.saturating_add(1));
     let map = value
         .as_object()
@@ -559,13 +568,13 @@ fn parse_http(value: &Value, index: usize) -> Result<extensions::HttpEntry, Stri
         let body = string(reply, "body", &format!("{prefix}.reply"))?;
         Ok((status, body.into_bytes()))
     };
-    Ok(extensions::HttpEntry {
+    Ok(crate::HttpEntry {
         request,
         reply: scripted,
     })
 }
 
-fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, String> {
+fn parse_exec(value: &Value, index: usize) -> Result<crate::ExecEntry, String> {
     let prefix = format!("host.exec[{}]", index.saturating_add(1));
     let map = value
         .as_object()
@@ -619,9 +628,9 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
         if reply.len() != 1 {
             return Err(format!("{prefix}.reply.hang: takes no other key"));
         }
-        return Ok(extensions::ExecEntry {
+        return Ok(crate::ExecEntry {
             request: Value::Object(request.clone()),
-            reply: Ok(extensions::ExecReply::Hang),
+            reply: Ok(crate::ExecReply::Hang),
         });
     }
     let end = match (reply.contains_key("code"), reply.contains_key("signal")) {
@@ -629,13 +638,13 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
             let code = signed(reply, "code", &format!("{prefix}.reply"))?;
             let code = i32::try_from(code)
                 .map_err(|_| format!("{prefix}.reply.code: outside the process exit-code range"))?;
-            extensions::ExecEnd::Code(code)
+            crate::ExecEnd::Code(code)
         }
         (false, true) => {
             let signal = signed(reply, "signal", &format!("{prefix}.reply"))?;
             let signal = i32::try_from(signal)
                 .map_err(|_| format!("{prefix}.reply.signal: outside the process signal range"))?;
-            extensions::ExecEnd::Signal(signal)
+            crate::ExecEnd::Signal(signal)
         }
         _ => {
             return Err(format!(
@@ -645,9 +654,9 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
     };
     let stdout = string(reply, "stdout", &format!("{prefix}.reply"))?;
     let stderr = string(reply, "stderr", &format!("{prefix}.reply"))?;
-    Ok(extensions::ExecEntry {
+    Ok(crate::ExecEntry {
         request: Value::Object(request.clone()),
-        reply: Ok(extensions::ExecReply::Completed {
+        reply: Ok(crate::ExecReply::Completed {
             end,
             stdout,
             stderr,
@@ -657,7 +666,7 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
 
 fn parse_clock(
     value: Option<&Value>,
-    exec: &[extensions::ExecEntry],
+    exec: &[crate::ExecEntry],
 ) -> Result<Vec<ClockAdvance>, String> {
     let Some(value) = value else {
         return Ok(Vec::new());
@@ -696,11 +705,7 @@ fn parse_clock(
 
 /// Parses a clock entry's `hang` key: the 1-based index of the `host.exec`
 /// entry the advance waits to match as a hang.
-fn parse_hang(
-    value: &Value,
-    prefix: &str,
-    exec: &[extensions::ExecEntry],
-) -> Result<usize, String> {
+fn parse_hang(value: &Value, prefix: &str, exec: &[crate::ExecEntry]) -> Result<usize, String> {
     let hang = value
         .as_u64()
         .filter(|hang| *hang > 0)
@@ -709,7 +714,7 @@ fn parse_hang(
     let hangs = exec
         .get(hang.saturating_sub(1))
         .and_then(|entry| entry.reply.as_ref().ok())
-        .is_some_and(|reply| matches!(reply, extensions::ExecReply::Hang));
+        .is_some_and(|reply| matches!(reply, crate::ExecReply::Hang));
     if !hangs {
         return Err(format!(
             "{prefix}.hang: must name a host.exec entry whose reply is hang"
