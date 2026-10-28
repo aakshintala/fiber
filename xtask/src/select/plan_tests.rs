@@ -535,6 +535,18 @@ fn a_cli_diff_skips_session_start_and_paging() {
 }
 
 #[test]
+fn a_worktree_diff_selects_the_list_row() {
+    // `cli::sessions_list::list` resolves the project in `worktree`
+    // (`cli/src/sessions_list.rs:137`), so a worktree change selects
+    // `sessions list` alongside `session start` and the terminal rows:
+    // only `paging` is skipped.
+    assert_eq!(
+        skipped("pull_request", &["crates/worktree/src/project.rs"]),
+        vec!["paging"]
+    );
+}
+
+#[test]
 fn an_unmapped_path_selects_every_row() {
     for path in [
         "crates/bench/examples/bench/main.rs",
