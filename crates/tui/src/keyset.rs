@@ -3,6 +3,8 @@
 //! replaces its action's defaults, `[]` unbinds it, and an invalid or
 //! clashing entry gives one notice and keeps the defaults.
 
+use std::collections::BTreeSet;
+
 use serde_json::{Map, Value};
 
 use crate::bindings::BINDINGS;
@@ -494,6 +496,59 @@ impl Keyset {
             .collect::<Vec<_>>()
             .join(", ")
     }
+}
+
+/// The canonical name of `name`: parsed then rewritten in lowercase with
+/// the modifiers in `ctrl`, `shift`, `alt`, `super` order, or `None` when
+/// it does not parse (`docs/tui.md`, "Bindings"). Whole-screen bindings
+/// and key-slot settings canonicalize through this one parser.
+pub fn canonical_key(name: &str) -> Option<String> {
+    Stroke::parse(name).ok().map(|stroke| stroke.name())
+}
+
+/// Whether (`id`, `variant`) names a bindable action: `None` when valid,
+/// else the reason, naming the action (`docs/tui.md`, "Bindings"). A
+/// variant action names one of its variants; a one-variant action takes
+/// none; `clear_then_quit` cannot be rebound at all.
+pub fn check_action(id: &str, variant: Option<&str>) -> Option<String> {
+    if id == "clear_then_quit" {
+        return Some(format!(
+            "{id} cannot be rebound: Ctrl+C always clears, then quits."
+        ));
+    }
+    let Some(binding) = BINDINGS.iter().find(|binding| binding.id == id) else {
+        return Some(format!("Fiber has no action {id}."));
+    };
+    let variants = binding.events.len().max(1);
+    if variants == 1 {
+        if let Some(variant) = variant {
+            return Some(format!("{id} takes no `variant`, but names {variant:?}."));
+        }
+        return None;
+    }
+    let Some(variant) = variant else {
+        let (_, names) = takes(id);
+        return Some(format!("{id} takes a `variant`: {names}."));
+    };
+    if (0..variants).any(|slot| variant_name(id, slot) == variant) {
+        return None;
+    }
+    let (_, names) = takes(id);
+    Some(format!("{id} has no variant {variant:?}: {names}."))
+}
+
+/// The person's canonical key names after clash reversion: the keys of
+/// every entry still set (`docs/tui.md`, "Bindings"). A key the person
+/// owns stays theirs in every context (`docs/tui.md`, "When two
+/// extensions want one slot").
+pub fn person_bound_keys(user: &Map<String, Value>) -> BTreeSet<String> {
+    let (keyset, _) = load(user);
+    BINDINGS
+        .iter()
+        .zip(keyset.rows.iter())
+        .filter(|(_, row)| row.person)
+        .flat_map(|(_, row)| row.keys.iter().map(Stroke::name))
+        .collect()
 }
 
 /// The person's `keys` (`docs/configuration.md`, "Keys"): each action's id
