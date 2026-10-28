@@ -113,7 +113,10 @@ use crate::link::Line;
 
 pub use attention::Attention;
 
-pub use catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, ReadModels, Refresh};
+pub use catalogue::{
+    Catalogue, LeftOutGroup, LeftOutModel, ListAge, ModelEntry, Price, PriceTier, ReadModels,
+    Refresh,
+};
 pub use configure::{
     BrowserLogin, Configure, ConfigureError, FileOutcome, FileSaved, HostGap, HostSaved, KeyEdit,
     Layer, LoginKind, LoginNeed, LoginShow, LoginTarget, LogoutRow, NotesFile, NotesSaved,

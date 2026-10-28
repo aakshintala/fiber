@@ -484,6 +484,9 @@ fn decode_models(value: &Value) -> Option<Catalogue> {
             None => Vec::new(),
             Some(names) => serde_json::from_value(names.clone()).ok()?,
         },
+        // The grouped left-out wire lands with the hub in the next
+        // task; a missing key reads as empty, mirroring `installable`.
+        left_out: Vec::new(),
         models: value
             .get("models")?
             .as_array()?

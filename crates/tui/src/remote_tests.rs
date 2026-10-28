@@ -1284,6 +1284,7 @@ fn catalogue_answers_decode_field_for_field() {
                     stale: true,
                 },
             ],
+            left_out: Vec::new(),
         }
     );
 }
