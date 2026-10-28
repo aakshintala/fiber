@@ -9,6 +9,7 @@ use contract::events::{ToolInfo, ToolSource, ToolState};
 use crate::configure::{SwitchScope, ToolGroup, ToolLists, ToolSwitches};
 use crate::format::tokens;
 use crate::keys::{Edit, Key};
+use crate::scope_switches::ScopeSwitches;
 use crate::settings_view::{Act, Ctx};
 use crate::swapped::{Frame, GUTTER, Ink, List, Spot, about, rows_height};
 use crate::text;
@@ -123,8 +124,8 @@ pub(crate) struct Tools {
     /// Headings and tool rows.
     rows: Vec<Entry>,
     list: List,
-    /// The switch Space flips: this project at open.
-    focus: SwitchScope,
+    /// The two switches' shared state: the switch Space flips.
+    focus: ScopeSwitches,
     /// What the last failed action said, shown below the rows.
     said: Vec<String>,
 }
@@ -144,7 +145,9 @@ impl Tools {
             unlisted: Vec::new(),
             rows: Vec::new(),
             list: List::gutter(),
-            focus: SwitchScope::Project,
+            focus: ScopeSwitches {
+                focus: SwitchScope::Project,
+            },
             said,
         };
         tools.rebuild(ctx);
@@ -187,20 +190,7 @@ impl Tools {
 
     /// Handles one editing key: ← and → choose the row's switch.
     pub(crate) fn edit_key(&mut self, edit: &Edit) {
-        match edit {
-            Edit::Left => self.focus = SwitchScope::Project,
-            Edit::Right => self.focus = SwitchScope::Everywhere,
-            Edit::ShiftEnter
-            | Edit::CtrlJ
-            | Edit::WordLeft
-            | Edit::WordRight
-            | Edit::DeleteWord
-            | Edit::DeleteToLineStart
-            | Edit::LineStart
-            | Edit::LineEnd
-            | Edit::Delete
-            | Edit::Paste(_) => {}
-        }
+        self.focus.edit_key(edit);
     }
 
     /// A click: the ✕ closes, a row is selected, and a switch is selected
@@ -219,11 +209,7 @@ impl Tools {
             Spot::Switch { row, at } => {
                 let shown = self.shown(ctx);
                 self.list.select(row, self.rows.len(), shown);
-                self.focus = if at == 0 {
-                    SwitchScope::Project
-                } else {
-                    SwitchScope::Everywhere
-                };
+                self.focus.focus = ScopeSwitches::scope_for_at(at);
                 self.switch(ctx)
             }
         }
@@ -239,22 +225,21 @@ impl Tools {
             return Act::Stay;
         };
         let name = row.name.clone();
-        let on = !self.on_in_scope(&group, &name, self.focus);
-        match ctx
-            .seam
-            .switch_tool(ctx.workspace, &group, &name, self.focus, on)
-        {
-            Ok(()) => {
-                self.reread(ctx);
-                self.said.clear();
-            }
-            Err(error) => {
-                // A write may have landed before the error, so the rows
-                // show what the files hold before the message does.
-                self.reread(ctx);
-                self.said = vec![error.message];
-            }
-        }
+        let scope = self.focus.focused();
+        ScopeSwitches::write_then_reread(
+            scope,
+            self,
+            |view, scope| view.on_in_scope(&group, &name, scope),
+            |_view, scope, on| {
+                ctx.seam
+                    .switch_tool(ctx.workspace, &group, &name, scope, on)
+            },
+            |view| view.reread(ctx),
+            |view| view.said.clear(),
+            // A write may have landed before the error, so the rows
+            // show what the files hold before the message does.
+            |view, error| view.said = vec![error],
+        );
         Act::Stay
     }
 
@@ -441,11 +426,8 @@ impl Tools {
         };
         let selected = index == self.list.selected();
         let switch = |scope: SwitchScope, at: usize| {
-            let mark = if selected && self.focus == scope {
-                ("›".to_owned(), None, Ink::Heading)
-            } else {
-                (" ".to_owned(), None, Ink::Plain)
-            };
+            let (text, ink) = ScopeSwitches::mark(selected, self.focus.focused() == scope);
+            let mark = (text, None, ink);
             let (word, ink) = if self.on_in_scope(group, &row.name, scope) {
                 ("[on]", Ink::Heading)
             } else {
