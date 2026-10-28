@@ -272,7 +272,7 @@ fn run_terminal(
             },
         )?;
     for notice in &notices {
-        writeln!(err, "{notice}").map_err(CliError::StandardError)?;
+        writeln!(err, "{}", notice.message).map_err(CliError::StandardError)?;
     }
     let code = step_providers(home, Some(&providers), flags, clock, Some(&mut *stdin), err)?;
     if code != 0 {
