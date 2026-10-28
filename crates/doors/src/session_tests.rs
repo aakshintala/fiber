@@ -6090,23 +6090,21 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
     let release = Mutex::new(release);
     let (dispatch_tx, dispatch) = mpsc::channel();
     let (cut_wait_tx, cut_wait) = mpsc::channel();
-    let armed = Arc::new(AtomicBool::new(false));
-    let probe_armed = Arc::clone(&armed);
+    // The subscription reservation predates the probe, so every
+    // `CommandReserved` below is the dispatched prompt.
+    let client = subscribed_client(&opened);
     *super::lock(&gate.probe) = Some(Arc::new(move |point| match point {
         Probe::SettleWaitDone => {
             if let Ok(()) = settle_tx.send(()) {}
             released(&hold_settle, "settle_answers");
         }
-        Probe::CommandReserved if probe_armed.load(Ordering::SeqCst) => {
+        Probe::CommandReserved => {
             if let Ok(()) = reserved_tx.send(()) {}
-            // Held past the negative receive below, which itself waits the
-            // full DEADLINE: 15 seconds outlives it from this earlier start.
-            released_after(&release, "the dispatching reader", Duration::from_secs(15));
+            released(&release, "the dispatching reader");
         }
         Probe::DispatchWaitStarted => if let Ok(()) = dispatch_tx.send(()) {},
         Probe::CutWaitStarted => if let Ok(()) = cut_wait_tx.send(()) {},
-        Probe::CommandReserved
-        | Probe::FirstShellWaitDone
+        Probe::FirstShellWaitDone
         | Probe::PrinterStopQueued
         | Probe::ShellsWaiting
         | Probe::SubscribeSeeded
@@ -6116,7 +6114,6 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
         | Probe::WriterParkedAtStop
         | Probe::WriterPastEnd => {}
     }));
-    let client = subscribed_client(&opened);
     let clock = Arc::clone(&opened.clock);
     // The fake clock never moves before the reader finishes, so this is
     // the same `until` the quiescer computes when it starts.
@@ -6137,7 +6134,6 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
         .expect("settle_answers reaches its cut");
     // Admission closed when quiesce started, so the prompt the reader takes
     // now is refused `closing` once it dispatches.
-    armed.store(true, Ordering::SeqCst);
     client
         .send(r#"{"id":"c_p","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#)
         .unwrap();
@@ -6151,12 +6147,16 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
     Deadline::after(DEADLINE)
         .recv(&dispatch)
         .expect("settle_answers waits for the dispatching reader");
-    // While the reader is held, quiesce cannot return: a wait that returns
-    // at once would let the cut through and finish before this receive
-    // times out. The dispatching hold above waits 15 seconds from its
-    // earlier start, so it still outlives this full-DEADLINE receive.
+    // The quiescer parks in the dispatch wait at `until`: the observed park
+    // proves it waits, and the immediate check proves it has not returned
+    // while the reader is held.
+    let until = start + super::GRACE;
     assert!(
-        Deadline::after(DEADLINE).recv(&done).is_err(),
+        clock.await_parked(until, Deadline::after(DEADLINE)),
+        "settle_answers parks waiting for the dispatching reader"
+    );
+    assert!(
+        done.try_recv().is_err(),
         "quiesce waits for the dispatching reader"
     );
     // Release the dispatching reader (b): its `closing` answer drains
@@ -6169,7 +6169,7 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
     Deadline::after(DEADLINE)
         .recv(&cut_wait)
         .expect("settle_answers reaches its cut flush");
-    let flush_at = start + super::GRACE + super::CUT_FLUSH;
+    let flush_at = until + super::CUT_FLUSH;
     if clock.await_parked(flush_at, Deadline::after(DEADLINE)) {
         // Parked in the existing cut-flush wait: drive only its two
         // existing bounds, first the grace to `until`, then the flush
@@ -6205,7 +6205,6 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
         .recv(&done)
         .expect("quiesce returns once the dispatch is answered");
     let session = quiescer.join().expect("the quiesce thread returns");
-    armed.store(false, Ordering::SeqCst);
     let answer = loop {
         let line = recv(&client);
         if matches!(
@@ -6219,8 +6218,11 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
     assert_eq!(answer["kind"], "command_rejected", "{answer:?}");
     assert_eq!(support::rejection(&answer).0, "closing", "{answer:?}");
     close_within(session, log);
-    // The answer arrived before close, so count it with the lines that
-    // arrive after: exactly one answer, and it is `closing`, never cut.
+    // `docs/invocation.md`, "What the hub speaks", "Commands keep their order":
+    // every line a session reads gets exactly one answer on its connection
+    // before the session shuts it. The answer arrived before close, so count
+    // it with the lines that arrive after: exactly one answer, and it is
+    // `closing`, never cut.
     let mut lines = vec![answer];
     lines.extend(read_to_eof(&client));
     let acks = acks_for(&lines, "c_p");
