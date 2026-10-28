@@ -1066,7 +1066,7 @@ fn a_query_waits_while_the_row_has_left_and_goes_with_the_next_line() {
     let out = opened(&mut app);
     app.on_line(left_line(SESSION));
     assert!(ack(&mut app, &out).is_empty());
-    let lines = app.on_line(live(SESSION, json!({"state": "idle"})));
+    let lines = app.on_line(live(SESSION, json!({"state": "idle", "since": 1})));
     branch_query(&lines);
 }
 

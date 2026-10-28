@@ -6,7 +6,7 @@ use contract::tool::Effects;
 use super::super::classify::classify;
 
 fn classified(command: &str) -> Effects {
-    classify(command, Path::new("/work"), &[])
+    classify(command, Path::new("/work"), Path::new("/work"), &[])
 }
 
 fn assert_reads(command: &str) {
@@ -205,7 +205,8 @@ fn xargs_with_static_stdin_words_declares_canonical_paths() {
     std::fs::write(dir.path().join("outside"), "elsewhere\n").unwrap();
     symlink(dir.path().join("outside"), workspace.join("link")).unwrap();
     let workdir = workspace.to_str().unwrap().to_owned();
-    let classified = |command: &str| classify(command, Path::new(&workdir), &[]);
+    let root = dir.path().to_path_buf();
+    let classified = |command: &str| classify(command, &root, Path::new(&workdir), &[]);
     let canonical = workspace.canonicalize().unwrap();
     let file = canonical.join("f").to_str().unwrap().to_owned();
 

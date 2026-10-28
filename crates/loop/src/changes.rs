@@ -128,6 +128,7 @@ impl State {
         message: &OpeningMessage,
         workspace: &Path,
         prompt: &PromptInputs,
+        pre_stats: &BTreeMap<String, Option<Stat>>,
     ) -> Self {
         let workspace = opening::canonical(workspace);
         let (chain, _) = opening::repo_chain(&workspace);
@@ -138,16 +139,20 @@ impl State {
         for root in &message.added_directories {
             state.track_added(Path::new(root));
         }
+        // The baseline is the stat taken immediately before the opening
+        // build read each file: a change between the stat and the read
+        // misses the size-and-time shortcut at the next check and content
+        // decides.
         for file in &message.instruction_files {
             state.files.insert(
                 file.path.clone(),
                 Tracked {
-                    stat: stat_of(&file.path),
+                    stat: pre_stats.get(&file.path).copied().flatten(),
                     noticed: None,
                 },
             );
         }
-        state.track_sections(&prompt.extension_sections, true);
+        state.track_sections(&prompt.extension_sections, true, pre_stats);
         state.date = message.environment.date.clone();
         state
     }
@@ -174,8 +179,9 @@ impl State {
         state.dirs.extend(chain);
         // Today's manifest only: a path the log's opening message sent
         // that the manifest no longer names is not tracked and sends
-        // nothing.
-        state.track_sections(&prompt.extension_sections, false);
+        // nothing. A resume remembers no sizes or times, so no baseline
+        // threads through here.
+        state.track_sections(&prompt.extension_sections, false, &BTreeMap::new());
         // Each started call's declared paths, until its completion: only a
         // call that ran and completed touched its directories, as live.
         let mut running: BTreeMap<ActionId, Vec<String>> = BTreeMap::new();
@@ -251,7 +257,15 @@ impl State {
     /// size and time are read now (live); on resume nothing is
     /// remembered. Applied after the instruction files: a path in both
     /// roles is tracked once, and reads as the section's.
-    fn track_sections(&mut self, sections: &[(String, Vec<PathBuf>, Option<u64>)], sized: bool) {
+    fn track_sections(
+        &mut self,
+        sections: &[(String, Vec<PathBuf>, Option<u64>)],
+        sized: bool,
+        pre_stats: &BTreeMap<String, Option<Stat>>,
+    ) {
+        // A sized build baselines each section file on its pre-read stat,
+        // so a change between the stat and the read misses the shortcut
+        // at the next check; a resume remembers nothing.
         for (name, paths, budget) in sections {
             let keys: Vec<String> = paths
                 .iter()
@@ -259,7 +273,11 @@ impl State {
                 .collect();
             for key in &keys {
                 self.files.entry(key.clone()).or_insert_with(|| Tracked {
-                    stat: if sized { stat_of(key) } else { None },
+                    stat: if sized {
+                        pre_stats.get(key).copied().flatten()
+                    } else {
+                        None
+                    },
                     noticed: None,
                 });
             }
@@ -457,13 +475,18 @@ impl State {
         if self.files.contains_key(&path) {
             return (None, None);
         }
-        match std::fs::read(&candidate) {
+        // A stat taken after the read is stored as the stat of what was
+        // read only when nothing moved across the read: on mismatch the
+        // torn baseline is kept with no stat, so the next check diffs it
+        // instead of re-adopting a second `Created` event.
+        let (result, validated) = crate::read_stat::read_validated(&path);
+        match result {
             Ok(bytes) => {
                 let content = String::from_utf8_lossy(&bytes).into_owned();
                 self.files.insert(
                     path.clone(),
                     Tracked {
-                        stat: stat_of(&path),
+                        stat: validated,
                         noticed: None,
                     },
                 );
@@ -525,10 +548,16 @@ impl State {
             if !self.files.contains_key(&key) {
                 continue;
             }
-            match std::fs::read(resolved) {
+            // A stat taken after the read is stored as the stat of what was
+            // read only when nothing moved across the read: on mismatch
+            // the prior tracked stat is kept, so the next check re-reads.
+            let (result, validated) = crate::read_stat::read_validated(&key);
+            match result {
                 Ok(bytes) => {
                     let content = String::from_utf8_lossy(&bytes).into_owned();
-                    self.track(&key, stat_of(&key));
+                    if let Some(now) = validated {
+                        self.track(&key, Some(now));
+                    }
                     // Content different from what the model had: the model
                     // saw its own edit, so nothing is sent.
                     if self.had.get(&key).is_none_or(|old| old != &content) {
@@ -645,10 +674,14 @@ impl State {
                 out.push(event);
                 continue;
             };
-            match std::fs::read(&file.path) {
+            // A stat taken after the read is stored as the stat of what was
+            // read only when nothing moved across the read: on mismatch
+            // no stat is stored, so the next check re-reads.
+            let (result, validated) = crate::read_stat::read_validated(&file.path);
+            match result {
                 Ok(bytes) => {
                     let content = String::from_utf8_lossy(&bytes).into_owned();
-                    self.track(&file.path, stat_of(&file.path));
+                    self.track(&file.path, validated);
                     if self.had.get(&file.path) == Some(&content) {
                         // An own edit already moved what the model had.
                         continue;

@@ -27,6 +27,7 @@ const OTHER: &str = "s_0000000000000002";
 fn status(name: &str) -> SessionStatus {
     SessionStatus {
         name: name.into(),
+        named: false,
         workspace: "/w".into(),
         parent: None,
         model: "m".into(),

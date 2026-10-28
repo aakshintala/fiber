@@ -2565,7 +2565,8 @@ fn drawing_a_page_keeps_each_replys_render() {
             | Entry::Group(_)
             | Entry::Aside(_)
             | Entry::Band(_)
-            | Entry::Answers(_) => None,
+            | Entry::Answers(_)
+            | Entry::Message(_) => None,
         });
     let reply = replies.next().expect("the turn has a reply");
     assert_eq!(reply.cached_at(), Some(58));

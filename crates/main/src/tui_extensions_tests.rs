@@ -3,6 +3,32 @@ use super::*;
 use fakes::clock::FakeClock;
 use tui::ext::{AnswerDisposition, LedgerResult, TurnCardState, TurnGroupState};
 
+#[test]
+fn turn_card_message_entries_serialize_all_message_fields() {
+    let entry = tui::ext::TurnEntry::Message {
+        source: "session",
+        label: std::borrow::Cow::Borrowed("worker"),
+        text: "please check",
+        images: vec![tui::ext::PromptImage {
+            path: "image.png",
+            width: 12,
+            height: 8,
+        }],
+        ts: 1234,
+    };
+    assert_eq!(
+        entry_value(&entry),
+        json!({
+            "kind": "message",
+            "source": "session",
+            "label": "worker",
+            "text": "please check",
+            "images": [{"path": "image.png", "width": 12, "height": 8}],
+            "ts": 1234
+        })
+    );
+}
+
 fn fixture() -> (fakes::TempDir, Loader) {
     let dir = fakes::TempDir::new("fiber-tui-loader");
     let sources = config::Sources {

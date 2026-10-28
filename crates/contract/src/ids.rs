@@ -4,6 +4,21 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Whether `id` has the lowercase session-id grammar minted by the Hub.
+pub fn is_minted_session_id(id: &str) -> bool {
+    let Some(hex) = id.strip_prefix("s_") else {
+        return false;
+    };
+    hex.len() == 16
+        && hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+#[cfg(test)]
+#[path = "ids_tests.rs"]
+mod tests;
+
 /// The session an event belongs to. Opaque, and unique within Fiber home.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]

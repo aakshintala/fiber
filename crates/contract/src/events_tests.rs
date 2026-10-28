@@ -459,7 +459,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("clients", json!({"count": 1})),
         (
             "session_status",
-            json!({"name": "n", "workspace": "/w", "parent": "s0", "supervised": true, "model": "p/m", "thinking": "high",
+            json!({"name": "n", "named": true, "workspace": "/w", "parent": "s0", "supervised": true, "model": "p/m", "thinking": "high",
             "state": "idle", "started": 0, "calls": 0, "turns": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
@@ -1020,6 +1020,11 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "command_rejected",
+            json!({"command_id": "c", "code": "session_held", "message": "m",
+                "held": ["s_aaaaaaaaaaaaaaaa"]}),
+        ),
+        (
+            "command_rejected",
             json!({"code": "malformed", "message": "m"}),
         ),
         (
@@ -1072,8 +1077,14 @@ fn every_sample_reads_as_its_kind_and_writes_back_unchanged() {
         assert_eq!(event.kind(), kind);
         let written = Value::Object(event.payload().unwrap());
         // `null` details read as absent, which is the one lossy key here.
+        // `held` rides the raw `command_rejected` map for the TUI; the typed
+        // `CommandRejected` leaves it off on write, so expect that loss here.
         let expected = if kind == "job_delta" {
             json!({"job_id": "j", "text": "t"})
+        } else if kind == "command_rejected" && payload.get("held").is_some() {
+            let mut without_held = payload.clone();
+            without_held.as_object_mut().unwrap().remove("held");
+            without_held
         } else {
             payload
         };
@@ -2407,6 +2418,28 @@ fn a_session_started_omits_supervised_when_false_and_round_trips_when_true() {
         panic!("not a session_started");
     };
     assert!(present.supervised);
+    assert_eq!(serde_json::to_value(&present).unwrap(), shown);
+}
+
+#[test]
+fn a_session_status_omits_named_when_false_and_round_trips_when_true() {
+    let (_, base) = samples()
+        .into_iter()
+        .find(|(kind, payload)| {
+            *kind == "session_status" && !payload.as_object().unwrap().contains_key("named")
+        })
+        .unwrap();
+    let Some(Event::SessionStatus(absent)) = read("session_status", base.clone()).unwrap() else {
+        panic!("not a session_status");
+    };
+    assert!(!absent.named);
+    assert_eq!(serde_json::to_value(&absent).unwrap(), base);
+    let mut shown = base.clone();
+    shown["named"] = json!(true);
+    let Some(Event::SessionStatus(present)) = read("session_status", shown.clone()).unwrap() else {
+        panic!("not a session_status");
+    };
+    assert!(present.named);
     assert_eq!(serde_json::to_value(&present).unwrap(), shown);
 }
 

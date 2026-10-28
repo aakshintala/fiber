@@ -15,6 +15,7 @@ use contract::ErrorCode;
 use contract::events::{CommandInfo, SkillListed, SkillSource};
 use contract::shapes::ContentPart;
 use fakes::clock::FakeClock;
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 
 use super::{
     Cache, Found, commands, discover, discover_cached, entry, expand, listing, size_notice,
@@ -1220,4 +1221,64 @@ fn an_unreachable_entry_is_unread_without_a_notice_and_a_dangling_link_is_skippe
     assert!(names(&found).is_empty());
     assert_eq!(found.unread, [place.join("link")]);
     assert!(found.notices.is_empty(), "{:?}", messages(&found));
+}
+
+#[test]
+fn a_raced_skill_read_does_not_pin_the_torn_header() {
+    crate::read_stat::disarm();
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    // Torn (invalid) and final (valid) share size: the first line alone
+    // decides validity, so a read landing mid-write parses as Invalid.
+    let torn = "~~~\nname: same\ndescription: aaa\n---\nBody.\n";
+    let final_text = "---\nname: same\ndescription: aaa\n---\nBody.\n";
+    assert_eq!(
+        torn.len(),
+        final_text.len(),
+        "the race hides in content, not size"
+    );
+    let path = write(&place, "a", torn);
+    let pre_mtime = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
+    let final_mtime = std::time::UNIX_EPOCH + std::time::Duration::from_secs(2_000);
+    assert_ne!(pre_mtime, final_mtime, "pre/post stats must differ");
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(pre_mtime)
+        .unwrap();
+    let mut cache = Cache::default();
+    let target = path.display().to_string();
+    // Pre-stat edge, read-return edge, held hook edge, post-stat edge:
+    // the worker reads the torn bytes and parks; the test writes the
+    // final content before releasing it, so the post-stat is final.
+    let first = std::thread::scope(|scope| {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let waiter = scope.spawn(|| {
+            crate::read_stat::arm(&target, entered_tx, release_rx);
+            cached(&tree, &mut cache)
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the skill read reached its read edge");
+        std::fs::write(&path, final_text).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(final_mtime)
+            .unwrap();
+        let _sent = release_tx.send(());
+        waiter.join().expect("the hooked skill read ends")
+    });
+    assert!(
+        names(&first).is_empty(),
+        "this turn serves the torn Invalid: {:?}",
+        names(&first)
+    );
+    // The next turn start re-reads: the torn header was never pinned
+    // under the final stat.
+    let second = cached(&tree, &mut cache);
+    assert_eq!(names(&second), ["same"], "the next turn offers the skill");
+    assert_eq!(description_of(&second, "same"), "aaa");
 }

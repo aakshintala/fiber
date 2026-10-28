@@ -14,6 +14,7 @@ impl App {
     /// the consumed command leaves the draft, so typing `/clear` again
     /// dispatches fresh instead of appending to a stale row.
     pub(crate) fn open_clear(&mut self, id: SessionId, name: String, waiting: String) -> Effect {
+        self.close_delete_prompt();
         if let Some(home) = self.home.as_mut() {
             home.questions.prompt = Some(Prompt::Clear {
                 id,

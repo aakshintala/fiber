@@ -440,6 +440,7 @@ impl Loop {
             message,
             notices,
             found,
+            pre_stats,
         } = collected;
         let (refresh_commands, commands_changed) = self.skills.opened(
             found.clone(),
@@ -463,7 +464,8 @@ impl Loop {
         let resend = std::mem::take(&mut self.handoff.carry.resend);
         let reader = self.skills.reader();
         let (sent, left_out) = resent_skills(&reader, &|target| self.refuse(target), &resend);
-        self.changes = crate::changes::State::initial(&message, &self.workspace, &self.prompt);
+        self.changes =
+            crate::changes::State::initial(&message, &self.workspace, &self.prompt, &pre_stats);
         if !sent.is_empty() {
             self.write(
                 &Event::SkillsResent(SkillsResent { skills: sent }),

@@ -51,6 +51,7 @@ pub use codes::ErrorCode;
 pub use envelope::{Envelope, HubLine, SCHEMA_VERSION};
 pub use ids::{
     ActionId, CommandId, GenerationId, JobId, ProviderCallId, RequestId, Seq, SessionId, TurnId,
+    is_minted_session_id,
 };
 pub use pre_session::{PreSessionExit, PreSessionPayload};
 pub use rules::{Rule, RuleDecision, Rules, RulesError, StandingRules};

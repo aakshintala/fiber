@@ -239,7 +239,7 @@ fn a_left_row_sends_nothing_and_reattach_discards_a_lost_answer() {
         payload: payload.as_object().unwrap().clone(),
     }));
     assert!(app.quota_focus().is_none());
-    app.on_line(live(SESSION, json!({"state": "idle"})));
+    app.on_line(live(SESSION, json!({"state": "idle", "since": 1})));
     let lost = app.quota_focus().unwrap();
     app.attach(contract::SessionId(SESSION.to_owned()));
     let new = first(&mut app);

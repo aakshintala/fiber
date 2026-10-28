@@ -16,6 +16,7 @@ impl App {
     /// the terminal exits without asking. Opening the question clears
     /// the armed Ctrl+C.
     pub(crate) fn quit(&mut self) -> Effect {
+        self.close_delete_prompt();
         if self.home.is_none() || self.working().is_empty() {
             return Effect::Quit;
         }
@@ -73,6 +74,7 @@ impl App {
             sessions.iter().filter(|id| working.contains(id)).count(),
             self.elsewhere(&sessions),
         );
+        self.close_delete_prompt();
         if let Some(home) = self.home.as_mut() {
             home.questions.prompt = Some(Prompt::CloseAll { sessions, counts });
         }
@@ -136,6 +138,7 @@ impl App {
         let name = crate::home::title(row);
         let working = self.working().contains(&id);
         let elsewhere = self.elsewhere(std::slice::from_ref(&id)) > 0;
+        self.close_delete_prompt();
         if let Some(home) = self.home.as_mut() {
             home.questions.prompt = Some(Prompt::Stop {
                 id,
@@ -352,8 +355,12 @@ impl App {
     /// this connection holds nothing, then a minted `close` with `now`
     /// each, with each session beside its close id. Both questions send
     /// the lines: the quit question records its closes in `closing`, the
-    /// close-all question in `asks`.
-    fn close_lines(&mut self, sessions: &[SessionId]) -> (Vec<String>, Vec<(SessionId, String)>) {
+    /// close-all question in `asks`. The command records its stops in
+    /// `closing`, so shutdown never resumes a session it stopped.
+    pub(super) fn close_lines(
+        &mut self,
+        sessions: &[SessionId],
+    ) -> (Vec<String>, Vec<(SessionId, String)>) {
         let mut lines = Vec::new();
         let mut pairs = Vec::new();
         for session in sessions {
@@ -374,7 +381,8 @@ impl App {
     }
 
     /// Drops from `closing` every session whose `close` line was not
-    /// written: a close never sent keeps its resume line on exit.
+    /// written: a close never sent keeps its resume line on exit. A
+    /// command stop that never went out ends in its stop uncertainty.
     pub(crate) fn home_unsent(&mut self, unsent: &[String]) {
         let ids: Vec<String> = unsent
             .iter()
@@ -389,6 +397,7 @@ impl App {
                 .closing
                 .retain(|(_, close)| !ids.contains(close));
         }
+        self.delete_command_unsent(&ids);
     }
 
     /// The sessions working now, in list order, the attached one last

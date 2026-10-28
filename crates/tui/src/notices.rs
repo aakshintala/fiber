@@ -45,6 +45,7 @@ const KINDS: &[(&str, Kind)] = &[
     ("history_loading", Kind::Condition),
     ("hook_failed", Kind::Event),
     ("hub_version", Kind::Event),
+    ("indeterminate", Kind::Event),
     ("instructions_large", Kind::Event),
     ("invalid_arguments", Kind::Event),
     ("io_failed", Kind::Event),

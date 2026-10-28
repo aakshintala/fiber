@@ -147,6 +147,7 @@ impl Fold {
             clients: 0,
             last: SessionStatus {
                 name: String::new(),
+                named: false,
                 workspace: String::new(),
                 project: String::new(),
                 parent: None,
@@ -549,6 +550,7 @@ impl Fold {
             .filter(|id| !self.delegates.contains(id))
             .count();
         SessionStatus {
+            named: self.name.is_some(),
             name: self
                 .name
                 .clone()
