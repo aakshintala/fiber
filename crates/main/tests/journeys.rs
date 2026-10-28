@@ -774,6 +774,34 @@ fn find_cell(screen: &Grid, needle: &str) -> (u16, u16) {
     panic!("{needle:?} in\n{}", screen.contents);
 }
 
+/// The first blank gap after the row holding `anchor` in `screen`:
+/// `len` blank cells at or after `from_x`, proven blank cell by cell.
+/// The scan starts inside the conversation's text column (a press in
+/// the gutter claims no surface, so no copy follows). Anchoring after
+/// a shown conversation row keeps the gap inside the shown
+/// conversation, where a press claims the conversation surface and an
+/// empty selection copies empty; the stale row itself varies between
+/// border chrome and conversation text after the move, so it cannot
+/// supply a deterministic blank.
+fn find_blank_gap_after(screen: &Grid, anchor: &str, from_x: u16, len: u16) -> (u16, u16) {
+    let anchor_row = screen
+        .rows
+        .iter()
+        .position(|row| row.contains(anchor))
+        .unwrap_or_else(|| panic!("{anchor} in\n{}", screen.contents));
+    let (_, rows) = screen.size();
+    for y in (anchor_row.saturating_add(1))..usize::from(rows) {
+        let y = u16::try_from(y).unwrap_or(u16::MAX);
+        if from_x.saturating_add(len) > screen.size().0 {
+            break;
+        }
+        if (0..len).all(|dx| screen.cell(from_x + dx, y).symbol == " ") {
+            return (from_x, y);
+        }
+    }
+    panic!("no blank gap after {anchor} in\n{}", screen.contents);
+}
+
 /// Drags from `from` to `to`, 0-based cells: a press, one drag report,
 /// and the release whose copy the caller reads.
 fn drag(run: &mut Run, from: (u16, u16), to: (u16, u16)) {
@@ -962,12 +990,19 @@ fn journey_drag_notice_copies_its_text() {
         forced_at, forced_row,
         "the forced resize moved the notice cell"
     );
-    // The forced stale interleaving: the snapshot's cell now sits on
-    // blank conversation cells, so its release routes through
+    // The forced stale interleaving: a drag after the forced move lands
+    // on conversation cells, so its release routes through
     // copy_selection to an empty OSC 52 payload — the flake's exact
-    // signature.
+    // signature. The stale coordinates themselves can overlap visible
+    // text after the move (stress iteration 87 copied `completed ·
+    // 13`), and the stale row varies between border chrome and text,
+    // so the drag targets the first blank gap after the shown `Beta
+    // here.` row proven blank cell by cell in the settled forced grid,
+    // keeping the forced-resize order and the empty-copy assertion
+    // deterministic.
+    let (blank_x, blank_y) = find_blank_gap_after(&forced, "Beta here.", stale_x, 14);
     let stale_from = run.output().len();
-    drag(&mut run, (stale_x, stale_y), (stale_x + 13, stale_y));
+    drag(&mut run, (blank_x, blank_y), (blank_x + 13, blank_y));
     assert_eq!(
         osc52_copy(&mut run, stale_from),
         "",
