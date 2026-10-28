@@ -1258,7 +1258,9 @@ impl ModelPicker {
             return Some(layout);
         }
         // Shown models and count rows merge by provider, in provider
-        // name order on both sides.
+        // name order on both sides: a provider's count rows flush at
+        // its first shown model, so each section reads heading, count
+        // rows, then models.
         let mut groups = left_out.iter().peekable();
         let mut provider: Option<&str> = None;
         for index in rows {
@@ -1267,7 +1269,7 @@ impl ModelPicker {
             };
             while groups
                 .peek()
-                .is_some_and(|group| group.provider.as_str() < entry.provider.as_str())
+                .is_some_and(|group| group.provider.as_str() <= entry.provider.as_str())
             {
                 let Some(group) = groups.next() else {
                     break;

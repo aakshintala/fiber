@@ -2161,8 +2161,8 @@ fn count_rows_are_never_focused_or_chosen() {
             &[("m9", None)],
         )],
     );
-    // Layout rows: 0 the filter, 1 the buttons, 2 the heading, 3 and 4
-    // the models, 5 the count row.
+    // Layout rows: 0 the filter, 1 the buttons, 2 the heading, 3 the
+    // count row, 4 and 5 the models.
     let layout = picker.layout().expect("the picker is open");
     assert_eq!(
         layout,
@@ -2170,12 +2170,12 @@ fn count_rows_are_never_focused_or_chosen() {
             RowAt::Filter,
             RowAt::Buttons,
             RowAt::Heading("acme".to_owned()),
-            RowAt::Model(0),
-            RowAt::Model(1),
             RowAt::LeftOut {
                 provider: "acme".to_owned(),
                 setting: "workspace".to_owned(),
             },
+            RowAt::Model(0),
+            RowAt::Model(1),
         ]
     );
     // Walking down past the last model clamps instead of stopping on
@@ -2194,12 +2194,12 @@ fn count_rows_are_never_focused_or_chosen() {
             .iter()
             .map(|row| row.at)
             .collect::<Vec<_>>(),
-        [5]
+        [3]
     );
     // A frame row or click on the count row changes nothing.
-    picker.select_frame_row(5);
+    picker.select_frame_row(3);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
-    assert_eq!(picker.click_cell(5, 0), None);
+    assert_eq!(picker.click_cell(3, 0), None);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
     assert!(picker.choice(false).is_some());
 }

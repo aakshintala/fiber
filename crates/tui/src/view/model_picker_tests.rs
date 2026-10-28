@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use super::{body, id_spans, model_fit, page_step, window};
 use crate::app::{App, Effect};
-use crate::catalogue::{Catalogue, ModelEntry, Price};
+use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, ModelEntry, Price};
 use crate::keys::{Edit, Key};
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
@@ -1230,6 +1230,194 @@ fn a_drag_over_a_chosen_chip_copies_the_level_without_brackets() {
         report(MouseKind::Release, x + 5, y),
         crate::app::Effect::Copy("high".to_owned())
     );
+}
+
+/// The fixture catalogue with left-out groups: `acme` counts two
+/// models under its credential label, `opencode` counts one behind a
+/// login and lists nothing.
+fn left_out_catalogue() -> Catalogue {
+    let mut catalogue = catalogue();
+    catalogue.left_out = vec![
+        LeftOutGroup {
+            provider: "acme".to_owned(),
+            extension: "acme-ext".to_owned(),
+            file: "config/acme-ext.json".to_owned(),
+            setting: "api_key".to_owned(),
+            login: false,
+            models: vec![
+                LeftOutModel {
+                    id: "m9".to_owned(),
+                    name: Some("Acme Nine".to_owned()),
+                },
+                LeftOutModel {
+                    id: "m10".to_owned(),
+                    name: None,
+                },
+            ],
+        },
+        LeftOutGroup {
+            provider: "opencode".to_owned(),
+            extension: "github.com/aakshintala/fiber/providers/opencode".to_owned(),
+            file: "config/opencode.json".to_owned(),
+            setting: "workspace".to_owned(),
+            login: true,
+            models: vec![LeftOutModel {
+                id: "o1".to_owned(),
+                name: None,
+            }],
+        },
+    ];
+    catalogue
+}
+
+/// A choosing app with the left-out catalogue read and the picker open.
+fn choosing_left_out(width: u16, height: u16) -> App {
+    let mut app = attached(width, height);
+    app.on_models(Ok(left_out_catalogue()));
+    open(&mut app);
+    app
+}
+
+#[test]
+fn count_rows_draw_dim_with_a_four_column_indent_and_no_targets() {
+    let app = choosing_left_out(160, 48);
+    let view = app.model_picker_view().expect("open");
+    let body = body(&view, 160, 48);
+    let rows: Vec<_> = body
+        .iter()
+        .filter(|row| {
+            row.spans
+                .iter()
+                .any(|span| span.content.contains("api_key") || span.content.contains("workspace"))
+        })
+        .collect();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert!(row.targets.is_empty());
+        assert!(!row.barred);
+        assert_eq!(row.spans.len(), 2);
+        assert_eq!(row.spans[0].content.as_ref(), "    ");
+        assert_eq!(row.spans[0].style, Style::new());
+        for span in &row.spans[1..] {
+            assert_eq!(span.style, Style::new().add_modifier(Modifier::DIM));
+        }
+    }
+}
+
+#[test]
+fn count_rows_name_the_supplied_files() {
+    let app = choosing_left_out(160, 48);
+    let text = screen(&app, 160, 48);
+    let (_, api) = find_row(&text, "api_key");
+    assert!(
+        api.contains("2 models need api_key: set it in `config/acme-ext.json`"),
+        "{api}"
+    );
+    let (_, workspace) = find_row(&text, "needs workspace");
+    assert!(
+        workspace.contains("1 model needs workspace: run `fiber login opencode`"),
+        "{workspace}"
+    );
+    // The row never derives a path from the full extension name.
+    assert!(!text.contains("github.com"), "{text}");
+}
+
+#[test]
+fn count_rows_scroll_with_their_sections_window() {
+    let app = choosing_left_out(160, 48);
+    let view = app.model_picker_view().expect("open");
+    // Items in draw order: the `acme` count, its two models, the
+    // `opencode` count, then the two `zeta` models. The focus sits on
+    // `acme/m1`.
+    assert_eq!(view.focused, Some(4));
+    assert_eq!(window(&view, 2), (1, 2));
+    assert_eq!(window(&view, 4), (0, 2));
+    assert_eq!(window(&view, 6), (0, 3));
+    // Headings, counts, model rows and blanks sum exactly: 6 + 1 + 5
+    // + 1 + 2, past the filter and the buttons.
+    assert_eq!(body(&view, 160, 48).len(), 2 + 15);
+}
+
+#[test]
+fn an_all_left_out_section_stays_visible_in_a_short_viewport() {
+    let catalogue = Catalogue {
+        left_out: vec![LeftOutGroup {
+            provider: "opencode".to_owned(),
+            extension: "github.com/aakshintala/fiber/providers/opencode".to_owned(),
+            file: "config/opencode.json".to_owned(),
+            setting: "workspace".to_owned(),
+            login: true,
+            models: vec![LeftOutModel {
+                id: "o1".to_owned(),
+                name: None,
+            }],
+        }],
+        ..Catalogue::default()
+    };
+    let mut app = attached(80, 10);
+    app.on_models(Ok(catalogue.clone()));
+    open(&mut app);
+    // The opening read answered: the status below is the catalogue's
+    // own, not the loading line.
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
+    app.on_models(Ok(catalogue));
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(window(&view, 2), (0, 1));
+    // The windowed body keeps the heading and its count row: the
+    // section is not dropped from the viewport accounting.
+    let lines: Vec<String> = body(&view, 80, 10)
+        .iter()
+        .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
+        .collect();
+    assert!(
+        lines.iter().any(|line| line.contains("opencode")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("1 model needs workspace: run `fiber login opencode`")),
+        "{lines:?}"
+    );
+    // End to end, the count row renders under its heading.
+    let text = screen(&app, 80, 24);
+    assert!(text.contains("opencode"), "{text}");
+    assert!(
+        text.contains("1 model needs workspace: run `fiber login opencode`"),
+        "{text}"
+    );
+}
+
+#[test]
+fn paging_moves_across_count_rows_and_sections() {
+    let mut app = choosing_left_out(160, 10);
+    // Six windowed items, two of them count rows: a page holds six.
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(page_step(&view, 48), 6);
+    // A short screen fits one model: a page moves one.
+    assert_eq!(page_step(&view, 10), 1);
+    // The opening read answered, so the loading line takes no row.
+    let catalogue = left_out_catalogue();
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
+    app.on_models(Ok(catalogue));
+    // Two steps down lands on `zeta/z1`: the `acme` count row scrolled
+    // out with its section.
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(window(&view, 2), (4, 5));
+    // The windowed body keeps `zeta/z1` and drops the `acme` count row
+    // with its section.
+    let lines: Vec<String> = body(&view, 160, 12)
+        .iter()
+        .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
+        .collect();
+    assert!(
+        lines.iter().all(|line| !line.contains("api_key")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|line| line.contains("z1")), "{lines:?}");
 }
 
 /// A chip is `[text]` with a non-empty spaceless middle: `[]`, open
