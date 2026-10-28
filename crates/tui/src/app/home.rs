@@ -338,8 +338,13 @@ impl App {
                 .unwrap_or_else(|| workspace.display().to_string())
         });
         // The delete question names the session and everything
-        // `--cascade` would add; the frame wraps and scrolls it.
+        // `--cascade` would add; the frame wraps and scrolls it. The
+        // command's question draws over the attached session instead.
+        let command_question = self.delete_command_home_question();
         let (question, question_scroll) = match home.questions.prompt() {
+            Some(Prompt::Delete { .. }) if self.command_owns_prompt() => command_question
+                .map(|(question, scroll)| (Some(question), scroll))
+                .unwrap_or((None, 0)),
             Some(Prompt::Delete { id, expect, scroll }) => (
                 home.sessions.row(id).map(|row| match expect {
                     None => delete_line(row),
@@ -645,12 +650,15 @@ impl App {
                         .as_ref()
                         .and_then(|home| home.sessions.row(&exited))
                         .map(|row| row.project.clone());
-                    let lines = project
+                    let mut lines = project
                         .map(|project| self.scoped_first(&project))
                         .unwrap_or_default();
                     if how == Left::Exited {
                         self.rail_state.note_exited(&exited);
                     }
+                    // The command's confirmed stops retire here: only an
+                    // exit permits its one delete.
+                    lines.extend(self.delete_command_session_left(&exited));
                     Some(lines)
                 }
                 "command_accepted" | "command_rejected" => {
@@ -670,6 +678,11 @@ impl App {
                     // the existing refused path with the offer open on
                     // rejection.
                     if let Some(lines) = self.import_answer(id, accepted, &hub.payload) {
+                        return Some(lines);
+                    }
+                    // The command's discovery and confirmed stops fold
+                    // before unrelated ask handling.
+                    if let Some(lines) = self.delete_command_answer(id, accepted, &hub.payload) {
                         return Some(lines);
                     }
                     if let Some(ask) = self.take_ask(id) {
@@ -861,6 +874,12 @@ impl App {
                             Some(lines)
                         };
                     }
+                    // The command's discovery and confirmed stops fold
+                    // before unrelated ask handling.
+                    if let Some(lines) = self.delete_command_answer(id, accepted, &envelope.payload)
+                    {
+                        return Some(lines);
+                    }
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &envelope.payload));
                     }
@@ -958,8 +977,12 @@ impl App {
     }
 
     /// Whether home's delete question or first-run import offer is open:
-    /// the home screen's question, below the quit-surface questions.
+    /// the home screen's question, below the quit-surface questions, or
+    /// the command's delete question over the attached session.
     pub(in crate::app) fn home_question_open(&self) -> bool {
+        if self.delete_command_frame().is_some() {
+            return true;
+        }
         self.on_home()
             && self.home.as_ref().is_some_and(|home| {
                 home.questions.prompt().is_some_and(|prompt| {
@@ -1224,7 +1247,7 @@ impl App {
     /// Asks the first unscoped `recent` page again: an accepted delete
     /// fills the gap it left. It also asks the scoped `recent` for the
     /// deleted row's project, or marks it dirty while one is in flight.
-    fn ask_recent_first(&mut self, delete_project: Option<&str>) -> Vec<String> {
+    pub(super) fn ask_recent_first(&mut self, delete_project: Option<&str>) -> Vec<String> {
         if !self.outbox.is_up() {
             return Vec::new();
         }

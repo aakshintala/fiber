@@ -685,12 +685,20 @@ impl Sessions {
     /// new id goes after the rows already there. A status means the
     /// session is live, so it clears `left`: a resumed session. A status
     /// is a late copy, and changes nothing, when it began before the one the
-    /// row holds, or in the same millisecond while the row waits and it does
-    /// not (the feed and the `full` subscription each deliver every status,
-    /// by separate writers, and a tool call and its approval can share a
-    /// millisecond).
+    /// row holds; if the row is left, an equal-or-older timestamp keeps it
+    /// left. A status in the same millisecond also loses while the row waits
+    /// and the new one does not (the feed and the `full` subscription each
+    /// deliver every status, by separate writers, and a tool call and its
+    /// approval can share a millisecond).
     pub(crate) fn status(&mut self, row: Row) {
         if let Some(existing) = self.feed.iter_mut().find(|feed| feed.id == row.id) {
+            if existing.left.is_some() {
+                match (existing.status.as_ref(), row.status.as_ref()) {
+                    (Some(held), Some(new)) if new.since > held.since => {}
+                    (Some(_), _) => return,
+                    (None, _) => {}
+                }
+            }
             if let (Some(held), Some(new)) = (existing.status.as_ref(), row.status.as_ref())
                 && (new.since < held.since
                     || (new.since == held.since
@@ -881,6 +889,11 @@ impl Sessions {
             .iter()
             .chain(self.recent.iter())
             .any(|row| row.workspace == workspace && row.git)
+    }
+
+    /// The feed row for `id`, live or left; a recent-only row does not qualify.
+    pub(crate) fn feed_row(&self, id: &SessionId) -> Option<&Row> {
+        self.feed.iter().find(|row| row.id == *id)
     }
 
     /// The row for `id`, live or exited.

@@ -2823,8 +2823,8 @@ fn short_home_slash_keeps_its_selection_barred() {
     let row = row_text(&buf, selected, 80);
     assert!(row.contains("credential"), "{shown}");
     // The range counts matching entries, including every built-in
-    // (`docs/tui.md:1682-1685,1995`): the total is the command table's
-    // row count, with no fixture extension rows here.
+    // (`docs/tui.md`, "Slash commands"): the total follows the command
+    // table, with no fixture extension rows here.
     let total = crate::app::commands::TABLE.len();
     assert!(shown.contains(&format!("of {total}")), "{shown}");
 }

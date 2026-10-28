@@ -1429,6 +1429,7 @@ impl App {
             self.notices
                 .push("connection_failed", "Connection lost.".to_owned());
         }
+        self.delete_command_link_lost();
         // A lost connection closes an open item view first, swapping the
         // screen back before anything clears it, and drops every wish:
         // the hub connection and its levels are gone.
