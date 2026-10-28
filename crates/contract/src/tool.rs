@@ -150,6 +150,23 @@ pub trait Tool: Send + Sync {
         self.run(arguments, cancel, emit)
     }
 
+    /// Runs the call as [`Tool::run_asking`] does, with the exact `effects`
+    /// the loop prepared before `tool_call_started`: the declared decision
+    /// a later reload must not change. The loop calls only this. A tool
+    /// that needs nothing beyond its arguments keeps the default, which
+    /// forwards to [`Tool::run_asking`] unchanged.
+    fn run_with_effects(
+        &self,
+        arguments: &Map<String, Value>,
+        effects: &Effects,
+        cancel: &dyn Cancel,
+        emit: &dyn Emit,
+        ask: &dyn Ask,
+    ) -> Output {
+        let _ = effects;
+        self.run_asking(arguments, cancel, emit, ask)
+    }
+
     /// How a long result is cut (`docs/tools.md`, "Bounded results").
     fn bound(&self) -> Bound {
         Bound::DEFAULT
@@ -350,3 +367,6 @@ impl Bound {
 #[cfg(test)]
 #[path = "tool_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "tool_run_effects_tests.rs"]
+mod tool_run_effects_tests;

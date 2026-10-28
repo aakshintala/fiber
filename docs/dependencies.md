@@ -148,7 +148,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server; the hub's websocket handshake (SHA-1) and device-token hashes; the hub client's websocket handshake (SHA-1); secure random pairing codes and device tokens | ~0 | ~0 | ~0 | 8 | 341 |
 | base64 | PKCE, attachments sent to providers, images a client pastes, the terminal's copy through OSC 52 (`docs/tui.md`, "Selection and copy"), the files the hub's `read_file` answers with, the hub client's websocket key and a proxy's credentials | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group, and reading a key without echo; `host.exec`'s process groups; signalling MCP servers; killing a credential command at its timeout, or on shutdown; signalling a Fiber delegate's process group; the terminal's clipboard read: its process group, its pipe's poll and waiting for its exit; and the test fakes' process and process-group probes; and the process-group guard and the stoppable read's poll in `support`; doctor's non-blocking credential open and descriptor check; the hub client's non-blocking connect and handshake poll in `doors` and `session_list`'s and `session_message`'s non-blocking connects to session sockets; the hub sessions-stop bounded socket, flag, address, connect, error and poll calls; the loop's no-follow, non-blocking output-file open and descriptor check; and `log`'s identity-safe session-directory removal | ~0 | ~0 | ~0 | 4 | 330 |
-| libc | macOS: the peak physical footprint for a `peak_memory` line (`docs/state.md`, "What each part holds"); and the socket peer process id and the `proc_pidinfo(PROC_PIDTBSDINFO)` parent/effective-uid and `sysctl KERN_PROCARGS2` argv queries behind `support::peer` (`docs/permissions.md`, "Sessions on the sockets") | n/a | n/a | ~0 | 2 | n/a |
+| libc | macOS: the peak physical footprint for a `peak_memory` line (`docs/state.md`, "What each part holds"); and the socket peer process id and the `proc_pidinfo(PROC_PIDTBSDINFO)` parent/effective-uid and `sysctl KERN_PROCARGS2` argv queries behind `support::peer` (`docs/permissions.md`, "Sessions on the sockets"). Linux: raw `write` for the shell tool's pre-exec errors, the `EPERM`, `EINVAL` and `EIO` errno values, and syscall numbers for its seccomp filter (`docs/sandbox.md`, "On Linux") | n/a | n/a | ~0 | 2 | n/a |
 | ignore, grep-searcher, grep-regex, grep-matcher | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search"), `session_search`'s scan (`docs/tools.md`, "Searching past sessions"), and the terminal's `@` path search (`docs/tui.md`, "Rules") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
 | similar | an edit's diff in `details` (`docs/tools.md`, "edit"), the lines a `write` added and removed (`docs/tools.md`, "write"), an instruction file's diff (`docs/system-prompt.md`, "When something changes"), a repository's changed code against its approved copy (`docs/extensions.md`, "Code a repository ships"), and the terminal's diff of the reviewer notes before they are saved (`docs/tui.md`, "Rules") | ~0 | 380 | ~0 | 1 | 389 |
 | html5ever | `web_fetch`'s tokenizer, without its tree builder | 808 | 960 | 480 | 19 | 1,058 |
@@ -157,7 +157,9 @@ only that crate, in KiB; the empty program is 323 KiB.
 | flate2 | decompressing the release's docs and extensions archives (`docs/releasing.md`, "Installing"), and the test fakes' release archives | 560 | 640 | 592 | 6 | 403 |
 | jiff | the terminal's local time of day under a prompt bubble and on steering (`docs/tui.md`, "Turns"), and a standing rule's `added` time in `/rules`, with daylight saving and `TZ`, which `std` lacks | 536 | 640 | 384 | 2 | 692 |
 | qrcode | the terminal QR code for `hub pair`; default features off | 160 | 256 | 336 | 1 | 360 |
-| all of the above together | | 8,760 | 8,076 | 5,249 | 155 | 8,217 |
+| landlock | the shell tool's Linux Landlock policy: read/write grants at spawn, ABI floor 2 | 152 | 128 | n/a | 10 | 391 |
+| seccompiler | the shell tool's Linux seccomp filter denying sockets and `io_uring_setup` | 160 | 116 | n/a | 2 | 399 |
+| all of the above together | | 9,048 | 7,892 | 5,297 | 155 | 8,290 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
 | lopdf | the image child: counting a PDF's pages and cutting a page range (`docs/tools.md`, "read") | 908 | 704 | 336 | 66 | 1,320 |
 | dhat | heap profiles behind the opt-in `dhat-heap` build; never in a shipped build | not measured | not measured | not measured | not measured | not measured |
@@ -180,10 +182,11 @@ Notes:
 - mlua carries Lua's C source.
 - ratatui's figure is its two 200 by 50 screen buffers. Any full-screen
   terminal UI holds a screen model of that size.
-- thiserror, ring, rustix and libc are already in the tree
-  through other crates (rustls, crossterm, mlua), so listing them directly
-  adds no crate. libc is a direct dependency on macOS only; Linux reads
-  `/proc/self/status` instead.
+- thiserror, ring, rustix and libc are already in the tree through other
+  crates (rustls, crossterm and mlua), so listing them directly adds no
+  crate. `libc` is direct on macOS for `peak_memory` and `support::peer`, and
+  on Linux for the shell sandbox's pre-exec error reporting and seccomp
+  filter. Linux's `peak_memory` reader uses `/proc/self/status` instead.
 - Random ids come from the standard library's `RandomState`, which the
   operating system seeds, so no crate mints them. Secret random values, the PKCE verifier, pairing codes and device tokens,
   come from ring.
@@ -222,6 +225,7 @@ Notes:
   of 6,048 and 6,064 KiB against 5,760 and 6,128 KiB in two rounds),
   because its peak is the busiest other workload.
 - jiff is built with default features off and only `std`, `tz-system` and `tzdb-zoneinfo`: it reads `/etc/localtime`, `TZ` and the system's zoneinfo database, and bundles no database. `time`, already in the tree through ratatui-widgets, is not used: its local-offset lookup does not work in a multithreaded process. jiff's figure is reading the system zone and formatting 1,000 times of day. The jiff and together rows were measured on October 8, 2026, on the runners above (run 37809842530); the together row was measured again with jiff linked, so its other crates' figures moved with the run.
+- landlock's figure is building the ABI-2 ruleset shaped like the shell tool's prepare() and applying it in a re-executed child; seccompiler's is compiling the socket-denying filter shaped like the shell tool's compile step and applying it in a re-executed child. The landlock, seccompiler and together rows were measured in [probe run 40499728352](https://github.com/aakshintala/fiber/actions/runs/40499728352) ([Linux x86_64](https://github.com/aakshintala/fiber/actions/runs/40499728352/artifacts/12732239406), [Linux arm64](https://github.com/aakshintala/fiber/actions/runs/40499728352/artifacts/12733290160), [macOS arm64](https://github.com/aakshintala/fiber/actions/runs/40499728352/artifacts/12732254451)), rustc 1.99.1. On macOS arm64 both rows report they do not build on Darwin arm64, recorded as n/a. The together row was re-measured in the same run with both crates linked on Linux, so its other crates' figures moved with the run.
 - `web_fetch` converts a page with html5ever's tokenizer feeding Fiber's own
   single-pass writer (`crates/tools/src/web_fetch/markdown.rs`), not with a
   parser that builds the page's document tree. The smallest maintained crate
@@ -340,6 +344,15 @@ already.
 | rusqlite, SQLite bundled | Fiber keeps a derived database, such as an index for session search; today listing and searching sessions read the logs (`docs/state.md`, `docs/tools.md` "Searching past sessions") | 2,236 | 1,984 | ~0 | 14 | 2,268 |
 
 rusqlite carries SQLite's C source.
+
+When #3027's Linux sandbox policy landed, the crates are `landlock` and
+`seccompiler`, Linux only; no srt, no bubblewrap. The floor is Landlock ABI
+2 (Linux 5.19); below it the sandbox reports unavailable and calls are
+reviewed. Their rows above, and the re-measured together row, record
+[probe run 40499728352](https://github.com/aakshintala/fiber/actions/runs/40499728352)
+(October 27, 2026, rustc 1.99.1) on `ubuntu-24.04`, `ubuntu-24.04-arm` and
+`macos-26`. On macOS arm64 both crates report they do not build on Darwin
+arm64, recorded as n/a.
 
 ## Written ourselves
 

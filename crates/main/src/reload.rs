@@ -195,6 +195,7 @@ pub(crate) struct State {
     pub(crate) diag: Arc<log::diag::Diag>,
     pub(crate) names: std::sync::Mutex<Vec<String>>,
     pub(crate) shell_read_only: crate::settings::ShellReadOnly,
+    pub(crate) sandbox: crate::settings::SandboxHandle,
     /// The session's servers, kept for the reconnect entry's in-place
     /// restart (`docs/mcp.md`, "Servers, their state and the
     /// per-server commands").
@@ -247,6 +248,7 @@ impl State {
         log: Arc<log::Log>,
         diag: Arc<log::diag::Diag>,
         shell_read_only: crate::settings::ShellReadOnly,
+        sandbox: crate::settings::SandboxHandle,
         repository: Arc<std::sync::Mutex<crate::session_extensions::RepositoryScope>>,
         commands_sync: CommandsSync,
     ) -> (
@@ -299,6 +301,7 @@ impl State {
             diag,
             names: std::sync::Mutex::new(names),
             shell_read_only,
+            sandbox,
             servers: servers_handle,
             artifacts,
             images,
@@ -771,6 +774,7 @@ impl State {
             shared.servers.set_resources_declared(declares_resources);
             publish();
             crate::settings::refresh_shell_read_only(&shared.shell_read_only, &next.config);
+            crate::settings::refresh_sandbox(&shared.sandbox, &next.config);
             shared.switching.reloaded(next);
             shared.current.swap(extensions);
         });

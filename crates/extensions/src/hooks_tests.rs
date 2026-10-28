@@ -3955,6 +3955,7 @@ fn process_check_hook_refuses_the_tool() {
         effects: Vec::new(),
         reversible: true,
         paths: None,
+        confined: false,
     };
     let answer = session.check_tool(&BeforeToolCall {
         tool: "write",

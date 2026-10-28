@@ -491,6 +491,7 @@ pub(crate) fn run_new(
         warm,
         caps,
         shell_read_only,
+        sandbox,
         home,
         project,
         workspace,
@@ -573,6 +574,7 @@ pub(crate) fn run_new(
         extensions.tools(),
         timing.clone(),
         shell_read_only.clone(),
+        sandbox.clone(),
     )?;
     let delegates = Arc::new(delegates);
     let forget = Arc::clone(&session_servers.forget);
@@ -698,6 +700,7 @@ pub(crate) fn run_new(
         log.clone(),
         diag.clone(),
         shell_read_only,
+        sandbox,
         std::sync::Arc::new(std::sync::Mutex::new(repository)),
         commands_sync,
     );

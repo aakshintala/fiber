@@ -38,6 +38,9 @@ lopdf = { version = "0.45", default-features = false }
 signal-hook = "0.3"
 ring = "0.17"
 insta = "1"
+landlock = "0.4.7"
+seccompiler = "0.5"
+libc = "0.2"
 
 # The lints in docs/code-quality.md, "Lints". Every crate inherits them with
 # `lints.workspace = true`.

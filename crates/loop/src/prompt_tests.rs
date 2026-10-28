@@ -468,6 +468,7 @@ impl contract::tool::Tool for BuildTool {
                 effects: vec![contract::shapes::Effect::Reads],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: None,
             prefix: None,

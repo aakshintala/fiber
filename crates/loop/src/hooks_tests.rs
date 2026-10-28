@@ -192,6 +192,7 @@ impl Tool for Fixed {
                 effects: self.effects.clone(),
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,

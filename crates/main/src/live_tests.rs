@@ -109,6 +109,7 @@ impl Tool for Shell {
                 effects: vec![Effect::Executes],
                 reversible: false,
                 paths: None,
+                confined: false,
             },
             subject: Some(command),
             prefix: None,
