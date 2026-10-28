@@ -442,6 +442,17 @@ session").
 | `name` | string or null | yes | the name; `null` when the person cleared theirs |
 | `by` | string | yes | `person`, from the `name` command, which pins the name, or `model`, from `name_session`; a closed set |
 
+#### `directory_added`
+
+Durable. Written when the session accepts an `add_directory` driver command (`docs/invocation.md`, "Driver commands") for a folder outside the current boundary, and by a delegate at spawn for each of its parent's added folders that its folded history does not already hold (`docs/delegates.md`, "Forks"). An `add_directory` command for a folder already inside the workspace or an added folder is accepted with no event written.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `path` | string | yes | the added folder's resolved path |
+| `inherited` | boolean | no | `true` when a fresh spawn records the root before its opening; the opening lists it, so it adds no separate message; absent or `false` for a normal folder-added message, including a folder added after a fork's point |
+
+The fold adds each resolved path at its first `directory_added` event and keeps it in that position. A later event for the same canonical path does not move it: B, A, B folds to B, A. A resume rebuilds the same order from the log. The opening message rebuilt at a handoff lists the folders in that order (`docs/system-prompt.md`, "After a handoff"). A fork or a rewind from a point after the event keeps it, and one from a point before it does not. For a fresh delegate spawn, the opening lists inherited folders, so their seed events add no separate folder-added messages. A later addition to a running fork does render its normal message.
+
 #### `clients`
 
 Ephemeral. Written whenever a `full` connection attaches or leaves
@@ -968,6 +979,7 @@ Durable.
 | `instruction_files` | array | yes | each file sent, in order: `path` and `content` (strings) |
 | `extension_sections` | array | no | each extension section sent, in order, each entry as below; absent when empty |
 | `skills` | array | yes | the skills listing, each entry as below |
+| `added_directories` | array | no | the session's added folders, resolved, in log order; absent when empty |
 
 | `environment` key | Type | Required | Meaning |
 |---|---|---|---|

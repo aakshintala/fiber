@@ -343,6 +343,7 @@ fn launched() -> jobs::Launched {
         parent: SessionId("s_parent".into()),
         prompt: "scan the tree".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
+        added: Vec::new(),
         start: jobs::Start::Fresh(jobs::Fresh::Spawn {
             model: "fake/m:high".to_owned(),
             credential: None,
@@ -445,6 +446,231 @@ fn launch_carries_the_childs_depth() {
         argv.windows(2)
             .any(|args| args == ["--delegate-id=j_1", "--depth=2"])
     );
+}
+
+#[test]
+fn launch_carries_inherited_roots_as_added_flags() {
+    let mut launch = launched();
+    launch.added = vec![
+        std::path::PathBuf::from("/shared"),
+        std::path::PathBuf::from("/-leading-dash"),
+    ];
+    let command = launcher(std::path::Path::new("/bin/fiber"))(&launch);
+    let argv: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    // One `--added=<path>` per root after `--depth`, so a root starting
+    // with `-` still travels as one argument.
+    assert_eq!(
+        argv,
+        [
+            "session",
+            "--id=s_child",
+            "--workspace=/w",
+            "--model=fake/m:high",
+            "--prompt=scan the tree",
+            "--parent=s_parent",
+            "--delegate-id=j_1",
+            "--depth=1",
+            "--added=/shared",
+            "--added=/-leading-dash",
+        ]
+    );
+}
+
+#[test]
+fn fork_launch_carries_inherited_roots_as_added_flags() {
+    let mut fork = jobs::Launched {
+        start: jobs::Start::Fresh(jobs::Fresh::Fork {
+            from: jobs::Forking {
+                point: contract::shapes::Point {
+                    session_id: SessionId("s_parent".into()),
+                    seq: contract::Seq(41),
+                    project: None,
+                },
+                model: "fiber:parent-model".to_owned(),
+            },
+        }),
+        prompt: "-go".to_owned(),
+        ..launched()
+    };
+    fork.added = vec![std::path::PathBuf::from("/shared")];
+    let command = launcher(std::path::Path::new("/bin/fiber"))(&fork);
+    let argv: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        argv,
+        [
+            "session",
+            "--id=s_child",
+            "--workspace=/w",
+            "--prompt=-go",
+            "--forked-from=s_parent",
+            "--forked-seq=41",
+            "--parent=s_parent",
+            "--delegate-id=j_1",
+            "--depth=1",
+            "--added=/shared",
+        ]
+    );
+}
+
+/// A `Delegates` bound to parent `id`: the temp dir stays alive under
+/// the caller, and the sessions dir is where the test writes logs.
+fn delegates_for(root: &fakes::TempDir, id: &str) -> super::Delegates {
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    super::Delegates::new(
+        "/bin/fiber".into(),
+        root.path().into(),
+        SessionId(id.to_owned()),
+        root.path().into(),
+        root.path().join("sessions"),
+        jobs,
+        clock,
+        jobs::Resolve {
+            lookup: Arc::new(|_| Err("unused".into())),
+            catalogue: Arc::from("unused"),
+            credential: Arc::new(|_| Ok(None)),
+        },
+    )
+}
+
+fn log_envelope(session: &str, seq: u64, event: &contract::events::Event) -> contract::Envelope {
+    contract::Envelope {
+        kind: event.kind().to_owned(),
+        session_id: SessionId(session.to_owned()),
+        ts: 1_759_150_000_000 + seq,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(seq)),
+        payload: event.payload().unwrap(),
+    }
+}
+
+fn started(workspace: &str, parent: Option<contract::events::Parent>) -> contract::events::Event {
+    contract::events::Event::SessionStarted(contract::events::SessionStarted {
+        workspace: workspace.to_owned(),
+        variables: contract::events::Variables {
+            path: "/usr/bin".to_owned(),
+            names: Vec::new(),
+            source: contract::events::VariablesSource::Inherited,
+        },
+        parent,
+        forked_from: None,
+        rewind: None,
+        worktree: None,
+        supervised: false,
+    })
+}
+
+fn added_dir(path: &str) -> contract::events::Event {
+    contract::events::Event::DirectoryAdded(contract::events::DirectoryAdded {
+        path: path.to_owned(),
+        inherited: false,
+    })
+}
+
+fn write_typed_log(sessions: &std::path::Path, session: &str, lines: &[contract::Envelope]) {
+    let dir = sessions.join(session);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut text = String::new();
+    for line in lines {
+        text.push_str(&serde_json::to_string(line).unwrap());
+        text.push('\n');
+    }
+    std::fs::write(dir.join("events.jsonl"), text).unwrap();
+}
+
+#[test]
+fn the_reader_folds_additions_after_wiring() {
+    let root = fakes::TempDir::new("fiber-inherited-roots");
+    let delegates = delegates_for(&root, "s_parent");
+    let sessions = root.path().join("sessions");
+    let inherited = delegates.tool().wiring.inherited;
+    write_typed_log(
+        &sessions,
+        "s_parent",
+        &[log_envelope("s_parent", 0, &started("/w", None))],
+    );
+    assert!(inherited().is_empty());
+    // Written after the wiring was built: the launch-time read folds
+    // the current tail, so the late addition is captured.
+    write_typed_log(
+        &sessions,
+        "s_parent",
+        &[
+            log_envelope("s_parent", 0, &started("/w", None)),
+            log_envelope("s_parent", 1, &added_dir("/shared")),
+        ],
+    );
+    assert_eq!(inherited(), [std::path::PathBuf::from("/shared")]);
+}
+
+#[test]
+fn the_reader_folds_a_fork_from_the_launch_tail_not_its_selected_point() {
+    let root = fakes::TempDir::new("fiber-inherited-point");
+    let delegates = delegates_for(&root, "s_parent");
+    let sessions = root.path().join("sessions");
+    let inherited = delegates.tool().wiring.inherited;
+    write_typed_log(
+        &sessions,
+        "s_parent",
+        &[
+            log_envelope("s_parent", 0, &started("/w", None)),
+            log_envelope("s_parent", 1, &added_dir("/shared")),
+            log_envelope("s_parent", 2, &added_dir("/later")),
+        ],
+    );
+    // The delegate's conversation point precedes `/later`, but its
+    // boundary is the parent's launch-time state: the point never
+    // narrows these roots.
+    assert_eq!(
+        inherited(),
+        [
+            std::path::PathBuf::from("/shared"),
+            std::path::PathBuf::from("/later")
+        ]
+    );
+}
+
+#[test]
+fn a_descendant_launch_folds_the_childs_own_log() {
+    let root = fakes::TempDir::new("fiber-inherited-descendant");
+    let delegates = delegates_for(&root, "s_child");
+    let sessions = root.path().join("sessions");
+    let inherited = delegates.tool().wiring.inherited;
+    // What a spawn child wrote: its `session_started` naming its parent,
+    // then the inherited roots as its own `directory_added` events. The
+    // grandchild's launch folds them from the child's log, so no
+    // ancestor-log walk is needed.
+    write_typed_log(
+        &sessions,
+        "s_child",
+        &[
+            log_envelope(
+                "s_child",
+                0,
+                &started(
+                    "/w",
+                    Some(contract::events::Parent {
+                        session_id: SessionId("s_parent".into()),
+                        delegate_id: contract::JobId("j_1".into()),
+                    }),
+                ),
+            ),
+            log_envelope("s_child", 1, &added_dir("/shared")),
+        ],
+    );
+    assert_eq!(inherited(), [std::path::PathBuf::from("/shared")]);
 }
 
 fn tool_depth() -> u32 {
@@ -609,6 +835,7 @@ fn resumed() -> jobs::Launched {
         parent: SessionId("s_parent".into()),
         prompt: "- also check Y".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
+        added: Vec::new(),
         start: jobs::Start::Resume,
     }
 }

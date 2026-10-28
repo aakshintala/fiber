@@ -531,7 +531,12 @@ impl Loop {
         let cut = cut_for(&self.reviewed, under.id);
         let previous = self.reviewer_sent;
         self.reviewer_sent = Some(cut);
-        let item = under_item(under.prepared, &under.call.name, &self.workspace_label);
+        let item = under_item(
+            under.prepared,
+            &under.call.name,
+            &self.workspace_label,
+            self.changes.added(),
+        );
         (
             stage_conversation(&self.reviewed, cut, item, stage, note),
             previous,
@@ -557,7 +562,12 @@ impl Loop {
         sent: Option<usize>,
     ) -> BuiltStage1 {
         let cut = cut_for(&self.reviewed, under.id);
-        let item = under_item(under.prepared, &under.call.name, &self.workspace_label);
+        let item = under_item(
+            under.prepared,
+            &under.call.name,
+            &self.workspace_label,
+            self.changes.added(),
+        );
         let conversation = stage_conversation(&self.reviewed, cut, item, stage, note);
         let request = self.review_request(
             endpoint,
@@ -765,7 +775,12 @@ impl Loop {
         note: &str,
         cut: usize,
     ) -> Result<Reply, CallError> {
-        let item = under_item(under.prepared, &under.call.name, &self.workspace_label);
+        let item = under_item(
+            under.prepared,
+            &under.call.name,
+            &self.workspace_label,
+            self.changes.added(),
+        );
         let conversation = stage_conversation(&self.reviewed, cut, item, &prompt.first, Some(note));
         let request = self.review_request(
             endpoint,
@@ -1089,27 +1104,44 @@ fn cut_for(reviewed: &[Reviewed], id: &ActionId) -> usize {
 /// to the stage item. A rewritten call is judged as the call that will run:
 /// its effects item names the rewritten call's declared effects and the
 /// arguments it runs with.
-pub(crate) fn under_item(prepared: &Prepared, name: &str, workspace: &str) -> Input {
+pub(crate) fn under_item(
+    prepared: &Prepared,
+    name: &str,
+    workspace: &str,
+    added: &[std::path::PathBuf],
+) -> Input {
     // The call stays where it ran: the item after it names it, so the
     // reviewer never counts on it coming last. A per-call note, when the
     // tool sets one, follows the declared effects on its own line, in both
-    // branches, so the cache still keys on the tool definition alone.
+    // branches, so the cache still keys on the tool definition alone. The
+    // added folders ride beside the workspace root, so the reviewer
+    // judges the call against the same boundary the loop does.
     let declared = serde_json::to_string(&prepared.effects.declared).unwrap_or_default();
     let note = prepared
         .tool
         .review_note(&prepared.arguments)
         .map(|note| format!("\n{note}"))
         .unwrap_or_default();
+    let roots = if added.is_empty() {
+        String::new()
+    } else {
+        let folders = added
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("\nAdded folders: {folders}")
+    };
     let effects = match &prepared.rewritten {
         Some(changed_by) => {
             let names = changed_by.join(", ");
             let arguments = serde_json::to_string(&prepared.arguments).unwrap_or_default();
             format!(
-                "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}{note}\nExtension {names} rewrote this call's arguments; it runs with {arguments}\nWorkspace root: {workspace}"
+                "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}{note}\nExtension {names} rewrote this call's arguments; it runs with {arguments}\nWorkspace root: {workspace}{roots}"
             )
         }
         None => format!(
-            "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}{note}\nWorkspace root: {workspace}"
+            "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}{note}\nWorkspace root: {workspace}{roots}"
         ),
     };
     Input::User {

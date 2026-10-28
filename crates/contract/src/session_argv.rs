@@ -45,6 +45,11 @@ pub struct SessionArgv {
     pub delegate_id: Option<JobId>,
     /// This session's depth in the delegate tree, passed by its parent.
     pub depth: Option<u32>,
+    /// The parent's added folders the child also runs with: the child's
+    /// own log records them as its `directory_added` events, so the
+    /// delegate tools take no new argument (`docs/delegates.md`, "The
+    /// tools").
+    pub added: Vec<PathBuf>,
     /// The session's environment came from the login-shell capture.
     pub login_shell: bool,
     /// A program drives the session (`docs/permissions.md`, "Supervised sessions").
@@ -69,6 +74,7 @@ impl Default for SessionArgv {
             parent: None,
             delegate_id: None,
             depth: None,
+            added: Vec::new(),
             login_shell: false,
             supervised: false,
         }
@@ -84,7 +90,8 @@ impl SessionArgv {
     /// `--workspace`, then `--model`, each `-c`, `--resume`, `--prompt`,
     /// `--credential`, `--worktree`, `--rewound-from`, `--continues`, `--forked-from`,
     /// `--forked-seq`, `--parent`,
-    /// `--delegate-id`, `--depth`, `--login-shell`, `--supervised`, each only when set.
+    /// `--delegate-id`, `--depth`, each `--added`, `--login-shell`,
+    /// `--supervised`, each only when set.
     #[must_use]
     pub fn to_argv(&self) -> Vec<OsString> {
         let mut argv = vec![OsString::from("session")];
@@ -135,6 +142,14 @@ impl SessionArgv {
         }
         if let Some(depth) = self.depth {
             argv.push(OsString::from(format!("--depth={depth}")));
+        }
+        // One `--added=<path>` per inherited root, in fold order: the
+        // child records each as its own `directory_added`, so the order
+        // the parent folded is the order the child replays.
+        for added in &self.added {
+            let mut arg = OsString::from("--added=");
+            arg.push(added);
+            argv.push(arg);
         }
         if self.login_shell {
             argv.push(OsString::from("--login-shell"));

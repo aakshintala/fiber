@@ -213,6 +213,7 @@ impl Loop {
             | Delivery::McpReconnect(..)
             | Delivery::Credential(..)
             | Delivery::Name(..)
+            | Delivery::AddDirectory(..)
             | Delivery::Rewind(..)
             | Delivery::ChangeWorkspace(..)
             | Delivery::Handoff(..)

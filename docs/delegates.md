@@ -54,7 +54,14 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 - `description` is a short label for people.
 - `isolation` is `none` (the default) or `worktree`.
 - `workspace` defaults to the parent's workspace. A delegate started inside a
-  worktree delegate defaults to that worktree.
+  worktree delegate defaults to that worktree. Every delegate the session
+  starts, forks included, also runs with the parent's added folders as they are
+  when it starts. Before its first request, it records each one its own
+  history does not already hold as `directory_added` (`docs/events.md`). A
+  fresh spawn lists those folders in its opening without separate folder-added
+  messages. A fork usually writes no duplicate events; if a folder was added
+  after its point, it records that folder and its normal message follows the
+  byte-identical prefix. The delegate tools take no new argument for them.
 - `timeout_ms` is optional, with no default. At the deadline, the delegate is
   stopped like any job and ends `failed` with code `timeout`. A delegate has no
   other deadline: a Fiber delegate's shell commands carry their own
