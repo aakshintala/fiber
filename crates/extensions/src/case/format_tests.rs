@@ -7,11 +7,39 @@
     reason = "case parser assertions fail the test with their field context"
 )]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde_json::{Value, json};
 
 use super::{CallOutcome, Case};
+use crate as extensions;
+
+#[test]
+fn a_script_check_error_keeps_its_context_and_path() {
+    let path = Path::new("providers/acme/tests/bad-script.json");
+    let checked_path = Mutex::new(None::<PathBuf>);
+    let check_script = |checked: &Path, _bytes: &[u8]| {
+        *checked_path.lock().expect("script checker lock") = Some(checked.to_path_buf());
+        Err("bad script".to_owned())
+    };
+    let error = Case::parse(
+        path,
+        br#"{"script":{"steps":[false]},"prompt":"hi","expect":[]}"#,
+        &check_script,
+    )
+    .err()
+    .expect("a rejected script returns an error");
+
+    assert!(matches!(
+        error,
+        crate::Error::Case(message) if message == "script: bad script"
+    ));
+    assert_eq!(
+        *checked_path.lock().expect("script checker lock"),
+        Some(path.to_path_buf())
+    );
+}
 
 fn single(case: &super::CallCase) -> (&super::Call, &CallOutcome) {
     let super::CallOperation::Invoke { call, outcome } = &case.steps[0].operation else {
@@ -176,7 +204,19 @@ fn session_case() -> Value {
 }
 
 fn parse(value: &Value) -> Result<Case, String> {
-    Case::parse(Path::new("case.json"), value.to_string().as_bytes())
+    parse_with_script_check(value, &|_, _| Ok(()))
+}
+
+fn parse_with_script_check(
+    value: &Value,
+    check_script: &dyn Fn(&Path, &[u8]) -> Result<(), String>,
+) -> Result<Case, String> {
+    Case::parse(
+        Path::new("case.json"),
+        value.to_string().as_bytes(),
+        check_script,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn case_error(value: &Value) -> String {
@@ -336,9 +376,6 @@ fn malformed_case_fields_name_the_field() {
     value["name"] = json!(12);
     cases.push(("name", value));
     let mut value = session_case();
-    value["script"] = json!({"steps": [false]});
-    cases.push(("script", value));
-    let mut value = session_case();
     value["prompt"] = json!(false);
     cases.push(("prompt", value));
     let mut value = session_case();
@@ -413,6 +450,18 @@ fn malformed_case_fields_name_the_field() {
             .unwrap_or_else(|| panic!("{field}: case was accepted"));
         assert!(error.contains(field), "{field}: {error}");
     }
+
+    let mut invalid_script = session_case();
+    invalid_script["script"] = json!({"steps": [false]});
+    let error = parse_with_script_check(&invalid_script, &|path, _| {
+        Err(format!(
+            "The script `{}` is malformed at step 1: the step is not an object.",
+            path.display()
+        ))
+    })
+    .err()
+    .expect("the script checker rejects its malformed script");
+    assert!(error.contains("script"), "{error}");
 }
 
 #[test]
