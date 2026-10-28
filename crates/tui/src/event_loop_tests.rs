@@ -2743,7 +2743,11 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
                 name: None,
                 price: None,
             }],
-            notices: vec!["the lists are in".to_owned()],
+            notices: vec![contract::events::Notice {
+                code: contract::ErrorCode::ModelInvalid,
+                message: "the lists are in".to_owned(),
+                extension: None,
+            }],
             lists: Vec::new(),
         })
     });

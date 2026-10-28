@@ -341,7 +341,7 @@ fn load_notices_reach_the_catalogue() {
     assert!(catalogue.models.is_empty());
     assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
     assert!(
-        catalogue.notices[0].contains("extension API"),
+        catalogue.notices[0].message.contains("extension API"),
         "{:?}",
         catalogue.notices
     );

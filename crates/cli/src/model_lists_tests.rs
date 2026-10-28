@@ -14,7 +14,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use config::Config;
+use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::events::Notice;
 use extensions::{Providers, SessionExtensions};
 use fakes::Deadline;
 use fakes::NoLock;
@@ -173,17 +175,17 @@ fn age_cache(setup: &Setup, name: &str, ago: Duration) {
         .unwrap();
 }
 
-/// The listed models and notices: the text `model_lists` read, without
-/// the picker's entries.
+/// The listed models and notices: the [`Notice`]s `model_lists` read,
+/// without the picker's entries.
 struct Listed {
     models: Vec<String>,
-    notices: Vec<String>,
+    notices: Vec<Notice>,
 }
 
 /// One `{name}/{id}` reference per model of every installed provider,
 /// providers sorted by name, models in list order: the walk the picker's
 /// entries make.
-fn listed((providers, _config, notices): (Providers, Config, Vec<String>)) -> Listed {
+fn listed((providers, _config, notices): (Providers, Config, Vec<Notice>)) -> Listed {
     let mut models = Vec::new();
     for name in providers.names() {
         let Some(data) = providers.get(name) else {
@@ -474,14 +476,26 @@ fn a_failed_refresh_is_a_notice_and_the_cached_list_stays() {
     age_cache(&setup, "acme", Duration::from_secs(25 * 60 * 60));
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
+    let failed = catalogue
+        .notices
+        .iter()
+        .find(|notice| {
+            notice
+                .message
+                .contains("Could not refresh acme's model list")
+        })
+        .expect("a failed refresh is a notice");
     assert!(
-        catalogue
-            .notices
-            .iter()
-            .any(|notice| notice.contains("Could not refresh acme's model list")),
-        "{:?}",
-        catalogue.notices
+        failed
+            .message
+            .contains("Could not refresh acme's model list:"),
+        "the text is unchanged: {failed:?}"
     );
+    assert_eq!(failed.code, ErrorCode::ExtensionFailed);
+    // The notice names the extension, not the provider
+    // (`docs/model-routing.md`, "Model discovery": an `extension_failed`
+    // notice names the extension).
+    assert_eq!(failed.extension.as_deref(), Some("acme-ext"));
 }
 
 #[test]
@@ -562,8 +576,8 @@ fn a_held_providers_cached_invalid_model_is_not_reported_twice() {
     );
     assert!(catalogue.models.is_empty());
     assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
-    assert!(catalogue.notices[0].contains("acme/m1"));
-    assert!(catalogue.notices[0].contains("context_window"));
+    assert!(catalogue.notices[0].message.contains("acme/m1"));
+    assert!(catalogue.notices[0].message.contains("context_window"));
 }
 
 #[test]
@@ -641,7 +655,7 @@ fn load_notices_reach_the_lists() {
     assert!(catalogue.models.is_empty());
     assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
     assert!(
-        catalogue.notices[0].contains("extension API"),
+        catalogue.notices[0].message.contains("extension API"),
         "{:?}",
         catalogue.notices
     );
@@ -733,7 +747,7 @@ fn a_cached_read_leaves_out_a_cached_model_at_an_unlisted_url() {
     assert_eq!(references(&catalogue), ["acme/m1"]);
     assert_eq!(catalogue.notices.len(), 1);
     assert!(
-        catalogue.notices[0].contains("acme/m2"),
+        catalogue.notices[0].message.contains("acme/m2"),
         "{:?}",
         catalogue.notices
     );
@@ -792,7 +806,7 @@ fiber.provider("acme", {{
         catalogue
             .notices
             .iter()
-            .any(|notice| notice.contains("acme/m2")),
+            .any(|notice| notice.message.contains("acme/m2")),
         "{:?}",
         catalogue.notices
     );
@@ -936,14 +950,14 @@ fn a_cached_list_leaves_out_what_no_hub_answers_when_the_client_lacks_it() {
         .unwrap(),
     );
     assert!(catalogue.models.is_empty(), "{:?}", catalogue.models);
-    assert!(
-        catalogue
-            .notices
-            .iter()
-            .any(|notice| notice.contains(HUB_ENV_HOST) && notice.contains("hub's environment")),
-        "the list names the unconfigured model: {:?}",
-        catalogue.notices
-    );
+    let unconfigured = catalogue
+        .notices
+        .iter()
+        .find(|notice| {
+            notice.message.contains(HUB_ENV_HOST) && notice.message.contains("hub's environment")
+        })
+        .expect("the list names the unconfigured model");
+    assert_eq!(unconfigured.code, ErrorCode::ModelUnconfigured);
 }
 
 #[test]
@@ -982,11 +996,21 @@ fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
     };
     let (_providers, _config, others, unconfigured) = read();
     assert_eq!(others.len(), 1, "{others:?}");
-    assert!(others[0].contains("bad/m1"), "{others:?}");
-    assert!(others[0].contains("context_window"), "{others:?}");
+    assert!(others[0].message.contains("bad/m1"), "{others:?}");
+    assert!(others[0].message.contains("context_window"), "{others:?}");
+    assert_eq!(others[0].code, ErrorCode::ModelInvalid);
+    assert_eq!(others[0].extension.as_deref(), Some("bad-ext"));
     assert_eq!(unconfigured.len(), 1, "{unconfigured:?}");
-    assert!(unconfigured[0].contains("acme/m"), "{unconfigured:?}");
-    assert!(unconfigured[0].contains(HUB_ENV_HOST), "{unconfigured:?}");
+    assert!(
+        unconfigured[0].message.contains("acme/m"),
+        "{unconfigured:?}"
+    );
+    assert!(
+        unconfigured[0].message.contains(HUB_ENV_HOST),
+        "{unconfigured:?}"
+    );
+    assert_eq!(unconfigured[0].code, ErrorCode::ModelUnconfigured);
+    assert_eq!(unconfigured[0].extension.as_deref(), Some("acme-ext"));
     // `model_lists` returns both, the others first.
     let (_providers, _config, notices) = model_lists(
         &setup.home(),
