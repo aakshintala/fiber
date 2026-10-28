@@ -6,7 +6,7 @@ use image::codecs::png::PngEncoder;
 use image::codecs::webp::WebPEncoder;
 use image::{DynamicImage, Frame, ImageBuffer, ImageEncoder, ImageFormat, Rgb, RgbImage, Rgba};
 
-use super::{MAX_BASE64, Stored, base64_len, next_side, process};
+use super::{MAX_BASE64, Stored, base64_len, next_side, png, process};
 
 /// Deterministic noise: a linear congruential generator, so a fixture never
 /// changes between runs.
@@ -404,6 +404,73 @@ fn a_truncated_png_within_the_caps_is_stored_as_it_is() {
     let mut input = png_of(&DynamicImage::ImageRgb8(noise(100, 100)));
     input.truncate(input.len() / 2);
     assert_eq!(process(&input).unwrap().bytes, input);
+}
+
+/// The PNG signature every conversion writes.
+const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+/// A conversion's output, decoded back as PNG.
+fn converted(input: &[u8]) -> DynamicImage {
+    let out = png(input).unwrap();
+    assert!(out.starts_with(PNG_SIGNATURE), "{out:?}");
+    image::load_from_memory_with_format(&out, ImageFormat::Png).unwrap()
+}
+
+#[test]
+fn png_of_a_jpeg_has_its_size() {
+    let again = converted(&jpeg_of(&flat(64, 48)));
+    assert_eq!((again.width(), again.height()), (64, 48));
+}
+
+#[test]
+fn png_of_a_webp_has_its_size() {
+    let again = converted(&webp_of(&flat(40, 30)));
+    assert_eq!((again.width(), again.height()), (40, 30));
+}
+
+#[test]
+fn png_of_a_png_is_accepted() {
+    let again = converted(&png_of(&DynamicImage::ImageRgb8(flat(300, 200))));
+    assert_eq!((again.width(), again.height()), (300, 200));
+}
+
+#[test]
+fn png_of_a_gif_decodes_its_first_frame() {
+    let again = converted(&gif_of_two_frames());
+    assert_eq!((again.width(), again.height()), (20, 10));
+    let pixel = again.to_rgba8().get_pixel(3, 3).0;
+    assert_eq!(pixel, [255, 0, 0, 255]);
+}
+
+#[test]
+fn png_refuses_over_50_megapixels_from_the_header() {
+    let error = png(&header_only_png(8000, 7000)).unwrap_err();
+    assert_eq!(error, "8000x7000 is 56000000 pixels; the limit is 50000000");
+    let error = png(&header_only_png(10_000, 5001)).unwrap_err();
+    assert_eq!(
+        error,
+        "10000x5001 is 50010000 pixels; the limit is 50000000"
+    );
+}
+
+#[test]
+fn png_at_exactly_50_megapixels_passes_the_header_check() {
+    // The header-only file cannot decode, so the error is a decoder's,
+    // never the pixel count.
+    let error = png(&header_only_png(10_000, 5000)).unwrap_err();
+    assert!(!error.contains("the limit is"), "{error}");
+}
+
+#[test]
+fn png_refuses_an_unsupported_format() {
+    let error = png(b"BM\0\0\0\0\0\0\0\0\0\0\0\0\0\0").unwrap_err();
+    assert!(error.contains("is not a supported image format"), "{error}");
+}
+
+#[test]
+fn png_refuses_bytes_that_are_not_an_image() {
+    let error = png(b"not an image at all").unwrap_err();
+    assert!(!error.is_empty());
 }
 
 #[test]

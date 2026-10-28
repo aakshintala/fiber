@@ -132,8 +132,36 @@ fn call_rows_sit_at_the_ledger_indent() {
 /// A layout sizing its images inline with `cell`.
 fn inline_layout(paths: &[&str], cell: (u16, u16)) -> Layout {
     let mut layout = noted(paths);
-    layout.sizing = crate::image::Sizing::Inline { cell };
+    layout.sizing = crate::image::Sizing::Inline {
+        cell,
+        converts: false,
+    };
     layout
+}
+
+/// A layout sizing its images inline with `cell` and the converter
+/// available, having noted `parts`.
+fn converting_layout(parts: &[crate::image::Part], cell: (u16, u16)) -> Layout {
+    let mut layout = Layout::default();
+    for part in parts {
+        layout.note(part);
+    }
+    layout.sizing = crate::image::Sizing::Inline {
+        cell,
+        converts: true,
+    };
+    layout
+}
+
+/// A part at `path` of `mime`, 1280 by 800.
+fn typed(path: &str, mime: &str) -> crate::image::Part {
+    crate::image::Part {
+        session: session(),
+        path: path.to_owned(),
+        mime_type: mime.to_owned(),
+        width: 1280,
+        height: 800,
+    }
 }
 
 #[test]
@@ -166,6 +194,41 @@ fn call_rows_draw_the_inline_grid() {
     );
     assert_eq!(rows[7].0.to_string(), "    ▣ a.png · 1280×800");
     assert!(matches!(rows[7].1, Some(Target::Image(_))));
+}
+
+#[test]
+fn call_rows_draw_the_grid_for_converting_jpeg_and_webp() {
+    for (path, mime, caption) in [
+        ("artifacts/a.jpg", "image/jpeg", "    ▣ a.jpg · 1280×800"),
+        ("artifacts/a.webp", "image/webp", "    ▣ a.webp · 1280×800"),
+    ] {
+        let part = typed(path, mime);
+        let layout = converting_layout(std::slice::from_ref(&part), (10, 20));
+        let mut out = Rows::default();
+        call_rows(&[part], 60, &layout, &mut out);
+        let (rows, _) = out.into_parts();
+        // 1280 by 800 at 60 columns with a 10 by 20 cell: 24 by 7
+        // placeholders, then the caption line.
+        assert_eq!(rows.len(), 8, "{mime}: the grid and its caption");
+        assert_eq!(rows[7].0.to_string(), caption);
+        assert!(matches!(rows[7].1, Some(Target::Image(1))), "{mime}");
+    }
+}
+
+#[test]
+fn call_rows_keep_a_jpeg_line_without_the_converter() {
+    let part = typed("artifacts/a.jpg", "image/jpeg");
+    let mut layout = Layout::default();
+    layout.note(&part);
+    layout.sizing = crate::image::Sizing::Inline {
+        cell: (10, 20),
+        converts: false,
+    };
+    let mut out = Rows::default();
+    call_rows(&[part], 60, &layout, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.jpg · 1280×800");
 }
 
 #[test]

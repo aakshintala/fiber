@@ -126,7 +126,7 @@ fn scripted_exec_matches_input_when_given() {
             cap: 1024,
             own_group: true,
             #[cfg(test)]
-            stdout_read: None,
+            test_events: None,
         }
         .case_value()
     }
