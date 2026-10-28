@@ -470,7 +470,11 @@ fn no_session_delete_shows_the_shared_notice() {
     fakes::wait_until("the terminal's Hub connection", setup.deadline, move || {
         fs::read_to_string(&hub_log).is_ok_and(|log| log.contains("client_connected"))
     });
-    run.write(b"/delete\r");
+    run.write(b"/delete");
+    run.wait_screen("the /delete draft and its completion row", |grid| {
+        grid.contents.contains("/delete") && grid.contents.contains("Stops, then deletes")
+    });
+    run.write(b"\r");
     let notice = run.wait_screen("the no-session notice", |grid| {
         grid.contents.contains("No session on screen.")
     });
