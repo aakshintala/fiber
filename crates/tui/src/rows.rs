@@ -171,6 +171,20 @@ impl Rows {
         self.push_text(row, RowText::plain());
     }
 
+    /// Adds a fitted replacement line as its own row: the line's cells
+    /// with its links, the pad count in the row text's tail, and
+    /// `target`. The pad is decoration, never text.
+    pub(crate) fn push_fitted(&mut self, line: &FittedLine, target: Option<Target>) {
+        self.push_text(
+            (line.line.clone(), target),
+            RowText {
+                tail: line.pad,
+                links: line.links.clone(),
+                ..RowText::plain()
+            },
+        );
+    }
+
     /// Adds a row with what it adds to its logical line.
     pub(crate) fn push_text(&mut self, row: Row, mut text: RowText) {
         text.scopes = self.scopes.clone();
