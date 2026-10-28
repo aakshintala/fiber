@@ -702,11 +702,9 @@ impl Session {
         // A reader that reserved after the owed wait is still dispatching:
         // wait for it to finish and answer, bounded by the same grace, so
         // the writer drains its answer before the cut decides what is owed.
-        if self.gate.conns.has_unfinished_readers() {
-            #[cfg(test)]
-            self.gate.note(tests::Probe::DispatchWaitStarted);
-            self.gate.conns.wait_readers_finished(clock, until);
-        }
+        #[cfg(test)]
+        self.gate.note(tests::Probe::DispatchWaitStarted);
+        self.gate.conns.wait_readers_finished(clock, until);
         self.gate.conns.cut_owed(&self.gate.session_id, |reader| {
             self.gate.accepted.unanswered(reader) > 0
         });

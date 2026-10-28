@@ -260,23 +260,14 @@ impl Conns {
         }
     }
 
-    /// Whether any live reader has not finished the line it is
-    /// dispatching: one lock, no wait. The caller notes the wait-entry
-    /// probe after this returns true and all locks are released, then
-    /// parks in [`Conns::wait_readers_finished`].
-    pub(super) fn has_unfinished_readers(&self) -> bool {
-        lock(&self.state)
-            .live
-            .iter()
-            .any(|(_, live)| !live.finished)
-    }
-
     /// Waits, up to `until`, for every live reader to finish the line it
     /// is dispatching. A reader that is still dispatching when the grace
     /// passes is cut `indeterminate` by the caller, so the bound is the
     /// same `until` the owed wait used: no new duration, no restarted
     /// clock. Parks on the `writers` condvar that [`Conns::finish`]
-    /// already notifies, and never joins a reader.
+    /// already notifies, and never joins a reader. The caller reaches this
+    /// method after quieting readers; with none unfinished, it returns at
+    /// once.
     pub(super) fn wait_readers_finished(&self, clock: &dyn Clock, until: Instant) {
         let mut state = lock(&self.state);
         while clock.now() < until && state.live.iter().any(|(_, live)| !live.finished) {

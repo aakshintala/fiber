@@ -6143,10 +6143,10 @@ fn quiesce_answers_a_dispatching_prompt_closing_before_cut() {
     // Release the cut (a) while the reader is still dispatching: the cut
     // waits for the dispatch to finish before deciding what is owed.
     hold_settle_tx.send(()).unwrap();
-    // The cut saw the dispatching reader and waits for it.
+    // The cut reaches its bounded reader wait while the dispatch is held.
     Deadline::after(DEADLINE)
         .recv(&dispatch)
-        .expect("settle_answers waits for the dispatching reader");
+        .expect("settle_answers reaches the reader wait");
     // The quiescer parks in the dispatch wait at `until`: the observed park
     // proves it waits, and the immediate check proves it has not returned
     // while the reader is held.
