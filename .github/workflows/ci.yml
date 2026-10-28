@@ -559,6 +559,13 @@ jobs:
             tests=$(sed -n 's/^test\t//p' <<<"$plan" | wc -l)
             echo "tests=${tests//[[:space:]]/}"
           } >>"$GITHUB_OUTPUT"
+      # nextest builds the fakes library as a dev dependency but not its
+      # examples; ProcessFixture::example_path starts that example, so build
+      # it before the selected tests run (scripts/check does the same for
+      # every selection).
+      - name: Build the process-extension fixture
+        if: steps.plan.outputs.run == 'true'
+        run: cargo build -p fakes --examples
       - name: Run each touched test
         id: run
         if: steps.plan.outputs.run == 'true'
