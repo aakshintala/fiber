@@ -11,10 +11,10 @@ use ratatui::style::{Color, Style};
 use serde_json::Value;
 
 /// How many roles a theme gives a colour.
-pub(crate) const ROLES: usize = 37;
+pub(crate) const ROLES: usize = 41;
 
 /// Lifted markers start here: [`Role::lifted`] is `LIFTED_BASE` plus the
-/// role's index, so lifts run 64..=100, past every role marker and the
+/// role's index, so lifts run 64..=104, past every role marker and the
 /// colours the paint pass leaves alone.
 pub(crate) const LIFTED_BASE: u8 = 64;
 
@@ -81,6 +81,14 @@ pub(crate) enum Role {
     Surface,
     /// The card on screen, a hovered card, pickers.
     SurfaceRaised,
+    /// A rail card in RETRYING.
+    CardRetrying,
+    /// A rail card in NEEDS INPUT.
+    CardNeedsInput,
+    /// A rail card in READY or IDLE.
+    CardReady,
+    /// A rail card in CRASHED.
+    CardCrashed,
     /// A turn's card.
     Turn,
     /// The person's prompt bubble.
@@ -133,6 +141,10 @@ impl Role {
         Self::Panel,
         Self::Surface,
         Self::SurfaceRaised,
+        Self::CardRetrying,
+        Self::CardNeedsInput,
+        Self::CardReady,
+        Self::CardCrashed,
         Self::Turn,
         Self::Prompt,
         Self::Code,
@@ -181,6 +193,10 @@ impl Role {
             Self::Panel => "panel",
             Self::Surface => "surface",
             Self::SurfaceRaised => "surface_raised",
+            Self::CardRetrying => "card_retrying",
+            Self::CardNeedsInput => "card_needs_input",
+            Self::CardReady => "card_ready",
+            Self::CardCrashed => "card_crashed",
             Self::Turn => "turn",
             Self::Prompt => "prompt",
             Self::Code => "code",
@@ -206,6 +222,10 @@ impl Role {
             | Self::Panel
             | Self::Surface
             | Self::SurfaceRaised
+            | Self::CardRetrying
+            | Self::CardNeedsInput
+            | Self::CardReady
+            | Self::CardCrashed
             | Self::Turn
             | Self::Prompt
             | Self::Code
@@ -250,6 +270,8 @@ impl Role {
             | Self::Panel
             | Self::Surface
             | Self::SurfaceRaised
+            | Self::CardReady
+            | Self::CardCrashed
             | Self::Turn
             | Self::Prompt
             | Self::Code
@@ -278,6 +300,8 @@ impl Role {
             | Self::Info
             | Self::Secondary
             | Self::Scroll
+            | Self::CardRetrying
+            | Self::CardNeedsInput
             | Self::Handoff
             | Self::Alert
             | Self::Selection
@@ -310,7 +334,7 @@ impl Role {
     }
 
     /// The role a hover-lift marker lifts, if one is: a marker outside
-    /// 64..=100 lifts nothing, so [`Role::from_index`] never matches a
+    /// 64..=104 lifts nothing, so [`Role::from_index`] never matches a
     /// lifted marker.
     pub(crate) fn from_lifted(index: u8) -> Option<Role> {
         index.checked_sub(LIFTED_BASE).and_then(Self::from_index)
@@ -376,6 +400,10 @@ impl Theme {
             Shade::Rgb((0x0c, 0x0c, 0x11)), // panel
             Shade::Rgb((0x1a, 0x1a, 0x22)), // surface
             Shade::Rgb((0x3a, 0x3a, 0x4a)), // surface_raised
+            Shade::Rgb((0x26, 0x20, 0x14)), // card_retrying
+            Shade::Rgb((0x24, 0x1a, 0x10)), // card_needs_input
+            Shade::Rgb((0x12, 0x12, 0x17)), // card_ready
+            Shade::Rgb((0x20, 0x11, 0x14)), // card_crashed
             Shade::Rgb((0x10, 0x10, 0x17)), // turn
             Shade::Rgb((0x34, 0x35, 0x41)), // prompt
             Shade::Rgb((0x18, 0x18, 0x21)), // code
@@ -419,6 +447,10 @@ impl Theme {
             Shade::Rgb((0xf6, 0xf8, 0xfa)), // panel
             Shade::Rgb((0xea, 0xee, 0xf2)), // surface
             Shade::Rgb((0xd0, 0xd7, 0xde)), // surface_raised
+            Shade::Rgb((0xeb, 0xe5, 0xd9)), // card_retrying
+            Shade::Rgb((0xef, 0xe5, 0xdb)), // card_needs_input
+            Shade::Rgb((0xe8, 0xe8, 0xed)), // card_ready
+            Shade::Rgb((0xee, 0xdf, 0xe2)), // card_crashed
             Shade::Rgb((0xf3, 0xf5, 0xf8)), // turn
             Shade::Rgb((0xdd, 0xe3, 0xea)), // prompt
             Shade::Rgb((0xef, 0xf1, 0xf4)), // code

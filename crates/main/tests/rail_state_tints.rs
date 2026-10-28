@@ -78,7 +78,7 @@ fn rail_cards_tint_by_state() {
     let other_guard = SessionGuard::arm(setup.deadline, &other_text);
     // The retrying card: its first model call fails, and the long backoff
     // holds it in RETRYING while the test reads the rail.
-    let retrying = start_session(&control, &other_text, "retry work");
+    let _retrying = start_session(&control, &other_text, "retry work");
     assert!(
         server.await_requests(1, setup.deadline),
         "the retrying turn runs"
@@ -114,15 +114,21 @@ fn rail_cards_tint_by_state() {
     );
 
     // The hub exits on its own once the terminal quits: release the held
-    // turn, close both sessions, then quit and reap the hub.
+    // turn and close the working session. The terminal's own session
+    // stays live in the launch workspace until it quits, so the quit
+    // comes before waiting for the launch processes. The retrying
+    // session sleeps through its long backoff and never answers `close`
+    // in time, so its guard's kill ends it instead.
     server.release();
-    for id in [&retrying, &working] {
-        close_session(&Socket::connect(setup.deadline, &setup.session_socket(id)));
-    }
-    launch_guard.wait_gone();
-    other_guard.wait_gone();
+    close_session(&Socket::connect(
+        setup.deadline,
+        &setup.session_socket(&working),
+    ));
     drop(control);
     quit(run);
+    launch_guard.wait_gone();
+    support::kill_matching(setup.deadline, &other_text).unwrap();
+    other_guard.wait_gone();
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.wait();
 }

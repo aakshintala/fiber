@@ -256,10 +256,20 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
     } else {
         room
     };
+    // A card sits on its state's tint. A crash lives in `left` while
+    // `state` can stay working, so the crash wins; jobs read as
+    // working and an unreadable row keeps the working tint.
     let tint = if app.session() == Some(&row.id) {
         Role::SurfaceRaised
+    } else if row.left == Some(Left::Crashed) {
+        Role::CardCrashed
     } else {
-        Role::Surface
+        match row.state {
+            State::Retrying => Role::CardRetrying,
+            State::Waiting => Role::CardNeedsInput,
+            State::Idle => Role::CardReady,
+            State::Working | State::Jobs | State::Unreadable => Role::Surface,
+        }
     };
     // The stripe is main's surface cell (on or off with the stripes), and a
     // waiting card pulses its colour for its first ten seconds, then holds
