@@ -476,8 +476,24 @@ impl Cache {
     /// The animation dues of items painted this frame: each active one's
     /// last tick with its interval, for the wake fold. The fold asks each
     /// one's next frame at its last tick plus its interval. Rotates the
-    /// painted sets and closes the frame.
+    /// painted sets and closes the frame. Production folds through
+    /// [`Cache::anim_dues_live`]; this unfiltered seam is test-only.
+    #[cfg(test)]
     pub(crate) fn anim_dues(&self) -> Vec<(Instant, Duration)> {
+        self.dues_filtered(None)
+    }
+
+    /// The animation dues for the live notice set: like [`Cache::anim_dues`],
+    /// but a painted notice no longer stacked contributes no due, so a
+    /// notice expiring in the post-draw sweep arms no animation timer.
+    /// Keys without a notice always count, so item dues never change.
+    pub(crate) fn anim_dues_live(&self, live_ids: &[usize]) -> Vec<(Instant, Duration)> {
+        self.dues_filtered(Some(live_ids))
+    }
+
+    /// Rotates the painted sets, closes the frame, and returns each
+    /// active painted key's due, dropping notice keys outside `live`.
+    fn dues_filtered(&self, live: Option<&[usize]>) -> Vec<(Instant, Duration)> {
         let mut anim = support::lock(&self.anim);
         let painted = std::mem::take(&mut anim.painted_this);
         anim.painted_last = painted.clone();
@@ -487,6 +503,11 @@ impl Cache {
         painted
             .into_iter()
             .filter_map(|key| {
+                if let Some(live_ids) = live
+                    && key.notice_id().is_some_and(|id| !live_ids.contains(&id))
+                {
+                    return None;
+                }
                 let state = anim.states.get(&key)?;
                 (state.kind == AnimKind::Active).then_some((state.last, state.interval))
             })
