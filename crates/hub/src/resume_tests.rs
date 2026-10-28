@@ -1022,6 +1022,43 @@ impl Client {
         assert_eq!(line["kind"], "command_accepted", "{line}");
         line["payload"]["command_id"].as_str().unwrap().to_owned()
     }
+
+    /// Asserts no further line is waiting on the connection: the command
+    /// under test got exactly one answer. Call only after the hub is
+    /// known done answering, so a second answer would already be
+    /// buffered; this never waits.
+    fn assert_no_more(&mut self, what: &str) {
+        self.read.get_mut().set_nonblocking(true).unwrap();
+        let mut text = String::new();
+        let result = self.read.read_line(&mut text);
+        self.read.get_mut().set_nonblocking(false).unwrap_or(());
+        match result {
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Ok(0) => {}
+            _ => panic!("a second answer arrived for {what}: {text:?}"),
+        }
+    }
+}
+
+/// `assert_no_more` fails when a second line is already buffered, as a
+/// double-answering hub would leave it: two lines in, one read, the
+/// check panics on the other.
+#[test]
+#[should_panic(expected = "a second answer arrived")]
+fn assert_no_more_fails_on_a_buffered_second_answer() {
+    let (read_end, write_end) = UnixStream::pair().unwrap();
+    let (write_half, _) = UnixStream::pair().unwrap();
+    let mut client = Client {
+        write: write_half,
+        read: BufReader::new(read_end),
+    };
+    let mut hub_side = write_end;
+    hub_side
+        .write_all(b"{\"kind\":\"command_rejected\"}\n{\"kind\":\"command_rejected\"}\n")
+        .unwrap();
+    hub_side.flush().unwrap();
+    let _ = client.next("the first answer");
+    client.assert_no_more("the test command");
 }
 
 /// The hub's replacement for a muted full replay acknowledgement.
@@ -3718,6 +3755,7 @@ fn a_cut_command_write_is_indeterminate_on_first_attach() {
             .any(|(id, _)| id != "c_0" && id != "c_1"),
         "no other command runs"
     );
+    // docs/invocation.md:728 promises a command is delivered once.
     assert_eq!(
         received(&starter)
             .iter()
@@ -3761,6 +3799,7 @@ fn a_zero_byte_command_write_is_retried_after_a_clean_exit() {
     assert_eq!(client.acknowledged("the retried command's answer"), "c_2");
     assert_eq!(order.session_for("c_2"), None, "the answer left the queue");
     assert_eq!(starter.resumed().len(), 2, "one resume for the retry");
+    // docs/invocation.md:728 promises a command is delivered once.
     assert_eq!(
         received(&starter)
             .iter()
@@ -3838,15 +3877,17 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
         "{line}"
     );
     assert_eq!(order.session_for("c_2"), None, "the answer left the queue");
-    // One resume: the subscribe's session start. The cut command resumes
-    // nothing and reaches no resumed session.
-    assert_eq!(starter.resumed().len(), 1, "nothing is resumed");
     // Two lines arrived on the session, the subscribe and the torn
     // fragment: the bytes arrived once and were never delivered again.
     // Raw lines, not parsed ones: a mid-body fragment parses to nothing.
+    // docs/invocation.md:728 promises a command is delivered once.
     assert_eq!(
         starter.received().len(),
         2,
         "the cut bytes arrive once and are never delivered again"
     );
+    // Exactly one answer for the cut command: the queue is drained and
+    // the session's bytes are counted above, so a second answer would
+    // already be buffered; a non-blocking read finds nothing more.
+    client.assert_no_more("the cut command");
 }

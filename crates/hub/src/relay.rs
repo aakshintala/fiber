@@ -1794,19 +1794,12 @@ fn line_bytes(line: &Map<String, Value>) -> Option<Vec<u8>> {
 }
 
 /// What a failed write accepted before it failed: bytes the session may
-/// have read, and why the rest never went out.
+/// have read.
 struct PartialWrite {
     /// Bytes accepted before the failure. Positive when the session may
     /// have read the command, even when the whole buffer went out and
     /// only the flush failed.
     written: usize,
-    /// Why the rest never went out: kept for diagnosis; the count above
-    /// drives the retry decision.
-    #[allow(
-        dead_code,
-        reason = "kept for diagnosis; the count drives the decision"
-    )]
-    source: std::io::Error,
 }
 
 /// Counts the bytes the wrapped writer accepts, so a failed write
@@ -1848,9 +1841,8 @@ fn write_through(
     };
     match support::framing::write_line(&mut counting, line) {
         Ok(()) => Ok(()),
-        Err(source) => Err(PartialWrite {
+        Err(_) => Err(PartialWrite {
             written: counting.written,
-            source,
         }),
     }
 }

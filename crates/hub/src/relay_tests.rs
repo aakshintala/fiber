@@ -3192,11 +3192,6 @@ fn the_command_writer_counts_accepted_bytes_before_its_failure() {
     match write_client_command(&writer, bytes, Some(cut)) {
         Err(partial) => {
             assert_eq!(partial.written, cut);
-            assert_eq!(
-                partial.source.kind(),
-                std::io::ErrorKind::BrokenPipe,
-                "the cap fails the write"
-            );
         }
         Ok(()) => panic!("a cut write fails"),
     }
