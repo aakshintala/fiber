@@ -34,7 +34,8 @@ pub(crate) fn copy_target(turns: &[Turn], target: Target, width: u16) -> Option<
             | Entry::Group(_)
             | Entry::Aside(_)
             | Entry::Band(_)
-            | Entry::Answers(_) => None,
+            | Entry::Answers(_)
+            | Entry::Message(_) => None,
         })
 }
 
@@ -71,7 +72,8 @@ pub(crate) fn last_reply<'a>(pages: impl Iterator<Item = Option<&'a [Turn]>>) ->
                     | Entry::Group(_)
                     | Entry::Aside(_)
                     | Entry::Band(_)
-                    | Entry::Answers(_) => None,
+                    | Entry::Answers(_)
+                    | Entry::Message(_) => None,
                 })
                 .collect();
             return LastReply::Text(parts.join("\n\n"));
@@ -88,7 +90,8 @@ fn reply_action(entry: &Entry) -> Option<&str> {
         | Entry::Group(_)
         | Entry::Aside(_)
         | Entry::Band(_)
-        | Entry::Answers(_) => None,
+        | Entry::Answers(_)
+        | Entry::Message(_) => None,
     }
 }
 

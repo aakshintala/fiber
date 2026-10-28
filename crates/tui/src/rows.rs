@@ -3,8 +3,11 @@
 //! unwrapped). Producers push into [`Rows`] as they would into a
 //! `Vec<Row>`; a plain push is a row that starts a line of its own.
 
+use std::collections::HashMap;
 use std::ops::{Deref, Range};
 use std::sync::Arc;
+
+use contract::SessionId;
 
 use contract::Seq;
 use ratatui::style::Style;
@@ -96,6 +99,8 @@ pub(crate) struct Rows {
     /// The renderer seam bound to the page these rows draw on, if any:
     /// the ledger asks it for each call's lines.
     pub(crate) seam: Option<Bound>,
+    /// Current actual session names used by message entries.
+    pub(crate) session_names: Arc<HashMap<SessionId, String>>,
 }
 
 impl Rows {

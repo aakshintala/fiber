@@ -737,6 +737,7 @@ impl App {
                                         .collect()
                                 })
                                 .unwrap_or_default();
+                            self.session_labels(&rows);
                             if let Some(home) = self.home.as_mut() {
                                 home.sessions.recent(rows, first);
                                 home.refill_picker();
@@ -821,6 +822,7 @@ impl App {
                             home.left_after_attach = None;
                         }
                     }
+                    self.refresh_session_labels();
                     // The queued ask rides in home's outbox, drained by
                     // `home_outgoing`; while one is in flight it marks the
                     // project dirty instead. The status still reaches the
@@ -1323,6 +1325,7 @@ impl App {
             self.notices.push(&code, refusal(payload));
             return Vec::new();
         };
+        self.session_labels(&rows);
         if let Some(home) = self.home.as_mut() {
             home.sessions.scoped(rows);
             home.sessions.note_total(&project, total);
