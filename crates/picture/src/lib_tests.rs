@@ -23,12 +23,43 @@ fn child(arguments: &[OsString]) -> (i32, String, String) {
     )
 }
 
+/// Runs the child and returns the exit code, raw standard output and
+/// standard error: a conversion's PNG is binary, never UTF-8.
+fn child_bytes(arguments: &[OsString]) -> (i32, Vec<u8>, String) {
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let code = run(arguments, &mut stdout, &mut stderr);
+    (code, stdout, String::from_utf8(stderr).unwrap())
+}
+
 fn png(width: u32, height: u32) -> Vec<u8> {
     let image = image::RgbImage::from_pixel(width, height, image::Rgb([1, 2, 3]));
     let mut out = std::io::Cursor::new(Vec::new());
     image.write_to(&mut out, image::ImageFormat::Png).unwrap();
     out.into_inner()
 }
+
+fn jpeg(width: u32, height: u32) -> Vec<u8> {
+    let image = image::RgbImage::from_pixel(width, height, image::Rgb([4, 5, 6]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut out, image::ImageFormat::Jpeg).unwrap();
+    out.into_inner()
+}
+
+/// A writer whose every write fails, so a stdout failure exits 3.
+struct FailWrite;
+
+impl std::io::Write for FailWrite {
+    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("no room"))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::other("no room"))
+    }
+}
+
+/// The PNG signature every `--png` conversion writes.
+const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
 #[test]
 fn the_wrong_number_of_arguments_is_a_usage_error() {
@@ -154,6 +185,150 @@ fn an_unwritable_directory_exits_3() {
     assert_eq!(code, 3);
     assert!(stdout.is_empty());
     assert!(stderr.starts_with("i_4.png: "), "{stderr}");
+}
+
+#[test]
+fn the_png_form_converts_a_jpeg_to_png_on_stdout() {
+    let dir = fakes::TempDir::new("fiber-picture-png");
+    let input = dir.path().join("in.jpg");
+    std::fs::write(&input, jpeg(64, 48)).unwrap();
+    let (code, bytes, stderr) = child_bytes(&[OsString::from("--png"), input.into_os_string()]);
+    assert_eq!((code, stderr.as_str()), (0, ""));
+    assert!(bytes.starts_with(PNG_SIGNATURE));
+    let again = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).unwrap();
+    assert_eq!((again.width(), again.height()), (64, 48));
+}
+
+#[test]
+fn the_png_form_accepts_a_png() {
+    let dir = fakes::TempDir::new("fiber-picture-png-png");
+    let input = dir.path().join("in.png");
+    std::fs::write(&input, png(30, 20)).unwrap();
+    let (code, bytes, stderr) = child_bytes(&[OsString::from("--png"), input.into_os_string()]);
+    assert_eq!((code, stderr.as_str()), (0, ""));
+    assert!(bytes.starts_with(PNG_SIGNATURE));
+}
+
+#[test]
+fn the_png_form_refused_is_exit_1_with_the_reason() {
+    let dir = fakes::TempDir::new("fiber-picture-png-refused");
+    let input = dir.path().join("in.bin");
+    std::fs::write(&input, b"not an image at all").unwrap();
+    let (code, stdout, stderr) = child(&[OsString::from("--png"), input.into_os_string()]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(!stderr.is_empty(), "a refusal names its reason");
+}
+
+#[test]
+fn the_png_form_refuses_over_50_megapixels_from_the_header() {
+    let dir = fakes::TempDir::new("fiber-picture-png-limit");
+    let input = dir.path().join("big.png");
+    // Header only: 8000 x 7000 and no pixels.
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut ihdr = 8000_u32.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&7000_u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    for (kind, data) in [(b"IHDR", ihdr), (b"IDAT", vec![0x78, 0x9C, 0x00])] {
+        let mut body = kind.to_vec();
+        body.extend_from_slice(&data);
+        bytes.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+        bytes.extend_from_slice(&body);
+        let mut crc = 0xFFFF_FFFF_u32;
+        for byte in &body {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        bytes.extend_from_slice(&(!crc).to_be_bytes());
+    }
+    std::fs::write(&input, bytes).unwrap();
+    let (code, stdout, stderr) = child(&[OsString::from("--png"), input.into_os_string()]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert_eq!(
+        stderr,
+        "8000x7000 is 56000000 pixels; the limit is 50000000\n"
+    );
+}
+
+#[test]
+fn the_png_form_missing_input_is_exit_1() {
+    let dir = fakes::TempDir::new("fiber-picture-png-missing");
+    let (code, stdout, stderr) = child(&[
+        OsString::from("--png"),
+        dir.path().join("missing.jpg").into_os_string(),
+    ]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("No such file"), "{stderr}");
+}
+
+#[test]
+fn the_png_form_with_the_wrong_number_of_arguments_is_usage_2() {
+    let dir = fakes::TempDir::new("fiber-picture-png-usage");
+    let input = dir.path().join("in.jpg");
+    std::fs::write(&input, jpeg(8, 8)).unwrap();
+    for arguments in [
+        vec![OsString::from("--png")],
+        vec![
+            OsString::from("--png"),
+            input.as_os_str().to_owned(),
+            OsString::from("extra"),
+            OsString::from("extra"),
+        ],
+    ] {
+        let (code, stdout, stderr) = child(&arguments);
+        assert_eq!(code, 2, "{arguments:?}");
+        assert!(stdout.is_empty());
+        assert_eq!(
+            stderr, "usage: fiber image --png <input>\n",
+            "{arguments:?}"
+        );
+    }
+}
+
+#[test]
+fn the_png_form_does_not_reinterpret_the_three_operand_form() {
+    // Three arguments starting with `--png` stay the stored-file form:
+    // a file named `--png` is read, not converted.
+    let arguments = [
+        OsString::from("--png"),
+        OsString::from("artifacts"),
+        OsString::from("i_9"),
+    ];
+    let (code, stdout, _) = child(&arguments);
+    assert_eq!(code, 1, "{arguments:?}");
+    assert!(stdout.is_empty(), "{arguments:?}");
+}
+
+#[test]
+fn the_png_flag_off_the_form_is_not_a_conversion() {
+    // Two arguments not starting with `--png` stay the stored-file form's
+    // usage error, never a conversion.
+    let (code, stdout, stderr) = child(&[OsString::from("--pn"), OsString::from("in.jpg")]);
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty());
+    assert_eq!(
+        stderr,
+        "usage: fiber image <input> <artifacts_dir> <stem>\n"
+    );
+}
+
+#[test]
+fn the_png_form_stdout_failure_is_exit_3() {
+    let dir = fakes::TempDir::new("fiber-picture-png-write");
+    let input = dir.path().join("in.jpg");
+    std::fs::write(&input, jpeg(8, 8)).unwrap();
+    let arguments = [OsString::from("--png"), input.into_os_string()];
+    let mut stderr = Vec::new();
+    let code = super::run(&arguments, &mut FailWrite, &mut stderr);
+    assert_eq!(code, 3);
 }
 
 #[test]

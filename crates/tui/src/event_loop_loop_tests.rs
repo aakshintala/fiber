@@ -642,6 +642,7 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::Image { .. }
             | Input::Feedback(_)
             | Input::Viewed { .. } => "other".to_owned(),
+            Input::Converted { .. } => "other".to_owned(),
             Input::Resize => "resize".to_owned(),
         })
         .collect();
@@ -2814,6 +2815,7 @@ fn hooks_results_waiting_on_history_are_stashed_then_folded_stale() {
         .map(|input| match input {
             Input::HooksOfferNames { .. } => "names".to_owned(),
             Input::HooksInstalled { .. } => "installed".to_owned(),
+            Input::Converted { .. } => "other".to_owned(),
             Input::Bytes(_)
             | Input::Hub(_)
             | Input::Connected(..)

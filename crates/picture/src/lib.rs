@@ -4,8 +4,10 @@
 //! `<artifacts_dir>/<stem>.<ext>`. It prints one JSON line naming the file and
 //! exits 0. An image it refuses or cannot decode gets the decoder's message on
 //! standard error and exit 1; a usage error exits 2 and a write failure 3.
-//! `fiber image pdf <input> <artifacts_dir> <stem> <what>` counts a PDF's
-//! pages and cuts a page range (`docs/tools.md`, "read").
+//! `fiber image --png <input>` writes one PNG to standard output for the
+//! terminal (`docs/tui.md`, "Images"). `fiber image pdf <input>
+//! <artifacts_dir> <stem> <what>` counts a PDF's pages and cuts a page range
+//! (`docs/tools.md`, "read").
 
 mod fit;
 mod pdf;
@@ -31,6 +33,17 @@ pub fn main(args: Vec<OsString>) -> i32 {
 }
 
 fn run(args: &[OsString], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
+    // The terminal's conversion form, before the PDF and three-operand
+    // forms: exactly its two arguments, so a stored file named `--png`
+    // keeps the three-operand form (`docs/tui.md`, "Images").
+    if let [flag, input] = args {
+        if flag == "--png" {
+            return run_png(input, stdout, stderr);
+        }
+    } else if args.first().is_some_and(|first| first == "--png") && args.len() != 3 {
+        writeln!(stderr, "usage: fiber image --png <input>").unwrap_or(());
+        return USAGE;
+    }
     if args.first().is_some_and(|first| first == "pdf") {
         if args.len() != 5 {
             writeln!(
@@ -76,6 +89,35 @@ fn run(args: &[OsString], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32
         "height": stored.height,
     });
     if writeln!(stdout, "{line}")
+        .and_then(|()| stdout.flush())
+        .is_err()
+    {
+        return WRITE_FAILED;
+    }
+    0
+}
+
+/// Converts `input` to PNG on standard output for the terminal: exit 0
+/// with the PNG bytes, 1 with the reason when the file is missing,
+/// refused or undecodable, and 3 when standard output fails
+/// (`docs/tui.md`, "Images").
+fn run_png(input: &OsString, stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
+    let bytes = match std::fs::read(input) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            writeln!(stderr, "{error}").unwrap_or(());
+            return REFUSED;
+        }
+    };
+    let png = match fit::png(&bytes) {
+        Ok(png) => png,
+        Err(message) => {
+            writeln!(stderr, "{message}").unwrap_or(());
+            return REFUSED;
+        }
+    };
+    if stdout
+        .write_all(&png)
         .and_then(|()| stdout.flush())
         .is_err()
     {
