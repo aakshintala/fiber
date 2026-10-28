@@ -451,3 +451,131 @@ fn ctrl_c_with_the_notice_overlay_open_still_clears_then_quits() {
     );
     assert_eq!(tap_at(&mut app, "ctrl+c", clock.now()), Effect::Quit);
 }
+
+/// A wheel report at (`col`, `row`): down steps toward the tail, up away
+/// from it, over the conversation column the `/keys` screen takes.
+fn wheel(col: u16, row: u16, down: bool) -> crate::keys::Mouse {
+    crate::keys::Mouse {
+        kind: if down {
+            crate::keys::MouseKind::WheelDown
+        } else {
+            crate::keys::MouseKind::WheelUp
+        },
+        col,
+        row,
+    }
+}
+
+/// The wheel over the `/keys` screen steps its Browse list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_keys_steps_browse_not_the_conversation() {
+    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    // Scroll first, while the wheel still reaches the conversation: the
+    // screen covers it once open.
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    app.open_keys();
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let frame = app.keys_frame(24).expect("the screen is open");
+    let before = frame.list.selected();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.keys_frame(24)
+            .expect("the screen is open")
+            .list
+            .selected(),
+        before + 3,
+        "one wheel step is three Down keys through the screen"
+    );
+}
+
+/// An open notice overlay swallows the wheel, so the hidden `/keys`
+/// list does not move and neither does the conversation.
+#[test]
+fn wheel_over_a_notice_over_keys_moves_neither_list_nor_conversation() {
+    use crate::app::Surface;
+    use crate::app::top::tests::open;
+    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    app.open_keys();
+    open(&mut app, Surface::Notice);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let slab = crate::view::frame_of(&app, Surface::Notice);
+    assert!(!slab.is_empty(), "the notice overlay draws a slab");
+    let before = app
+        .keys_frame(24)
+        .expect("the screen is open")
+        .list
+        .selected();
+    app.on_wheel(&wheel(slab.x + 1, slab.y + 1, false));
+    assert_eq!(
+        app.keys_frame(24)
+            .expect("the screen is open")
+            .list
+            .selected(),
+        before,
+        "the overlay swallows the wheel before the hidden list"
+    );
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+}
+
+/// The wrapper steps the Browse list one row per call through the same
+/// path as an Up/Down stroke.
+#[test]
+fn keys_screen_wheel_steps_browse_one_row() {
+    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    app.open_keys();
+    let before = app
+        .keys_frame(24)
+        .expect("the screen is open")
+        .list
+        .selected();
+    assert_eq!(app.keys_screen_wheel(false), Effect::None);
+    assert_eq!(
+        app.keys_frame(24)
+            .expect("the screen is open")
+            .list
+            .selected(),
+        before + 1,
+        "one wrapper call is one Down through the screen"
+    );
+    assert_eq!(app.keys_screen_wheel(true), Effect::None);
+    assert_eq!(
+        app.keys_frame(24)
+            .expect("the screen is open")
+            .list
+            .selected(),
+        before,
+        "one wrapper call is one Up through the screen"
+    );
+}
+
+/// The wrapper swallows the wheel while a notice overlay is open, so the
+/// hidden list does not move.
+#[test]
+fn keys_screen_wheel_with_a_notice_open_moves_nothing() {
+    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    app.open_keys();
+    app.notices.push("extension_failed", "first".to_owned());
+    app.open_more_notices();
+    assert!(app.notice_overlay().is_some());
+    let before = app
+        .keys_frame(24)
+        .expect("the screen is open")
+        .list
+        .selected();
+    assert_eq!(app.keys_screen_wheel(false), Effect::None);
+    assert_eq!(
+        app.keys_frame(24)
+            .expect("the screen is open")
+            .list
+            .selected(),
+        before,
+        "the overlay swallows the wheel before the hidden list"
+    );
+}

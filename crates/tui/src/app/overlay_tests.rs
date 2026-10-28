@@ -4130,12 +4130,10 @@ mod stacked {
         let mut app = long_session();
         app.on_wheel(&wheel(10, 5, false));
         assert!(app.top().is_some());
-        for covering in [Surface::Keymap, Surface::Offer, Surface::Results] {
-            let mut app = long_session();
-            open(&mut app, covering);
-            app.on_wheel(&wheel(10, 5, false));
-            assert_eq!(app.top(), None, "{covering:?}");
-        }
+        let mut app = long_session();
+        open(&mut app, Surface::Keymap);
+        app.on_wheel(&wheel(10, 5, false));
+        assert_eq!(app.top(), None, "keymap covers the conversation");
     }
 
     #[test]
@@ -4281,6 +4279,145 @@ mod stacked {
         let slab = crate::view::frame_of(&app, Surface::Quit);
         app.on_wheel(&wheel(slab.x + 1, slab.y + 1, true));
         assert_eq!(app.import_report().map(|report| report.top()), Some(3));
+    }
+    /// An attached app with a delegates panel card, five delegates and
+    /// a tall conversation, so panel, conversation and rail wheels each
+    /// have somewhere to go.
+    fn panel_session() -> App {
+        let mut app = App::new(std::path::PathBuf::from("/w"));
+        app.set_home(crate::home::Launch {
+            location: crate::LaunchLocation::Local {
+                workspace: std::path::PathBuf::from("/w"),
+                project: "-w".to_owned(),
+                git: false,
+            },
+            rail_share: 15.0,
+            panel_share: 21.0,
+            panel_cards: vec!["delegates".to_owned()],
+            ..Default::default()
+        });
+        app.attach(contract::SessionId(SESSION.to_owned()));
+        app.set_size(160, 40);
+        let mut seq = 0;
+        for at in 0..40 {
+            for next in turn(&mut seq, &format!("a_m{at}"), "a one-line reply") {
+                app.on_line(next);
+            }
+        }
+        let mut no = 1000;
+        for k in 1..=5 {
+            let job = format!("j_{k}");
+            no += 1;
+            app.on_line(super::line(
+                "job_started",
+                no,
+                Some(&format!("a_{k}")),
+                serde_json::json!({"job_id": job, "description": format!("task {k}"),
+                    "output_path": "/tmp/out"}),
+            ));
+            no += 1;
+            app.on_line(super::line(
+                "delegate_started",
+                no,
+                Some(&format!("a_{k}")),
+                serde_json::json!({"job_id": job,
+                    "delegate_session_id": format!("s_{job:0>16}"),
+                    "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+            ));
+        }
+        assert_eq!(app.top(), None, "following the bottom");
+        app
+    }
+
+    /// Keymap open over a swapped view swallows the wheel over the view
+    /// region: neither the view nor the hidden conversation moves, while
+    /// the panel and rail regions keep their existing wheel owners
+    /// (`docs/tui.md`, "Swapped views"; see #3578).
+    #[test]
+    fn keymap_over_a_swapped_view_swallows_the_view_region_only() {
+        let mut app = panel_session();
+        app.on_wheel(&wheel(30, 5, false));
+        assert!(app.top().is_some(), "setup scrolled the conversation up");
+        // No seam: Settings opens as Unavailable, still a swapped view
+        // over the conversation area.
+        app.open_config_view(crate::app::ConfigView::Settings);
+        assert!(app.config_view_open(), "the view opened");
+        open(&mut app, Surface::Keymap);
+        let top = app.top();
+        assert!(top.is_some(), "opening keeps the scrolled conversation");
+        // The view region: swallowed, view and conversation unchanged.
+        app.on_wheel(&wheel(30, 5, true));
+        assert_eq!(app.top(), top, "the wheel left the conversation");
+        assert_eq!(
+            app.config_view_screen()
+                .expect("the view stays open")
+                .list
+                .selected(),
+            0,
+            "the wheel left the view"
+        );
+        assert!(app.top_surfaces().contains(&Surface::Keymap));
+        // The panel region: the panel scrolls instead.
+        let panel_x = app
+            .chrome()
+            .layout()
+            .and_then(|layout| layout.panel)
+            .map(|panel| panel.x.saturating_add(4))
+            .expect("the panel draws");
+        app.on_wheel(&wheel(panel_x, 5, true));
+        assert_eq!(app.top(), top, "the wheel left the conversation");
+        assert!(
+            app.panel_state().delegate_scroll() > 0,
+            "the panel scrolled instead"
+        );
+        // The rail region: the rail takes it, not the conversation.
+        app.on_wheel(&wheel(5, 10, true));
+        assert_eq!(app.top(), top, "the wheel left the conversation");
+    }
+
+    /// Keymap open over a home config view swallows the wheel over the
+    /// list region: neither the view nor the home list moves, while the
+    /// rail region keeps its existing owner (`docs/tui.md`, "Swapped
+    /// views"; see #3578).
+    #[test]
+    fn keymap_over_a_home_config_view_swallows_the_list_region() {
+        let mut app = short_home();
+        app.on_wheel(&wheel(2, 5, true));
+        let scrolled = app.home_list_scroll();
+        assert!(scrolled > 0, "setup scrolled the home list down");
+        // No seam: Settings opens as Unavailable, still a swapped view
+        // over the whole screen.
+        app.open_config_view(crate::app::ConfigView::Settings);
+        assert!(app.config_view_open(), "the view opened");
+        open(&mut app, Surface::Keymap);
+        assert_eq!(
+            app.home_list_scroll(),
+            scrolled,
+            "opening keeps the scrolled list"
+        );
+        // The list region: swallowed, view and list unchanged.
+        app.on_wheel(&wheel(2, 5, true));
+        assert_eq!(
+            app.home_list_scroll(),
+            scrolled,
+            "the wheel left the home list"
+        );
+        assert_eq!(
+            app.config_view_screen()
+                .expect("the view stays open")
+                .list
+                .selected(),
+            0,
+            "the wheel left the view"
+        );
+        assert!(app.top_surfaces().contains(&Surface::Keymap));
+        // The rail region: the rail takes it, not the list.
+        app.on_wheel(&wheel(5, 10, true));
+        assert_eq!(
+            app.home_list_scroll(),
+            scrolled,
+            "the wheel left the home list"
+        );
     }
 }
 

@@ -209,6 +209,49 @@ pub(crate) fn session_line_in_turn(
     envelope(session, kind, Some(turn), payload, action)
 }
 
+/// Feeds `count` completed one-line driver turns into `app`, oldest
+/// first, with sequence numbers from `seq`, so the conversation grows
+/// taller than the window and scrolls. A wheel test scrolls up from the
+/// followed bottom first, making a wheel that reaches the conversation
+/// move its top.
+pub(crate) fn long_turns(app: &mut App, seq: &mut u64, count: u64) {
+    for at in 0..count {
+        let message = format!("a_m{at}");
+        let mut push = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
+            app.on_line(Line::Session(contract::Envelope {
+                kind: kind.to_owned(),
+                session_id: contract::SessionId(SESSION.to_owned()),
+                ts: *seq,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: action.map(|id| contract::ActionId(id.to_owned())),
+                seq: Some(contract::Seq(*seq)),
+                payload: payload.as_object().cloned().unwrap_or_default(),
+            }));
+            *seq += 1;
+        };
+        push(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "prompt"}]}]}),
+        );
+        push("step_started", None, json!({}));
+        push("assistant_message_started", Some(&message), json!({}));
+        push(
+            "text_completed",
+            Some(&message),
+            json!({"text": "a one-line reply"}),
+        );
+        push(
+            "assistant_message_completed",
+            Some(&message),
+            json!({"outcome": "completed"}),
+        );
+        push("turn_completed", None, json!({"outcome": "completed"}));
+    }
+}
+
 /// Every line an effect sends, parsed.
 pub(crate) fn sent(effect: Effect) -> Vec<serde_json::Value> {
     match effect {

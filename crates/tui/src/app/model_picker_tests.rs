@@ -7,6 +7,8 @@ use crate::catalogue::{Catalogue, ModelEntry};
 use crate::home::Launch;
 use contract::ErrorCode;
 use contract::events::Notice;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use std::path::PathBuf;
 
 /// An app on home at 80x24.
@@ -136,7 +138,7 @@ use std::time::Instant;
 use contract::clock::Clock;
 use serde_json::json;
 
-use crate::keys::{Edit, Key};
+use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::stroke::Stroke;
 
 /// The injected clock's now.
@@ -4586,4 +4588,110 @@ fn on_models_arrival_clears_models_loading() {
     );
     app.on_models(Err("gone".to_owned()));
     assert!(!has_code(&app, "models_loading"));
+}
+
+/// A catalogue with five models, so three steps fit without clamping.
+fn five() -> Catalogue {
+    let mut catalogue = three();
+    for reference in ["acme/m3", "acme/m4"] {
+        let (provider, id) = reference.split_once('/').unwrap();
+        catalogue.models.push(ModelEntry {
+            reference: reference.to_owned(),
+            provider: provider.to_owned(),
+            id: id.to_owned(),
+            levels: Vec::new(),
+            default_level: None,
+            configured: None,
+            roles: Vec::new(),
+            name: None,
+            price: None,
+        });
+    }
+    catalogue
+}
+
+/// A wheel report at (`col`, `row`): down steps toward the tail, over the
+/// picker's view area.
+fn wheel(col: u16, row: u16, down: bool) -> Mouse {
+    Mouse {
+        kind: if down {
+            MouseKind::WheelDown
+        } else {
+            MouseKind::WheelUp
+        },
+        col,
+        row,
+    }
+}
+
+/// Renders `app` at its size so slabs are noted for the wheel points.
+fn rendered(app: &App) {
+    let (width, height) = app.screen_size();
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let _ = crate::view::render(app, area, &mut buf, None);
+}
+
+/// The wheel inside the picker slab moves the picker, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_inside_the_picker_slab_moves_the_picker_not_the_conversation() {
+    let mut app = attached();
+    app.on_models(Ok(five()));
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert!(app.model_picker_open());
+    rendered(&app);
+    let slab = app
+        .frames()
+        .slab_of(crate::app::Surface::Picker)
+        .expect("the picker notes a slab");
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    app.on_wheel(&wheel(slab.x + 1, slab.y + 1, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("acme/m3"),
+        "one wheel step is three Down keys through the picker"
+    );
+}
+
+/// The wheel outside the picker slab but over its view area moves the
+/// picker too, never the conversation under it (`docs/tui.md`, "Swapped
+/// views"; see #3578).
+#[test]
+fn wheel_outside_the_picker_slab_moves_the_picker_not_the_conversation() {
+    let mut app = attached();
+    app.on_models(Ok(five()));
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert!(app.model_picker_open());
+    rendered(&app);
+    let slab = app
+        .frames()
+        .slab_of(crate::app::Surface::Picker)
+        .expect("the picker notes a slab");
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    // Below the slab, centered: still the picker's view area, above the
+    // input box. The slab spans the width, so no point beside it clears
+    // it on this screen.
+    let col = 40;
+    let row = slab.y + slab.height + 1;
+    assert!(
+        (row as usize) < app.conversation_height(),
+        "the point sits in the view area"
+    );
+    app.on_wheel(&wheel(col, row, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("acme/m3"),
+        "one wheel step is three Down keys through the picker"
+    );
 }

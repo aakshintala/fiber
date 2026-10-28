@@ -1399,6 +1399,13 @@ impl App {
         self.outbox.is_up()
     }
 
+    /// Whether home is set, regardless of what covers it: the key map
+    /// and the approval panel hide it without unsetting it, so the wheel
+    /// still treats its screen as home while either is open.
+    pub(crate) fn home_set(&self) -> bool {
+        self.home.is_some()
+    }
+
     /// The attached session, if any.
     pub(crate) fn session(&self) -> Option<&SessionId> {
         match &self.phase {

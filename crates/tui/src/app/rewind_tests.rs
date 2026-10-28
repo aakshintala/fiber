@@ -2578,3 +2578,72 @@ fn shot(app: &crate::app::App) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+/// A wheel report at (`col`, `row`): down steps toward the tail, up away
+/// from it, over the conversation column the view takes.
+fn wheel(col: u16, row: u16, down: bool) -> crate::keys::Mouse {
+    crate::keys::Mouse {
+        kind: if down {
+            crate::keys::MouseKind::WheelDown
+        } else {
+            crate::keys::MouseKind::WheelUp
+        },
+        col,
+        row,
+    }
+}
+
+/// The wheel over the rewind view moves the rewind list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_rewind_moves_the_list_not_the_conversation() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    app.set_size(80, 24);
+    // Scroll first, while the wheel still reaches the conversation: the
+    // view covers it once open.
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    let lines = open(&mut app, &clock);
+    // A third turn past the fixture's two, so three steps down from the
+    // resting row stay off the tail instead of clamping.
+    let mut history = segment_a();
+    history.extend([
+        history_line(
+            SESSION,
+            "turn_started",
+            7,
+            Some("t_3"),
+            None,
+            message_input("third"),
+        ),
+        history_line(SESSION, "step_started", 8, Some("t_3"), None, json!({})),
+        history_line(
+            SESSION,
+            "turn_completed",
+            9,
+            Some("t_3"),
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ]);
+    accept(&mut app, &lines[0]["id"], history);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    // Step off the resting row first: the rest tracks the history length
+    // with only two rows past it, so three steps from rest would clamp.
+    app.on_key(crate::keys::Key::Up, clock.now());
+    let frame = app.session_view_screen(80).expect("the view is open");
+    let before = frame.list.selected();
+    assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.session_view_screen(80)
+            .expect("the view is open")
+            .list
+            .selected(),
+        before + 3,
+        "one wheel step is three Down keys through the view"
+    );
+}

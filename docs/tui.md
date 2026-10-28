@@ -562,7 +562,7 @@ two-column gutter, as overlay choices do, without the bar.
 A view swaps into the conversation area and takes all of it. Esc returns to
 the conversation. Its top row, on the `surface` tint, is the view's name
 bold, its command dim ("  /context"), and "Esc returns" dim, right-aligned;
-a click on it returns too. The views are:
+a click on it returns too. The mouse wheel over a view scrolls it 3 rows a step, as the conversation scrolls, and never the conversation under it. The views are:
 
 - **A delegate's or job's view.** Its header is a breadcrumb
   ("main › ◆ review: …"). A status card gives harness, model, calls, elapsed

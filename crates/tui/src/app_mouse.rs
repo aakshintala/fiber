@@ -16,9 +16,9 @@ impl App {
     /// Handles one mouse report against the last frame's `targets`:
     /// every left press clears "Copied" and ends a finished attention
     /// title, then the press feeds the drag, the wheel, the selection
-    /// and the pointer in order; a click's effect wins over the
-    /// selection's (`docs/tui.md`, "Mouse and hover", "Getting the
-    /// person's attention").
+    /// and the pointer in order; a click's effect wins, then the wheel's,
+    /// then the selection's (`docs/tui.md`, "Mouse and hover", "Getting
+    /// the person's attention").
     pub(crate) fn on_mouse(
         &mut self,
         mouse: &Mouse,
@@ -39,15 +39,17 @@ impl App {
             }
         }
         self.on_drag(mouse);
-        self.on_wheel(mouse);
+        let wheel = self.on_wheel(mouse);
         let selected = self.on_select(mouse, targets);
         let clicked = pointer.on_mouse(mouse, targets, hover);
-        // A click's effect, else the selection's.
+        // A click's effect wins, then the wheel's, then the selection's.
         let effect = clicked.map_or(Effect::None, |target| self.on_click(target));
-        if effect == Effect::None {
-            selected
-        } else {
+        if effect != Effect::None {
             effect
+        } else if wheel != Effect::None {
+            wheel
+        } else {
+            selected
         }
     }
 
@@ -224,18 +226,21 @@ impl App {
     }
 
     /// The mouse wheel scrolls what it is over (`docs/tui.md`, "Turns",
-    /// "The panel", "The rail", "Layout"): over the panel it scrolls only
-    /// the panel, or over the Delegates card only that card; over the rail,
-    /// only the rail; over the conversation's visible rows it scrolls the
-    /// conversation by [`WHEEL_ROWS`] rows, but only while a session is on
-    /// screen and no swapped view covers the conversation. Over the header
-    /// or below the conversation it scrolls the conversation not at all.
-    pub(crate) fn on_wheel(&mut self, mouse: &Mouse) {
+    /// "The panel", "The rail", "Layout", "Swapped views"): over the panel
+    /// it scrolls only the panel, or over the Delegates card only that
+    /// card; over the rail, only the rail; over a swapped view's rows it
+    /// takes the view's own key path three Up/Down equivalents a step,
+    /// never the hidden conversation under it. Over the conversation's
+    /// visible rows with no view over them it scrolls the conversation by
+    /// [`WHEEL_ROWS`] rows, but only while a session is on screen. Over
+    /// the header or below the conversation it scrolls not at all. The
+    /// one send a paged view asks for comes back for the loop to send.
+    pub(crate) fn on_wheel(&mut self, mouse: &Mouse) -> Effect {
         let up = match mouse.kind {
             MouseKind::WheelUp => true,
             MouseKind::WheelDown => false,
             MouseKind::Press(_) | MouseKind::Release | MouseKind::Motion | MouseKind::Drag(_) => {
-                return;
+                return Effect::None;
             }
         };
         let at = Position::new(mouse.col, mouse.row);
@@ -245,19 +250,19 @@ impl App {
         // conversation, home and the rail.
         if order.contains(&Surface::Report) {
             self.scroll_report_rows(!up, WHEEL_ROWS);
-            return;
+            return Effect::None;
         }
         // The reviewer setup takes the wheel and does nothing with it: the
         // conversation under the panel stays where it is.
         if order.contains(&Surface::ReviewerSetup) {
-            return;
+            return Effect::None;
         }
         // The hooks offer consumes the wheel while it is on top: its
         // names query draws no frame, so the frame-only guard below
         // would let the wheel reach the home list, the panel or the
         // rail.
         if self.top_surface() == Surface::HooksOffer {
-            return;
+            return Effect::None;
         }
         // The quit, hooks offer and clear questions and the notice
         // overlay have nothing to scroll, and their frames cover the
@@ -272,7 +277,7 @@ impl App {
         .into_iter()
         .any(|frame| order.contains(&frame) && crate::view::frame_of(self, frame).contains(at))
         {
-            return;
+            return Effect::None;
         }
         if self
             .chrome()
@@ -281,8 +286,10 @@ impl App {
             .is_some_and(|panel| panel.contains(at))
         {
             self.wheel_panel(mouse.row, up);
+        } else if let Some(effect) = self.wheel_swapped(up, at, &order) {
+            return effect;
         } else if self.session().is_some()
-            && !covered(&[Surface::Keymap, Surface::Offer, Surface::Results])
+            && !covered(&[Surface::Keymap])
             && self.over_conversation(at)
         {
             self.scroll_conversation(up);
@@ -297,6 +304,119 @@ impl App {
         if over_rail {
             self.scroll_rail(up);
         }
+        Effect::None
+    }
+
+    /// Routes a wheel over a swapped view's rows to the view, three
+    /// Up/Down equivalents through its own key path with one pump, never
+    /// the hidden conversation under it (`docs/tui.md`, "Swapped views").
+    /// `None` when no swapped view covers `at`, so the existing chain
+    /// continues.
+    fn wheel_swapped(&mut self, up: bool, at: Position, order: &[Surface]) -> Option<Effect> {
+        // The rail keeps its owner ahead of every swapped route.
+        if self
+            .chrome()
+            .regions()
+            .rail
+            .is_some_and(|rail| rail.contains(at))
+        {
+            return None;
+        }
+        // Attached, a swapped view takes the conversation area; on home
+        // it takes the whole screen. Home is set with no session, even
+        // while the key map or the approval panel hides it.
+        let home = self.home_set() && self.session().is_none();
+        if !home && !self.over_conversation(at) {
+            return None;
+        }
+        // The key map swallows the wheel over the view region before the
+        // swapped-view or home-list path.
+        if order.contains(&Surface::Keymap) {
+            return Some(Effect::None);
+        }
+        // An item view overlaps Offer and Results: the top-drawn item
+        // wins. A Fiber delegate's swapped-in transcript scrolls through
+        // the shown screen; a live `tty`, a finished `tty`, a non-`tty`
+        // job and a foreign-harness delegate show the parent's screen, so
+        // the wheel is swallowed and the parent stays where it is.
+        if self.item_open() {
+            if self.item_transcript() {
+                self.scroll_conversation(up);
+            }
+            return Some(Effect::None);
+        }
+        let key = if up { Key::Up } else { Key::Down };
+        // The model picker takes the whole view area, slab or not; the
+        // credential picker falls through to the config path as
+        // `surface_key` does.
+        if self.model_picker_open() {
+            let send = self.wheel_steps(|app| app.model_picker_key(&key));
+            self.settle();
+            return Some(send);
+        }
+        if self.config_view_open() {
+            let send = self.wheel_steps(|app| app.config_view_key(&key));
+            self.settle();
+            return Some(send);
+        }
+        // The `/keys` screen steps while browsing; Capture and Clash
+        // swallow through the wrapper, as does an open notice overlay.
+        if self.keys_screen_open() {
+            let mut send = None;
+            for _ in 0..WHEEL_ROWS {
+                let effect = self.keys_screen_wheel(up);
+                if send.is_none() && matches!(effect, Effect::Send(_)) {
+                    send = Some(effect);
+                }
+            }
+            self.settle();
+            return Some(send.unwrap_or(Effect::None));
+        }
+        if self.session_view_open() {
+            let call = self.call_view_open();
+            let send = self.wheel_steps(|app| app.session_view_key(&key));
+            // A call view settles per step through its own path; every
+            // other session view settles once here, as a key does.
+            if !call {
+                self.settle();
+            }
+            return Some(send);
+        }
+        // With the approval panel higher than the offer, the panel keeps
+        // its region and the wheel otherwise swallows rather than routing
+        // into the offer.
+        if self.offer_open() {
+            if order.contains(&Surface::Panel) {
+                return Some(Effect::None);
+            }
+            let send = self.wheel_steps(|app| app.offer_key(&key));
+            self.settle();
+            return Some(send);
+        }
+        // With Search higher than the results, the wheel swallows rather
+        // than routing into the results.
+        if self.results_open() {
+            if order.contains(&Surface::Search) {
+                return Some(Effect::None);
+            }
+            let send = self.wheel_steps(|app| app.results_key(&key));
+            self.settle();
+            return Some(send);
+        }
+        None
+    }
+
+    /// Loops one wheel step through a view's own key path three times,
+    /// keeping the first send: three Up/Down equivalents with one pump.
+    fn wheel_steps(&mut self, mut step: impl FnMut(&mut Self) -> Option<Effect>) -> Effect {
+        let mut send = None;
+        for _ in 0..WHEEL_ROWS {
+            let effect = step(self).unwrap_or(Effect::None);
+            if send.is_none() && matches!(effect, Effect::Send(_)) {
+                send = Some(effect);
+            }
+        }
+        send.unwrap_or(Effect::None)
     }
 
     /// Whether `at` is over the conversation's visible rows: the

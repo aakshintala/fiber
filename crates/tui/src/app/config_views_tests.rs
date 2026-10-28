@@ -18,7 +18,7 @@ use crate::Configure;
 use crate::configure::{Layer, Shown, WriteScope};
 use crate::configure_fake::{Fake, file, row};
 use crate::home::Launch;
-use crate::keys::{Edit, Key};
+use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
@@ -1643,4 +1643,449 @@ fn slash_theme_name_saves_applies_and_refuses() {
     );
     assert_eq!(seam.writes().len(), writes);
     assert_eq!(app.take_theme_choice(), None);
+}
+
+/// A wheel report at (`col`, `row`): down steps toward the tail, up away
+/// from it, over the conversation column the config views take.
+fn wheel(col: u16, row: u16, down: bool) -> Mouse {
+    Mouse {
+        kind: if down {
+            MouseKind::WheelDown
+        } else {
+            MouseKind::WheelUp
+        },
+        col,
+        row,
+    }
+}
+
+/// A seam over six settings rows, so the settings list fits three wheel
+/// steps without clamping.
+fn big_fake() -> Arc<Fake> {
+    Arc::new(Fake::new(vec![
+        row(
+            "handoff.tokens",
+            Shown::Value("400000".to_owned()),
+            "default",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "tui.theme",
+            Shown::Unset,
+            "default",
+            WriteScope::Any { repo: false },
+        ),
+        row(
+            "reviewer.model",
+            Shown::Value("a/b".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "shell.approval",
+            Shown::Value("auto".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "shell.executor",
+            Shown::Value("worktree".to_owned()),
+            "project",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "context.reserve",
+            Shown::Value("10%".to_owned()),
+            "global",
+            WriteScope::Any { repo: true },
+        ),
+    ]))
+}
+
+/// The wheel over the settings view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_settings_scrolls_the_list_not_the_conversation() {
+    let mut app = attached(Some(big_fake()));
+    // Scroll first, while the wheel still reaches the conversation: the
+    // view covers it once open. (The scroll-up must precede the open both
+    // at base, where the wheel would reach the conversation, and after
+    // the fix, where the view takes it.)
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    app.open_config_view(ConfigView::Settings);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let frame = app.config_view_screen().expect("the view is open");
+    // The gutter list holds a header row, so the first key row is 1.
+    assert!(frame.rows.len() >= 5, "the list fits three steps");
+    assert_eq!(frame.list.selected(), 1);
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.config_view_screen()
+            .expect("the view is open")
+            .list
+            .selected(),
+        4,
+        "one wheel step is three Down keys through the view"
+    );
+}
+
+/// The wheel over the theme picker moves its selection, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_theme_moves_the_picker_not_the_conversation() {
+    let mut fake = Fake::new(vec![row(
+        "tui.theme",
+        Shown::Unset,
+        "default",
+        WriteScope::Any { repo: false },
+    )]);
+    fake.themes = vec![
+        "solar".to_owned(),
+        "dawn".to_owned(),
+        "dusk".to_owned(),
+        "noon".to_owned(),
+        "night".to_owned(),
+    ];
+    let mut app = attached(Some(Arc::new(fake)));
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    // Direct open: typing the slash command first would disturb the
+    // scrolled conversation the wheel must leave alone.
+    app.open_config_view(ConfigView::Theme);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let frame = app.config_view_screen().expect("the view is open");
+    assert!(frame.rows.len() >= 4, "the picker fits three steps");
+    assert_eq!(frame.list.selected(), 0);
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.config_view_screen()
+            .expect("the view is open")
+            .list
+            .selected(),
+        3,
+        "one wheel step is three Down keys through the picker"
+    );
+}
+
+/// A `tools` answer with one builtin and six grouped tools: the selection
+/// rests on the first grouped row, and the grouped rows run consecutive
+/// so three steps move it by exactly three.
+fn six_tools_answer() -> serde_json::Value {
+    serde_json::json!({"tools": [
+        {"name": "read", "source": "builtin", "state": "full", "bytes": 10},
+        {"name": "mcp__m__a", "source": "mcp", "server": "m", "tool": "a", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__b", "source": "mcp", "server": "m", "tool": "b", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__c", "source": "mcp", "server": "m", "tool": "c", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__d", "source": "mcp", "server": "m", "tool": "d", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__e", "source": "mcp", "server": "m", "tool": "e", "state": "deferred", "bytes": 1},
+        {"name": "mcp__m__f", "source": "mcp", "server": "m", "tool": "f", "state": "deferred", "bytes": 1}]})
+}
+
+/// The wheel over the tools view moves its selection, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_tools_moves_the_selection_not_the_conversation() {
+    // Connected: the open sends its `tools` command through the hub.
+    let mut app = connected(Some(fake()));
+    app.set_size(80, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    // Direct open: typing the slash command first would disturb the
+    // scrolled conversation the wheel must leave alone.
+    let lines = sent(app.open_config_view(ConfigView::Tools));
+    assert_eq!(lines.len(), 1);
+    let id = lines[0]["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": six_tools_answer()}),
+    ));
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let frame = app.config_view_screen().expect("the view is open");
+    let before = frame.list.selected();
+    assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.config_view_screen()
+            .expect("the view is open")
+            .list
+            .selected(),
+        before + 3,
+        "one wheel step is three Down keys through the view"
+    );
+}
+
+/// A `skills` answer with six repository skills, so three steps fit.
+fn six_skills_answer() -> serde_json::Value {
+    serde_json::json!({"skills": [
+        {"name": "a", "description": "A.", "path": "/w/.fiber/skills/a/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "b", "description": "B.", "path": "/w/.fiber/skills/b/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "c", "description": "C.", "path": "/w/.fiber/skills/c/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "d", "description": "D.", "path": "/w/.fiber/skills/d/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "e", "description": "E.", "path": "/w/.fiber/skills/e/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []},
+        {"name": "f", "description": "F.", "path": "/w/.fiber/skills/f/SKILL.md",
+         "source": "repository", "model_invocable": true, "disabled": false, "shadows": []}]})
+}
+
+/// The wheel over the skills view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_skills_scrolls_the_list_not_the_conversation() {
+    let mut app = connected(Some(fake()));
+    app.set_size(80, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    // Direct open: typing the slash command first would disturb the
+    // scrolled conversation the wheel must leave alone.
+    let lines = sent(app.open_config_view(ConfigView::Skills));
+    assert_eq!(lines.len(), 1);
+    let id = lines[0]["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": six_skills_answer()}),
+    ));
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let frame = app.config_view_screen().expect("the view is open");
+    let before = frame.list.selected();
+    assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.config_view_screen()
+            .expect("the view is open")
+            .list
+            .selected(),
+        before + 3,
+        "one wheel step is three Down keys through the view"
+    );
+}
+
+/// The wheel over the rules view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_rules_scrolls_the_list_not_the_conversation() {
+    let seam = fake();
+    if let Ok(mut rules) = seam.rules.lock() {
+        let section = |file: &str, texts: &[&str]| crate::configure::RulesSection {
+            file: std::path::PathBuf::from(file),
+            rows: Ok(texts
+                .iter()
+                .enumerate()
+                .map(|(at, text)| crate::configure::RuleRow {
+                    line: at + 1,
+                    text: (*text).to_owned(),
+                    rule: contract::Rule {
+                        decision: contract::RuleDecision::Allow,
+                        tool: "shell".to_owned(),
+                        prefix: "echo".to_owned(),
+                        added: None,
+                        session_id: None,
+                    },
+                })
+                .collect()),
+        };
+        *rules = Ok((
+            section("/w/.fiber/rules.md", &["- a", "- b", "- c", "- d"]),
+            section("/global.md", &["- g", "- h"]),
+        ));
+    }
+    let mut app = attached(Some(seam));
+    app.set_size(80, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    app.open_config_view(ConfigView::Rules);
+    assert!(app.config_view_open(), "the rules view opened");
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let frame = app.config_view_screen().expect("the view is open");
+    let before = frame.list.selected();
+    assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.config_view_screen()
+            .expect("the view is open")
+            .list
+            .selected(),
+        before + 3,
+        "one wheel step is three Down keys through the view"
+    );
+}
+
+/// The wheel over the login view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_login_scrolls_the_list_not_the_conversation() {
+    let seam = fake();
+    if let Ok(mut targets) = seam.targets.lock() {
+        *targets = Ok((0..6)
+            .map(|at| crate::configure::LoginTarget {
+                name: format!("p{at}"),
+                kind: crate::configure::LoginKind::Key,
+            })
+            .collect());
+    }
+    let mut app = attached(Some(Arc::clone(&seam)));
+    app.set_size(80, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    app.open_config_view(ConfigView::Login);
+    assert!(app.config_view_open(), "the login view opened");
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    // Three Down equivalents move past p0..p2 onto p3: Enter opens p3's
+    // key field, the paste fills it, and a second Enter stores p3's key,
+    // not p0's.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    app.on_edit(Edit::Paste("s3\n".to_owned()));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(seam.stores(), [("p3".to_owned(), None)]);
+}
+
+/// The wheel over the logout view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_logout_scrolls_the_list_not_the_conversation() {
+    let seam = fake();
+    if let Ok(mut rows) = seam.logout.lock() {
+        *rows = Ok((0..6)
+            .map(|at| crate::configure::LogoutRow::Provider {
+                name: "acme".to_owned(),
+                label: format!("l{at:02}"),
+                default: at == 0,
+                deletable: true,
+                origin: None,
+                siblings: Vec::new(),
+            })
+            .collect());
+    }
+    let mut app = attached(Some(seam));
+    app.set_size(80, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    app.open_config_view(ConfigView::Logout);
+    assert!(app.config_view_open(), "the logout view opened");
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    // Three Down equivalents move past l00..l02 onto l03: Enter asks to
+    // delete l03, not the still-selected l00 the base wheel would keep.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    let shown = screen(&app).join("\n");
+    assert!(shown.contains("Delete acme/l03?"), "{shown}");
+}
+
+/// An `mcp_servers` answer with six servers, so three steps fit.
+fn six_servers_answer() -> serde_json::Value {
+    serde_json::json!({"servers": [
+        {"name": "a", "layer": "project", "state": "failed",
+         "reason": "refused a", "tools": 2, "approved": true, "auth_url": null},
+        {"name": "b", "layer": "project", "state": "failed",
+         "reason": "refused b", "tools": 2, "approved": true, "auth_url": null},
+        {"name": "c", "layer": "project", "state": "failed",
+         "reason": "refused c", "tools": 2, "approved": true, "auth_url": null},
+        {"name": "d", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 d", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "e", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 e", "tools": 0, "approved": true, "auth_url": null},
+        {"name": "f", "layer": "global", "state": "needs-login",
+         "reason": "HTTP 401 f", "tools": 0, "approved": true, "auth_url": null}]})
+}
+
+/// The wheel over the MCP view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_mcp_scrolls_the_list_not_the_conversation() {
+    let mut app = connected(Some(fake()));
+    app.set_size(80, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    // Direct open: typing the slash command first would disturb the
+    // scrolled conversation the wheel must leave alone.
+    let lines = sent(app.open_config_view(ConfigView::Mcp));
+    assert_eq!(lines.len(), 1);
+    let id = lines[0]["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": six_servers_answer()}),
+    ));
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let frame = app.config_view_screen().expect("the view is open");
+    let before = frame.list.selected();
+    assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.config_view_screen()
+            .expect("the view is open")
+            .list
+            .selected(),
+        before + 3,
+        "one wheel step is three Down keys through the view"
+    );
+}
+
+/// The wheel over the credential picker routes through the config path
+/// and leaves the conversation alone (`docs/tui.md`, "Swapped views";
+/// see #3578). The picker holds no rows before its answer, so there is
+/// no list move to pin.
+#[test]
+fn wheel_over_credential_leaves_the_conversation() {
+    let mut app = connected(Some(fake()));
+    app.set_size(80, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    let lines = sent(app.open_config_view(ConfigView::Credential));
+    assert_eq!(lines.len(), 1);
+    assert!(app.config_view_open(), "the credential picker opened");
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+}
+
+/// The wheel over the doctor view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_doctor_scrolls_the_list_not_the_conversation() {
+    let mut app = attached(Some(fake()));
+    let report = (0..60).map(|n| format!("line {n:02}")).collect::<Vec<_>>();
+    let report = report.join("\n");
+    app.set_doctor(Some(Arc::new(move || Ok(report.clone()))));
+    app.set_size(80, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    app.open_config_view(ConfigView::Doctor);
+    assert!(app.config_view_open(), "the doctor view opened");
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let frame = app.config_view_screen().expect("the view is open");
+    let before = frame.list.selected();
+    assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.config_view_screen()
+            .expect("the view is open")
+            .list
+            .selected(),
+        before + 3,
+        "one wheel step is three Down keys through the view"
+    );
 }

@@ -270,6 +270,29 @@ impl App {
         Effect::None
     }
 
+    /// Steps the `/keys` screen's list for a wheel step through the same
+    /// path as an Up/Down stroke; an open notice overlay swallows the
+    /// wheel so the hidden list does not move. Away from `bindings_press`.
+    pub(crate) fn keys_screen_wheel(&mut self, up: bool) -> Effect {
+        if self.notice_overlay().is_some() {
+            return Effect::None;
+        }
+        let height = self.keys_height();
+        let outcome = match self.keyboard.screen.as_mut() {
+            Some(screen) => screen.wheel(up, &self.keyboard.keys, height),
+            None => Outcome::Nothing,
+        };
+        match outcome {
+            Outcome::Nothing => Effect::None,
+            Outcome::Close => {
+                self.keyboard.screen = None;
+                Effect::None
+            }
+            Outcome::Apply(next) => self.apply_keys(next),
+            Outcome::Pass => Effect::None,
+        }
+    }
+
     /// The screen's height in rows: the attached conversation's, or the
     /// screen's on home, as the model picker computes its own.
     fn keys_height(&self) -> usize {
