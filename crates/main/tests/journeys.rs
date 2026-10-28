@@ -847,12 +847,14 @@ fn journey_drag_input_box_copies_its_text() {
     assert_eq!(osc52_copy(&mut run, from), "hello");
 }
 
-/// A drag across a notice row copies the notice's text: switch models
-/// to raise the cache-rebuild notice, then drag its code word.
+/// A drag across a notice row copies its code: hold the provider reply
+/// while switching models, then resize and copy the condition notice
+/// before releasing the reply.
 #[test]
 fn journey_drag_notice_copies_its_text() {
     let setup = Setup::new();
-    let server = ProviderServer::start([reply("Hello."), reply("Beta here.")]).unwrap();
+    let server = ProviderServer::start([reply("Hello.")]).unwrap();
+    server.hold();
     install_picker_provider(&setup, &server);
     let mut run = Run::spawn(
         &setup,
@@ -866,10 +868,18 @@ fn journey_drag_notice_copies_its_text() {
     );
     run.ready();
     run.wait_bytes(0, MOTION, "mouse motion enabled");
-    let from = run.output().len();
+    let turn_from = run.output().len();
     run.write(b"say hi\r");
-    run.wait_screen("the reply", |screen| shows(screen, "Hel"));
-    run.turn_finished(from);
+    // One step is one round-trip that sends a request (`docs/loop.md`,
+    // "One step"), so one held request proves the turn started.
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the first request to reach the held provider"
+    );
+    run.wait_screen("the running turn", |screen| {
+        working_elapsed(&screen.contents)
+    });
+
     run.write(b"\x0c");
     run.wait_screen("the open picker", |screen| {
         shows(screen, "Type to search") && shows(screen, "alpha-1")
@@ -878,74 +888,58 @@ fn journey_drag_notice_copies_its_text() {
     run.wait_screen("the beta-filtered list", |screen| {
         shows(screen, "1 of 2 models") && shows(screen, "beta-2")
     });
+    let selection_from = run.output().len();
     run.write(b"\r");
-    // The notice can appear before the command answer. It is not a switch
-    // completion signal, so do not use its row until the fake sees beta's
-    // next request.
-    run.wait_screen("the cache-rebuild notice", |screen| {
-        shows(screen, "cache_rebuild") && shows(screen, "✕")
+    run.wait_bytes(selection_from, b"\x1b[?2026l", "the switch_pending frame");
+    let before_resize = run.wait_screen("the switch_pending notice before resize", |screen| {
+        shows(screen, "switch_pending") && shows(screen, "beta-2 applies when this turn ends")
     });
-    let from = run.output().len();
-    run.write(b"again\r");
-    assert!(
-        server.await_requests(2, setup.deadline),
-        "the second request to reach the fake provider"
-    );
-    let requests = server.requests();
-    assert_eq!(requests.len(), 2, "the first and second model requests");
-    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
-    assert_eq!(second["model"], "beta-2", "the switch reached beta");
-    run.wait_screen("the second reply", |screen| shows(screen, "Beta here."));
-    run.turn_finished(from);
-    let notice = run.wait_screen("the cache-rebuild notice after the switch", |screen| {
-        shows(screen, "cache_rebuild") && shows(screen, "✕") && shows(screen, "Beta here.")
-    });
-    let (stale_x, stale_y) = find_cell(&notice, "cache_rebuild");
-    let stale_row = usize::from(stale_y);
-    // A taller terminal moves the bottom-anchored notice to a new row,
-    // so the snapshot's cell points at blank conversation cells. The
-    // offset is taken before the resize, so the frame-end wait catches
-    // the redraw the resize causes.
+    let (before_x, before_y) = find_cell(&before_resize, "switch_pending");
+    let before_row = usize::from(before_y);
+
     let resized_from = run.output().len();
     run.resize(120, 38);
-    // The redrawn frame's end on the raw output proves a whole frame
-    // drew after the resize went out, before the pointer goes out
-    // (`docs/testing/screens.md`, "Screens"): a grid match alone never
-    // proves the layout settled.
     run.wait_bytes(resized_from, b"\x1b[?2026l", "the resized frame");
-    let resized = run.wait_screen("the cache-rebuild notice after resize", |screen| {
-        shows(screen, "cache_rebuild")
-            && shows(screen, "✕")
-            && shows(screen, "Beta here.")
+    let resized = run.wait_screen("the switch_pending notice after resize", |screen| {
+        screen.size() == (120, 38)
+            && shows(screen, "switch_pending")
+            && shows(screen, "beta-2 applies when this turn ends")
+            && screen
+                .rows
+                .iter()
+                .position(|row| row.contains("switch_pending"))
+                .is_some_and(|row| row != before_row)
+    });
+    let (x, y) = find_cell(&resized, "switch_pending");
+    assert_ne!(
+        (x, y),
+        (before_x, before_y),
+        "the resize moved the notice cell"
+    );
+
+    let copy_from = run.output().len();
+    drag(&mut run, (x, y), (x + 14, y));
+    assert_eq!(osc52_copy(&mut run, copy_from), "switch_pending");
+    run.wait_screen("the switch_pending notice after copy", |screen| {
+        shows(screen, "switch_pending")
+            && shows(screen, "beta-2 applies when this turn ends")
             && screen.size() == (120, 38)
             && screen
                 .rows
                 .iter()
-                .position(|row| row.contains("cache_rebuild"))
-                .is_some_and(|row| row != stale_row)
+                .position(|row| row.contains("switch_pending"))
+                == Some(usize::from(y))
     });
-    // The press, drag and release all use the post-resize grid's cell:
-    // the snapshot's cell points at the wrong row after the move.
-    let (x, y) = find_cell(&resized, "cache_rebuild");
-    assert_ne!(
-        (x, y),
-        (stale_x, stale_y),
-        "the resize moved the notice cell"
-    );
-    // The forced stale interleaving: the snapshot's cell now sits on
-    // blank conversation cells, so its release routes through
-    // copy_selection to an empty OSC 52 payload — the flake's exact
-    // signature.
-    let stale_from = run.output().len();
-    drag(&mut run, (stale_x, stale_y), (stale_x + 13, stale_y));
-    assert_eq!(
-        osc52_copy(&mut run, stale_from),
-        "",
-        "the stale cell copies nothing"
-    );
-    let from = run.output().len();
-    drag(&mut run, (x, y), (x + 13, y));
-    assert_eq!(osc52_copy(&mut run, from), "cache_rebuild");
+
+    server.release_one();
+    run.wait_screen("the released reply", |screen| shows(screen, "Hello."));
+    run.turn_finished(turn_from);
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen with the resume line", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor && shows(screen, "fiber resume")
+    });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
 }
 
 /// A drag across a session card's name copies the name: the card
