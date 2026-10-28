@@ -5351,7 +5351,7 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
             .unwrap()
             .to_owned();
         let sessions = if missing_workspace {
-            log::sessions_dir(&setup.home(), &doors::project(&workspace))
+            log::sessions_dir(&setup.home(), &worktree::project(&workspace))
         } else {
             ask_sessions(&setup)
         };
@@ -5558,7 +5558,7 @@ fn delegate_resume_recovers_the_childs_workspace_in_another_project() {
         } else {
             repository.clone()
         };
-        let sessions = log::sessions_dir(&setup.home(), &doors::project(&workspace));
+        let sessions = log::sessions_dir(&setup.home(), &worktree::project(&workspace));
         let worktrees = sessions.parent().unwrap().join("worktrees");
         let selected = workspace.clone();
         let selected_repository = repository.clone();
@@ -7494,7 +7494,7 @@ fn an_isolated_fork_records_and_holds_its_own_worktree_and_explains_its_workspac
     let path = PathBuf::from(worktree["path"].as_str().unwrap());
     let fork_log = log::session_dir(
         &setup.home(),
-        &log::project_key(&doors::project(setup.root.path())),
+        &log::project_key(&worktree::project(setup.root.path())),
         &contract::SessionId(fork_id.into()),
     )
     .join("events.jsonl");

@@ -33,7 +33,7 @@ type SessionTools = (
 /// model when it has one, else Fiber's own over the installed backend, else
 /// nothing (`docs/tools.md`, "Hosted by the provider" and "Fiber's own, over
 /// a backend"). `session_search` searches the logs under `home`, Fiber
-/// home, and counts a session as this project's when `doors::project` gives
+/// home, and counts a session as this project's when `worktree::project` gives
 /// its workspace the same identity as `workspace`, as resume looks a
 /// session up. `read`, `write` and `edit`
 /// share one session's file state, which a handoff forgets, take `locks`,
@@ -165,9 +165,11 @@ pub(crate) fn builtin_timed(
             }),
         ))?,
         registered(tools::SessionSearch::new(Arc::new(match scan_timing {
-            Some(scan_timing) => log::SessionScan::new(home, workspace, Arc::new(doors::project))
-                .with_timing(scan_timing),
-            None => log::SessionScan::new(home, workspace, Arc::new(doors::project)),
+            Some(scan_timing) => {
+                log::SessionScan::new(home, workspace, Arc::new(worktree::project))
+                    .with_timing(scan_timing)
+            }
+            None => log::SessionScan::new(home, workspace, Arc::new(worktree::project)),
         })))?,
         registered(shell)?,
         registered(tools::Skill::new(skills))?,

@@ -55,8 +55,8 @@ fn exited_row(
 /// Seeds two exited rows for the launch workspace and keeps their
 /// session directories, as the hub's recent reader requires.
 fn seed_exited_rows(setup: &Setup, workspace: &std::path::Path) {
-    let project = log::project_key(&doors::project(workspace));
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(workspace));
+    let project = log::project_key(&worktree::project(workspace));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(workspace));
     std::fs::create_dir_all(&sessions).unwrap();
     let mut lines = Vec::new();
     for (index, name) in [(1u64, "seeded exit one"), (2, "seeded exit two")] {

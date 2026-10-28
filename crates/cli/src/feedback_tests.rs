@@ -458,7 +458,7 @@ impl Home {
     }
 
     fn session(&self, stored_in: &Path, workspace: &Path, id: &str, ts: u64, parent: Option<&str>) {
-        let project = doors::project(stored_in);
+        let project = worktree::project(stored_in);
         let dir = log::sessions_dir(self.0.path(), &project).join(id);
         fs::create_dir_all(&dir).unwrap();
         let mut payload = serde_json::json!({

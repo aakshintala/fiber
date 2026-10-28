@@ -62,7 +62,7 @@ fn ask_command(setup: &Setup, cwd: &Path, extra_env: &[(&str, &str)], args: &[&s
 fn key_of(deadline: Deadline, workspace: &Path) -> String {
     let workspace = workspace.to_owned();
     support::bounded(deadline, "the project key", move || {
-        log::project_key(&doors::project(&workspace))
+        log::project_key(&worktree::project(&workspace))
     })
 }
 

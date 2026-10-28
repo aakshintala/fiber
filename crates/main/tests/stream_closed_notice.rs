@@ -159,7 +159,8 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
 
     // Damage the log mid-page: one line overwritten with `x`s, every
     // line on one page.
-    let log_path = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace())).join(&id);
+    let log_path =
+        log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace())).join(&id);
     let events = log_path.join("events.jsonl");
     let whole = fs::read(&events).unwrap();
     let file_lines: Vec<&[u8]> = whole.split_inclusive(|b| *b == b'\n').collect();

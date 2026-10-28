@@ -89,7 +89,7 @@ impl Setup {
 
     /// The session's directory, from its id.
     fn session_dir(&self, id: &str) -> PathBuf {
-        log::sessions_dir(&self.home(), &doors::project(&self.workspace())).join(id)
+        log::sessions_dir(&self.home(), &worktree::project(&self.workspace())).join(id)
     }
 
     fn socket(&self, id: &str) -> PathBuf {
@@ -1286,7 +1286,7 @@ fn a_second_session_with_the_same_id_fails_and_leaves_the_first_alone() {
     assert_eq!(lines[0]["payload"]["error"]["code"], "session_held");
     // The second session's own directory is removed, and the first
     // session's socket still answers.
-    let second_dir = log::sessions_dir(&setup.home(), &doors::project(&other)).join(&id);
+    let second_dir = log::sessions_dir(&setup.home(), &worktree::project(&other)).join(&id);
     assert!(!second_dir.exists());
     assert!(setup.socket(&id).exists());
 

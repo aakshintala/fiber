@@ -66,7 +66,7 @@ fn assert_box_at_bottom(grid: &Grid) {
 /// The project key of `workspace`, from its `projects/<key>` directory.
 fn project_key(home: &Path, workspace: &Path) -> String {
     let _ = home;
-    log::project_key(&doors::project(workspace))
+    log::project_key(&worktree::project(workspace))
 }
 
 /// A `recent.jsonl` row with a readable status; `turns: None` models a
@@ -119,7 +119,7 @@ fn exited_row(
 /// for each, as the hub's recent reader requires.
 fn seed_exited_rows(setup: &Setup, workspace: &Path) {
     let project = project_key(&setup.home(), workspace);
-    let sessions = log::sessions_dir(&setup.home(), &doors::project(workspace));
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(workspace));
     fs::create_dir_all(&sessions).unwrap();
     let mut lines = Vec::new();
     for (index, name, turns) in [
