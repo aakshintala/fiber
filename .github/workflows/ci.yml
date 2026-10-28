@@ -573,6 +573,7 @@ jobs:
               package_args+=(-p "$package")
             fi
           done <<<"$PACKAGES"
+          cargo build -q -p fakes --example process-extension
           cargo nextest run --profile stress "${package_args[@]}" -E "$FILTER" --stress-count "$COUNT" --no-tests=warn
       - name: Record the stress cost
         if: always()
