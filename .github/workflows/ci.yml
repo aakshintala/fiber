@@ -1294,7 +1294,7 @@ jobs:
   flake_report:
     name: Report flaky tests
     needs: [flake_decide]
-    if: always() && (needs.flake_decide.result == 'failure' || needs.flake_decide.outputs.has_flakes == 'true')
+    if: ${{ !cancelled() && (needs.flake_decide.result == 'failure' || needs.flake_decide.outputs.has_flakes == 'true') }}
     runs-on: ubuntu-24.04
     # No history: it makes only gh calls.
     timeout-minutes: 5
