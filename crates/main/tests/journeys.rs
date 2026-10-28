@@ -973,27 +973,30 @@ fn journey_drag_notice_copies_its_text() {
         "",
         "the stale cell copies nothing"
     );
-    // The copy drag reads its cell from a grid settled after the
-    // forced move and after the stale drag's copy landed, so no frame
-    // sits between the read and the pointer. The stale drag must not
-    // move the notice itself: a move there would be the product
-    // shifting a visible notice on an unrelated drag.
+    // The release's copy proves the release landed, but not that a whole
+    // frame drew after it: a grid match alone never proves the layout
+    // settled (`docs/testing/screens.md`, "Screens"). The redrawn
+    // frame's end on the raw output, searched from the copy's end so a
+    // press-frame end cannot satisfy the wait, proves a whole frame drew
+    // after the stale drag, before the pointer goes out again. The copy
+    // drag reads its cell from that grid, so no frame sits between the
+    // read and the pointer. The stale drag must not move the notice
+    // itself: a move there would be the product shifting a visible
+    // notice on an unrelated drag.
+    let copy_end = run.wait_bytes(stale_from, b"\x1b]52;c;", "the stale copy");
+    run.wait_bytes(copy_end, b"\x1b[?2026l", "the post-drag frame");
     let settled = run.wait_screen("the cache-rebuild notice before the copy drag", |screen| {
         shows(screen, "cache_rebuild")
             && shows(screen, "✕")
             && shows(screen, "Beta here.")
             && screen.size() == (120, 44)
     });
-    let settled_at = settled
-        .rows
-        .iter()
-        .position(|row| row.contains("cache_rebuild"))
-        .expect("the notice stayed for the copy drag");
+    let (fx, fy) = find_cell(&settled, "cache_rebuild");
     assert_eq!(
-        settled_at, forced_at,
+        usize::from(fy),
+        forced_at,
         "the stale drag left the notice in place"
     );
-    let (fx, fy) = find_cell(&settled, "cache_rebuild");
     let from = run.output().len();
     drag(&mut run, (fx, fy), (fx + 13, fy));
     assert_eq!(osc52_copy(&mut run, from), "cache_rebuild");
