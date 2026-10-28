@@ -3637,7 +3637,9 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     };
     // Each batch-end wait carries its own full deadline: the receives are
     // separated by `resume` sends the next one awaits, so they are separate
-    // waits, and the label names the taken counts so far.
+    // waits, and the label names the taken counts so far. Each invocation
+    // starts its own full deadline, so an earlier wait cannot spend the
+    // later one's budget.
     let mut batch_end = |what: &str| {
         let wait = Deadline::after(DEADLINE);
         let label = format!("{what} after {taken:?}");
@@ -3836,7 +3838,9 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
     };
     // Each batch-end wait carries its own full deadline: the receives are
     // separated by `resume` sends the next one awaits, so they are separate
-    // waits, and the label names the taken counts so far.
+    // waits, and the label names the taken counts so far. Each invocation
+    // starts its own full deadline, so an earlier wait cannot spend the
+    // later one's budget.
     let mut batch_end = |what: &str| {
         let wait = Deadline::after(DEADLINE);
         let label = format!("{what} after {taken:?}");
