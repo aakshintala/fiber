@@ -345,6 +345,112 @@ fn exact_forms_read_without_paths() {
 }
 
 #[test]
+fn nl_numbering_and_layout_flags_read() {
+    // The ticket's acceptance command: `nl -ba` over a file, piped
+    // through a print-only `sed`. The `sed` with no file declares the
+    // workdir beside the numbered file.
+    assert_reads("nl -ba crates/main/src/switch.rs | sed -n '1,5p'");
+    assert_eq!(
+        classified("nl -ba crates/main/src/switch.rs | sed -n '1,5p'")
+            .declared
+            .paths,
+        Some(vec![
+            "/work/crates/main/src/switch.rs".to_owned(),
+            "/work".to_owned()
+        ])
+    );
+    for command in [
+        "nl f",
+        "nl -ba f",
+        "nl -b a -n ln -w 6 -s ' ' -v 10 -i 1 f",
+        "nl --body-numbering a --number-format ln --number-width 6 f",
+        "nl --body-numbering=a --number-format=ln --number-width=6 --number-separator=' ' --starting-line-number=1 --line-increment=1 f",
+        "nl -- -b",
+    ] {
+        assert_reads(command);
+    }
+    assert_eq!(
+        classified("nl -b a -n ln -w 6 -s ' ' -v 10 -i 1 f")
+            .declared
+            .paths,
+        Some(vec!["/work/f".to_owned()])
+    );
+    assert_eq!(
+        classified("nl --body-numbering=a f").declared.paths,
+        Some(vec!["/work/f".to_owned()])
+    );
+    assert_eq!(
+        classified("nl -- -b").declared.paths,
+        Some(vec!["/work/-b".to_owned()])
+    );
+    // With no operand `nl` reads its standard input, so the call
+    // declares the workdir, as `cat` with no operand does.
+    assert_eq!(
+        classified("nl").declared.paths,
+        Some(vec!["/work".to_owned()])
+    );
+}
+
+#[test]
+fn nl_other_forms_are_not_read_only() {
+    // An attached short value is not on the list, as with `head -n10`.
+    // A cluster mixing a value-taking letter is not one either.
+    // A value flag with no value, a long flag with no value, and any
+    // unlisted flag make the call `executes`.
+    for command in [
+        "nl -w3 f",
+        "nl -b=t f",
+        "nl -bax f",
+        "nl -bn f",
+        "nl -b",
+        "nl --number-width",
+        "nl -v",
+        "nl -p f",
+        "nl -d '\t' f",
+        "nl --help",
+        "nl --number-width=6 --bogus f",
+        "nl /proc/self/environ",
+        "nl notes.txt /proc/self/environ",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn bare_true_and_colon_read_without_paths() {
+    // The ticket's acceptance command: `true` after a read-only list
+    // still declares `reads`, with only the earlier part's path.
+    assert_reads("cat a 2>/dev/null || true");
+    assert_eq!(
+        classified("cat a 2>/dev/null || true").declared.paths,
+        Some(vec!["/work/a".to_owned()])
+    );
+    for command in ["true", ":"] {
+        assert_reads(command);
+        assert!(classified(command).declared.paths.is_none(), "{command}");
+    }
+    // A discard redirect drops out before the exact match, as with
+    // `git status 2>/dev/null`.
+    for command in ["true 2>/dev/null", ": 2>/dev/null"] {
+        assert_reads(command);
+        assert!(classified(command).declared.paths.is_none(), "{command}");
+    }
+    // Any operand, flag, or writing redirect leaves the bare-only form.
+    for command in [
+        "true x",
+        "true -n",
+        "true --not-listed",
+        ": x",
+        ": -n",
+        ": --not-listed",
+        ": >f",
+        "true f > out",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
 fn the_longest_built_in_path_wins() {
     // `git branch --show-current` reads by its own entry: an extra operand
     // still reads with no paths.
@@ -891,6 +997,7 @@ fn every_command_states_whether_double_dash_ends_flags() {
         ("rg", true),
         ("find", false),
         ("sort", true),
+        ("nl", true),
         ("git status", true),
         ("git branch --show-current", false),
         ("git diff", true),
