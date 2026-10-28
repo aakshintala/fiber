@@ -191,6 +191,27 @@ fn find_row_below(rows: &[String], after: u16, needle: &str) -> Option<u16> {
         .map(|(y, _)| y as u16)
 }
 
+/// The first row below `after` that draws exactly the indented `path`
+/// with every path cell bold: a grouped path row. A substring search
+/// would also match the command line naming both files, so the
+/// grouping assertion reads only these rows.
+fn find_path_row_below(grid: &Grid, left: u16, right: u16, after: u16, path: &str) -> Option<u16> {
+    let want = format!("        {path}");
+    (after + 1..48).find(|y| {
+        let row = content(grid, *y, left, right);
+        if row != want {
+            return false;
+        }
+        let Some(at) = row.find(path) else {
+            return false;
+        };
+        path.chars().enumerate().all(|(i, _)| {
+            let x = left + 1 + at as u16 + i as u16;
+            grid.cell(x, *y).bold
+        })
+    })
+}
+
 #[test]
 fn an_opened_edit_shows_a_numbered_diff_with_paired_words() {
     let setup = Setup::new();
@@ -338,19 +359,22 @@ fn an_opened_shell_grep_shows_matches_grouped_by_path() {
     let grid = open_call(&mut run, gutter, "search", "grep", "needle one");
     let y = find_row(&grid.rows, "thought ").expect("the group row");
     let (left, right) = card_edges(&grid, y, 2);
-    // One bold path row per file, in printed order.
+    // The grouped path rows draw the path bold: holding the frame with
+    // both bold rows never reads the command line naming both files.
+    let grid = run.wait_screen("the grouped paths", |grid| {
+        ["m1.txt", "m2.txt"]
+            .iter()
+            .all(|path| find_path_row_below(grid, left, right, 0, path).is_some())
+    });
+    let y = find_row(&grid.rows, "thought ").expect("the group row");
+    let (left, right) = card_edges(&grid, y, 2);
+    // One bold path row per file; docs/tui.md promises grouping under
+    // each path, not an order between paths.
     let call = ledger_row(&grid, left + 1, "search", "grep");
-    let first = find_row_below(&grid.rows, call, "m1.txt").expect("the first path");
-    let second = find_row_below(&grid.rows, call, "m2.txt").expect("the second path");
-    assert!(first < second, "printed order");
-    for (path, y) in [("m1.txt", first), ("m2.txt", second)] {
-        let row = content(&grid, y, left, right);
-        assert_eq!(row, format!("        {path}"), "{row:?}");
-        let at = row.find(path).expect("the path");
-        for (i, _) in path.chars().enumerate() {
-            let x = left + 1 + at as u16 + i as u16;
-            assert!(grid.cell(x, y).bold, "path ({x}, {y})");
-        }
+    let below: Vec<String> = grid.rows.iter().skip(call as usize + 1).cloned().collect();
+    for path in ["m1.txt", "m2.txt"] {
+        find_path_row_below(&grid, left, right, call, path)
+            .unwrap_or_else(|| panic!("the {path} path in {below:?}"));
     }
     // The matched text draws on the match tint; the context line does not.
     let hit = find_row(&grid.rows, "needle one").expect("the match");
