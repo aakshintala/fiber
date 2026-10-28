@@ -611,6 +611,22 @@ fn await_pass(done: &mpsc::Receiver<()>, what: &str) {
     );
 }
 
+/// Live `(id, relays)` pairs from the registry, pruning dead entries with
+/// the same upgrade-and-prune the removed test-only reader ran: the tests
+/// read the registry they drive, so the production type carries no
+/// test-only reader.
+fn live_pairs(conns: &Connections) -> Vec<(u64, Arc<Mutex<Relays>>)> {
+    let mut inner = lock(&conns.inner);
+    inner
+        .conns
+        .retain(|(_, writer, relays)| writer.upgrade().is_some() && relays.upgrade().is_some());
+    inner
+        .conns
+        .iter()
+        .filter_map(|(id, _, relays)| relays.upgrade().map(|relays| (*id, relays)))
+        .collect()
+}
+
 /// Waits, at most [`MUST_SUCCEED_WITHIN`] of real time, until the registry drops
 /// every connection: a scoped thread waits on the hub's tick, which
 /// `serve_counted` wakes after it unregisters, and this takes its
@@ -625,7 +641,7 @@ fn await_unregistered(hub: &Hub, clock: &FakeClock, what: &str) {
         let given_up = &given_up;
         scope.spawn(move || {
             hub.tick.wait_for(clock, &mut |_| {
-                if hub.rejoins.ids().is_empty() || given_up.load(Ordering::SeqCst) {
+                if live_pairs(&hub.rejoins).is_empty() || given_up.load(Ordering::SeqCst) {
                     crate::tick::Wait::Done
                 } else {
                     crate::tick::Wait::Until(None)
@@ -640,7 +656,7 @@ fn await_unregistered(hub: &Hub, clock: &FakeClock, what: &str) {
         }
     });
     assert!(
-        hub.rejoins.ids().is_empty(),
+        live_pairs(&hub.rejoins).is_empty(),
         "the registry no longer holds it for {what}"
     );
 }
@@ -1158,9 +1174,39 @@ fn the_registry_forgets_an_unregistered_connection() {
     registry.register(2, &writer_b, &relays_b);
     registry.unregister(1);
     assert_eq!(
-        registry.ids(),
+        live_pairs(&registry)
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>(),
         vec![2],
         "the other connection is still swept"
+    );
+}
+
+/// An accepted local connection keeps the kernel attribution the accept
+/// read, for reroutes to reuse: the store path runs only under a real
+/// accepted socket, never under a fabricated refusal matrix.
+#[test]
+fn accepted_local_connection_retains_its_kernel_attribution() {
+    let temp = Temp::new();
+    let (hub, _clock) = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
+    client.send(&json!({"id": "c_status", "command": "status", "args": {}}));
+    let ack = client.next("the status acknowledgement");
+    assert_eq!(ack.get("kind"), Some(&json!("command_accepted")));
+    let pairs = live_pairs(&hub.rejoins);
+    assert_eq!(pairs.len(), 1, "the accepted client is registered");
+    assert!(
+        matches!(
+            lock(&pairs[0].1).attribution.clone(),
+            Some(crate::connection::Attribution::Local {
+                peer_pid,
+                session_process_pids
+            }) if peer_pid == support::peer::Pid(std::process::id())
+                && session_process_pids.is_empty()
+        ),
+        "reroutes keep the attribution read from this accepted socket"
     );
 }
 

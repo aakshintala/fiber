@@ -163,28 +163,6 @@ fn command(id: &str, command: &str, args: Value) -> Value {
     json!({"id": id, "command": command, "args": args})
 }
 
-#[test]
-fn accepted_local_connection_retains_its_kernel_attribution() {
-    let temp = Temp::new();
-    let hub = temp.hub(FakeStarter::hang(&temp.dir));
-    let mut client = Client::connect(&hub);
-    client.hello();
-    client.send(&command("c_status", "status", json!({})));
-    let ack = client.next("the status acknowledgement");
-    assert_eq!(ack.get("kind"), Some(&json!("command_accepted")));
-
-    let ids = hub.rejoins.ids();
-    assert_eq!(ids.len(), 1, "the accepted client is registered");
-    assert!(
-        matches!(
-            hub.rejoins.attribution(ids[0]),
-            Some(Attribution::Local { peer_pid, session_process_pids })
-                if peer_pid == support::peer::Pid(std::process::id()) && session_process_pids.is_empty()
-        ),
-        "reroutes keep the attribution read from this accepted socket"
-    );
-}
-
 fn rejected(line: &Value) -> (String, Option<String>, String) {
     assert_eq!(line.get("kind"), Some(&json!("command_rejected")));
     let payload = line.get("payload").unwrap();
