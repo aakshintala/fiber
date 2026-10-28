@@ -960,12 +960,10 @@ fn journey_drag_notice_copies_its_text() {
         (stale_x, stale_y),
         "the resize moved the notice cell"
     );
-    // A frame landing between reading the cell and dragging moves the
-    // bottom-anchored notice, so the just-read cell points at blank
-    // conversation cells. The second resize forces that interleaving:
-    // the offset is taken before it, so the frame-end wait catches the
-    // redraw it causes, and the settled-grid wait makes the new row
-    // final before the pointer goes out.
+    // Keep the drag target from the settled grid before the forced
+    // resize. The forced resize then tests that the same conversation
+    // cells are still blank at the stale coordinate.
+    let (blank_x, blank_y) = find_blank_gap_after(&resized, "Beta here.", stale_x, 14);
     let forced_from = run.output().len();
     run.resize(120, 44);
     run.wait_bytes(forced_from, b"\x1b[?2026l", "the forced frame");
@@ -990,17 +988,13 @@ fn journey_drag_notice_copies_its_text() {
         forced_at, forced_row,
         "the forced resize moved the notice cell"
     );
-    // The forced stale interleaving: a drag after the forced move lands
-    // on conversation cells, so its release routes through
-    // copy_selection to an empty OSC 52 payload — the flake's exact
-    // signature. The stale coordinates themselves can overlap visible
-    // text after the move (stress iteration 87 copied `completed ·
-    // 13`), and the stale row varies between border chrome and text,
-    // so the drag targets the first blank gap after the shown `Beta
-    // here.` row proven blank cell by cell in the settled forced grid,
-    // keeping the forced-resize order and the empty-copy assertion
-    // deterministic.
-    let (blank_x, blank_y) = find_blank_gap_after(&forced, "Beta here.", stale_x, 14);
+    // The pre-resize target stays blank in the settled forced-redraw
+    // grid, so the forced stale interleaving still releases on empty
+    // conversation cells and copies nothing.
+    assert!(
+        (0..14).all(|dx| forced.cell(blank_x + dx, blank_y).symbol == " "),
+        "the pre-resize drag cells remain blank after the forced resize"
+    );
     let stale_from = run.output().len();
     drag(&mut run, (blank_x, blank_y), (blank_x + 13, blank_y));
     assert_eq!(
