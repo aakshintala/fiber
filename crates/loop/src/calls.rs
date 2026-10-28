@@ -367,6 +367,11 @@ impl Loop {
                         let tool = Arc::clone(&prepared.tool);
                         let arguments = Arc::new(prepared.arguments);
                         let thread_arguments = Arc::clone(&arguments);
+                        // The exact prepared effects ride into the run: a
+                        // reload between `tool_call_started` and spawn must
+                        // not change the call's declared decision.
+                        let effects = Arc::new(prepared.effects);
+                        let thread_effects = Arc::clone(&effects);
                         // The entered run's worker context: at `info` this
                         // is `None` and the name stays uncloned, so an
                         // untimed level changes nothing about the spawn.
@@ -382,8 +387,9 @@ impl Loop {
                                     }
                                     None => None,
                                 };
-                                tool.run_asking(
+                                tool.run_with_effects(
                                     &thread_arguments,
+                                    &thread_effects,
                                     call_cancel.as_ref(),
                                     thread_stream.as_ref(),
                                     thread_stream.as_ref(),
@@ -394,7 +400,7 @@ impl Loop {
                         State::Running {
                             bound,
                             stream,
-                            declared: prepared.effects.declared,
+                            declared: effects.declared.clone(),
                             tool: name,
                             arguments,
                             rewritten: prepared.rewritten,

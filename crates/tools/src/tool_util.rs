@@ -73,6 +73,7 @@ pub(crate) fn effects(
             effects,
             reversible,
             paths,
+            confined: false,
         },
         subject,
         prefix,

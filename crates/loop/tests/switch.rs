@@ -1328,6 +1328,7 @@ impl contract::tool::Tool for HostedFake {
                 effects: vec![Effect::Network],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             subject: Some(String::new()),
             prefix: None,
@@ -1872,6 +1873,7 @@ fn resume_interleaving_holds_arrival_order() {
                 effects: vec![contract::shapes::Effect::Executes],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             step: AskStep::StandingAsk {
                 standing_rule: StandingRule {
@@ -2509,6 +2511,7 @@ fn run_deferred_case(case: &DeferredCase) {
                 effects: vec![contract::shapes::Effect::Executes],
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             step: AskStep::StandingAsk {
                 standing_rule: StandingRule {

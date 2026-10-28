@@ -1011,6 +1011,7 @@ mod started_arguments_tests {
                 effects: Vec::new(),
                 reversible: true,
                 paths: None,
+                confined: false,
             },
             arguments: Some(json!({"path": "b.txt"}).as_object().unwrap().clone()),
             changed_by: Some(vec!["fiber.test/guard".into()]),

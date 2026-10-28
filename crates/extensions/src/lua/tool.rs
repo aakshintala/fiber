@@ -410,6 +410,7 @@ pub(crate) fn effects_from(
             effects,
             reversible,
             paths,
+            confined: false,
         },
         hosts,
     ))

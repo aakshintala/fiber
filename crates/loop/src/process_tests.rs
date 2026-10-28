@@ -146,6 +146,7 @@ fn permission(id: &str) -> Event {
             effects: vec![Effect::Executes],
             reversible: false,
             paths: None,
+            confined: false,
         },
         step: AskStep::StandingAsk {
             standing_rule: StandingRule {

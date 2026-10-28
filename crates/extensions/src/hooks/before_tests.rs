@@ -133,6 +133,7 @@ fn declared(effects: Vec<Effect>, paths: Option<Vec<&str>>, reversible: bool) ->
         effects,
         reversible,
         paths: paths.map(|paths| paths.iter().map(|path| (*path).to_owned()).collect()),
+        confined: false,
     }
 }
 

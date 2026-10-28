@@ -32,6 +32,7 @@ impl Loop {
                             effects: Vec::new(),
                             reversible: true,
                             paths: None,
+                            confined: false,
                         },
                         false,
                     )

@@ -17,12 +17,13 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use contract::ActionId;
 use contract::ErrorCode;
 use contract::clock::Wake;
 use contract::events::{JobStarted, Outcome};
 use contract::jobs::{JobRecord, Jobs as _};
 use contract::shapes::{ContentPart, Process};
-use contract::tool::{Cancel, Tool};
+use contract::tool::{Answered, Ask, Asking, Cancel, Tool};
 use fakes::Deadline;
 use fakes::children::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
 use fakes::clock::FakeClock;
@@ -63,6 +64,40 @@ fn args(command: &str) -> Map<String, Value> {
     map
 }
 
+/// A caller that never asks: integration calls run through
+/// `run_with_effects` with prepared effects and no interaction.
+struct NoAsk;
+
+impl Ask for NoAsk {
+    fn action(&self) -> ActionId {
+        ActionId("a_1".into())
+    }
+
+    fn answerable(&self) -> bool {
+        false
+    }
+
+    fn ask(&self, _asking: Asking) -> Answered {
+        Answered::NoAnswer
+    }
+}
+
+/// Runs the call with the prepared effects, as the loop would: the shell
+/// classifies the arguments, then runs with that exact decision. The
+/// integration suite drives this entry so every shell behavior runs
+/// through the same seam the loop uses.
+fn run_prepared(
+    shell: &Shell,
+    arguments: &Map<String, Value>,
+    cancel: &dyn Cancel,
+    emit: &dyn contract::emit::Emit,
+) -> contract::tool::Output {
+    let effects = shell
+        .effects(arguments)
+        .expect("the test arguments classify");
+    shell.run_with_effects(arguments, &effects, cancel, emit, &NoAsk)
+}
+
 #[track_caller]
 fn run(dir: &Path, command: &str) -> contract::tool::Output {
     let shell = Arc::new(Shell::new(dir.to_path_buf(), FakeClock::new()));
@@ -83,7 +118,7 @@ fn run_on(
     fakes::within(
         &format!("the shell command {}", arguments["command"]),
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-        move || shell.run(&arguments, &CancelToken::new(), recorder.as_ref()),
+        move || run_prepared(&shell, &arguments, &CancelToken::new(), recorder.as_ref()),
     )
 }
 
@@ -188,8 +223,13 @@ fn start(dir: PathBuf, command: String, timeout_ms: Option<u64>, cancel: CancelT
     let (tx, rx) = mpsc::channel();
     let cancel_for_run = cancel.clone();
     thread::spawn(move || {
-        tx.send(shell.run(&arguments, &cancel_for_run, &Recorder::default()))
-            .unwrap();
+        tx.send(run_prepared(
+            &shell,
+            &arguments,
+            &cancel_for_run,
+            &Recorder::default(),
+        ))
+        .unwrap();
     });
     Running {
         clock,
@@ -824,8 +864,13 @@ fn streamed(dir: PathBuf, command: String, timeout_ms: Option<u64>) -> Streamed 
     let tapped = Arc::clone(&recorder);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        tx.send(shell.run(&arguments, &CancelToken::new(), tapped.as_ref()))
-            .unwrap();
+        tx.send(run_prepared(
+            &shell,
+            &arguments,
+            &CancelToken::new(),
+            tapped.as_ref(),
+        ))
+        .unwrap();
     });
     Streamed {
         clock,
@@ -846,8 +891,13 @@ fn output_streams_before_the_call_returns() {
     let command = format!("echo line; read x < {}; echo got:$x", quote(&fifo));
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        tx.send(shell.run(&args(&command), &CancelToken::new(), tapped.as_ref()))
-            .unwrap();
+        tx.send(run_prepared(
+            &shell,
+            &args(&command),
+            &CancelToken::new(),
+            tapped.as_ref(),
+        ))
+        .unwrap();
     });
     assert!(
         recorder.wait_for_text("line\n", fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
@@ -959,8 +1009,13 @@ fn start_jobs(
     let cancel_for_run = cancel;
     let (tx, rx) = mpsc::channel();
     let call = thread::spawn(move || {
-        tx.send(shell.run(&arguments, &cancel_for_run, tapped.as_ref()))
-            .unwrap();
+        tx.send(run_prepared(
+            &shell,
+            &arguments,
+            &cancel_for_run,
+            tapped.as_ref(),
+        ))
+        .unwrap();
     })
     .thread()
     .id();
@@ -1702,8 +1757,13 @@ fn start_tty(
     let tapped = Arc::clone(&recorder);
     let (tx, rx) = mpsc::channel();
     let call = thread::spawn(move || {
-        tx.send(shell.run(&arguments, &CancelToken::new(), tapped.as_ref()))
-            .unwrap();
+        tx.send(run_prepared(
+            &shell,
+            &arguments,
+            &CancelToken::new(),
+            tapped.as_ref(),
+        ))
+        .unwrap();
     })
     .thread()
     .id();
@@ -2140,8 +2200,13 @@ fn start_monitor(
     let tapped = Arc::clone(&recorder);
     let (tx, rx) = mpsc::channel();
     let call = thread::spawn(move || {
-        tx.send(shell.run(&arguments, &CancelToken::new(), tapped.as_ref()))
-            .unwrap();
+        tx.send(run_prepared(
+            &shell,
+            &arguments,
+            &CancelToken::new(),
+            tapped.as_ref(),
+        ))
+        .unwrap();
     })
     .thread()
     .id();
@@ -3091,5 +3156,69 @@ fn a_shell_guards_git_reads_by_repository() {
     assert_eq!(
         effects.declared.effects,
         vec![contract::shapes::Effect::Reads]
+    );
+}
+
+fn sandbox_settings_for_integration(name: &str) -> tools::SandboxSettings {
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    tools::SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: home.join(format!(
+            "fiber-tools-shell-sandbox-{name}-{}",
+            std::process::id()
+        )),
+    }
+}
+
+#[test]
+fn a_confined_shell_runs_and_marks_its_effects() {
+    let dir = fakes::TempDir::new("fiber-tools-shell-sandbox-run");
+    let workspace = dir.path().to_path_buf();
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(sandbox_settings_for_integration(
+        "run",
+    )));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox);
+    let mut args = Map::new();
+    args.insert("command".into(), Value::String("echo hi".into()));
+    let effects = shell.effects(&args).unwrap();
+    #[cfg(target_os = "linux")]
+    assert!(effects.declared.confined);
+    #[cfg(not(target_os = "linux"))]
+    assert!(!effects.declared.confined);
+    let output = run_prepared(&shell, &args, &CancelToken::new(), &Recorder::default());
+    assert!(output.error.is_none());
+    assert!(text(&output).contains("hi"));
+}
+
+#[test]
+fn an_unavailable_sandbox_does_not_declare_the_shell_confined() {
+    let dir = fakes::TempDir::new("fiber-tools-shell-sandbox-fail");
+    let workspace = dir.path().to_path_buf();
+    let home = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
+        enabled: true,
+        allow_write: vec![workspace.join("missing-write")],
+        deny_read: Vec::new(),
+        fiber_home: home.join(format!(
+            "fiber-tools-shell-sandbox-fail-{}",
+            std::process::id()
+        )),
+    }));
+    let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
+    let effects = shell
+        .effects(&args("echo hi"))
+        .expect("the shell command classifies");
+
+    assert!(
+        !effects.declared.confined,
+        "an unavailable sandbox leaves the call on the reviewed path"
     );
 }

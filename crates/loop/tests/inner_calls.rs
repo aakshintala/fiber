@@ -49,6 +49,7 @@ impl FakeTool {
                     effects: vec![Effect::Reads],
                     reversible: true,
                     paths: None,
+                    confined: false,
                 },
                 subject: Some("x".into()),
                 prefix: None,
