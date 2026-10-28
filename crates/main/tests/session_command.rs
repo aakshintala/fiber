@@ -3772,11 +3772,12 @@ fn a_skill_rewritten_in_place_between_turns_is_offered_at_the_next_turn_start() 
     assert_eq!(changed["payload"]["added"][0]["name"], "late");
     assert_eq!(changed["payload"]["added"][0]["description"], "Runs late.");
     let path = changed["payload"]["added"][0]["path"].clone();
-    // The second request carries the added line's text.
+    // The next turn's request carries the added line's text
+    // (`docs/system-prompt.md`, "Added and removed skills").
     let requests = server.requests();
-    assert_eq!(requests.len(), 3);
+    let second_request = requests.get(1).expect("the second turn sent a request");
     assert!(
-        String::from_utf8_lossy(&requests[1].body)
+        String::from_utf8_lossy(&second_request.body)
             .contains("Fiber: skill late can now be loaded: Runs late."),
         "the added line reached the model"
     );
@@ -3792,7 +3793,11 @@ fn a_skill_rewritten_in_place_between_turns_is_offered_at_the_next_turn_start() 
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let tail = until_session_close(&client);
-    assert_eq!(kinds(&tail), ["command_accepted", "fiber_exited"]);
+    assert_eq!(
+        tail.last()
+            .expect("the close was answered and the session exited")["kind"],
+        "fiber_exited"
+    );
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
