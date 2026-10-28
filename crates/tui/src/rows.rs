@@ -153,7 +153,6 @@ impl Rows {
                 renderer.half(&seam.ctx, extension),
                 input,
                 width,
-                seam.flat,
                 interval,
                 |frame| renderer.render_animated(&seam.ctx, slot, input, width, frame, builtin),
             ),

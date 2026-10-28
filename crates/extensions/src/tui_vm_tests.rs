@@ -721,6 +721,24 @@ fn animate_is_refused_unless_a_table_with_a_positive_whole_interval() {
 }
 
 #[test]
+fn animate_with_a_key_beside_interval_ms_is_refused() {
+    // docs/extensions.md:1507-1509: any other animate shape fails
+    // registration, naming the slot.
+    for bad in [
+        "{ interval_ms = 500, extra = 1 }",
+        "{ interval_ms = 500, [1] = 2 }",
+    ] {
+        let message = refused(&format!(
+            "fiber.slot('notice', {{ timeout = 100, animate = {bad}, render = function() end }})"
+        ));
+        assert!(
+            message.contains("notice") && message.contains("interval_ms"),
+            "{bad}: {message}"
+        );
+    }
+}
+
+#[test]
 fn an_interval_below_the_tick_floor_stores_the_raw_value() {
     // No error here: the adapter normalizes to the 120 ms floor at
     // registration, and the seam clamps its dues and asks.

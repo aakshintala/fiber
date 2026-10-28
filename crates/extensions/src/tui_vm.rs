@@ -139,6 +139,11 @@ fiber = {
       if math.type(spec.animate.interval_ms) ~= "integer" or spec.animate.interval_ms <= 0 then
         refuse("fiber.slot: `" .. shown .. "`: `animate.interval_ms` must be a whole number of milliseconds above 0")
       end
+      for key, _ in pairs(spec.animate) do
+        if key ~= "interval_ms" then
+          refuse("fiber.slot: `" .. shown .. "`: `animate` holds only `interval_ms`")
+        end
+      end
     end
     slots[name] = { timeout = spec.timeout, render = spec.render, animate = spec.animate }
   end,
