@@ -322,16 +322,39 @@ fn session_log_tails(home: &Path) -> Vec<String> {
 fn finish_names_session_tails_when_a_holder_outlives_the_wait() {
     let setup = Setup::new();
     // A holder whose command line carries the workspace: `exec -a`
-    // names argv[0], which the workspace wait matches.
+    // names argv[0], which the workspace wait matches. It blocks
+    // copying its stdin pipe, which the test holds open, so the
+    // guard's timeout is decided by the pipe staying open, never by
+    // the clock.
     let held = setup.root.path().join("held");
     let held_text = held.to_string_lossy().into_owned();
-    let mut holder = Command::new("bash")
-        .args(["-c", &format!("exec -a 'holder {held_text}' sleep 30")])
-        .stdin(std::process::Stdio::null())
+    let mut spawned = Command::new("bash");
+    spawned
+        .args(["-c", &format!("exec -a 'holder {held_text}' cat")])
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
+        .stderr(std::process::Stdio::null());
+    // The guarded group helper: its own process group, reaped below,
+    // with a watchdog killing the group if the test dies first.
+    let (mut holder, watchdog) = spawn_watched(&mut spawned);
+    let stdin = holder.stdin.take().expect("the holder keeps stdin piped");
+    let group = holder.id();
+    // The guard's first listing must see the holder: a short wait armed
+    // before the holder appears would pass with nothing to wait on,
+    // instead of timing out on the live holder.
+    loop {
+        if fakes::matching(&held_text)
+            .unwrap_or_default()
+            .contains(&group)
+        {
+            break;
+        }
+        assert!(
+            !setup.deadline.left().is_zero(),
+            "waited until the deadline for the holder to appear"
+        );
+        thread::yield_now();
+    }
     // One planted session log, ending `moved`: the failure names its
     // last line with the wait.
     let dir = setup
@@ -350,14 +373,22 @@ fn finish_names_session_tails_when_a_holder_outlives_the_wait() {
         &held_text,
     ));
     let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hubbed.finish()));
-    // The guard's drop already killed the holder; reap it here so no
-    // zombie outlives the test, before asserting on the message.
-    match holder.kill() {
-        Ok(()) | Err(_) => {}
-    }
-    match holder.wait() {
-        Ok(_) | Err(_) => {}
-    }
+    // Release the pipe the holder was blocked on, then reap it and its
+    // group under the cleanup bound before asserting on the message, so
+    // no zombie outlives the test.
+    drop(stdin);
+    let cleanup = setup.deadline.cleanup_phase();
+    let (done, reaped) = mpsc::channel();
+    thread::spawn(move || done.send(holder.wait()).unwrap());
+    match cleanup.recv(&reaped) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited until the cleanup deadline to reap the holder"),
+    };
+    assert!(
+        fakes::group_empties(group, cleanup),
+        "the holder left a process in its group behind"
+    );
+    watchdog.stand_down(cleanup);
     let message = payload_message(&finished.expect_err("a live holder outlives the short wait"));
     assert!(message.contains(&held_text), "{message}");
     assert!(message.contains("holding the workspace path"), "{message}");
