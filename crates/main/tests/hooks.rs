@@ -1134,6 +1134,7 @@ fn a_check_before_message_hook_that_replaces_has_failed() {
 #[test]
 fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected() {
     use extension_harness::{send as session_send, until_session as session_until};
+    use support::{Diag, session_dir};
 
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
@@ -1148,7 +1149,11 @@ fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected()
     );
     let id = doors::mint("s_");
     let mut running = setup.start_session(&id, &[]);
-    let client = running.connect(&setup.socket(&id));
+    let mut client = running.connect(&setup.socket(&id));
+    client.set_diag(Diag::new(
+        running.stderr_snapshot.clone(),
+        session_dir(&setup, &id),
+    ));
     running.wait_for("extensions_loaded");
     session_send(
         &client,
