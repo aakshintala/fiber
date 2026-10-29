@@ -2808,6 +2808,48 @@ fn a_personal_init_template_overrides_the_first_party_one() {
     }
 }
 
+#[test]
+fn twenty_five_shadowed_skills_raise_one_grouped_notice() {
+    // One notice per code, per pass: a home with 25 skills each shadowed
+    // by the same name in the person's `~/.agents/skills` raises exactly
+    // one `skill_shadowed` notice listing all 25 (`#3679`, "The rule").
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    for index in 0..25 {
+        let name = format!("dup{index:02}");
+        let body = format!("---\nname: {name}\ndescription: {name} skill.\n---\n{name} does things.\n");
+        let winner = setup.home().join("skills").join(&name);
+        fs::create_dir_all(&winner).unwrap();
+        fs::write(winner.join("SKILL.md"), &body).unwrap();
+        let loser = setup
+            .root
+            .path()
+            .join(".agents")
+            .join("skills")
+            .join(&name);
+        fs::create_dir_all(&loser).unwrap();
+        fs::write(loser.join("SKILL.md"), &body).unwrap();
+    }
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let notices: Vec<&Value> = run.lines.iter().filter(|l| l["kind"] == "notice").collect();
+    assert_eq!(
+        notices.len(),
+        1,
+        "one notice per code per pass: {}",
+        run.stdout
+    );
+    assert_eq!(notices[0]["payload"]["code"], "skill_shadowed");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    for index in 0..25 {
+        let name = format!("dup{index:02}");
+        assert!(message.contains(&name), "{name} missing: {message}");
+    }
+}
+
 /// Installs the fixture extension and points its provider at `server`,
 /// with `fixture/m1` as the configured model.
 fn fixture(setup: &Setup, server: &ProviderServer) {

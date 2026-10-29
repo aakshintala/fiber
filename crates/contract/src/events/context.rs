@@ -131,6 +131,22 @@ pub struct Notice {
     pub extension: Option<String>,
 }
 
+/// Groups one pass's notices by code, so no emitter floods one pass with
+/// one row per item (`docs/errors.md`, "Notices"): one notice per code in
+/// first-seen code order, each item kept in order. A code seen once passes
+/// through unchanged, without calling `lead`; a code seen more than once
+/// becomes one notice whose message is `lead`'s sentence for the group's
+/// first notice and count, followed by one `- ` line per item in order,
+/// each keeping its own extension attribution. The grouped notice keeps
+/// `extension` only when every item names the same one, and omits it
+/// otherwise, so a group across extensions names none.
+pub fn group_notices(
+    notices: Vec<Notice>,
+    _lead: impl Fn(&Notice, usize) -> String,
+) -> Vec<Notice> {
+    notices
+}
+
 /// Why a preamble was built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

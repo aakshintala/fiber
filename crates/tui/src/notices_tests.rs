@@ -1240,6 +1240,25 @@ fn an_extension_failed_notice_always_shows_built_in() {
 }
 
 #[test]
+fn a_notice_shown_once_does_not_show_again_in_the_same_run() {
+    // In one terminal run, a notice whose code and text match one already
+    // shown does not show again (`docs/tui.md`, "Notices"): after the row
+    // shows and fades, pushing the identical notice stacks no new row.
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = Notices::default();
+    notices.push("skill_shadowed", "25 skills are shadowed".to_owned());
+    notices.sweep(t0);
+    assert_eq!(texts(&notices.lines()), ["25 skills are shadowed"]);
+    notices.sweep(at(t0, 10_000));
+    assert!(notices.lines().is_empty());
+    notices.push("skill_shadowed", "25 skills are shadowed".to_owned());
+    assert!(
+        notices.lines().is_empty(),
+        "an identical notice after its first display shows no row"
+    );
+}
+
+#[test]
 fn visible_views_pass_through_without_a_notice_renderer() {
     // Nothing fills the slot: every shown notice draws built-in, oldest
     // first with "+N more" (`docs/tui.md`, "Notices"), and the overlay

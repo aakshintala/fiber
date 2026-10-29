@@ -27,7 +27,7 @@ pub use context::{
     InstructionReason, InstructionSent, KeptMessage, ModelChanged, ModelSettings, Note, Notice,
     OpeningMessage, Outcome, PreambleBuilt, PreambleReason, QuotaNoticed, QuotaRearmed,
     RetryScheduled, ReviewerKept, ReviewerUse, SentTool, SkillListed, SkillSent, SkillSource,
-    SkillsChanged, SkillsResent, SwitchSource, ToolReplaced, UsageRecorded,
+    SkillsChanged, SkillsResent, SwitchSource, ToolReplaced, UsageRecorded, group_notices,
 };
 pub use host::{
     CallResult, CommandAccepted, CommandInfo, CommandRejected, CommandResult, CredentialLabels,
