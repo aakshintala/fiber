@@ -71,6 +71,9 @@
 //! - `must-succeed`: no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, except the kept bounds in `xtask/src/must_succeed.rs`
 //! - `threads <cpus> <load>`: the nextest `--test-threads` count for the
 //!   host's load, printed as one integer
+//! - `budget-bounds --base REV`: whether any line changed against the merge
+//!   base with REV raises `WAITS`, `BUDGET` or `CLEANUP`, or adds a
+//!   `Deadline::after` of 60 s or more in a test, without `// ruling: #N`
 //! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
 //! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
 //!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
@@ -83,6 +86,7 @@
 )]
 
 mod bench;
+mod budget_bounds;
 mod ci_needs;
 mod docs;
 mod flake_report;
@@ -326,6 +330,10 @@ fn run(args: &[String]) -> Result<bool, String> {
             let load: f64 = load.parse().map_err(|e| format!("load: {e}"))?;
             println!("{}", threads::threads(cpus, load));
             Ok(true)
+        }
+        "budget-bounds" => {
+            let base = flag(rest, "--base")?;
+            report("budget-bounds", &budget_bounds::budget_bounds(&base)?, "ok")
         }
         "site" => site::run(rest),
         "compiled-in" => {
