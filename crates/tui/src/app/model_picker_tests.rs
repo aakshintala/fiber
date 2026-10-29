@@ -4778,7 +4778,6 @@ fn tab_with_nothing_to_show_keeps_the_window() {
 /// (`docs/tui.md:576`).
 #[test]
 fn picker_on_home_with_a_session_sizes_from_the_conversation() {
-    use crate::LaunchLocation;
     use std::path::PathBuf;
     let mut home_only = home();
     home_only.on_models(Ok(five()));

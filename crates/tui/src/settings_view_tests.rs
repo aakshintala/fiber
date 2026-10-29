@@ -1072,12 +1072,12 @@ fn wheel_over_short_choices_stays_without_choosing() {
     let context = ctx(&fake);
     let before = match &settings.mode {
         super::Mode::Choices { list, .. } => list.selected(),
-        _ => panic!("no choices"),
+        super::Mode::Rows | super::Mode::Field(_) => panic!("no choices"),
     };
     assert!(matches!(settings.wheel(false, &context), Act::Stay));
     let after = match &settings.mode {
         super::Mode::Choices { list, .. } => list.selected(),
-        _ => panic!("no choices"),
+        super::Mode::Rows | super::Mode::Field(_) => panic!("no choices"),
     };
     assert_eq!(
         after, before,
