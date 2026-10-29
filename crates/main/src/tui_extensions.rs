@@ -630,6 +630,10 @@ impl Renderer for Composite {
             Err(error) => Decision::Fail(Self::failure(candidate, extension, error)),
         }
     }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame and its wall time travel with the draw context"
+    )]
     fn render_animated(
         &self,
         ctx: &SessionCtx,
@@ -637,11 +641,12 @@ impl Renderer for Composite {
         input: &Input<'_>,
         width: u16,
         frame: u64,
+        now: u64,
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> (Decision, bool) {
-        // The same selection as `render`: the frame counts the
-        // animation into the input object, and failures map exactly as
-        // a still call's do, stopping on every failure.
+        // The same selection as `render`: the frame and its wall time
+        // count the animation into the input object, and failures map
+        // exactly as a still call's do, stopping on every failure.
         let SlotSelection::Draw { extension } = self.fills_for(ctx, slot) else {
             return (
                 Decision::NotForSession {
@@ -675,6 +680,7 @@ impl Renderer for Composite {
             &value,
             width,
             frame,
+            now,
             &built,
         ) {
             Ok(out) => (
@@ -841,7 +847,252 @@ fn input_value(input: &Input<'_>) -> Value {
         Input::Notice(notice) => {
             json!({"code": notice.code, "text": notice.text, "flat": notice.flat})
         }
+        Input::WorkingLine(line) => working_line_value(line),
+        Input::SteeringQueue(queue) => steering_queue_value(queue),
+        Input::StatusRows(rows) => status_rows_value(rows),
+        Input::Card(card) => card_value(card),
     }
+}
+
+/// Inserts `value` under `key` when it holds one: optional input keys
+/// are absent when they do not apply, never null.
+fn insert_present(table: &mut serde_json::Map<String, Value>, key: &str, value: Option<Value>) {
+    if let Some(value) = value {
+        table.insert(key.to_owned(), value);
+    }
+}
+
+fn working_line_value(line: &tui::ext::WorkingLine) -> Value {
+    let mut out = serde_json::Map::new();
+    insert_present(
+        &mut out,
+        "started",
+        line.started.map(|started| json!(started)),
+    );
+    insert_present(
+        &mut out,
+        "retry",
+        line.retry.as_ref().map(|retry| {
+            json!({
+                "code": code_value(&retry.code),
+                "attempt": retry.attempt,
+                "last_attempt": retry.last_attempt,
+                "delay_ms": retry.delay_ms,
+                "ts": retry.ts,
+            })
+        }),
+    );
+    out.insert("flat".to_owned(), json!(line.flat));
+    Value::Object(out)
+}
+
+fn steering_queue_value(queue: &tui::ext::SteeringQueue<'_>) -> Value {
+    json!({
+        "messages": queue.messages.iter().map(|message| json!({
+            "text": message.text,
+            "images": images_value(&message.images),
+            "droppable": message.droppable,
+            "selectable": message.selectable,
+            "selected": message.selected,
+        })).collect::<Vec<_>>(),
+        "flat": queue.flat,
+    })
+}
+
+/// The session card's spend: the status spend whole, or the attached
+/// spend's cost alone when the session reports none.
+fn spend_value(spend: &tui::ext::Spend<'_>) -> Value {
+    match spend {
+        tui::ext::Spend::Status(status) => {
+            let mut out = serde_json::Map::new();
+            insert_present(&mut out, "cost", status.cost.map(|cost| json!(cost)));
+            out.insert(
+                "tokens".to_owned(),
+                json!({
+                    "input": status.tokens.input,
+                    "output": status.tokens.output,
+                    "cache_read": status.tokens.cache_read,
+                    "cache_write": status.tokens.cache_write,
+                }),
+            );
+            out.insert(
+                "subscription_cost".to_owned(),
+                json!(status.subscription_cost),
+            );
+            Value::Object(out)
+        }
+        tui::ext::Spend::Attached { cost } => json!({ "cost": cost }),
+    }
+}
+
+fn quota_value(quota: &tui::ext::Quota<'_>) -> Value {
+    json!({
+        "quota": quota.rows,
+        "notice_at": quota.notice_at,
+    })
+}
+
+fn branch_value(branch: &tui::ext::BranchName<'_>) -> Value {
+    match branch {
+        tui::ext::BranchName::Named(name) => json!(name),
+        tui::ext::BranchName::Detached => json!("detached"),
+    }
+}
+
+fn session_value(card: &tui::ext::SessionCard<'_>) -> Value {
+    let mut out = serde_json::Map::new();
+    insert_present(
+        &mut out,
+        "workspace",
+        card.workspace.map(|workspace| json!(workspace)),
+    );
+    insert_present(&mut out, "branch", card.branch.as_ref().map(branch_value));
+    insert_present(&mut out, "model", card.model.map(|model| json!(model)));
+    insert_present(
+        &mut out,
+        "thinking",
+        card.thinking.map(|thinking| json!(thinking)),
+    );
+    insert_present(
+        &mut out,
+        "context",
+        card.context.map(|context| {
+            let mut filled = serde_json::Map::new();
+            filled.insert("tokens".to_owned(), json!(context.tokens));
+            filled.insert("window".to_owned(), json!(context.window));
+            insert_present(
+                &mut filled,
+                "trigger_at",
+                context.trigger_at.map(|at| json!(at)),
+            );
+            Value::Object(filled)
+        }),
+    );
+    insert_present(&mut out, "spend", card.spend.as_ref().map(spend_value));
+    insert_present(&mut out, "budget", card.budget.map(|budget| json!(budget)));
+    insert_present(&mut out, "speed", card.speed.map(|speed| json!(speed)));
+    out.insert("turns".to_owned(), json!(card.turns));
+    out.insert(
+        "tools_down".to_owned(),
+        card.tools_down.iter().cloned().collect::<Vec<_>>().into(),
+    );
+    insert_present(
+        &mut out,
+        "waiting",
+        card.waiting.map(|waiting| json!(waiting)),
+    );
+    out.insert("flat".to_owned(), json!(card.flat));
+    Value::Object(out)
+}
+
+fn changed_files_value(card: &tui::ext::ChangedFiles<'_>) -> Value {
+    json!({
+        "files": card.files.iter().map(|file| json!({
+            "path": file.path,
+            "added": file.added,
+            "removed": file.removed,
+        })).collect::<Vec<_>>(),
+        "flat": card.flat,
+    })
+}
+
+fn outcome_value(outcome: contract::events::Outcome) -> Value {
+    serde_json::to_value(outcome).unwrap_or(Value::Null)
+}
+
+fn delegates_value(card: &tui::ext::DelegatesCard<'_>) -> Value {
+    json!({
+        "delegates": card.delegates.iter().map(|delegate| {
+            let mut out = serde_json::Map::new();
+            out.insert("job_id".to_owned(), json!(delegate.job_id));
+            out.insert("description".to_owned(), json!(delegate.description));
+            out.insert("harness".to_owned(), json!(delegate.harness));
+            out.insert("model".to_owned(), json!(delegate.model));
+            out.insert("calls".to_owned(), json!(delegate.calls));
+            insert_present(&mut out, "step", delegate.step.map(|step| json!(step)));
+            insert_present(&mut out, "started", delegate.started.map(|started| json!(started)));
+            insert_present(
+                &mut out,
+                "outcome",
+                delegate.outcome.map(outcome_value),
+            );
+            insert_present(&mut out, "ended", delegate.ended.map(|ended| json!(ended)));
+            Value::Object(out)
+        }).collect::<Vec<_>>(),
+        "flat": card.flat,
+    })
+}
+
+fn jobs_value(card: &tui::ext::JobsCard<'_>) -> Value {
+    json!({
+        "jobs": card.jobs.iter().map(|job| json!({
+            "job_id": job.job_id,
+            "description": job.description,
+        })).collect::<Vec<_>>(),
+        "open": card.open,
+        "flat": card.flat,
+    })
+}
+
+fn widget_value(card: &tui::ext::WidgetCard<'_>) -> Value {
+    json!({
+        "extension": card.extension,
+        "widget": card.widget,
+        "lines": card.lines,
+        "open": card.open,
+        "flat": card.flat,
+    })
+}
+
+fn card_value(card: &tui::ext::Card<'_>) -> Value {
+    match card {
+        tui::ext::Card::Session(session) => session_value(session),
+        tui::ext::Card::ChangedFiles(files) => changed_files_value(files),
+        tui::ext::Card::Delegates(delegates) => delegates_value(delegates),
+        tui::ext::Card::Jobs(jobs) => jobs_value(jobs),
+        tui::ext::Card::Widget(widget) => widget_value(widget),
+    }
+}
+
+fn status_rows_value(rows: &tui::ext::StatusRows<'_>) -> Value {
+    let mut out = serde_json::Map::new();
+    out.insert("cards".to_owned(), json!(rows.cards));
+    out.insert("session".to_owned(), session_value(&rows.session));
+    out.insert(
+        "changed_files".to_owned(),
+        json!({"files": rows.changed_files.files.iter().map(|file| json!({
+            "path": file.path,
+            "added": file.added,
+            "removed": file.removed,
+        })).collect::<Vec<_>>()}),
+    );
+    out.insert(
+        "delegates_running".to_owned(),
+        json!(rows.delegates_running),
+    );
+    out.insert("jobs_running".to_owned(), json!(rows.jobs_running));
+    out.insert(
+        "widgets".to_owned(),
+        rows.widgets
+            .iter()
+            .map(|widget| {
+                json!({
+                    "extension": widget.extension,
+                    "widget": widget.widget,
+                    "lines": widget.lines,
+                })
+            })
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    insert_present(
+        &mut out,
+        "waiting",
+        rows.waiting.map(|waiting| json!(waiting)),
+    );
+    insert_present(&mut out, "quota", rows.quota.as_ref().map(quota_value));
+    out.insert("flat".to_owned(), json!(rows.flat));
+    Value::Object(out)
 }
 
 fn code_value(code: &contract::ErrorCode) -> Value {

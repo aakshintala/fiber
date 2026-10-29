@@ -831,6 +831,8 @@ pub(crate) struct AnimatedRenderer {
     grow: bool,
     /// The frames it drew, in order.
     pub(crate) frames: RefCell<Vec<u64>>,
+    /// The wall time each drawn frame carried, in order.
+    pub(crate) nows: RefCell<Vec<u64>>,
     /// When set, it answers `{ lines, animate = false }`: draws once,
     /// then stops until its input changes.
     pub(crate) stop: Cell<bool>,
@@ -846,6 +848,7 @@ impl AnimatedRenderer {
             rows: rows.max(1),
             grow: false,
             frames: RefCell::new(Vec::new()),
+            nows: RefCell::new(Vec::new()),
             stop: Cell::new(false),
         }
     }
@@ -887,6 +890,10 @@ impl Renderer for AnimatedRenderer {
         Some(self.interval)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame and its wall time travel with the draw context"
+    )]
     fn render_animated(
         &self,
         _ctx: &SessionCtx,
@@ -894,9 +901,11 @@ impl Renderer for AnimatedRenderer {
         _input: &Input<'_>,
         _width: u16,
         frame: u64,
+        now: u64,
         _builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> (Decision, bool) {
         self.frames.borrow_mut().push(frame);
+        self.nows.borrow_mut().push(now);
         let rows = self.rows.saturating_add(if self.grow {
             usize::try_from(frame).unwrap_or(usize::MAX)
         } else {
@@ -915,6 +924,31 @@ impl Renderer for AnimatedRenderer {
     }
 }
 
+/// A bound seam holding `fake` on page 0 with the frame wall time
+/// `now`, sharing `cache`.
+fn animated_bound(
+    fake: &std::rc::Rc<AnimatedRenderer>,
+    cache: &std::sync::Arc<super::cache::Cache>,
+    now: Option<u64>,
+) -> super::Bound {
+    let handle = Handle::create();
+    handle.set(std::rc::Rc::clone(fake) as std::rc::Rc<dyn Renderer>);
+    super::Bound {
+        handle,
+        cache: std::sync::Arc::clone(cache),
+        page: super::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        ctx: SessionCtx {
+            session_id: Some(contract::SessionId("s".into())),
+            halves: None,
+        },
+        flat: false,
+        now,
+    }
+}
+
 /// A seam holding `fake` on page `index` with session `session`: flat
 /// draws drop every style.
 pub(crate) fn seam(
@@ -930,6 +964,7 @@ pub(crate) fn seam(
         handle,
         cache: std::sync::Arc::new(super::cache::Cache::default()),
         flat,
+        wall_ms: None,
     };
     ext.bind(
         super::cache::PageKey {
@@ -2152,6 +2187,7 @@ fn a_still_renderer_animates_nothing() {
         &input,
         80,
         3,
+        1_000,
         &|_, _| Vec::new(),
     );
     // The default draws the still render and continues.
@@ -2181,13 +2217,14 @@ fn an_animated_renderer_draws_its_frame_and_reports_its_interval() {
         halves: None,
     };
     let (decision, continues) =
-        fake.render_animated(&ctx, "ledger_row", &input, 80, 7, &|_, _| Vec::new());
+        fake.render_animated(&ctx, "ledger_row", &input, 80, 7, 1_000, &|_, _| Vec::new());
     assert!(continues);
     let Decision::Draw { extension, lines } = decision else {
         panic!("expected drawn lines, got {decision:?}");
     };
     assert_eq!(extension, "animated-test");
     assert_eq!(fake.frames.borrow().clone(), vec![7]); // docs/tui.md:2996: the frame reaches the renderer in its input.
+    assert_eq!(fake.nows.borrow().clone(), vec![1_000]);
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0][0].text, "anim7-0");
     assert_eq!(lines[1][0].text, "anim7-1");
@@ -2207,7 +2244,203 @@ fn a_stopped_animated_renderer_draws_once() {
         session_id: None,
         halves: None,
     };
-    let (_, continues) = fake.render_animated(&ctx, "notice", &notice, 80, 2, &|_, _| Vec::new());
+    let (_, continues) =
+        fake.render_animated(&ctx, "notice", &notice, 80, 2, 1_000, &|_, _| Vec::new());
     assert!(!continues);
     assert_eq!(fake.frames.borrow().clone(), vec![2]); // docs/tui.md:2996: the frame reaches the renderer in its input.
+}
+
+#[test]
+fn an_animated_row_without_wall_time_draws_builtin() {
+    crate::work::take();
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling(
+        "ledger_row",
+        std::time::Duration::from_millis(500),
+        1,
+    ));
+    let cache = std::sync::Arc::new(super::cache::Cache::default());
+    let bound = animated_bound(&fake, &cache, None);
+    let rows = crate::rows::Rows::default().with_seam(bound);
+    let base = base();
+    let row = base_row(&base);
+    let input = Input::LedgerRow(row);
+    // Without the frame wall time there is no animated call: the slot
+    // draws its built-in, invoking and memoizing nothing.
+    assert!(
+        rows.ext_lines("ledger_row", "animated-test", &input, 40, &|_, _| Vec::new(
+        ))
+        .is_none()
+    );
+    assert!(fake.frames.borrow().is_empty());
+    assert!(cache.take_failures().is_empty());
+    // The same input draws once the wall time exists.
+    let bound = animated_bound(&fake, &cache, Some(1_000));
+    let rows = crate::rows::Rows::default().with_seam(bound);
+    let drawn = rows
+        .ext_lines("ledger_row", "animated-test", &input, 40, &|_, _| {
+            Vec::new()
+        })
+        .expect("frame 0 with wall time");
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(fake.nows.borrow().clone(), vec![1_000]);
+    assert_eq!(drawn.len(), 1);
+}
+
+#[test]
+fn a_still_chrome_slot_draws_through_lines() {
+    use std::rc::Rc;
+    let fake = Rc::new(SlotRenderer::filling(
+        &["working_line"],
+        SlotScript::Replace(vec![vec![raw("working")]]),
+    ));
+    let bound = seam(&fake, "s", 0, false);
+    let input = Input::WorkingLine(super::WorkingLine {
+        started: Some(1),
+        retry: None,
+        flat: false,
+    });
+    let first = bound
+        .slot_lines(
+            super::SlotDraw::Paint,
+            "working_line",
+            &input,
+            20,
+            &|_, _| Vec::new(),
+        )
+        .expect("a still chrome line");
+    assert_eq!(first.len(), 1);
+    assert_eq!(fake.calls.borrow().len(), 1);
+    // The width rides the still entry: a repeat hits.
+    let second = bound
+        .slot_lines(
+            super::SlotDraw::Paint,
+            "working_line",
+            &input,
+            20,
+            &|_, _| Vec::new(),
+        )
+        .expect("a cached chrome line");
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(second.len(), first.len());
+}
+
+#[test]
+fn an_animated_chrome_count_promotes_its_paint() {
+    use std::rc::Rc;
+    let fake = Rc::new(AnimatedRenderer::filling(
+        "working_line",
+        std::time::Duration::from_millis(500),
+        1,
+    ));
+    let cache = std::sync::Arc::new(super::cache::Cache::default());
+    let bound = animated_bound(&fake, &cache, Some(1_000));
+    let t0 = fakes::clock::FakeClock::new().origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let input = Input::WorkingLine(super::WorkingLine {
+        started: Some(1),
+        retry: None,
+        flat: false,
+    });
+    // A cold count stores frame 0 with no animation state or mark.
+    let counted = bound
+        .slot_lines(
+            super::SlotDraw::Count,
+            "working_line",
+            &input,
+            20,
+            &|_, _| Vec::new(),
+        )
+        .expect("counted frame 0");
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(fake.nows.borrow().clone(), vec![1_000]);
+    assert!(cache.anim_dues().is_empty());
+    // The paint promotes the stored frame 0 instead of calling again.
+    let painted = bound
+        .slot_lines(
+            super::SlotDraw::Paint,
+            "working_line",
+            &input,
+            20,
+            &|_, _| Vec::new(),
+        )
+        .expect("painted frame 0");
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(painted.len(), counted.len());
+}
+
+#[test]
+fn an_animated_chrome_slot_without_wall_time_draws_builtin() {
+    use std::rc::Rc;
+    let fake = Rc::new(AnimatedRenderer::filling(
+        "working_line",
+        std::time::Duration::from_millis(500),
+        1,
+    ));
+    let cache = std::sync::Arc::new(super::cache::Cache::default());
+    let bound = animated_bound(&fake, &cache, None);
+    let t0 = fakes::clock::FakeClock::new().origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let input = Input::WorkingLine(super::WorkingLine {
+        started: Some(1),
+        retry: None,
+        flat: false,
+    });
+    // Neither mode invokes without the wall time: no call and no memo.
+    for mode in [super::SlotDraw::Count, super::SlotDraw::Paint] {
+        assert!(
+            bound
+                .slot_lines(mode, "working_line", &input, 20, &|_, _| Vec::new())
+                .is_none()
+        );
+    }
+    assert!(fake.frames.borrow().is_empty());
+    assert!(cache.take_failures().is_empty());
+}
+
+#[test]
+fn a_scratch_seam_for_a_dropped_page_keeps_the_frame_wall_time() {
+    use std::rc::Rc;
+    // `window.rs` binds a dropped page's search and count draws through
+    // a scratch cache sharing the resident install, flag and wall time.
+    let installed = Rc::new(AnimatedRenderer::filling(
+        "ledger_row",
+        std::time::Duration::from_millis(500),
+        1,
+    ));
+    let handle = Handle::create();
+    handle.set(Rc::clone(&installed) as Rc<dyn Renderer>);
+    let resident = Ext {
+        handle,
+        cache: std::sync::Arc::new(super::cache::Cache::default()),
+        flat: false,
+        wall_ms: Some(1_000),
+    };
+    let scratch = Ext {
+        handle: resident.handle,
+        cache: std::sync::Arc::new(resident.cache.scratch_sharing_pending()),
+        flat: resident.flat,
+        wall_ms: resident.wall_ms,
+    };
+    let bound = scratch.bind(
+        super::cache::PageKey {
+            session: contract::SessionId("s".into()),
+            index: 0,
+        },
+        SessionCtx {
+            session_id: Some(contract::SessionId("s".into())),
+            halves: None,
+        },
+    );
+    let rows = crate::rows::Rows::default().with_seam(bound);
+    let base = base();
+    let row = base_row(&base);
+    let input = Input::LedgerRow(row);
+    let drawn = rows
+        .ext_lines("ledger_row", "animated-test", &input, 40, &|_, _| {
+            Vec::new()
+        })
+        .expect("a scratch frame 0");
+    assert_eq!(drawn.len(), 1);
+    assert_eq!(installed.frames.borrow().clone(), vec![0]);
+    assert_eq!(installed.nows.borrow().clone(), vec![1_000]);
 }

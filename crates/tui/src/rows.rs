@@ -161,7 +161,9 @@ impl Rows {
     /// The bound renderer's lines for `slot`: none without a seam,
     /// without an installed renderer, or when the item falls back to
     /// its built-in row. A miss calls the renderer once and validates
-    /// what it returns before storing or drawing any of it.
+    /// what it returns before storing or drawing any of it. An animated
+    /// slot without the frame wall time draws built-in, invoking and
+    /// memoizing nothing.
     pub(crate) fn ext_lines(
         &self,
         slot: &str,
@@ -176,16 +178,21 @@ impl Rows {
             // An animated slot draws through the animation schedule:
             // open paint advances; a closed draw caches a miss in the
             // ordinary entries without changing animation state.
-            Some(interval) => seam.cache.lines_animated(
-                seam.page.clone(),
-                slot,
-                extension,
-                renderer.half(&seam.ctx, extension),
-                input,
-                width,
-                interval,
-                |frame| renderer.render_animated(&seam.ctx, slot, input, width, frame, builtin),
-            ),
+            Some(interval) => {
+                let now = seam.now?;
+                seam.cache.lines_animated(
+                    seam.page.clone(),
+                    slot,
+                    extension,
+                    renderer.half(&seam.ctx, extension),
+                    input,
+                    width,
+                    interval,
+                    |frame| {
+                        renderer.render_animated(&seam.ctx, slot, input, width, frame, now, builtin)
+                    },
+                )
+            }
             None => seam.cache.lines(
                 seam.page.clone(),
                 slot,

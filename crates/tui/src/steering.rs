@@ -13,6 +13,7 @@
 use contract::events::SteeringQueue;
 
 use super::{App, Effect, Kind, mint, session_command};
+use crate::ext::{PromptImage, QueuedImage, SteeringMessage};
 use crate::format;
 use crate::input::Draft;
 use crate::keys::Key;
@@ -25,9 +26,9 @@ struct Queued {
     /// The `steer` that sent it; `None` for Fiber's own message, which
     /// cannot be selected.
     command_id: Option<String>,
-    /// Whether the message holds an image: such a row cannot be selected
+    /// The message's images in order: a row with any cannot be selected
     /// for editing, but it can still be dropped.
-    image: bool,
+    images: Vec<QueuedImage>,
 }
 
 /// One queued message laid out for its column: the mark, the text as
@@ -73,10 +74,25 @@ impl Steering {
             .map(|message| Queued {
                 text: crate::app::text_of(&message.content),
                 command_id: message.sender.command_id.as_ref().map(|id| id.0.clone()),
-                image: message
+                images: message
                     .content
                     .iter()
-                    .any(|part| matches!(part, contract::shapes::ContentPart::Image { .. })),
+                    .filter_map(|part| match part {
+                        contract::shapes::ContentPart::Image {
+                            path,
+                            width,
+                            height,
+                            ..
+                        } => Some(QueuedImage {
+                            path: path.clone(),
+                            width: *width,
+                            height: *height,
+                        }),
+                        contract::shapes::ContentPart::Text { .. }
+                        | contract::shapes::ContentPart::Pdf(_)
+                        | contract::shapes::ContentPart::Unknown => None,
+                    })
+                    .collect(),
             })
             .collect();
         if self
@@ -99,7 +115,7 @@ impl Steering {
         self.rows
             .iter()
             .enumerate()
-            .filter(|(_, row)| row.command_id.is_some() && !row.image)
+            .filter(|(_, row)| row.command_id.is_some() && row.images.is_empty())
             .map(|(at, _)| at)
     }
 
@@ -113,6 +129,36 @@ impl Steering {
     /// The selected row's index.
     pub(crate) fn selected_at(&self) -> Option<usize> {
         self.selected.as_deref().and_then(|id| self.at(id))
+    }
+
+    /// The queue's messages for the `steering_queue` input, oldest
+    /// first: each message's full text and images with what the
+    /// built-in draws from them.
+    pub(crate) fn messages(&self) -> Vec<SteeringMessage<'_>> {
+        self.rows
+            .iter()
+            .map(|row| {
+                let droppable = row.command_id.is_some();
+                SteeringMessage {
+                    text: &row.text,
+                    images: row
+                        .images
+                        .iter()
+                        .map(|image| PromptImage {
+                            path: &image.path,
+                            width: image.width,
+                            height: image.height,
+                        })
+                        .collect(),
+                    droppable,
+                    selectable: droppable && row.images.is_empty(),
+                    selected: row
+                        .command_id
+                        .as_deref()
+                        .is_some_and(|id| self.selected.as_deref() == Some(id)),
+                }
+            })
+            .collect()
     }
 
     /// ⌥↑: with nothing selected the newest row, else the next older one,
@@ -148,7 +194,7 @@ impl Steering {
         let Some(row) = self.rows.get(at) else {
             return false;
         };
-        if row.image {
+        if !row.images.is_empty() {
             return false;
         }
         let Some(id) = row.command_id.clone() else {
@@ -268,6 +314,12 @@ impl App {
     /// (`docs/tui.md`, "Steering").
     pub(crate) fn steering_rows(&self) -> Vec<LaidRow> {
         self.steering.rows(self.column_width())
+    }
+
+    /// The steering queue's messages for its renderer input, oldest
+    /// first (`docs/tui.md`, "The slots").
+    pub(crate) fn steering_messages(&self) -> Vec<crate::ext::SteeringMessage<'_>> {
+        self.steering.messages()
     }
 
     /// The steering queue's rows below the conversation: one per message

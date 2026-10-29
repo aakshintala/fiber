@@ -1289,9 +1289,18 @@ fn a_sessionless_adapter_sends_no_session_id_key() {
     assert_eq!(lines[0][0].text, "none");
 }
 
-/// Renders frame `frame` of the `ledger_row` slot through the animated
-/// path, with an empty built-in fallback.
-fn render_frame(renderer: &dyn Renderer, ctx: &SessionCtx, frame: u64) -> (Decision, bool) {
+/// Renders frame `frame` at wall time `now` of the `ledger_row` slot
+/// through the animated path, with an empty built-in fallback.
+/// The frame wall time the animated calls send: a fixed Unix
+/// millisecond, so the tests pin the value Lua reads.
+const NOW: u64 = 1_720_000_000_000;
+
+fn render_frame(
+    renderer: &dyn Renderer,
+    ctx: &SessionCtx,
+    frame: u64,
+    now: u64,
+) -> (Decision, bool) {
     let args = json!({});
     let row = tui::ext::LedgerRow {
         name: "shell",
@@ -1312,6 +1321,7 @@ fn render_frame(renderer: &dyn Renderer, ctx: &SessionCtx, frame: u64) -> (Decis
         &Input::LedgerRow(row),
         80,
         frame,
+        now,
         &|_, _| vec![],
     )
 }
@@ -1372,7 +1382,7 @@ fn animated_calls_pass_frame_width_and_input_through() {
     let (renderer, notices) = loader.load();
     assert!(notices.is_empty());
     for frame in [0, 7] {
-        let (decision, continues) = render_frame(&*renderer, &ctx(None), frame);
+        let (decision, continues) = render_frame(&*renderer, &ctx(None), frame, NOW);
         let Decision::Draw { lines, .. } = decision else {
             panic!("frame {frame} draws")
         };
@@ -1396,13 +1406,13 @@ fn animated_returns_map_continue_and_stop() {
     assert!(notices.is_empty());
     // `{ lines, animate = false }` draws once, then stops until its
     // input changes; `{ lines }` continues.
-    let (stopped, continues) = render_frame(&*renderer, &ctx(None), 0);
+    let (stopped, continues) = render_frame(&*renderer, &ctx(None), 0, NOW);
     let Decision::Draw { lines, .. } = stopped else {
         panic!("the stopping frame draws")
     };
     assert_eq!(lines[0][0].text, "first");
     assert!(!continues);
-    let (kept, continues) = render_frame(&*renderer, &ctx(None), 1);
+    let (kept, continues) = render_frame(&*renderer, &ctx(None), 1, NOW);
     let Decision::Draw { lines, .. } = kept else {
         panic!("the continuing frame draws")
     };
@@ -1430,7 +1440,7 @@ fn animated_wrong_shapes_fail_like_still_calls() {
         assert!(notices.is_empty());
         // Each wrong keyed shape fails exactly as a still wrong shape
         // does, and stops: the VM refuses the call, never the draw.
-        let (decision, continues) = render_frame(&*renderer, &ctx(None), 3);
+        let (decision, continues) = render_frame(&*renderer, &ctx(None), 3, NOW);
         let Decision::Fail(failure) = decision else {
             panic!("{name} fails")
         };
@@ -1493,7 +1503,7 @@ fn animated_deadline_reports_typed_extension_failure_and_switches_off() {
         Vec::new()
     };
     let (decision, continues) =
-        renderer.render_animated(&ctx(None), "ledger_row", &input, 80, 0, &over);
+        renderer.render_animated(&ctx(None), "ledger_row", &input, 80, 0, NOW, &over);
     let Decision::Fail(failure) = decision else {
         panic!("overdue frame fails")
     };
@@ -1506,7 +1516,8 @@ fn animated_deadline_reports_typed_extension_failure_and_switches_off() {
         SlotSelection::Absent
     );
     assert!(!renderer.fills("ledger_row"));
-    let (decision, _) = renderer.render_animated(&ctx(None), "ledger_row", &input, 80, 1, &over);
+    let (decision, _) =
+        renderer.render_animated(&ctx(None), "ledger_row", &input, 80, 1, NOW, &over);
     assert!(matches!(decision, Decision::NotForSession { .. }));
 }
 
@@ -2228,4 +2239,627 @@ fn a_run_timeout_switches_the_extension_off() {
         KeyOutcome::NotHandled
     );
     assert!(renderer.take_pending().is_empty());
+}
+
+/// Chrome projection fixtures (Part 5a): the tables reach Lua with the
+/// doc's keys, oldest-first, and omit absent keys instead of nulling
+/// them.
+fn working_input(started: Option<u64>, retry: bool) -> Input<'static> {
+    Input::WorkingLine(tui::ext::WorkingLine {
+        started,
+        retry: retry.then_some(tui::ext::WorkingRetry {
+            code: contract::ErrorCode::RateLimited,
+            attempt: 2,
+            last_attempt: 4,
+            delay_ms: 4000,
+            ts: 9,
+        }),
+        flat: false,
+    })
+}
+
+fn steering_message(
+    text: &'static str,
+    selected: bool,
+    image: bool,
+) -> tui::ext::SteeringMessage<'static> {
+    tui::ext::SteeringMessage {
+        text,
+        images: if image {
+            vec![tui::ext::PromptImage {
+                path: "artifacts/a.png",
+                width: 8,
+                height: 8,
+            }]
+        } else {
+            Vec::new()
+        },
+        droppable: true,
+        selectable: !image,
+        selected,
+    }
+}
+
+fn usage(cost: Option<f64>) -> contract::shapes::Usage {
+    contract::shapes::Usage {
+        tokens: contract::shapes::Tokens {
+            input: 100,
+            output: 20,
+            cache_read: 300,
+            cache_write: [("ephemeral_1h".to_owned(), 400)].into_iter().collect(),
+        },
+        cost,
+        subscription_cost: 1.5,
+    }
+}
+
+/// A session card with the doc's keys: the variable fields ride the
+/// arguments, and the fixed ones pin the shared shapes.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one fixture covers every optional session key"
+)]
+fn session_card<'a>(
+    workspace: Option<&'a str>,
+    branch: Option<tui::ext::BranchName<'a>>,
+    model: Option<&'a str>,
+    spend: Option<tui::ext::Spend<'a>>,
+    budget: Option<f64>,
+    waiting: Option<usize>,
+    tools_down: &'a std::collections::BTreeSet<String>,
+) -> tui::ext::SessionCard<'a> {
+    tui::ext::SessionCard {
+        workspace,
+        branch,
+        model,
+        thinking: Some("high"),
+        context: Some(tui::ext::SessionContext {
+            tokens: 268000,
+            window: 1000000,
+            trigger_at: Some(400000),
+        }),
+        spend,
+        budget,
+        speed: Some(64),
+        turns: 12,
+        tools_down,
+        waiting,
+        flat: false,
+    }
+}
+
+fn quota_info(provider: &str) -> contract::events::QuotaInfo {
+    contract::events::QuotaInfo {
+        provider: provider.to_owned(),
+        credential: "work".to_owned(),
+        windows: Some(vec![contract::events::QuotaWindow {
+            name: "weekly".to_owned(),
+            percent_used: Some(35.0),
+            reset: None,
+            resets_at: None,
+        }]),
+        credit: None,
+        unreachable: None,
+    }
+}
+
+#[test]
+fn a_working_line_renderer_reads_started_and_retry() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('working_line',{timeout=100,render=function(input) return {{{text=tostring(input.started) .. ':' .. input.retry.code .. ':' .. input.retry.attempt .. ':' .. input.retry.last_attempt .. ':' .. input.retry.delay_ms .. ':' .. input.retry.ts .. ':' .. tostring(input.flat)}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let Decision::Draw { lines, .. } = render_slot(
+        &*renderer,
+        &ctx(None),
+        "working_line",
+        &working_input(Some(7), true),
+    ) else {
+        panic!("a working line draws")
+    };
+    assert_eq!(lines[0][0].text, "7:rate_limited:2:4:4000:9:false");
+}
+
+#[test]
+fn a_working_line_renderer_sees_absent_keys_as_nil() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('working_line',{timeout=100,render=function(input) return {{{text=tostring(input.started) .. ':' .. tostring(input.retry) .. ':' .. tostring(input.flat)}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let Decision::Draw { lines, .. } = render_slot(
+        &*renderer,
+        &ctx(None),
+        "working_line",
+        &working_input(None, false),
+    ) else {
+        panic!("a working line draws")
+    };
+    // docs/tui.md:2877-2878,2754: absent keys are nil, never null.
+    assert_eq!(lines[0][0].text, "nil:nil:false"); // docs/tui.md:2877-2878,2754.
+}
+
+#[test]
+fn a_steering_queue_renderer_reads_messages_oldest_first() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('steering_queue',{timeout=100,render=function(input) local first = input.messages[1] return {{{text=first.text .. '|' .. #input.messages .. '|' .. first.images[1].path .. '|' .. first.images[1].width .. '|' .. first.images[1].height .. '|' .. tostring(first.droppable) .. '|' .. tostring(first.selectable) .. '|' .. tostring(first.selected) .. '|' .. input.messages[2].text .. '|' .. tostring(input.messages[2].selectable) .. '|' .. tostring(input.messages[2].selected)}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let queue = Input::SteeringQueue(tui::ext::SteeringQueue {
+        messages: vec![
+            steering_message("first", false, true),
+            steering_message("second", true, false),
+        ],
+        flat: false,
+    });
+    let Decision::Draw { lines, .. } =
+        render_slot(&*renderer, &ctx(None), "steering_queue", &queue)
+    else {
+        panic!("a steering queue draws")
+    };
+    // docs/tui.md:2891: messages oldest-first with text, images and flags.
+    assert_eq!(
+        lines[0][0].text,
+        "first|2|artifacts/a.png|8|8|true|false|false|second|true|true"
+    ); // docs/tui.md:2891.
+}
+
+/// A status row renderer reads the narrow layout's cards with what each
+/// one reads: the session, the ranked changed files, the counts, the
+/// widgets, the waiting sessions and the quota answer.
+#[test]
+fn a_status_rows_renderer_reads_the_docs_keys() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('status_rows',{timeout=100,render=function(input) return {{{text=input.cards[1] .. '|' .. input.cards[2] .. '|' .. input.session.model .. '|' .. input.session.branch .. '|' .. input.session.context.tokens .. '|' .. input.session.spend.cost .. '|' .. input.session.spend.tokens.cache_write.ephemeral_1h .. '|' .. input.session.spend.subscription_cost .. '|' .. input.session.budget .. '|' .. input.session.speed .. '|' .. input.session.turns .. '|' .. input.session.tools_down[1] .. '|' .. input.session.waiting .. '|' .. input.changed_files.files[1].path .. '|' .. input.changed_files.files[2].added .. '|' .. input.delegates_running .. '|' .. input.jobs_running .. '|' .. input.widgets[1].extension .. '/' .. input.widgets[1].widget .. '|' .. input.widgets[1].lines[1] .. '|' .. input.waiting .. '|' .. input.quota.quota[1].provider .. '|' .. input.quota.quota[1].windows[1].name .. '|' .. input.quota.notice_at .. '|' .. tostring(input.flat)}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let tools_down = std::collections::BTreeSet::from(["tailscale".to_owned()]);
+    let spend = usage(Some(4.12));
+    let quotas = [quota_info("codex")];
+    let files = [
+        tui::ext::ChangedFile {
+            path: "b.rs",
+            added: 1,
+            removed: 2,
+        },
+        tui::ext::ChangedFile {
+            path: "a.rs",
+            added: 3,
+            removed: 4,
+        },
+    ];
+    let wlines = ["one".to_owned()];
+    let rows = Input::StatusRows(tui::ext::StatusRows {
+        cards: vec!["session".to_owned(), "changed_files".to_owned()],
+        session: session_card(
+            Some("/w"),
+            Some(tui::ext::BranchName::Named("main")),
+            Some("m"),
+            Some(tui::ext::Spend::Status(&spend)),
+            Some(20.0),
+            Some(3),
+            &tools_down,
+        ),
+        changed_files: tui::ext::ChangedFiles {
+            files: &files,
+            flat: false,
+        },
+        delegates_running: 1,
+        jobs_running: 2,
+        widgets: vec![tui::ext::WidgetCard {
+            extension: "e",
+            widget: "w",
+            lines: &wlines,
+            open: true,
+            flat: false,
+        }],
+        waiting: Some(2),
+        quota: Some(tui::ext::Quota {
+            rows: &quotas,
+            notice_at: 80.0,
+        }),
+        flat: false,
+    });
+    let Decision::Draw { lines, .. } = render_slot(&*renderer, &ctx(None), "status_rows", &rows)
+    else {
+        panic!("status rows draw")
+    };
+    // docs/tui.md:2899-2901,2905-2906: cards in order, ranked files, waiting and quota.
+    assert_eq!(
+        lines[0][0].text,
+        "session|changed_files|m|main|268000|4.12|400|1.5|20.0|64|12|tailscale|3|b.rs|3|1|2|e/w|one|2|codex|weekly|80.0|false"
+    ); // docs/tui.md:2899-2901,2905-2906.
+}
+
+#[test]
+fn status_rows_omits_absent_waiting_quota_and_spend() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('status_rows',{timeout=100,render=function(input) return {{{text=tostring(input.waiting) .. ':' .. tostring(input.quota) .. ':' .. tostring(input.session.spend) .. ':' .. tostring(input.session.waiting)}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let tools_down = std::collections::BTreeSet::new();
+    let files: [tui::ext::ChangedFile<'_>; 0] = [];
+    let rows = Input::StatusRows(tui::ext::StatusRows {
+        cards: Vec::new(),
+        session: session_card(None, None, None, None, None, None, &tools_down),
+        changed_files: tui::ext::ChangedFiles {
+            files: &files,
+            flat: false,
+        },
+        delegates_running: 0,
+        jobs_running: 0,
+        widgets: Vec::new(),
+        waiting: None,
+        quota: None,
+        flat: false,
+    });
+    let Decision::Draw { lines, .. } = render_slot(&*renderer, &ctx(None), "status_rows", &rows)
+    else {
+        panic!("status rows draw")
+    };
+    // docs/tui.md:2905-2906,2928: waiting, quota and spend absent at zero.
+    assert_eq!(lines[0][0].text, "nil:nil:nil:nil"); // docs/tui.md:2905-2906,2928.
+}
+
+fn session_input<'a>(
+    spend: Option<tui::ext::Spend<'a>>,
+    branch: Option<tui::ext::BranchName<'a>>,
+    waiting: Option<usize>,
+    tools_down: &'a std::collections::BTreeSet<String>,
+) -> Input<'a> {
+    Input::Card(tui::ext::Card::Session(session_card(
+        Some("/w"),
+        branch,
+        Some("m"),
+        spend,
+        None,
+        waiting,
+        tools_down,
+    )))
+}
+
+#[test]
+fn a_session_card_renderer_reads_the_full_spend() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('card:session',{timeout=100,render=function(input) return {{{text=input.spend.cost .. '|' .. input.spend.tokens.input .. '|' .. input.spend.tokens.output .. '|' .. input.spend.tokens.cache_read .. '|' .. input.spend.tokens.cache_write.ephemeral_1h .. '|' .. input.spend.subscription_cost .. '|' .. tostring(input.flat)}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let tools_down = std::collections::BTreeSet::new();
+    let spend = usage(Some(4.12));
+    let Decision::Draw { lines, .. } = render_slot(
+        &*renderer,
+        &ctx(None),
+        "card:session",
+        &session_input(
+            Some(tui::ext::Spend::Status(&spend)),
+            Some(tui::ext::BranchName::Named("main")),
+            Some(2),
+            &tools_down,
+        ),
+    ) else {
+        panic!("a session card draws")
+    };
+    // docs/tui.md:2923: cost with tokens and subscription_cost.
+    assert_eq!(lines[0][0].text, "4.12|100|20|300|400|1.5|false"); // docs/tui.md:2923.
+}
+
+#[test]
+fn a_session_card_renderer_reads_the_attached_fallback_cost_alone() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('card:session',{timeout=100,render=function(input) return {{{text=input.spend.cost .. ':' .. tostring(input.spend.tokens)}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let tools_down = std::collections::BTreeSet::new();
+    let Decision::Draw { lines, .. } = render_slot(
+        &*renderer,
+        &ctx(None),
+        "card:session",
+        &session_input(
+            Some(tui::ext::Spend::Attached { cost: 4.12 }),
+            Some(tui::ext::BranchName::Detached),
+            None,
+            &tools_down,
+        ),
+    ) else {
+        panic!("a session card draws")
+    };
+    // docs/tui.md:2923: attached spend falls back to cost alone.
+    assert_eq!(lines[0][0].text, "4.12:nil"); // docs/tui.md:2923.
+}
+
+#[test]
+fn a_session_card_renderer_sees_absent_spend_branch_and_keys_as_nil() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('card:session',{timeout=100,render=function(input) return {{{text=tostring(input.spend) .. ':' .. tostring(input.branch) .. ':' .. tostring(input.budget) .. ':' .. tostring(input.waiting)}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let tools_down = std::collections::BTreeSet::new();
+    let Decision::Draw { lines, .. } = render_slot(
+        &*renderer,
+        &ctx(None),
+        "card:session",
+        &session_input(None, None, None, &tools_down),
+    ) else {
+        panic!("a session card draws")
+    };
+    // docs/tui.md:2919,2923-2924,2928,2754: absent keys are nil, never null.
+    assert_eq!(lines[0][0].text, "nil:nil:nil:nil"); // docs/tui.md:2754.
+}
+
+#[test]
+fn a_session_card_renderer_reads_a_costless_status_spend() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('card:session',{timeout=100,render=function(input) return {{{text=tostring(input.spend.cost) .. ':' .. input.spend.tokens.input .. ':' .. input.spend.subscription_cost}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let tools_down = std::collections::BTreeSet::new();
+    let spend = usage(None);
+    let Decision::Draw { lines, .. } = render_slot(
+        &*renderer,
+        &ctx(None),
+        "card:session",
+        &session_input(
+            Some(tui::ext::Spend::Status(&spend)),
+            Some(tui::ext::BranchName::Named("main")),
+            None,
+            &tools_down,
+        ),
+    ) else {
+        panic!("a session card draws")
+    };
+    // docs/tui.md:2923: a costless status spend still carries tokens.
+    assert_eq!(lines[0][0].text, "nil:100:1.5"); // docs/tui.md:2923.
+}
+
+#[test]
+fn a_changed_files_card_renderer_reads_files_in_ranked_order() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('card:changed_files',{timeout=100,render=function(input) return {{{text=input.files[1].path .. '|' .. input.files[1].added .. '|' .. input.files[1].removed .. '|' .. input.files[2].path .. '|' .. tostring(input.flat)}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let files = [
+        tui::ext::ChangedFile {
+            path: "b.rs",
+            added: 1,
+            removed: 2,
+        },
+        tui::ext::ChangedFile {
+            path: "a.rs",
+            added: 3,
+            removed: 4,
+        },
+    ];
+    let card = Input::Card(tui::ext::Card::ChangedFiles(tui::ext::ChangedFiles {
+        files: &files,
+        flat: false,
+    }));
+    let Decision::Draw { lines, .. } =
+        render_slot(&*renderer, &ctx(None), "card:changed_files", &card)
+    else {
+        panic!("a changed-files card draws")
+    };
+    // docs/tui.md:2934: files in the built-in ranked order.
+    assert_eq!(lines[0][0].text, "b.rs|1|2|a.rs|false"); // docs/tui.md:2934.
+}
+
+fn delegate(
+    job_id: &'static str,
+    outcome: Option<contract::events::Outcome>,
+    ended: Option<u64>,
+) -> tui::ext::Delegate<'static> {
+    tui::ext::Delegate {
+        job_id,
+        description: "review the diff",
+        harness: "fiber",
+        model: "m",
+        calls: 14,
+        step: Some("read app.rs"),
+        started: Some(1720000000000),
+        outcome,
+        ended,
+    }
+}
+
+#[test]
+fn a_delegates_card_renderer_reads_running_then_finished() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('card:delegates',{timeout=100,render=function(input) local running = input.delegates[1] local done = input.delegates[2] return {{{text=running.job_id .. '|' .. running.description .. '|' .. running.harness .. '|' .. running.model .. '|' .. running.calls .. '|' .. running.step .. '|' .. running.started .. '|' .. tostring(running.outcome) .. '|' .. tostring(running.ended) .. '|' .. done.job_id .. '|' .. done.outcome .. '|' .. done.ended}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let card = Input::Card(tui::ext::Card::Delegates(tui::ext::DelegatesCard {
+        delegates: vec![
+            delegate("3", None, None),
+            delegate(
+                "4",
+                Some(contract::events::Outcome::Completed),
+                Some(1720000001000),
+            ),
+        ],
+        flat: false,
+    }));
+    let Decision::Draw { lines, .. } = render_slot(&*renderer, &ctx(None), "card:delegates", &card)
+    else {
+        panic!("a delegates card draws")
+    };
+    // docs/tui.md:2940: running in start order first, then finished in start order.
+    assert_eq!(
+        lines[0][0].text,
+        "3|review the diff|fiber|m|14|read app.rs|1720000000000|nil|nil|4|completed|1720000001000"
+    ); // docs/tui.md:2940.
+}
+
+#[test]
+fn a_jobs_card_renderer_reads_jobs_and_open() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('card:jobs',{timeout=100,render=function(input) return {{{text=input.jobs[1].job_id .. '|' .. input.jobs[1].description .. '|' .. tostring(input.open)}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let jobs = [tui::ext::Job {
+        job_id: "7",
+        description: "bench",
+    }];
+    for open in [false, true] {
+        let card = Input::Card(tui::ext::Card::Jobs(tui::ext::JobsCard {
+            jobs: &jobs,
+            open,
+            flat: false,
+        }));
+        let Decision::Draw { lines, .. } = render_slot(&*renderer, &ctx(None), "card:jobs", &card)
+        else {
+            panic!("a jobs card draws")
+        };
+        // docs/tui.md:2946-2947: jobs with job_id and description, plus open.
+        assert_eq!(lines[0][0].text, format!("7|bench|{open}")); // docs/tui.md:2946-2947.
+    }
+}
+
+#[test]
+fn a_widget_card_renderer_reads_all_lines_and_open() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('card:e/w',{timeout=100,render=function(input) return {{{text=input.extension .. '|' .. input.widget .. '|' .. input.lines[1] .. '|' .. input.lines[2] .. '|' .. tostring(input.open)}}} end})",
+        ),
+    );
+    let (renderer, _) = loader.load();
+    let lines = ["one".to_owned(), "two".to_owned()];
+    let card = Input::Card(tui::ext::Card::Widget(tui::ext::WidgetCard {
+        extension: "e",
+        widget: "w",
+        lines: &lines,
+        open: true,
+        flat: false,
+    }));
+    let Decision::Draw { lines, .. } = render_slot(&*renderer, &ctx(None), "card:e/w", &card)
+    else {
+        panic!("a widget card draws")
+    };
+    // docs/tui.md:2953-2956: extension, widget, lines and open.
+    assert_eq!(lines[0][0].text, "e|w|one|two|true"); // docs/tui.md:2953-2956.
+}
+
+#[test]
+fn an_animated_part4_call_carries_frame_and_now() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('ledger_row',{timeout=100,animate={interval_ms=500},render=function(input) return {{{text=input.frame .. ':' .. input.now}}} end})",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty());
+    let (decision, continues) = render_frame(&*renderer, &ctx(None), 3, NOW);
+    let Decision::Draw { lines, .. } = decision else {
+        panic!("frame 3 draws")
+    };
+    // docs/tui.md:3121: an animated call carries frame and now.
+    assert_eq!(lines[0][0].text, format!("3:{NOW}")); // docs/tui.md:3121.
+    assert!(continues);
+}
+
+#[test]
+fn an_animated_chrome_call_carries_frame_and_now() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.slot('working_line',{timeout=100,animate={interval_ms=500},render=function(input) return {{{text=input.frame .. ':' .. input.now .. ':' .. tostring(input.started)}}} end})",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty());
+    let (decision, continues) = renderer.render_animated(
+        &ctx(None),
+        "working_line",
+        &working_input(Some(7), false),
+        80,
+        3,
+        NOW,
+        &|_, _| vec![],
+    );
+    let Decision::Draw { lines, .. } = decision else {
+        panic!("an animated working line draws")
+    };
+    // docs/tui.md:3121: a chrome animated call carries frame and now.
+    assert_eq!(lines[0][0].text, format!("3:{NOW}:7")); // docs/tui.md:3121.
+    assert!(continues);
 }

@@ -34,6 +34,33 @@ type FailKey = (PageKey, String, u64, String, Option<String>);
 type EntryKey = (FailKey, Option<usize>, u16);
 type AnimEntries = HashMap<AnimKey, HashMap<u16, Arc<Vec<FittedLine>>>>;
 
+/// One closed draw's stored result: the fitted lines at the frame they
+/// drew, with whether the item continues. A later paint at the same
+/// frame promotes the result instead of calling again.
+#[derive(Debug, Clone)]
+struct ClosedLines {
+    /// The fitted lines the closed draw stored.
+    lines: Arc<Vec<FittedLine>>,
+    /// The frame the lines drew at: the stored frame, or 0.
+    frame: u64,
+    /// Whether the draw keeps animating.
+    continues: bool,
+}
+
+/// Which draw the shared animated path takes: the frame decides, a
+/// count forces the closed path, or a paint promotes a stored closed
+/// result on the open path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DrawMode {
+    /// The frame decides: open paint advances, a closed frame draws
+    /// still.
+    Auto,
+    /// A count forces the closed path, even in an open frame.
+    Count,
+    /// A paint promotes a stored closed result at the drawn frame.
+    Paint,
+}
+
 #[derive(Debug, Default)]
 struct Pending {
     failures: Vec<(PageKey, String, Failure)>,
@@ -44,6 +71,10 @@ struct Pending {
 #[derive(Debug)]
 pub(crate) struct Cache {
     entries: Mutex<HashMap<EntryKey, Arc<Vec<FittedLine>>>>,
+    /// Closed draws by input and width, with the frame they drew at and
+    /// whether they continue: a count's frame-0 result, promoted by the
+    /// paint that follows it at the same width.
+    closed: Mutex<HashMap<EntryKey, ClosedLines>>,
     failed: Arc<Mutex<HashSet<FailKey>>>,
     pending: Arc<Mutex<Pending>>,
     owner: AtomicBool,
@@ -96,6 +127,7 @@ impl Default for Cache {
     fn default() -> Self {
         Self {
             entries: Mutex::default(),
+            closed: Mutex::default(),
             failed: Arc::default(),
             pending: Arc::default(),
             owner: AtomicBool::new(true),
@@ -109,6 +141,7 @@ impl Cache {
     pub(crate) fn scratch_sharing_pending(&self) -> Self {
         Self {
             entries: Mutex::default(),
+            closed: Mutex::default(),
             failed: Arc::clone(&self.failed),
             pending: Arc::clone(&self.pending),
             owner: AtomicBool::new(false),
@@ -230,7 +263,15 @@ impl Cache {
         let key = AnimKey::new(page.clone(), slot, input_key, extension, half.clone());
         let fail_key = (page, slot.to_owned(), input_key, extension.to_owned(), half);
         self.lines_animated_with_key(
-            key, fail_key, None, extension, input_flat, width, interval, call,
+            key,
+            fail_key,
+            None,
+            extension,
+            input_flat,
+            width,
+            interval,
+            DrawMode::Auto,
+            call,
         )
     }
 
@@ -278,6 +319,76 @@ impl Cache {
             input_flat,
             width,
             interval,
+            DrawMode::Auto,
+            call,
+        )
+    }
+
+    /// A chrome count's lines for one draw: the shared closed path even
+    /// in an open frame, caching the drawn frame with whether it
+    /// continues, without animation state or mark. The paint that
+    /// follows promotes the stored result at the same width.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the key, draw flags and callback describe one animated row"
+    )]
+    pub(crate) fn lines_animated_closed(
+        &self,
+        page: PageKey,
+        slot: &str,
+        extension: &str,
+        half: Option<String>,
+        input: &Input<'_>,
+        width: u16,
+        call: impl FnOnce(u64) -> (Decision, bool),
+    ) -> Option<Arc<Vec<FittedLine>>> {
+        let (input_key, input_flat) = key_of(input, slot);
+        let key = AnimKey::new(page.clone(), slot, input_key, extension, half.clone());
+        let fail_key = (page, slot.to_owned(), input_key, extension.to_owned(), half);
+        self.lines_animated_with_key(
+            key,
+            fail_key,
+            None,
+            extension,
+            input_flat,
+            width,
+            // A count never schedules: the closed path ignores it.
+            Duration::ZERO,
+            DrawMode::Count,
+            call,
+        )
+    }
+
+    /// A chrome paint's lines for one draw: the open animated path, with
+    /// a stored closed result at the drawn frame promoted instead of
+    /// calling again. Later paints advance only painted items.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the key, draw flags and callback describe one animated row"
+    )]
+    pub(crate) fn lines_animated_paint(
+        &self,
+        page: PageKey,
+        slot: &str,
+        extension: &str,
+        half: Option<String>,
+        input: &Input<'_>,
+        width: u16,
+        interval: Duration,
+        call: impl FnOnce(u64) -> (Decision, bool),
+    ) -> Option<Arc<Vec<FittedLine>>> {
+        let (input_key, input_flat) = key_of(input, slot);
+        let key = AnimKey::new(page.clone(), slot, input_key, extension, half.clone());
+        let fail_key = (page, slot.to_owned(), input_key, extension.to_owned(), half);
+        self.lines_animated_with_key(
+            key,
+            fail_key,
+            None,
+            extension,
+            input_flat,
+            width,
+            interval,
+            DrawMode::Paint,
             call,
         )
     }
@@ -299,16 +410,23 @@ impl Cache {
         flat: bool,
         width: u16,
         interval: Duration,
+        mode: DrawMode,
         call: impl FnOnce(u64) -> (Decision, bool),
     ) -> Option<Arc<Vec<FittedLine>>> {
         if support::lock(&self.failed).contains(&fail_key) {
             return None;
+        }
+        if mode == DrawMode::Count {
+            // A count takes the closed path even in an open frame: no
+            // animation state and no mark.
+            return self.closed_draw(&fail_key, notice_id, &key, extension, flat, width, call);
         }
         let frame = support::lock(&self.anim).at;
         let Some((now, frame_reduced)) = frame else {
             return self.closed_draw(&fail_key, notice_id, &key, extension, flat, width, call);
         };
         let reduced = frame_reduced;
+        let promote = mode == DrawMode::Paint;
         let (state, painted) = {
             let anim = support::lock(&self.anim);
             (
@@ -318,10 +436,19 @@ impl Cache {
         };
         match state {
             None => {
-                // A fresh item starts at frame 0, still under reduced.
+                // A fresh item starts at frame 0, still under reduced. A
+                // paint promotes the count's stored frame-0 result at
+                // the same width instead of calling again.
                 let frame = 0;
-                let drawn =
-                    self.draw_frame(&fail_key, &key, extension, flat, width, frame, call)?;
+                let promoted = promote
+                    .then(|| self.promoted(&(fail_key.clone(), notice_id, width), frame))
+                    .flatten();
+                let drawn = match promoted {
+                    Some((lines, continues)) => (lines, continues),
+                    None => {
+                        self.draw_frame(&fail_key, &key, extension, flat, width, frame, call)?
+                    }
+                };
                 // A fresh draw that declines to continue stays stopped,
                 // even under reduced motion, so leaving reduced motion
                 // recalls nothing.
@@ -388,7 +515,16 @@ impl Cache {
                 let due = now
                     .checked_duration_since(state.last)
                     .is_some_and(|elapsed| elapsed >= effective_interval(state.interval));
-                if state.kind == AnimKind::Active && painted && due {
+                // A width miss with a stored closed result at the drawn
+                // frame promotes it instead of advancing: the count and
+                // paint of one frame must agree, even when the item is due.
+                if promote
+                    && self.stored_entry(&key, width).is_none()
+                    && let Some((lines, _)) =
+                        self.promoted(&(fail_key.clone(), notice_id, width), state.frame)
+                {
+                    self.store_frame(&key, width, lines, false)
+                } else if state.kind == AnimKind::Active && painted && due {
                     let frame = state.frame.saturating_add(1);
                     let drawn =
                         self.draw_frame(&fail_key, &key, extension, flat, width, frame, call)?;
@@ -411,16 +547,24 @@ impl Cache {
                 } else {
                     // A width change or an early re-render reuses the
                     // stored frame with the counter, last, markers and
-                    // due unchanged.
-                    let drawn = self.draw_frame(
-                        &fail_key,
-                        &key,
-                        extension,
-                        flat,
-                        width,
-                        state.frame,
-                        call,
-                    )?;
+                    // due unchanged. A paint promotes the count's stored
+                    // result at the same width and frame instead of
+                    // calling again.
+                    let promoted = promote
+                        .then(|| self.promoted(&(fail_key.clone(), notice_id, width), state.frame))
+                        .flatten();
+                    let drawn = match promoted {
+                        Some((lines, continues)) => (lines, continues),
+                        None => self.draw_frame(
+                            &fail_key,
+                            &key,
+                            extension,
+                            flat,
+                            width,
+                            state.frame,
+                            call,
+                        )?,
+                    };
                     self.store_frame(&key, width, drawn.0, false)
                 }
             }
@@ -459,18 +603,31 @@ impl Cache {
         {
             return Some(hit);
         }
-        let (lines, _) = self.draw_frame(
-            fail_key,
-            key,
-            extension,
-            flat,
-            width,
-            frame.unwrap_or(0),
-            call,
-        )?;
+        if let Some((lines, _)) = self.promoted(&entry, frame.unwrap_or(0)) {
+            return Some(Arc::new(lines));
+        }
+        let drawn_at = frame.unwrap_or(0);
+        let (lines, continues) =
+            self.draw_frame(fail_key, key, extension, flat, width, drawn_at, call)?;
         let lines = Arc::new(lines);
-        support::lock(&self.entries).insert(entry, Arc::clone(&lines));
+        support::lock(&self.entries).insert(entry.clone(), Arc::clone(&lines));
+        support::lock(&self.closed).insert(
+            entry,
+            ClosedLines {
+                lines: Arc::clone(&lines),
+                frame: drawn_at,
+                continues,
+            },
+        );
         Some(lines)
+    }
+
+    /// A stored closed draw for `entry` at `frame`: its lines with
+    /// whether the item continues. A paint promotes the result instead
+    /// of calling again; any other frame draws fresh.
+    fn promoted(&self, entry: &EntryKey, frame: u64) -> Option<(Vec<FittedLine>, bool)> {
+        let closed = support::lock(&self.closed).get(entry).cloned()?;
+        (closed.frame == frame).then(|| ((*closed.lines).clone(), closed.continues))
     }
 
     /// The animation dues of items painted this frame: each active one's
@@ -672,6 +829,7 @@ impl Cache {
     /// Only displayed owners may prune shared failures for this exact page.
     pub(crate) fn drop_page(&self, page: PageKey) {
         support::lock(&self.entries).retain(|key, _| key.0.0 != page);
+        support::lock(&self.closed).retain(|key, _| key.0.0 != page);
         // Animation counters, entries and pending recounts drop with the
         // page: a returning item restarts at frame 0.
         let mut anim = support::lock(&self.anim);
@@ -709,6 +867,8 @@ impl Cache {
         drop(anim);
         support::lock(&self.entries)
             .retain(|(_, notice_id, _), _| notice_id.is_none_or(|id| live_ids.contains(&id)));
+        support::lock(&self.closed)
+            .retain(|(_, notice_id, _), _| notice_id.is_none_or(|id| live_ids.contains(&id)));
     }
 
     /// Whether any per-notice store retains `id`: animation state, either
@@ -732,6 +892,7 @@ impl Cache {
         // A width change keeps the frame counter, the last time, the line
         // count and every still and stopped marker: only rendered entries go.
         support::lock(&self.entries).clear();
+        support::lock(&self.closed).clear();
         support::lock(&self.anim).entries.clear();
     }
 
@@ -777,6 +938,10 @@ fn key_of(input: &Input<'_>, slot: &str) -> (u64, bool) {
         Input::HandoffBand(band) => (band.key(slot), band.flat),
         Input::ErrorLine(line) => (line.key(slot), line.flat),
         Input::Notice(notice) => (notice.key(slot), notice.flat),
+        Input::WorkingLine(line) => (line.key(slot), line.flat),
+        Input::SteeringQueue(queue) => (queue.key(slot), queue.flat),
+        Input::StatusRows(rows) => (rows.key(slot), rows.flat),
+        Input::Card(card) => (card.key(slot), card.flat()),
     }
 }
 
