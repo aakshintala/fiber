@@ -1237,9 +1237,9 @@ fn effects_sets_confined_for_an_enabled_linux_sandbox() {
     let sandbox = sandbox_handle_for_test("effects");
     let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
     let confined = effects(&shell, "echo hi");
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     assert!(confined.declared.confined);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     assert!(!confined.declared.confined);
 }
 
@@ -1273,9 +1273,9 @@ fn a_configured_direct_run_shares_the_sandbox_selection() {
     // same selection confines this call, and the driver's own shell stays
     // unconfigured everywhere else.
     let confined = effects(&shell, "echo hi");
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     assert!(confined.declared.confined);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     assert!(!confined.declared.confined);
     let output = shell.run(&args("echo hi"), &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), None);

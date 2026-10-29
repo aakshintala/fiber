@@ -34,7 +34,7 @@ Before a tool call runs, its tool declares that call's **effects**:
 | `executes` | runs a program |
 | `network` | sends or receives outside this machine |
 
-A call also carries whether it ran **confined**, inside the opt-in Linux
+A call also carries whether it ran **confined**, inside the opt-in OS
 sandbox ([Confinement](#confinement)). The log records it
 (`docs/events.md`, "Declared effects").
 
@@ -210,11 +210,13 @@ and
 [permissions: an opt-in OS sandbox, and whether its commands skip the reviewer](https://github.com/aakshintala/fiber/issues/3027);
 those tickets' resolutions hold the rationale and the rejected alternatives.
 
-The opt-in Linux sandbox in #3027 is implemented in the current build. It
-is off by default and confines model-issued shell calls, not a person's own
-driver-shell commands, at the operating-system level under Fiber's own policy:
-Landlock plus seccomp; no srt, no bubblewrap. Calls remain reviewed; this
-slice adds no reviewer fast path. The Linux policy is `docs/sandbox.md`.
+The opt-in OS sandbox is implemented in the current build: #3027 on Linux
+and #3630 on macOS. It is off by default and confines model-issued shell
+calls, not a person's own driver-shell commands, at the
+operating-system level under Fiber's own policy: Landlock plus seccomp on
+Linux with no srt and no bubblewrap, Seatbelt through `sandbox-exec` on
+macOS. Calls remain reviewed; neither slice adds a reviewer fast path. The
+policies are `docs/sandbox.md`.
 
 A shell call runs with the account's full rights when the sandbox is off.
 Everything on this page decides whether a call runs; when the sandbox is

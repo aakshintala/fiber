@@ -1308,9 +1308,10 @@ to session artifacts.
   local socket. Limiting them to the hub's machine would stop no one holding a
   token, since a device token is already a shell on the hub's account and a
   session's shell reaches the local socket; only a shell call that
-  successfully runs confined on Linux cannot reach Fiber's local socket
-  (`docs/sandbox.md`). The Linux sandbox denies all sockets. An
-  unavailable-sandbox fallback retains today's socket access. It would only
+  successfully runs confined cannot reach Fiber's local socket
+  (`docs/sandbox.md`). The sandbox denies all sockets on Linux and on
+  macOS. An unavailable-sandbox fallback retains today's socket access. It
+  would only
   stop a person whose one device is a phone from adding a second. Detection is the control
   instead. Each pairing and each revocation is written to the hub's
   diagnostic log (`docs/state.md`, "What each part holds") and sent to every
