@@ -769,11 +769,10 @@ fn command_loop(
         // before the next piece, so deletes and Purge take effect at that
         // boundary. The wait runs after the writer-chunk guard is released,
         // so a hold never blocks loop output.
-        if runner
-            .current
-            .as_ref()
-            .is_some_and(|active| active.next > 0)
-        {
+        // `current` is `Some` here only after a chunk write: the place
+        // path clears it above, and a fresh item writes its first chunk
+        // in this same pass, so `next > 0` always holds with it.
+        if runner.current.is_some() {
             runner.gate.wait();
         }
     }

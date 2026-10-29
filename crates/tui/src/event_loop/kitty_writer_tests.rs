@@ -810,6 +810,30 @@ fn tty_lock_queued_loop_write_beats_later_writer_chunk() {
     }
 }
 
+/// `loop_write` on a free tty acquires it at once: the wait parks
+/// only behind a writer chunk. A `==` to `!=` mutant parks on a free
+/// tty instead, so the deadline fails the test instead of hanging
+/// the shard.
+#[test]
+fn loop_write_acquires_a_free_tty_without_waiting() {
+    let lock = Arc::new(TtyLock::new());
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("kitty-test-free".to_owned())
+        .spawn({
+            let lock = Arc::clone(&lock);
+            move || {
+                let _guard = lock.loop_write();
+                let _ = done.send(()).ok();
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    match fakes::Deadline::after(DEADLINE).recv(&finished) {
+        Ok(()) => {}
+        Err(error) => panic!("waited {DEADLINE:?} for loop_write on a free tty: {error}"),
+    }
+}
+
 #[test]
 fn kitty_writer_stack_is_one_mib() {
     // The plan names the exact stack: a `<<` to `>>` mutant leaves 0.
