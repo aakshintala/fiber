@@ -1313,6 +1313,137 @@ fn chrome_keys_cover_flat_order_slot_and_spend_shape() {
     assert_eq!(calls.get(), before + 4, "quota presence and order miss");
 }
 
+#[test]
+fn chrome_spend_cost_is_in_the_key() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let tools_down = std::collections::BTreeSet::new();
+    let low = usage(Some(4.12));
+    let high = usage(Some(4.13));
+    let cheap = Input::Card(Card::Session(session_card(
+        Some("m"),
+        Some(Spend::Status(&low)),
+        &tools_down,
+        None,
+    )));
+    let dear = Input::Card(Card::Session(session_card(
+        Some("m"),
+        Some(Spend::Status(&high)),
+        &tools_down,
+        None,
+    )));
+    let first = draw_counted(&cache, "card:session", &cheap, 20, &calls, drawn("hi"))
+        .expect("a cached line");
+    assert!(text_of(&first).starts_with("hi"));
+    assert!(draw_counted(&cache, "card:session", &cheap, 20, &calls, drawn("hi")).is_some());
+    assert_eq!(calls.get(), 1, "same spend hits");
+    assert!(draw_counted(&cache, "card:session", &dear, 20, &calls, drawn("hi")).is_some());
+    // Only the session spend's cost differs, so a miss proves the key
+    // carries the float (`docs/tui.md`, "How a TUI extension runs").
+    assert_eq!(calls.get(), 2, "a changed cost misses");
+}
+
+#[test]
+fn chrome_delegate_outcomes_key_apart() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let ended = Some(1720000001000);
+    for outcome in [
+        contract::events::Outcome::Completed,
+        contract::events::Outcome::Failed,
+        contract::events::Outcome::Cancelled,
+    ] {
+        let card = Input::Card(Card::Delegates(DelegatesCard {
+            delegates: vec![delegate("3", Some(outcome), ended)],
+            flat: false,
+        }));
+        assert!(
+            draw_counted(&cache, "card:delegates", &card, 20, &calls, drawn("hi")).is_some(),
+            "{outcome:?} draws"
+        );
+    }
+    // Every field but the outcome matches, and every outcome is `Some`,
+    // so three misses prove the key reaches the variant
+    // (`docs/tui.md`, "How a TUI extension runs").
+    assert_eq!(calls.get(), 3, "each outcome misses");
+}
+
+#[test]
+fn chrome_card_flat_drops_the_style_through_the_closed_path() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let lines = vec!["hi".to_owned()];
+    let card = |flat: bool| {
+        Input::Card(Card::Widget(WidgetCard {
+            extension: "e",
+            widget: "w",
+            lines: &lines,
+            open: false,
+            flat,
+        }))
+    };
+    let styled = vec![vec![RawSpan {
+        text: "hi".to_owned(),
+        fg: Some("accent".to_owned()),
+        ..RawSpan::default()
+    }]];
+    let draw = |flat: bool| {
+        cache
+            .lines_animated_closed(
+                page(0),
+                "card:e/w",
+                "test",
+                None,
+                &card(flat),
+                20,
+                |frame| {
+                    calls.set(calls.get() + 1);
+                    assert_eq!(frame, 0);
+                    (
+                        Decision::Draw {
+                            extension: "test".into(),
+                            lines: styled.clone(),
+                        },
+                        true,
+                    )
+                },
+            )
+            .expect("a fitted line")
+    };
+    let vivid = draw(false);
+    assert!(text_of(&vivid).starts_with("hi"));
+    assert_ne!(
+        vivid
+            .first()
+            .expect("one line")
+            .line
+            .spans
+            .first()
+            .expect("one span")
+            .style,
+        ratatui::style::Style::default(),
+        "a styled span keeps its style"
+    );
+    let flat = draw(true);
+    assert!(text_of(&flat).starts_with("hi"));
+    // (`docs/tui.md`, "The slots": `flat` is true when the terminal drops every style.)
+    assert_eq!(
+        flat.first()
+            .expect("one line")
+            .line
+            .spans
+            .first()
+            .expect("one span")
+            .style,
+        ratatui::style::Style::default(),
+        "flat drops the style"
+    );
+    assert_eq!(calls.get(), 2, "flat misses");
+}
+
 /// Draws `row` at `width`, counting renderer calls.
 fn draw_counted<'a>(
     cache: &Cache,
@@ -2702,6 +2833,74 @@ fn a_due_paint_promotes_its_count_at_a_new_width() {
         .expect("painted frame 1 at the new width");
     assert_eq!(calls.get(), 3, "a due paint promotes the due count");
     assert_eq!(text_of(&painted_wide), text_of(&counted_wide));
+}
+
+#[test]
+fn dropping_a_page_drops_its_closed_draw_but_promotes_the_other() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let frames = std::cell::RefCell::new(Vec::new());
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let draw = |frame: u64| {
+        calls.set(calls.get() + 1);
+        frames.borrow_mut().push(frame);
+        (
+            Decision::Draw {
+                extension: "test".into(),
+                lines: vec![vec![raw(&format!("f{frame}"))]],
+            },
+            true,
+        )
+    };
+    let counted = |at: usize| {
+        cache
+            .lines_animated_closed(page(at), "ledger_row", "test", None, &row, 20, draw)
+            .expect("a counted frame")
+    };
+    let first = counted(0);
+    let second = counted(1);
+    assert!(text_of(&first).starts_with("f0"), "{first:?}");
+    assert!(text_of(&second).starts_with("f0"), "{second:?}");
+    assert_eq!(calls.get(), 2);
+    cache.drop_page(page(0));
+    // The cache lives with the paging window and is dropped with its
+    // pages (`docs/tui.md`, "How a TUI extension runs"): the dropped
+    // page paints again from frame 0 with a call ...
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let repainted = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("a repainted frame 0");
+    assert!(text_of(&repainted).starts_with("f0"), "{repainted:?}");
+    assert_eq!(calls.get(), 3, "the dropped page calls again");
+    // ... while the kept page promotes its counted frame without one:
+    // one call per cache miss, none on a hit.
+    let promoted = cache
+        .lines_animated_paint(
+            page(1),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("a promoted frame 0");
+    assert_eq!(text_of(&promoted), text_of(&second));
+    assert_eq!(calls.get(), 3, "the kept page promotes without a call");
+    assert_eq!(frames.borrow().clone(), vec![0, 0, 0]);
 }
 
 /// Paints animated notice `id` holding `text` at `width` on `cache`,
