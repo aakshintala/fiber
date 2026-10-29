@@ -17,16 +17,44 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use fakes::{ProviderServer, Response};
-use serde_json::json;
-use support::kinds_without_attention as kinds;
+use serde_json::{Value, json};
 use support::*;
 
-/// The complete, ordered stream from the subscription through `fiber_exited`:
-/// the replayed start, the full retried turn, the `close` acknowledgement
-/// and the exit. The ephemeral `clients` line is checked apart: the hub sends
-/// a `start`'s first prompt once the `full` `subscribe` is accepted or 1
-/// second after its answer, so on a loaded machine `clients` can fall after
-/// the loop's first lines, and only its presence is pinned.
+/// The verbatim count rule the multiset calls cite
+/// (`docs/testing.md`, "Event streams").
+const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+
+/// Verbatim lifecycle sources for the session-boundary assertions below.
+const SESSION_FIRST_DOC: &str =
+    "docs/events.md:339: Durable. The first line of every session's log.";
+const PROCESS_START_DOC: &str = "docs/events.md:285-286: Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line.";
+const PROCESS_END_DOC: &str =
+    "docs/events.md:296: Durable. The last line a process writes for a session.";
+
+/// The durable log of session `id`, wherever its project is.
+fn session_log(setup: &Setup, id: &str) -> Vec<Value> {
+    let path = std::fs::read_dir(setup.home().join("projects"))
+        .unwrap()
+        .map(|entry| {
+            entry
+                .unwrap()
+                .path()
+                .join("sessions")
+                .join(id)
+                .join("events.jsonl")
+        })
+        .find(|log| log.is_file())
+        .expect("the session's log exists");
+    support::complete_lines(&std::fs::read_to_string(path).unwrap())
+}
+
+/// The complete stream from the subscription through `fiber_exited`,
+/// asserted as a set: the replayed start, the full retried turn, the
+/// `close` acknowledgement and the exit. The ephemeral `clients` line is
+/// counted too: the hub sends a `start`'s first prompt once the `full`
+/// `subscribe` is accepted or 1 second after its answer, so on a loaded
+/// machine `clients` can fall after the loop's first lines, and only its
+/// presence is pinned.
 const EXPECTED_KINDS: [&str; 20] = [
     "session_started",
     "fiber_started",
@@ -111,11 +139,16 @@ fn hub_start_with_overrides_runs_the_session_with_them_as_dash_c() {
         .filter(|line| line["kind"] == "clients")
         .count();
     assert_eq!(clients, 1, "{stream:?}");
-    let without_clients: Vec<&str> = kinds(&stream)
-        .into_iter()
-        .filter(|kind| *kind != "clients")
-        .collect();
-    assert_eq!(without_clients, EXPECTED_KINDS);
+    let mut expected = vec!["clients"];
+    expected.extend(EXPECTED_KINDS);
+    support::assert_kinds_multiset(&stream, &expected, &["clients"], None, COUNT_DOC);
+    support::assert_session_process_boundaries(
+        &session_log(&setup, &id),
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
     guard.wait_gone();
     drop(client);
     hub.lock()

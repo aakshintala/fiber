@@ -24,9 +24,20 @@ use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::{
     Deadline, HubProc, SessionGuard, Setup, Socket, assert_one_continued_log, complete_lines,
-    connect_hub, function_call, git, kinds, kinds_without_attention, recv_reply, run_to_exit,
-    session_dir, stream, subscribe, until,
+    connect_hub, function_call, git, recv_reply, run_to_exit, session_dir, stream, subscribe,
+    until,
 };
+
+/// The verbatim count rule the multiset calls cite
+/// (`docs/testing.md`, "Event streams").
+const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+
+/// Verbatim lifecycle sources for the session-boundary assertions below.
+const SESSION_FIRST_DOC: &str =
+    "docs/events.md:339: Durable. The first line of every session's log.";
+const PROCESS_START_DOC: &str = "docs/events.md:285-286: Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line.";
+const PROCESS_END_DOC: &str =
+    "docs/events.md:296: Durable. The last line a process writes for a session.";
 
 /// A repository with one commit on `main` at `dir`.
 fn init_repo(deadline: Deadline, dir: &Path) {
@@ -98,19 +109,40 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
         .filter(|line| line["kind"] == "clients")
         .count();
     assert_eq!(clients, 1, "{stream:?}");
-    let without_clients: Vec<&str> = kinds(&stream)
-        .into_iter()
-        .filter(|kind| *kind != "clients")
-        .collect();
-    assert_eq!(
-        without_clients,
-        [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "command_accepted",
-            "fiber_exited",
-        ]
+    // The stream as a set, with the one `clients` line counted: the hub
+    // writes it when the `full` subscribe attaches, which races the
+    // session's own `fiber_started` and `extensions_loaded`.
+    let mut expected = vec!["clients"];
+    expected.extend([
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "command_accepted",
+        "fiber_exited",
+    ]);
+    support::assert_kinds_multiset(&stream, &expected, &["clients"], None, COUNT_DOC);
+    // The hub capture above is complete through the exit. The session ran
+    // in a new worktree, so its durable log lives under that project: walk
+    // for it as the hub timer test does.
+    let continued: Vec<Value> = fs::read_dir(setup.home().join("projects"))
+        .unwrap()
+        .map(|entry| {
+            entry
+                .unwrap()
+                .path()
+                .join("sessions")
+                .join(&id)
+                .join("events.jsonl")
+        })
+        .find(|log| log.is_file())
+        .map(|log| support::complete_lines(&fs::read_to_string(log).unwrap()))
+        .expect("the session's log exists");
+    support::assert_session_process_boundaries(
+        &continued,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
     );
     guard.wait_gone();
     // Clean, so both are gone after exit.
@@ -301,37 +333,37 @@ fn a_hub_resume_makes_a_removed_worktree_again_and_keeps_it_when_dirty() {
         .filter(|line| line["kind"] == "clients")
         .count();
     assert_eq!(clients, 1, "{stream:?}");
-    let without: Vec<&str> = kinds_without_attention(&stream)
-        .into_iter()
-        .filter(|kind| *kind != "clients")
-        .collect();
-    assert_eq!(
-        without,
-        [
-            "fiber_started",
-            "extensions_loaded",
-            "preamble_built",
-            "turn_started",
-            "command_accepted",
-            "step_started",
-            "assistant_message_started",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "command_accepted",
-            "fiber_exited",
-        ]
-    );
+    // The resumed stream as a set, with the one `clients` line
+    // counted: the capture starts at the resumed process, so the
+    // lifecycle edges are asserted on the complete durable log.
+    let mut expected = vec!["clients"];
+    expected.extend([
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "turn_started",
+        "command_accepted",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "command_accepted",
+        "fiber_exited",
+    ]);
+    support::assert_kinds_multiset(&stream, &expected, &["clients"], None, COUNT_DOC);
+    // The hub capture above starts at the resumed process, so the
+    // lifecycle edges are asserted on the complete continued log below.
     repo_guard.wait_gone();
     // Dirty, so the path and branch are kept.
     assert!(first.path.exists());
@@ -347,6 +379,13 @@ fn a_hub_resume_makes_a_removed_worktree_again_and_keeps_it_when_dirty() {
     // One continued log, and the first line's bytes are unchanged.
     let (lines, now_first) = session_log(&setup, &first.id);
     assert_one_continued_log(&lines, 2);
+    support::assert_session_process_boundaries(
+        &lines,
+        &first.id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
     assert_eq!(now_first, first_line);
     let log = setup.hub_log();
     assert!(!log.contains(&first.repository), "{log}");
@@ -394,18 +433,26 @@ fn a_hub_resume_removes_a_clean_recreated_worktree_at_the_end() {
         .filter(|line| line["kind"] == "clients")
         .count();
     assert_eq!(clients, 1, "{stream:?}");
-    let without: Vec<&str> = kinds_without_attention(&stream)
-        .into_iter()
-        .filter(|kind| *kind != "clients")
-        .collect();
-    assert_eq!(
-        without,
-        [
-            "fiber_started",
-            "extensions_loaded",
-            "command_accepted",
-            "fiber_exited",
-        ]
+    // The resumed stream as a set, with the one `clients` line
+    // counted: the capture starts at the resumed process, so the
+    // lifecycle edges are asserted on the complete durable log.
+    let mut expected = vec!["clients"];
+    expected.extend([
+        "fiber_started",
+        "extensions_loaded",
+        "command_accepted",
+        "fiber_exited",
+    ]);
+    support::assert_kinds_multiset(&stream, &expected, &["clients"], None, COUNT_DOC);
+    // The hub capture above starts at the resumed process, so the
+    // lifecycle edges are asserted on the complete durable log.
+    let (continued, _) = session_log(&setup, &first.id);
+    support::assert_session_process_boundaries(
+        &continued,
+        &first.id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
     );
     repo_guard.wait_gone();
     // Clean, so the path, the branch and the lock are gone again: a stray
@@ -488,37 +535,35 @@ fn a_hub_resume_of_a_kept_worktree_runs_in_it_and_never_removes_it() {
         .filter(|line| line["kind"] == "clients")
         .count();
     assert_eq!(clients, 1, "{stream:?}");
-    let without: Vec<&str> = kinds_without_attention(&stream)
-        .into_iter()
-        .filter(|kind| *kind != "clients")
-        .collect();
-    assert_eq!(
-        without,
-        [
-            "fiber_started",
-            "extensions_loaded",
-            "preamble_built",
-            "turn_started",
-            "command_accepted",
-            "step_started",
-            "assistant_message_started",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "command_accepted",
-            "fiber_exited",
-        ]
-    );
+    // The resumed stream as a set, with the one `clients` line
+    // counted: the capture starts at the resumed process, so the
+    // lifecycle edges are asserted on the complete durable log.
+    let mut expected = vec!["clients"];
+    expected.extend([
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "turn_started",
+        "command_accepted",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "command_accepted",
+        "fiber_exited",
+    ]);
+    support::assert_kinds_multiset(&stream, &expected, &["clients"], None, COUNT_DOC);
     path_guard.wait_gone();
     // A resumed process of a kept worktree never removes it.
     assert!(first.path.exists());
@@ -531,7 +576,14 @@ fn a_hub_resume_of_a_kept_worktree_runs_in_it_and_never_removes_it() {
         .is_empty(),
         "the branch is kept"
     );
-    let (_, now_first) = session_log(&setup, &first.id);
+    let (continued, now_first) = session_log(&setup, &first.id);
+    support::assert_session_process_boundaries(
+        &continued,
+        &first.id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
     assert_eq!(now_first, first_line);
     drop(client);
     hub.lock()
@@ -571,7 +623,7 @@ fn a_hub_resume_with_the_repository_gone_is_io_failed_naming_it_and_changes_noth
     let stream = until(&client, "command_rejected", |line| {
         line["kind"] == "command_rejected"
     });
-    assert_eq!(kinds(&stream), ["command_rejected"]);
+    support::assert_kinds_multiset(&stream, &["command_rejected"], &[], None, COUNT_DOC);
     let rejected = stream.last().unwrap();
     assert_eq!(rejected["payload"]["command_id"], "c_sub");
     assert_eq!(rejected["payload"]["code"], "io_failed");
