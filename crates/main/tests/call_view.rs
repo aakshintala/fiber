@@ -610,39 +610,30 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     // PageUp twice: the ups page past the held tail window, so the tail
     // pages drop and the window re-anchors to the held head segment,
     // whose last output rows are 036 and 037 above the end marker. The
-    // refetches behind that window fill the rows below without moving its
-    // top again, so waiting for 36 proves both ups and the refetch settle
-    // landed, in order.
+    // marker appears only once its edge pages are held, so it signals the
+    // refetch that fills this segment has landed.
     run.write(b"\x1b[5~");
     run.write(b"\x1b[5~");
+    let marker = "── end of the model's view ──";
     let grid = run.wait_screen("the settled paged-up view", |grid| {
-        first_output_number(grid) == Some(36)
+        first_output_number(grid) == Some(36) && grid.rows.iter().any(|row| row.contains(marker))
     });
     let settled = first_output_number(&grid).expect("the settled first output number");
     // The marker row breaks the output-number/top-row one-to-one. Aim
-    // the wheel at the view's fixed interior instead of clicking a
-    // grid-derived output row: page replies may still fill the view, but
-    // cannot change which surface owns this wheel coordinate.
-    run.write(WHEEL_DOWN);
-    let grid = run.wait_screen("the view past the end marker", |grid| {
-        first_output_number(grid).is_some_and(|first| first > settled)
-    });
-    let start = first_output_number(&grid).expect("the view moved past the end marker");
-    // Three wheel-downs over the view move its first visible row nine
-    // rows: each step shifts the viewport three displayed rows, as
-    // promised in `docs/tui.md:576`. The
-    // conversation stays hidden, so the Esc check below is the one
-    // that proves its scroll is unchanged.
+    // the wheel at the view's fixed interior, not a grid-derived row;
+    // page replies cannot change which surface owns this coordinate.
+    // Three steps move nine displayed rows, eight of them numbered output
+    // rows because the first step passes the end marker.
     run.write(WHEEL_DOWN);
     run.write(WHEEL_DOWN);
     run.write(WHEEL_DOWN);
     let grid = run.wait_screen("the wheeled view", |grid| {
-        first_output_number(grid) == Some(start + 9)
+        first_output_number(grid) == Some(settled + 8)
     });
     assert_eq!(
         first_output_number(&grid),
-        Some(start + 9),
-        "three wheel steps moved the view's first visible row nine rows"
+        Some(settled + 8),
+        "three wheel steps moved nine displayed rows past the end marker"
     );
     // Esc returns to the opened call with its row still focused: the
     // conversation's scroll is exactly where the wheel found it.
