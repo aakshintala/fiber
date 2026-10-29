@@ -1770,14 +1770,16 @@ pub(crate) fn assert_promised_order(
         !starts.is_empty(),
         "no run for job {job_id}: no `job_started` in {mine:?} ({doc})",
     );
+    // Each run holds its start through its matching completion: the first
+    // `job_completed` at or after the start. Runs of one job never
+    // overlap, so that completion closes the run that opened it.
     let mut runs: Vec<&[&str]> = Vec::with_capacity(starts.len());
-    for (n, start) in starts.iter().enumerate() {
-        let limit = starts.get(n + 1).copied().unwrap_or(mine.len());
-        let end = mine[*start..limit]
+    for start in &starts {
+        let end = mine[*start..]
             .iter()
             .position(|kind| *kind == "job_completed")
             .map(|at| start + at + 1)
-            .unwrap_or(limit);
+            .unwrap_or(mine.len());
         runs.push(&mine[*start..end]);
     }
     for (n, run) in runs.iter().enumerate() {
