@@ -1576,7 +1576,7 @@ impl SessionExtensions {
             }
             if self
                 .runtime
-                .push_watcher(&watcher.watcher, arg.clone())
+                .push_watcher(&watcher.watcher, arg.clone(), None)
                 .is_some()
                 && let Some(seq) = seq
             {
@@ -1643,7 +1643,7 @@ impl SessionExtensions {
                 }
                 let _ = self
                     .runtime
-                    .push_watcher(&watcher.watcher, envelope.clone());
+                    .push_watcher(&watcher.watcher, envelope.clone(), None);
             }
         }
     }
@@ -1789,7 +1789,7 @@ impl SessionExtensions {
                 } else {
                     watcher_arg(event)
                 };
-                match self.runtime.drain_watcher(&watcher.watcher, arg) {
+                match self.runtime.drain_watcher(&watcher.watcher, arg, None) {
                     Ok(()) => {}
                     Err(Error::Stopped { .. }) => {
                         stopped = true;
@@ -2057,7 +2057,7 @@ impl SessionExtensions {
                 };
                 handle.process = Some(crate::lua_provider::ProcessProvider {
                     runtime: runtime.clone(),
-                    runs: entry.runs.clone(),
+                    runs: Mutex::new(entry.runs.clone()),
                     owner: Arc::clone(&live.owner),
                 });
                 self.process_providers.insert(
@@ -2166,7 +2166,7 @@ impl Hooks for SessionExtensions {
             );
             let returned = self
                 .runtime
-                .hook_with(&entry.hook, arg, |value| {
+                .hook_with(&entry.hook, arg, None, |value| {
                     let change = decode(&name, value)?;
                     let changed = change.content.is_some()
                         || change.details.is_some()

@@ -4,8 +4,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
+use crate::lua::CredentialFor;
 use crate::oauth::LoginSlot;
 use crate::{Error, LuaProvider};
 
@@ -60,10 +61,34 @@ impl LuaProvider {
         method: LoginMethod,
     ) -> Result<LoggedIn, Error> {
         if self.process.is_some() {
-            return Err(self.bad_return(
-                "credential",
-                "process login requires trusted credential scope, which is unavailable".into(),
-            ));
+            // A process provider's login `credential()` runs behind the
+            // session's runtime, carrying the slot as its scope: the
+            // refresh under it fills the slot, never a file. The
+            // arguments match what `provider_login` builds for Lua.
+            let slot: LoginSlot = Arc::new(Mutex::new(None));
+            let login = match method {
+                LoginMethod::Browser => "browser",
+                LoginMethod::Device => "device",
+            };
+            let mut arg = Map::from_iter([
+                (
+                    "credential".to_owned(),
+                    Value::String(credential.to_owned()),
+                ),
+                ("login".to_owned(), Value::String(login.to_owned())),
+            ]);
+            if let Some(label) = label {
+                arg.insert("label".to_owned(), Value::String(label.to_owned()));
+            }
+            let inner: Result<LoggedIn, Error> = (|| {
+                let returned = self.call(
+                    "credential",
+                    Value::Object(arg),
+                    Some(CredentialFor::Login(Arc::clone(&slot))),
+                )?;
+                self.finish_login(&returned, &slot)
+            })();
+            return inner.map_err(Self::refresh_error);
         }
         self.extension.ensure_provider(&self.name)?;
         let slot: LoginSlot = Arc::new(Mutex::new(None));
@@ -75,33 +100,37 @@ impl LuaProvider {
                 method,
                 Arc::clone(&slot),
             )?;
-            // The stored value comes from the slot the login's refresh
-            // filled, never from the return: until its `held:write` ran,
-            // `credential()` stored nothing.
-            let stored = super::lock(&slot).clone().ok_or_else(|| {
-                self.bad_return(
-                    "credential",
-                    "credential() stored nothing during a login".into(),
-                )
-            })?;
-            self.check_token(&stored)?;
-            // The login's email rides the return, for `fiber login` alone;
-            // every other call ignores it (`docs/model-routing.md`,
-            // "Logging in").
-            let email = match returned.get("email") {
-                Some(Value::String(email)) if !email.is_empty() => Some(email.clone()),
-                // An empty address names no label, so it is no email.
-                None | Some(Value::Null) | Some(Value::String(_)) => None,
-                _ => {
-                    return Err(self.bad_return("credential", "`email` is not a string".into()));
-                }
-            };
-            Ok(LoggedIn {
-                stored: StoredLogin(stored),
-                email,
-            })
+            self.finish_login(&returned, &slot)
         })();
         inner.map_err(Self::refresh_error)
+    }
+
+    /// Finishes a login from what `credential()` returned and what its
+    /// refresh stored: the stored value comes from the slot the login's
+    /// refresh filled, never from the return: until its `held:write` ran,
+    /// `credential()` stored nothing. The login's email rides the return,
+    /// for `fiber login` alone; every other call ignores it
+    /// (`docs/model-routing.md`, "Logging in").
+    fn finish_login(&self, returned: &Value, slot: &LoginSlot) -> Result<LoggedIn, Error> {
+        let stored = super::lock(slot).clone().ok_or_else(|| {
+            self.bad_return(
+                "credential",
+                "credential() stored nothing during a login".into(),
+            )
+        })?;
+        self.check_token(&stored)?;
+        let email = match returned.get("email") {
+            Some(Value::String(email)) if !email.is_empty() => Some(email.clone()),
+            // An empty address names no label, so it is no email.
+            None | Some(Value::Null) | Some(Value::String(_)) => None,
+            _ => {
+                return Err(self.bad_return("credential", "`email` is not a string".into()));
+            }
+        };
+        Ok(LoggedIn {
+            stored: StoredLogin(stored),
+            email,
+        })
     }
 
     /// Stops this provider's extension: a call waiting in it returns an

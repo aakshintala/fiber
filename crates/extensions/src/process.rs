@@ -333,6 +333,20 @@ impl ProcessExtension {
         &self.shared.runtime
     }
 
+    /// The provider's current handler references, by function: what a
+    /// restart's fresh registrations install under the bumped generation.
+    /// Empty when the provider registered nothing under this generation.
+    pub(crate) fn provider_runs(
+        &self,
+        provider: &str,
+    ) -> std::collections::BTreeMap<String, FunctionRef> {
+        support::lock(&self.shared.registry)
+            .providers()
+            .get(provider)
+            .map(|entry| entry.runs.clone())
+            .unwrap_or_default()
+    }
+
     /// Dispatches the stream item behind `func`: hooks, watcher
     /// deliveries and commands, one at a time in arrival order. Resolves
     /// the reference first, so a stale generation never runs.

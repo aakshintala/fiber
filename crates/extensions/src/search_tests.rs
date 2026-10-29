@@ -271,7 +271,7 @@ fn process_search_receives_the_query_and_returns_its_results() {
             "fiber.test/proc",
             CommandId("register-search".to_owned()),
             "run",
-            Arc::new(move |args, _cancel| {
+            Arc::new(move |args, _scope, _cancel| {
                 *received.lock().unwrap() = Some(args);
                 Ok(Some(serde_json::json!([
                     {"title": "Rust", "url": "https://rust-lang.org", "snippet": "Language"}

@@ -561,17 +561,16 @@ pub(crate) fn run_request(
             extension: shared.owner.clone(),
         });
     }
-    // No dispatcher behind the package seam runs a provider's
-    // `credential()`: dispatches carry no credential scope, and a
-    // `host.oauth.refresh` under them is refused. The session sets the
-    // scope when it dispatches provider functions.
+    // Only the dispatcher that runs a provider's `credential()` sets a
+    // scope: every other dispatch carries `None`, and a
+    // `host.oauth.refresh` under it is refused.
     let minted = shared.table.mint(
         dispatch.kind,
         &shared.owner,
         dispatch.ran_by,
         deadline,
         dispatch.state_call,
-        None,
+        dispatch.credential,
     );
     let id = minted.id;
     if dispatch.kind == RequestKind::Stream {
@@ -666,6 +665,9 @@ pub(crate) struct Dispatch {
     /// The hook state transaction the call's writes join, when the
     /// request is a hook delivery.
     pub state_call: Option<u64>,
+    /// What a `host.oauth.refresh` under this request refreshes: set
+    /// only by the dispatcher that runs a provider's `credential()`.
+    pub credential: Option<crate::lua::CredentialFor>,
 }
 
 impl Dispatch {
@@ -689,6 +691,7 @@ impl Dispatch {
             args: wire_args(args),
             timeout,
             state_call,
+            credential: None,
         }
     }
 
@@ -706,6 +709,7 @@ impl Dispatch {
             args: wire_args(args),
             timeout,
             state_call: None,
+            credential: None,
         }
     }
 }

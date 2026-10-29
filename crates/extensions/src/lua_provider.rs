@@ -95,8 +95,20 @@ pub struct LuaProvider {
 /// The admitted process registration and the owner keeping its callbacks alive.
 pub(crate) struct ProcessProvider {
     pub(crate) runtime: crate::runtime::Runtime,
-    pub(crate) runs: BTreeMap<String, crate::runtime::FunctionRef>,
+    /// The provider's handler references, refreshed from the owner
+    /// before every call, so a restart's re-registrations replace stale
+    /// generations instead of failing them.
+    pub(crate) runs: Mutex<BTreeMap<String, crate::runtime::FunctionRef>>,
     pub(crate) owner: Arc<crate::process::ProcessExtension>,
+}
+
+impl ProcessProvider {
+    /// Refreshes the handler references from the owner's current
+    /// registrations: after a restart the fresh generation replaces the
+    /// stale one, and a dropped registration resolves no longer.
+    pub(crate) fn rebind_runs(&self, provider_name: &str) {
+        *lock(&self.runs) = self.owner.provider_runs(provider_name);
+    }
 }
 
 /// A test's hold on a woken caller: `arrived` fires after the wake, and the
@@ -267,7 +279,7 @@ impl LuaProvider {
     /// The functions `fiber.provider` registered for this provider, sorted.
     pub fn functions(&self) -> Result<Vec<String>, Error> {
         match &self.process {
-            Some(process) => Ok(process.runs.keys().cloned().collect()),
+            Some(process) => Ok(lock(&process.runs).keys().cloned().collect()),
             None => self.extension.provider_functions(&self.name),
         }
     }
@@ -278,19 +290,14 @@ impl LuaProvider {
     }
 
     /// Signs this provider's requests: `None` when it registered neither
-    /// `credential` nor `sign`.
+    /// `credential` nor `sign`. A process provider signs through its own
+    /// dispatch, which carries the pair's scope to the refresh.
     pub fn signer(
         self: &Arc<Self>,
         pair: CredentialPair,
     ) -> Result<Option<Arc<dyn Signer>>, Error> {
         let functions = self.functions()?;
         let credential = functions.iter().any(|f| f == "credential");
-        if self.process.is_some() && credential {
-            return Err(self.bad_return(
-                "credential",
-                "process credential scope is unavailable".into(),
-            ));
-        }
         let sign = functions.iter().any(|f| f == "sign");
         if !credential && !sign {
             return Ok(None);
@@ -420,7 +427,7 @@ impl LuaProvider {
     /// carrying the argument's key is redacted: no failure text from
     /// `list_models` holds the key (`docs/errors.md`, "The shape").
     pub fn list_models(&self, arg: &ModelsArg) -> Result<(Vec<ModelData>, Value), Error> {
-        let returned = self.call("models", arg.to_value());
+        let returned = self.call("models", arg.to_value(), None);
         let redact = |message: &str| match &arg.key {
             Some(key) => redact_values(message, std::slice::from_ref(key)),
             None => message.to_owned(),
@@ -461,12 +468,6 @@ impl LuaProvider {
     // token expires. Report a failed refresh as a notice if tokens are seen
     // expiring mid-session.
     pub fn token(self: &Arc<Self>, pair: &CredentialPair) -> Result<Secret, Error> {
-        if self.process.is_some() {
-            return Err(self.bad_return(
-                "credential",
-                "process credential scope is unavailable".into(),
-            ));
-        }
         Ok(self.current(pair)?.secret)
     }
 
@@ -572,12 +573,6 @@ impl LuaProvider {
     /// Fetches the cached credential as its callback's token, expiry and headers.
     /// The returned JSON contains secrets and is intended for the case runner.
     pub fn credential_value(self: &Arc<Self>, pair: &CredentialPair) -> Result<Value, Error> {
-        if self.process.is_some() {
-            return Err(self.bad_return(
-                "credential",
-                "process credential scope is unavailable".into(),
-            ));
-        }
         let token = self.current(pair)?;
         let headers: Map<String, Value> = token
             .headers
@@ -594,11 +589,6 @@ impl LuaProvider {
         self: &Arc<Self>,
         pair: &CredentialPair,
     ) -> Result<Secret, signing::Error> {
-        if self.process.is_some() {
-            return Err(signing::Error::Failed(
-                "process credential scope is unavailable".into(),
-            ));
-        }
         Ok(self.signing_token(pair)?.secret)
     }
 
@@ -684,6 +674,18 @@ impl LuaProvider {
     /// empty table, and an empty table encoded as `[]`, mean no headers, as
     /// for `sign()`.
     fn fetch_token(&self, pair: &CredentialPair) -> Result<Token, Error> {
+        if self.process.is_some() {
+            // A process provider's `credential()` runs behind the
+            // session's runtime, carrying the pair as its scope: the
+            // refresh under it resolves this pair's file, never an
+            // identity inferred from the wire arguments.
+            let returned = self.call(
+                "credential",
+                json!({"label": pair.label, "credential": pair.credential}),
+                Some(crate::lua::CredentialFor::Stored(pair.clone())),
+            )?;
+            return self.check_token(&returned).map_err(Self::refresh_error);
+        }
         self.extension.ensure_provider(&self.name)?;
         let inner: Result<Token, Error> = (|| {
             let returned = self.extension.provider_credential(&self.name, pair)?;
@@ -750,14 +752,29 @@ impl LuaProvider {
         }
     }
 
-    pub(crate) fn call(&self, function: &'static str, arg: Value) -> Result<Value, Error> {
+    pub(crate) fn call(
+        &self,
+        function: &'static str,
+        arg: Value,
+        scope: Option<crate::lua::CredentialFor>,
+    ) -> Result<Value, Error> {
         if let Some(process) = &self.process {
-            let Some(run) = process.runs.get(function) else {
+            // A `credential()` call without the pair's scope fails
+            // closed: the registry never invents a pair from the wire
+            // arguments.
+            if function == "credential" && scope.is_none() {
+                return Err(self.bad_return(
+                    "credential",
+                    "process credential scope is unavailable".into(),
+                ));
+            }
+            process.rebind_runs(&self.name);
+            let Some(run) = lock(&process.runs).get(function).cloned() else {
                 return Err(self.bad_return(function, "function is not registered".into()));
             };
             return process
                 .runtime
-                .tool_run(run, arg, &support::cancel::Token::new())
+                .tool_run(&run, arg, scope, &support::cancel::Token::new())
                 .map(|value| value.unwrap_or(Value::Null));
         }
         self.extension.provider_call(&self.name, function, arg)
@@ -798,7 +815,7 @@ impl Signer for LuaProvider {
             "time": time,
         });
         let returned = self
-            .call("sign", arg)
+            .call("sign", arg, None)
             .map_err(|e| signing::Error::Failed(detail(&e)))?;
         let not_headers = || {
             signing::Error::NotHeaders(

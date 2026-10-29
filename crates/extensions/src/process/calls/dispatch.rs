@@ -433,7 +433,9 @@ impl ProcessExtension {
     }
 
     /// The invoker the registry resolves one installed key through: sends
-    /// the request and waits for its answer, as `run_request` does.
+    /// the request and waits for its answer, as `run_request` does. The
+    /// invocation's scope rides into the dispatch, so only the
+    /// dispatcher that runs a provider's `credential()` refreshes.
     fn invoke_for(
         &self,
         registration: contract::CommandId,
@@ -443,21 +445,26 @@ impl ProcessExtension {
         timeout: Duration,
     ) -> crate::runtime::ProcessInvoke {
         let shared = Arc::clone(&self.shared);
-        Arc::new(move |args: Value, caller: &dyn contract::tool::Cancel| {
-            requests::run_request(
-                &shared,
-                requests::Dispatch {
-                    kind,
-                    registration: registration.clone(),
-                    key: key.clone(),
-                    ran_by: ran_by.clone(),
-                    args: requests::wire_args(args),
-                    timeout,
-                    state_call: None,
-                },
-                caller,
-            )
-        })
+        Arc::new(
+            move |args: Value,
+                  scope: Option<crate::lua::CredentialFor>,
+                  caller: &dyn contract::tool::Cancel| {
+                requests::run_request(
+                    &shared,
+                    requests::Dispatch {
+                        kind,
+                        registration: registration.clone(),
+                        key: key.clone(),
+                        ran_by: ran_by.clone(),
+                        args: requests::wire_args(args),
+                        timeout,
+                        state_call: None,
+                        credential: scope,
+                    },
+                    caller,
+                )
+            },
+        )
     }
 }
 

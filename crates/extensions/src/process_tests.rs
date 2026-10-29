@@ -1550,7 +1550,7 @@ fn positional_references_share_the_generation_triple() {
     let positional = registry.set_handler(
         &CommandId("c1".to_owned()),
         "1",
-        Shared::new(|_, _| Ok(Some(json!({"positional": true})))),
+        Shared::new(|_, _, _| Ok(Some(json!({"positional": true})))),
     );
     assert_eq!(positional.command, CommandId("c1".to_owned()));
     assert_eq!(positional.key, "1");
@@ -1752,6 +1752,60 @@ impl Harness {
             .to_string(),
         )
         .unwrap();
+        Self::start_with_services_on_manifest(script, args, state, drive, dir, services, recorded)
+    }
+
+    /// Starts as [`Harness::start`], with `extra` merged over the base
+    /// manifest, so the registry admits provider registrations the base
+    /// manifest forbids.
+    fn start_with_manifest_extra(
+        script: &str,
+        args: &[&str],
+        state: serde_json::Map<String, Value>,
+        drive: Option<Arc<dyn contract::extension::Drive>>,
+        extra: Value,
+    ) -> Self {
+        let recorded = FakeServices::new();
+        let dir = fakes::TempDir::new("fiber-process-owner");
+        let mut manifest = json!({
+            "name": "fiber.test/proc",
+            "version": "v1.2.3",
+            "fiber": "0.1.0",
+            "api": 1,
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            manifest[key] = value.clone();
+        }
+        std::fs::write(dir.path().join("extension.json"), manifest.to_string()).unwrap();
+        Self::start_with_services_on_manifest(
+            script,
+            args,
+            state,
+            drive,
+            dir,
+            {
+                let recorded = Arc::clone(&recorded);
+                move |_, _, _| -> Arc<dyn super::process::context::ProcessHostServices> { recorded }
+            },
+            recorded,
+        )
+    }
+
+    /// Starts on the manifest in `dir`, sharing the rest of the launch
+    /// with [`Harness::start_with_services`].
+    fn start_with_services_on_manifest(
+        script: &str,
+        args: &[&str],
+        state: serde_json::Map<String, Value>,
+        drive: Option<Arc<dyn contract::extension::Drive>>,
+        dir: fakes::TempDir,
+        services: impl FnOnce(
+            Arc<super::host::state::ExtensionState>,
+            Arc<dyn contract::clock::Clock>,
+            Runtime,
+        ) -> Arc<dyn super::process::context::ProcessHostServices>,
+        recorded: Arc<FakeServices>,
+    ) -> Self {
         let manifest = config::read_manifest(dir.path()).unwrap();
         let clock = fakes::clock::FakeClock::new();
         let runtime = Runtime::new(clock.clone());
@@ -2471,7 +2525,7 @@ fn a_cancelled_dispatch_drops_its_late_reply() {
         {"send": {"id": "c1", "command": "call", "args": {"call": "fiber.hook", "args": ["turn_end", wire_hook_spec()]}}},
         {"send": {"id": "c2", "command": "ready"}},
         {"repeat": {"count": 2, "actions": [{"read": {}}]}},
-        {"read": {"as": "request"}},
+        {"read_until": {"path": "kind", "equals": "extension_request", "as": "request"}},
         {"hold": {"release_on": "line", "release_line": {"test_release": true}}},
         {"send": {"id": "p-late", "command": "reply", "args": {"request_id": {"$ref": "request.payload.request_id"}, "result": "late"}}},
         {"read": {}},
@@ -2911,7 +2965,7 @@ fn a_tool_request_anchors_its_inner_call() {
         {"send": {"id": "c1", "command": "call", "args": {"call": "fiber.tool", "args": ["t", wire_tool_spec()]}}},
         {"send": {"id": "ready", "command": "ready"}},
         {"repeat": {"count": 2, "actions": [{"read": {}}]}},
-        {"read": {"as": "request"}},
+        {"read_until": {"path": "kind", "equals": "extension_request", "as": "request"}},
         {"send": {"id": "c2", "command": "call", "args": {"call": "host.tool", "args": ["inner", {}], "request_id": {"$ref": "request.payload.request_id"}}}},
         {"read": {"as": "answer"}},
         {"send": {"id": "p-r", "command": "reply", "args": {"request_id": {"$ref": "request.payload.request_id"}, "result": 7}}},
@@ -5470,6 +5524,310 @@ fn retire_at_the_seam_stales_the_in_flight_request() {
     assert_eq!(outcome.expect("the hook answers"), Some(json!("done")));
     kill_peer(&owner);
     assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// A provider `credential()` dispatched with a stored scope refreshes
+/// that pair: the nested function sees the scope pair's stored value,
+/// and the token comes back, whatever the wire arguments claim. Reading
+/// the pair from the wire arguments instead would answer the wrong
+/// file's value.
+#[test]
+fn credential_dispatch_carries_the_invocation_scope() {
+    let fresh = json!({"token": "tok-fresh", "expires_at": FRESH_EXPIRES});
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c-reg", "command": "call", "args": {"call": "fiber.provider", "args": ["testprov", {"credential": {"timeout": 60000, "run": true}}]}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c-reg"}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read_until": {"path": "kind", "equals": "extension_request", "as": "request"}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [true], "request_id": {"$ref": "request.payload.request_id"}}}},
+        {"read": {"as": "nested", "expect": {"payload": {"registration": "c1", "key": "1"}}}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "nested.payload.request_id"}, "result": {"token": "tok-fresh", "expires_at": FRESH_EXPIRES}}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c1"}},
+        {"send": {"id": "p2", "command": "reply", "args": {"request_id": {"$ref": "request.payload.request_id"}, "result": {"token": "tok-fresh", "expires_at": FRESH_EXPIRES}}}},
+        {"read": {}},
+    ])
+    .to_string();
+    let owner = Harness::start_with_manifest_extra(
+        script,
+        &[],
+        serde_json::Map::new(),
+        None,
+        json!({"providers": {"testprov": []}}),
+    );
+    // The scope pair's stored value is expired, so the refresh runs its
+    // nested function; the wire arguments name a pair with no file.
+    write_pair(owner.workspace(), "testprov", "test", &expired_pair());
+    owner.pump();
+    owner.pump();
+    let provider = process_provider(&owner, "testprov");
+    let pair = crate::lua_provider::CredentialPair {
+        credential: "testprov".to_owned(),
+        label: "test".to_owned(),
+    };
+    let wrong_args = json!({"label": "someone-else", "credential": "someone-else"});
+    let worker = std::thread::spawn(move || {
+        provider.call(
+            "credential",
+            wrong_args,
+            Some(crate::lua::CredentialFor::Stored(pair)),
+        )
+    });
+    owner.pump();
+    owner.pump();
+    owner.pump();
+    let returned = worker
+        .join()
+        .expect("the credential call ends")
+        .expect("a token");
+    assert_eq!(returned, fresh);
+    assert_eq!(
+        read_pair(owner.workspace(), "testprov", "test"),
+        Some(fresh)
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// Two credential calls for different pairs refresh different files:
+/// each invocation's scope stays its own, even when the calls overlap.
+#[test]
+fn concurrent_credential_dispatches_keep_their_own_scope() {
+    // The two requests arrive in thread order, so each token is chosen
+    // from the request's own label: the reply for a request always
+    // carries that request's pair token, whichever arrived first.
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c-reg", "command": "call", "args": {"call": "fiber.provider", "args": ["testprov", {"credential": {"timeout": 60000, "run": true}}]}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c-reg"}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read_until": {"path": "payload.command_id", "equals": "ready"}},
+        {"repeat": {"count": 2, "actions": [{"read": {"append_to": "reqs"}}]}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "host.oauth.refresh", "args": [true], "request_id": {"$ref": "reqs.0.payload.request_id"}}}},
+        {"read": {"as": "nested1", "expect": {"payload": {"registration": "c1", "key": "1"}}}},
+        {"if": {"path": "reqs.0.payload.args.0.label", "equals": "a",
+            "then": [{"repeat_string": {"as": "tok0", "value": "tok-a", "count": 1}}],
+            "else": [{"repeat_string": {"as": "tok0", "value": "tok-b", "count": 1}}]}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "nested1.payload.request_id"}, "result": {"token": {"$ref": "tok0"}, "expires_at": FRESH_EXPIRES}}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c1"}},
+        {"send": {"id": "p2", "command": "reply", "args": {"request_id": {"$ref": "reqs.0.payload.request_id"}, "result": {"token": {"$ref": "tok0"}, "expires_at": FRESH_EXPIRES}}}},
+        {"read": {"expect": {"kind": "command_accepted"}}},
+        {"send": {"id": "c2", "command": "call", "args": {"call": "host.oauth.refresh", "args": [true], "request_id": {"$ref": "reqs.1.payload.request_id"}}}},
+        {"read": {"as": "nested2", "expect": {"payload": {"registration": "c2", "key": "1"}}}},
+        {"if": {"path": "reqs.1.payload.args.0.label", "equals": "a",
+            "then": [{"repeat_string": {"as": "tok1", "value": "tok-a", "count": 1}}],
+            "else": [{"repeat_string": {"as": "tok1", "value": "tok-b", "count": 1}}]}},
+        {"send": {"id": "p3", "command": "reply", "args": {"request_id": {"$ref": "nested2.payload.request_id"}, "result": {"token": {"$ref": "tok1"}, "expires_at": FRESH_EXPIRES}}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c2"}},
+        {"send": {"id": "p4", "command": "reply", "args": {"request_id": {"$ref": "reqs.1.payload.request_id"}, "result": {"token": {"$ref": "tok1"}, "expires_at": FRESH_EXPIRES}}}},
+        {"read": {}},
+    ])
+    .to_string();
+    let owner = Harness::start_with_manifest_extra(
+        script,
+        &[],
+        serde_json::Map::new(),
+        None,
+        json!({"providers": {"testprov": []}}),
+    );
+    write_pair(owner.workspace(), "testprov", "a", &expired_pair());
+    write_pair(owner.workspace(), "testprov", "b", &expired_pair());
+    owner.pump();
+    owner.pump();
+    let worker_a = credential_worker(&owner, "a");
+    let worker_b = credential_worker(&owner, "b");
+    for _ in 0..6 {
+        owner.pump();
+    }
+    let token_a = worker_a.join().expect("call A ends").expect("a token");
+    let token_b = worker_b.join().expect("call B ends").expect("a token");
+    let tokens = [token_a["token"].clone(), token_b["token"].clone()];
+    assert!(
+        tokens.contains(&json!("tok-a")) && tokens.contains(&json!("tok-b")),
+        "each call returns its own pair's token: {tokens:?}"
+    );
+    assert_eq!(
+        read_pair(owner.workspace(), "testprov", "a"),
+        Some(json!({"token": "tok-a", "expires_at": FRESH_EXPIRES}))
+    );
+    assert_eq!(
+        read_pair(owner.workspace(), "testprov", "b"),
+        Some(json!({"token": "tok-b", "expires_at": FRESH_EXPIRES}))
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// Dispatching `credential` with no scope fails closed: the registry
+/// never invents a pair from the wire arguments.
+#[test]
+fn credential_dispatch_without_scope_fails_closed() {
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c-reg", "command": "call", "args": {"call": "fiber.provider", "args": ["testprov", {"credential": {"timeout": 60000, "run": true}}]}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c-reg"}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read": {}},
+    ])
+    .to_string();
+    let owner = Harness::start_with_manifest_extra(
+        script,
+        &[],
+        serde_json::Map::new(),
+        None,
+        json!({"providers": {"testprov": []}}),
+    );
+    owner.pump();
+    owner.pump();
+    let provider = process_provider(&owner, "testprov");
+    let error = provider
+        .call(
+            "credential",
+            json!({"label": "test", "credential": "testprov"}),
+            None,
+        )
+        .expect_err("an unscoped credential dispatch fails");
+    assert!(
+        error
+            .to_string()
+            .contains("process credential scope is unavailable"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// Rebinding after a re-registration swaps stale references for current
+/// ones: the old reference no longer resolves, and a provider bound to
+/// it dispatches through the refreshed one, carrying its scope.
+#[test]
+fn rebound_runs_replace_stale_references() {
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c-reg", "command": "call", "args": {"call": "fiber.provider", "args": ["testprov", {"credential": {"timeout": 60000, "run": true}}]}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c-reg"}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read": {}},
+    ])
+    .to_string();
+    let owner = Harness::start_with_manifest_extra(
+        script,
+        &[],
+        serde_json::Map::new(),
+        None,
+        json!({"providers": {"testprov": []}}),
+    );
+    owner.pump();
+    owner.pump();
+    let stale = owner.extension.provider_runs("testprov");
+    assert_eq!(stale.len(), 1);
+    let stale_run = stale["credential"].clone();
+    // A re-registration bumps the generation, resets the registry as a
+    // restart does, and installs a fresh handler: the bound reference
+    // goes stale.
+    let runtime = owner.extension.runtime().clone();
+    runtime.register_owner("fiber.test/proc", None);
+    support::lock(&owner.registry).restart();
+    let outcome = support::lock(&owner.registry).register(
+        CommandId("c-reg2".to_owned()),
+        "fiber.provider",
+        &[
+            json!("testprov"),
+            json!({"credential": {"timeout": 60000, "run": true}}),
+        ],
+        false,
+    );
+    assert!(matches!(outcome, RegisterOutcome::Accepted), "{outcome:?}");
+    let seen: Arc<Mutex<Option<crate::lua::CredentialFor>>> = Arc::new(Mutex::new(None));
+    let seen_handler = Arc::clone(&seen);
+    support::lock(&owner.registry).set_handler(
+        &CommandId("c-reg2".to_owned()),
+        "credential",
+        Arc::new(
+            move |_args: Value,
+                  scope: Option<crate::lua::CredentialFor>,
+                  _cancel: &dyn contract::tool::Cancel| {
+                *seen_handler.lock().unwrap() = scope;
+                Ok(Some(
+                    json!({"token": "tok-rebound", "expires_at": FRESH_EXPIRES}),
+                ))
+            },
+        ),
+    );
+    assert!(
+        runtime.resolve(&stale_run).is_err(),
+        "the old generation no longer resolves"
+    );
+    // The provider still holds the stale run: the call rebinds and
+    // dispatches through the fresh one.
+    let meta = std::sync::Arc::new(crate::LuaExtension::new(
+        "fiber.test/proc",
+        owner.workspace(),
+        owner.workspace().to_path_buf(),
+        Arc::clone(&owner.clock) as Arc<dyn contract::clock::Clock>,
+    ));
+    let mut provider = crate::LuaProvider::new(meta, "testprov");
+    let handle = std::sync::Arc::get_mut(&mut provider).expect("a unique provider handle");
+    handle.process = Some(crate::lua_provider::ProcessProvider {
+        runtime: runtime.clone(),
+        runs: std::sync::Mutex::new(stale),
+        owner: Arc::clone(&owner.extension),
+    });
+    let pair = crate::lua_provider::CredentialPair {
+        credential: "testprov".to_owned(),
+        label: "test".to_owned(),
+    };
+    let returned = provider
+        .call(
+            "credential",
+            json!({"label": "test", "credential": "testprov"}),
+            Some(crate::lua::CredentialFor::Stored(pair.clone())),
+        )
+        .expect("the rebound call dispatches");
+    assert_eq!(returned["token"], json!("tok-rebound"));
+    assert!(matches!(
+        &*seen.lock().unwrap(),
+        Some(crate::lua::CredentialFor::Stored(seen_pair)) if *seen_pair == pair
+    ));
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// Builds the `testprov` process provider behind the owner's runtime,
+/// as the session fold does.
+fn process_provider(owner: &Harness, name: &str) -> std::sync::Arc<crate::LuaProvider> {
+    let meta = std::sync::Arc::new(crate::LuaExtension::new(
+        "fiber.test/proc",
+        owner.workspace(),
+        owner.workspace().to_path_buf(),
+        Arc::clone(&owner.clock) as Arc<dyn contract::clock::Clock>,
+    ));
+    let mut provider = crate::LuaProvider::new(meta, name);
+    let runs = owner.extension.provider_runs(name);
+    let handle = std::sync::Arc::get_mut(&mut provider).expect("a unique provider handle");
+    handle.process = Some(crate::lua_provider::ProcessProvider {
+        runtime: owner.extension.runtime().clone(),
+        runs: std::sync::Mutex::new(runs),
+        owner: Arc::clone(&owner.extension),
+    });
+    provider
+}
+
+/// Dispatches one `credential()` call for label `label` on a worker, as
+/// a concurrent caller would.
+fn credential_worker(
+    owner: &Harness,
+    label: &str,
+) -> std::thread::JoinHandle<Result<Value, crate::Error>> {
+    let provider = process_provider(owner, "testprov");
+    let pair = crate::lua_provider::CredentialPair {
+        credential: "testprov".to_owned(),
+        label: label.to_owned(),
+    };
+    let args = json!({"label": label, "credential": "testprov"});
+    std::thread::spawn(move || {
+        provider.call(
+            "credential",
+            args,
+            Some(crate::lua::CredentialFor::Stored(pair)),
+        )
+    })
 }
 
 /// Finishing a dead child reaps without signals: the exit is already

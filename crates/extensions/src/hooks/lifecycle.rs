@@ -99,7 +99,7 @@ pub(super) fn before_model_call(
         };
         let returned = session
             .runtime
-            .hook_with(&entry.hook, arg.clone(), |value| {
+            .hook_with(&entry.hook, arg.clone(), None, |value| {
                 decode_additive(&name, BEFORE_MODEL_CALL, "refuse", value)
                     .map(|change| (change, false))
             })
@@ -168,7 +168,7 @@ fn run_additive(
         };
         let returned = session
             .runtime
-            .hook_with(&entry.hook, arg.clone(), |value| {
+            .hook_with(&entry.hook, arg.clone(), None, |value| {
                 let change = decode_additive(&name, point, key, value)?;
                 let changed = change.is_some();
                 Ok((change, changed))
