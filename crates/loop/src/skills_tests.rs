@@ -1419,6 +1419,20 @@ fn a_fiber_home_winner_does_not_stop_the_diversion() {
 }
 
 #[test]
+fn a_fiber_home_only_skill_does_not_divert() {
+    let tree = Tree::new();
+    skill(&tree.home().join("skills"), "review", "review", "My copy.");
+    // Fiber home is no other personal source: the only copy is already
+    // where the import would put it, so nothing diverts.
+    let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
+    let got = already_read(&tree.home(), Some(&tree.person()), &[checked]);
+    assert!(
+        got.is_empty(),
+        "a Fiber-home copy is not already read: {got:?}"
+    );
+}
+
+#[test]
 fn the_first_agents_directory_wins_a_shared_header_name() {
     let tree = Tree::new();
     let first = skill(
