@@ -973,6 +973,31 @@ fn session_card_clears_the_thinking_glyph_when_a_tool_call_starts() {
     insta::assert_snapshot!("session_card_thinking_tool_cleared", screen(&app, 160, 40));
 }
 
+/// Streamed thinking with no thinking level draws no glyph: the flag is
+/// set, but the model row has no level to hang the `∴` on, so the row
+/// stays blank (`docs/tui.md`, "The panel").
+#[test]
+fn session_card_draws_no_glyph_without_a_thinking_level() {
+    use crate::app::panel::Spot;
+    let mut app = attached(160, 40);
+    app.on_line(session_line(
+        "assistant_message_started",
+        serde_json::json!({}),
+    ));
+    app.on_line(session_line(
+        "reasoning_delta",
+        serde_json::json!({"text": "hmm"}),
+    ));
+    assert!(app.panel_state().thinking_now());
+    let drawn = texts(&app, 40);
+    assert!(drawn.iter().all(|row| !row.contains('∴')), "{drawn:?}");
+    let model = rows(&app, 40)
+        .into_iter()
+        .find(|row| row.spot == Some(Spot::Model))
+        .expect("a model row");
+    assert_eq!(model.line.to_string(), "");
+}
+
 #[test]
 fn every_context_card_row_opens_the_context_view() {
     use crate::app::panel::Spot;

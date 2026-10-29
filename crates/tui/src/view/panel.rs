@@ -402,14 +402,20 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
     match model {
         Some(model) => {
             // The model in accent, the thinking level right-aligned in
-            // attention. No `∴`: no thinking-state source is held.
-            // debt: show the `∴` while the model thinks; upgrade trigger: a thinking flag on the panel fold.
+            // attention, with a dim `∴` after it while the model thinks
+            // (`docs/tui.md`, "The panel").
             let line = match panel.thinking() {
-                Some(thinking) => sides(
-                    vec![Span::styled(model.to_owned(), style(Role::Accent))],
-                    Span::styled(thinking.to_owned(), style(Role::Attention)),
-                    text,
-                ),
+                Some(thinking) => {
+                    let mut right = vec![Span::styled(thinking.to_owned(), style(Role::Attention))];
+                    if panel.thinking_now() {
+                        right.push(Span::styled(" ∴", style(Role::Muted)));
+                    }
+                    sides_spans(
+                        vec![Span::styled(model.to_owned(), style(Role::Accent))],
+                        right,
+                        text,
+                    )
+                }
                 None => Line::from(vec![Span::styled(model.to_owned(), style(Role::Accent))]),
             };
             out.push(Row {
@@ -679,7 +685,14 @@ pub(super) fn bar_spans(
 /// columns: at least one space of pad between them, the left cut with
 /// `…` when the two cannot fit (`docs/tui.md`, "The panel").
 fn sides(left: Vec<Span<'static>>, right: Span<'static>, text: usize) -> Line<'static> {
-    let right_w = format::width(&right.content);
+    sides_spans(left, vec![right], text)
+}
+
+/// A row from `left` spans with several `right` spans right-aligned at
+/// `text` columns: at least one space of pad between them, the left cut
+/// with `…` when the two cannot fit (`docs/tui.md`, "The panel").
+fn sides_spans(left: Vec<Span<'static>>, right: Vec<Span<'static>>, text: usize) -> Line<'static> {
+    let right_w: usize = right.iter().map(|span| format::width(&span.content)).sum();
     let room = text.saturating_sub(right_w + 1);
     // `fit_spans` keeps a cell for the `…`, so only rows too long for
     // the room go through it; a row that fits keeps every cell.
@@ -692,7 +705,7 @@ fn sides(left: Vec<Span<'static>>, right: Span<'static>, text: usize) -> Line<'s
     let used: usize = out.iter().map(|span| format::width(&span.content)).sum();
     let pad = text.saturating_sub(used + right_w).max(1);
     out.push(Span::raw(" ".repeat(pad)));
-    out.push(right);
+    out.extend(right);
     Line::from(out)
 }
 
