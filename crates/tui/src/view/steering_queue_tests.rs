@@ -757,17 +757,17 @@ fn draw_queue(app: &App, width: u16, height: u16) -> (String, Vec<crate::mouse::
 fn messages_carry_full_text_images_and_flags_oldest_first() {
     let app = imaged(60, 12);
     let messages = app.steering_messages();
-    // docs/tui.md:2877: the queued messages oldest-first (three fixture rows).
-    assert_eq!(messages.len(), 3); // docs/tui.md:2877: oldest-first messages.
+    // docs/tui.md:2891: the queued messages oldest-first (three fixture rows).
+    assert_eq!(messages.len(), 3); // docs/tui.md:2891: oldest-first messages.
     // The first row keeps its full raw text, newline included: only the
-    // laid rows flatten it. docs/tui.md:2877: oldest-first, with text and flags.
-    assert_eq!(messages[0].text, "first line\nsecond line"); // docs/tui.md:2877.
+    // laid rows flatten it. docs/tui.md:2891: oldest-first, with text and flags.
+    assert_eq!(messages[0].text, "first line\nsecond line"); // docs/tui.md:2891.
     assert!(messages[0].images.is_empty());
     assert!(messages[0].droppable);
     assert!(messages[0].selectable);
     assert!(!messages[0].selected);
-    // The second row carries its image's path and size. docs/tui.md:2877: oldest-first.
-    assert_eq!(messages[1].text, "look"); // docs/tui.md:2877.
+    // The second row carries its image's path and size. docs/tui.md:2891: oldest-first.
+    assert_eq!(messages[1].text, "look"); // docs/tui.md:2891.
     assert!(messages[1].droppable);
     assert!(!messages[1].selectable);
     let image = messages[1].images.first().expect("one image");
@@ -791,8 +791,8 @@ fn an_empty_replacement_hides_heading_rows_and_footer() {
     let fake = std::rc::Rc::new(RecordingRenderer::lines(&[], None));
     app.install_renderer(fake);
     // No rows reserved and none drawn, and no target left behind: the
-    // heading, the rows and the footer all hide. docs/tui.md:2871-2873.
-    assert_eq!(super::count(&app, 80), 0); // docs/tui.md:2872: no lines hides all three.
+    // heading, the rows and the footer all hide. docs/tui.md:2885-2887.
+    assert_eq!(super::count(&app, 80), 0); // docs/tui.md:2886: no lines hides all three.
     let (shown, targets, _) = draw_queue(&app, 80, 24);
     assert!(!shown.contains("Steering"), "{shown}");
     assert!(!shown.contains("use the parser"), "{shown}");
@@ -806,8 +806,8 @@ fn an_empty_replacement_hides_heading_rows_and_footer() {
     // The layout drops the hidden rows: without a renderer the same app
     // reserves four rows more.
     let plain = queued(80, 24);
-    // docs/tui.md:2871-2873: heading, rows and footer (four rows) hide together.
-    assert_eq!(app.below_rows() + 4, plain.below_rows()); // docs/tui.md:2872.
+    // docs/tui.md:2885-2887: heading, rows and footer (four rows) hide together.
+    assert_eq!(app.below_rows() + 4, plain.below_rows()); // docs/tui.md:2886.
     // With no rows at all and no renderer, the builtin reserves nothing
     // either: the heading and footer hide with the rows.
     let mut drained = queued(80, 24);
@@ -816,7 +816,7 @@ fn an_empty_replacement_hides_heading_rows_and_footer() {
         "steering_queue",
         serde_json::json!({"messages": []}),
     ));
-    assert_eq!(super::count(&drained, 80), 0); // docs/tui.md:2879: empty queue draws nothing.
+    assert_eq!(super::count(&drained, 80), 0); // docs/tui.md:2893: empty queue draws nothing.
     let (shown, targets, _) = draw_queue(&drained, 80, 24);
     assert!(!shown.contains("Steering"), "{shown}");
     assert!(
@@ -836,9 +836,9 @@ fn an_empty_replacement_hides_heading_rows_and_footer() {
         Some(std::time::Duration::from_millis(500)),
     ));
     drained.install_renderer(animated.clone());
-    assert_eq!(super::count(&drained, 80), 0); // docs/tui.md:2879: empty queue draws nothing.
-    assert!(animated.inputs.borrow().is_empty()); // docs/tui.md:2879: no renderer runs.
-    assert!(animated.frames.borrow().is_empty()); // docs/tui.md:2879.
+    assert_eq!(super::count(&drained, 80), 0); // docs/tui.md:2893: empty queue draws nothing.
+    assert!(animated.inputs.borrow().is_empty()); // docs/tui.md:2893: no renderer runs.
+    assert!(animated.frames.borrow().is_empty()); // docs/tui.md:2893.
 }
 
 #[test]
@@ -889,7 +889,7 @@ fn an_animated_replacement_records_frame_and_now() {
     app.install_renderer(fake.clone());
     let (shown, _, _) = draw_queue(&app, 80, 24);
     assert!(shown.contains("queued one"), "{shown}");
-    // docs/tui.md:3107: every animated slot carries frame and now.
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:3107.
-    assert_eq!(fake.nows.borrow().clone(), vec![1_000]); // docs/tui.md:3107.
+    // docs/tui.md:3121: every animated slot carries frame and now.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:3121.
+    assert_eq!(fake.nows.borrow().clone(), vec![1_000]); // docs/tui.md:3121.
 }
