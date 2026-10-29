@@ -3737,7 +3737,19 @@ fn macos_confined_background_call_moves_only_after_its_marker() {
         .expect("the shell command classifies");
     assert!(effects.declared.confined);
 
-    let running = start_confined(workspace, "echo hi", true, false, jobs.clone(), sandbox);
+    let ready = Ready::new(&workspace);
+    let command = blocking(ready.path(), "hi", "done");
+    let running = start_confined(
+        workspace.clone(),
+        &command,
+        true,
+        false,
+        jobs.clone(),
+        sandbox,
+    );
+    let pgid = ready.wait(Deadline::after(CHILD_START))[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let receipt = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&running.output) {
         Ok(receipt) => receipt,
         Err(_) => panic!(
@@ -3745,16 +3757,21 @@ fn macos_confined_background_call_moves_only_after_its_marker() {
             fakes::MUST_SUCCEED_WITHIN
         ),
     };
+    assert!(receipt.error.is_none(), "{}", text(&receipt));
     let job = started(&receipt);
-    let ended = jobs
-        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
-        .expect("the job to finish");
-    assert_eq!(ended.status, Outcome::Completed);
-    assert_eq!(job_output(root.path(), &job), "hi\n");
+    assert_eq!(jobs.started(), vec![job.clone()]);
+    assert!(group_alive(pgid));
     assert!(
         !running.recorder.text().contains("FIBER_SANDBOX_CONFINED"),
         "the marker never reaches the caller"
     );
+    release_block(ready.path());
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("the job to finish");
+    assert_eq!(ended.status, Outcome::Completed);
+    assert_eq!(job_output(root.path(), &job), "hi\ndone\n");
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// A quiet confined call hands off right after its marker: with the fake
