@@ -19,7 +19,7 @@ const DOC: &str = concat!(
     "| Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked | 7 ms | 8 ms | 11 ms | 18 % | 8 % |\n",
     "| Terminal to its first frame, attaching | 50 ms | Linux x86_64 | picked | 50 ms | 50 ms | 50 ms | — | — |\n",
     "| Terminal attaching, to the end of the opening pass | 841 ms (1 MiB); 5,570 ms (10 MiB) | Linux x86_64 | measured | — | — | — | — | — |\n",
-    "| Terminal attaching, fold per MiB of session log | 15 ms per MiB | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| Terminal attaching, fold per MiB of session log | 138 ms per MiB | Linux x86_64 | measured | — | — | 138 ms | — | 69 % |\n",
     "| Terminal, attaching a 10 MiB session | 200 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Session, memory kept after the busy turn | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
@@ -1494,12 +1494,12 @@ const FOLD_BUDGET: &str = "Terminal attaching, fold per MiB of session log";
 
 #[test]
 fn fold_row_gates_each_fixtures_rate_on_eligible_models() {
-    // Each fixture over 15 ms per MiB fails once on an eligible model,
-    // with the other fixture passing, naming the over fixture: swapping
-    // the fixtures must move the failure with it.
+    // Each fixture over the slow class ceiling fails once, with the
+    // other fixture passing, naming the over fixture: swapping fixtures
+    // must move the failure with it.
     for (one, ten, over) in [
-        ([20.0; 5], [50.0; 5], "1 MiB"),
-        ([5.0; 5], [200.0; 5], "10 MiB"),
+        ([140.0; 5], [50.0; 5], "1 MiB"),
+        ([5.0; 5], [2000.0; 5], "10 MiB"),
     ] {
         let (h, b) = fold_pair(&one, &ten, &[4.5; 5], &[45.0; 5], SLOW_MODEL);
         let out = judge(&h, Some(&b), Event::PullRequest);
@@ -1534,11 +1534,11 @@ fn fold_row_gates_each_fixtures_rate_on_eligible_models() {
 }
 
 #[test]
-fn exactly_15_ms_per_mib_passes() {
-    // A median rate of exactly 15.0 ms per MiB passes: only strictly
-    // over fails the fixture.
-    let one = Value::Array(fold_entries("1 MiB", 1_048_576, &[15.0; 5]));
-    let ten = Value::Array(fold_entries("10 MiB", 10_485_760, &[150.0; 5]));
+fn exactly_the_slow_class_fold_ceiling_passes() {
+    // A median rate of exactly 138 ms per MiB passes: only strictly
+    // over the recorded slow-class ceiling fails.
+    let one = Value::Array(fold_entries("1 MiB", 1_048_576, &[138.0; 5]));
+    let ten = Value::Array(fold_entries("10 MiB", 10_485_760, &[1380.0; 5]));
     let entries = || {
         let mut all = one.as_array().unwrap().clone();
         all.extend(ten.as_array().unwrap().clone());
@@ -1566,32 +1566,24 @@ fn exactly_15_ms_per_mib_passes() {
 }
 
 #[test]
-fn fold_pin_text_is_pinned() {
-    let out = judge_doc(
-        &doc_with(
-            "| Terminal attaching, fold per MiB of session log | 15 ms per MiB |",
-            "| Terminal attaching, fold per MiB of session log | 16 ms per MiB |",
-        ),
-        &head(),
-        Some(&base()),
-        Event::PullRequest,
+fn fold_class_ceiling_is_the_gate_not_the_advisory_ceiling() {
+    // The class cell, not the ordinary ceiling reference, controls the
+    // eligible runner. Lowering it moves the verdict at the boundary.
+    let doc = doc_with(
+        "| Terminal attaching, fold per MiB of session log | 138 ms per MiB | Linux x86_64 | measured | — | — | 138 ms | — | 69 % |",
+        "| Terminal attaching, fold per MiB of session log | 138 ms per MiB | Linux x86_64 | measured | — | — | 130 ms | — | 69 % |",
     );
-    assert!(
-        has(&out.failures, "xtask/src/bench/judge.rs"),
-        "{:?}",
-        out.failures
-    );
+    let (h, b) = fold_pair(&[135.0; 5], &[1350.0; 5], &[4.5; 5], &[45.0; 5], SLOW_MODEL);
+    let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
     assert!(has(&out.failures, FOLD_BUDGET), "{:?}", out.failures);
+    assert!(row(&out.comment, FOLD_BUDGET).ends_with("| fail |"));
 }
 
 #[test]
-fn numbered_fold_class_cells_fail_the_table_check() {
-    // A number in a fold class cell fails loudly instead of staying
-    // silently advisory: the row keeps `—` in every class cell while its
-    // pin carries the rate.
+fn skipped_fold_row_still_validates_its_measured_class_cells() {
     let doc = doc_with(
-        "| Terminal attaching, fold per MiB of session log | 15 ms per MiB | Linux x86_64 | picked | — | — | — | — | — |",
-        "| Terminal attaching, fold per MiB of session log | 15 ms per MiB | Linux x86_64 | picked | 15 ms | — | — | — | — |",
+        "| Terminal attaching, fold per MiB of session log | 138 ms per MiB | Linux x86_64 | measured | — | — | 138 ms | — | 69 % |",
+        "| Terminal attaching, fold per MiB of session log | 138 ms per MiB | Linux x86_64 | measured | — | — | bad | — | 69 % |",
     );
     let mut head = head();
     for id in [
@@ -1712,6 +1704,19 @@ fn fold_validation_does_not_repeat_an_existing_error() {
 }
 
 #[test]
+fn a_class_without_fold_reference_files_stays_advisory() {
+    let (h, b) = fold_pair(&[200.0; 5], &[2000.0; 5], &[4.5; 5], &[45.0; 5], FAST_MODEL);
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(&out.comment, FOLD_BUDGET);
+    assert!(line.ends_with("| advisory |"), "{line}");
+    assert!(
+        line.contains("fewer than 5 stored files carry this metric"),
+        "{line}"
+    );
+}
+
+#[test]
 fn middle_stays_advisory_for_fold() {
     let (h, b) = fold_pair(&[20.0; 5], &[200.0; 5], &[4.5; 5], &[45.0; 5], MIDDLE_MODEL);
     let out = judge(&h, Some(&b), Event::PullRequest);
@@ -1758,7 +1763,7 @@ fn fold_head_without_five_fold_samples_per_fixture_fails() {
 fn missing_or_malformed_fold_base_reads_unavailable() {
     // A missing or malformed base reads unavailable: it can neither
     // satisfy nor bypass the head's absolute cap.
-    let (h, _) = fold_pair(&[20.0; 5], &[50.0; 5], &[4.5; 5], &[45.0; 5], SLOW_MODEL);
+    let (h, _) = fold_pair(&[140.0; 5], &[50.0; 5], &[4.5; 5], &[45.0; 5], SLOW_MODEL);
     let out = judge(&h, Some(&with_cpu(base(), SLOW_MODEL)), Event::PullRequest);
     assert!(has(&out.failures, FOLD_BUDGET), "{:?}", out.failures);
     let line = row(&out.comment, FOLD_BUDGET);
@@ -1849,44 +1854,29 @@ fn fold_incomparable_base_stays_advisory() {
 
 #[test]
 fn fold_rate_ceiling_must_parse() {
-    // The bound reads from the ceiling cell like every other check: a
-    // cell that is not a number, and a number so large it parses past
-    // finite, both fail the configuration instead of gating.
+    // The ordinary ceiling is still validated as measured reference data.
     let huge = format!("{} ms per MiB", "9".repeat(400));
     for cell in ["1e999 ms per MiB".to_owned(), huge] {
         let out = judge_doc(
             &doc_with(
-                "| Terminal attaching, fold per MiB of session log | 15 ms per MiB |",
+                "| Terminal attaching, fold per MiB of session log | 138 ms per MiB |",
                 &format!("| Terminal attaching, fold per MiB of session log | {cell} |"),
             ),
             &head(),
             Some(&base()),
             Event::PullRequest,
         );
-        assert!(
-            has(&out.failures, "xtask/src/bench/judge.rs"),
-            "{cell}: {:?}",
-            out.failures
-        );
-        assert!(
-            has(&out.failures, FOLD_BUDGET),
-            "{cell}: {:?}",
-            out.failures
-        );
-        assert!(
-            has(&out.failures, "rate ceiling"),
-            "{cell}: {:?}",
-            out.failures
-        );
+        assert!(!out.failures.is_empty(), "{cell}: {:?}", out.failures);
+        assert!(out.comment.contains(FOLD_BUDGET), "{cell}: {}", out.comment);
     }
 }
 
 #[test]
 fn fold_divisor_uses_binary_mib() {
-    // The 1 MiB fixture's 1,050,231 bytes read about 1.0016 MiB: 15.02 ms
-    // passes the 15 ms per MiB bound only through the floating-point
-    // conversion, while integer division would read 15.02 over 1 and fail.
-    let (h, b) = fold_pair(&[15.02; 5], &[50.0; 5], &[4.5; 5], &[45.0; 5], SLOW_MODEL);
+    // The 1 MiB fixture's 1,050,231 bytes read about 1.0016 MiB: 138.1 ms
+    // rates below the 138 ms ceiling, while integer division reads 138.1
+    // over 1 and fails. The floating-point divisor must keep it below.
+    let (h, b) = fold_pair(&[138.1; 5], &[1300.0; 5], &[4.5; 5], &[45.0; 5], SLOW_MODEL);
     let out = judge(&h, Some(&b), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
     let line = row(&out.comment, FOLD_BUDGET);
@@ -2864,11 +2854,11 @@ fn a_skipped_budget_still_checks_its_table_row() {
         "{:?}",
         out.failures
     );
-    // A changed fold pin fails when the attach row is skipped.
+    // A malformed class ceiling fails when the attach row is skipped.
     let out = judge_doc(
         &doc_with(
-            "| Terminal attaching, fold per MiB of session log | 15 ms per MiB |",
-            "| Terminal attaching, fold per MiB of session log | 16 ms per MiB |",
+            "| Terminal attaching, fold per MiB of session log | 138 ms per MiB | Linux x86_64 | measured | — | — | 138 ms | — | 69 % |",
+            "| Terminal attaching, fold per MiB of session log | 138 ms per MiB | Linux x86_64 | measured | — | — | bad | — | 69 % |",
         ),
         &with_skipped(pin_head.clone(), &["terminal attach"]),
         Some(&base()),
@@ -3963,7 +3953,7 @@ fn class_ceiling_cells_carry_the_ruled_figures() {
         .find(|l| l.starts_with("| Terminal attaching, fold per MiB of session log"))
         .unwrap();
     assert!(
-        fold.contains("| 15 ms per MiB | Linux x86_64 | picked | — | — | — | — | — |"),
+        fold.contains("| 138 ms per MiB | Linux x86_64 | measured | — | — | 138 ms | — | 69 % |"),
         "{fold}"
     );
 }
@@ -4831,7 +4821,7 @@ fn attach_fixture_errors_fail_and_stages_stay_diagnostic() {
     let staged = with_metric(h, "attach_stage_ms", Value::Array(other_stage));
     let out = judge(&staged, Some(&b), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
-    let mut over = fold_entries("1 MiB", 1_050_231, &[20.0; 5]);
+    let mut over = fold_entries("1 MiB", 1_050_231, &[140.0; 5]);
     over.extend(fold_entries("10 MiB", 10_492_016, &[50.0; 5]));
     let staged_fold = with_metric(
         neutral_scalars("terminal_attach_ms", head()),

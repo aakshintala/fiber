@@ -96,8 +96,8 @@ pub(super) fn fold_rates(id: &str, results: Option<&Results>) -> Result<FoldMedi
 
 /// Each fixture's median fold ms per MiB, and what the head or base
 /// column shows: one `fixture (bytes): rate ms per MiB` part per
-/// fixture. The 15 ms per MiB pin lives in the table's ceiling cell, so
-/// no number renders here. A malformed metric is one failure naming `id`.
+/// fixture. The eligible runner's class ceiling lives in the budget row,
+/// so no number renders here. A malformed metric is one failure naming `id`.
 pub(super) fn fold_per_mib(id: &str, results: Option<&Results>) -> (Vec<String>, String) {
     let (one_bytes, ten_bytes) = fold_bytes(id, results);
     match fold_rates(id, results) {

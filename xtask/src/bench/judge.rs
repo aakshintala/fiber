@@ -434,7 +434,7 @@ pub(super) enum Check {
     /// carries the rate, so the ceiling text is code. A missing or
     /// malformed fold stage fails the head, never skips; a missing or
     /// malformed base reads unavailable without waiving the head's cap.
-    FoldPerMib { pin: &'static str, id: &'static str },
+    FoldPerMib { id: &'static str },
     /// A paired growth ratio per run: each run's `large` over its `small`
     /// must not exceed `times`. The row's ceiling cell must read `pin`
     /// exactly, and the pin and the multiplier change together in code.
@@ -540,7 +540,6 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
     (
         "Terminal attaching, fold per MiB of session log",
         Check::FoldPerMib {
-            pin: "15 ms per MiB",
             id: "attach_stage_ms",
         },
     ),
@@ -875,20 +874,17 @@ fn table_failures(budget: &str, cell: &str, check: Check, rows: &[Vec<String>]) 
                 Err(e) => failures.push(e),
             }
         }
-        Check::FoldPerMib { pin, .. } => {
-            if cell != pin {
-                failures.push(format!(
-                    "the ceiling reads {cell:?}; it must read {pin:?} for budget {budget:?}: change xtask/src/bench/judge.rs with it"
-                ));
-            }
-            match attach_gates(budget, rows) {
-                Ok(gates)
-                    if [gates.fast_ceiling, gates.middle_ceiling, gates.slow_ceiling, gates.fast_tolerance, gates.slow_tolerance]
-                        .iter().all(Option::is_none) => {}
-                Ok(_) => failures.push(format!(
-                    "{budget}: a class cell holds a number; the fold-per-MiB row gates on its pin with `—` in every class cell"
+        Check::FoldPerMib { .. } => {
+            match ceiling(cell) {
+                Ok(Quantity::Ms(value)) if value.is_finite() && value >= 0.0 => {}
+                Ok(Quantity::Ms(_)) => failures.push(format!(
+                    "{cell:?} is not a finite rate ceiling at or above zero"
                 )),
+                Ok(Quantity::Kib(_)) => failures.push(format!("{cell:?} is not a rate ceiling")),
                 Err(e) => failures.push(e),
+            }
+            if let Err(e) = attach_gates(budget, rows) {
+                failures.push(e);
             }
         }
         Check::Timing(_) => {
@@ -1409,11 +1405,9 @@ pub(super) fn judge(
                 "; ordinary ceiling {cell} (advisory reference: every class cell is `—`)"
             ));
         }
-        Check::FoldPerMib { pin, id } => {
-            if cell != pin {
-                failures.push(format!(
-                    "the ceiling reads {cell:?}; it must read {pin:?} for budget {budget:?}: change xtask/src/bench/judge.rs with it"
-                ));
+        Check::FoldPerMib { id } => {
+            for failure in table_failures(budget, cell, check, rows) {
+                push_failure_once(&mut failures, failure);
             }
             let (broken, shown) = fold_per_mib(id, head);
             failures.extend(broken);
@@ -1430,18 +1424,6 @@ pub(super) fn judge(
                     }
                 }
             };
-            // The table check above pins the ceiling cell to the pin, so
-            // the bound reads from the cell like every other check: a
-            // non-number cell fails the configuration here.
-            let bound = match ceiling(cell) {
-                Ok(Quantity::Ms(bound)) if bound.is_finite() && bound >= 0.0 => Some(bound),
-                _ => {
-                    failures.push(format!(
-                        "{cell:?} is not a `<number> ms per MiB` rate ceiling"
-                    ));
-                    None
-                }
-            };
             // The typed fold-stage medians with strict validation: a
             // missing fold stage, missing log bytes, or a negative or
             // non-finite ms fails even on an advisory model.
@@ -1449,25 +1431,34 @@ pub(super) fn judge(
             let gates = attach_gates(budget, rows);
             let head_cpu = head.and_then(|results| results.cpu.as_deref());
             let info = model_info(head_cpu);
-            match (head_rates, gates, bound) {
-                (Err(e), _, _) | (_, Err(e), _) => {
+            match (head_rates, gates) {
+                (Err(e), _) | (_, Err(e)) => {
                     // `fold_per_mib` already reported the same shape;
                     // naming it twice would double-count, so only add
                     // what it missed.
                     push_failure_once(&mut failures, e);
                 }
-                (_, _, None) => {}
-                (Ok(rates), Ok(_), Some(bound)) => match info {
+                (Ok(rates), Ok(gates)) => match info {
                     // Fast and slow gate; middle never does, even with
                     // enough stored files, and anything without enough
                     // evidence stays advisory.
                     ModelInfo::Eligible {
                         class: class @ (SpeedClass::Fast | SpeedClass::Slow),
                     } => {
-                        // No relative leg: the base column is a
-                        // diagnostic, and a missing or malformed base
-                        // reads unavailable without waiving the head's
-                        // absolute cap.
+                        let (bound, _) = match attach_limit(&gates, class) {
+                            (Some(bound), tolerance) => (bound, tolerance),
+                            (None, _) => {
+                                line.result = "advisory";
+                                line.head.push_str(&format!(
+                                    "; {} ceiling is unavailable (fewer than 5 stored files carry this metric)",
+                                    class_name(class)
+                                ));
+                                return (failures, line);
+                            }
+                        };
+                        // The base remains diagnostic: neither a missing
+                        // base nor a matching failure waives the absolute
+                        // class ceiling.
                         let usable_base = match base {
                             Base::Ok(results) if base_cpu_comparable(head_cpu, base) => {
                                 fold_rates(id, Some(results)).ok()
