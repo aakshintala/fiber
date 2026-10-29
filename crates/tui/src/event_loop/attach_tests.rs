@@ -280,7 +280,8 @@ fn kinds(inputs: &[Input]) -> Vec<String> {
             | Input::Install { .. }
             | Input::HooksOfferNames { .. }
             | Input::HooksInstalled { .. }
-            | Input::Login { .. } => "other".to_owned(),
+            | Input::Login { .. }
+            | Input::KittyFailed => "other".to_owned(),
         })
         .collect()
 }

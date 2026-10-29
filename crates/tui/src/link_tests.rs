@@ -318,7 +318,8 @@ fn identity(input: &Input) -> String {
         | Input::Install { .. }
         | Input::HooksOfferNames { .. }
         | Input::HooksInstalled { .. }
-        | Input::Login { .. } => panic!("a hub line, not another input"),
+        | Input::Login { .. }
+        | Input::KittyFailed => panic!("a hub line, not another input"),
     }
 }
 

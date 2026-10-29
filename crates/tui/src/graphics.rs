@@ -42,12 +42,14 @@ pub(crate) fn cell(row: usize, col: usize, style: Style) -> Span<'static> {
     Span::styled(format!("{PLACEHOLDER}{row}{col}"), style)
 }
 
-/// The transmit bytes for `id`'s PNG `payload`: the base64 forwarded as
-/// kitty's payload in 4096-byte chunks, `m=1` on all but the last.
+/// The transmit bytes for `id`'s PNG `payload`: one entry per whole
+/// 4096-byte chunk, `m=1` on all but the last, so the writer thread sends
+/// each chunk between loop writes without splitting an escape.
 /// Transmit only: the image shows when its placeholders draw
 /// (`docs/tui.md`, "Images"). The transmit carries no `U=1`: that flag
-/// binds a placement to its Unicode placeholders.
-pub(crate) fn transmit(id: u32, base64_png: &str) -> Vec<u8> {
+/// binds a placement to its Unicode placeholders. Concatenating the
+/// chunks reproduces the one-write bytes.
+pub(crate) fn transmit(id: u32, base64_png: &str) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     let mut chunks = base64_png.as_bytes().chunks(CHUNK).peekable();
     if chunks.peek().is_none() {
@@ -56,8 +58,9 @@ pub(crate) fn transmit(id: u32, base64_png: &str) -> Vec<u8> {
     let mut first = true;
     while let Some(chunk) = chunks.next() {
         let more = u8::from(chunks.peek().is_some());
+        let mut piece = Vec::new();
         if first {
-            out.extend_from_slice(
+            piece.extend_from_slice(
                 format!(
                     "\x1b_Ga=t,f=100,i={id},q=2,m={more};{}",
                     String::from_utf8_lossy(chunk)
@@ -66,11 +69,12 @@ pub(crate) fn transmit(id: u32, base64_png: &str) -> Vec<u8> {
             );
             first = false;
         } else {
-            out.extend_from_slice(
+            piece.extend_from_slice(
                 format!("\x1b_Gm={more};{}", String::from_utf8_lossy(chunk)).as_bytes(),
             );
         }
-        out.extend_from_slice(b"\x1b\\");
+        piece.extend_from_slice(b"\x1b\\");
+        out.push(piece);
     }
     out
 }
@@ -116,8 +120,15 @@ mod tests {
         // carries the PNG format, the id, quiet and the last-chunk mark.
         assert_eq!(
             transmit(7, "AAAA"),
-            b"\x1b_Ga=t,f=100,i=7,q=2,m=0;AAAA\x1b\\"
+            vec![b"\x1b_Ga=t,f=100,i=7,q=2,m=0;AAAA\x1b\\".to_vec()]
         );
+    }
+
+    #[test]
+    fn transmit_empty_yields_no_chunks() {
+        // Nothing to send means no chunk: the place still goes on its
+        // own, so an empty payload never writes a partial escape.
+        assert!(transmit(7, "").is_empty());
     }
 
     #[test]
@@ -125,22 +136,32 @@ mod tests {
         let prefix = "\x1b_Ga=t,f=100,i=7,q=2,m=0;";
         // Exactly one chunk still sends `m=0` once.
         let full = "B".repeat(4096);
-        let bytes = transmit(7, &full);
+        let chunks = transmit(7, &full);
+        assert_eq!(chunks.len(), 1);
         assert_eq!(
-            bytes,
+            chunks[0],
             [prefix.as_bytes(), full.as_bytes(), b"\x1b\\"].concat()
         );
-        assert!(transmit(7, "").is_empty());
     }
 
     #[test]
     fn transmit_marks_every_chunk_but_the_last_with_more() {
         let payload = "B".repeat(4097);
-        let text = String::from_utf8(transmit(7, &payload)).expect("escapes are text");
+        let chunks = transmit(7, &payload);
+        // Dropping the last chunk would lose the tail: both land.
+        assert_eq!(chunks.len(), 2);
+        let first = String::from_utf8(chunks[0].clone()).expect("escapes are text");
+        assert!(first.starts_with("\x1b_Ga=t,f=100,i=7,q=2,m=1;"));
+        assert_eq!(
+            first.len(),
+            "\x1b_Ga=t,f=100,i=7,q=2,m=1;".len() + 4096 + "\x1b\\".len()
+        );
+        assert_eq!(chunks[1], b"\x1b_Gm=0;B\x1b\\");
+        // Concatenating reproduces the one-write bytes.
+        let joined: Vec<u8> = chunks.concat();
+        let text = String::from_utf8(joined).expect("escapes are text");
         let parts: Vec<&str> = text.split("\x1b\\").collect();
         assert_eq!(parts.len(), 3);
-        assert!(parts[0].starts_with("\x1b_Ga=t,f=100,i=7,q=2,m=1;"));
-        assert_eq!(parts[0].len(), "\x1b_Ga=t,f=100,i=7,q=2,m=1;".len() + 4096);
         assert_eq!(parts[1], "\x1b_Gm=0;B");
     }
 

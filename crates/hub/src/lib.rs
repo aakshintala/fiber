@@ -312,7 +312,7 @@ pub fn serve(
                 let hub = Arc::clone(&hub);
                 thread::Builder::new()
                     .name("hub-rewind".to_owned())
-                    .spawn(move || drop(crate::rewind::reach(&hub, &from, &next)))
+                    .spawn(move || drop(crate::rewind::retry_after_exit(&hub, &from, &next)))
             };
             if spawned.is_err() {
                 hub.diag.line(

@@ -37,6 +37,25 @@ use crate::relay::Relays;
 use crate::start::{self, Outcome};
 use crate::tick::Tick;
 
+/// One recorded child's start guard and whether its single old-exit
+/// retry is already claimed. The guard serializes starts of that child;
+/// the flag makes the relay-end `follow` and the feed's `on_rewound`
+/// paths attempt at most one retry between them, even when that attempt
+/// fails. The move-time `reach` never consults the flag.
+pub(crate) struct StartSlot {
+    pub(crate) guard: Arc<Mutex<()>>,
+    pub(crate) retry_claimed: bool,
+}
+
+impl StartSlot {
+    pub(crate) fn new() -> Self {
+        Self {
+            guard: Arc::new(Mutex::new(())),
+            retry_claimed: false,
+        }
+    }
+}
+
 /// What the hub shares across its connections: home, the version it
 /// reports, how it starts sessions, the clock, the diagnostic log, and the
 /// open connections `status` answers with.
@@ -93,11 +112,12 @@ pub(crate) struct Hub {
     pub(crate) environments: Arc<crate::Environments>,
     /// Every served connection's writer and relays, for the rejoin sweep.
     pub(crate) rejoins: crate::rejoin::Connections,
-    /// One start at a time per next session: a slow rewind start blocks
+    /// One start at a time per next session, and whether its single
+    /// old-exit retry is already claimed: a slow rewind start blocks
     /// only the threads starting that same session, never a resume, which
     /// takes the shared gate instead (`docs/invocation.md`, "`rewind`
     /// starts a new session process").
-    pub(crate) starting: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
+    pub(crate) starting: Mutex<HashMap<SessionId, StartSlot>>,
     /// Tests only: a one-shot pause run before `hub_hello` is sent. It
     /// parks a connection between its attention registration and its
     /// `hub_hello`, the window the waiting-attention delivery test needs.
@@ -221,6 +241,13 @@ pub(crate) struct Hub {
     /// effects, 1011 closes and `io_failed` answers, not thrift.
     #[cfg(test)]
     pub(crate) fail_spawn: Mutex<Option<&'static str>>,
+    /// Tests only: a one-shot signal fired after a competing old-exit
+    /// callback sees this child's start guard already held, before it
+    /// blocks on that guard. The retry test arms it to prove the second
+    /// callback reached the shared retry decision point while the first
+    /// retry still runs inside the starter.
+    #[cfg(test)]
+    pub(crate) on_retry_contended: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: scripted process reads for the session-socket refusal
     /// paths; production always reads the kernel. The seam makes the
     /// kernel report a false ancestry for the connecting peer, pinning the
@@ -349,6 +376,8 @@ impl Hub {
             before_abort_answer: Mutex::new(None),
             #[cfg(test)]
             fail_spawn: Mutex::new(None),
+            #[cfg(test)]
+            on_retry_contended: Mutex::new(None),
             line_cap: AtomicUsize::new(support::framing::MAX_LINE),
         }
     }
@@ -552,6 +581,23 @@ impl Hub {
             return Err(stopping());
         }
         Ok(Admitted { hub: self })
+    }
+
+    /// Claims the single old-exit retry of the recorded child `next`:
+    /// true for the first old-exit callback to ask, false after. Both
+    /// old-exit paths consult it while holding the child's start guard,
+    /// so the first to lock starts and the loser blocks until that start
+    /// finishes before connecting; the two callbacks make at most one
+    /// retry attempt even when that attempt fails. The move-time `reach`
+    /// never claims.
+    pub(crate) fn claim_retry(&self, next: &SessionId) -> bool {
+        let mut starting = lock(&self.starting);
+        let slot = starting.entry(next.clone()).or_insert_with(StartSlot::new);
+        if slot.retry_claimed {
+            return false;
+        }
+        slot.retry_claimed = true;
+        true
     }
 
     /// Records a local `stop`: under the tick hold, so a waiter that has
@@ -1764,6 +1810,19 @@ pub(crate) fn spawn(
 }
 
 pub(crate) use support::lock;
+
+/// Tests only: fires the hub's one-shot `on_retry_contended` signal when
+/// `guard` is already held, before the caller blocks on it. A free guard
+/// fires nothing. It proves a competing old-exit callback reached the
+/// shared retry decision point while the first retry still runs.
+#[cfg(test)]
+pub(crate) fn probe_retry_contention(hub: &Hub, guard: &Mutex<()>) {
+    if guard.try_lock().is_err()
+        && let Some(fire) = lock(&hub.on_retry_contended).take()
+    {
+        fire();
+    }
+}
 
 /// Locks an opener gate in tests, signaling only after `try_lock` proves
 /// another opener still holds it. It serializes the two `race_openers`

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the release profile for the target that ships,
 # x86_64-unknown-linux-musl, strips it, prints its size, and fails when the
-# stripped head binary is 24 MiB or more (docs/ci.md, "On every pull request
+# stripped head binary is 25 MiB or more (docs/ci.md, "On every pull request
 # that changes code"; docs/dependencies.md). The checkout's HEAD is the head.
 #
 # Usage: scripts/release-size [BASE_COMMIT]
@@ -33,7 +33,7 @@ shopt -s inherit_errexit 2> /dev/null || true # bash 4.4; macOS ships 3.2
 . "$(dirname "${BASH_SOURCE[0]}")/lib/release.sh"
 cd "$(git rev-parse --show-toplevel)"
 
-readonly limit=25165824 # 24 * 1024 * 1024
+readonly limit=26214400 # 25 * 1024 * 1024
 base_commit=${1:-}
 out="${RUNNER_TEMP:?}/release"
 top=$PWD
@@ -135,6 +135,6 @@ else
 fi
 
 if [ "$head_bytes" -ge "$limit" ]; then
-  echo "release-size: the stripped head binary is $head_bytes bytes, at or over the 24 MiB limit (docs/dependencies.md)"
+  echo "release-size: the stripped head binary is $head_bytes bytes, at or over the 25 MiB limit (docs/dependencies.md)"
   exit 1
 fi

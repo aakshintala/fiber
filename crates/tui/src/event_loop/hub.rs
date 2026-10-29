@@ -425,6 +425,12 @@ impl Connection {
                     self.push_stash(Input::Signal(signal));
                     return Err(LOST.to_owned());
                 }
+                // A failed Kitty write ends a history wait as lost, like
+                // a signal: the stashed failure quits the loop next batch.
+                Input::KittyFailed => {
+                    self.push_stash(Input::KittyFailed);
+                    return Err(LOST.to_owned());
+                }
                 other @ (Input::Bytes(_)
                 | Input::Hub(_)
                 | Input::Connected(..)
