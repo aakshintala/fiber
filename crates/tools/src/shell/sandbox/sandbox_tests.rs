@@ -1,18 +1,23 @@
-//! The Linux sandbox policy: unavailable cases, the read-deny contract
-//! proved by confined commands, and the walk measurement helper. Tests that
-//! need Landlock or a confined spawn run only on Linux; the unavailable
-//! variants they assert never arise elsewhere.
+//! The OS sandbox policy: unavailable cases, the read-deny contract proved
+//! by confined commands, and the walk measurement helper. Tests that need
+//! Landlock or a confined spawn run only on Linux, and Seatbelt ones only
+//! on macOS; the unavailable variants they assert never arise elsewhere.
 
 #[cfg(target_os = "linux")]
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
 use std::sync::mpsc;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 
 #[cfg(target_os = "linux")]
 use super::denied_paths;
+#[cfg(target_os = "macos")]
+use super::{
+    MarkerWatch, StripMarker, apply_cause, check_available_with_exec, marker_token, prepare,
+    wrap_command,
+};
 use super::{Settings, Unavailable, check_available};
 
 /// A fixture root under the owner's home, not the temp dir: the sandbox
@@ -60,7 +65,9 @@ fn enabled_without_overlap_is_available_on_linux() {
     let settings = workspace_settings(&fiber_home);
     #[cfg(target_os = "linux")]
     check_available(&settings, &workspace).expect("no overlap is available");
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    check_available(&settings, &workspace).expect("no overlap is available");
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     check_available(&settings, &workspace).expect_err("other platforms are unavailable");
 }
 
@@ -824,4 +831,707 @@ fn the_owner_home_walk_reports_its_count_and_time() {
     assert!(count > 1, "a home walk grants more than one rule");
     // Reported for the pull-request body, never asserted.
     println!("home sandbox walk: {count} read grants in {elapsed:?}");
+}
+
+/// A macOS fixture: an enabled sandbox with no overlap, so `prepare`
+/// builds a profile. Runs only on macOS, where `sandbox-exec` ships.
+#[cfg(target_os = "macos")]
+struct MacosFixture {
+    dir: fakes::TempDir,
+    workspace: PathBuf,
+    settings: Settings,
+}
+
+#[cfg(target_os = "macos")]
+impl MacosFixture {
+    fn new(prefix: &str) -> Self {
+        let dir = fixture(prefix);
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        let settings = workspace_settings(&dir.path().join("fiber-home"));
+        Self {
+            dir,
+            workspace,
+            settings,
+        }
+    }
+
+    fn binding<'a>(prepared: &'a super::Prepared, name: &str) -> &'a str {
+        prepared
+            .bindings
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+            .unwrap_or_else(|| panic!("a {name} binding exists"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_enabled_without_overlap_is_available() {
+    let fixture = MacosFixture::new("fiber-sandbox-macos-available");
+    check_available(&fixture.settings, &fixture.workspace)
+        .expect("overlap-free settings are available on macOS");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_missing_executable_reports_the_binary() {
+    let fixture = MacosFixture::new("fiber-sandbox-macos-missing-exec");
+    let missing = fixture.dir.path().join("no-sandbox-exec");
+    let unavailable = check_available_with_exec(&fixture.settings, &fixture.workspace, &missing)
+        .expect_err("a missing binary is unavailable");
+    assert_eq!(
+        unavailable,
+        Unavailable::SandboxExecUnavailable {
+            path: missing.clone()
+        }
+    );
+    assert_eq!(unavailable.code(), contract::ErrorCode::ToolError);
+    assert!(
+        unavailable
+            .to_string()
+            .contains(&*missing.to_string_lossy()),
+        "the notice names the binary it looked for: {unavailable}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_a_directory_as_the_executable_is_unavailable() {
+    let fixture = MacosFixture::new("fiber-sandbox-macos-dir-exec");
+    let unavailable =
+        check_available_with_exec(&fixture.settings, &fixture.workspace, fixture.dir.path())
+            .expect_err("a directory is not a usable binary");
+    assert!(
+        matches!(unavailable, Unavailable::SandboxExecUnavailable { .. }),
+        "a directory reports the missing-binary case: {unavailable}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_deny_inside_write_is_unavailable_with_a_generic_label() {
+    let mut fixture = MacosFixture::new("fiber-sandbox-macos-overlap");
+    let denied = fixture.workspace.join("secret");
+    std::fs::write(&denied, "secret").expect("write secret");
+    fixture.settings.deny_read.push(denied.clone());
+    let unavailable = check_available(&fixture.settings, &fixture.workspace).expect_err("overlap");
+    assert_eq!(
+        unavailable,
+        Unavailable::DenyInsideWrite {
+            configured: denied.clone(),
+            overlapping: denied.clone(),
+            root: fixture.workspace.clone(),
+        }
+    );
+    assert_eq!(unavailable.code(), contract::ErrorCode::InvalidArguments);
+    let notice = unavailable.to_string();
+    assert!(
+        notice.contains("sandbox read-deny path"),
+        "the label names no source: {notice}"
+    );
+    assert!(
+        !notice.contains("sandbox.deny_read"),
+        "a credential path gets no deny_read attribution: {notice}"
+    );
+    assert!(
+        notice.contains(&*denied.to_string_lossy()),
+        "the notice names the configured path: {notice}"
+    );
+    assert!(
+        notice.contains(&*fixture.workspace.to_string_lossy()),
+        "the notice names the writable root: {notice}"
+    );
+    assert!(!notice.contains('\u{2192}'), "no target in {notice}");
+}
+
+/// The actual wrapper rejects an invalid profile before the user program
+/// runs: no marker line is observed, so the call fails closed with the
+/// wrapper's diagnostic instead of a normal end.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_rejected_profile_runs_nothing_and_fails_closed() {
+    use super::super::command::{MovePolicy, SandboxApply, execute_confined};
+    let dir = fixture("fiber-sandbox-macos-rejected");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let side_effect = workspace.join("side-effect");
+    let command = format!("touch {}", side_effect.display());
+    let clock = fakes::clock::FakeClock::new();
+    let cancel = fakes::CancelToken::new();
+    let Err(error) = execute_confined(
+        std::path::Path::new("/bin/sh"),
+        &command,
+        &workspace,
+        Duration::from_secs(60),
+        clock.as_ref(),
+        &cancel,
+        &fakes::Recorder::default(),
+        MovePolicy::Stay,
+        None,
+        None,
+        None,
+        support::group::alive,
+        std::path::Path::new("ps"),
+        "(version 1)\n(deny bogus-operation-for-fiber-test)",
+        &[],
+    ) else {
+        panic!("a rejected profile fails");
+    };
+    let apply = error
+        .get_ref()
+        .and_then(|error| error.downcast_ref::<SandboxApply>())
+        .expect("a rejected profile maps to a sandbox-apply failure");
+    assert!(
+        apply.cause.contains("sandbox-exec"),
+        "the cause names the wrapper: {}",
+        apply.cause
+    );
+    assert!(
+        !side_effect.exists(),
+        "the user program never ran past the rejected profile"
+    );
+}
+
+/// Unavailable settings never reach spawn: the pre-spawn check fails the
+/// call with the overlap, and no command runs.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_unavailable_settings_never_reach_spawn() {
+    use super::super::command::{MovePolicy, SandboxApply, execute};
+    let mut fixture = MacosFixture::new("fiber-sandbox-macos-no-spawn");
+    let missing = fixture.dir.path().join("missing-write");
+    fixture.settings.allow_write.push(missing.clone());
+    let clock = fakes::clock::FakeClock::new();
+    let cancel = fakes::CancelToken::new();
+    let Err(error) = execute(
+        std::path::Path::new("/bin/sh"),
+        "touch side-effect",
+        &fixture.workspace,
+        Duration::from_secs(60),
+        clock.as_ref(),
+        &cancel,
+        &fakes::Recorder::default(),
+        MovePolicy::Stay,
+        None,
+        None,
+        None,
+        &fixture.settings,
+        &fixture.workspace,
+    ) else {
+        panic!("unavailable settings fail");
+    };
+    let apply = error
+        .get_ref()
+        .and_then(|error| error.downcast_ref::<SandboxApply>())
+        .expect("an unavailable sandbox maps to a sandbox-apply failure");
+    assert!(
+        apply.cause.contains(&*missing.to_string_lossy()),
+        "the cause names the unresolvable root: {}",
+        apply.cause
+    );
+    assert!(
+        !fixture.workspace.join("side-effect").exists(),
+        "no command ran past the failed check"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_prepare_failure_names_the_unresolvable_root() {
+    let mut fixture = MacosFixture::new("fiber-sandbox-macos-unresolved");
+    let missing = fixture.dir.path().join("missing-write");
+    fixture.settings.allow_write.push(missing.clone());
+    let error = prepare(&fixture.settings, &fixture.workspace).expect_err("no grant is missing");
+    assert!(
+        error.contains(&*missing.to_string_lossy()),
+        "the setup error names the root: {error}"
+    );
+}
+
+/// The profile carries every write grant, every read deny and the git
+/// protections, while no dynamic path text reaches the Seatbelt source.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_profile_grants_roots_denies_and_names_no_paths() {
+    let mut fixture = MacosFixture::new("fiber-sandbox-macos-profile");
+    std::fs::create_dir_all(fixture.workspace.join(".git")).expect("create git dir");
+    let secret = fixture.dir.path().join("secret");
+    std::fs::write(&secret, "secret").expect("write secret");
+    fixture.settings.deny_read.push(secret.clone());
+    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let profile = &prepared.profile;
+    for rule in [
+        "(deny default)",
+        "(allow process-exec)",
+        "(allow process-fork)",
+        "(allow sysctl-read)",
+        "(allow file-read* (subpath \"/\"))",
+        "(allow file-read* file-write* file-ioctl",
+        "(deny network-outbound)",
+        "(deny network-inbound)",
+        "(deny network-bind)",
+        "(deny system-socket)",
+        "launchd",
+        "/.git/config",
+        "/.git/hooks",
+        "/.fiber",
+        "(param \"FIBER_WS\")",
+        "(param \"FIBER_TMPDIR\")",
+        "(param \"FIBER_TMP\")",
+    ] {
+        assert!(profile.contains(rule), "the profile carries {rule}");
+    }
+    let workspace = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
+    let temp = std::fs::canonicalize(std::env::temp_dir()).expect("resolve temp");
+    let tmp = std::fs::canonicalize("/tmp").expect("resolve /tmp");
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_WS"),
+        workspace.to_str().expect("utf8")
+    );
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_TMPDIR"),
+        temp.to_str().expect("utf8")
+    );
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_TMP"),
+        tmp.to_str().expect("utf8")
+    );
+    for dynamic in [
+        workspace.to_string_lossy(),
+        temp.to_string_lossy(),
+        tmp.to_string_lossy(),
+        secret.to_string_lossy(),
+    ] {
+        assert!(
+            !profile.contains(dynamic.as_ref()),
+            "no dynamic path text in the profile source: {dynamic}"
+        );
+    }
+    assert!(
+        prepared
+            .bindings
+            .iter()
+            .any(|(_, value)| value == &secret.to_string_lossy()),
+        "the deny travels as a binding"
+    );
+}
+
+/// A quote, parentheses and a newline stay literal through `-D`: the
+/// profile source never sees them and the binding carries them whole.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_profile_keeps_hostile_paths_literal() {
+    let mut fixture = MacosFixture::new("fiber-sandbox-macos-literal");
+    let hostile = fixture.dir.path().join("we'ird (dir)");
+    std::fs::create_dir_all(&hostile).expect("create hostile dir");
+    let newline = fixture.dir.path().join("line\nbreak");
+    std::fs::create_dir_all(&newline).expect("create newline dir");
+    fixture.settings.allow_write.push(hostile.clone());
+    fixture.settings.deny_read.push(newline.clone());
+    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    for dynamic in ["we'ird (dir)", "line\nbreak"] {
+        assert!(
+            !prepared.profile.contains(dynamic),
+            "hostile text never reaches the profile source"
+        );
+    }
+    for expected in [&hostile, &newline] {
+        assert!(
+            prepared
+                .bindings
+                .iter()
+                .any(|(_, value)| Path::new(value) == expected),
+            "the binding carries {} whole",
+            expected.display()
+        );
+    }
+}
+
+/// A symlink deny binds both spellings: the lexical path and the resolved
+/// target the sandbox judges the access by.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_profile_denies_a_link_and_its_target() {
+    use std::os::unix::fs::symlink;
+    let mut fixture = MacosFixture::new("fiber-sandbox-macos-link-deny");
+    let target = fixture.dir.path().join("target");
+    std::fs::write(&target, "shh").expect("write target");
+    let link = fixture.dir.path().join("link");
+    symlink(&target, &link).expect("link to the target");
+    fixture.settings.deny_read.push(link.clone());
+    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    for expected in [&link, &target] {
+        assert!(
+            prepared
+                .bindings
+                .iter()
+                .any(|(_, value)| Path::new(value) == expected),
+            "the deny binds {}",
+            expected.display()
+        );
+    }
+}
+
+/// A checkout's `.git` directory grants commits while its config and hooks
+/// stay denied.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_profile_protects_a_checkout_gitdir() {
+    let fixture = MacosFixture::new("fiber-sandbox-macos-checkout");
+    let gitdir = fixture.workspace.join(".git");
+    std::fs::create_dir_all(&gitdir).expect("create git dir");
+    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let resolved = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_GITDIR"),
+        resolved.join(".git").to_str().expect("utf8")
+    );
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_COMMONDIR"),
+        resolved.join(".git").to_str().expect("utf8")
+    );
+}
+
+/// A worktree's `.git` file denies the pointer while the outside gitdir and
+/// the shared objects, refs and logs stay writable for commits.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_profile_follows_a_worktree_pointer() {
+    let fixture = MacosFixture::new("fiber-sandbox-macos-worktree");
+    let gitdir = fixture.dir.path().join("real-gitdir");
+    std::fs::create_dir_all(&gitdir).expect("create gitdir");
+    std::fs::write(gitdir.join("commondir"), "../common").expect("write commondir");
+    let common = fixture.dir.path().join("common");
+    for name in ["objects", "refs", "logs", "hooks"] {
+        std::fs::create_dir_all(common.join(name)).expect("create common dir");
+    }
+    std::fs::write(
+        fixture.workspace.join(".git"),
+        format!("gitdir: {}\n", gitdir.display()),
+    )
+    .expect("write the worktree pointer");
+    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let gitdir_resolved = std::fs::canonicalize(&gitdir).expect("resolve gitdir");
+    let common_resolved = std::fs::canonicalize(&common).expect("resolve common");
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_GITDIR"),
+        gitdir_resolved.to_str().expect("utf8")
+    );
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_COMMONDIR"),
+        common_resolved.to_str().expect("utf8")
+    );
+    for rule in [
+        "(allow file-write* (subpath (param \"FIBER_GITDIR\")))",
+        "(deny file-write* (subpath (string-append (param \"FIBER_COMMONDIR\") \"/hooks\")))",
+        "(deny file-write* (literal (string-append (param \"FIBER_COMMONDIR\") \"/config\")))",
+        "(deny file-write* (literal (string-append (param \"FIBER_WS\") \"/.git\")))",
+    ] {
+        assert!(
+            prepared.profile.contains(rule),
+            "the profile carries {rule}"
+        );
+    }
+}
+
+/// A hostile `.git` pointer at the filesystem root earns no git write
+/// grant: `/` is no recognized git layout, so both directories fall back to
+/// the workspace-local `.git` the workspace grant already covers.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_absolute_git_pointer_at_root_grants_neither() {
+    let fixture = MacosFixture::new("fiber-sandbox-macos-hostile-root");
+    std::fs::write(fixture.workspace.join(".git"), "gitdir: /\n").expect("write hostile pointer");
+    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let workspace = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
+    let fallback = workspace.join(".git").to_str().expect("utf8").to_owned();
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_GITDIR"),
+        fallback,
+        "an unverified gitdir falls back inside the workspace"
+    );
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_COMMONDIR"),
+        fallback,
+        "an unverified common dir falls back inside the workspace"
+    );
+    for (_, value) in &prepared.bindings {
+        assert!(
+            !["/", "/objects", "/refs", "/logs"].contains(&value.as_str()),
+            "no binding names the root or its git entries: {value}"
+        );
+    }
+}
+
+/// A pointer at an existing directory without git entries earns no grant
+/// either: only a recognized layout carries the commit paths.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_git_pointer_at_a_non_git_dir_grants_neither() {
+    let fixture = MacosFixture::new("fiber-sandbox-macos-hostile-plain");
+    let plain = fixture.dir.path().join("plain");
+    std::fs::create_dir_all(&plain).expect("create plain dir");
+    std::fs::write(
+        fixture.workspace.join(".git"),
+        format!("gitdir: {}\n", plain.display()),
+    )
+    .expect("write hostile pointer");
+    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let workspace = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
+    let fallback = workspace.join(".git").to_str().expect("utf8").to_owned();
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_GITDIR"),
+        fallback,
+        "a non-git dir falls back inside the workspace"
+    );
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_COMMONDIR"),
+        fallback,
+        "a non-git common dir falls back inside the workspace"
+    );
+    assert!(
+        prepared
+            .bindings
+            .iter()
+            .all(|(_, value)| value != &plain.to_string_lossy()),
+        "the plain dir earns no binding"
+    );
+}
+
+/// A valid gitdir whose `commondir` points at `/` still grants neither: the
+/// common directory is validated as a recognized layout too.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_git_pointer_with_root_commondir_grants_neither() {
+    let fixture = MacosFixture::new("fiber-sandbox-macos-hostile-common");
+    let gitdir = fixture.dir.path().join("real-gitdir");
+    std::fs::create_dir_all(&gitdir).expect("create gitdir");
+    std::fs::write(gitdir.join("commondir"), "/\n").expect("write hostile commondir");
+    std::fs::write(
+        fixture.workspace.join(".git"),
+        format!("gitdir: {}\n", gitdir.display()),
+    )
+    .expect("write the worktree pointer");
+    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let workspace = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
+    let fallback = workspace.join(".git").to_str().expect("utf8").to_owned();
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_GITDIR"),
+        fallback,
+        "an unverified common dir pulls the gitdir back inside the workspace"
+    );
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_COMMONDIR"),
+        fallback,
+        "an unverified common dir falls back inside the workspace"
+    );
+    for (_, value) in &prepared.bindings {
+        assert!(
+            !["/", "/objects", "/refs", "/logs"].contains(&value.as_str()),
+            "no binding names the root or its git entries: {value}"
+        );
+    }
+}
+
+/// The wrapper prints the marker before the user program; the strip
+/// adapter removes exactly that first line, even when the user program
+/// echoes the marker text afterwards (`docs/sandbox.md`, "On macOS": the
+/// marker line precedes the user program, and the reader strips exactly
+/// that first line).
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_marker_wrap_then_strip_is_byte_identical() {
+    use std::io::Read as _;
+    let token = marker_token();
+    let user = "user output\nFIBER_SANDBOX_CONFINED echoed\ntrailing\n";
+    let wrapped = wrap_command("ignored", &token);
+    assert!(
+        wrapped.starts_with(&format!(
+            "printf '%s\\n' 'FIBER_SANDBOX_CONFINED {token}'; "
+        )),
+        "the marker runs first: {wrapped}"
+    );
+    let watch = std::sync::Arc::new(MarkerWatch::new(&token));
+    let output = format!("FIBER_SANDBOX_CONFINED {token}\n{user}");
+    let mut strip = StripMarker::new(std::io::Cursor::new(output.into_bytes()), watch.clone());
+    let mut kept = Vec::new();
+    strip.read_to_end(&mut kept).expect("strip reads");
+    assert!(watch.observed(), "the marker is recognized");
+    assert_eq!(kept, user.as_bytes(), "user output stays byte-identical");
+}
+
+/// A pty translates the marker's newline to carriage-return newline; the
+/// adapter still recognizes it and passes the rest through untouched.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_marker_strip_tolerates_a_pty_carriage_return() {
+    use std::io::Read as _;
+    let token = marker_token();
+    let watch = std::sync::Arc::new(MarkerWatch::new(&token));
+    let output = format!("FIBER_SANDBOX_CONFINED {token}\r\nuser\n");
+    let mut strip = StripMarker::new(std::io::Cursor::new(output.into_bytes()), watch.clone());
+    let mut kept = Vec::new();
+    strip.read_to_end(&mut kept).expect("strip reads");
+    assert!(watch.observed(), "the carriage-return marker is recognized");
+    assert_eq!(kept, b"user\n");
+}
+
+/// Observing the marker wakes the parked drive loop: a quiet call offers
+/// no later output to wake on, so the observation itself must wake the
+/// loop (`docs/sandbox.md`, "On macOS": no move before the marker is
+/// observed). The test asserts delivery, not a count; the observable
+/// handoff timing is pinned by
+/// `macos_confined_quiet_call_hands_off_right_after_its_marker`.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_marker_observation_wakes_the_parked_loop() {
+    let token = marker_token();
+    let watch = MarkerWatch::new(&token);
+    let fired = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let delivered = fired.clone();
+    watch.set_wake(std::sync::Arc::new(move || {
+        delivered.store(true, std::sync::atomic::Ordering::SeqCst);
+    }));
+    assert!(
+        watch.check(format!("FIBER_SANDBOX_CONFINED {token}").as_bytes()),
+        "the marker is recognized"
+    );
+    assert!(
+        fired.load(std::sync::atomic::Ordering::SeqCst),
+        "the first observation wakes the loop"
+    );
+    assert!(
+        !watch.check(b"something else"),
+        "a later line is not the marker"
+    );
+    assert!(watch.observed(), "the marker stays observed");
+}
+
+/// Without the marker the adapter drains what the wrapper wrote and reports
+/// a miss, so the call fails closed with the wrapper's own bytes as cause.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_missing_marker_drains_as_a_miss() {
+    use std::io::Read as _;
+    let token = marker_token();
+    let watch = std::sync::Arc::new(MarkerWatch::new(&token));
+    let diagnostic = "sandbox-exec: unbound variable: bogus\n\nBacktrace: <input>\n";
+    let mut strip = StripMarker::new(
+        std::io::Cursor::new(diagnostic.as_bytes().to_vec()),
+        watch.clone(),
+    );
+    let mut kept = Vec::new();
+    strip.read_to_end(&mut kept).expect("strip reads");
+    assert!(!watch.observed(), "no marker means no confinement");
+    assert_eq!(
+        kept,
+        diagnostic.as_bytes(),
+        "the diagnostic drains for the cause"
+    );
+    let cause = apply_cause(&watch, None);
+    assert!(
+        cause.contains("sandbox-exec: unbound variable: bogus"),
+        "the cause names Seatbelt's diagnostic: {cause}"
+    );
+}
+
+/// A marker that arrives alone in the first reads is not end-of-file: the
+/// reader must wait for the user bytes behind it, never close the pipe
+/// while the command still runs.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_marker_arriving_alone_is_not_end_of_file() {
+    use std::io::Read as _;
+    struct Ones {
+        data: Vec<u8>,
+        pos: usize,
+    }
+    impl std::io::Read for Ones {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.pos >= self.data.len() || buf.is_empty() {
+                return Ok(0);
+            }
+            buf[0] = self.data[self.pos];
+            self.pos += 1;
+            Ok(1)
+        }
+    }
+    let token = marker_token();
+    let watch = std::sync::Arc::new(MarkerWatch::new(&token));
+    let mut bytes = format!("FIBER_SANDBOX_CONFINED {token}\n").into_bytes();
+    bytes.extend_from_slice(b"user\n");
+    let mut strip = StripMarker::new(
+        Ones {
+            data: bytes,
+            pos: 0,
+        },
+        watch.clone(),
+    );
+    let mut kept = Vec::new();
+    strip.read_to_end(&mut kept).expect("strip reads");
+    assert!(watch.observed(), "the split marker is recognized");
+    assert_eq!(kept, b"user\n", "the reader waits past a lone marker");
+}
+
+/// A first line without a newline past the stash budget fails closed too.
+/// The expected marker is fixed and short, so such a line is never the
+/// marker; the budget only bounds the buffering. At, just below and just
+/// above the edge the call fails closed identically, and the stream stays
+/// byte-identical: the boundary must neither lose nor duplicate a byte.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_a_line_past_the_stash_budget_is_a_miss() {
+    use std::io::Read as _;
+    /// Yields at most `chunk` bytes per read, so the stash crosses the
+    /// budget mid-prefix instead of in one read.
+    struct Chunks {
+        data: Vec<u8>,
+        pos: usize,
+        chunk: usize,
+    }
+    impl std::io::Read for Chunks {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.pos >= self.data.len() {
+                return Ok(0);
+            }
+            let end = (self.pos + self.chunk)
+                .min(self.data.len())
+                .min(self.pos + buf.len());
+            let count = end - self.pos;
+            buf[..count].copy_from_slice(&self.data[self.pos..end]);
+            self.pos = end;
+            Ok(count)
+        }
+    }
+    for length in [
+        super::MARKER_STASH_CAP - 1,
+        super::MARKER_STASH_CAP,
+        super::MARKER_STASH_CAP + 1,
+    ] {
+        let token = marker_token();
+        let watch = std::sync::Arc::new(MarkerWatch::new(&token));
+        let mut bytes = vec![b'x'; length];
+        bytes.extend_from_slice(b"tail\n");
+        let input = bytes.clone();
+        let mut strip = StripMarker::new(
+            Chunks {
+                data: bytes,
+                pos: 0,
+                chunk: 1024,
+            },
+            watch.clone(),
+        );
+        let mut kept = Vec::new();
+        strip.read_to_end(&mut kept).expect("strip reads");
+        assert!(
+            !watch.observed(),
+            "a {length}-byte first line is never the marker"
+        );
+        assert_eq!(
+            kept, input,
+            "the boundary keeps a {length}-byte prefix byte-identical"
+        );
+    }
 }

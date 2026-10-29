@@ -202,8 +202,14 @@ fn a_confined_session_denies_the_configured_path() {
                 .join("")
         })
         .unwrap_or_default();
+    // Seatbelt reports EPERM where Landlock reports EACCES: the confined
+    // read fails on both, with the platform's refusal word.
+    #[cfg(target_os = "macos")]
+    let refused = "Operation not permitted";
+    #[cfg(not(target_os = "macos"))]
+    let refused = "Permission denied";
     assert!(
-        secret_text.contains("Permission denied"),
+        secret_text.contains(refused),
         "the denied read fails: {secret_text}"
     );
     assert!(
