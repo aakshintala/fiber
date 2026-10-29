@@ -25,7 +25,7 @@ use super::*;
 use crate::Starter as _;
 use crate::connection::{Hub, lock};
 use crate::fake::{FakeSession, FakeStarter};
-use crate::relay::{Kept, Relay, RelayTarget, Replayed};
+use crate::relay::{Kept, KeptState, Relay, RelayTarget, Replayed};
 use crate::testkit::write_log;
 use fakes::Deadline;
 
@@ -586,7 +586,7 @@ fn a_relay_that_saw_the_exited_window_sends_no_stream_closed() {
     lock(&rig.relays)
         .subscribed
         .push((SID.to_owned(), subscribe("c_sub", "full")));
-    lock(&rig.kept).push(("c_x".to_owned(), tools("c_x"), true));
+    lock(&rig.kept).push(("c_x".to_owned(), tools("c_x"), KeptState::Sent));
     lock(&rig.relays).order.enqueue(SID, "c_x");
     let thread = spawn(&rig, SID, reader);
     let closing = json!({"kind": "command_rejected",

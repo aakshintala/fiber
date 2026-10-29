@@ -1034,7 +1034,7 @@ fn a_refused_rewind_drops_only_the_old_sessions_kept_level() {
             .as_object()
             .unwrap()
             .clone(),
-        true,
+        crate::relay::KeptState::Sent,
     )]));
     let (hub_session, mut session_peer) = UnixStream::pair().unwrap();
     let reader = hub_session.try_clone().unwrap();
@@ -1136,7 +1136,7 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
                 .as_object()
                 .unwrap()
                 .clone(),
-            true,
+            crate::relay::KeptState::Sent,
         ),
         (
             "c_rw".to_owned(),
@@ -1144,7 +1144,7 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
                 .as_object()
                 .unwrap()
                 .clone(),
-            true,
+            crate::relay::KeptState::Sent,
         ),
     ]));
     let order = lock(&relays).order.clone();
@@ -1177,7 +1177,7 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
             .as_object()
             .unwrap()
             .clone(),
-        true,
+        crate::relay::KeptState::Sent,
     )]));
     let (live_session, mut live_peer) = UnixStream::pair().unwrap();
     let live_reader = live_session.try_clone().unwrap();
