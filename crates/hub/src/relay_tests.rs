@@ -2898,7 +2898,7 @@ fn rejection(id: &str, code: &str) -> Value {
     json!({"kind": "command_rejected", "payload": {"command_id": id, "code": code, "message": "m"}})
 }
 
-/// `docs/invocation.md`, "Lifecycle": after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
+/// `docs/invocation.md`, "Lifecycle" (#2054): after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
 #[test]
 fn a_clean_exit_re_routes_a_sent_unanswered_command_once() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -2939,6 +2939,7 @@ fn a_queue_pump_reroute_rechecks_the_connection_attribution() {
     );
 }
 
+/// `docs/invocation.md`, "Lifecycle" (#2054): a command is delivered once; a second unanswered end is rejected `closing` instead of routed again.
 #[test]
 fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -2965,7 +2966,7 @@ fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     );
 }
 
-/// `docs/invocation.md`, "Lifecycle": a command is delivered once; a second unanswered end, or a `closing` answer to it, is rejected `closing`.
+/// `docs/invocation.md`, "Lifecycle" (#2054): a command is delivered once; a second unanswered end, or a `closing` answer to it, is rejected `closing`.
 #[test]
 fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -2983,7 +2984,7 @@ fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
 }
 
-/// `docs/invocation.md`, "Lifecycle": after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
+/// `docs/invocation.md`, "Lifecycle" (#2054): after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
 #[test]
 fn a_closing_answer_the_first_time_is_routed_to_the_resumed_session() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -3148,10 +3149,216 @@ fn an_indeterminate_answer_from_the_session_is_forwarded_and_never_routed() {
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
 }
 
+/// `docs/invocation.md`, "Lifecycle" (#3616): a command whose write fails
+/// before its line feed may still run. End-of-file framing delivers the
+/// cut body as a final line, so the session answers it, and the hub
+/// suppresses that answer: the client gets exactly one `indeterminate`
+/// answer, and the command is never routed again.
+#[test]
+fn a_reply_cut_before_its_line_feed_is_answered_indeterminate_once() {
+    use std::sync::{Arc, Mutex};
+    const SID: &str = "s_0123456789abcdef";
+    let held = fakes::TempDir::new("rc");
+    let dir = held.path().join("h");
+    std::fs::create_dir_all(&dir).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let timed: Arc<dyn contract::clock::Clock> = clock;
+    let starter = crate::fake::FakeStarter::bind_and_hold(&dir);
+    let hub = Arc::new(crate::testkit::hub(&dir, Arc::new(starter.clone()), timed));
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    let order = crate::connection::lock(&relays).order.clone();
+    let epoch = crate::connection::lock(&relays).mint();
+    let kept: Kept = Arc::new(Mutex::new(Vec::new()));
+    // The established relay: a parked live thread keeps the entry
+    // writable while the relay thread under test reads the session, so
+    // the routed command takes the write path with the cut armed.
+    let (park_tx, park_rx) = std::sync::mpsc::channel::<()>();
+    let parked = std::thread::Builder::new()
+        .name("parked-relay".to_owned())
+        .spawn(move || {
+            let _released = park_rx.recv();
+        })
+        .unwrap();
+    let (hub_session, mut session_peer) = UnixStream::pair().unwrap();
+    session_peer
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
+    let reader = hub_session.try_clone().unwrap();
+    let (client_write, client_read) = UnixStream::pair().unwrap();
+    client_read
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
+    let client_writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(client_write));
+    let thread = spawn_for_test(
+        SID.to_owned(),
+        epoch,
+        reader,
+        Arc::clone(&hub),
+        Arc::clone(&client_writer),
+        Arc::clone(&relays),
+        Arc::clone(&kept),
+    );
+    crate::connection::lock(&relays).entries.push(Relay {
+        session: SID.to_owned(),
+        epoch,
+        writer: hub_session,
+        kept: Arc::clone(&kept),
+        replayed: Replayed::default(),
+        thread: Some(parked),
+        retiring: None,
+        target: RelayTarget::LiveUnreadable,
+    });
+    // Cut the command write before its line feed: the session's next
+    // line never completes, but the hub counted accepted bytes.
+    crate::connection::lock(&relays).before_command_write = Some(Box::new(move |cap, bytes| {
+        *cap = Some(bytes.len() - 1);
+    }));
+    let stripped = json!({"id": "c_2", "command": "reply", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    crate::relay::route(
+        &contract::CommandId("c_2".to_owned()),
+        SID,
+        stripped,
+        &hub,
+        &client_writer,
+        &relays,
+        None,
+        false,
+        None,
+    );
+    assert_eq!(
+        order.state("c_2"),
+        Some(CommandState::Partial),
+        "the cut write is partial"
+    );
+    // End-of-file framing delivers the cut body as a final line: the hub
+    // already shut its write half when the capped write failed, so the
+    // read ends with the valid `reply` body and no line feed.
+    let body = {
+        // Scoped past the read: the clone must drop before cleanup, or
+        // the relay never sees end of file.
+        let session_reader = session_peer.try_clone().unwrap();
+        let mut read = BufReader::new(session_reader);
+        support::framing::read_line(&mut read, support::framing::MAX_LINE)
+            .expect("the cut body arrives")
+            .expect("framing delivers the cut body as a final line")
+    };
+    let body: Value = serde_json::from_slice(&body).expect("a valid `reply` JSON body arrives");
+    assert_eq!(body["command"], "reply", "{body}");
+    assert_eq!(body["id"], "c_2", "{body}");
+    // The session runs it and answers; the hub suppresses the answer.
+    let mut accept =
+        serde_json::to_vec(&json!({"kind": "command_accepted", "payload": {"command_id": "c_2"}}))
+            .unwrap();
+    accept.push(b'\n');
+    session_peer.write_all(&accept).unwrap();
+    session_peer.flush().unwrap();
+    let mut text = String::new();
+    BufReader::new(client_read)
+        .read_line(&mut text)
+        .expect("the cut command is answered within the deadline");
+    let answer: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(answer["kind"], "command_rejected", "{answer}");
+    assert_eq!(answer["payload"]["command_id"], "c_2", "{answer}");
+    assert_eq!(answer["payload"]["code"], "indeterminate", "{answer}");
+    assert_eq!(
+        answer["payload"]["message"],
+        crate::retire::PARTIAL_WRITE_MAY_HAVE_RUN,
+        "{answer}"
+    );
+    // Exactly one answer: the suppressed accept is consumed, the queue is
+    // clean, and nothing resumes to deliver the command again.
+    assert!(
+        crate::connection::lock(&kept).is_empty(),
+        "the suppressed answer is consumed"
+    );
+    assert_eq!(order.session_for("c_2"), None);
+    assert_eq!(order.state("c_2"), None);
+    assert!(starter.resumed().is_empty(), "nothing is resumed");
+    drop(park_tx);
+    drop(session_peer);
+    join_within_deadline(thread);
+}
+
+/// `docs/invocation.md`, "Lifecycle" (#3491, #3534): a command the session
+/// read while closing is answered `closing`, never stranded and never
+/// `indeterminate`. Without the exited window the hub forwards the
+/// session's answer as promised instead of routing it again.
+#[test]
+fn a_command_read_while_closing_is_answered_closing_not_stranded() {
+    let mut ended = Ended::start("turn_completed", true, &["c_1"], &[]);
+    ended.say(rejection("c_1", "closing"));
+    let line = ended.line();
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    assert_eq!(line["payload"]["code"], "closing", "{line}");
+    ended.close_session();
+    assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
+    assert!(
+        ended.received_ids().is_empty(),
+        "the command is never delivered again"
+    );
+    assert_eq!(ended.order.session_for("c_1"), None);
+    assert_eq!(ended.order.state("c_1"), None);
+    assert!(ended.kept.lock().unwrap().is_empty());
+}
+
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order"
+/// (#3279, #3326): a session-read command in the exit window gets exactly
+/// one answer before shutdown. The session's accept is forwarded, and the
+/// relay's end routes nothing, resumes nothing and refuses nothing.
+#[test]
+fn a_session_read_command_in_the_exit_window_is_answered_exactly_once() {
+    let mut ended = Ended::start("turn_completed", true, &["c_1"], &[]);
+    ended.say(json!({"kind": "command_accepted", "payload": {"command_id": "c_1"}}));
+    let line = ended.line();
+    assert_eq!(line["kind"], "command_accepted", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    ended.close_session();
+    assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
+    assert!(
+        ended.received_ids().is_empty(),
+        "the command is never delivered again"
+    );
+    assert_eq!(ended.order.session_for("c_1"), None);
+    assert_eq!(ended.order.state("c_1"), None);
+    assert!(ended.kept.lock().unwrap().is_empty());
+}
+
+/// `docs/invocation.md`, "What the hub speaks" (#1662, #2094): a
+/// connection that ends before `hub_hello` is a connect retry, never a
+/// completed relayed command. While the hub is exiting, the accept is
+/// dropped unanswered: the peer reads EOF with no line before it.
+#[test]
+fn an_exiting_hub_sends_no_hello_before_the_connection_ends() {
+    use std::io::Read;
+    let held = fakes::TempDir::new("rh");
+    let hub = hub(&held);
+    let (stream, mut peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+    let stop = std::sync::atomic::AtomicBool::new(true);
+    assert!(
+        matches!(
+            hub.poll_accept(&stream, &stop),
+            crate::connection::Accept::Exiting
+        ),
+        "an exiting hub drops the accept"
+    );
+    drop(stream);
+    let mut bytes = Vec::new();
+    peer.read_to_end(&mut bytes).unwrap();
+    assert!(
+        bytes.is_empty(),
+        "EOF with no `hub_hello`: no command completes"
+    );
+}
+
 /// A refused admission still answers the command already written to the
-/// new socket: the exclusive attach finds the live relay, so no thread
-/// ever reads the command, and the client must hear `session_not_found`
-/// instead of waiting with no reply.
+/// new socket (#3589, #3619): the exclusive attach finds the live relay,
+/// so no thread ever reads the command, and the client must hear
+/// `session_not_found` instead of waiting with no reply.
 #[test]
 fn a_refused_admission_answers_the_pending_command() {
     use std::io::{BufRead, BufReader};
@@ -3215,8 +3422,9 @@ fn a_refused_admission_answers_the_pending_command() {
 }
 
 /// A relay thread that never starts still answers the command already
-/// written to the session socket: `route` enqueues before `attach_inner`
-/// writes, so without an answer the client would wait with no reply.
+/// written to the session socket (#3589, #3619): `route` enqueues before
+/// `attach_inner` writes, so without an answer the client would wait with
+/// no reply.
 #[test]
 fn a_spawn_failure_answers_the_written_command() {
     use std::io::{BufRead, BufReader};

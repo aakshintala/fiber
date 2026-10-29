@@ -2671,14 +2671,14 @@ impl Starter for RetryGate {
 }
 
 /// A moved child whose start fails retries exactly once across both
-/// old-exit callbacks: the relay-end `follow` and the feed's retry share
-/// one decision under the child's start guard, so the second callback
-/// starts nothing even when the first retry fails. Both callback orders
-/// run, each with its own moved child, seeded log and hub: the claim is
-/// per child, so sharing one child across orders would spend its single
-/// retry in the first order. In each order the first retry is held inside
-/// the starter until the competing callback proves it reached the held
-/// guard.
+/// old-exit callbacks (#3565): the relay-end `follow` and the feed's retry
+/// share one decision under the child's start guard, so the second
+/// callback starts nothing even when the first retry fails. Both callback
+/// orders run, each with its own moved child, seeded log and hub: the
+/// claim is per child, so sharing one child across orders would spend its
+/// single retry in the first order. In each order the first retry is held
+/// inside the starter until the competing callback proves it reached the
+/// held guard.
 #[test]
 fn a_failed_moved_child_retries_once_across_both_old_exit_paths() {
     for first_is_follow in [true, false] {
@@ -2902,14 +2902,14 @@ impl Starter for FailOnceThenBind {
 
 /// A moved child whose initial start fails is retried once when the old
 /// process exits, and the losing old-exit callback attaches to the
-/// running child instead of starting again: the feed-side retry and the
-/// relay-end `follow` share one per-child decision under the child's start
-/// guard, in both orders, each with its own hub so the per-child claim
-/// starts fresh. The winning retry is held inside the starter until the
-/// peer proves it reached the held guard, so the loser waits for the
-/// claimed start to finish before connecting instead of missing the bind
-/// (`docs/invocation.md`, "Change workspace": the hub retries the same
-/// child id once when the old process exits).
+/// running child instead of starting again (#3565): the feed-side retry
+/// and the relay-end `follow` share one per-child decision under the
+/// child's start guard, in both orders, each with its own hub so the
+/// per-child claim starts fresh. The winning retry is held inside the
+/// starter until the peer proves it reached the held guard, so the loser
+/// waits for the claimed start to finish before connecting instead of
+/// missing the bind (`docs/invocation.md`, "Change workspace": the hub
+/// retries the same child id once when the old process exits).
 #[test]
 fn a_failed_moved_child_retry_attaches_the_losing_callback() {
     for first_is_follow in [true, false] {
@@ -3039,10 +3039,10 @@ fn a_failed_moved_child_retry_attaches_the_losing_callback() {
 }
 
 /// The relay-end `follow` retries a failed moved child on the old
-/// socket's EOF even when the feed never observes the old process exit:
-/// the retry does not wait for the feed's scan. With and without a saved
-/// subscription, the shared decision still makes the one retry; only
-/// attaching needs the kept level (`docs/invocation.md`, "Change
+/// socket's EOF even when the feed never observes the old process exit
+/// (#3565): the retry does not wait for the feed's scan. With and without
+/// a saved subscription, the shared decision still makes the one retry;
+/// only attaching needs the kept level (`docs/invocation.md`, "Change
 /// workspace": the hub retries the same child id once when the old
 /// process exits).
 #[test]
@@ -3111,8 +3111,8 @@ fn a_failed_moved_child_retries_on_old_exit_before_the_feed_scan() {
     }
 }
 
-/// A failed old-exit retry stays consumed: no later old-exit callback
-/// starts the child again when it is not running.
+/// A failed old-exit retry stays consumed (#3565): no later old-exit
+/// callback starts the child again when it is not running.
 #[test]
 fn a_failed_old_exit_retry_is_never_repeated() {
     let temp = Temp::new();
