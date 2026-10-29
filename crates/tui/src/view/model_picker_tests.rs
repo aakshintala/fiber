@@ -1838,7 +1838,11 @@ fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
         .position(|row| row.focus == view.focused);
     assert_eq!(current, Some(end), "the focus sits exactly on the new end");
     let nearest = focus.expect("an offscreen focus clamps to a visible row");
-    assert_ne!(nearest, view.focused.expect("focused"), "the edge row stays outside");
+    assert_ne!(
+        nearest,
+        view.focused.expect("focused"),
+        "the edge row stays outside"
+    );
     let nearest_row = display
         .rows
         .iter()
@@ -1854,7 +1858,7 @@ fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
     let last = *focusables.last().expect("a last focusable row");
     below.focused = display.rows[last].focus;
     below.top = 0;
-    let effective = keep_focus_visible_top(&below, height);
+    let _effective = keep_focus_visible_top(&below, height);
     let (top, focus) = picker_wheel_window(&below, true, height);
     let end = top.saturating_add(fit);
     let current = display

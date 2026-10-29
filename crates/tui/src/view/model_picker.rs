@@ -811,14 +811,13 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
 
     // The filter and button rows stay fixed; only the provider/list rows
     // above are windowed. Width is measured from the rows actually shown.
+    // Width is measured from the spans alone: the footer legend always
+    // outruns any right column here, so testing it adds only an
+    // equivalent mutant on emptiness (removed).
     let mut rows = vec![filter_row(view)];
     let mut content: usize = 0;
     let mut widen = |row: &Row| {
-        let mut wide = spans_width(&row.spans);
-        if !row.right.is_empty() {
-            wide = wide.saturating_add(spans_width(&row.right).saturating_add(1));
-        }
-        content = content.max(wide);
+        content = content.max(spans_width(&row.spans));
     };
     for row in &rows {
         widen(row);

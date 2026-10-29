@@ -757,3 +757,25 @@ fn wheel_with_search_open_and_no_results_reaches_the_conversation() {
         "with no results underneath the conversation scrolls"
     );
 }
+
+/// A wheel outside the drawn conversation with results open reaches
+/// neither the results nor the conversation (`docs/tui.md:576`).
+#[test]
+fn wheel_outside_the_conversation_with_results_open_moves_neither() {
+    let matches: Vec<String> = (1..=18).map(|n| format!("needle {n:02}")).collect();
+    let refs: Vec<&str> = matches.iter().map(String::as_str).collect();
+    let mut app = turned(40, 45, &refs);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    scan(&mut app, "needle");
+    open(&mut app);
+    app.on_key(Key::Down, now());
+    let top = app.top();
+    let before = cursor(&app);
+    // The input line sits below the drawn conversation, outside it and not
+    // on the rail: a wheel there owns neither the results nor the
+    // conversation.
+    app.on_wheel(&wheel(10, 44, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(cursor(&app), before, "the wheel left the results");
+}
