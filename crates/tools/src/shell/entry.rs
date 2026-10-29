@@ -204,9 +204,7 @@ pub(super) fn accept_flag(
             return None;
         }
         if flag.takes_value {
-            let Some(value) = words.next() else {
-                return None;
-            };
+            let value = words.next()?;
             if flag.spelling == "--jq" && !jq_program_ok(&value.cooked) {
                 return None;
             }
