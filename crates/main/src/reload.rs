@@ -196,6 +196,11 @@ pub(crate) struct State {
     pub(crate) names: std::sync::Mutex<Vec<String>>,
     pub(crate) shell_read_only: crate::settings::ShellReadOnly,
     pub(crate) sandbox: crate::settings::SandboxHandle,
+    /// Whether the session already reported the sandbox unavailable: set at
+    /// startup when the sandbox is enabled and unavailable, and set by the
+    /// first reload install that newly reports it, so the notice fires once
+    /// per session even when configuration toggles off and on later.
+    pub(crate) sandbox_notice_reported: std::sync::atomic::AtomicBool,
     /// The session's servers, kept for the reconnect entry's in-place
     /// restart (`docs/mcp.md`, "Servers, their state and the
     /// per-server commands").
@@ -211,6 +216,21 @@ pub(crate) struct State {
     /// images, as at startup.
     pub(crate) artifacts: std::path::PathBuf,
     pub(crate) images: Arc<dyn contract::images::Images>,
+}
+
+/// Whether the startup already reported the sandbox unavailable, mirroring
+/// the startup-notice condition: enabled, and failing `check_available`
+/// against the startup workspace. A disabled or available sandbox starts
+/// unreported, so the first reload that newly breaks it stages the notice.
+fn sandbox_notice_reported(
+    sources: &config::Sources,
+    sandbox: &crate::settings::SandboxHandle,
+) -> std::sync::atomic::AtomicBool {
+    let reported = {
+        let settings = support::lock(sandbox);
+        settings.enabled && tools::sandbox_check_available(&settings, &sources.workspace).is_err()
+    };
+    std::sync::atomic::AtomicBool::new(reported)
 }
 
 /// The late preparation skips the sync: no grouping, records,
@@ -258,6 +278,8 @@ impl State {
         mcp::Prompts,
         Vec<contract::events::McpServerFailed>,
     ) {
+        // Computed before the literal below moves `sources` and `sandbox`.
+        let sandbox_notice_reported = sandbox_notice_reported(&sources, &sandbox);
         let late = Arc::new(std::sync::Mutex::new(Late::default()));
         let servers_handle = Arc::clone(&servers.servers);
         let artifacts = servers.later.artifacts.clone();
@@ -302,6 +324,7 @@ impl State {
             names: std::sync::Mutex::new(names),
             shell_read_only,
             sandbox,
+            sandbox_notice_reported,
             servers: servers_handle,
             artifacts,
             images,
@@ -680,6 +703,36 @@ impl State {
         };
         let (reviewer, reviewer_observe, credential_files, publish) =
             self.switching.reviewer_for(route, &config, &here);
+        // A reload that newly makes the sandbox unavailable stages the
+        // startup-shaped notice, but only on the first transition for the
+        // session: prepare computes the candidate settings with the reloaded
+        // credential files, and the install below applies them and sets the
+        // latch, so later toggles emit nothing.
+        let staged_sandbox_notice: Option<contract::events::Notice> = (|| {
+            let fiber_home = support::lock(&self.sandbox).fiber_home.clone();
+            let candidate =
+                crate::settings::sandbox_settings(&config, &fiber_home, &credential_files);
+            if !candidate.enabled {
+                return None;
+            }
+            let unavailable =
+                tools::sandbox_check_available(&candidate, &self.sources.workspace).err()?;
+            if self
+                .sandbox_notice_reported
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return None;
+            }
+            Some(contract::events::Notice {
+                code: unavailable.code(),
+                message: format!("sandbox unavailable: {unavailable}"),
+                extension: None,
+            })
+        })();
+        if let Some(notice) = &staged_sandbox_notice {
+            notices.push(notice.clone());
+        }
+        let sandbox_credentials = credential_files.clone();
         let hooks: Arc<dyn contract::hook::Hooks> = extensions.clone();
         let loaded = extensions.loaded();
         // Owned inputs for the installed hook's apply: the hook runs
@@ -774,7 +827,12 @@ impl State {
             shared.servers.set_resources_declared(declares_resources);
             publish();
             crate::settings::refresh_shell_read_only(&shared.shell_read_only, &next.config);
-            crate::settings::refresh_sandbox(&shared.sandbox, &next.config);
+            crate::settings::refresh_sandbox(&shared.sandbox, &next.config, &sandbox_credentials);
+            if staged_sandbox_notice.is_some() {
+                shared
+                    .sandbox_notice_reported
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
             shared.switching.reloaded(next);
             shared.current.swap(extensions);
         });

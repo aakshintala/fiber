@@ -1669,6 +1669,7 @@ fn seam(fake: &Rc<Fake>, flat: bool) -> Bound {
             halves: None,
         },
         flat,
+        now: Some(1_000),
     }
 }
 
@@ -2140,6 +2141,7 @@ fn an_animated_group_line_keeps_its_tag() {
             halves: None,
         },
         flat: false,
+        now: Some(1_000),
     };
     let t0 = fakes::clock::FakeClock::new().origin();
     bound.cache.begin_anim_frame(Some(t0), false);
@@ -2171,6 +2173,7 @@ fn animated_ledger_rows_keep_their_tags_through_the_gutter() {
             halves: None,
         },
         flat: false,
+        now: Some(1_000),
     };
     let t0 = fakes::clock::FakeClock::new().origin();
     bound.cache.begin_anim_frame(Some(t0), false);

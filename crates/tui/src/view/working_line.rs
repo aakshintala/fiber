@@ -9,9 +9,69 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
 use crate::app::App;
+use crate::ext::{Input, RawSpan, SlotDraw, WorkingLine, WorkingRetry};
 use crate::mouse::{Target, TargetId};
 use crate::theme::{Role, style};
-use crate::working::lay;
+use crate::view::notice_rows::frame_bound;
+use crate::working::{Working, lay};
+
+/// The working line's renderer input: the attached turn's start with
+/// its wait to retry, from the same turn card the built-in reads.
+fn input(working: &Working, flat: bool) -> WorkingLine {
+    WorkingLine {
+        started: working.started_ms,
+        retry: working.retry.as_ref().map(|retry| WorkingRetry {
+            code: retry.retry.code.clone(),
+            attempt: retry.attempt,
+            last_attempt: retry.retry.last_attempt,
+            delay_ms: retry.retry.delay_ms,
+            ts: retry.ts,
+        }),
+        flat,
+    }
+}
+
+/// The built-in working-line row as spans: the laid text in its base
+/// style. The spinner's colour and the glimmer band are paint-time
+/// recolors, so a cached line's text never changes.
+fn builtin_spans(app: &App, working: &Working, width: u16) -> Vec<Vec<RawSpan>> {
+    let motion = app.motion();
+    let laid = lay(working, motion.wall_ms(), motion.spinner(), width);
+    let line = if laid.retrying {
+        style(Role::Warning)
+    } else {
+        style(Role::Muted)
+    };
+    vec![crate::ext::spans::from_ratatui(&[
+        ratatui::text::Span::styled(laid.text, line),
+    ])]
+}
+
+/// How many rows the working line reserves: the banner's row while it
+/// shows, else a replacement's line count, or the built-in row while
+/// the turn runs. A zero-line replacement hides the line.
+pub(crate) fn count(app: &App, width: u16) -> usize {
+    if app.banner().is_some() {
+        return 1;
+    }
+    let Some(working) = app.working_line() else {
+        return 0;
+    };
+    let bound = frame_bound(app);
+    let folded = input(&working, bound.flat);
+    let builtin = &|_: &Input<'_>, width: u16| builtin_spans(app, &working, width);
+    match bound.slot_lines(
+        SlotDraw::Count,
+        "working_line",
+        &Input::WorkingLine(folded),
+        width,
+        builtin,
+    ) {
+        Some(lines) => lines.len(),
+        // A miss draws the built-in, which shows exactly when the row shows.
+        None => usize::from(app.working_row_shown()),
+    }
+}
 
 /// Draws the working line on the row above `bottom`, above the running
 /// delegates, and moves `bottom` up to it; nothing while no turn runs.
@@ -27,8 +87,65 @@ pub(super) fn draw(
     let Some(working) = app.working_line() else {
         return;
     };
+    let bound = frame_bound(app);
+    let folded = input(&working, bound.flat);
+    let builtin = &|_: &Input<'_>, width: u16| builtin_spans(app, &working, width);
+    let Some(fitted) = bound.slot_lines(
+        SlotDraw::Paint,
+        "working_line",
+        &Input::WorkingLine(folded),
+        area.width,
+        builtin,
+    ) else {
+        paint_builtin(app, &working, area, buf, bottom, targets);
+        return;
+    };
+    if fitted.is_empty() {
+        // An empty replacement hides the line: no rows and no targets.
+        return;
+    }
+    paint_replacement(area, buf, bottom, targets, &fitted);
+}
+
+/// Paints a replacement's lines bottom-up, keeping one interrupt target
+/// over each line's full width.
+fn paint_replacement(
+    area: Rect,
+    buf: &mut Buffer,
+    bottom: &mut u16,
+    targets: &mut Vec<Target>,
+    fitted: &[crate::ext::spans::FittedLine],
+) {
+    let count = fitted
+        .len()
+        .min(usize::from(u16::MAX))
+        .min(bottom.saturating_sub(area.y) as usize);
+    if count == 0 {
+        return;
+    }
+    *bottom = bottom.saturating_sub(u16::try_from(count).unwrap_or(u16::MAX));
+    for (dy, line) in fitted.iter().take(count).enumerate() {
+        let row = bottom.saturating_add(u16::try_from(dy).unwrap_or(u16::MAX));
+        buf.set_line(area.x, row, &line.line, area.width);
+        targets.push(Target {
+            id: TargetId::Interrupt,
+            rect: Rect::new(area.x, row, area.width, 1),
+        });
+    }
+}
+
+/// Paints the built-in working line: the laid text with the spinner in
+/// the attention colour and the glimmer band across its word.
+fn paint_builtin(
+    app: &App,
+    working: &Working,
+    area: Rect,
+    buf: &mut Buffer,
+    bottom: &mut u16,
+    targets: &mut Vec<Target>,
+) {
     let motion = app.motion();
-    let laid = lay(&working, motion.wall_ms(), motion.spinner(), area.width);
+    let laid = lay(working, motion.wall_ms(), motion.spinner(), area.width);
     let line = if laid.retrying {
         style(Role::Warning)
     } else {

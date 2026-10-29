@@ -41,8 +41,8 @@ mod results;
 mod reviewer_setup;
 pub(crate) mod scroll_bar;
 pub(crate) mod status_rows;
-mod steering_queue;
-mod working_line;
+pub(crate) mod steering_queue;
+pub(crate) mod working_line;
 
 pub(crate) use home::list_window;
 pub(crate) use home::max_question_scroll;

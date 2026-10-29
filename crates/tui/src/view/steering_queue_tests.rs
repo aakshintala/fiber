@@ -67,6 +67,88 @@ fn buffer(app: &App, width: u16, height: u16) -> Buffer {
     buf
 }
 
+/// A renderer that draws whatever the built-in queue draws, so the
+/// test observes the built-in cross decision at the callback width.
+#[derive(Debug, Default)]
+struct BuiltinEcho {
+    /// The widths the built-in callback receives, in order.
+    widths: std::cell::RefCell<Vec<u16>>,
+    /// Optional callback width to keep a returned cross visible at paint width.
+    builtin_width: Option<u16>,
+}
+
+impl crate::ext::Renderer for BuiltinEcho {
+    fn name(&self) -> &str {
+        "builtin-test"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "steering_queue"
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        width: u16,
+        builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        let builtin_width = self.builtin_width.unwrap_or(width);
+        self.widths.borrow_mut().push(builtin_width);
+        crate::ext::Decision::Draw {
+            extension: self.name().into(),
+            lines: builtin(input, builtin_width),
+        }
+    }
+}
+
+/// The queue row holding `text` on `shown`.
+fn queue_row<'a>(shown: &'a str, text: &str) -> &'a str {
+    shown
+        .lines()
+        .find(|row| row.contains(text))
+        .unwrap_or_else(|| panic!("no {text:?} row\n{shown}"))
+}
+
+#[test]
+fn a_replacement_sees_the_builtin_cross_only_at_exact_fit() {
+    use std::rc::Rc;
+    // "use the parser" is 14 cells: with the four-cell prefix and the
+    // three-cell cross the row fits exactly at 21 columns.
+    let mut app = queued(21, 12);
+    let fake = Rc::new(BuiltinEcho::default());
+    app.install_renderer(fake.clone());
+    let wide = screen(&app, 21, 12);
+    // The built-in heading, rows and footer all draw through the
+    // replacement (`docs/tui.md`, "What a renderer returns").
+    assert!(wide.contains("Steering, joins"), "{wide}");
+    let fitted = queue_row(&wide, "use the parser");
+    assert!(
+        fitted.trim_end().ends_with("use the parser  ✕"),
+        "{fitted:?}"
+    );
+    let plain = queue_row(&wide, "and test it");
+    assert!(!plain.contains('✕'), "{plain:?}");
+    // One column short, the built-in omits its cross. Keep the paint
+    // area at 21 so a mutant that returns the cross at callback width 20
+    // cannot hide behind paint clipping.
+    let mut short_app = queued(21, 12);
+    let short_fake = Rc::new(BuiltinEcho {
+        builtin_width: Some(20),
+        ..BuiltinEcho::default()
+    });
+    short_app.install_renderer(short_fake.clone());
+    let short = screen(&short_app, 21, 12);
+    assert!(short.contains("Steering, joins"), "{short}");
+    let omitted = queue_row(&short, "use the parser");
+    assert!(!omitted.contains('✕'), "{omitted:?}");
+    // Exact-fit and one-short built-in results were returned to the same
+    // 21-column paint area at callback widths 21 and 20.
+    assert_eq!(&*fake.widths.borrow(), &[21]);
+    assert_eq!(&*short_fake.widths.borrow(), &[20]);
+}
+
 #[test]
 fn wide_and_combining_marks_draw_whole() {
     // `界` takes two cells and `é` here is `e` with a combining acute:
@@ -580,4 +662,316 @@ fn the_hint_clips_at_a_narrow_right_edge() {
             "cell {x}"
         );
     }
+}
+
+/// A `steering_queue` renderer recording its inputs: the folded lines
+/// it returns with the frame each animated call carries.
+#[derive(Debug)]
+struct RecordingRenderer {
+    lines: Vec<Vec<crate::ext::RawSpan>>,
+    interval: Option<std::time::Duration>,
+    inputs: std::cell::RefCell<Vec<crate::ext::SteeringQueue<'static>>>,
+    frames: std::cell::RefCell<Vec<u64>>,
+    nows: std::cell::RefCell<Vec<u64>>,
+}
+
+impl RecordingRenderer {
+    fn lines(texts: &[&str], interval: Option<std::time::Duration>) -> Self {
+        Self {
+            lines: texts
+                .iter()
+                .map(|text| {
+                    vec![crate::ext::RawSpan {
+                        text: (*text).to_owned(),
+                        fg: None,
+                        bg: None,
+                        bold: false,
+                        dim: false,
+                        italic: false,
+                        underline: false,
+                        link: None,
+                        click: None,
+                    }]
+                })
+                .collect(),
+            interval,
+            inputs: std::cell::RefCell::new(Vec::new()),
+            frames: std::cell::RefCell::new(Vec::new()),
+            nows: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    fn record(&self, input: &crate::ext::Input<'_>) {
+        let crate::ext::Input::SteeringQueue(queue) = input else {
+            panic!("a steering-queue input, got {input:?}");
+        };
+        // The recording owns its messages: the fold borrows the app.
+        let owned = crate::ext::SteeringQueue {
+            messages: queue
+                .messages
+                .iter()
+                .map(|message| crate::ext::SteeringMessage {
+                    text: Box::leak(message.text.to_owned().into_boxed_str()) as &str,
+                    images: message
+                        .images
+                        .iter()
+                        .map(|image| crate::ext::PromptImage {
+                            path: Box::leak(image.path.to_owned().into_boxed_str()) as &str,
+                            width: image.width,
+                            height: image.height,
+                        })
+                        .collect(),
+                    droppable: message.droppable,
+                    selectable: message.selectable,
+                    selected: message.selected,
+                })
+                .collect(),
+            flat: queue.flat,
+        };
+        self.inputs.borrow_mut().push(owned);
+    }
+}
+
+impl crate::ext::Renderer for RecordingRenderer {
+    fn name(&self) -> &str {
+        "test"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "steering_queue"
+    }
+
+    fn animate_interval(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+    ) -> Option<std::time::Duration> {
+        self.interval
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        self.record(input);
+        crate::ext::Decision::Draw {
+            extension: "test".into(),
+            lines: self.lines.clone(),
+        }
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame and its wall time travel with the draw context"
+    )]
+    fn render_animated(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        _width: u16,
+        frame: u64,
+        now: u64,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> (crate::ext::Decision, bool) {
+        self.record(input);
+        self.frames.borrow_mut().push(frame);
+        self.nows.borrow_mut().push(now);
+        (
+            crate::ext::Decision::Draw {
+                extension: "test".into(),
+                lines: self.lines.clone(),
+            },
+            true,
+        )
+    }
+}
+
+/// An app with a three-row queue: a droppable text row, a droppable row
+/// with an image, and Fiber's own row.
+fn imaged(width: u16, height: u16) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(width, height);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "turn_started",
+        serde_json::json!({"input": [{
+            "type": "message",
+            "source": "driver",
+            "content": [{"type": "text", "text": "hi"}],
+        }]}),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "steering_queue",
+        serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "first line\nsecond line"}],
+             "source": "driver", "command_id": "c_1"},
+            {"content": [
+                {"type": "text", "text": "look"},
+                {"type": "image", "path": "artifacts/a.png",
+                 "mime_type": "image/png", "width": 8, "height": 8}],
+             "source": "driver", "command_id": "c_2"},
+            {"content": [{"type": "text", "text": "note"}],
+             "source": "fiber"},
+        ]}),
+    ));
+    app
+}
+
+/// Draws `app`'s steering queue alone: the rows' text and the click
+/// targets it leaves.
+fn draw_queue(app: &App, width: u16, height: u16) -> (String, Vec<crate::mouse::Target>, u16) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    super::draw(app, area, &mut bottom, &mut buf, &mut targets);
+    (crate::view::text(&buf), targets, bottom)
+}
+
+#[test]
+fn messages_carry_full_text_images_and_flags_oldest_first() {
+    let app = imaged(60, 12);
+    let messages = app.steering_messages();
+    // docs/tui.md:2891: the queued messages oldest-first (three fixture rows).
+    assert_eq!(messages.len(), 3); // docs/tui.md:2891: oldest-first messages.
+    // The first row keeps its full raw text, newline included: only the
+    // laid rows flatten it. docs/tui.md:2891: oldest-first, with text and flags.
+    assert_eq!(messages[0].text, "first line\nsecond line"); // docs/tui.md:2891.
+    assert!(messages[0].images.is_empty());
+    assert!(messages[0].droppable);
+    assert!(messages[0].selectable);
+    assert!(!messages[0].selected);
+    // The second row carries its image's path and size. docs/tui.md:2891: oldest-first.
+    assert_eq!(messages[1].text, "look"); // docs/tui.md:2891.
+    assert!(messages[1].droppable);
+    assert!(!messages[1].selectable);
+    let image = messages[1].images.first().expect("one image");
+    assert_eq!(image.path, "artifacts/a.png");
+    assert_eq!((image.width, image.height), (8, 8));
+    // Fiber's own row drops and picks nothing.
+    assert!(!messages[2].droppable);
+    assert!(!messages[2].selectable);
+    assert!(!messages[2].selected);
+    // The person's choice lands on the picked row.
+    let mut picked = imaged(60, 12);
+    picked.select_steering(0);
+    let messages = picked.steering_messages();
+    assert!(messages[0].selected);
+    assert!(!messages[1].selected);
+}
+
+#[test]
+fn an_empty_replacement_hides_heading_rows_and_footer() {
+    let mut app = queued(80, 24);
+    let fake = std::rc::Rc::new(RecordingRenderer::lines(&[], None));
+    app.install_renderer(fake);
+    // No rows reserved and none drawn, and no target left behind: the
+    // heading, the rows and the footer all hide. docs/tui.md:2885-2887.
+    assert_eq!(super::count(&app, 80), 0); // docs/tui.md:2886: no lines hides all three.
+    let (shown, targets, _) = draw_queue(&app, 80, 24);
+    assert!(!shown.contains("Steering"), "{shown}");
+    assert!(!shown.contains("use the parser"), "{shown}");
+    assert!(
+        targets.iter().all(|target| !matches!(
+            target.id,
+            crate::mouse::TargetId::Steering(_) | crate::mouse::TargetId::DropSteering(_)
+        )),
+        "{targets:?}"
+    );
+    // The layout drops the hidden rows: without a renderer the same app
+    // reserves four rows more.
+    let plain = queued(80, 24);
+    // docs/tui.md:2885-2887: heading, rows and footer (four rows) hide together.
+    assert_eq!(app.below_rows() + 4, plain.below_rows()); // docs/tui.md:2886.
+    // With no rows at all and no renderer, the builtin reserves nothing
+    // either: the heading and footer hide with the rows.
+    let mut drained = queued(80, 24);
+    drained.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "steering_queue",
+        serde_json::json!({"messages": []}),
+    ));
+    assert_eq!(super::count(&drained, 80), 0); // docs/tui.md:2893: empty queue draws nothing.
+    let (shown, targets, _) = draw_queue(&drained, 80, 24);
+    assert!(!shown.contains("Steering"), "{shown}");
+    assert!(
+        targets.iter().all(|target| !matches!(
+            target.id,
+            crate::mouse::TargetId::Steering(_) | crate::mouse::TargetId::DropSteering(_)
+        )),
+        "{targets:?}"
+    );
+    // Counting an empty queue runs nothing, even animated with the wall
+    // time set: the count stays zero and the renderer sees no call.
+    use fakes::clock::FakeClock;
+    let clock = FakeClock::new();
+    drained.set_now(clock.origin(), 2_000);
+    let animated = std::rc::Rc::new(RecordingRenderer::lines(
+        &["queued one"],
+        Some(std::time::Duration::from_millis(500)),
+    ));
+    drained.install_renderer(animated.clone());
+    assert_eq!(super::count(&drained, 80), 0); // docs/tui.md:2893: empty queue draws nothing.
+    assert!(animated.inputs.borrow().is_empty()); // docs/tui.md:2893: no renderer runs.
+    assert!(animated.frames.borrow().is_empty()); // docs/tui.md:2893.
+}
+
+#[test]
+fn a_replacement_draws_without_per_message_targets() {
+    let mut app = queued(80, 24);
+    let fake = std::rc::Rc::new(RecordingRenderer::lines(
+        &["queued one", "queued two"],
+        None,
+    ));
+    app.install_renderer(fake);
+    let (shown, targets, _) = draw_queue(&app, 80, 24);
+    assert!(shown.contains("queued one"), "{shown}");
+    assert!(shown.contains("queued two"), "{shown}");
+    assert!(!shown.contains("Steering"), "{shown}");
+    // No per-message target survives on a replacement row.
+    assert!(
+        targets.iter().all(|target| !matches!(
+            target.id,
+            crate::mouse::TargetId::Steering(_) | crate::mouse::TargetId::DropSteering(_)
+        )),
+        "{targets:?}"
+    );
+    // Keys still drop and pick rows under the replacement: dropping the
+    // first row sends its `steer_drop` line. The link starts down in
+    // these fixtures, so the test raises it the way a hub hello would.
+    app.outbox.link = crate::app::Link::Up;
+    let crate::app::Effect::Send(lines) = app.drop_steering(0) else {
+        panic!("dropping a row sends its line");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: serde_json::Value = serde_json::from_str(&lines[0]).expect("a command line");
+    assert_eq!(line["command"], "steer_drop");
+    assert_eq!(line["args"]["command_id"], "c_1");
+    app.select_steering(0);
+    assert!(app.steering_messages()[0].selected);
+}
+
+#[test]
+fn an_animated_replacement_records_frame_and_now() {
+    use fakes::clock::FakeClock;
+    let mut app = queued(80, 24);
+    let clock = FakeClock::new();
+    app.set_now(clock.origin(), 1_000);
+    let fake = std::rc::Rc::new(RecordingRenderer::lines(
+        &["queued one"],
+        Some(std::time::Duration::from_millis(500)),
+    ));
+    app.install_renderer(fake.clone());
+    let (shown, _, _) = draw_queue(&app, 80, 24);
+    assert!(shown.contains("queued one"), "{shown}");
+    // docs/tui.md:3121: every animated slot carries frame and now.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:3044: one call on the miss; 3121: frame in input.
+    assert_eq!(fake.nows.borrow().clone(), vec![1_000]); // docs/tui.md:3044: one call on the miss; 3121: now in input.
 }

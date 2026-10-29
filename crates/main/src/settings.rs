@@ -359,6 +359,7 @@ pub(crate) type SandboxHandle = Arc<Mutex<tools::SandboxSettings>>;
 pub(crate) fn sandbox_settings(
     config: &Config,
     fiber_home: &std::path::Path,
+    credential_files: &[std::path::PathBuf],
 ) -> tools::SandboxSettings {
     use std::path::PathBuf;
     fn expand(path: &str) -> PathBuf {
@@ -369,6 +370,23 @@ pub(crate) fn sandbox_settings(
         }
         PathBuf::from(path)
     }
+    // The existing resolved credential files ride the deny set: the
+    // sandbox's own read deny follows whatever the credential deny covers,
+    // so a credential path inside a writable root disables the sandbox for
+    // the session instead of being silently granted. A path with no file
+    // behind it merges nothing: there is no secret to protect yet, and a
+    // fresh install without credentials stays available.
+    let mut deny_read: Vec<PathBuf> = config
+        .list("sandbox.deny_read", None)
+        .into_iter()
+        .map(|path| expand(&path))
+        .collect();
+    deny_read.extend(
+        credential_files
+            .iter()
+            .filter(|path| path.exists())
+            .cloned(),
+    );
     tools::SandboxSettings {
         enabled: config.flag("sandbox.enabled", None).unwrap_or_default(),
         allow_write: config
@@ -376,11 +394,7 @@ pub(crate) fn sandbox_settings(
             .into_iter()
             .map(|path| expand(&path))
             .collect(),
-        deny_read: config
-            .list("sandbox.deny_read", None)
-            .into_iter()
-            .map(|path| expand(&path))
-            .collect(),
+        deny_read,
         fiber_home: fiber_home.to_path_buf(),
     }
 }
@@ -391,9 +405,13 @@ pub(crate) fn sandbox_settings(
 /// handle's existing home and only replaces the person-only keys. The next
 /// settings are computed before the lock is taken; only the assignment runs
 /// under it. A poisoned lock is recovered.
-pub(crate) fn refresh_sandbox(handle: &SandboxHandle, config: &Config) {
+pub(crate) fn refresh_sandbox(
+    handle: &SandboxHandle,
+    config: &Config,
+    credential_files: &[std::path::PathBuf],
+) {
     let fiber_home = support::lock(handle).fiber_home.clone();
-    let next = sandbox_settings(config, &fiber_home);
+    let next = sandbox_settings(config, &fiber_home, credential_files);
     *support::lock(handle) = next;
 }
 
