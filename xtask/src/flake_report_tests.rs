@@ -14,7 +14,7 @@ use super::{
     tested_line,
 };
 
-const TITLE: &str = "Flaky test: main::probe fails_once_then_passes";
+const TITLE: &str = "Flaky tests: main::probe";
 const FIX: &str = "4444444444444444444444444444444444444444";
 
 /// The decisions as parsed JSON objects, in output order.
@@ -383,7 +383,7 @@ fn duplicate_titles_decide_once() {
     input["flakes"] = json!([{"title": TITLE}, {"title": TITLE}]);
     assert_eq!(run(&input, &[]).len(), 1);
     let mut input = base();
-    input["flakes"] = json!([{"title": TITLE}, {"title": "Flaky test: other"}]);
+    input["flakes"] = json!([{"title": TITLE}, {"title": "Flaky tests: other"}]);
     assert_eq!(run(&input, &[]).len(), 2);
 }
 
@@ -420,7 +420,7 @@ fn event_requests_select_only_titles_needing_events() {
     // An open match and a title with no closed issue need no fetch; a
     // failed open lookup decides unknown without events.
     let mut input = base();
-    input["flakes"] = json!([{"title": TITLE}, {"title": "Flaky test: other"}]);
+    input["flakes"] = json!([{"title": TITLE}, {"title": "Flaky tests: other"}]);
     with_closed(
         &mut input,
         vec![closed_issue(9, TITLE, "2026-10-24T11:00:00Z")],
@@ -495,10 +495,10 @@ fn field<'a>(record: &'a Value, key: &str) -> Option<&'a str> {
     record.get(key).and_then(Value::as_str)
 }
 
-/// The record for test `name`, found by its title: the writer loop handles
+/// The record for binary `id`, found by its title: the writer loop handles
 /// each record on its own, so record order is not part of the contract.
-fn titled<'a>(out: &'a [Value], name: &str) -> &'a Value {
-    let title = format!("Flaky test: {name}");
+fn titled<'a>(out: &'a [Value], id: &str) -> &'a Value {
+    let title = format!("Flaky tests: {id}");
     out.iter()
         .find(|record| field(record, "title") == Some(title.as_str()))
         .unwrap_or_else(|| panic!("no record titled {title}"))
@@ -516,7 +516,7 @@ fn a_panic_with_a_file_goes_on_to_the_lookup() {
     assert_eq!(field(record, "failing"), Some(FILE));
     assert_eq!(field(record, "name"), Some("main::t"));
     assert_eq!(field(record, "runner"), Some("ubuntu-24.04"));
-    assert_eq!(field(record, "title"), Some("Flaky test: main::t"));
+    assert_eq!(field(record, "title"), Some("Flaky tests: main::t"));
     assert_eq!(field(record, "detail"), Some(PANIC));
     let want_tested = format!("tested {SHA} = main {BASE_SHA} + head {HEAD_SHA}");
     assert_eq!(field(record, "tested"), Some(want_tested.as_str()));
@@ -606,7 +606,7 @@ fn a_line_with_no_tab_has_empty_detail() {
     let record = titled(&out, "main::t");
     assert_eq!(field(record, "name"), Some("main::t"));
     assert_eq!(field(record, "detail"), Some(""));
-    assert_eq!(field(record, "title"), Some("Flaky test: main::t"));
+    assert_eq!(field(record, "title"), Some("Flaky tests: main::t"));
     assert_eq!(field(record, "failing"), None);
 }
 
@@ -625,7 +625,7 @@ fn a_line_that_is_only_a_tab_names_the_empty_test() {
     let out = classified(&[("linux", "\t")], &push_run());
     let record = titled(&out, "");
     assert_eq!(field(record, "name"), Some(""));
-    assert_eq!(field(record, "title"), Some("Flaky test: "));
+    assert_eq!(field(record, "title"), Some("Flaky tests: "));
 }
 
 #[test]
@@ -661,7 +661,7 @@ fn a_repeated_title_is_written_once_from_its_first_occurrence() {
     let second = "main::t\tthread other panicked at crates/other.rs:3";
     let text = format!("{first}\n{second}\n");
     let out = classified(&[("linux", &text)], &push_run());
-    // docs/testing/running.md, "Flaky tests": "Within one report job a test
+    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
     assert_eq!(out.len(), 1);
     assert_eq!(field(&out[0], "detail"), Some(PANIC));
@@ -676,7 +676,7 @@ fn a_repeated_title_is_written_once_from_its_first_occurrence() {
             pr_files: "",
         },
     );
-    // docs/testing/running.md, "Flaky tests": "Within one report job a test
+    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
     assert_eq!(out.len(), 1);
     assert_eq!(field(&out[0], "runner"), Some("zeta"));
@@ -684,6 +684,100 @@ fn a_repeated_title_is_written_once_from_its_first_occurrence() {
         field(&out[0], "detail"),
         Some("thread other panicked at crates/other.rs:3")
     );
+}
+
+#[test]
+fn two_tests_of_one_binary_make_one_record() {
+    // One binary id, two test names: the second test is dropped, and the
+    // record keeps the first occurrence's name, runner and detail.
+    let first = format!("main::probe fails_once\t{PANIC}");
+    let second = "main::probe other_test\tthread other panicked at crates/other.rs:3";
+    let text = format!("{first}\n{second}\n");
+    let out = classified(&[("linux", &text)], &push_run());
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "main::probe");
+    assert_eq!(field(record, "title"), Some("Flaky tests: main::probe"));
+    assert_eq!(field(record, "name"), Some("main::probe fails_once"));
+    assert_eq!(field(record, "runner"), Some("linux"));
+    assert_eq!(field(record, "detail"), Some(PANIC));
+}
+
+#[test]
+fn two_tests_of_one_binary_make_one_record_across_lists() {
+    // File-name byte order reads alpha's list first, so its occurrence
+    // wins the dedupe: one record, with alpha's runner and detail.
+    let first = format!("main::probe fails_once\t{PANIC}");
+    let second = "main::probe other_test\tthread other panicked at crates/other.rs:3";
+    let out = classified(&[("alpha", &first), ("zeta", second)], &push_run());
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "main::probe");
+    assert_eq!(field(record, "title"), Some("Flaky tests: main::probe"));
+    assert_eq!(field(record, "name"), Some("main::probe fails_once"));
+    assert_eq!(field(record, "runner"), Some("alpha"));
+    assert_eq!(field(record, "detail"), Some(PANIC));
+}
+
+#[test]
+fn two_binaries_make_two_records() {
+    let text = "main::a t1\tfirst detail\nmain::b t1\tsecond detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    assert_eq!(out.len(), 2);
+    let a = titled(&out, "main::a");
+    assert_eq!(field(a, "title"), Some("Flaky tests: main::a"));
+    assert_eq!(field(a, "name"), Some("main::a t1"));
+    assert_eq!(field(a, "detail"), Some("first detail"));
+    let b = titled(&out, "main::b");
+    assert_eq!(field(b, "title"), Some("Flaky tests: main::b"));
+    assert_eq!(field(b, "name"), Some("main::b t1"));
+    assert_eq!(field(b, "detail"), Some("second detail"));
+}
+
+#[test]
+fn a_unit_test_binary_id_without_colons() {
+    // A unit-test binary id has no `::`: the id up to the first space is
+    // the title, and the bare id gives the same title.
+    let text = "fiber-core tests::foo\tfirst detail\nfiber-core\tsecond detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "fiber-core");
+    assert_eq!(field(record, "title"), Some("Flaky tests: fiber-core"));
+    assert_eq!(field(record, "name"), Some("fiber-core tests::foo"));
+    assert_eq!(field(record, "detail"), Some("first detail"));
+}
+
+#[test]
+fn a_name_with_no_space_is_the_whole_id() {
+    let out = classified(&[("linux", "main::t\tsome detail")], &push_run());
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "main::t");
+    assert_eq!(field(record, "title"), Some("Flaky tests: main::t"));
+    assert_eq!(field(record, "name"), Some("main::t"));
+    assert_eq!(field(record, "detail"), Some("some detail"));
+}
+
+#[test]
+fn a_leading_space_gives_the_empty_id() {
+    // The binary id is the name up to the first space, so a leading space
+    // gives the empty id. Nextest test names cannot start with a space, so
+    // this line is unreachable from the report; the test pins the split.
+    let out = classified(&[("linux", " x\tsome detail")], &push_run());
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "");
+    assert_eq!(field(record, "title"), Some("Flaky tests: "));
+    assert_eq!(field(record, "name"), Some(" x"));
+    assert_eq!(field(record, "detail"), Some("some detail"));
+}
+
+#[test]
+fn a_tabless_line_with_spaces_gives_the_binary_id() {
+    // No TAB: the whole line is the name, the detail is empty, and the
+    // title still cuts at the first space.
+    let out = classified(&[("linux", "main::a x")], &push_run());
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "main::a");
+    assert_eq!(field(record, "title"), Some("Flaky tests: main::a"));
+    assert_eq!(field(record, "name"), Some("main::a x"));
+    assert_eq!(field(record, "detail"), Some(""));
 }
 
 #[test]
@@ -737,8 +831,8 @@ fn classification_takes_no_issue_data() {
     let out = classified(&[("linux", &line)], &context);
     assert_eq!(field(&out[0], "action"), Some("stale-base"));
     let mut input = base();
-    input["flakes"] = json!([{"title": "Flaky test: main::t"}]);
-    input["open"]["issues"] = json!([{"number": 7, "title": "Flaky test: main::t"}]);
+    input["flakes"] = json!([{"title": "Flaky tests: main::t"}]);
+    input["open"]["issues"] = json!([{"number": 7, "title": "Flaky tests: main::t"}]);
     let out = run(&input, &[]);
     assert!(out.is_empty());
 }
