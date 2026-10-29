@@ -197,23 +197,16 @@ fn run(
     run: config::Runner<'_>,
 ) -> Result<(), CliError> {
     // Each notice as one line on stderr: this load's, the session
-    // extensions', then discovery and placeholders', each once per
-    // command run.
+    // extensions', then discovery and placeholders'. The session load
+    // merges the same repository set, so it repeats the providers load's
+    // shadow notices; the batch groups by code, so one pass prints one
+    // notice per code (`docs/errors.md`, "Notices").
     let (mut providers, config, set, loading) =
         providers_config_and_set(home, workspace, Arc::clone(&clock))?;
     let mut notices: Vec<Notice> = config.notices().to_vec();
     notices.extend(loading);
     let extensions = load(&config, set);
-    // The session load merges the same repository set, so it repeats the
-    // providers load's shadow notices: each message prints once per run.
-    for notice in extensions.notices() {
-        if !notices
-            .iter()
-            .any(|printed| printed.message == notice.message)
-        {
-            notices.push(notice);
-        }
-    }
+    notices.extend(extensions.notices());
     // Each placeholder value from the hub's captured environment, so the
     // list agrees with the session the hub would start; no hub answers
     // and the process environment serves, as before.
@@ -235,6 +228,7 @@ fn run(
             .iter()
             .filter_map(|group| group.notice(&listed)),
     );
+    let notices = contract::events::group_notices(notices, contract::events::grouped_lead);
     crate::config::print_notices(err, &notices);
     // A stale list refreshes in the background for the next run: the
     // detached child, never waited on. A spawn that fails is ignored:

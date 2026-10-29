@@ -1582,16 +1582,22 @@ fn a_shadowed_personal_provider_prints_one_notice() {
                 setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
             assert!(result.is_ok(), "{result:?} {err}");
             // The repository copy wins, and its shadow over the personal
-            // install prints once, not once per load.
+            // install prints as one grouped notice, not once per load:
+            // the lead plus one item line per load repeating it.
             assert!(out.contains("acme/repo-model"), "{out:?}");
             assert!(!out.contains("personal-model"), "{out:?}");
-            assert_eq!(
-                err.lines()
-                    .filter(|line| line.contains("in place of your install"))
-                    .count(),
-                1,
+            let shadowed: Vec<&str> = err
+                .lines()
+                .filter(|line| line.contains("in place of your install"))
+                .collect();
+            assert_eq!(shadowed.len(), 3, "{err:?}");
+            assert!(
+                shadowed[0].starts_with("2 extensions are shadowed: "),
                 "{err:?}"
             );
+            assert!(shadowed[1].starts_with("- "), "{err:?}");
+            assert!(shadowed[2].starts_with("- "), "{err:?}");
+            assert_eq!(shadowed[1], shadowed[2]);
         },
     );
 }
@@ -1853,7 +1859,9 @@ fn models_search_that_matches_no_hidden_model_prints_no_notice() {
 }
 
 #[test]
-fn models_prints_one_notice_per_provider_and_setting_in_order() {
+fn models_groups_left_out_notices_by_code_in_order() {
+    // One `model_unconfigured` notice for the run: the count and the
+    // first group up front, every provider and setting listed in order.
     let setup = Setup::new();
     setup.install_templated(
         "zed-ext",
@@ -1873,12 +1881,18 @@ fn models_prints_one_notice_per_provider_and_setting_in_order() {
     assert_eq!(out, "");
     assert_eq!(
         err,
-        "`acme`: 1 model needs the setting `region` for its base URL, which has no value. \
-         Run `fiber login acme`, or set `region` in `config/acme-ext.json` in Fiber home.\n\
-         `acme`: 1 model needs the setting `workspace` for its base URL, which has no value. \
-         Run `fiber login acme`, or set `workspace` in `config/acme-ext.json` in Fiber home.\n\
-         `zed`: 1 model needs the setting `workspace` for its base URL, which has no value. \
-         Run `fiber login zed`, or set `workspace` in `config/zed-ext.json` in Fiber home.\n"
+        "3 models are unconfigured: `acme`: 1 model needs the setting `region` for its base URL, \
+         which has no value. Run `fiber login acme`, or set `region` in `config/acme-ext.json` in \
+         Fiber home.\n\
+         - `acme`: 1 model needs the setting `region` for its base URL, which has no value. \
+         Run `fiber login acme`, or set `region` in `config/acme-ext.json` in Fiber home. \
+         (extension `acme-ext`)\n\
+         - `acme`: 1 model needs the setting `workspace` for its base URL, which has no value. \
+         Run `fiber login acme`, or set `workspace` in `config/acme-ext.json` in Fiber home. \
+         (extension `acme-ext`)\n\
+         - `zed`: 1 model needs the setting `workspace` for its base URL, which has no value. \
+         Run `fiber login zed`, or set `workspace` in `config/zed-ext.json` in Fiber home. \
+         (extension `zed-ext`)\n"
     );
 }
 
@@ -1897,9 +1911,11 @@ fn models_keeps_the_per_model_notice_for_a_value_that_is_not_a_host() {
     assert!(out.contains("acme/keep"), "{out:?}");
     assert_eq!(
         err,
-        "The model `acme/hide-1` needs the setting `workspace` for its base URL, \
-         whose value is not a host.\n\
-         The model `acme/hide-2` needs the setting `workspace` for its base URL, \
-         whose value is not a host.\n"
+        "2 models are unconfigured: The model `acme/hide-1` needs the setting `workspace` for \
+         its base URL, whose value is not a host.\n\
+         - The model `acme/hide-1` needs the setting `workspace` for its base URL, \
+         whose value is not a host. (extension `acme-ext`)\n\
+         - The model `acme/hide-2` needs the setting `workspace` for its base URL, \
+         whose value is not a host. (extension `acme-ext`)\n"
     );
 }
