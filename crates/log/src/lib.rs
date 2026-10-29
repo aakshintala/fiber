@@ -49,7 +49,7 @@ use contract::{ErrorCode, SessionId};
 pub use artifact::{OutputRead, Refusal, Unreadable, check_artifact_path, open_artifact};
 pub use delete::{delete_session, is_plain_dir};
 pub use dependents::{Children, dependents};
-pub use escalations::{AllowedEscalation, allowed_escalations};
+pub use escalations::{AllowedEscalation, ShellCall, allowed_escalations, reviewer_shell_calls};
 pub use export::export;
 pub use history::{Segment, history, history_to, last_line, last_seq};
 pub use media::read_media;
