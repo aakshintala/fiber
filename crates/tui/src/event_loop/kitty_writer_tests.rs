@@ -817,9 +817,9 @@ fn tty_lock_queued_loop_write_beats_later_writer_chunk() {
 }
 
 /// `loop_write` on a free tty acquires it at once: the wait parks
-/// only behind a writer chunk. A `==` to `!=` mutant parks on a free
-/// tty instead, so the deadline fails the test instead of hanging
-/// the shard.
+/// only behind a writer chunk. The wait names the writer-held flag
+/// directly, so no comparison flip can park it here; the deadline
+/// fails the test instead of hanging it.
 #[test]
 fn loop_write_acquires_a_free_tty_without_waiting() {
     let lock = Arc::new(TtyLock::new());

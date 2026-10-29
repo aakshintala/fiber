@@ -71,21 +71,13 @@ pub(crate) struct TtyLock {
     queued_hook: Mutex<Option<Sender<()>>>,
 }
 
-/// Who holds the tty: the writer for its chunk, place or delete, the loop
-/// for its write, or nobody. The writer and the loop never hold it
-/// together: one flag per holder could claim it twice.
-#[derive(Default, PartialEq, Eq)]
-enum TtyOwner {
-    #[default]
-    Free,
-    Writer,
-    Loop,
-}
-
 #[derive(Default)]
 struct State {
-    /// Who holds the tty for its current write.
-    owner: TtyOwner,
+    /// A writer chunk, place or delete holds the tty: loop writes wait
+    /// for it. The waits below never let both held flags stand together.
+    writer_holds: bool,
+    /// A loop write holds the tty: writer chunks wait for it.
+    loop_holds: bool,
     /// A loop write waits: the writer finishes at most its current chunk,
     /// then yields until the loop write completes.
     loop_waiting: bool,
@@ -103,16 +95,17 @@ impl TtyLock {
 
     /// Holds the tty for one writer chunk, place or delete: waits while a
     /// loop write waits or holds, so a queued loop write beats every later
-    /// writer chunk.
+    /// writer chunk. (`writer_holds` is always clear here: the single
+    /// writer thread drops its guard before the next acquire.)
     pub(crate) fn writer_chunk(&self) -> WriterChunkGuard<'_> {
         let mut state = lock(&self.state);
-        while state.loop_waiting || state.owner != TtyOwner::Free {
+        while state.loop_waiting || state.loop_holds {
             state = self
                 .changed
                 .wait(state)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        state.owner = TtyOwner::Writer;
+        state.writer_holds = true;
         WriterChunkGuard { lock: self }
     }
 
@@ -125,13 +118,16 @@ impl TtyLock {
         if let Some(hook) = lock(&self.queued_hook).take() {
             let _ = hook.send(()).ok();
         }
-        while state.owner == TtyOwner::Writer {
+        // A bare held flag, not an equality: a flipped comparison here
+        // parked every loop write forever, wedging the suite that takes
+        // this lock (`docs/testing/mutants.md`, "Proving a test bites").
+        while state.writer_holds {
             state = self
                 .changed
                 .wait(state)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        state.owner = TtyOwner::Loop;
+        state.loop_holds = true;
         LoopGuard { lock: self }
     }
 
@@ -151,7 +147,7 @@ pub(crate) struct WriterChunkGuard<'a> {
 impl Drop for WriterChunkGuard<'_> {
     fn drop(&mut self) {
         let mut state = lock(&self.lock.state);
-        state.owner = TtyOwner::Free;
+        state.writer_holds = false;
         self.lock.changed.notify_all();
     }
 }
@@ -164,7 +160,7 @@ pub(crate) struct LoopGuard<'a> {
 impl Drop for LoopGuard<'_> {
     fn drop(&mut self) {
         let mut state = lock(&self.lock.state);
-        state.owner = TtyOwner::Free;
+        state.loop_holds = false;
         state.loop_waiting = false;
         self.lock.changed.notify_all();
     }
