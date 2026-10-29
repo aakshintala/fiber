@@ -1391,9 +1391,10 @@ fn an_all_left_out_section_stays_visible_in_a_short_viewport() {
 #[test]
 fn paging_moves_across_count_rows_and_sections() {
     let mut app = choosing_left_out(160, 10);
-    // Six windowed items, two of them count rows: a page holds six.
+    // Six windowed items, two of them count rows: four focusable stops
+    // make the page step four, not six.
     let view = app.model_picker_view().expect("open");
-    assert_eq!(page_step(&view, 48), 6);
+    assert_eq!(page_step(&view, 48), 4);
     // A short screen fits one model: a page moves one.
     assert_eq!(page_step(&view, 10), 1);
     // The opening read answered, so the loading line takes no row.
@@ -1418,6 +1419,119 @@ fn paging_moves_across_count_rows_and_sections() {
         "{lines:?}"
     );
     assert!(lines.iter().any(|line| line.contains("z1")), "{lines:?}");
+}
+
+#[test]
+fn page_keys_jump_over_count_rows() {
+    let mut app = choosing_left_out(160, 48);
+    let catalogue = left_out_catalogue();
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
+    app.on_models(Ok(catalogue));
+    // Four focusable stops under two count rows: a full page holds
+    // four, so PageDown moves by three stops and PageUp moves back.
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(page_step(&view, 48), 4);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::PageDown, now), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    let z2 = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .find(|model| model.id == "z2")
+        .expect("z2 is shown")
+        .at;
+    assert_eq!(view.focused, Some(z2));
+    assert_eq!(app.on_key(Key::PageUp, now), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    let m1 = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .find(|model| model.id == "m1")
+        .expect("m1 is shown")
+        .at;
+    assert_eq!(view.focused, Some(m1));
+}
+
+#[test]
+fn a_first_count_row_needs_two_body_rows() {
+    let catalogue = Catalogue {
+        left_out: vec![LeftOutGroup {
+            provider: "opencode".to_owned(),
+            extension: "github.com/aakshintala/fiber/providers/opencode".to_owned(),
+            file: "config/opencode.json".to_owned(),
+            setting: "workspace".to_owned(),
+            login: true,
+            models: vec![LeftOutModel {
+                id: "o1".to_owned(),
+                name: None,
+            }],
+        }],
+        ..Catalogue::default()
+    };
+    let mut app = attached(80, 10);
+    app.on_models(Ok(catalogue.clone()));
+    open(&mut app);
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
+    app.on_models(Ok(catalogue));
+    let view = app.model_picker_view().expect("open");
+    // Two body rows keep the heading and its count.
+    let kept: Vec<String> = body(&view, 80, 10)
+        .iter()
+        .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
+        .collect();
+    assert!(
+        kept.iter().any(|line| line.contains("opencode")),
+        "{kept:?}"
+    );
+    assert!(
+        kept.iter()
+            .any(|line| line.contains("1 model needs workspace: run `fiber login opencode`")),
+        "{kept:?}"
+    );
+    // Fewer than two body rows omit that first count and its heading
+    // together: a count never shows without its provider.
+    let cut: Vec<String> = body(&view, 80, 9)
+        .iter()
+        .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
+        .collect();
+    assert!(cut.iter().all(|line| !line.contains("opencode")), "{cut:?}");
+    assert!(
+        cut.iter()
+            .all(|line| !line.contains("1 model needs workspace")),
+        "{cut:?}"
+    );
+}
+
+#[test]
+fn a_first_party_file_row_names_its_config_file() {
+    let catalogue = Catalogue {
+        models: Vec::new(),
+        installable: Vec::new(),
+        notices: Vec::new(),
+        lists: Vec::new(),
+        left_out: vec![LeftOutGroup {
+            provider: "opencode".to_owned(),
+            extension: "github.com/aakshintala/fiber/providers/opencode".to_owned(),
+            file: "config/opencode.json".to_owned(),
+            setting: "api_key".to_owned(),
+            login: false,
+            models: vec![LeftOutModel {
+                id: "o1".to_owned(),
+                name: None,
+            }],
+        }],
+    };
+    let mut app = attached(160, 48);
+    app.on_models(Ok(catalogue));
+    open(&mut app);
+    let text = screen(&app, 160, 48);
+    assert!(
+        text.contains("1 model needs api_key: set it in `config/opencode.json`"),
+        "{text}"
+    );
+    assert!(!text.contains("github.com"), "{text}");
 }
 
 /// A chip is `[text]` with a non-empty spaceless middle: `[]`, open

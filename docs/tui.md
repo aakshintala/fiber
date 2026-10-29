@@ -633,7 +633,7 @@ a click on it returns too. The views are:
   applies at the turn's end. The notice appears when the choice is sent; if
   the session rejects the choice, the rejection's notice replaces it. When
   `scoped_models` is set, the picker shows only those models, with a "show
-  all" toggle on Tab. Typing filters the list on every letter: each
+  all" toggle on Tab. A provider hidden by `scoped_models` has no section and no count row, and does not by itself make the picker show "No models match". Typing filters the list on every letter: each
   space-separated word of the query must match, in order but not
   necessarily next to each other and ignoring case, the model's provider,
   id or display name. A left-out count row matches the same way, against
@@ -686,7 +686,7 @@ a click on it returns too. The views are:
   model's chips. A model chosen for this session only gets a third row,
   "ⓢ this session only · nothing saved" dim. While a query is typed, the
   characters of each id it matched are underlined and bold; a query that
-  matches no model, no not-installed row and no left-out model shows one
+  matches no model, no count row and no not-installed row shows one
   line, "No models match" dim, and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
   Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
 
@@ -696,8 +696,8 @@ a click on it returns too. The views are:
   `accent`, " · not installed" dim. The scripted provider is never listed
   (`docs/model-routing.md`, "The scripted provider"), and `/thinking` and
   `/scoped-models` list none. Typing filters these rows by provider name as it
-  filters models, and a query that matches no model, no row and no left-out
-  model still shows the one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
+  filters models, and a query that matches no model, no count row and no not-installed row
+  still shows the one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
   walk the models and then these rows; no row is focused until ↓ or a click
   puts it there, so Enter with no row focused does what it does with none
   listed (a query that hides every model focuses nothing). The focused row

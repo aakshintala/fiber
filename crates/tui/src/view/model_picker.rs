@@ -544,11 +544,25 @@ fn model_fit(view: &PickerView, height: u16) -> usize {
     usize::from(height.saturating_sub(CHROME)).saturating_sub(reserved)
 }
 
-/// The page step over `view` at `height`: the windowed items, which
-/// the list pages by less one.
+/// The page step over `view` at `height`: the windowed focusable
+/// model and install stops, which the list pages by less one. Count
+/// rows consume viewport and window rows but never focus, so they stay
+/// in the window without growing the step.
 pub(crate) fn page_step(view: &PickerView, height: u16) -> usize {
-    let (start, end) = window(view, model_fit(view, height));
-    end.saturating_sub(start).max(1)
+    let fit = model_fit(view, height);
+    let shown = items(view);
+    let (start, end) = window(view, fit);
+    let mut step = 0;
+    for at in start..end {
+        if let Some(item) = shown.get(at) {
+            if matches!(item, Item::Model(_)) {
+                step += 1;
+            }
+        } else if view.installs.get(at.saturating_sub(shown.len())).is_some() {
+            step += 1;
+        }
+    }
+    step.max(1)
 }
 
 /// The spans' width in columns.
@@ -602,16 +616,26 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
     // heading; any other provider change opens one. On a short overlay
     // the focused model's heading would push its first row out of the
     // frame, so that heading alone is omitted: the focused row stays on
-    // screen, and nothing else is trimmed.
+    // screen, and nothing else is trimmed. A first count row with fewer
+    // than two body rows is omitted with its heading together: a
+    // nonfocusable count never shows without the provider that names
+    // it, while two rows keep both.
     let trim_heading = fit < 2
         && items.get(start).is_some_and(
             |item| matches!(item, Item::Model(flat) if Some(flat.row.at) == view.focused),
         );
+    let trim_count = fit < 2
+        && items
+            .get(start)
+            .is_some_and(|item| matches!(item, Item::Count(_)));
     let mut before = start
         .checked_sub(1)
         .and_then(|at| items.get(at))
         .map(|item| item.provider());
     for (n, at) in (start..end).enumerate() {
+        if n == 0 && trim_count {
+            continue;
+        }
         let Some(item) = items.get(at) else {
             if let Some(install) = view.installs.get(at.saturating_sub(items.len())) {
                 // The first not-installed row in the window sits below a
