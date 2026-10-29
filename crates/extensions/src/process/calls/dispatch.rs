@@ -61,11 +61,12 @@ impl ProcessExtension {
                         requests::Outcome::Answered(requests::Answer::Failure { code, message })
                     }
                 };
+                let accepted = self.accepted_line(&id, None, live.max_line());
                 match self
                     .shared
                     .table
-                    .settle_with_before_wake(&request_id, outcome, || {
-                        self.answer_accepted_on(live, &id, None);
+                    .settle_with_before_wake(&request_id, outcome, || match live.send(accepted) {
+                        Ok(()) | Err(_) => {}
                     }) {
                     requests::Settled::Completed => {}
                     requests::Settled::Stale => self.answer_stale(&id),

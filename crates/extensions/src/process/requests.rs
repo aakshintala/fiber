@@ -361,9 +361,10 @@ impl Table {
     }
 
     /// Completes `id` after `before_wake` has queued any response to the
-    /// child. A stale id never runs the callback. The queue operation must
-    /// not wait: it runs while the table excludes timeout and cancellation,
-    /// then the outcome and released stream gate become visible together.
+    /// child. A stale id never runs the callback. The callback must only
+    /// queue and must not wait or re-enter this table: it runs while the
+    /// table excludes timeout and cancellation, then the outcome and
+    /// released stream gate become visible together.
     pub(crate) fn settle_with_before_wake(
         &self,
         id: &RequestId,

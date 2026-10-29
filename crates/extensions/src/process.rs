@@ -575,6 +575,21 @@ impl ProcessExtension {
         id: &contract::CommandId,
         result: Option<contract::events::CommandResult>,
     ) {
+        let line = self.accepted_line(id, result, live.max_line());
+        // The writer only queues here; pipe I/O stays on its thread.
+        match live.send(line) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+
+    /// Builds the acceptance line, substituting a size rejection when the
+    /// accepted result would exceed the transport's framing cap.
+    fn accepted_line(
+        &self,
+        id: &contract::CommandId,
+        result: Option<contract::events::CommandResult>,
+        max_line: usize,
+    ) -> Vec<u8> {
         let payload = serde_json::to_value(&contract::events::CommandAccepted {
             command_id: id.clone(),
             result,
@@ -583,19 +598,14 @@ impl ProcessExtension {
         .and_then(|payload| payload.as_object().cloned())
         .unwrap_or_default();
         let line = envelope_line(&self.shared, "command_accepted", payload);
-        if line.len() > live.max_line() {
-            self.answer_rejected_on(
-                live,
+        if line.len() > max_line {
+            return self.rejected_line(
                 id,
                 ErrorCode::TooLarge,
                 "the result does not fit the 64 MiB wire cap".to_owned(),
             );
-            return;
         }
-        // The writer only queues here; pipe I/O stays on its thread.
-        match live.send(line) {
-            Ok(()) | Err(_) => {}
-        }
+        line
     }
 
     /// Answers one command rejected with its code and message.
@@ -612,6 +622,14 @@ impl ProcessExtension {
         code: ErrorCode,
         message: String,
     ) {
+        // The writer only queues here; pipe I/O stays on its thread.
+        match live.send(self.rejected_line(id, code, message)) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+
+    /// Builds a rejection line without touching the current transport.
+    fn rejected_line(&self, id: &contract::CommandId, code: ErrorCode, message: String) -> Vec<u8> {
         let payload = serde_json::to_value(&contract::events::CommandRejected {
             command_id: Some(id.clone()),
             code,
@@ -620,11 +638,7 @@ impl ProcessExtension {
         .ok()
         .and_then(|payload| payload.as_object().cloned())
         .unwrap_or_default();
-        let line = envelope_line(&self.shared, "command_rejected", payload);
-        // The writer only queues here; pipe I/O stays on its thread.
-        match live.send(line) {
-            Ok(()) | Err(_) => {}
-        }
+        envelope_line(&self.shared, "command_rejected", payload)
     }
 
     /// Rejects a call or reply naming a request that is no longer
