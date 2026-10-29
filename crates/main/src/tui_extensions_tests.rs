@@ -1289,9 +1289,18 @@ fn a_sessionless_adapter_sends_no_session_id_key() {
     assert_eq!(lines[0][0].text, "none");
 }
 
-/// Renders frame `frame` of the `ledger_row` slot through the animated
-/// path, with an empty built-in fallback.
-fn render_frame(renderer: &dyn Renderer, ctx: &SessionCtx, frame: u64) -> (Decision, bool) {
+/// Renders frame `frame` at wall time `now` of the `ledger_row` slot
+/// through the animated path, with an empty built-in fallback.
+/// The frame wall time the animated calls send: a fixed Unix
+/// millisecond, so the tests pin the value Lua reads.
+const NOW: u64 = 1_720_000_000_000;
+
+fn render_frame(
+    renderer: &dyn Renderer,
+    ctx: &SessionCtx,
+    frame: u64,
+    now: u64,
+) -> (Decision, bool) {
     let args = json!({});
     let row = tui::ext::LedgerRow {
         name: "shell",
@@ -1312,6 +1321,7 @@ fn render_frame(renderer: &dyn Renderer, ctx: &SessionCtx, frame: u64) -> (Decis
         &Input::LedgerRow(row),
         80,
         frame,
+        now,
         &|_, _| vec![],
     )
 }
@@ -1372,7 +1382,7 @@ fn animated_calls_pass_frame_width_and_input_through() {
     let (renderer, notices) = loader.load();
     assert!(notices.is_empty());
     for frame in [0, 7] {
-        let (decision, continues) = render_frame(&*renderer, &ctx(None), frame);
+        let (decision, continues) = render_frame(&*renderer, &ctx(None), frame, NOW);
         let Decision::Draw { lines, .. } = decision else {
             panic!("frame {frame} draws")
         };
@@ -1396,13 +1406,13 @@ fn animated_returns_map_continue_and_stop() {
     assert!(notices.is_empty());
     // `{ lines, animate = false }` draws once, then stops until its
     // input changes; `{ lines }` continues.
-    let (stopped, continues) = render_frame(&*renderer, &ctx(None), 0);
+    let (stopped, continues) = render_frame(&*renderer, &ctx(None), 0, NOW);
     let Decision::Draw { lines, .. } = stopped else {
         panic!("the stopping frame draws")
     };
     assert_eq!(lines[0][0].text, "first");
     assert!(!continues);
-    let (kept, continues) = render_frame(&*renderer, &ctx(None), 1);
+    let (kept, continues) = render_frame(&*renderer, &ctx(None), 1, NOW);
     let Decision::Draw { lines, .. } = kept else {
         panic!("the continuing frame draws")
     };
@@ -1430,7 +1440,7 @@ fn animated_wrong_shapes_fail_like_still_calls() {
         assert!(notices.is_empty());
         // Each wrong keyed shape fails exactly as a still wrong shape
         // does, and stops: the VM refuses the call, never the draw.
-        let (decision, continues) = render_frame(&*renderer, &ctx(None), 3);
+        let (decision, continues) = render_frame(&*renderer, &ctx(None), 3, NOW);
         let Decision::Fail(failure) = decision else {
             panic!("{name} fails")
         };
@@ -1493,7 +1503,7 @@ fn animated_deadline_reports_typed_extension_failure_and_switches_off() {
         Vec::new()
     };
     let (decision, continues) =
-        renderer.render_animated(&ctx(None), "ledger_row", &input, 80, 0, &over);
+        renderer.render_animated(&ctx(None), "ledger_row", &input, 80, 0, NOW, &over);
     let Decision::Fail(failure) = decision else {
         panic!("overdue frame fails")
     };
@@ -1506,7 +1516,8 @@ fn animated_deadline_reports_typed_extension_failure_and_switches_off() {
         SlotSelection::Absent
     );
     assert!(!renderer.fills("ledger_row"));
-    let (decision, _) = renderer.render_animated(&ctx(None), "ledger_row", &input, 80, 1, &over);
+    let (decision, _) =
+        renderer.render_animated(&ctx(None), "ledger_row", &input, 80, 1, NOW, &over);
     assert!(matches!(decision, Decision::NotForSession { .. }));
 }
 

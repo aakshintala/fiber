@@ -2439,7 +2439,8 @@ fn closed_draws_cache_the_still_or_stored_frame_without_animation_state() {
     assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1, 1]); // docs/tui.md:2994: closed draws cache frame 0 without changing animation state.
 }
 
-/// A notice seam holding `fake` on page 0.
+/// A notice seam holding `fake` on page 0, with the frame wall time
+/// set, so animated draws run.
 fn notice_bound(fake: std::rc::Rc<dyn crate::ext::Renderer>) -> crate::ext::Bound {
     let handle = crate::ext::Handle::create();
     handle.set(fake);
@@ -2452,6 +2453,7 @@ fn notice_bound(fake: std::rc::Rc<dyn crate::ext::Renderer>) -> crate::ext::Boun
             halves: None,
         },
         flat: false,
+        now: Some(1_000),
     }
 }
 
@@ -2509,6 +2511,115 @@ fn an_animated_notice_draws_its_cached_frame_zero_still() {
     assert_eq!(fake.frames.borrow().clone(), vec![0, 0]);
     bound.cache.mark_painted(&[tag_of(&second)]);
     assert_eq!(bound.cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+}
+
+#[test]
+fn an_animated_notice_without_wall_time_draws_builtin() {
+    use crate::ext::tests::AnimatedRenderer;
+    crate::work::take();
+    let cache = Cache::default();
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling("notice", ANIM_INTERVAL, 1));
+    let handle = crate::ext::Handle::create();
+    handle.set(fake.clone());
+    let bound = crate::ext::Bound {
+        handle,
+        cache: Arc::new(cache),
+        page: page(0),
+        ctx: crate::ext::SessionCtx {
+            session_id: Some(contract::SessionId("s".into())),
+            halves: None,
+        },
+        flat: false,
+        now: None,
+    };
+    // Without the frame wall time there is no animated call: the slot
+    // draws its built-in, invoking and memoizing nothing.
+    assert!(bound.notice_lines(7, "io_failed", "x", 20).is_none());
+    assert!(fake.frames.borrow().is_empty());
+    assert!(bound.cache.take_failures().is_empty());
+}
+
+#[test]
+fn a_warm_count_promotes_its_paint_at_a_new_width() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let arguments = serde_json::json!({});
+    let row = input("shell", "first", &arguments);
+    let draw = |frame: u64| {
+        calls.set(calls.get() + 1);
+        (
+            Decision::Draw {
+                extension: "test".into(),
+                lines: vec![vec![raw(&format!("f{frame}"))]],
+            },
+            true,
+        )
+    };
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    // A cold count stores frame 0 through the closed path, writing no
+    // animation state and asking no due: the dues check stays shut
+    // until a paint marks, so it runs only after the promotion below.
+    let counted = cache
+        .lines_animated_closed(page(0), "ledger_row", "test", None, &row, 20, draw)
+        .expect("counted frame 0");
+    assert_eq!(calls.get(), 1);
+    assert!(text_of(&counted).starts_with("f0"), "{counted:?}");
+    // The paint promotes the stored frame 0 instead of calling again,
+    // initializing the item's animation state as a fresh draw would.
+    let painted = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("painted frame 0");
+    assert_eq!(calls.get(), 1, "paint promotes the count");
+    assert_eq!(text_of(&painted), text_of(&counted));
+    cache.mark_painted(&[tag_of(&painted)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    // The next frame advances with a call; a count at a new width stores
+    // that warmer frame, and the paint there promotes it.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let advanced = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("advanced frame 1");
+    assert_eq!(calls.get(), 2);
+    assert!(text_of(&advanced).starts_with("f1"), "{advanced:?}");
+    let counted_wide = cache
+        .lines_animated_closed(page(0), "ledger_row", "test", None, &row, 24, draw)
+        .expect("counted frame 1 at the new width");
+    assert_eq!(calls.get(), 3);
+    assert!(text_of(&counted_wide).starts_with("f1"), "{counted_wide:?}");
+    let painted_wide = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            24,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("painted frame 1 at the new width");
+    assert_eq!(calls.get(), 3, "a warm paint promotes the warm count");
+    assert_eq!(text_of(&painted_wide), text_of(&counted_wide));
 }
 
 /// Paints animated notice `id` holding `text` at `width` on `cache`,
@@ -2769,6 +2880,10 @@ impl crate::ext::Renderer for FailingNotice {
     ) -> Option<std::time::Duration> {
         Some(ANIM_INTERVAL)
     }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame and its wall time travel with the draw context"
+    )]
     fn render_animated(
         &self,
         _ctx: &crate::ext::SessionCtx,
@@ -2776,6 +2891,7 @@ impl crate::ext::Renderer for FailingNotice {
         _input: &crate::ext::Input<'_>,
         _width: u16,
         frame: u64,
+        _now: u64,
         _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
     ) -> (Decision, bool) {
         let _ = frame;
@@ -2783,7 +2899,8 @@ impl crate::ext::Renderer for FailingNotice {
     }
 }
 
-/// A failing `notice` bound on shared `cache` at page `index`.
+/// A failing `notice` bound on shared `cache` at page `index`, with
+/// the frame wall time set, so animated draws run.
 fn failing_bound(cache: Arc<Cache>, index: usize) -> crate::ext::Bound {
     let handle = crate::ext::Handle::create();
     handle.set(std::rc::Rc::new(FailingNotice));
@@ -2796,6 +2913,7 @@ fn failing_bound(cache: Arc<Cache>, index: usize) -> crate::ext::Bound {
             halves: None,
         },
         flat: false,
+        now: Some(1_000),
     }
 }
 

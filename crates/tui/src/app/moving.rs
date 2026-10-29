@@ -17,6 +17,7 @@ impl App {
         // A changed animated line count requests one corrective frame;
         // recount after the previous frame has closed, before laying out.
         self.screen.pages_mut().recount_animated();
+        self.screen.pages_mut().ext.wall_ms = Some(wall_ms);
         self.motion.set_now(now, wall_ms);
         self.set_wall(wall_ms);
     }

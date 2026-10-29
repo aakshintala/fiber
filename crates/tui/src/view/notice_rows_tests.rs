@@ -903,6 +903,8 @@ fn animated_app(rows: usize) -> (App, std::rc::Rc<crate::ext::tests::AnimatedRen
         rows,
     ));
     app.install_renderer(fake.clone());
+    let wall = 1_000;
+    app.set_now(fakes::clock::FakeClock::new().origin(), wall);
     (app, fake)
 }
 
@@ -954,6 +956,7 @@ fn draw_drops_rows_past_the_top_without_their_keys() {
     ));
     app.install_renderer(fake.clone());
     let t0 = fakes::clock::FakeClock::new().origin();
+    app.set_now(t0, 1_000);
     // Frame 0 draws two lines, and the tall draw paints both keys.
     // docs/tui.md:2740: a notice replacement with more lines than the
     // notice rows left keeps its first lines in order and drops the rest.
