@@ -11,8 +11,9 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::{
-    FileOutcome, NotesSaved, NotesWrite, ReadOnlyEntryProblem, ReadOnlyFlags, same_directory,
-    save_reviewer_notes, validate_read_only_entry,
+    FileOutcome, NotesSaved, NotesWrite, ReadOnlyEntryProblem, ReadOnlyFlags, overlaps,
+    read_only_keys, same_directory, save_reviewer_notes, unread_keys, validate_read_only_entry,
+    with_notes_and_entries,
 };
 use crate::home::ProjectKey;
 use crate::reviewer_notes;
@@ -606,6 +607,56 @@ fn same_directory_with_a_missing_project_directory_is_false() {
             assert!(matches!(result, Ok(false)), "got {result:?}");
         },
     );
+}
+
+#[test]
+fn overlaps_accepts_a_strict_descendant_when_only_the_first_side_holds() {
+    assert!(overlaps("acme-cli query extra", "acme-cli query"));
+    assert!(overlaps("acme-cli query", "acme-cli query extra"));
+}
+
+#[test]
+fn unread_keys_treats_only_not_found_as_an_empty_layer() {
+    fakes::within(
+        "unread read-only keys",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            assert!(matches!(unread_keys(&setup.global()), Ok(keys) if keys.is_empty()));
+            fs::create_dir_all(setup.global()).unwrap();
+            assert!(matches!(
+                unread_keys(&setup.global()),
+                Err(ReadOnlyEntryProblem::Malformed)
+            ));
+        },
+    );
+}
+
+#[test]
+fn read_only_keys_returns_the_exact_union_of_both_layers() {
+    fakes::within(
+        "read-only key union",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(&setup.global(), r#"{"shell":{"read_only":{"acme-cli query":{"flags":[]},"git status":{"flags":["--short"]}}}}"#);
+            setup.write(
+                &setup.project_file(),
+                r#"{"shell":{"read_only":{"cargo test":{"flags":[]}}}}"#,
+            );
+            let mut keys = read_only_keys(&setup.home, &Setup::project()).unwrap();
+            keys.sort();
+            assert_eq!(keys, ["acme-cli query", "cargo test", "git status"]);
+        },
+    );
+}
+
+#[test]
+fn existing_reviewer_context_is_cleared_even_when_new_text_is_empty() {
+    let root = serde_json::json!({"reviewer": {"context": "old", "tone": "dry"}});
+    let merged = with_notes_and_entries(Path::new("config.json"), root, "", &[]).unwrap();
+    assert_eq!(merged["reviewer"]["context"], "");
+    assert_eq!(merged["reviewer"]["tone"], "dry");
 }
 
 #[test]

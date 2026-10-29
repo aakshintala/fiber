@@ -303,6 +303,43 @@ fn allowed_redirects_hold_the_quoted_allow_list() {
     );
 }
 
+// Kills the escaping ORs in render_read_only_entry: each test case
+// makes exactly one side of `ch == '"' || ch == '\\'` true, so a mutant
+// of `||` (for instance `&&`) escapes the wrong characters.
+#[test]
+fn read_only_entry_escapes_quotation_mark_and_backslash_separately() {
+    for (command, flags, expected) in [
+        (
+            "my \"quoted\" tool",
+            vec![],
+            "shell.read_only.\"my \\\"quoted\\\" tool\".flags = []",
+        ),
+        (
+            "back\\slash",
+            vec![],
+            "shell.read_only.\"back\\\\slash\".flags = []",
+        ),
+        (
+            "acme-cli query",
+            vec!["\"--json\""],
+            "shell.read_only.\"acme-cli query\".flags = [\"\\\"--json\\\"\"]",
+        ),
+        (
+            "acme-cli query",
+            vec!["--path\\x"],
+            "shell.read_only.\"acme-cli query\".flags = [\"--path\\\\x\"]",
+        ),
+    ] {
+        let flags: Vec<String> = flags.into_iter().map(str::to_owned).collect();
+        let rendered = render_read_only_entry(command, &flags);
+        assert_eq!(rendered, expected, "{command:?} {flags:?}");
+        let (back_command, back_flags) =
+            parse_read_only_entry(&rendered).unwrap_or_else(|| panic!("{rendered} parses"));
+        assert_eq!(back_command, command);
+        assert_eq!(back_flags, flags);
+    }
+}
+
 #[test]
 fn read_only_entries_round_trip_and_reject_strictly() {
     for (command, flags) in [

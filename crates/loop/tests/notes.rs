@@ -282,6 +282,81 @@ fn read_only_notes_withhold_an_ambiguous_tally() {
     assert!(session.requests().is_empty());
 }
 
+fn ambiguous_withheld(mut request: NotesAsk, subject: &str, subject_text: &str) {
+    let mut session = Session::new(vec![Scripted::text("unused")], None);
+    request.evidence = vec![tally("kubectl", subject)];
+    let (result, _) = run_read_only(&mut session, request);
+    let Ok(Some(CommandResult::ProposeNotes {
+        evidence,
+        proposed,
+        error,
+    })) = result
+    else {
+        panic!("{subject_text} withholds its entry: {result:?}");
+    };
+    assert!(error.is_none());
+    assert!(proposed.is_empty());
+    assert_eq!(
+        evidence,
+        vec![withheld(
+            subject,
+            "words after the command: an entry would cover other subcommands"
+        )]
+    );
+}
+
+#[test]
+fn read_only_notes_withhold_a_non_flag_word_after_the_subcommand() {
+    // Only the left side of the disjunction holds: the word is not a
+    // flag and holds neither `<` nor `>`.
+    let ask = read_only_ask();
+    ambiguous_withheld(
+        ask,
+        "kubectl -n x get pods",
+        "a non-flag word after the subcommand",
+    );
+}
+
+#[test]
+fn read_only_notes_withhold_a_flag_with_a_left_angle_after_the_subcommand() {
+    // Only the middle side of the disjunction holds: the word is a
+    // flag and holds `<` but not `>`.
+    let ask = read_only_ask();
+    ambiguous_withheld(
+        ask,
+        "kubectl -n x --json< pods",
+        "a flag holding `<` after the subcommand",
+    );
+}
+
+#[test]
+fn read_only_notes_withhold_a_flag_with_a_right_angle_after_the_subcommand() {
+    // Only the right side of the disjunction holds: the word is a
+    // flag and holds `>` but not `<`.
+    let ask = read_only_ask();
+    ambiguous_withheld(
+        ask,
+        "kubectl -n x --json> pods",
+        "a flag holding `>` after the subcommand",
+    );
+}
+
+#[test]
+fn read_only_notes_withhold_a_subcommand_holding_a_left_angle() {
+    // Only the left side of the disjunction holds: the subcommand
+    // holds `<` but not `>`.
+    let ask = read_only_ask();
+    ambiguous_withheld(ask, "kubectl se<d x", "a subcommand holding `<`");
+}
+
+#[test]
+fn read_only_notes_withhold_a_subcommand_holding_a_right_angle() {
+    // Only the right side of the disjunction holds: the subcommand
+    // holds `>` but not `<`.
+    let ask = read_only_ask();
+    ambiguous_withheld(ask, "kubectl se>d x", "a subcommand holding `>`");
+}
+
 #[test]
 fn read_only_notes_withhold_a_one_word_tally() {
     let mut session = Session::new(vec![Scripted::text("unused")], None);

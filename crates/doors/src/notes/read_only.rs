@@ -405,3 +405,37 @@ fn configured_sets(home: &Path, dir: &Path) -> Option<Vec<String>> {
     let project = config::ProjectKey::new(key).ok()?;
     config::read_only_keys(home, &project).ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outcome_count_reports_the_tally_not_a_constant() {
+        let summary = ReadOnlySummary { here: 3, there: 2 };
+        assert_eq!(ReadOnlyOutcome::Keep(summary.clone()).count(), 5);
+        assert_eq!(
+            ReadOnlyOutcome::Withheld {
+                summary,
+                reason: COVERED_REASON,
+            }
+            .count(),
+            5
+        );
+        assert_eq!(ReadOnlyOutcome::Drop.count(), 0);
+    }
+
+    #[test]
+    fn retained_command_rejects_each_redirect_delimiter_alone() {
+        assert_eq!(retained_command("acme-cli query>out"), None);
+        assert_eq!(retained_command("acme-cli query<input"), None);
+    }
+
+    #[test]
+    fn raw_command_name_is_not_bounded_by_a_dot() {
+        assert!(!raw_contains_command_word(
+            "wrapper.acme-cli query --json",
+            "acme-cli query"
+        ));
+    }
+}

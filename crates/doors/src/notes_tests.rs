@@ -1528,6 +1528,55 @@ fn ran_by_allows_alone_propose_nothing_but_ran_by_denies_withhold() {
 }
 
 #[test]
+fn only_reviewer_allows_not_denies_people_or_ran_by_calls_count() {
+    for kind in ["reviewer denies", "person allows", "ran_by allows"] {
+        let root = fakes::TempDir::new("doors-notes-allow-filters");
+        let home = root.path().join("home");
+        let workspace = repo(root.path(), "here");
+        let key = log::project_key(&worktree::project(&workspace));
+        let body = match kind {
+            "reviewer denies" => (0..5)
+                .map(|index| {
+                    deny_call(
+                        &format!("a_{index}"),
+                        u64::try_from(index).unwrap() * 3 + 1,
+                        "acme-cli query --json",
+                        "reviewer",
+                        None,
+                        None,
+                    )
+                })
+                .collect::<String>(),
+            "person allows" => allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "person",
+                false,
+                1,
+            ),
+            "ran_by allows" => allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                true,
+                1,
+            ),
+            _ => unreachable!(),
+        };
+        seed_calls(&home, &key, "s_1", workspace.to_str().unwrap(), &body);
+        let shell = StubShell::new(
+            "shell",
+            &[(
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            )],
+        );
+        let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+        assert!(found.is_empty(), "{kind} do not count: {found:?}");
+    }
+}
+
+#[test]
 fn a_reviewer_block_on_a_ran_by_call_withholds() {
     let root = fakes::TempDir::new("doors-notes-block");
     let home = root.path().join("home");
