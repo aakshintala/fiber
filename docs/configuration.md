@@ -99,8 +99,8 @@ this one:
 ## Keys
 
 Keys are snake_case and grouped by area. In "Repo", yes means a repository may
-set the key. The `sandbox.*` entries are the Linux sandbox in #3027; the
-build reads them on Linux.
+set the key. The `sandbox.*` entries are the OS sandbox in #3027 on Linux
+and #3630 on macOS; the build reads them on those platforms.
 
 In an `extensions."<name>"` key, `<name>` is the extension's full name or,
 for an extension that has one, its short name (`docs/extensions.md`,
@@ -142,9 +142,9 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `skills.disabled` | `[]` | no | Names of skills switched off: left out of the listing, refused by the `skill` tool and not expanded by `/name`. The project's list and the global list both apply. The terminal's `/skills` view writes it (`docs/system-prompt.md`, "Skills"). |
 | `web_search.backend` | the one installed | no | The search backend `web_search` uses when more than one is installed (`docs/tools.md`, "Web fetch and web search"). |
 | `shell.read_only."<command>".flags` | none | no | Adds a command to the shell classifier's read-only list, with the flags it may take and stay read-only, such as `["--json", "-p"]`. `<command>` is a command name, optionally followed by a subcommand path, such as `"gh pr view"` (`docs/tools.md`, "Shell", "Effects", and "Search", "Other command-line tools"). |
-| `sandbox.enabled` | false | no | Whether shell calls run inside the opt-in Linux sandbox (`docs/sandbox.md`). Set in global config or with `-c`; a repository's project config cannot turn the sandbox on. |
+| `sandbox.enabled` | false | no | Whether shell calls run inside the opt-in OS sandbox on Linux and macOS (`docs/sandbox.md`). Set in global config or with `-c`; a repository's project config cannot turn the sandbox on. |
 | `sandbox.allow_write` | `[]` | no | Extra paths a confined call may write, such as `["~/.pi/agent"]`, as a list of strings. Person-only, like every `sandbox.*` key. |
-| `sandbox.deny_read` | `[]` | no | Extra paths a confined call may not read, such as `["~/extra-secret"]`, as a list of strings. Person-only, like every `sandbox.*` key. |
+| `sandbox.deny_read` | `[]` | no | Extra paths a confined call may not read, such as `["~/extra-secret"]`, as a list of strings. Person-only, like every `sandbox.*` key. Existing resolved credential paths merge into the same deny set. |
 | `diagnostics.level` | `"info"` | no | How much the diagnostic logs record: `"info"` or `"debug"` (`docs/state.md`, "What each part holds", says what each level writes). Only Fiber home's `config.json` sets it; a project's file or `-c` is ignored with a `notice`. A process reads it when it starts. Timing `startup.config` starts from one monotonic read taken before the configuration is read; at `"info"` that read is the only extra cost. |
 | `budget.usd` | none | no | The most a session may spend, in US dollars billed per token, its delegates included; unset means no limit (`docs/loop.md`, "Spending budget"). |
 | `quota.notice_at` | 80 | yes | The percent used of a quota window at which the model gets a notice (`docs/tools.md`, "Provider quota"). |
