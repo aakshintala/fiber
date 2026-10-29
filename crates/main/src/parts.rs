@@ -69,7 +69,7 @@ pub(crate) struct Parts {
     /// configuration and shared with the model shell (`docs/tools.md`,
     /// "Other command-line tools").
     pub(crate) shell_read_only: crate::settings::ShellReadOnly,
-    /// The person's Linux sandbox settings, read from the session's
+    /// The person's OS sandbox settings, read from the session's
     /// configuration and shared with the model shell (`docs/sandbox.md`).
     pub(crate) sandbox: crate::settings::SandboxHandle,
     /// Every configured `file` credential source, relative paths joined
@@ -480,7 +480,7 @@ pub(crate) fn parts_in(
     prompt.thinking = thinking;
     // The startup notices are written with the MCP notices, after
     // `fiber_started`.
-    let sandbox_settings = settings::sandbox_settings(&config, &home);
+    let sandbox_settings = settings::sandbox_settings(&config, &home, &credential_files);
     if sandbox_settings.enabled
         && let Err(unavailable) = tools::sandbox_check_available(&sandbox_settings, &workspace)
     {

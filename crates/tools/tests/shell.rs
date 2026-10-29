@@ -30,6 +30,8 @@ use fakes::clock::FakeClock;
 use fakes::jobs::FakeJobs;
 use fakes::{CancelToken, Recorder, Watchdog, group_alive, kill_group, kill_pid, pid_alive};
 use serde_json::{Map, Value, json};
+#[cfg(target_os = "macos")]
+use tools::SandboxSettings;
 use tools::Shell;
 
 /// The bound on a child's startup-marker ready lines. How long a child takes to start
@@ -3186,9 +3188,9 @@ fn a_confined_shell_runs_and_marks_its_effects() {
     let mut args = Map::new();
     args.insert("command".into(), Value::String("echo hi".into()));
     let effects = shell.effects(&args).unwrap();
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     assert!(effects.declared.confined);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     assert!(!effects.declared.confined);
     let output = run_prepared(&shell, &args, &CancelToken::new(), &Recorder::default());
     assert!(output.error.is_none());
@@ -3221,4 +3223,702 @@ fn an_unavailable_sandbox_does_not_declare_the_shell_confined() {
         !effects.declared.confined,
         "an unavailable sandbox leaves the call on the reviewed path"
     );
+}
+
+/// A confined shell on macOS: an enabled sandbox with no overlap. The
+/// fixture root sits under the owner's home, never the temp dir, and the
+/// deny sits beside the workspace.
+#[cfg(target_os = "macos")]
+struct MacosConfined {
+    root: fakes::TempDir,
+    workspace: PathBuf,
+    shell: Shell,
+}
+
+#[cfg(target_os = "macos")]
+impl MacosConfined {
+    fn new(prefix: &str, deny: &[&str]) -> Self {
+        let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+        let root = fakes::TempDir::under(&home, prefix);
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let sandbox = Arc::new(Mutex::new(SandboxSettings {
+            enabled: true,
+            allow_write: Vec::new(),
+            deny_read: deny.iter().map(|name| root.path().join(name)).collect(),
+            fiber_home: root.path().join("fiber-home"),
+        }));
+        let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox.clone());
+        Self {
+            root,
+            workspace,
+            shell,
+        }
+    }
+
+    fn run(&self, command: &str) -> contract::tool::Output {
+        let shell = self.shell.clone();
+        let command = command.to_owned();
+        let what = format!("confined command {command:?}");
+        fakes::within(
+            &what,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                run_prepared(
+                    &shell,
+                    &args(&command),
+                    &CancelToken::new(),
+                    &Recorder::default(),
+                )
+            },
+        )
+    }
+}
+
+/// Writes stay inside the workspace, reads of the denied file fail, and a
+/// sibling reads fine. Every output carries user bytes only: the marker
+/// never reaches the caller.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_confined_shell_enforces_read_write_boundaries() {
+    let confined = MacosConfined::new("fiber-macos-shell-boundaries", &["secret"]);
+    std::fs::write(confined.root.path().join("secret"), "shh").unwrap();
+    std::fs::write(confined.root.path().join("sibling"), "ok").unwrap();
+    let effects = confined
+        .shell
+        .effects(&args("echo hi"))
+        .expect("the shell command classifies");
+    assert!(effects.declared.confined);
+
+    let wrote = confined.run("echo hi > hello");
+    assert!(wrote.error.is_none(), "a workspace write succeeds");
+    assert!(
+        !text(&wrote).contains("FIBER_SANDBOX_CONFINED"),
+        "the marker never reaches the caller"
+    );
+    assert_eq!(
+        std::fs::read_to_string(confined.workspace.join("hello")).unwrap(),
+        "hi\n"
+    );
+
+    let outside = confined.root.path().join("outside");
+    let escaped = confined.run(&format!("echo evil > {}", quote(&outside)));
+    assert!(escaped.error.is_some(), "a write outside the grants fails");
+    assert!(!outside.exists(), "nothing escaped the sandbox");
+
+    let unread = confined.run(&format!(
+        "cat {}",
+        quote(&confined.root.path().join("secret"))
+    ));
+    assert!(unread.error.is_some(), "a denied read fails");
+    assert!(
+        !text(&unread).contains("shh"),
+        "no protected byte reaches the caller"
+    );
+
+    let sibling = confined.run(&format!(
+        "cat {}",
+        quote(&confined.root.path().join("sibling"))
+    ));
+    assert!(sibling.error.is_none(), "a sibling reads fine");
+    assert!(text(&sibling).contains("ok"));
+}
+
+/// Symlink, `..` and child-process escapes stay inside the grants: a link
+/// to an outside file, a `..` write and a grandchild `python3` write all
+/// fail with nothing created outside, while an inside write succeeds.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_confined_shell_blocks_symlink_and_child_process_escapes() {
+    let confined = MacosConfined::new("fiber-macos-shell-escapes", &[]);
+    let effects = confined
+        .shell
+        .effects(&args("echo hi"))
+        .expect("the shell command classifies");
+    assert!(effects.declared.confined);
+
+    let inside = confined.run("echo ok > inside.txt");
+    assert!(inside.error.is_none(), "an inside write succeeds");
+    assert_eq!(
+        std::fs::read_to_string(confined.workspace.join("inside.txt")).unwrap(),
+        "ok\n"
+    );
+
+    let target = confined.root.path().join("escape-target");
+    let linked = confined.run(&format!(
+        "ln -s {} link && echo evil > link",
+        quote(&target)
+    ));
+    assert!(linked.error.is_some(), "a symlink write outside fails");
+    assert!(!target.exists(), "nothing escaped through the link");
+
+    let dotdot = confined.root.path().join("escape-dotdot");
+    let traversed = confined.run("echo evil > ../escape-dotdot");
+    assert!(traversed.error.is_some(), "a `..` write outside fails");
+    assert!(!dotdot.exists(), "nothing escaped through `..`");
+
+    let py = confined.root.path().join("escape-py");
+    let grandchild = confined.run(&format!(
+        "python3 -c \"open('{}', 'w').write('evil')\"",
+        py.display()
+    ));
+    assert!(
+        grandchild.error.is_some(),
+        "a grandchild write outside fails"
+    );
+    assert!(!py.exists(), "nothing escaped through the grandchild");
+}
+
+/// A configured credential file outside the workspace reads as denied
+/// while its sibling reads fine: the deny travels as a binding, not as
+/// profile text.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_confined_shell_refuses_a_configured_credential_file() {
+    let confined = MacosConfined::new("fiber-macos-shell-credential", &["credential"]);
+    std::fs::write(confined.root.path().join("credential"), "token-shh").unwrap();
+    std::fs::write(confined.root.path().join("sibling"), "ok").unwrap();
+
+    let denied = confined.run(&format!(
+        "cat {}",
+        quote(&confined.root.path().join("credential"))
+    ));
+    assert!(denied.error.is_some(), "the credential read fails");
+    let denied_text = text(&denied);
+    assert!(
+        !denied_text.contains("token-shh"),
+        "no credential byte reaches the caller"
+    );
+    assert!(
+        !denied_text.contains("FIBER_SANDBOX_CONFINED"),
+        "the marker never reaches the caller"
+    );
+
+    let sibling = confined.run(&format!(
+        "cat {}",
+        quote(&confined.root.path().join("sibling"))
+    ));
+    assert!(sibling.error.is_none(), "a sibling reads fine");
+    assert!(text(&sibling).contains("ok"));
+}
+
+/// A normal checkout keeps committing while `.git/config`, hooks and
+/// `.fiber/` stay unwritable.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_confined_git_commit_works_in_a_checkout() {
+    let confined = MacosConfined::new("fiber-macos-shell-git", &[]);
+    let repo = &confined.workspace;
+    fakes::git::git(repo, &["init", "-q"]);
+    fakes::git::git(repo, &["config", "user.email", "confined@example.com"]);
+    fakes::git::git(repo, &["config", "user.name", "Confined"]);
+    std::fs::write(repo.join("file.txt"), "one\n").unwrap();
+    fakes::git::git(repo, &["add", "file.txt"]);
+    fakes::git::git(repo, &["commit", "-qm", "initial"]);
+
+    let status = confined.run("GIT_CONFIG_GLOBAL=/dev/null git status --short");
+    assert!(status.error.is_none(), "status runs confined");
+
+    let wrote = confined.run("echo two >> file.txt");
+    assert!(wrote.error.is_none(), "a tracked write succeeds");
+    let commit = confined.run("GIT_CONFIG_GLOBAL=/dev/null git commit -qam confined");
+    assert!(commit.error.is_none(), "a confined commit lands");
+    let log = fakes::git::git(repo, &["log", "--format=%s"]);
+    assert!(log.contains("confined"), "the commit is in the log");
+
+    let checkout = confined.run("GIT_CONFIG_GLOBAL=/dev/null git checkout -qb branch");
+    assert!(checkout.error.is_none(), "a confined branch lands");
+
+    let config = confined.run("GIT_CONFIG_GLOBAL=/dev/null git config user.email evil@example.com");
+    assert!(config.error.is_some(), "a config write fails");
+    let config_file = std::fs::read_to_string(repo.join(".git").join("config")).unwrap();
+    assert!(
+        !config_file.contains("evil@example.com"),
+        "the config is unchanged"
+    );
+
+    let hook = confined.run("echo hook > .git/hooks/pre-commit");
+    assert!(hook.error.is_some(), "a hook write fails");
+    assert!(
+        !repo.join(".git").join("hooks").join("pre-commit").exists(),
+        "no hook was installed"
+    );
+
+    let fiber = confined.run("mkdir -p .fiber && echo x > .fiber/x");
+    assert!(fiber.error.is_some(), "the .fiber/ write fails");
+    assert!(!repo.join(".fiber").exists(), "no .fiber/ was created");
+}
+
+/// A worktree commits through its outside gitdir while its `.git` pointer
+/// file and the shared hooks and config stay unwritable.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_confined_git_commit_works_in_a_worktree() {
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    let root = fakes::TempDir::under(&home, "fiber-macos-shell-worktree");
+    let repo = root.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    fakes::git::git(&repo, &["init", "-q"]);
+    fakes::git::git(&repo, &["config", "user.email", "confined@example.com"]);
+    fakes::git::git(&repo, &["config", "user.name", "Confined"]);
+    std::fs::write(repo.join("file.txt"), "one\n").unwrap();
+    fakes::git::git(&repo, &["add", "file.txt"]);
+    fakes::git::git(&repo, &["commit", "-qm", "initial"]);
+    let worktree = root.path().join("wt");
+    fakes::git::git(&repo, &["worktree", "add", &worktree.to_string_lossy()]);
+
+    let sandbox = Arc::new(Mutex::new(SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: root.path().join("fiber-home"),
+    }));
+    let shell = Shell::new(worktree.clone(), FakeClock::new()).with_sandbox(sandbox);
+    let effects = shell
+        .effects(&args("echo hi"))
+        .expect("the shell command classifies");
+    assert!(effects.declared.confined);
+
+    let wrote = call(&shell, "echo two >> file.txt");
+    assert!(wrote.error.is_none());
+    let commit = call(
+        &shell,
+        "GIT_CONFIG_GLOBAL=/dev/null git commit -qam worktree",
+    );
+    assert!(
+        commit.error.is_none(),
+        "a worktree commit lands: {}",
+        text(&commit)
+    );
+    let log = fakes::git::git(&worktree, &["log", "--format=%s"]);
+    assert!(log.contains("worktree"), "the commit is in the log");
+
+    let pointer = std::fs::read_to_string(worktree.join(".git")).unwrap();
+    let rewrite = call(&shell, "echo 'gitdir: /evil' > .git");
+    assert!(rewrite.error.is_some(), "the pointer rewrite fails");
+    assert_eq!(
+        std::fs::read_to_string(worktree.join(".git")).unwrap(),
+        pointer,
+        "the pointer is unchanged"
+    );
+    let moved = call(&shell, "echo 'gitdir: /evil' > newgit && mv newgit .git");
+    assert!(moved.error.is_some(), "the pointer replace fails");
+    assert_eq!(
+        std::fs::read_to_string(worktree.join(".git")).unwrap(),
+        pointer,
+        "the pointer is still unchanged"
+    );
+
+    let config = call(
+        &shell,
+        "GIT_CONFIG_GLOBAL=/dev/null git config user.email evil@example.com",
+    );
+    assert!(config.error.is_some(), "the shared config write fails");
+
+    let common_hooks = root
+        .path()
+        .join("repo")
+        .join(".git")
+        .join("hooks")
+        .join("evil");
+    let hook = call(&shell, &format!("echo hook > {}", quote(&common_hooks)));
+    assert!(hook.error.is_some(), "the shared hook write fails");
+    assert!(!common_hooks.exists(), "no shared hook was installed");
+}
+
+/// Unix sockets stay unreachable: a bind inside the workspace fails, and a
+/// connect to a listener outside the grants — including Fiber's own
+/// `FIBER_HOME/run/` socket path — fails too. `launchd` stays unreachable
+/// as well.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_confined_shell_cannot_reach_sockets() {
+    use std::os::unix::net::UnixListener;
+    let confined = MacosConfined::new("fiber-macos-shell-sockets", &[]);
+    let effects = confined
+        .shell
+        .effects(&args("echo hi"))
+        .expect("the shell command classifies");
+    assert!(effects.declared.confined);
+
+    let bound = confined.run(&format!(
+        "printf 'attempting bind\\n'; python3 -c \"import socket; s = socket.socket(socket.AF_UNIX); s.bind('{}')\"",
+        confined.workspace.join("x.sock").display()
+    ));
+    assert!(
+        text(&bound).contains("attempting bind"),
+        "the confined command reached bind"
+    );
+    assert!(bound.error.is_some(), "a unix bind fails");
+    assert!(
+        !confined.workspace.join("x.sock").exists(),
+        "no socket file was created"
+    );
+    assert!(!text(&bound).contains("FIBER_SANDBOX_CONFINED"));
+
+    let outside = confined.root.path().join("outside.sock");
+    let _listener = UnixListener::bind(&outside).expect("the test binds its own socket");
+    let connected = confined.run(&format!(
+        "printf 'attempting outside connect\\n'; python3 -c \"import socket; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('{}')\"",
+        outside.display()
+    ));
+    assert!(
+        text(&connected).contains("attempting outside connect"),
+        "the confined command reached connect"
+    );
+    assert!(connected.error.is_some(), "a unix connect fails");
+
+    // Fiber's own `run/` sockets stay unreachable too: a listener under the
+    // session's `FIBER_HOME/run/` answers nothing to a confined call.
+    let run_dir = confined.root.path().join("fiber-home").join("run");
+    std::fs::create_dir_all(&run_dir).expect("the test makes its run dir");
+    let run_sock = run_dir.join("test.sock");
+    let _run_listener = UnixListener::bind(&run_sock).expect("the test binds its own run socket");
+    let run_connected = confined.run(&format!(
+        "printf 'attempting run-socket connect\\n'; python3 -c \"import socket; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('{}')\"",
+        run_sock.display()
+    ));
+    assert!(
+        text(&run_connected).contains("attempting run-socket connect"),
+        "the confined command reached the run-socket connect"
+    );
+    assert!(run_connected.error.is_some(), "a run-socket connect fails");
+    assert!(
+        !text(&run_connected).contains("FIBER_SANDBOX_CONFINED"),
+        "the marker never reaches the caller"
+    );
+
+    let launchd = confined.run("launchctl list");
+    assert!(launchd.error.is_some(), "launchd stays unreachable");
+}
+
+/// `ps` and `pgrep` stay unavailable under the sandbox, while `stty` on the
+/// inherited pty keeps working: the single ioctl allow covers the pty the
+/// shell holds, not process listing.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_confined_ps_and_pgrep_fail() {
+    let confined = MacosConfined::new("fiber-macos-shell-ps", &[]);
+
+    let listed = confined.run("ps -p 1");
+    assert!(listed.error.is_some(), "ps fails confined");
+    assert!(!text(&listed).contains("FIBER_SANDBOX_CONFINED"));
+
+    let matched = confined.run("pgrep -f .");
+    assert!(matched.error.is_some(), "pgrep fails confined");
+}
+
+/// A declared-confined call whose settings break before spawn never runs
+/// unconfined: the pre-spawn check fails it closed, and the side-effect
+/// command never runs.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_declared_confined_call_failing_before_spawn_never_runs() {
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    let root = fakes::TempDir::under(&home, "fiber-macos-shell-fail-closed");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let sandbox = Arc::new(Mutex::new(SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: root.path().join("fiber-home"),
+    }));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox.clone());
+    let effects = shell
+        .effects(&args("echo hi"))
+        .expect("the shell command classifies");
+    assert!(effects.declared.confined, "the call is declared confined");
+
+    // The settings break between the declaration and the spawn: a deny
+    // lands inside the workspace, tripping the overlap rule.
+    let denied = workspace.join("secret");
+    std::fs::write(&denied, "shh").unwrap();
+    sandbox.lock().unwrap().deny_read.push(denied);
+
+    let side_effect = workspace.join("side-effect");
+    // The loop's exact seam: the call runs with the earlier declaration,
+    // not a fresh classification.
+    let output = shell.run_with_effects(
+        &args(&format!(
+            "touch {} && echo CONFINED_USER_OUTPUT_XYZ",
+            quote(&side_effect)
+        )),
+        &effects,
+        &CancelToken::new(),
+        &Recorder::default(),
+        &NoAsk,
+    );
+    assert_eq!(
+        code(&output),
+        Some(ErrorCode::ToolError),
+        "the broken declaration fails with a tool error"
+    );
+    assert!(
+        text(&output).contains("The sandbox could not be applied"),
+        "the failure names the sandbox: {}",
+        text(&output)
+    );
+    assert!(
+        !text(&output).contains("CONFINED_USER_OUTPUT_XYZ"),
+        "no user output escapes the failed call: {}",
+        text(&output)
+    );
+    assert!(!side_effect.exists(), "the side-effect command never ran");
+}
+
+/// Starts one confined call on its own thread, mirroring `start_jobs`
+/// with the sandbox attached: background and tty ride the same seam.
+#[cfg(target_os = "macos")]
+fn start_confined(
+    dir: PathBuf,
+    command: &str,
+    background: bool,
+    tty: bool,
+    jobs: Arc<FakeJobs>,
+    sandbox: Arc<Mutex<SandboxSettings>>,
+) -> JobRun {
+    let clock = FakeClock::new();
+    let start = clock.origin();
+    let shell = Shell::new(dir, Arc::clone(&clock) as Arc<dyn contract::clock::Clock>)
+        .with_jobs(jobs.clone())
+        .with_sandbox(sandbox);
+    let mut arguments = args(command);
+    if background {
+        arguments.insert("run_in_background".into(), json!(true));
+    }
+    if tty {
+        arguments.insert("tty".into(), json!(true));
+    }
+    let recorder = Arc::new(Recorder::default());
+    let tapped = Arc::clone(&recorder);
+    let (tx, rx) = mpsc::channel();
+    let call = thread::spawn(move || {
+        tx.send(run_prepared(
+            &shell,
+            &arguments,
+            &CancelToken::new(),
+            tapped.as_ref(),
+        ))
+        .unwrap();
+    })
+    .thread()
+    .id();
+    JobRun {
+        call,
+        clock,
+        start,
+        output: rx,
+        jobs,
+        recorder,
+    }
+}
+
+/// An immediate Background move hands the confined call to a job: the
+/// receipt arrives within the deadline, and the job finishes with the
+/// user's output intact and no marker byte. The receipt follows the contract
+/// in `docs/tools.md`, "Background jobs".
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_confined_background_call_moves_only_after_its_marker() {
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    let root = fakes::TempDir::under(&home, "fiber-macos-shell-bg");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let jobs = FakeJobs::new(root.path());
+    let sandbox = Arc::new(Mutex::new(SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: root.path().join("fiber-home"),
+    }));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox.clone());
+    let effects = shell
+        .effects(&args("echo hi"))
+        .expect("the shell command classifies");
+    assert!(effects.declared.confined);
+
+    let ready = Ready::new(&workspace);
+    let command = blocking(ready.path(), "hi", "done");
+    let running = start_confined(
+        workspace.clone(),
+        &command,
+        true,
+        false,
+        jobs.clone(),
+        sandbox,
+    );
+    let pgid = ready.wait(Deadline::after(CHILD_START))[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let receipt = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&running.output) {
+        Ok(receipt) => receipt,
+        Err(_) => panic!(
+            "waited {:?} for the confined move receipt",
+            fakes::MUST_SUCCEED_WITHIN
+        ),
+    };
+    assert!(receipt.error.is_none(), "{}", text(&receipt));
+    let job = started(&receipt);
+    assert_eq!(jobs.started(), vec![job.clone()]);
+    assert!(group_alive(pgid));
+    assert!(
+        !running.recorder.text().contains("FIBER_SANDBOX_CONFINED"),
+        "the marker never reaches the caller"
+    );
+    release_block(ready.path());
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("the job to finish");
+    assert_eq!(ended.status, Outcome::Completed);
+    assert_eq!(job_output(root.path(), &job), "hi\ndone\n");
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+/// A quiet confined call hands off right after its marker: with the fake
+/// clock frozen and no output after the marker, only the marker
+/// observation can wake the parked drive loop, so the receipt arrives
+/// while the command still runs instead of at its end
+/// (`docs/sandbox.md`, "On macOS": no move hands the call to a job before
+/// the marker is observed).
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    let root = fakes::TempDir::under(&home, "fiber-macos-shell-quiet");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let jobs = FakeJobs::new(root.path());
+    let sandbox = Arc::new(Mutex::new(SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: root.path().join("fiber-home"),
+    }));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox.clone());
+    let effects = shell
+        .effects(&args("echo hi"))
+        .expect("the shell command classifies");
+    assert!(effects.declared.confined);
+
+    // The shell acknowledges after opening the FIFO, then blocks on its
+    // read. A read-write opener never blocks, so hold one before the child
+    // starts and use it to release the child after the acknowledgement.
+    let hold = root.path().join("hold");
+    let ready = workspace.join("hold-ready");
+    fakes::fifo(&hold);
+    let mut release = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&hold)
+        .unwrap();
+    let running = start_confined(
+        workspace,
+        &format!(
+            "exec 9< {} && : > {} && read -r _ <&9",
+            quote(&hold),
+            quote(&ready)
+        ),
+        true,
+        false,
+        jobs.clone(),
+        sandbox,
+    );
+    let receipt = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&running.output) {
+        Ok(receipt) => receipt,
+        Err(_) => panic!(
+            "waited {:?} for the quiet call's handoff",
+            fakes::MUST_SUCCEED_WITHIN
+        ),
+    };
+    let job = started(&receipt);
+    assert!(receipt.error.is_none(), "{}", text(&receipt));
+    let ready_for_wait = ready.clone();
+    fakes::wait_until(
+        "the confined child to acknowledge opening the held FIFO",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || ready_for_wait.exists(),
+    );
+    // The child acknowledged after opening the FIFO and is now blocked on
+    // its read. The fake clock never moved: the handoff waited for the
+    // marker, not for output, the end, or a deadline (`docs/sandbox.md`,
+    // "On macOS": no move before the marker is observed).
+    // The call creates one job object (`docs/tools.md`, "Background jobs").
+    assert_eq!(jobs.started(), vec![job.clone()]);
+    assert_eq!(contract::clock::Clock::now(&*running.clock), running.start);
+    assert!(
+        !running.recorder.text().contains("FIBER_SANDBOX_CONFINED"),
+        "the marker never reaches the caller"
+    );
+    // Release the held read and reap the job: the test leaves no detached
+    // call behind.
+    writeln!(release, "go").unwrap();
+    drop(release);
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("the job to finish");
+    assert_eq!(ended.status, Outcome::Completed);
+}
+
+/// `stty` on the inherited pty keeps working confined: the single ioctl
+/// allow covers the pty the shell holds.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_confined_stty_on_a_pty_succeeds() {
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    let root = fakes::TempDir::under(&home, "fiber-macos-shell-tty");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let jobs = FakeJobs::new(root.path());
+    let sandbox = Arc::new(Mutex::new(SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: root.path().join("fiber-home"),
+    }));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox.clone());
+    let effects = shell
+        .effects(&args("echo hi"))
+        .expect("the shell command classifies");
+    assert!(effects.declared.confined);
+
+    let running = start_confined(workspace, "stty -g", false, true, jobs.clone(), sandbox);
+    let receipt = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&running.output) {
+        Ok(receipt) => receipt,
+        Err(_) => panic!(
+            "waited {:?} for the terminal move receipt",
+            fakes::MUST_SUCCEED_WITHIN
+        ),
+    };
+    let job = started(&receipt);
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("the job to finish");
+    assert_eq!(ended.status, Outcome::Completed);
+    let output = job_output(root.path(), &job);
+    assert!(output.contains("speed"), "stty printed settings: {output}");
+    assert!(
+        !output.contains("FIBER_SANDBOX_CONFINED"),
+        "the marker never reaches the caller"
+    );
+}
+
+/// Runs one confined call to completion on an existing shell.
+#[cfg(target_os = "macos")]
+fn call(shell: &Shell, command: &str) -> contract::tool::Output {
+    let shell = shell.clone();
+    let command = command.to_owned();
+    let what = format!("confined command {command:?}");
+    fakes::within(
+        &what,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            run_prepared(
+                &shell,
+                &args(&command),
+                &CancelToken::new(),
+                &Recorder::default(),
+            )
+        },
+    )
 }
