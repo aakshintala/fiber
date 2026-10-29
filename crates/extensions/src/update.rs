@@ -63,19 +63,18 @@ pub fn release_triple(build: &str) -> Result<&'static str, Error> {
 }
 
 /// The release `fiber update` moves to: where its archives live, the
-/// version, and the running binary's build triple, mapped to the
-/// release archive triple by [`release_triple`]. The release tag's
-/// commit is resolved inside, never passed in.
+/// version, and the release archive triple selected for the running
+/// binary by [`release_triple`]. The release tag's commit is resolved
+/// inside, never passed in.
 pub struct Target {
     /// Where releases are published, such as
     /// `https://github.com/aakshintala/fiber/releases`.
     pub base: String,
     /// The release's version, such as `0.3.0`.
     pub version: String,
-    /// The running binary's build triple, such as
-    /// `aarch64-apple-darwin`: the stage maps it to the release archive
-    /// triple, so a Linux build takes its architecture's musl archive
-    /// whatever libc it was built against.
+    /// The release archive triple, such as `aarch64-apple-darwin`.
+    /// Linux builds use their architecture's musl archive, whatever libc
+    /// they were built against.
     pub triple: String,
 }
 

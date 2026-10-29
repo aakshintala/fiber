@@ -42,6 +42,7 @@ fn published_archives_match_the_releasing_table() {
         .filter(|line| line.starts_with("| "))
         .filter_map(|line| line.split('`').nth(1))
         .collect();
+    // `docs/releasing.md`, "What a release publishes": one archive per target.
     assert_eq!(documented, PUBLISHED_ARCHIVES);
 }
 

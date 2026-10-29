@@ -672,10 +672,10 @@ fn update_maps_a_failed_tag_fetch_to_exit_one() {
     assert_eq!(code, 1);
 }
 
-/// A platform with no published archive fails before any download
-/// (`docs/releasing.md`, "Updating" step 2): the run reports the
-/// platform and the published targets, and the fixture sees no request
-/// of any kind, including the release-tag fetch.
+/// A platform with no published archive fails before downloading an
+/// archive (`docs/releasing.md`, "Updating" step 2): the run reports
+/// the platform and published targets, and the fixture sees no archive
+/// download request.
 #[test]
 fn unlisted_platform_fails_before_any_download() {
     let world = World::new("0.1.0", "0.2.0", "v0.2.0", None, OLD_BINARY);
