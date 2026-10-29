@@ -117,12 +117,12 @@ pub(crate) fn parse_typed(line: &[u8]) -> Option<Ack> {
 /// The acknowledgement's keys as the line carries them: every optional
 /// reads leniently, so a wrong-typed value is absent, never an error.
 struct RawAck {
-    kind: Option<String>,
-    payload: Option<RawPayload>,
+    kind: LenientString,
+    payload: LenientPayload,
 }
 
 struct RawPayload {
-    command_id: Option<String>,
+    command_id: LenientString,
     code: LenientString,
     result: Option<RawResult>,
 }
@@ -131,6 +131,9 @@ struct RawResult {
     last_seq: Option<LenientU64>,
     new_session_id: LenientString,
 }
+
+#[derive(Default)]
+struct LenientPayload(Option<RawPayload>);
 
 /// A string the line may carry under another type: present only when it
 /// is one.
@@ -161,8 +164,8 @@ impl<'de> Deserialize<'de> for RawAck {
             where
                 A: MapAccess<'de>,
             {
-                let mut kind = None;
-                let mut payload = None;
+                let mut kind = LenientString::default();
+                let mut payload = LenientPayload::default();
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "kind" => kind = map.next_value()?,
@@ -198,7 +201,7 @@ impl<'de> Deserialize<'de> for RawPayload {
             where
                 A: MapAccess<'de>,
             {
-                let mut command_id = None;
+                let mut command_id = LenientString::default();
                 let mut code = LenientString::default();
                 let mut result = None;
                 while let Some(key) = map.next_key::<String>()? {
@@ -219,6 +222,83 @@ impl<'de> Deserialize<'de> for RawPayload {
             }
         }
         deserializer.deserialize_map(PayloadVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for LenientPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct PayloadVisitor;
+        impl<'de> Visitor<'de> for PayloadVisitor {
+            type Value = LenientPayload;
+            // Exempt: serde_json never calls `expecting` through the
+            // `Option`-returning parse, so its text observes nothing and
+            // its mutants change no behaviour.
+            #[cfg_attr(false, mutants::skip)]
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("an acknowledgement payload object")
+            }
+            fn visit_map<A>(self, map: A) -> Result<LenientPayload, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let payload =
+                    RawPayload::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(LenientPayload(Some(payload)))
+            }
+            fn visit_seq<A>(self, mut seq: A) -> Result<LenientPayload, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                while seq.next_element::<Validate>()?.is_some() {}
+                Ok(LenientPayload(None))
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<LenientPayload, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientPayload(None))
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<LenientPayload, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientPayload(None))
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<LenientPayload, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientPayload(None))
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<LenientPayload, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientPayload(None))
+            }
+            fn visit_str<E>(self, _: &str) -> Result<LenientPayload, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientPayload(None))
+            }
+            fn visit_string<E>(self, _: String) -> Result<LenientPayload, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientPayload(None))
+            }
+            fn visit_unit<E>(self) -> Result<LenientPayload, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LenientPayload(None))
+            }
+        }
+        deserializer.deserialize_any(PayloadVisitor)
     }
 }
 
@@ -439,7 +519,7 @@ impl<'de> Deserialize<'de> for LenientString {
             where
                 A: MapAccess<'de>,
             {
-                while map.next_key::<&str>()?.is_some() {
+                while map.next_key::<String>()?.is_some() {
                     map.next_value::<Validate>()?;
                 }
                 Ok(LenientString::default())
@@ -548,7 +628,7 @@ impl<'de> Deserialize<'de> for LenientU64 {
             where
                 A: MapAccess<'de>,
             {
-                while map.next_key::<&str>()?.is_some() {
+                while map.next_key::<String>()?.is_some() {
                     map.next_value::<Validate>()?;
                 }
                 Ok(LenientU64::default())
@@ -643,12 +723,12 @@ impl<'de> Deserialize<'de> for Validate {
 
 impl RawAck {
     fn into_ack(self) -> Option<Ack> {
-        let kind = self.kind?;
+        let kind = self.kind.0?;
         if !matches!(kind.as_str(), "command_accepted" | "command_rejected") {
             return None;
         }
-        let payload = self.payload?;
-        let id = payload.command_id?;
+        let payload = self.payload.0?;
+        let id = payload.command_id.0?;
         let verdict = if kind == "command_accepted" {
             Verdict::Accepted
         } else if payload.code.0.as_deref() == Some("closing") {
