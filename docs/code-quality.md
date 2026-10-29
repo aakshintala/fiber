@@ -127,6 +127,7 @@ the code and the list disagree.
 | `main` | `crates/main/src/alloc_stats.rs` | the counting allocator implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System` |
 | `log` | `crates/log/src/alloc_stats_tests.rs` | the test-only counting mirror implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System`; the test calls it explicitly, never installing it |
 | `fakes` | `crates/fakes/examples/process-extension.rs` | the SIGTERM marker handler registers with `signal-hook` and writes its file with async-signal-safe `libc` calls |
+| `main` | `crates/main/tests/support/mod.rs` | the test-only hub-log wait parks in `kqueue` for a hub.log write on macOS; the vnode fd is the watch's own open file and the event buffer is stack-owned |
 
 `unsafe` inside dependencies is `docs/dependencies.md`'s.
 
