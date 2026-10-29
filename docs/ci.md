@@ -557,7 +557,7 @@ eviction or a `Cargo.lock` change builds cold. The median behind each bound is a
 raised in its workflow. The release gates (`release-gate` and `nightly-gate`)
 bound macOS at 50 minutes because a macOS cold build plus the full suite
 measures 24-26 minutes (runs 39679547149/39660697905), twice that per the
-cold-cache rule; Linux stays at 20.
+cold-cache rule; Linux is 30, the backstop test job's bound, because the Linux gate measures 17-20 minutes (runs 40487347149/40677917738/40865045602, the last cancelled by the earlier bound of 20).
 
 Every `apt-get` step sets a 5-minute `timeout-minutes` and passes the workflow's
 `APT_OPTS` (three retries, 20-second HTTP and HTTPS timeouts), so a silent mirror
