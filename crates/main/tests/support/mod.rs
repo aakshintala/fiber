@@ -1665,6 +1665,200 @@ pub(crate) fn kinds_without_attention(lines: &[Value]) -> Vec<&str> {
     kinds(lines)
 }
 
+/// The relation a cited doc line promises between an exact kind pair. The
+/// relation is passed explicitly at each call site so its strength matches
+/// the wording of the cited line: "after" maps to [`Relation::After`],
+/// "just before" to [`Relation::JustBefore`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Relation {
+    /// The first kind appears before the second, with any lines between.
+    After,
+    /// The first kind sits immediately before the second: no line of the
+    /// same run falls between them.
+    JustBefore,
+}
+
+/// Asserts a whole stream as a multiset: every ordered kind in `expected`,
+/// plus each set-aside kind the test names in `counted_set_aside` because
+/// its count is fixed (such as one `clients` line per attach) or under
+/// test. Every other set-aside kind is ignored, as is `job_delta` when
+/// `ignore_job_delta` carries the combined citation for its documented
+/// exception and its ephemeral-progress definition. `count_doc` is the
+/// verbatim `docs/testing.md`, "Event streams" count rule, shown in each
+/// call. A set-aside kind in `expected` must be named in `counted_set_aside`,
+/// and `expected` must not hold `job_delta` while it is excluded: both are
+/// rejected as contradictory policies. A counted set-aside kind may be
+/// absent from `expected` to assert its expected count is zero. Only the
+/// documented `job_delta` is excludable; no other kind can be ignored.
+#[track_caller]
+pub(crate) fn assert_kinds_multiset(
+    lines: &[Value],
+    expected: &[&str],
+    counted_set_aside: &[&str],
+    ignore_job_delta: Option<&str>,
+    count_doc: &str,
+) {
+    for kind in expected {
+        if *kind == "job_delta" && ignore_job_delta.is_some() {
+            panic!(
+                "contradictory policy: `job_delta` is expected yet excluded ({})",
+                ignore_job_delta.unwrap_or_default()
+            );
+        }
+        if UNORDERED_KINDS.contains(kind) && !counted_set_aside.contains(kind) {
+            panic!(
+                "contradictory policy: set-aside kind `{kind}` is expected but not counted; \
+                 name it in `counted_set_aside` or drop it ({count_doc})"
+            );
+        }
+    }
+    let mut actual: Vec<&str> = Vec::with_capacity(lines.len());
+    for line in lines {
+        let kind = line["kind"].as_str().unwrap();
+        if kind == "job_delta" && ignore_job_delta.is_some() {
+            continue;
+        }
+        if UNORDERED_KINDS.contains(&kind) && !counted_set_aside.contains(&kind) {
+            continue;
+        }
+        actual.push(kind);
+    }
+    let mut actual_sorted = actual;
+    actual_sorted.sort_unstable();
+    let mut expected_sorted = expected.to_vec();
+    expected_sorted.sort_unstable();
+    assert_eq!(
+        actual_sorted, expected_sorted,
+        "event kinds as a set with counts ({count_doc})"
+    );
+}
+
+/// Asserts an exact kind pair in every run of one job: the stream is
+/// filtered to the lines carrying `job_id`, partitioned into runs from each
+/// `job_started` through its matching `job_completed` (or the end of the
+/// stream when the run never completed), and the pair must hold in each
+/// run. A later run cannot borrow the pair from an earlier one. Lines from
+/// other jobs may interleave; only the same job's lines break adjacency.
+/// `doc` is the verbatim source line promising the order.
+#[track_caller]
+pub(crate) fn assert_promised_order(
+    lines: &[Value],
+    job_id: &str,
+    pair: (&str, &str),
+    relation: Relation,
+    doc: &str,
+) {
+    let (first, second) = pair;
+    let mine: Vec<&str> = lines
+        .iter()
+        .filter(|line| {
+            line.get("payload")
+                .and_then(|payload| payload.get("job_id"))
+                .and_then(Value::as_str)
+                == Some(job_id)
+        })
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert!(!mine.is_empty(), "no lines for job {job_id}: {doc}",);
+    let starts: Vec<usize> = mine
+        .iter()
+        .enumerate()
+        .filter(|(_, kind)| **kind == "job_started")
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        !starts.is_empty(),
+        "no run for job {job_id}: no `job_started` in {mine:?} ({doc})",
+    );
+    let mut runs: Vec<&[&str]> = Vec::with_capacity(starts.len());
+    for (n, start) in starts.iter().enumerate() {
+        let limit = starts.get(n + 1).copied().unwrap_or(mine.len());
+        let end = mine[*start..limit]
+            .iter()
+            .position(|kind| *kind == "job_completed")
+            .map(|at| start + at + 1)
+            .unwrap_or(limit);
+        runs.push(&mine[*start..end]);
+    }
+    for (n, run) in runs.iter().enumerate() {
+        let holds = match relation {
+            Relation::After => run
+                .iter()
+                .position(|kind| *kind == first)
+                .is_some_and(|i| run[i + 1..].contains(&second)),
+            Relation::JustBefore => run
+                .iter()
+                .enumerate()
+                .any(|(i, kind)| *kind == first && run.get(i + 1) == Some(&second)),
+        };
+        assert!(
+            holds,
+            "job {job_id} run {n}: `{first}` is not {relation:?} `{second}` in {run:?} ({doc})",
+        );
+    }
+}
+
+/// Asserts a complete session log's lifecycle edges: the log is filtered to
+/// one `session_id`, its first ordered kind is `session_started`, every
+/// `fiber_started` opens a process run its `fiber_exited` closes, and the
+/// last ordered kind is `fiber_exited`. Tests whose socket or stdout capture
+/// holds only a resumed process pass that session's complete durable log
+/// here; a partial stream never claims an exit. The helper takes the three
+/// verbatim source lines it enforces. It does not model `rewound` or
+/// `moved` endings, which these sites do not exercise.
+#[track_caller]
+pub(crate) fn assert_session_process_boundaries(
+    lines: &[Value],
+    session_id: &str,
+    session_first_doc: &str,
+    process_start_doc: &str,
+    process_end_doc: &str,
+) {
+    let mine: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line.get("session_id").and_then(Value::as_str) == Some(session_id))
+        .collect();
+    assert!(
+        !mine.is_empty(),
+        "no lines for session {session_id}: {session_first_doc}",
+    );
+    let ordered: Vec<&str> = mine
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .filter(|kind| !UNORDERED_KINDS.contains(kind))
+        .collect();
+    assert_eq!(
+        ordered.first(),
+        Some(&"session_started"),
+        "session {session_id} log does not start with `session_started`: {session_first_doc}; got {ordered:?}",
+    );
+    assert!(
+        ordered.contains(&"fiber_started"),
+        "session {session_id} log holds no `fiber_started`: {process_start_doc}; got {ordered:?}",
+    );
+    let mut open = false;
+    for kind in &ordered[1..] {
+        match (*kind, open) {
+            ("fiber_started", false) => open = true,
+            ("fiber_started", true) => panic!(
+                "session {session_id}: `fiber_started` while a process run is still open \
+                 (missing `fiber_exited`): {process_end_doc}; got {ordered:?}",
+            ),
+            ("fiber_exited", _) => open = false,
+            _ => {}
+        }
+    }
+    assert!(
+        !open,
+        "session {session_id}: last process run never closed with `fiber_exited`: {process_end_doc}; got {ordered:?}",
+    );
+    assert_eq!(
+        ordered.last(),
+        Some(&"fiber_exited"),
+        "session {session_id} log does not end with the process exit: {process_end_doc}; got {ordered:?}",
+    );
+}
+
 /// Asserts exact multiset membership strictly between identity-selected
 /// anchors. Callers separately assert the anchors and any promised order.
 pub(crate) fn assert_set_between(lines: &[Value], lo: usize, hi: usize, expected: &[&str]) {

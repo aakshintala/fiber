@@ -379,6 +379,473 @@ fn cancellation_windows_allow_both_usage_positions_but_require_one_call() {
     }
 }
 
+/// The verbatim count rule the multiset calls cite
+/// (`docs/testing.md`, "Event streams").
+const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+
+/// The combined citation the `job_delta` exclusion carries: the narrow
+/// exception (`docs/testing.md`, "Event streams") and the ephemeral-progress
+/// definition it names (`docs/events.md:1333`).
+const IGNORE_JOB_DELTA_DOC: &str = "docs/testing.md, Event streams: A documented variable-progress kind, such as `job_delta`, may be excluded from the multiset only when its count is not under test.; docs/events.md:1333: Ephemeral. Progress for clients, paced as `tool_call_delta` is.";
+
+#[test]
+fn multiset_passes_reordered_and_catches_duplicate_missing_extra() {
+    let lines = support::expected(&["turn_started", "usage_recorded", "turn_completed"]);
+    support::assert_kinds_multiset(
+        &lines,
+        &["turn_completed", "turn_started", "usage_recorded"],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    let mut duplicated = lines.clone();
+    duplicated.push(json!({"kind": "usage_recorded"}));
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &duplicated,
+            &["turn_started", "usage_recorded", "turn_completed"],
+            &[],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted a duplicated ordered kind"
+    );
+    let missing = lines[..2].to_vec();
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &missing,
+            &["turn_started", "usage_recorded", "turn_completed"],
+            &[],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted a missing ordered kind"
+    );
+    let mut extra = lines.clone();
+    extra.push(json!({"kind": "step_started"}));
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &extra,
+            &["turn_started", "usage_recorded", "turn_completed"],
+            &[],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted an extra ordered kind"
+    );
+}
+
+#[test]
+fn multiset_counts_fixed_set_aside_and_ignores_the_rest() {
+    // One `clients` line per attach is fixed, so it is counted; the other
+    // set-aside lines hold no position and are ignored.
+    let lines = support::expected(&[
+        "clients",
+        "turn_started",
+        "session_status",
+        "attention",
+        "turn_completed",
+        "date_changed",
+    ]);
+    support::assert_kinds_multiset(
+        &lines,
+        &["clients", "turn_started", "turn_completed"],
+        &["clients"],
+        None,
+        COUNT_DOC,
+    );
+    let mut two = lines.clone();
+    two.push(json!({"kind": "clients"}));
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &two,
+            &["clients", "turn_started", "turn_completed"],
+            &["clients"],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted two `clients` lines against one fixed"
+    );
+    let none: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["kind"] != "clients")
+        .cloned()
+        .collect();
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &none,
+            &["clients", "turn_started", "turn_completed"],
+            &["clients"],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted no `clients` line against one fixed"
+    );
+    // An unlisted set-aside kind never fails the multiset, however many
+    // lines it holds.
+    let mut dates = lines.clone();
+    dates.push(json!({"kind": "date_changed"}));
+    support::assert_kinds_multiset(
+        &dates,
+        &["clients", "turn_started", "turn_completed"],
+        &["clients"],
+        None,
+        COUNT_DOC,
+    );
+}
+
+#[test]
+fn multiset_counts_a_set_aside_line_under_test() {
+    // Naming a set-aside kind makes its count exact: a duplicate, a miss
+    // and an extra each fail.
+    let lines = support::expected(&["turn_started", "session_status", "turn_completed"]);
+    support::assert_kinds_multiset(
+        &lines,
+        &["turn_started", "session_status", "turn_completed"],
+        &["session_status"],
+        None,
+        COUNT_DOC,
+    );
+    let mut duplicated = lines.clone();
+    duplicated.push(json!({"kind": "session_status"}));
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &duplicated,
+            &["turn_started", "session_status", "turn_completed"],
+            &["session_status"],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted a duplicated line under test"
+    );
+    let missing: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["kind"] != "session_status")
+        .cloned()
+        .collect();
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &missing,
+            &["turn_started", "session_status", "turn_completed"],
+            &["session_status"],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted a missing line under test"
+    );
+}
+
+#[test]
+fn multiset_excludes_job_delta_only_when_uncounted() {
+    let kinds: Vec<&str> = ["turn_started", "usage_recorded", "turn_completed"]
+        .into_iter()
+        .chain(["job_delta"; 3])
+        .collect();
+    let lines = support::expected(&kinds);
+    // Zero, one and several deltas all pass while excluded ...
+    for deltas in [0, 1, 3] {
+        let kinds: Vec<&str> = ["turn_started", "usage_recorded", "turn_completed"]
+            .into_iter()
+            .chain(std::iter::repeat_n("job_delta", deltas))
+            .collect();
+        let lines = support::expected(&kinds);
+        support::assert_kinds_multiset(
+            &lines,
+            &["turn_started", "usage_recorded", "turn_completed"],
+            &[],
+            Some(IGNORE_JOB_DELTA_DOC),
+            COUNT_DOC,
+        );
+    }
+    // ... without weakening the other counts.
+    let mut duplicated = lines.clone();
+    duplicated.push(json!({"kind": "usage_recorded"}));
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &duplicated,
+            &["turn_started", "usage_recorded", "turn_completed"],
+            &[],
+            Some(IGNORE_JOB_DELTA_DOC),
+            COUNT_DOC
+        ))
+        .is_err(),
+        "excluded deltas weakened another count"
+    );
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &lines,
+            &[
+                "turn_started",
+                "usage_recorded",
+                "turn_completed",
+                "job_delta"
+            ],
+            &[],
+            Some(IGNORE_JOB_DELTA_DOC),
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted `job_delta` expected while excluded"
+    );
+}
+
+#[test]
+fn multiset_rejects_set_aside_expected_but_uncounted() {
+    let lines = support::expected(&["turn_started", "clients", "turn_completed"]);
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &lines,
+            &["turn_started", "clients", "turn_completed"],
+            &[],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted a set-aside kind expected but not counted"
+    );
+    // A counted set-aside kind may be absent from `expected` to assert its
+    // expected count is zero.
+    let lines = support::expected(&["turn_started", "turn_completed"]);
+    support::assert_kinds_multiset(
+        &lines,
+        &["turn_started", "turn_completed"],
+        &["clients"],
+        None,
+        COUNT_DOC,
+    );
+}
+
+/// A line of kind `kind` for delegate job `job`.
+fn job_line(kind: &str, job: &str) -> Value {
+    json!({"kind": kind, "payload": {"job_id": job}})
+}
+
+/// A line of kind `kind` in session `session`.
+fn session_line(kind: &str, session: &str) -> Value {
+    json!({"kind": kind, "session_id": session, "payload": {}})
+}
+
+#[test]
+fn promised_order_checks_every_run_with_the_cited_line() {
+    let start_doc = "docs/events.md:1319: Durable. Written after `job_started`, for each run.";
+    let end_doc = "docs/events.md:1354: Durable. Written just before `job_completed`.";
+    let run = |job: &str| {
+        vec![
+            job_line("job_started", job),
+            job_line("turn_started", job),
+            job_line("delegate_started", job),
+            job_line("delegate_finished", job),
+            job_line("job_completed", job),
+        ]
+    };
+    let mut lines = run("j1");
+    lines.extend(run("j1"));
+    support::assert_promised_order(
+        &lines,
+        "j1",
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        start_doc,
+    );
+    support::assert_promised_order(
+        &lines,
+        "j1",
+        ("delegate_finished", "job_completed"),
+        support::Relation::JustBefore,
+        end_doc,
+    );
+    // A reversal in the second run fails, and the failure names the doc line.
+    let mut reversed = run("j1");
+    let mut second = run("j1");
+    second.swap(0, 2);
+    reversed.extend(second);
+    let failure = std::panic::catch_unwind(|| {
+        support::assert_promised_order(
+            &reversed,
+            "j1",
+            ("job_started", "delegate_started"),
+            support::Relation::After,
+            start_doc,
+        )
+    });
+    let message = failure
+        .unwrap_err()
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        message.contains(start_doc),
+        "reversal failure does not cite its doc line: {message}"
+    );
+    // An absence in one run fails even when the other run holds the pair.
+    let mut absent = run("j1");
+    absent.extend(vec![
+        job_line("job_started", "j1"),
+        job_line("turn_started", "j1"),
+        job_line("job_completed", "j1"),
+    ]);
+    assert!(
+        std::panic::catch_unwind(|| support::assert_promised_order(
+            &absent,
+            "j1",
+            ("job_started", "delegate_started"),
+            support::Relation::After,
+            start_doc
+        ))
+        .is_err(),
+        "accepted a run missing its delegate start"
+    );
+    // Another job cannot supply the pair: its lines interleave freely but
+    // never satisfy this job's assertion.
+    let mut crossed = run("j2");
+    crossed.extend(run("j1")[1..].to_vec());
+    assert!(
+        std::panic::catch_unwind(|| support::assert_promised_order(
+            &crossed,
+            "j1",
+            ("job_started", "delegate_started"),
+            support::Relation::After,
+            start_doc
+        ))
+        .is_err(),
+        "accepted another job's pair"
+    );
+    let mut interleaved = vec![job_line("job_started", "j1")];
+    interleaved.extend(run("j2"));
+    interleaved.push(job_line("delegate_started", "j1"));
+    interleaved.push(job_line("delegate_finished", "j1"));
+    interleaved.extend(run("j2"));
+    interleaved.push(job_line("job_completed", "j1"));
+    support::assert_promised_order(
+        &interleaved,
+        "j1",
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        start_doc,
+    );
+    support::assert_promised_order(
+        &interleaved,
+        "j1",
+        ("delegate_finished", "job_completed"),
+        support::Relation::JustBefore,
+        end_doc,
+    );
+    // A same-job line between the finish and its completion fails only
+    // `JustBefore`: the weaker relation still allows the interleaving.
+    let middle = vec![
+        job_line("job_started", "j1"),
+        job_line("usage_recorded", "j1"),
+        job_line("delegate_started", "j1"),
+        job_line("delegate_finished", "j1"),
+        job_line("usage_recorded", "j1"),
+        job_line("job_completed", "j1"),
+    ];
+    assert!(
+        std::panic::catch_unwind(|| support::assert_promised_order(
+            &middle,
+            "j1",
+            ("delegate_finished", "job_completed"),
+            support::Relation::JustBefore,
+            end_doc
+        ))
+        .is_err(),
+        "accepted a same-job line between a just-before pair"
+    );
+    support::assert_promised_order(
+        &middle,
+        "j1",
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        start_doc,
+    );
+}
+
+#[test]
+fn lifecycle_edges_accept_complete_logs_and_reject_broken_ones() {
+    let first_doc = "docs/events.md:339: Durable. The first line of every session's log.";
+    let start_doc = "docs/events.md:285-286: Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line.";
+    let end_doc = "docs/events.md:296: Durable. The last line a process writes for a session.";
+    let complete: Vec<Value> = ["s1", "s2"]
+        .iter()
+        .flat_map(|session| {
+            [
+                session_line("session_started", session),
+                session_line("fiber_started", session),
+                session_line("clients", session),
+                session_line("turn_started", session),
+                session_line("fiber_exited", session),
+                session_line("fiber_started", session),
+                session_line("attention", session),
+                session_line("turn_completed", session),
+                session_line("fiber_exited", session),
+            ]
+        })
+        .collect();
+    support::assert_session_process_boundaries(&complete, "s1", first_doc, start_doc, end_doc);
+    support::assert_session_process_boundaries(&complete, "s2", first_doc, start_doc, end_doc);
+    let broken: Vec<(&str, Vec<Value>)> = vec![
+        ("displaced first kind", {
+            let mut lines = complete.clone();
+            lines.swap(0, 3);
+            lines
+                .into_iter()
+                .filter(|line| line["session_id"] == "s1")
+                .collect()
+        }),
+        ("early process start", {
+            ["fiber_started", "session_started", "fiber_exited"]
+                .iter()
+                .map(|kind| session_line(kind, "s1"))
+                .collect()
+        }),
+        ("absent process start", {
+            ["session_started", "turn_started", "fiber_exited"]
+                .iter()
+                .map(|kind| session_line(kind, "s1"))
+                .collect()
+        }),
+        ("missing process exit", {
+            [
+                "session_started",
+                "fiber_started",
+                "turn_started",
+                "fiber_started",
+                "fiber_exited",
+            ]
+            .iter()
+            .map(|kind| session_line(kind, "s1"))
+            .collect()
+        }),
+        ("non-final process exit", {
+            [
+                "session_started",
+                "fiber_started",
+                "fiber_exited",
+                "turn_started",
+            ]
+            .iter()
+            .map(|kind| session_line(kind, "s1"))
+            .collect()
+        }),
+    ];
+    for (case, lines) in &broken {
+        assert!(
+            std::panic::catch_unwind(|| support::assert_session_process_boundaries(
+                lines, "s1", first_doc, start_doc, end_doc
+            ))
+            .is_err(),
+            "accepted a log with {case}"
+        );
+    }
+}
+
 /// The `job_completed` line for `job`.
 fn ended<'a>(lines: &'a [Value], job: &str) -> &'a Value {
     lines
