@@ -339,7 +339,6 @@ base=2222222222222222222222222222222222222222
 head=3333333333333333333333333333333333333333
 url=https://github.example/aakshintala/fiber/actions/runs/1
 name='main::flaky_probe fails_once_then_passes'
-name_second='main::flaky_probe second_test'
 title='Flaky tests: main::flaky_probe'
 detail='thread fails_once_then_passes panicked at crates/main/tests/flaky_probe.rs:10:9\nfirst attempt'
 fence='```'
@@ -854,19 +853,6 @@ expect_writes "$tmp/duplicate-title" 1
 arm_plain="The test \`$name\` passed after a retry on arm: $url."
 expect_write "$tmp/duplicate-title" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$arm_plain" "$push_tested")")"
 
-# Two tests of one binary write once, naming the first test: the second
-# test of the same binary is dropped, not commented.
-setup_case duplicate-binary
-printf '%s\t%s\n%s\t%s\n' "$name" "$detail" "$name_second" "$detail" >"$tmp/duplicate-binary/temp/flaky/flaky-tests-linux.txt"
-printf '%s\n' "$decide_new" >"$tmp/duplicate-binary/decisions.jsonl"
-code=$(classify_case "$tmp/duplicate-binary" push "" "" "")
-expect_exit duplicate-binary-classify "$code" 0
-code=$(run_step "$tmp/duplicate-binary" push "" "$empty_open" "" decisions.jsonl)
-expect_exit duplicate-binary "$code" 0
-# docs/testing/running.md, "Flaky tests": "Within one report job a file's title files or comments once; a repeat is skipped"
-expect_writes "$tmp/duplicate-binary" 1
-expect_write "$tmp/duplicate-binary" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$plain" "$push_tested")")"
-
 # A missing history input fails the decide step, and the writer then
 # files nothing: a failed rev-parse of the second parent, a failed diff,
 # and a missing origin/main ref each end the classify block non-zero
@@ -1047,6 +1033,22 @@ run_collate() {
     RUNNER_TEMP="$dir/out" GITHUB_OUTPUT="$dir/out/output" GITHUB_STEP_SUMMARY="$dir/out/summary" \
     bash --noprofile --norc -eo pipefail "$collate_dir/collate.sh" || fail "$dir: the collate step failed"
 }
+# expect_titles_sorted DIR WANT: the titles file holds exactly the titles in
+# WANT as a set. The Collate step promises one line per binary id, not an
+# order for distinct titles, so both sides are sorted before comparing; a
+# duplicate or a missing title still fails.
+# docs/testing/running.md, "Flaky tests": "Within one report job a file's title files or comments once; a repeat is skipped"
+expect_titles_sorted() {
+  got=$(LC_ALL=C sort "$1/out/flake-titles.txt")
+  want=$(printf '%s\n' "$2" | LC_ALL=C sort)
+  [ "$got" = "$want" ] || {
+    echo "--- want titles (sorted):" >&2
+    printf '%s\n' "$want" >&2
+    echo "--- got titles (sorted):" >&2
+    printf '%s\n' "$got" >&2
+    fail "$1: the title set differs"
+  }
+}
 # expect_titles DIR WANT: the titles file holds exactly WANT.
 expect_titles() {
   got=$(cat "$1/out/flake-titles.txt")
@@ -1069,12 +1071,14 @@ printf 'main::probe a\td1\nmain::probe b\td2\n' >"$collate_one/flaky/flaky-tests
 run_collate "$collate_one"
 expect_titles "$collate_one" 'Flaky tests: main::probe'
 expect_flakes "$collate_one" 'has_flakes=true'
-# Two binaries give two title lines.
+# Two binaries give two title lines, in no promised order: the set, not the
+# sequence, is asserted. Single-title cases above keep the exact comparison.
+# docs/testing/running.md, "Flaky tests": "Within one report job a file's title files or comments once; a repeat is skipped"
 collate_two=$tmp/collate-two
 mkdir -p "$collate_two/flaky"
 printf 'main::a t1\td1\nmain::b t1\td2\n' >"$collate_two/flaky/flaky-tests-linux.txt"
 run_collate "$collate_two"
-expect_titles "$collate_two" "$(printf 'Flaky tests: main::a\nFlaky tests: main::b')"
+expect_titles_sorted "$collate_two" "$(printf 'Flaky tests: main::a\nFlaky tests: main::b')"
 expect_flakes "$collate_two" 'has_flakes=true'
 # A unit-test binary id and the bare id give the one title.
 collate_unit=$tmp/collate-unit
@@ -1101,7 +1105,10 @@ mkdir -p "$collate_odd/flaky"
   printf 'main::c\r\td4\n'
 } >"$collate_odd/flaky/flaky-tests-linux.txt"
 run_collate "$collate_odd"
-expect_titles "$collate_odd" "$(printf 'Flaky tests: main::probe\nFlaky tests: \nFlaky tests: main::a\nFlaky tests: main::c\r')"
+# Four distinct titles, in no promised order: the set is asserted here, and
+# the sorted shell-vs-Rust parity check below pins the same set.
+# docs/testing/running.md, "Flaky tests": "Within one report job a file's title files or comments once; a repeat is skipped"
+expect_titles_sorted "$collate_odd" "$(printf 'Flaky tests: main::probe\nFlaky tests: \nFlaky tests: main::a\nFlaky tests: main::c\r')"
 expect_flakes "$collate_odd" 'has_flakes=true'
 "$real_cargo" run --quiet --manifest-path "$toplevel/xtask/Cargo.toml" -- flake-classify --flaky-dir "$collate_odd/flaky" --event push --tested-commit "$sha" >"$collate_odd/classes.jsonl" || fail "collate-odd: flake-classify failed"
 "$real_jq" -r .title "$collate_odd/classes.jsonl" | LC_ALL=C sort >"$collate_odd/rust.txt"

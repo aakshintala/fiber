@@ -1353,6 +1353,10 @@ fn flake_classify_files_two_tests_of_one_binary_once() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
+    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // title files or comments once; a repeat is skipped".
+    // docs/testing/running.md, "Flaky tests": "a repeated title takes its
+    // runner and detail from its first occurrence in file-name byte order".
     assert_eq!(records.len(), 1, "{out}");
     assert_eq!(records[0]["title"], "Flaky tests: main::a", "{out}");
     assert_eq!(records[0]["name"], "main::a first", "{out}");
