@@ -306,7 +306,10 @@ fn an_explicit_unconfined_retry_reads_the_denied_path() {
         .filter_map(|line| serde_json::from_str(line).ok())
         .collect();
     assert!(!lines.is_empty(), "the session writes event lines");
-    // No automatic retry: exactly one request per model response.
+    // No automatic retry: exactly one request per model response
+    // (`docs/events.md`, "Declared effects": a failed confined call is never
+    // rerun unconfined; the fixture serves two model responses with one call
+    // each).
     let requested = lines
         .iter()
         .filter(|line| line["kind"] == "tool_call_requested")
@@ -331,7 +334,11 @@ fn an_explicit_unconfined_retry_reads_the_denied_path() {
     let secret_id = action(false);
     let retry_id = action(true);
     // The two calls run in order, each requested before it starts and
-    // completed after.
+    // completed after (`docs/loop.md`, "One step": each step streams its
+    // reply, decides permission, then runs the approved calls, and returns
+    // every result before the next step; `docs/events.md`, "Declared
+    // effects": `tool_call_started` remains before execution and the call
+    // ends through the normal `tool_call_*` end event).
     let positions = |kind: &str, id: &str| {
         lines
             .iter()
@@ -404,7 +411,10 @@ fn an_explicit_unconfined_retry_reads_the_denied_path() {
     );
     assert!(marker.is_file(), "the retry ran its write");
     // The retry reached review: its resolution allows it after its request
-    // and before its start.
+    // and before its start (`docs/loop.md`, "One step": permission is decided
+    // after the reply streams its `tool_call_requested`; `docs/permissions.md`,
+    // "What the log records": a reply's `permission_resolved` lines are written
+    // in request order, before any of that reply's `tool_call_started`).
     let resolved = lines
         .iter()
         .position(|line| line["kind"] == "permission_resolved" && line["action_id"] == retry_id)
