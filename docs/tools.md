@@ -709,7 +709,12 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - `gh pr view`, `gh pr list`, `gh pr diff`, `gh pr checks`, `gh issue view`,
   `gh issue list`, `gh repo view`, `gh run view` and `gh run list` are
   read-only, each with only its listed flags, such as `--json`,
-  `--comments` and `--repo` for `gh pr view`. Such a read declares
+  `--comments` and `--repo` for `gh pr view`. `--jq <program>` joins each
+  listed read, but a program holding `env`, `ENV` or `input` as a
+  substring, matched case-sensitively, makes the call `executes`: `gh`
+  evaluates `--jq` in-process with the process environment loaded, so a
+  program naming the environment would print it into the result, the same
+  leak the `/proc/` rule below blocks. Such a read declares
   `network` with the default host, unless it is own: every repository it
   names belongs to an owner, an account or organisation, of one of the
   session workspace repository's `github.com` remotes, and then it declares
@@ -757,15 +762,22 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   file, otherwise the first operand is the script and the rest are files,
   and with no file the workdir is declared, as `cat` with no operand does.
 - `git log`, `git show`, `git diff`, `git status`, `git rev-parse`,
-  `git ls-files`, `git blame` and `git branch --show-current` are read-only.
-  `git log` also accepts `-<number>`, such as `-8`. A global flag before
+  `git merge-base`, `git ls-files`, `git blame` and `git branch
+  --show-current` are read-only. `git merge-base` takes no flags.
+  `git log` also accepts `-<number>`, such as `-8`. `git diff` also accepts
+  `--check`, `--merge-base`, `-w` and `--ignore-all-space`, plus
+  `--diff-filter=<value>` with any value, and `-U<n>` and `--unified=<n>`
+  with an all-digit `<n>`, such as `-U80` or `--unified=5`; `git log` and
+  `git show` accept `-U<n>` and `--unified=<n>` too. A bare or
+  separate-word `--diff-filter`, `--unified` or `-U`, and a non-digit
+  unified value, make the call `executes`. A global flag before
   the subcommand (`-c`, `--config-env`, `--exec-path`, `-p`/`--paginate`,
   `--git-dir`, `--work-tree`), a `GIT_CONFIG_*` variable, a subcommand flag
   `--ext-diff`, `--textconv`, `--output` or `--output=<file>`, any other
   `git branch` form, and any other subcommand make the call `executes`. So
   does a git read in a bare repository, or where `.git` is a file whose
-  target Fiber cannot verify. Operands of `git rev-parse` are revisions,
-  not paths, so they declare no paths.
+  target Fiber cannot verify. Operands of `git rev-parse` and
+  `git merge-base` are revisions, not paths, so they declare no paths.
 - Repository git config can make `diff`, `log -p`, `show`, `blame` and
   `status` run a program: `core.fsmonitor`, `core.pager` or a `filter.*`
   driver, including one reached through `include.path`. Fiber neither
