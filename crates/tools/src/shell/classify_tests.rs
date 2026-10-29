@@ -805,10 +805,12 @@ fn other_gh_forms_execute() {
     ] {
         assert_closed(command);
     }
-    // A configured `gh pr view` adds nothing: the built-in path owns the
-    // name. A configured `gh pr status` is honoured: no built-in owns it.
+    // A configured `gh pr view` merges its flags into the built-in entry:
+    // `--web` reads as a network call. A configured `gh pr status` is
+    // honoured: no built-in owns it.
     let view = [configured("gh pr view", &["--web"])];
-    assert_configured_closed("gh pr view 123 --web", &view);
+    assert_network("gh pr view 123 --web", &view, &["/work/123"]);
+    assert_configured_closed("gh pr view 123 --bogus", &view);
     // Only echo stages print statically-known words: a gh stage's output
     // leaves a later `xargs` reader unproven, so the call is reviewed.
     assert_closed("gh pr view 123 | xargs wc -l");
@@ -1517,17 +1519,29 @@ fn a_configured_name_matches_exactly() {
 }
 
 #[test]
-fn a_configured_builtin_basename_is_never_consulted() {
+fn a_configured_flag_on_a_built_in_command_reads() {
+    // The merge: the built-in's flags are kept and the configured ones are
+    // added. A flag on neither list still executes.
+    let entries = [configured("cat", &["--foo"])];
+    assert_configured_reads("cat --foo f", &entries, &["/work/f"]);
+    assert_configured_reads("cat -n f", &entries, &["/work/f"]);
+    assert_configured_closed("cat --bar f", &entries);
+    // Without the entry the configured-only flag executes.
+    assert_closed("cat --foo f");
+    // An empty configured flag list adds nothing.
+    assert_configured_closed("cat --foo f", &[configured("cat", &[])]);
+}
+
+#[test]
+fn a_path_qualified_or_owned_configured_name_is_never_consulted() {
+    // A plain built-in basename merges instead (the test above); what stays
+    // unconsulted is a path-qualified name, `sed` with its own grammar, a
+    // wrapper step, or a name the built-ins own some other way.
     for (command, name, flags) in [
-        ("grep -R x ws", "grep", &["-R"] as &[&str]),
-        ("/usr/bin/grep -R x ws", "/usr/bin/grep", &["-R"]),
+        ("/usr/bin/grep -R x ws", "/usr/bin/grep", &["-R"] as &[&str]),
         ("/usr/bin/grep -r x ws", "/usr/bin/grep", &["-r"]),
-        ("grep -R", "grep", &["-R"]),
-        ("rg -L x", "rg", &["-L"]),
         ("./rg -L x", "./rg", &["-L"]),
-        ("find -L x", "find", &["-L"]),
         ("/usr/bin/find -L x", "/usr/bin/find", &["-L"]),
-        ("cat --foo", "cat", &["--foo"]),
         ("/bin/cat --foo", "/bin/cat", &["--foo"]),
         ("git push", "/usr/bin/git push", &[]),
         ("sed -i 1p f", "sed", &["-i"]),

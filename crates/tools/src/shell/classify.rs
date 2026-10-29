@@ -25,8 +25,9 @@ use super::wrap::{self, Unwrapped};
 /// workspace's GitHub remote owners: the call's `workdir` only resolves
 /// paths, never owners. `configured` holds the person's `shell.read_only`
 /// entries beside the built-in list: an element no built-in path owns
-/// falls back to them, and a built-in path answers first so configuration
-/// cannot widen it.
+/// falls back to them, and a built-in path answers with its own flags plus
+/// a same-named configured entry's. An exact form still answers first, and
+/// a path-qualified or otherwise owned name still takes nothing.
 pub(super) fn classify(
     command: &str,
     workspace: &Path,
@@ -426,7 +427,7 @@ fn stage_outcome(
         (path_tail(&files, dirs), None)
     } else {
         match entry::find(words, configured) {
-            Found::Builtin(entry) => {
+            Found::Builtin(entry, extra) => {
                 // Leading outer redirects prepend their spellings to the
                 // tokens, so the words start past them: a substitution in
                 // `>/dev/null git diff $(...)..HEAD` still lines up with
@@ -438,7 +439,7 @@ fn stage_outcome(
                     .position(|token| simple.words.first().is_some_and(|word| *token == word.raw))
                     .unwrap_or(0);
                 (
-                    builtin_outcome(words, entry, dirs, Some((&simple.tokens, base))),
+                    builtin_outcome(words, entry, extra, dirs, Some((&simple.tokens, base))),
                     Some(entry),
                 )
             }
@@ -605,7 +606,7 @@ fn xargs_outcome(
         if !stdin_proven || has_input(simple) {
             return Outcome::Executes;
         }
-        let Outcome::Reads(mut declared) = builtin_outcome(inner, entry, dirs, None) else {
+        let Outcome::Reads(mut declared) = builtin_outcome(inner, entry, &[], dirs, None) else {
             return Outcome::Executes;
         };
         let Some(canonical_dirs) = canonical_dirs(dirs) else {
@@ -630,7 +631,7 @@ fn xargs_outcome(
         }
         return with_inputs(Outcome::Reads(declared), simple, dirs);
     }
-    with_inputs(builtin_outcome(inner, entry, dirs, None), simple, dirs)
+    with_inputs(builtin_outcome(inner, entry, &[], dirs, None), simple, dirs)
 }
 
 /// Whether a stage reads stdin from a redirect file of its own, rather
@@ -956,6 +957,7 @@ fn rev_ok(rev: &str) -> bool {
 fn builtin_outcome(
     words: &[Word],
     entry: &Command,
+    extra: &[String],
     dirs: &[String],
     aligned: Option<(&[String], usize)>,
 ) -> Outcome {
@@ -997,7 +999,12 @@ fn builtin_outcome(
                 if word.substituted {
                     return Outcome::Executes;
                 }
-                if entry::accept_flag(entry, &mut words, &word.cooked).is_none() {
+                // The built-in's flags are kept and the configured ones are
+                // added: a word the table refuses may still read under the
+                // same-named entry's grammar below.
+                if entry::accept_flag(entry, &mut words, &word.cooked).is_none()
+                    && accept_configured_flag(extra, &mut words, &word.cooked).is_none()
+                {
                     return Outcome::Executes;
                 }
                 pattern_given |= entry.pattern_flags.contains(&word.cooked.as_str());
@@ -1013,6 +1020,45 @@ fn builtin_outcome(
         operands.remove(0);
     }
     path_tail(&operands, dirs)
+}
+
+/// Whether the merged entry accepts one flag word under the configured
+/// grammar (`entry::configured_outcome`): an exact plain spelling takes no
+/// value, a spelling ending `=` takes its value after that exact prefix or
+/// as the next word, and any other word refuses. A consumed value is never
+/// a path, and a substituted one never reads, as with the built-in walk.
+fn accept_configured_flag(
+    extra: &[String],
+    words: &mut std::slice::Iter<'_, Word>,
+    cooked: &str,
+) -> Option<()> {
+    // An exact plain spelling wins over its `=` twin, in either list
+    // order: the word takes no value and the next word stays an operand.
+    if extra
+        .iter()
+        .any(|flag| !flag.ends_with('=') && *flag == cooked)
+    {
+        return Some(());
+    }
+    // An inline value after the exact `=` prefix, empty allowed.
+    if extra
+        .iter()
+        .any(|flag| flag.ends_with('=') && cooked.starts_with(flag.as_str()))
+    {
+        return Some(());
+    }
+    // A separate value word; missing or substituted executes.
+    if extra
+        .iter()
+        .any(|flag| flag.strip_suffix('=').is_some_and(|base| base == cooked))
+    {
+        let value = words.next()?;
+        if value.substituted {
+            return None;
+        }
+        return Some(());
+    }
+    None
 }
 
 /// Resolves each operand against every directory the element may run in,
