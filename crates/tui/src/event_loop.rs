@@ -1307,13 +1307,13 @@ impl<B: Backend> Loop<B> {
             let Some(writer) = &self.kitty_writer else {
                 return None;
             };
-            if !writer.push(Item::Image {
+            // Best-effort: a dead writer already reported `KittyFailed`,
+            // which quits the loop, so the logo returns `None` either way.
+            let _ = writer.push(Item::Image {
                 id: logo::ID,
                 chunks,
                 place,
-            }) {
-                return None;
-            }
+            });
             return None;
         }
         let lock = Arc::clone(&self.tty_lock);

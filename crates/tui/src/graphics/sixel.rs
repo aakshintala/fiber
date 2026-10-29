@@ -9,6 +9,15 @@ const BAND_ROWS: usize = 6;
 /// A run longer than this packs into `!<count><char>`.
 const RLE_OVER: usize = 3;
 
+/// The 3-3-2 register for a blended pixel: red in the top three bits,
+/// green in the middle three, blue in the bottom two.
+#[cfg_attr(false, mutants::skip)]
+// Both `|`→`^` joins are equivalent: the three fields occupy disjoint
+// bits, so either join packs the same register.
+fn register_332(red: u8, green: u8, blue: u8) -> u8 {
+    (red & 0xe0) | ((green & 0xe0) >> 3) | (blue >> 6)
+}
+
 /// Encodes `rgba` (`width` by `height`, 8-bit RGBA row-major) as Sixel
 /// data over `background`: 3-3-2 quantized, six-row bands, P2 set for
 /// square pixels.
@@ -36,7 +45,7 @@ pub(crate) fn encode(width: u32, height: u32, rgba: &[u8], background: [u8; 3]) 
                 blend(blue, back_blue),
             )
         };
-        let register = (red & 0xe0) | ((green & 0xe0) >> 3) | (blue >> 6);
+        let register = register_332(red, green, blue);
         if !registers.contains(&register) {
             registers.push(register);
         }
@@ -62,8 +71,7 @@ pub(crate) fn encode(width: u32, height: u32, rgba: &[u8], background: [u8; 3]) 
     }
     let rows = height as usize;
     let cols = width as usize;
-    let mut band = 0;
-    while band * BAND_ROWS < rows {
+    for band in 0..rows.div_ceil(BAND_ROWS) {
         for (seq, register) in registers.iter().enumerate() {
             out.extend_from_slice(format!("#{seq}").as_bytes());
             let mut run = (b'?', 0usize);
@@ -78,7 +86,9 @@ pub(crate) fn encode(width: u32, height: u32, rgba: &[u8], background: [u8; 3]) 
                 let mut cell = b'?';
                 for row in 0..BAND_ROWS {
                     let y = band * BAND_ROWS + row;
-                    if y < rows && at.get(y * cols + col) == Some(register) {
+                    // Past the last row `get` misses, so no explicit
+                    // bound is needed.
+                    if at.get(y * cols + col) == Some(register) {
                         cell += 1 << row;
                     }
                 }
@@ -93,7 +103,6 @@ pub(crate) fn encode(width: u32, height: u32, rgba: &[u8], background: [u8; 3]) 
             out.push(b'$');
         }
         out.push(b'-');
-        band += 1;
     }
     out.extend_from_slice(b"\x1b\\");
     out

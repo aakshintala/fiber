@@ -93,6 +93,51 @@ fn half_alpha_blends_toward_the_background() {
     );
 }
 
+/// The background's weight is its own term: (0 * 128 + 255 * 127) /
+// 255 = 127, the middle of the red ramp.
+#[test]
+fn blend_weights_the_background_term() {
+    assert_eq!(
+        encode(1, 1, &[0, 0, 0, 128], [255, 0, 0]),
+        b"\x1bP0;1q\"1;1;1;1#0;2;43;0;0#0@$-\x1b\\".as_slice()
+    );
+}
+
+/// The background's weight is 255 minus alpha: (0 * 32 + 255 * 223)
+// 255 = 223.
+#[test]
+fn blend_uses_255_minus_alpha() {
+    assert_eq!(
+        encode(1, 1, &[0, 0, 0, 32], [255, 0, 0]),
+        b"\x1bP0;1q\"1;1;1;1#0;2;86;0;0#0@$-\x1b\\".as_slice()
+    );
+}
+
+/// Two columns over one band: each register's raster follows its own
+/// selector, so a `/` in the row walk reads the wrong colour.
+#[test]
+fn two_columns_pin_the_band_walk_to_row_times_width() {
+    let mut rgba = Vec::new();
+    for _ in 0..6 {
+        rgba.extend_from_slice(&[255, 0, 0, 255]);
+        rgba.extend_from_slice(&[0, 0, 255, 255]);
+    }
+    assert_eq!(
+        encode(2, 6, &rgba, [0, 0, 0]),
+        b"\x1bP0;1q\"1;1;2;6#0;2;100;0;0#1;2;0;0;100#0~?$#1?~$-\x1b\\".as_slice()
+    );
+}
+
+/// Thirteen rows open three bands: the tail band holds one row.
+#[test]
+fn thirteen_rows_open_three_bands() {
+    let rgba = [[255, 0, 0, 255]].repeat(13).concat();
+    assert_eq!(
+        encode(1, 13, &rgba, [0, 0, 0]),
+        b"\x1bP0;1q\"1;1;1;13#0;2;100;0;0#0~$-#0~$-#0@$-\x1b\\".as_slice()
+    );
+}
+
 /// 300 distinct colors still fit the 256 registers 3-3-2 allows.
 #[test]
 fn the_palette_never_passes_256_registers() {

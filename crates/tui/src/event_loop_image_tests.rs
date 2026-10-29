@@ -866,6 +866,63 @@ fn logo_kitty_rejection_draws_pixels_without_retry() {
     );
 }
 
+/// A dead writer still returns None: the logo never takes the
+/// terminal-failure path itself; the writer's own KittyFailed quits
+/// the loop.
+#[test]
+fn logo_kitty_dead_writer_returns_none() {
+    let (mut lp, tty, rx) = logo_loop();
+    let (out, failures) = mpsc::channel();
+    lp.files_out = out;
+    lp.app.set_graphics();
+    // The place closes the emission: the transmit's chunks precede it.
+    let place = format!(
+        "\x1b_Ga=p,U=1,i={},c={},r={}\x1b\\",
+        crate::graphics::logo::ID,
+        crate::graphics::logo::COLS,
+        crate::graphics::logo::ROWS
+    );
+    let (_sent, tty) = step_emission(
+        &mut lp,
+        &rx,
+        Input::Bytes(Vec::new()),
+        tty,
+        place.clone().into_bytes(),
+    );
+    super::tests::flush_kitty(&lp);
+    // No reader: the writer's next write fails, like a dead terminal.
+    drop(tty);
+    // One chunk the writer must write: its failure kills the writer
+    // and reports KittyFailed.
+    assert!(
+        lp.kitty_writer
+            .as_ref()
+            .expect("the emission spawned the writer")
+            .push(super::kitty_writer::Item::Image {
+                id: crate::graphics::logo::ID,
+                chunks: vec![b"doomed".to_vec()],
+                place: Vec::new(),
+            }),
+        "the live writer queues"
+    );
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&failures) {
+        Ok(Input::KittyFailed) => {}
+        Ok(_) => panic!("a failure, not KittyFailed"),
+        Err(err) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the failure: {err}"),
+    }
+    // The logo write still returns None: no quit, no retry.
+    assert_eq!(
+        lp.logo_write(
+            crate::graphics::logo::Protocol::Kitty,
+            crate::graphics::logo::After {
+                bytes: place.into_bytes(),
+                repaint: false,
+            }
+        ),
+        None
+    );
+}
+
 /// iTerm2's image writes positioned after the frame: the cursor saved,
 /// moved to the logo rect, restored after the File.
 #[test]

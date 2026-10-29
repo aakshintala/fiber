@@ -23,6 +23,15 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
+/// Packs an Adler-32 check from its halves: the high word shifted
+/// over the low word.
+#[cfg_attr(false, mutants::skip)]
+// `|`→`^` is equivalent: both halves stay below 2^16, so no bit
+// overlaps and either join packs the same word.
+fn pack_adler(high: u32, low: u32) -> u32 {
+    (high << 16) | low
+}
+
 /// The Adler-32 of `bytes` (RFC 1950): the zlib stream check.
 fn adler32(bytes: &[u8]) -> u32 {
     const BASE: u32 = 65_521;
@@ -32,7 +41,7 @@ fn adler32(bytes: &[u8]) -> u32 {
         low = (low + u32::from(*byte)) % BASE;
         high = (high + low) % BASE;
     }
-    (high << 16) | low
+    pack_adler(high, low)
 }
 
 /// Encodes `rgba` (`width` by `height`, 8-bit RGBA row-major) as a PNG:

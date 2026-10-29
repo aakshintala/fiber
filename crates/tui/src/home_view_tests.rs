@@ -4133,27 +4133,67 @@ fn home_logo_rejected_draws_pixels() {
     assert_eq!(buf[(35, 1)].symbol(), "0");
 }
 
-// A Sixel reply without a measured, in-bound cell keeps pixels.
+// A Sixel reply without a measured, in-bound cell keeps pixels: the
+// pixel logo stays visible, never blank cells. Blank has no kitty
+// placeholders either, so the probe is the logo itself.
 #[test]
 fn home_logo_cell_blocked_draws_pixels() {
+    // An unmeasured cell.
     let mut app = home(80, 24);
     app.set_measured_cell(None);
     app.set_sixel();
-    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
-    render(&app, Rect::new(0, 0, 80, 24), &mut buf, None);
-    assert!(
-        !has_placeholder(&buf),
-        "an unmeasured cell draws no placeholders"
-    );
+    assert_pixels(&app, "an unmeasured cell");
+    // An out-of-bound cell at set time: Sixel never arms.
     let mut app = home(80, 24);
     app.set_measured_cell(Some((65, 128)));
     app.set_sixel();
-    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
-    render(&app, Rect::new(0, 0, 80, 24), &mut buf, None);
-    assert!(
-        !has_placeholder(&buf),
-        "an out-of-bound cell draws no placeholders"
+    assert_pixels(&app, "an out-of-bound cell");
+    // Newly out-of-bound after Sixel armed: a resize re-gates the
+    // cell, and the pixel logo returns.
+    let mut app = home(80, 24);
+    app.set_measured_cell(Some((10, 20)));
+    app.set_sixel();
+    app.set_measured_cell(Some((65, 128)));
+    assert_pixels(&app, "a re-gated cell");
+}
+
+/// The pixel logo draws, not placeholders or blank cells: the logo
+/// itself is visible and no image rect is named.
+#[track_caller]
+fn assert_pixels(app: &App, what: &str) {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(app, area, &mut buf, None);
+    assert!(!has_placeholder(&buf), "{what} draws no placeholders");
+    assert_eq!(buf[(35, 1)].symbol(), "0", "{what} keeps the pixel logo");
+    assert_eq!(
+        crate::view::logo_rect(app, area),
+        None,
+        "{what} names no rect"
     );
+}
+
+// A Sixel reply with a measured, in-bound cell draws blank cells
+// under the positioned image.
+#[test]
+fn home_logo_sixel_measured_draws_blank() {
+    let mut app = home(80, 24);
+    app.set_measured_cell(Some((10, 20)));
+    app.set_sixel();
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    assert!(!has_placeholder(&buf), "sixel places by coordinates");
+    let rect = crate::view::logo_rect(&app, area).expect("the image form names its rect");
+    for y in rect.y..rect.y + rect.height {
+        for x in rect.x..rect.x + rect.width {
+            assert_eq!(
+                buf[(x, y)].symbol(),
+                " ",
+                "blank cells draw under the positioned image"
+            );
+        }
+    }
 }
 
 // The logo rect is the image's 32-by-4 cells while the image form

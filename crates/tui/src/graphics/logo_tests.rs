@@ -61,6 +61,31 @@ fn dcs_off_past_the_cap() {
     assert!(matches!(dcs(&candidate), Dcs::Off));
 }
 
+/// The cap is exact: a 256-byte fitting candidate still holds or
+/// completes, while a 257-byte candidate reads as keys.
+#[test]
+fn dcs_boundary_holds_at_256_and_off_at_257() {
+    // 256 bytes, unterminated: still a fitting prefix.
+    let mut holding = b"\x1bP>|".to_vec();
+    holding.extend(std::iter::repeat_n(b'x', 252));
+    assert_eq!(holding.len(), 256);
+    assert!(matches!(dcs(&holding), Dcs::Hold));
+    // 256 bytes, BEL-terminated: a complete reply.
+    let mut done = b"\x1bP>|".to_vec();
+    done.extend(std::iter::repeat_n(b'x', 251));
+    done.push(0x07);
+    assert_eq!(done.len(), 256);
+    match dcs(&done) {
+        Dcs::Done(_, used) => assert_eq!(used, 256),
+        Dcs::Hold | Dcs::Off => panic!("a 256-byte reply completes"),
+    }
+    // 257 bytes: past the cap, keys.
+    let mut off = b"\x1bP>|".to_vec();
+    off.extend(std::iter::repeat_n(b'x', 253));
+    assert_eq!(off.len(), 257);
+    assert!(matches!(dcs(&off), Dcs::Off));
+}
+
 // The mask geometry the encoders share: the pixel logo's 32-by-4
 // cells, 640 by 160 pixels, the wave left of column 60.
 #[test]
@@ -416,10 +441,82 @@ fn after_frame_reemits_on_return_after_a_gone_rect() {
     assert!(!back.repaint);
 }
 
-// An empty side scales to nothing instead of dividing by zero.
+// An empty side scales to nothing instead of dividing by zero: each
+// comparison flips at its edge, so a single zero anywhere empties the
+// target, even with the other three sides nonzero.
 #[test]
 fn scale_with_an_empty_side_is_empty() {
     assert!(scale(&[255, 0, 0, 255], 1, 1, 0, 1).is_empty());
     assert!(scale(&[255, 0, 0, 255], 1, 1, 1, 0).is_empty());
     assert!(scale(&[], 0, 0, 8, 8).is_empty());
+    assert!(scale(&[], 0, 1, 8, 8).is_empty());
+    assert!(scale(&[0u8; 16], 1, 0, 8, 8).is_empty());
+}
+
+// One test image: non-linear channels, every pixel distinct, so any
+// shifted box or mistallied sum reads a different average.
+fn figured(width: u32, height: u32, seeds: &[u8]) -> Vec<u8> {
+    let mut src = Vec::with_capacity(seeds.len() * 4);
+    for seed in seeds {
+        src.extend_from_slice(&[
+            *seed,
+            seed.wrapping_mul(3).wrapping_add(11),
+            seed.wrapping_mul(7).wrapping_add(5),
+            255,
+        ]);
+    }
+    assert_eq!(src.len(), (width * height * 4) as usize);
+    src
+}
+
+// A 4-by-4 downscale to 2-by-2: every target pixel averages its own
+// 2-by-2 source box.
+#[test]
+fn scale_down_averages_each_target_pixel_over_its_box() {
+    let src = figured(
+        4,
+        4,
+        &[
+            3, 17, 42, 99, 8, 200, 5, 61, 150, 11, 88, 23, 7, 176, 64, 129,
+        ],
+    );
+    assert_eq!(
+        scale(&src, 4, 4, 2, 2),
+        vec![
+            57, 54, 84, 255, 51, 102, 111, 255, 86, 77, 95, 255, 76, 111, 153, 255,
+        ]
+    );
+}
+
+// A 6-by-2 downscale to 2-by-1: non-square 3-by-2 boxes, where the
+// count's `*` and `+` disagree.
+#[test]
+fn scale_down_counts_a_non_square_box() {
+    let seeds: Vec<u8> = (0..12u8)
+        .map(|at| at.wrapping_mul(37).wrapping_add(13))
+        .collect();
+    let src = figured(6, 2, &seeds);
+    assert_eq!(
+        scale(&src, 6, 2, 2, 1),
+        vec![75, 110, 108, 255, 144, 144, 117, 255,]
+    );
+}
+
+// A 2-by-2 upscale to 4-by-4: each source pixel covers its 2-by-2
+// block, pinning the one-pixel boxes and the clamped empty ones.
+#[test]
+fn scale_up_replicates_each_source_pixel() {
+    let src = figured(2, 2, &[7, 19, 149, 203]);
+    let (near, far) = (
+        vec![
+            7u8, 32, 54, 255, 7, 32, 54, 255, 19, 68, 138, 255, 19, 68, 138, 255,
+        ],
+        vec![
+            149u8, 202, 24, 255, 149, 202, 24, 255, 203, 108, 146, 255, 203, 108, 146, 255,
+        ],
+    );
+    assert_eq!(
+        scale(&src, 2, 2, 4, 4),
+        [near.clone(), near, far.clone(), far].concat()
+    );
 }

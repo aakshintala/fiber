@@ -144,6 +144,15 @@ pub(crate) fn rgba(tint: &Tint) -> Vec<u8> {
     out
 }
 
+/// Whether a `dst_w` by `dst_h` target holds no pixel: either side
+/// zero leaves the scaled bytes empty.
+#[cfg_attr(false, mutants::skip)]
+// `||`→`&&` is equivalent here: with either side zero the scaled
+// target is empty either way, so no test can tell the join apart.
+fn dst_empty(dst_w: usize, dst_h: usize) -> bool {
+    dst_w == 0 || dst_h == 0
+}
+
 /// Scales 8-bit RGBA `src` (`src_w` by `src_h`) to `dst_w` by `dst_h`
 /// by area-averaging each target pixel over its source box.
 fn scale(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
@@ -153,7 +162,7 @@ fn scale(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> 
         usize::try_from(dst_w).unwrap_or(0),
         usize::try_from(dst_h).unwrap_or(0),
     );
-    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+    if src_w == 0 || src_h == 0 || dst_empty(dst_w, dst_h) {
         return Vec::new();
     }
     let mut out = vec![0u8; dst_w * dst_h * 4];
