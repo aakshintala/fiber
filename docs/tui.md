@@ -2934,6 +2934,7 @@ five-file cut does, and the replacement inherits the cap.
 | `branch` | The branch from `git status`; absent when unknown |
 | `model` | The model |
 | `thinking` | The thinking level |
+| `thinking_now` | Whether the model is thinking now |
 | `context` | `tokens`, `window` and `trigger_at` |
 | `spend` | `cost` with `tokens` (`input`, `output`, `cache_read`, `cache_write`) and `subscription_cost`; when the session reports none, the attached spend falls back to `cost` alone; absent when there is no spend at all |
 | `budget` | The spend budget; absent when unset |
