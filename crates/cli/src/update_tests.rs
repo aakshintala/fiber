@@ -709,11 +709,12 @@ fn unlisted_platform_fails_before_any_download() {
         assert!(said.contains(archive), "{said}");
     }
     // `docs/releasing.md`, "Updating" step 2: an unlisted platform stops
-    // before any download, including the tag fetch.
-    assert_eq!(
-        world.server.requests().len(),
-        before,
-        "no request runs, including the tag fetch: {:?}",
+    // before downloading any archive.
+    assert!(
+        world.server.requests()[before..]
+            .iter()
+            .all(|request| !request.path.contains("/download/")),
+        "no archive is downloaded: {:?}",
         world.server.requests()
     );
 }

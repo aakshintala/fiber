@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use fakes::ustar::{archive, gzip, header, sha256 as sha};
 
-use super::{Target, release_triple, stage_update};
+use super::{PUBLISHED_ARCHIVES, Target, release_triple, stage_update};
 use crate::Error;
 use crate::manage::{Request, plan};
 use crate::release::{Release, install_release};
@@ -27,6 +27,23 @@ const RELEASE: &str = "0.2.0";
 const TRIPLE: &str = "x86_64-unknown-linux-musl";
 /// The nightly release the fixture serves above [`RELEASE`].
 const NIGHTLY: &str = "0.2.1-nightly.20240101";
+
+#[test]
+fn published_archives_match_the_releasing_table() {
+    let table = include_str!("../../../docs/releasing.md")
+        .split("## What a release publishes\n")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    let documented: Vec<_> = table
+        .lines()
+        .filter(|line| line.starts_with("| "))
+        .filter_map(|line| line.split('`').nth(1))
+        .collect();
+    assert_eq!(documented, PUBLISHED_ARCHIVES);
+}
 
 /// A fixture release served over HTTP: a binary archive holding `marker`
 /// as the top-level `fiber` file, the docs archive holding `docs`, the
