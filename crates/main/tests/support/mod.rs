@@ -14,13 +14,14 @@
     clippy::panic,
     reason = "test helpers; a failure is the test's"
 )]
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -217,10 +218,47 @@ pub(crate) struct Setup {
     pub(crate) deadline: Deadline,
 }
 
+/// Fixture binaries warmed past their first-exec stall in this test
+/// process, keyed by binary path: nextest runs one test per process, so
+/// the first start of each binary warms and later starts skip it. The
+/// registry mutex is released before any warm runs, so concurrent starts
+/// share one cell without holding a lock across the bounded child wait.
+static WARMED: OnceLock<Mutex<HashMap<PathBuf, Arc<OnceLock<()>>>>> = OnceLock::new();
+
+/// Warms `path` past its first-exec stall once per test process: a
+/// `fail-start` directory makes the fixture exit 1 before reading
+/// anything, so the warm-up never blocks on input. The warm runs under
+/// `fakes::START_BOUND` before the test's own deadline starts, so the
+/// stall never eats the success-wait margin.
+fn warm_once(path: &Path) {
+    let cell = WARMED
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("the warmed set")
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(OnceLock::new()))
+        .clone();
+    cell.get_or_init(|| {
+        let warm_dir = fakes::TempDir::new("fiber-main-warm");
+        std::fs::write(warm_dir.path().join("fail-start"), "").expect("warm-up dir");
+        let warm_arg = warm_dir.path().display().to_string();
+        fakes::warm_up(path, &[warm_arg.as_str()], 1);
+    });
+}
+
 impl Setup {
     /// Starts the test's deadline before any setup work.
     pub(crate) fn new() -> Self {
         Self::new_under(&std::env::temp_dir())
+    }
+
+    /// As [`Setup::new`], warming the shared MCP fixture past its
+    /// first-exec stall before the deadline starts: the warm runs under
+    /// its own bound, so the stall never eats the success-wait margin.
+    /// Tests that never start the fixture keep [`Setup::new`].
+    pub(crate) fn new_with_mcp_fixture() -> Self {
+        warm_once(&fakes::mcp_fixture());
+        Self::new()
     }
 
     /// As [`Setup::new`], rooted under `parent` for a short socket path.

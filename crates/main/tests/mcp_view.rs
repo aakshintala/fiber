@@ -407,8 +407,39 @@ fn drive_callback(auth_url: &str) {
 }
 
 #[test]
+fn new_with_mcp_fixture_warms_before_the_deadline_starts() {
+    // The first exec of a freshly linked binary can stall for seconds on
+    // macOS, so the fixture-starting setup warms the fixture through the
+    // shared once-per-process warm before `Setup::new` starts the test's
+    // deadline. This pins only the changed helper: it fails when the
+    // `warm_up` call is removed or when the warm moves after the setup.
+    let source =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/mod.rs"))
+            .expect("support/mod.rs");
+    let warmer = source.find("fn warm_once").expect("warm_once");
+    let warmed = source.find("impl Setup").expect("impl Setup");
+    let warm_up = source.find("fakes::warm_up").expect("warm_up");
+    assert!(warmer < warm_up, "warm_once runs fakes::warm_up");
+    assert!(warm_up < warmed, "warm_once runs fakes::warm_up");
+    let helper = source
+        .find("fn new_with_mcp_fixture")
+        .expect("new_with_mcp_fixture");
+    let warm = source
+        .match_indices("warm_once(&fakes")
+        .map(|(at, _)| at)
+        .find(|&at| at > helper)
+        .expect("new_with_mcp_fixture warms");
+    let started = source
+        .match_indices("Self::new()")
+        .map(|(at, _)| at)
+        .find(|&at| at > helper)
+        .expect("new_with_mcp_fixture starts the deadline");
+    assert!(warm < started, "new_with_mcp_fixture warms first");
+}
+
+#[test]
 fn list_shows_a_ready_a_failed_and_a_needs_login_server() {
-    let setup = support::Setup::new();
+    let setup = support::Setup::new_with_mcp_fixture();
     let dir = fixture_dir(&setup, "fx");
     let remote = oauth_and_mcp();
     let _model = configure(
@@ -493,7 +524,7 @@ fn list_shows_a_ready_a_failed_and_a_needs_login_server() {
 
 #[test]
 fn reconnect_restarts_the_failed_server() {
-    let setup = support::Setup::new();
+    let setup = support::Setup::new_with_mcp_fixture();
     let dir = fixture_dir(&setup, "fx");
     let marker = setup.root.path().join("marker");
     let wrapper = setup.root.path().join("flaky.sh");
@@ -783,7 +814,7 @@ fn reconnect_of_an_unapproved_repository_server_gives_the_approve_advice() {
 
 #[test]
 fn two_quick_reconnects_spawn_the_server_once() {
-    let setup = support::Setup::new();
+    let setup = support::Setup::new_with_mcp_fixture();
     let dir = fixture_dir(&setup, "fx");
     let marker = setup.root.path().join("marker");
     let spawns = setup.root.path().join("spawns");
