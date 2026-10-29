@@ -850,6 +850,9 @@ fn a_failing_prompt_list_leaves_the_server_started_with_no_prompts() {
 
 #[test]
 fn endless_pages_end_at_the_startup_deadline() {
+    // Both pages start the checked-in fixture directly, so warm it once
+    // before the first start keeps its own deadline.
+    Setup::warm_fixture();
     for method in ["tools/list", "prompts/list"] {
         let setup = Setup::new();
         setup.tools(&json!([{"name": "echo"}]));
@@ -899,6 +902,10 @@ fn endless_pages_end_at_the_startup_deadline() {
 /// `exit 0` to end on SIGTERM, empty to ignore it.
 #[track_caller]
 fn lingering(setup: &Setup, term: &str) -> super::OpenServer {
+    // The shell wrapper execs the checked-in fixture, so warm it once
+    // before the start keeps its own deadline. This covers the helper's
+    // three callers without starting an MCP server here.
+    Setup::warm_fixture();
     let script = format!("trap '{term}' TERM\n\"$1\" \"$2\"\nwhile :; do sleep 0.05; done\n");
     let fixture = fakes::mcp_fixture().display().to_string();
     let workspace = setup.dir.path().to_path_buf();
@@ -1370,6 +1377,9 @@ fn is_gone_turns_true_once_the_server_exits() {
 
 #[test]
 fn a_server_that_stops_reading_stdin_ends_every_call_gone() {
+    // The Bash pipeline execs the checked-in fixture, so warm it once
+    // before the start keeps its own deadline.
+    Setup::warm_fixture();
     let setup = Setup::new();
     setup.tools(&json!([{"name": "big"}]));
     let fixture = fakes::mcp_fixture().display().to_string();

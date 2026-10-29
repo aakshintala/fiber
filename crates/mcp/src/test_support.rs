@@ -97,7 +97,27 @@ fn warm_once(path: &Path) {
     });
 }
 
+/// Whether any spec starts the checked-in fixture directly: only a stdio
+/// spec whose command is the fixture execs it, so only then does the
+/// shared start pay for a warm. Remote specs never exec a child, and
+/// `/bin/bash` wrappers name the fixture in their args but warm through
+/// the explicit shared helper instead.
+pub(crate) fn specs_use_fixture(specs: &[ServerSpec]) -> bool {
+    let fixture = fakes::mcp_fixture().display().to_string();
+    specs
+        .iter()
+        .any(|spec| matches!(&spec.transport, Transport::Stdio(stdio) if stdio.command == fixture))
+}
+
 impl Setup {
+    /// Warms the checked-in fixture once per test process without starting
+    /// an MCP server: direct `Server::start` sites and `/bin/bash` wrapper
+    /// starts call this before their first exec, so the stall never eats
+    /// the test's own deadline.
+    pub(crate) fn warm_fixture() {
+        warm_once(&fakes::mcp_fixture());
+    }
+
     /// A fresh directory and clock, with the guard armed before any
     /// start: the directory is known here, while no server pid is.
     pub(crate) fn new() -> Self {
@@ -244,7 +264,9 @@ impl Setup {
         images: std::sync::Arc<FakeImages>,
         within: Duration,
     ) -> Started {
-        warm_once(&fakes::mcp_fixture());
+        if specs_use_fixture(&specs) {
+            warm_once(&fakes::mcp_fixture());
+        }
         let workspace = self.workspace();
         let artifacts = self.artifacts();
         let cache = self.cache();
@@ -297,7 +319,7 @@ impl Setup {
     /// Starts the fixture directly, expecting success, with a deadline naming the wait.
     #[track_caller]
     pub(crate) fn start_expect(&self, timeout: Duration) -> OpenServer {
-        warm_once(&fakes::mcp_fixture());
+        Self::warm_fixture();
         let script = fakes::mcp_fixture().display().to_string();
         let workspace = self.workspace();
         let arg = workspace.display().to_string();
@@ -314,7 +336,9 @@ impl Setup {
         clock: &Arc<dyn Clock>,
         timeout: Duration,
     ) -> Result<OpenServer, StartError> {
-        warm_once(&fakes::mcp_fixture());
+        if command == fakes::mcp_fixture().display().to_string() {
+            warm_once(&fakes::mcp_fixture());
+        }
         let command = command.to_owned();
         let args = args.to_owned();
         let workspace = workspace.to_path_buf();
