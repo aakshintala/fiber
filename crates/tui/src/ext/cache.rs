@@ -515,7 +515,16 @@ impl Cache {
                 let due = now
                     .checked_duration_since(state.last)
                     .is_some_and(|elapsed| elapsed >= effective_interval(state.interval));
-                if state.kind == AnimKind::Active && painted && due {
+                // A width miss with a stored closed result at the drawn
+                // frame promotes it instead of advancing: the count and
+                // paint of one frame must agree, even when the item is due.
+                if promote
+                    && self.stored_entry(&key, width).is_none()
+                    && let Some((lines, _)) =
+                        self.promoted(&(fail_key.clone(), notice_id, width), state.frame)
+                {
+                    self.store_frame(&key, width, lines, false)
+                } else if state.kind == AnimKind::Active && painted && due {
                     let frame = state.frame.saturating_add(1);
                     let drawn =
                         self.draw_frame(&fail_key, &key, extension, flat, width, frame, call)?;

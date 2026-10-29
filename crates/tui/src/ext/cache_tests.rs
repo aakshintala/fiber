@@ -2622,6 +2622,88 @@ fn a_warm_count_promotes_its_paint_at_a_new_width() {
     assert_eq!(text_of(&painted_wide), text_of(&counted_wide));
 }
 
+#[test]
+fn a_due_paint_promotes_its_count_at_a_new_width() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let arguments = serde_json::json!({});
+    let row = input("shell", "first", &arguments);
+    let draw = |frame: u64| {
+        calls.set(calls.get() + 1);
+        (
+            Decision::Draw {
+                extension: "test".into(),
+                lines: vec![vec![raw(&format!("f{frame}"))]],
+            },
+            true,
+        )
+    };
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let counted = cache
+        .lines_animated_closed(page(0), "ledger_row", "test", None, &row, 20, draw)
+        .expect("counted frame 0");
+    assert!(text_of(&counted).starts_with("f0"), "{counted:?}");
+    let painted = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("painted frame 0");
+    assert_eq!(calls.get(), 1, "paint promotes the count");
+    cache.mark_painted(&[tag_of(&painted)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    // Advance at the old width and mark it, so the next frame is both
+    // painted and due.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let advanced = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("advanced frame 1");
+    assert_eq!(calls.get(), 2);
+    assert!(text_of(&advanced).starts_with("f1"), "{advanced:?}");
+    cache.mark_painted(&[tag_of(&advanced)]);
+    assert_eq!(cache.anim_dues(), vec![(at(t0, 500), ANIM_INTERVAL)]);
+    // The next frame is due, so a paint without promotion would advance
+    // to frame 2: the count at the new width stores frame 1, and the
+    // paint there must promote it instead of calling again.
+    cache.begin_anim_frame(Some(at(t0, 1_000)), false);
+    let counted_wide = cache
+        .lines_animated_closed(page(0), "ledger_row", "test", None, &row, 24, draw)
+        .expect("counted frame 1 at the new width");
+    assert_eq!(calls.get(), 3);
+    assert!(text_of(&counted_wide).starts_with("f1"), "{counted_wide:?}");
+    let painted_wide = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            24,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("painted frame 1 at the new width");
+    assert_eq!(calls.get(), 3, "a due paint promotes the due count");
+    assert_eq!(text_of(&painted_wide), text_of(&counted_wide));
+}
+
 /// Paints animated notice `id` holding `text` at `width` on `cache`,
 /// recording each frame drawn.
 fn paint_notice(

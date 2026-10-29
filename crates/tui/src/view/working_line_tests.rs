@@ -1197,7 +1197,8 @@ fn a_replacement_keeps_an_interrupt_target_on_every_line() {
         .filter(|target| target.id == crate::mouse::TargetId::Interrupt)
         .collect();
     // One interrupt target over each replacement line's full width.
-    assert_eq!(interrupts.len(), 2, "{targets:?}");
+    // docs/tui.md:2866-2869: a replacement keeps one interrupt target per line.
+    assert_eq!(interrupts.len(), 2, "{targets:?}"); // docs/tui.md:2866-2869.
     for (dy, target) in interrupts.iter().enumerate() {
         assert_eq!(
             (target.rect.x, target.rect.width, target.rect.height),
@@ -1215,7 +1216,8 @@ fn an_empty_replacement_hides_the_line() {
     let fake = std::rc::Rc::new(RecordingRenderer::lines(&[], None));
     app.install_renderer(fake);
     // No rows reserved and none drawn, and no target left behind.
-    assert_eq!(super::count(&app, 80), 0);
+    // docs/tui.md:2866: a replacement that returns no lines hides the line.
+    assert_eq!(super::count(&app, 80), 0); // docs/tui.md:2866.
     let (shown, targets) = draw_line(&app, 80, 1);
     assert!(!shown.contains("Working"), "{shown}");
     assert!(
@@ -1228,7 +1230,8 @@ fn an_empty_replacement_hides_the_line() {
     // same app reserves one row more.
     let (mut plain, plain_clock) = home_app(WALL - 674_000);
     plain.set_now(plain_clock.origin(), WALL);
-    assert_eq!(app.below_rows() + 1, plain.below_rows());
+    // docs/tui.md:2866: the hidden line reserves no row.
+    assert_eq!(app.below_rows() + 1, plain.below_rows()); // docs/tui.md:2866.
 }
 
 #[test]
@@ -1241,8 +1244,9 @@ fn the_fold_matches_the_turn_cards_prompts_when_narrowed() {
         let (shown, _) = draw_line(&app, width, 1);
         assert!(shown.contains("custom"), "{shown}");
         // The input carries the turn card's start, however narrow.
+        // docs/tui.md:2858-2864: working_line draws the working line with started.
         let inputs = fake.inputs.borrow();
-        assert_eq!(inputs.len(), 1, "one folded input");
+        assert_eq!(inputs.len(), 1, "one folded input"); // docs/tui.md:2858-2864: one draw, one input.
         assert_eq!(inputs[0].started, Some(WALL - 674_000));
         assert!(inputs[0].retry.is_none());
     }
@@ -1270,7 +1274,8 @@ fn the_fold_maps_the_retry_schedule() {
     let (shown, _) = draw_line(&app, 80, 1);
     assert!(shown.contains("custom"), "{shown}");
     let inputs = fake.inputs.borrow();
-    assert_eq!(inputs.len(), 1, "one folded input");
+    // docs/tui.md:2858-2864: the retry input carries code, attempt and schedule.
+    assert_eq!(inputs.len(), 1, "one folded input"); // docs/tui.md:2858-2864.
     assert_eq!(inputs[0].started, Some(WALL));
     let retry = inputs[0].retry.as_ref().expect("a pending retry");
     assert!(matches!(retry.code, contract::ErrorCode::RateLimited));
@@ -1295,6 +1300,7 @@ fn an_animated_replacement_records_frame_and_now() {
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     assert!(text(&buf).contains("custom"), "{}", text(&buf));
-    assert_eq!(fake.frames.borrow().clone(), vec![0]);
-    assert_eq!(fake.nows.borrow().clone(), vec![WALL]);
+    // docs/tui.md:3107: every animated slot carries frame and now.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:3107.
+    assert_eq!(fake.nows.borrow().clone(), vec![WALL]); // docs/tui.md:3107.
 }

@@ -353,11 +353,7 @@ fn hash_spend(spend: &Spend<'_>, key: &mut DefaultHasher) {
             status.tokens.input.hash(key);
             status.tokens.output.hash(key);
             status.tokens.cache_read.hash(key);
-            status.tokens.cache_write.len().hash(key);
-            for (class, count) in &status.tokens.cache_write {
-                class.hash(key);
-                count.hash(key);
-            }
+            status.tokens.cache_write.hash(key);
             hash_float(status.subscription_cost, key);
         }
         Spend::Attached { cost } => {
@@ -440,10 +436,7 @@ impl SessionCard<'_> {
         }
         self.speed.hash(&mut key);
         self.turns.hash(&mut key);
-        self.tools_down.len().hash(&mut key);
-        for server in self.tools_down {
-            server.hash(&mut key);
-        }
+        self.tools_down.hash(&mut key);
         self.waiting.hash(&mut key);
         self.flat.hash(&mut key);
         key.finish()
@@ -531,10 +524,7 @@ impl WidgetCard<'_> {
         slot.hash(&mut key);
         self.extension.hash(&mut key);
         self.widget.hash(&mut key);
-        self.lines.len().hash(&mut key);
-        for line in self.lines {
-            line.hash(&mut key);
-        }
+        self.lines.hash(&mut key);
         self.open.hash(&mut key);
         self.flat.hash(&mut key);
         key.finish()
@@ -571,10 +561,7 @@ impl StatusRows<'_> {
     pub(crate) fn key(&self, slot: &str) -> u64 {
         let mut key = DefaultHasher::new();
         slot.hash(&mut key);
-        self.cards.len().hash(&mut key);
-        for card in &self.cards {
-            card.hash(&mut key);
-        }
+        self.cards.hash(&mut key);
         // The session input keys itself; hashing the key keeps the
         // session and card keys over the same fields.
         self.session.key(slot).hash(&mut key);

@@ -2363,7 +2363,8 @@ fn a_working_line_renderer_reads_started_and_retry() {
     ) else {
         panic!("a working line draws")
     };
-    assert_eq!(lines[0][0].text, "7:rate_limited:2:4:4000:9:false");
+    // docs/tui.md:2863-2864: started and the pending retry shape.
+    assert_eq!(lines[0][0].text, "7:rate_limited:2:4:4000:9:false"); // docs/tui.md:2863-2864.
 }
 
 #[test]
@@ -2386,7 +2387,8 @@ fn a_working_line_renderer_sees_absent_keys_as_nil() {
     ) else {
         panic!("a working line draws")
     };
-    assert_eq!(lines[0][0].text, "nil:nil:false");
+    // docs/tui.md:2863-2864,2740: absent keys are nil, never null.
+    assert_eq!(lines[0][0].text, "nil:nil:false"); // docs/tui.md:2863-2864,2740.
 }
 
 #[test]
@@ -2413,10 +2415,11 @@ fn a_steering_queue_renderer_reads_messages_oldest_first() {
     else {
         panic!("a steering queue draws")
     };
+    // docs/tui.md:2877: messages oldest-first with text, images and flags.
     assert_eq!(
         lines[0][0].text,
         "first|2|artifacts/a.png|8|8|true|false|false|second|true|true"
-    );
+    ); // docs/tui.md:2877.
 }
 
 /// A status row renderer reads the narrow layout's cards with what each
@@ -2485,10 +2488,11 @@ fn a_status_rows_renderer_reads_the_docs_keys() {
     else {
         panic!("status rows draw")
     };
+    // docs/tui.md:2885-2887,2891-2892: cards in order, ranked files, waiting and quota.
     assert_eq!(
         lines[0][0].text,
         "session|changed_files|m|main|268000|4.12|400|1.5|20.0|64|12|tailscale|3|b.rs|3|1|2|e/w|one|2|codex|weekly|80.0|false"
-    );
+    ); // docs/tui.md:2885-2887,2891-2892.
 }
 
 #[test]
@@ -2523,7 +2527,8 @@ fn status_rows_omits_absent_waiting_quota_and_spend() {
     else {
         panic!("status rows draw")
     };
-    assert_eq!(lines[0][0].text, "nil:nil:nil:nil");
+    // docs/tui.md:2891-2892,2914: waiting, quota and spend absent at zero.
+    assert_eq!(lines[0][0].text, "nil:nil:nil:nil"); // docs/tui.md:2891-2892,2914.
 }
 
 fn session_input<'a>(
@@ -2570,7 +2575,8 @@ fn a_session_card_renderer_reads_the_full_spend() {
     ) else {
         panic!("a session card draws")
     };
-    assert_eq!(lines[0][0].text, "4.12|100|20|300|400|1.5|false");
+    // docs/tui.md:2909: cost with tokens and subscription_cost.
+    assert_eq!(lines[0][0].text, "4.12|100|20|300|400|1.5|false"); // docs/tui.md:2909.
 }
 
 #[test]
@@ -2599,7 +2605,8 @@ fn a_session_card_renderer_reads_the_attached_fallback_cost_alone() {
     ) else {
         panic!("a session card draws")
     };
-    assert_eq!(lines[0][0].text, "4.12:nil");
+    // docs/tui.md:2909: attached spend falls back to cost alone.
+    assert_eq!(lines[0][0].text, "4.12:nil"); // docs/tui.md:2909.
 }
 
 #[test]
@@ -2623,7 +2630,8 @@ fn a_session_card_renderer_sees_absent_spend_branch_and_keys_as_nil() {
     ) else {
         panic!("a session card draws")
     };
-    assert_eq!(lines[0][0].text, "nil:nil:nil:nil");
+    // docs/tui.md:2905,2909-2910,2914,2740: absent keys are nil, never null.
+    assert_eq!(lines[0][0].text, "nil:nil:nil:nil"); // docs/tui.md:2740.
 }
 
 #[test]
@@ -2653,7 +2661,8 @@ fn a_session_card_renderer_reads_a_costless_status_spend() {
     ) else {
         panic!("a session card draws")
     };
-    assert_eq!(lines[0][0].text, "nil:100:1.5");
+    // docs/tui.md:2909: a costless status spend still carries tokens.
+    assert_eq!(lines[0][0].text, "nil:100:1.5"); // docs/tui.md:2909.
 }
 
 #[test]
@@ -2689,7 +2698,8 @@ fn a_changed_files_card_renderer_reads_files_in_ranked_order() {
     else {
         panic!("a changed-files card draws")
     };
-    assert_eq!(lines[0][0].text, "b.rs|1|2|a.rs|false");
+    // docs/tui.md:2920: files in the built-in ranked order.
+    assert_eq!(lines[0][0].text, "b.rs|1|2|a.rs|false"); // docs/tui.md:2920.
 }
 
 fn delegate(
@@ -2737,10 +2747,11 @@ fn a_delegates_card_renderer_reads_running_then_finished() {
     else {
         panic!("a delegates card draws")
     };
+    // docs/tui.md:2926: running in start order first, then finished in start order.
     assert_eq!(
         lines[0][0].text,
         "3|review the diff|fiber|m|14|read app.rs|1720000000000|nil|nil|4|completed|1720000001000"
-    );
+    ); // docs/tui.md:2926.
 }
 
 #[test]
@@ -2769,7 +2780,8 @@ fn a_jobs_card_renderer_reads_jobs_and_open() {
         else {
             panic!("a jobs card draws")
         };
-        assert_eq!(lines[0][0].text, format!("7|bench|{open}"));
+        // docs/tui.md:2932-2933: jobs with job_id and description, plus open.
+        assert_eq!(lines[0][0].text, format!("7|bench|{open}")); // docs/tui.md:2932-2933.
     }
 }
 
@@ -2797,7 +2809,8 @@ fn a_widget_card_renderer_reads_all_lines_and_open() {
     else {
         panic!("a widget card draws")
     };
-    assert_eq!(lines[0][0].text, "e|w|one|two|true");
+    // docs/tui.md:2939-2942: extension, widget, lines and open.
+    assert_eq!(lines[0][0].text, "e|w|one|two|true"); // docs/tui.md:2939-2942.
 }
 
 #[test]
@@ -2817,7 +2830,8 @@ fn an_animated_part4_call_carries_frame_and_now() {
     let Decision::Draw { lines, .. } = decision else {
         panic!("frame 3 draws")
     };
-    assert_eq!(lines[0][0].text, format!("3:{NOW}"));
+    // docs/tui.md:3107: an animated call carries frame and now.
+    assert_eq!(lines[0][0].text, format!("3:{NOW}")); // docs/tui.md:3107.
     assert!(continues);
 }
 
@@ -2846,6 +2860,7 @@ fn an_animated_chrome_call_carries_frame_and_now() {
     let Decision::Draw { lines, .. } = decision else {
         panic!("an animated working line draws")
     };
-    assert_eq!(lines[0][0].text, format!("3:{NOW}:7"));
+    // docs/tui.md:3107: a chrome animated call carries frame and now.
+    assert_eq!(lines[0][0].text, format!("3:{NOW}:7")); // docs/tui.md:3107.
     assert!(continues);
 }
