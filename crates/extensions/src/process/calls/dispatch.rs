@@ -41,7 +41,7 @@ impl ProcessExtension {
                 request_id,
             } => self.handle_call(id, call, args, request_id),
             transport::ParsedLine::Ready { id } => {
-                self.answer_accepted(&id, None);
+                self.answer_accepted_on(live, &id, None);
                 self.shared
                     .ready
                     .store(true, std::sync::atomic::Ordering::SeqCst);

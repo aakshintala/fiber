@@ -158,7 +158,9 @@ struct Inner {
 }
 
 /// The request table: one generation of pending requests and the stream
-/// gate. The lock is a leaf: no callback runs under it.
+/// gate. Its lock is a leaf except for `settle_with_before_wake`: that
+/// callback may only queue one outbound line and must never block or
+/// re-enter the table.
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct Table {
     inner: Mutex<Inner>,
@@ -337,27 +339,7 @@ impl Table {
     /// its waiter: a waiter that answers from its own release cannot
     /// deadlock on the gate.
     pub(crate) fn settle(&self, id: &RequestId, outcome: Outcome) -> Settled {
-        let wait = {
-            let mut inner = support::lock(&self.inner);
-            let wait = match inner.pending.get_mut(id) {
-                Some(pending) if !pending.done => {
-                    pending.done = true;
-                    Arc::clone(&pending.wait)
-                }
-                _ => return Settled::Stale,
-            };
-            if inner.stream_held.as_ref() == Some(id) {
-                inner.stream_held = None;
-            }
-            wait
-        };
-        self.stream_gate.notify_all();
-        {
-            let mut guard = support::lock(&wait.mutex);
-            *guard = Some(outcome);
-        }
-        wait.changed.notify_all();
-        Settled::Completed
+        self.settle_with_before_wake(id, outcome, || {})
     }
 
     /// Completes `id` after `before_wake` has queued any response to the
@@ -373,14 +355,13 @@ impl Table {
     ) -> Settled {
         let wait = {
             let mut inner = support::lock(&self.inner);
-            let wait = match inner.pending.get(id) {
-                Some(pending) if !pending.done => Arc::clone(&pending.wait),
+            let pending = match inner.pending.get_mut(id) {
+                Some(pending) if !pending.done => pending,
                 _ => return Settled::Stale,
             };
+            let wait = Arc::clone(&pending.wait);
             before_wake();
-            if let Some(pending) = inner.pending.get_mut(id) {
-                pending.done = true;
-            }
+            pending.done = true;
             if inner.stream_held.as_ref() == Some(id) {
                 inner.stream_held = None;
             }
