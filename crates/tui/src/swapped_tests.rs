@@ -5,7 +5,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
-use super::{Frame, Ink, List, Spot, about, compact, render, rows_height, wheel_window};
+use super::{
+    Frame, Ink, List, Spot, about, compact, render, rows_height, wheel_targets_window, wheel_window,
+};
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::theme::Role;
@@ -17,6 +19,22 @@ fn pressed(keys: &[Key], rows: usize, height: usize) -> List {
         list.key(key, rows, height);
     }
     list
+}
+
+/// Wheel steps shift three displayed rows; focus lands on the nearest
+/// shown target (`docs/tui.md:576`).
+#[test]
+fn wheel_targets_window_moves_three_rows_and_clamps_to_targets() {
+    assert_eq!(
+        wheel_targets_window(false, 2, 0, 20, 6, &[0, 2, 5, 7, 9]),
+        (5, 3)
+    );
+    assert_eq!(
+        wheel_targets_window(false, 15, 3, 20, 6, &[0, 2, 5, 7, 9]),
+        (9, 6)
+    );
+    assert_eq!(wheel_targets_window(false, 1, 0, 20, 6, &[]), (1, 3));
+    assert_eq!(wheel_targets_window(false, 1, 0, 20, 0, &[1, 2]), (1, 0));
 }
 
 #[test]

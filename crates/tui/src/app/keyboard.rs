@@ -396,19 +396,10 @@ impl App {
     /// before calling. Away from `bindings_press`.
     pub(crate) fn keys_screen_wheel(&mut self, up: bool) -> Effect {
         let height = self.keys_height();
-        let outcome = match self.keyboard.screen.as_mut() {
-            Some(screen) => screen.wheel(up, &self.keyboard.keys, height),
-            None => Outcome::Nothing,
-        };
-        match outcome {
-            Outcome::Nothing => Effect::None,
-            Outcome::Close => {
-                self.keyboard.screen = None;
-                Effect::None
-            }
-            Outcome::Apply(next) => self.apply_keys(next),
-            Outcome::Pass => Effect::None,
+        if let Some(screen) = self.keyboard.screen.as_mut() {
+            let _ = screen.wheel(up, &self.keyboard.keys, height);
         }
+        Effect::None
     }
 
     /// The screen's height in rows: the attached conversation's, or the

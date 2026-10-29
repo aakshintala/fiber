@@ -693,36 +693,15 @@ impl Login {
             return Act::Stay;
         }
         let shown = shown_body_rows(ctx.height);
-        if shown == 0 {
-            return Act::Stay;
-        }
-        let rows = self.body_len(ctx.width);
-        let end = rows.saturating_sub(shown);
-        let next = if up {
-            self.top.saturating_sub(3)
-        } else {
-            self.top.saturating_add(3).min(end)
-        };
-        self.top = next;
-        // Clamp the focus into the window, onto a target row; with no
-        // target shown the focus stays where it was.
         let targets = self.target_rows();
-        if !targets.is_empty()
-            && (self.selected < next || self.selected >= next.saturating_add(shown))
-        {
-            if self.selected < next {
-                if let Some(at) = targets.iter().copied().find(|at| *at >= next) {
-                    self.selected = at;
-                }
-            } else if let Some(at) = targets
-                .iter()
-                .copied()
-                .rev()
-                .find(|at| *at < next.saturating_add(shown))
-            {
-                self.selected = at;
-            }
-        }
+        (self.selected, self.top) = crate::swapped::wheel_targets_window(
+            up,
+            self.selected,
+            self.top,
+            self.body_len(ctx.width),
+            shown,
+            &targets,
+        );
         Act::Stay
     }
 

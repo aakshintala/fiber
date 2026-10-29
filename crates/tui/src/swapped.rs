@@ -248,6 +248,49 @@ pub(crate) fn wheel_window(
     (selected, next)
 }
 
+/// Shifts a viewport three rows per wheel step and keeps its selection
+/// on a focusable target when possible. A target that leaves the window
+/// moves to the nearest shown target; with no targets, selection stays
+/// unchanged. `rows` includes non-target rows such as headings and gaps.
+pub(crate) fn wheel_targets_window(
+    up: bool,
+    selected: usize,
+    top: usize,
+    rows: usize,
+    height: usize,
+    targets: &[usize],
+) -> (usize, usize) {
+    if height == 0 {
+        return (selected, top);
+    }
+    let end = rows.saturating_sub(height);
+    let next = if up {
+        top.saturating_sub(3)
+    } else {
+        top.saturating_add(3).min(end)
+    };
+    let selected =
+        if !targets.is_empty() && (selected < next || selected >= next.saturating_add(height)) {
+            if selected < next {
+                targets
+                    .iter()
+                    .copied()
+                    .find(|at| *at >= next)
+                    .unwrap_or(selected)
+            } else {
+                targets
+                    .iter()
+                    .copied()
+                    .rev()
+                    .find(|at| *at < next.saturating_add(height))
+                    .unwrap_or(selected)
+            }
+        } else {
+            selected
+        };
+    (selected, next)
+}
+
 /// One frame of a view, as the app builds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Frame {

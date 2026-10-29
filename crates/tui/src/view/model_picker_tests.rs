@@ -1442,6 +1442,8 @@ fn wheel_offsets_count_headings_and_blank_rows_as_displayed_rows() {
             .iter()
             .any(|span| span.content.contains("api_key"))
     );
+    // The wheel advances three displayed rows per step (`docs/tui.md:576`);
+    // headings, counts and models all count as displayed rows here.
     let (top, _) = picker_wheel_window(&view, false, height);
     assert_eq!(
         top, 3,

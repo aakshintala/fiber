@@ -521,7 +521,7 @@ const WHEEL_DOWN: &[u8] = b"\x1b[<65;21;41M";
 const THOUGHT: &str = "Ran 1 command";
 
 /// The wheel over a call's view scrolls the view, never the hidden
-/// conversation (`docs/tui.md`, "Swapped views"; see #3578): with the
+/// conversation (`docs/tui.md:576`, "Swapped views"; see #3578): with the
 /// conversation scrolled up to its thought row, three wheel-downs over
 /// the open view move its first visible row nine rows while the
 /// conversation's top marker stays exactly where the wheel found it.
@@ -619,25 +619,18 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
         first_output_number(grid) == Some(36)
     });
     let settled = first_output_number(&grid).expect("the settled first output number");
-    // Click the first output row past the head segment's end marker and
-    // step the viewport onto it: the marker row breaks the
-    // output-number/top-row one-to-one, so the nine-row proof starts
-    // past it. The rendered view marks no selection, so the click
-    // establishes that row as the selected one for the wheels below.
-    let start = settled + 2;
-    let row = grid
-        .rows
-        .iter()
-        .position(|line| line.trim_start().starts_with(&format!("{start:03}")))
-        .expect("the first output row past the end marker") as u16;
-    click(&mut run, 20, row);
+    // The marker row breaks the output-number/top-row one-to-one. Aim
+    // the wheel at the view's fixed interior instead of clicking a
+    // grid-derived output row: page replies may still fill the view, but
+    // cannot change which surface owns this wheel coordinate.
     run.write(WHEEL_DOWN);
-    run.wait_screen("the view past the end marker", |grid| {
-        first_output_number(grid) == Some(start)
+    let grid = run.wait_screen("the view past the end marker", |grid| {
+        first_output_number(grid).is_some_and(|first| first > settled)
     });
+    let start = first_output_number(&grid).expect("the view moved past the end marker");
     // Three wheel-downs over the view move its first visible row nine
-    // rows: each step shifts the viewport three displayed rows, keeping
-    // the clicked selection only while it stays on screen. The
+    // rows: each step shifts the viewport three displayed rows, as
+    // promised in `docs/tui.md:576`. The
     // conversation stays hidden, so the Esc check below is the one
     // that proves its scroll is unchanged.
     run.write(WHEEL_DOWN);
