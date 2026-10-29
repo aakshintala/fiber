@@ -554,6 +554,7 @@ fn kitty_event_loop_draws_at_chunk_boundary() {
         std::fs::File::from(std::os::fd::OwnedFd::from(pipe_read)),
         head,
     ));
+    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
     assert_eq!(chunk, first_bytes[..head].to_vec());
     // A key's frame is written while the payload is pending: the image's
     // rows stay blank, at their size, until it lands.
@@ -574,6 +575,9 @@ fn kitty_event_loop_draws_at_chunk_boundary() {
     super::tests::flush_kitty(&lp);
     let deleted = crate::graphics::delete(1);
     let (rest, read) = recv_wire(&read_exact_bytes(read, deleted.len() + second_bytes.len()));
+    // docs/tui.md:2529-2532 ("Images"): the delete goes at the next chunk
+    // boundary with no further first-image chunk and no first place, then
+    // the full second transmit and place follow in order.
     assert_eq!(
         rest,
         [deleted, second_bytes].concat(),
