@@ -44,9 +44,17 @@ pub fn version_key(text: &str) -> Result<([u64; 3], bool, String), Error> {
     }
 }
 
-/// A minimum, such as `1.2`, `v1.2` or `v1.2.0`: missing numbers are 0.
-fn minimum(text: &str) -> Result<[u64; 3], Error> {
-    parse(text, 1)
+/// A minimum as an orderable key: the base triple, whether the minimum
+/// is a stable one (a stable release sorts above a nightly on the same
+/// base), and the nightly date, which orders two nightlies on one base.
+/// A correctly shaped nightly form orders with its base triple; a short
+/// stable form such as `1.2` fills missing numbers with 0. Anything
+/// else is [`Error::BadVersion`].
+fn minimum(text: &str) -> Result<([u64; 3], bool, String), Error> {
+    if let Ok((base, date)) = nightly_parts(text) {
+        return Ok((base, false, date));
+    }
+    parse(text, 1).map(|base| (base, true, String::new()))
 }
 
 fn parse(text: &str, least: usize) -> Result<[u64; 3], Error> {
@@ -83,15 +91,20 @@ pub(crate) fn newest(tags: &[String]) -> Option<String> {
     versions(tags).last().map(|(_, t)| (*t).clone())
 }
 
-/// The highest minimum in `wants` (requirer to minimum). Minimums of two
-/// major versions stop with both named.
-fn floor(name: &str, wants: &BTreeMap<String, String>) -> Result<[u64; 3], Error> {
-    let mut floor = [0; 3];
+/// The highest minimum in `wants` (requirer to minimum), as the same
+/// orderable key [`minimum`] returns. Minimums of two major versions
+/// stop with both named.
+fn floor(name: &str, wants: &BTreeMap<String, String>) -> Result<([u64; 3], bool, String), Error> {
+    // The empty floor sorts below every valid minimum: a nightly
+    // (`false`) sorts below a stable (`true`) on the same base, and the
+    // empty date sorts below any eight-digit one, so the first minimum
+    // always wins the `max` below, including `0.0.0-nightly.YYYYMMDD`.
+    let mut floor = ([0; 3], false, String::new());
     let mut first: Option<(&String, &String, u64)> = None;
     for (requirer, min) in wants {
         let v = minimum(min)?;
         match first {
-            Some((a, a_min, major)) if major != v[0] => {
+            Some((a, a_min, major)) if major != v.0[0] => {
                 return Err(Error::MajorConflict {
                     name: name.into(),
                     a: format!("`{a}` needs {a_min}"),
@@ -99,21 +112,27 @@ fn floor(name: &str, wants: &BTreeMap<String, String>) -> Result<[u64; 3], Error
                 });
             }
             Some(_) => {}
-            None => first = Some((requirer, min, v[0])),
+            None => first = Some((requirer, min, v.0[0])),
         }
         floor = floor.max(v);
     }
     Ok(floor)
 }
 
-/// Whether the version `have` meets every minimum in `wants`.
+/// Whether the version `have` meets every minimum in `wants`: a
+/// correctly shaped nightly form orders below the stable release on
+/// its base, exactly as the minima do. A `have` that is no version at
+/// all stays a miss, so the update restages it.
 pub(crate) fn meets(
     name: &str,
     have: &str,
     wants: &BTreeMap<String, String>,
 ) -> Result<bool, Error> {
     let floor = floor(name, wants)?;
-    Ok(version(have).is_ok_and(|v| v >= floor && v[0] == floor[0]))
+    let Ok(have) = version_key(have) else {
+        return Ok(false);
+    };
+    Ok(have >= floor && have.0[0] == floor.0[0])
 }
 
 /// Whether the version being installed, `have`, meets every minimum
@@ -154,10 +173,12 @@ pub(crate) fn newest_within(
         return newest(tags).ok_or_else(|| Error::NoTag { name: name.into() });
     }
     let floor = floor(name, wants)?;
+    // Tags stay stable-only: each tag orders as the stable key it is,
+    // against a floor that may be a nightly.
     versions(tags)
         .into_iter()
         .rev()
-        .find(|(v, _)| *v >= floor && v[0] == floor[0])
+        .find(|(v, _)| (*v, true, String::new()) >= floor && v[0] == floor.0[0])
         .map(|(_, t)| t.clone())
         .ok_or_else(|| Error::NoVersion {
             name: name.into(),
@@ -177,9 +198,11 @@ pub(crate) fn pick(
     tags: &[String],
 ) -> Result<String, Error> {
     let floor = floor(name, wants)?;
+    // Tags stay stable-only: each tag orders as the stable key it is,
+    // against a floor that may be a nightly.
     versions(tags)
         .into_iter()
-        .find(|(v, _)| *v >= floor && v[0] == floor[0])
+        .find(|(v, _)| (*v, true, String::new()) >= floor && v[0] == floor.0[0])
         .map(|(_, t)| t.clone())
         .ok_or_else(|| Error::NoVersion {
             name: name.into(),

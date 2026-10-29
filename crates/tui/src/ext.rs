@@ -287,9 +287,12 @@ impl Bound {
     /// `extension_failed` always draws built-in. A renderer returning
     /// no lines hides the notice instead; rows, counts and the overlay
     /// share the one cached lookup, so each distinct notice calls the
-    /// renderer once (`docs/tui.md`, "How a TUI extension runs").
+    /// renderer once (`docs/tui.md`, "How a TUI extension runs"). An
+    /// animated renderer draws through the animation schedule under the
+    /// notice instance, while the public input stays its code and text.
     pub(crate) fn notice_lines(
         &self,
+        id: usize,
         code: &str,
         text: &str,
         width: u16,
@@ -310,29 +313,35 @@ impl Bound {
             text,
             flat: self.flat,
         });
-        let fitted = self.cache.lines(
-            self.page.clone(),
-            "notice",
-            &extension,
-            renderer.half(&self.ctx, &extension),
-            &input,
-            width,
-            || {
-                let builtin = |input: &Input<'_>, at| {
-                    let Input::Notice(notice) = input else {
-                        return Vec::new();
-                    };
-                    crate::view::notice_rows::builtin_spans(notice.code, notice.text, at as usize)
-                };
-                if renderer.animate_interval(&self.ctx, "notice").is_some() {
-                    renderer
-                        .render_animated(&self.ctx, "notice", &input, width, 0, &builtin)
-                        .0
-                } else {
-                    renderer.render(&self.ctx, "notice", &input, width, &builtin)
-                }
-            },
-        );
+        let half = renderer.half(&self.ctx, &extension);
+        let builtin = |input: &Input<'_>, at: u16| {
+            let Input::Notice(notice) = input else {
+                return Vec::new();
+            };
+            crate::view::notice_rows::builtin_spans(notice.code, notice.text, at as usize)
+        };
+        let fitted = match renderer.animate_interval(&self.ctx, "notice") {
+            Some(interval) => self.cache.lines_animated_notice(
+                id,
+                &extension,
+                half,
+                &input,
+                width,
+                interval,
+                |frame| {
+                    renderer.render_animated(&self.ctx, "notice", &input, width, frame, &builtin)
+                },
+            ),
+            None => self.cache.lines(
+                self.page.clone(),
+                "notice",
+                &extension,
+                half,
+                &input,
+                width,
+                || renderer.render(&self.ctx, "notice", &input, width, &builtin),
+            ),
+        };
         for queued in renderer.take_pending() {
             self.cache.queue_notice(queued);
         }
