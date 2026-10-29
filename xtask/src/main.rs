@@ -69,6 +69,8 @@
 //!   it (`docs/testing/running.md`, "Flaky tests")
 //! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
 //! - `must-succeed`: no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, except the kept bounds in `xtask/src/must_succeed.rs`
+//! - `threads <cpus> <load>`: the nextest `--test-threads` count for the
+//!   host's load, printed as one integer
 //! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
 //! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
 //!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
@@ -92,6 +94,7 @@ mod rules;
 mod select;
 mod site;
 mod stress;
+mod threads;
 mod ticket;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -314,6 +317,16 @@ fn run(args: &[String]) -> Result<bool, String> {
             ),
             "ok",
         ),
+        "threads" => {
+            let (cpus, load) = match rest {
+                [cpus, load] => (cpus, load),
+                _ => return Err("usage: cargo xtask threads <cpus> <load>".to_owned()),
+            };
+            let cpus: f64 = cpus.parse().map_err(|e| format!("cpus: {e}"))?;
+            let load: f64 = load.parse().map_err(|e| format!("load: {e}"))?;
+            println!("{}", threads::threads(cpus, load));
+            Ok(true)
+        }
         "site" => site::run(rest),
         "compiled-in" => {
             let members = workspace_members()?;
