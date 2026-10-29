@@ -2903,6 +2903,30 @@ fn tolerated_late_write(result: io::Result<()>) {
     }
 }
 
+// macOS `setsockopt(SO_RCVTIMEO)` fails with `EINVAL` on a Unix socket whose peer already closed.
+fn tolerated_late_timeout(result: io::Result<()>) -> bool {
+    match result {
+        Ok(()) => true,
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => false,
+        Err(error) => panic!("timeout setup on the late connection failed: {error:?}"),
+    }
+}
+
+#[test]
+fn late_timeout_setup_records_whether_the_read_is_bounded() {
+    assert!(tolerated_late_timeout(Ok(())));
+    assert!(!tolerated_late_timeout(Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "the peer already closed"
+    ))));
+}
+
+#[test]
+#[should_panic(expected = "timeout setup on the late connection failed")]
+fn late_timeout_setup_with_another_error_fails() {
+    tolerated_late_timeout(Err(io::Error::new(io::ErrorKind::TimedOut, "probe")));
+}
+
 #[test]
 fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     let opened = Opened::open(Vec::new());
@@ -3017,6 +3041,55 @@ fn after_quiesce_a_client_waiting_for_the_shutdown_before_its_write_gets_no_answ
             "the server closed the rejected post-quiesce connection before the deadline: {error:?}"
         ),
     }
+    tolerated_late_write(
+        late.write_all(format!("{}\n", subscribe_line("c_late", "full")).as_bytes()),
+    );
+    drop(late);
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn after_quiesce_a_late_connection_closed_before_its_timeout_accepts_invalid_input() {
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    let mut connected = None;
+    let first = socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |_| {
+            let client = Client::connect(&first).unwrap();
+            client.send(&subscribe_line("c_full", "full")).unwrap();
+            let _ack = recv(&client);
+            connected = Some(client);
+            Ok(())
+        })
+        .unwrap();
+    opened.session.quiesce();
+    drop(connected);
+    // The probe read proves the session closed this connection before the
+    // timeout below is set: end of file with no bytes is the missing answer.
+    // It runs on a thread so the wait below bounds it.
+    let mut late = UnixStream::connect(&socket).unwrap();
+    let mut probe = late.try_clone().unwrap();
+    let (closed, reached) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        let mut empty = [0u8; 64];
+        let _ = closed.send(probe.read(&mut empty));
+    });
+    match Deadline::after(DEADLINE)
+        .recv(&reached)
+        .expect("the session closes a rejected post-quiesce connection")
+    {
+        Ok(0) => {}
+        Ok(n) => panic!("no answer is written for a line never read, got {n} bytes"),
+        Err(error) => panic!(
+            "the server closed the rejected post-quiesce connection before the deadline: {error:?}"
+        ),
+    }
+    reader.join().expect("the probe read returned");
+    // The peer is already closed here, so the timeout below either arms or
+    // reports the closure instead of failing the test.
+    tolerated_late_timeout(late.set_read_timeout(Some(DEADLINE)));
     tolerated_late_write(
         late.write_all(format!("{}\n", subscribe_line("c_late", "full")).as_bytes()),
     );
