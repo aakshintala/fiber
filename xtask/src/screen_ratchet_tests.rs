@@ -1,0 +1,186 @@
+use super::*;
+use std::collections::BTreeMap;
+
+fn file(path: &str, source: &str) -> RustFile {
+    RustFile {
+        krate: "main".to_owned(),
+        path: path.to_owned(),
+        rel: path.strip_prefix("crates/main/").unwrap_or(path).to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+fn maxima(entries: &[(&str, usize)]) -> BTreeMap<String, usize> {
+    entries
+        .iter()
+        .map(|(path, maximum)| ((*path).to_owned(), *maximum))
+        .collect()
+}
+
+#[test]
+fn a_call_form_line_counts() {
+    assert_eq!(count_unmarked("    let grid = run.screen();\n"), 1);
+}
+
+#[test]
+fn a_field_access_without_parens_does_not_count() {
+    assert_eq!(count_unmarked("    run.screen.wait_for(\"Key: \");\n"), 0);
+    assert_eq!(count_unmarked("    let shown = &run.screen.seen;\n"), 0);
+}
+
+#[test]
+fn a_call_inside_a_string_does_not_count() {
+    assert_eq!(count_unmarked("    let marker = \"run.screen()\";\n"), 0);
+}
+
+#[test]
+fn a_call_inside_a_line_comment_does_not_count() {
+    assert_eq!(count_unmarked("    // let grid = run.screen();\n"), 0);
+}
+
+#[test]
+fn a_call_inside_a_block_comment_does_not_count() {
+    assert_eq!(count_unmarked("    /* run.screen() */\n"), 0);
+    assert_eq!(
+        count_unmarked("    /* open\n    run.screen();\n    close */\n"),
+        0
+    );
+}
+
+#[test]
+fn a_settled_marker_on_the_call_line_exempts() {
+    assert_eq!(
+        count_unmarked("    let grid = run.screen(); // settled: wait checked tint\n"),
+        0
+    );
+}
+
+#[test]
+fn a_settled_marker_on_the_previous_line_exempts() {
+    assert_eq!(
+        count_unmarked("    // settled: wait checked tint\n    let grid = run.screen();\n"),
+        0
+    );
+}
+
+#[test]
+fn a_marker_two_lines_above_does_not_exempt() {
+    assert_eq!(
+        count_unmarked(
+            "    // settled: wait checked tint\n    let other = 1;\n    let grid = run.screen();\n"
+        ),
+        1
+    );
+}
+
+#[test]
+fn a_marker_inside_a_string_literal_does_not_exempt() {
+    assert_eq!(
+        count_unmarked("    let note = \"// settled: done\";\n    let grid = run.screen();\n"),
+        1
+    );
+    assert_eq!(
+        count_unmarked("    let grid = run.screen();\n    let note = \"// settled: done\";\n"),
+        1
+    );
+}
+
+#[test]
+fn a_marker_inside_a_block_comment_does_not_exempt() {
+    assert_eq!(
+        count_unmarked("    /* // settled: done */\n    let grid = run.screen();\n"),
+        1
+    );
+}
+
+#[test]
+fn a_quote_inside_a_char_literal_does_not_start_a_string() {
+    assert_eq!(
+        count_unmarked("    let tick = '\"';\n    let grid = run.screen();\n"),
+        1
+    );
+}
+
+#[test]
+fn a_call_and_a_marker_inside_a_raw_string_count_for_nothing() {
+    assert_eq!(
+        count_unmarked("    let raw = r\"run.screen() // settled: x\";\n"),
+        0
+    );
+    assert_eq!(
+        count_unmarked("    let raw = r#\"// settled: x\"#;\n    let grid = run.screen();\n"),
+        1
+    );
+}
+
+#[test]
+fn support_files_are_outside_the_rule() {
+    let files = [file(
+        "crates/main/tests/support/pty.rs",
+        "    let grid = self.screen();\n    let other = run.screen();\n",
+    )];
+    assert!(check(&files, &maxima(&[])).is_empty());
+}
+
+#[test]
+fn per_file_maxima_are_independent() {
+    let files = [
+        file("crates/main/tests/a.rs", "    let a = run.screen();\n"),
+        file(
+            "crates/main/tests/b.rs",
+            "    let b = run.screen();\n    let c = run.screen();\n",
+        ),
+    ];
+    assert_eq!(
+        check(&files, &maxima(&[("crates/main/tests/a.rs", 1)])),
+        ["crates/main/tests/b.rs holds 2 unmarked .screen() call lines (maximum 0)"]
+    );
+}
+
+#[test]
+fn an_absent_file_has_maximum_zero() {
+    let files = [file(
+        "crates/main/tests/fresh.rs",
+        "    let grid = run.screen();\n",
+    )];
+    assert_eq!(
+        check(&files, &maxima(&[])),
+        ["crates/main/tests/fresh.rs holds 1 unmarked .screen() call lines (maximum 0)"]
+    );
+}
+
+#[test]
+fn a_file_at_its_maximum_passes() {
+    let files = [file(
+        "crates/main/tests/a.rs",
+        "    let grid = run.screen();\n",
+    )];
+    assert!(check(&files, &maxima(&[("crates/main/tests/a.rs", 1)])).is_empty());
+}
+
+#[test]
+fn a_failure_names_the_file_the_count_and_the_maximum() {
+    let files = [file(
+        "crates/main/tests/a.rs",
+        "    let a = run.screen();\n    let b = run.screen();\n",
+    )];
+    assert_eq!(
+        check(&files, &maxima(&[("crates/main/tests/a.rs", 1)])),
+        ["crates/main/tests/a.rs holds 2 unmarked .screen() call lines (maximum 1)"]
+    );
+}
+
+#[test]
+fn the_maxima_table_parses_paths_and_counts() {
+    let parsed =
+        parse_maxima("crates/main/tests/a.rs 1\ncrates/main/tests/b.rs 7\n").unwrap_or_default();
+    assert_eq!(parsed.get("crates/main/tests/a.rs"), Some(&1));
+    assert_eq!(parsed.get("crates/main/tests/b.rs"), Some(&7));
+}
+
+#[test]
+fn the_maxima_table_rejects_a_bad_line_a_duplicate_and_a_bad_count() {
+    assert!(parse_maxima("crates/main/tests/a.rs\n").is_err());
+    assert!(parse_maxima("crates/main/tests/a.rs 1\ncrates/main/tests/a.rs 2\n").is_err());
+    assert!(parse_maxima("crates/main/tests/a.rs many\n").is_err());
+}
