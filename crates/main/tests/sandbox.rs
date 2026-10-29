@@ -233,6 +233,187 @@ fn a_confined_session_denies_the_configured_path() {
     );
 }
 
+/// A confined denial followed by the model's explicit unconfined retry:
+/// the first call fails confined with no automatic retry, and only the
+/// next model response requests the write-plus-read call with
+/// `unconfined: true`. The retry is reviewed, starts without `confined`,
+/// and returns the secret.
+#[test]
+fn an_explicit_unconfined_retry_reads_the_denied_path() {
+    use fakes::ProviderServer;
+    use serde_json::{Value, json};
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    // The denied home sits beside the session workspace under the same
+    // owner-home root: a deny beneath the workspace would overlap it.
+    let fixture = setup.root.path().join("fh");
+    fs::create_dir_all(&fixture).unwrap();
+    fs::write(fixture.join("secret"), "shh\n").unwrap();
+    let secret = fixture.join("secret");
+    // The retry writes its marker into the workspace, which stays writable.
+    // It is one simple command on purpose: a script of several commands
+    // declares no subject, and no standing rule can match a call with none
+    // (`docs/permissions.md`, "What a rule matches"). `tee` prints the
+    // secret to both its output and the marker file.
+    let marker = setup.root.path().join("w").join("marker");
+    let retry_command = format!("tee {} < {}", marker.display(), secret.display());
+
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "secret_1",
+            "shell",
+            &json!({"command": format!("cat {}", secret.display())}),
+        )]),
+        stream(&[function_call(
+            "retry_1",
+            "shell",
+            &json!({"command": retry_command, "unconfined": true}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    // The person-only sandbox config enables confinement with the deny.
+    fs::write(
+        setup.home().join("config.json"),
+        serde_json::to_string(&json!({
+            "model": "fake/m",
+            "sandbox": {"enabled": true, "deny_read": [secret.display().to_string()]}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    // Standing rules allow both commands, so review approves them: a rule
+    // prefix matches a subject equal to it or going on with a space
+    // (`docs/permissions.md`, "What a rule matches"), so the prefixes carry
+    // no trailing space.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "cat"}),
+            json!({"decision": "allow", "tool": "shell", "prefix": "tee"}),
+        ),
+    )
+    .unwrap();
+
+    let run = setup.fiber_run(&["ask", "read both files"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let lines: Vec<Value> = run
+        .stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    assert!(!lines.is_empty(), "the session writes event lines");
+    // No automatic retry: exactly one request per model response.
+    let requested = lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_requested")
+        .count();
+    assert_eq!(requested, 2, "one request per model response");
+    // The calls are told apart by their arguments: only the retry carries
+    // `unconfined`.
+    let action = |want_unconfined: bool| {
+        lines
+            .iter()
+            .find(|line| {
+                line["kind"] == "tool_call_requested"
+                    && line["payload"]["arguments"]
+                        .get("unconfined")
+                        .is_some_and(|flag| flag == &json!(true))
+                        == want_unconfined
+            })
+            .and_then(|line| line["action_id"].as_str())
+            .unwrap_or_else(|| panic!("a request with unconfined:{want_unconfined}"))
+            .to_owned()
+    };
+    let secret_id = action(false);
+    let retry_id = action(true);
+    // The two calls run in order, each requested before it starts and
+    // completed after.
+    let positions = |kind: &str, id: &str| {
+        lines
+            .iter()
+            .position(|line| line["kind"] == kind && line["action_id"] == id)
+            .unwrap_or_else(|| panic!("a {kind} line for {id}"))
+    };
+    let order = [
+        positions("tool_call_requested", &secret_id),
+        positions("tool_call_started", &secret_id),
+        positions("tool_call_completed", &secret_id),
+        positions("tool_call_requested", &retry_id),
+        positions("tool_call_started", &retry_id),
+        positions("tool_call_completed", &retry_id),
+    ];
+    assert!(
+        order.windows(2).all(|pair| pair[0] < pair[1]),
+        "ordered events"
+    );
+    let secret_started = &lines[positions("tool_call_started", &secret_id)];
+    assert_eq!(
+        secret_started["payload"]["confined"], true,
+        "the first call starts confined"
+    );
+    let retry_started = &lines[positions("tool_call_started", &retry_id)];
+    assert!(
+        retry_started["payload"].get("confined").is_none(),
+        "the retry starts without confined: {}",
+        retry_started["payload"]
+    );
+    let content_text = |id: &str| {
+        lines[positions("tool_call_completed", id)]["payload"]["content"]
+            .as_array()
+            .map(|content| {
+                content
+                    .iter()
+                    .filter_map(|part| part["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .unwrap_or_default()
+    };
+    let secret_end = &lines[positions("tool_call_completed", &secret_id)];
+    assert_eq!(
+        secret_end["payload"]["status"], "failed",
+        "the first call fails"
+    );
+    let secret_text = content_text(&secret_id);
+    // Seatbelt reports EPERM where Landlock reports EACCES: the confined
+    // read fails on both, with the platform's refusal word.
+    #[cfg(target_os = "macos")]
+    let refused = "Operation not permitted";
+    #[cfg(not(target_os = "macos"))]
+    let refused = "Permission denied";
+    assert!(
+        secret_text.contains(refused),
+        "the denied read fails: {secret_text}"
+    );
+    assert!(
+        !secret_text.contains("shh"),
+        "no denied secret in the output: {secret_text}"
+    );
+    let retry_end = &lines[positions("tool_call_completed", &retry_id)];
+    assert_eq!(
+        retry_end["payload"]["status"], "completed",
+        "the retry succeeds"
+    );
+    assert!(
+        content_text(&retry_id).contains("shh"),
+        "the retry returns the secret"
+    );
+    assert!(marker.is_file(), "the retry ran its write");
+    // The retry reached review: its resolution allows it after its request
+    // and before its start.
+    let resolved = lines
+        .iter()
+        .position(|line| line["kind"] == "permission_resolved" && line["action_id"] == retry_id)
+        .expect("a resolution for the retry");
+    assert!(resolved > positions("tool_call_requested", &retry_id));
+    assert!(resolved < positions("tool_call_started", &retry_id));
+    assert_eq!(lines[resolved]["payload"]["decision"], "allow");
+}
+
 #[test]
 fn a_repository_sandbox_key_is_ignored_through_the_binary() {
     let setup = Setup::new_with_sandbox_root();

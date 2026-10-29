@@ -440,8 +440,15 @@ fn the_shell_schema_is_closed_and_excludes_deadline_ms() {
     );
     assert!(schema["properties"].get("timeout_ms").is_some(), "{schema}");
     assert_eq!(schema["additionalProperties"], serde_json::json!(false));
+    assert!(schema["properties"].get("unconfined").is_some(), "{schema}");
+    assert_eq!(
+        schema["properties"]["unconfined"]["type"],
+        serde_json::json!(["boolean", "null"]),
+        "{schema}"
+    );
     let required = schema["required"].as_array().expect("required names");
     assert!(required.iter().any(|name| name == "timeout_ms"), "{schema}");
+    assert!(required.iter().any(|name| name == "unconfined"), "{schema}");
     assert!(
         !required.iter().any(|name| name == "deadline_ms"),
         "{schema}"
