@@ -492,6 +492,9 @@ Fiber.
   (`shell.read_only` in `docs/configuration.md`). A call to that command with
   only those flags declares `reads` and skips review; any other flag makes it
   `executes`, as for the built-in list. A repository cannot add to the list.
+  An entry for a command the built-in list already has adds its flags to the
+  built-in ones; it cannot remove one. A command the built-ins accept only in
+  an exact form, such as `git stash list`, takes no added flags.
 
 ## Shell
 

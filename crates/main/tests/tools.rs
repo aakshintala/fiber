@@ -23,7 +23,7 @@ use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
     Deadline, KillGroup, PIXEL, PIXEL_BASE64, SENT, Setup, StdoutRun, TOOL_NAMES, function_call,
-    hello, holds_marker, is_status, read_kinds, spawn_watched, stream, text_reply, tool_names,
+    git, hello, holds_marker, is_status, read_kinds, spawn_watched, stream, text_reply, tool_names,
 };
 
 impl Setup {
@@ -943,6 +943,105 @@ fn a_configured_read_only_command_skips_review() {
     );
     let requests = server.requests();
     assert_eq!(requests.len(), 2);
+}
+
+#[test]
+fn a_configured_flag_on_a_built_in_command_skips_review() {
+    // `git status` has a flag list, so the person's same-named entry merges:
+    // `git status --long` declares `reads` and never reaches a reviewer
+    // (`docs/permissions.md`, "Fast paths": every call whose only effect is
+    // `reads` never reaches one). The workspace is a repository so the call
+    // itself succeeds.
+    let setup = Setup::new_with_started_deadline();
+    git(setup.deadline, &setup.workspace(), &["init", "--quiet"]);
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "shell_0",
+            "shell",
+            &json!({"command": "git status --long"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "shell": {"read_only": {"git status": {"flags": ["--long"]}}}}),
+    );
+
+    let run = setup.run(&["ask", "show the status"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        !run.kinds().contains(&"permission_resolved"),
+        "a reads-only call reached review"
+    );
+    assert!(
+        run.kinds().contains(&"tool_call_started"),
+        "a reads-only call never ran"
+    );
+    let completed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert!(
+        completed["payload"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Exit code 0."),
+        "unexpected content: {}",
+        completed["payload"]["content"][0]["text"]
+    );
+}
+
+#[test]
+fn a_configured_grep_dash_r_stays_reviewed_and_cannot_read_a_linked_credential() {
+    // Even listed in the person's `shell.read_only`, `-R` follows links
+    // below its operands, so the call is reviewed and denied before it runs.
+    // The declared path would be `ws`, which neither is nor contains
+    // `credentials/`; only the link below it leads there.
+    let setup = Setup::new_with_started_deadline();
+    let credentials = setup.home().join("credentials");
+    fs::create_dir_all(&credentials).unwrap();
+    fs::write(credentials.join("secret.txt"), format!("{MARKER}\n")).unwrap();
+    let ws = setup.workspace().join("ws");
+    fs::create_dir_all(&ws).unwrap();
+    std::os::unix::fs::symlink(fs::canonicalize(&credentials).unwrap(), ws.join("link")).unwrap();
+    let events = [function_call(
+        "call_grep",
+        "shell",
+        &json!({"command": "grep -R quorum ws"}),
+    )];
+    let server = ProviderServer::start([stream(&events), hello()]).unwrap();
+    setup.provider_with_defaults(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "shell": {"read_only": {"grep": {"flags": ["-R"]}}}}),
+    );
+
+    let run = setup.run(&["ask", "search the workspace"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_no_marker("stdout", run.stdout.as_bytes());
+    assert!(
+        !run.kinds().contains(&"tool_call_started"),
+        "a configured link-following grep ran without review"
+    );
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(resolved["payload"]["decided_by"], "no_reviewer");
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert!(resolved["payload"].get("reviewer").is_none());
+    assert_eq!(completed_call(&run)["payload"]["status"], "denied");
+    for (index, request) in server.requests().iter().enumerate() {
+        assert_no_marker(&format!("request {index}"), &request.body);
+    }
+    assert_session_has_no_marker(&run.session_dir(&setup));
 }
 
 #[test]
