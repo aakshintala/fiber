@@ -2533,12 +2533,6 @@ fn grouped_notice(code: ErrorCode, message: &str, extension: Option<&str>) -> No
     }
 }
 
-/// The tests' lead sentence: the count and the first item's message, so
-/// the grouped message names both (`docs/errors.md`, "Notices").
-fn grouped_lead(first: &Notice, count: usize) -> String {
-    format!("{count} grouped: {}", first.message)
-}
-
 /// Grouping an empty batch raises no notice and never calls the lead.
 #[test]
 fn grouping_an_empty_batch_raises_no_notice() {
@@ -2587,7 +2581,7 @@ fn groups_keep_first_seen_code_order_and_item_order() {
         [
             (
                 ErrorCode::SkillShadowed,
-                "3 grouped: first\n- first\n- second\n- third".to_owned(),
+                "3 skills are shadowed: first\n- first\n- second\n- third".to_owned(),
             ),
             (ErrorCode::IoFailed, "unreadable".to_owned(),),
         ]
@@ -2629,7 +2623,7 @@ fn the_grouped_message_lists_every_item_in_order() {
         grouped,
         vec![Notice {
             code: ErrorCode::SkillShadowed,
-            message: "3 grouped: first\n- first\n- second\n- third".to_owned(),
+            message: "3 skills are shadowed: first\n- first\n- second\n- third".to_owned(),
             extension: None,
         }]
     );
@@ -2650,7 +2644,7 @@ fn a_common_extension_stays_on_the_group() {
         grouped,
         vec![Notice {
             code: ErrorCode::HookFailed,
-            message: "2 grouped: first failed\n\
+            message: "2 hooks failed: first failed\n\
                       - first failed (extension `a`)\n\
                       - second failed (extension `a`)"
                 .to_owned(),
@@ -2676,7 +2670,7 @@ fn a_mixed_extension_group_names_none_but_lists_each_item() {
         grouped,
         vec![Notice {
             code: ErrorCode::HookFailed,
-            message: "3 grouped: first failed\n\
+            message: "3 hooks failed: first failed\n\
                       - first failed (extension `a`)\n\
                       - second failed\n\
                       - third failed (extension `b`)"
@@ -2701,9 +2695,41 @@ fn absent_extensions_stay_absent() {
         grouped,
         vec![Notice {
             code: ErrorCode::SkillShadowed,
-            message: "2 grouped: first\n- first\n- second".to_owned(),
+            message: "2 skills are shadowed: first\n- first\n- second".to_owned(),
             extension: None,
         }]
+    );
+}
+
+/// The default lead names what was counted for the codes one pass
+/// raises in bulk, and the code itself otherwise: each bulk code, one
+/// unlisted known code, and an unknown one.
+#[test]
+fn the_default_lead_names_the_count_and_first_item() {
+    for (code, plural) in [
+        (ErrorCode::SkillShadowed, "skills are shadowed"),
+        (ErrorCode::ExtensionShadowed, "extensions are shadowed"),
+        (ErrorCode::SkillInvalid, "skills are invalid"),
+        (ErrorCode::IoFailed, "reads failed"),
+        (ErrorCode::CommandConflict, "command conflicts"),
+        (ErrorCode::HookFailed, "hooks failed"),
+        (ErrorCode::ModelUnconfigured, "models are unconfigured"),
+    ] {
+        assert_eq!(
+            grouped_lead(&grouped_notice(code, "first", None), 2),
+            format!("2 {plural}: first")
+        );
+    }
+    assert_eq!(
+        grouped_lead(&grouped_notice(ErrorCode::CacheRebuild, "first", None), 3),
+        "3 `cache_rebuild` notices: first"
+    );
+    assert_eq!(
+        grouped_lead(
+            &grouped_notice(ErrorCode::Other("custom".into()), "first", None),
+            2
+        ),
+        "2 `custom` notices: first"
     );
 }
 

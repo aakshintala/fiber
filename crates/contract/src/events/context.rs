@@ -140,11 +140,78 @@ pub struct Notice {
 /// each keeping its own extension attribution. The grouped notice keeps
 /// `extension` only when every item names the same one, and omits it
 /// otherwise, so a group across extensions names none.
-pub fn group_notices(
-    notices: Vec<Notice>,
-    _lead: impl Fn(&Notice, usize) -> String,
-) -> Vec<Notice> {
-    notices
+#[must_use]
+pub fn group_notices(notices: Vec<Notice>, lead: impl Fn(&Notice, usize) -> String) -> Vec<Notice> {
+    // Each code's first notice beside the rest it grouped, in first-seen
+    // code order; a group is never empty, so no arm handles none.
+    let mut groups: Vec<(ErrorCode, Notice, Vec<Notice>)> = Vec::new();
+    for notice in notices {
+        match groups.iter_mut().find(|(code, _, _)| *code == notice.code) {
+            Some((_, _, rest)) => rest.push(notice),
+            None => groups.push((notice.code.clone(), notice, Vec::new())),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(_, first, rest)| {
+            if rest.is_empty() {
+                return first;
+            }
+            let all = std::iter::once(&first).chain(rest.iter());
+            let count = rest.len() + 1;
+            let extension = first.extension.clone().filter(|name| {
+                all.clone()
+                    .all(|item| item.extension.as_ref() == Some(name))
+            });
+            let mut message = lead(&first, count);
+            for item in std::iter::once(&first).chain(rest.iter()) {
+                message.push_str("\n- ");
+                message.push_str(&item.message);
+                if let Some(name) = &item.extension {
+                    message.push_str(&format!(" (extension `{name}`)"));
+                }
+            }
+            Notice {
+                code: first.code.clone(),
+                message,
+                extension,
+            }
+        })
+        .collect()
+}
+
+/// The default [`group_notices`] lead sentence for a group's first notice
+/// and count: the count and the first item, naming what was counted for
+/// the codes one pass raises in bulk, and the code itself otherwise. Only
+/// groups of more than one item reach it; singletons pass through
+/// unchanged.
+/// What the default [`group_notices`] lead counts for the codes one pass
+/// raises in bulk: the plural the lead sentence names.
+const BULK_LEADS: &[(ErrorCode, &str)] = &[
+    (ErrorCode::SkillShadowed, "skills are shadowed"),
+    (ErrorCode::ExtensionShadowed, "extensions are shadowed"),
+    (ErrorCode::SkillInvalid, "skills are invalid"),
+    (ErrorCode::IoFailed, "reads failed"),
+    (ErrorCode::CommandConflict, "command conflicts"),
+    (ErrorCode::HookFailed, "hooks failed"),
+    (ErrorCode::ModelUnconfigured, "models are unconfigured"),
+];
+
+/// The default [`group_notices`] lead sentence for a group's first notice
+/// and count: the count and the first item, naming what was counted for
+/// the codes one pass raises in bulk, and the code itself otherwise. Only
+/// groups of more than one item reach it; singletons pass through
+/// unchanged.
+#[must_use]
+pub fn grouped_lead(first: &Notice, count: usize) -> String {
+    if let Some((_, plural)) = BULK_LEADS.iter().find(|(code, _)| *code == first.code) {
+        return format!("{count} {plural}: {}", first.message);
+    }
+    let code = serde_json::to_value(&first.code)
+        .ok()
+        .and_then(|code| code.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "notice".to_owned());
+    format!("{count} `{code}` notices: {}", first.message)
 }
 
 /// Why a preamble was built.
