@@ -801,6 +801,10 @@ pub(crate) struct MarkerWatch {
     /// The first line, or the bytes before end-of-file without one: the
     /// wrapper's diagnostic when the marker never arrives, capped.
     head: Mutex<Vec<u8>>,
+    /// Wakes the drive loop parked in `drive_confined`: the reader observes
+    /// the marker on its own thread, and a quiet command offers no later
+    /// output to wake on, so the observation itself must wake the loop.
+    wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -811,7 +815,15 @@ impl MarkerWatch {
             expected: format!("{MARKER_PREFIX} {token}").into_bytes(),
             seen: AtomicBool::new(false),
             head: Mutex::new(Vec::new()),
+            wake: Mutex::new(None),
         }
+    }
+
+    /// Installs the drive loop's wake, called once when the marker is
+    /// first observed. Installed by the spawn site after the shared state
+    /// exists; without it the loop still wakes on later output or EOF.
+    pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) {
+        *support::lock(&self.wake) = Some(wake);
     }
 
     /// Whether the wrapper's first line was the marker.
@@ -828,8 +840,15 @@ impl MarkerWatch {
             line = stripped;
         }
         let seen = line == self.expected.as_slice();
-        if seen {
-            self.seen.store(true, Ordering::SeqCst);
+        if seen && !self.seen.swap(true, Ordering::SeqCst) {
+            // First observation only: a quiet command offers no later
+            // output, so this wake is what hands its parked drive loop
+            // off right after the marker. Cloned out from under the
+            // lock, so the wake never runs while this mutex is held.
+            let wake = support::lock(&self.wake).clone();
+            if let Some(wake) = wake {
+                wake();
+            }
         }
         support::lock(&self.head).extend_from_slice(line);
         seen

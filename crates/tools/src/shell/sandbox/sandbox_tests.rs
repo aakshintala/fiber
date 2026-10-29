@@ -1277,6 +1277,32 @@ fn macos_marker_strip_tolerates_a_pty_carriage_return() {
     assert_eq!(kept, b"user\n");
 }
 
+/// Observing the marker fires the installed wake exactly once: the parked
+/// drive loop of a quiet call wakes on the observation, not on later
+/// output. A miss or a repeated line never wakes.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_marker_observation_fires_the_wake_once() {
+    let token = marker_token();
+    let watch = MarkerWatch::new(&token);
+    let fired = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = fired.clone();
+    watch.set_wake(std::sync::Arc::new(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }));
+    assert!(
+        watch.check(format!("FIBER_SANDBOX_CONFINED {token}").as_bytes()),
+        "the marker is recognized"
+    );
+    assert!(!watch.check(b"something else"), "a later line is not");
+    watch.miss(b"trailing");
+    assert_eq!(
+        fired.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "only the first observation wakes"
+    );
+}
+
 /// Without the marker the adapter drains what the wrapper wrote and reports
 /// a miss, so the call fails closed with the wrapper's own bytes as cause.
 #[cfg(target_os = "macos")]

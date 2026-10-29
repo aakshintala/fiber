@@ -528,6 +528,19 @@ pub(crate) fn execute_confined(
 
     let pgid = child.id();
     let shared = Arc::new(Shared::default());
+    // The marker observation wakes the drive loop parked in
+    // `drive_confined`: the wake bumps under the same lock the park
+    // holds from check into wait, so it is never missed, and the loop
+    // re-checks the observed marker before handing the call off.
+    {
+        let waked = Arc::clone(&shared);
+        watch.set_wake(Arc::new(move || {
+            let mut inner = lock(&waked.inner);
+            bump(&mut inner);
+            drop(inner);
+            waked.cv.notify_all();
+        }));
+    }
     {
         let mut inner = lock(&shared.inner);
         inner.input = input;

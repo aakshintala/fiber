@@ -3717,6 +3717,50 @@ fn macos_confined_background_call_moves_only_after_its_marker() {
     );
 }
 
+/// A quiet confined call hands off right after its marker: with the fake
+/// clock frozen and no output after the marker, only the marker
+/// observation can wake the parked drive loop, so the receipt arrives
+/// while the command still runs instead of at its end.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    let root = fakes::TempDir::under(&home, "fiber-macos-shell-quiet");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let jobs = FakeJobs::new(root.path());
+    let sandbox = Arc::new(Mutex::new(SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: root.path().join("fiber-home"),
+    }));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox.clone());
+    let effects = shell
+        .effects(&args("echo hi"))
+        .expect("the shell command classifies");
+    assert!(effects.declared.confined);
+
+    let running = start_confined(workspace, "sleep 30", true, false, jobs.clone(), sandbox);
+    let receipt = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&running.output) {
+        Ok(receipt) => receipt,
+        Err(_) => panic!(
+            "waited {:?} for the quiet call's handoff",
+            fakes::MUST_SUCCEED_WITHIN
+        ),
+    };
+    let job = started(&receipt);
+    assert!(receipt.error.is_none(), "{}", text(&receipt));
+    // The sleeper still runs and the fake clock never moved: the handoff
+    // waited for the marker, not for output, the end, or a deadline.
+    assert_eq!(jobs.started(), vec![job.clone()]);
+    assert_eq!(contract::clock::Clock::now(&*running.clock), running.start);
+    assert!(
+        !running.recorder.text().contains("FIBER_SANDBOX_CONFINED"),
+        "the marker never reaches the caller"
+    );
+}
+
 /// `stty` on the inherited pty keeps working confined: the single ioctl
 /// allow covers the pty the shell holds.
 #[cfg(target_os = "macos")]
