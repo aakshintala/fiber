@@ -57,6 +57,7 @@ fn described(inputs: &[Input]) -> Vec<String> {
             | Input::HooksOfferNames { .. }
             | Input::HooksInstalled { .. }
             | Input::Login { .. }
+            | Input::KittyFailed
             | Input::Models(_) => "other".to_owned(),
         })
         .collect()

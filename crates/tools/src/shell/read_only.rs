@@ -2,12 +2,46 @@
 //! `uniq` is not listed: its second operand is an output file. `sed` has
 //! its own print-only grammar in `super::sed`.
 
+/// How a flag takes its value, if it does. One mode per flag: the modes
+/// below nest (`digits_only` requires `inline_only`, which requires a
+/// value), so separate booleans could contradict each other.
+pub(super) enum ValueMode {
+    /// The flag takes no value, as in `--stat`.
+    None,
+    /// The value rides the next word or after `=`, as in `-n 10`.
+    Separate,
+    /// The value rides only after `=`: a bare word with this spelling
+    /// refuses instead of consuming the next word, as with
+    /// `--diff-filter`.
+    Inline,
+    /// The value rides only after `=` and holds only ASCII digits, as in
+    /// `--unified=5`.
+    InlineDigits,
+}
+
 /// A flag that keeps its command read-only.
 pub(super) struct Flag {
     /// The flag as an exact word, such as `-n` or `--stat`.
     pub(super) spelling: &'static str,
+    /// How the flag takes its value, if it does.
+    pub(super) mode: ValueMode,
+}
+
+impl Flag {
     /// Whether the next word, or the text after `=`, is this flag's value.
-    pub(super) takes_value: bool,
+    pub(super) fn takes_value(&self) -> bool {
+        !matches!(self.mode, ValueMode::None)
+    }
+
+    /// Whether the value rides only after `=`.
+    pub(super) fn inline_only(&self) -> bool {
+        matches!(self.mode, ValueMode::Inline | ValueMode::InlineDigits)
+    }
+
+    /// Whether the `=` value holds only ASCII digits.
+    pub(super) fn digits_only(&self) -> bool {
+        matches!(self.mode, ValueMode::InlineDigits)
+    }
 }
 
 /// One command on the built-in list.
@@ -36,14 +70,33 @@ pub(super) struct Command {
 const fn flag(spelling: &'static str) -> Flag {
     Flag {
         spelling,
-        takes_value: false,
+        mode: ValueMode::None,
     }
 }
 
 const fn value(spelling: &'static str) -> Flag {
     Flag {
         spelling,
-        takes_value: true,
+        mode: ValueMode::Separate,
+    }
+}
+
+/// A `--long` flag taking any value only after `=`, as in
+/// `--diff-filter=ACM`: a bare word refuses, so it never consumes the next
+/// word.
+const fn inline_value(spelling: &'static str) -> Flag {
+    Flag {
+        spelling,
+        mode: ValueMode::Inline,
+    }
+}
+
+/// A `--long` flag taking only an all-digit value after `=`, as in
+/// `--unified=5`; `-U<n>` is its attached short form.
+const fn inline_digits(spelling: &'static str) -> Flag {
+    Flag {
+        spelling,
+        mode: ValueMode::InlineDigits,
     }
 }
 
@@ -185,6 +238,12 @@ const GIT_DIFF: &[Flag] = &[
     flag("--no-ext-diff"),
     flag("--exit-code"),
     flag("--quiet"),
+    flag("--check"),
+    flag("--merge-base"),
+    flag("-w"),
+    flag("--ignore-all-space"),
+    inline_value("--diff-filter"),
+    inline_digits("--unified"),
 ];
 
 const GIT_LOG: &[Flag] = &[
@@ -198,6 +257,7 @@ const GIT_LOG: &[Flag] = &[
     flag("--no-color"),
     flag("--no-ext-diff"),
     value("-n"),
+    inline_digits("--unified"),
 ];
 
 // debt: git diff and git show can run a configured external diff or textconv, drop both entries when the read-only list is no longer trusted
@@ -209,6 +269,7 @@ const GIT_SHOW: &[Flag] = &[
     flag("--name-only"),
     flag("--no-color"),
     flag("--no-ext-diff"),
+    inline_digits("--unified"),
 ];
 
 const GIT_REV_PARSE: &[Flag] = &[
@@ -221,6 +282,9 @@ const GIT_REV_PARSE: &[Flag] = &[
     flag("--is-inside-work-tree"),
     flag("--show-prefix"),
 ];
+
+/// No flags: every flag word makes the call `executes`.
+const GIT_MERGE_BASE: &[Flag] = &[];
 
 const GIT_LS_FILES: &[Flag] = &[
     flag("-c"),
@@ -244,6 +308,7 @@ const GIT_BLAME: &[Flag] = &[
 ];
 
 const GH_PR_VIEW: &[Flag] = &[
+    value("--jq"),
     value("--json"),
     flag("--comments"),
     value("--repo"),
@@ -251,6 +316,7 @@ const GH_PR_VIEW: &[Flag] = &[
 ];
 
 const GH_PR_LIST: &[Flag] = &[
+    value("--jq"),
     value("--state"),
     value("-s"),
     value("--author"),
@@ -270,6 +336,7 @@ const GH_PR_LIST: &[Flag] = &[
 ];
 
 const GH_PR_DIFF: &[Flag] = &[
+    value("--jq"),
     value("--color"),
     flag("--name-only"),
     flag("--patch"),
@@ -278,6 +345,7 @@ const GH_PR_DIFF: &[Flag] = &[
 ];
 
 const GH_PR_CHECKS: &[Flag] = &[
+    value("--jq"),
     flag("--watch"),
     flag("--required"),
     flag("--fail-fast"),
@@ -288,6 +356,7 @@ const GH_PR_CHECKS: &[Flag] = &[
 ];
 
 const GH_ISSUE_LIST: &[Flag] = &[
+    value("--jq"),
     value("--state"),
     value("-s"),
     value("--assignee"),
@@ -304,9 +373,10 @@ const GH_ISSUE_LIST: &[Flag] = &[
     value("-R"),
 ];
 
-const GH_REPO_VIEW: &[Flag] = &[value("--json")];
+const GH_REPO_VIEW: &[Flag] = &[value("--jq"), value("--json")];
 
 const GH_RUN_LIST: &[Flag] = &[
+    value("--jq"),
     value("--branch"),
     value("-b"),
     value("--status"),
@@ -328,6 +398,7 @@ const GH_RUN_LIST: &[Flag] = &[
 ];
 
 const GH_RUN_VIEW: &[Flag] = &[
+    value("--jq"),
     flag("--log"),
     flag("--log-failed"),
     flag("--exit-status"),
@@ -582,6 +653,18 @@ pub(super) const COMMANDS: &[Command] = &[
     Command {
         name: "git rev-parse",
         flags: GIT_REV_PARSE,
+        paths: false,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: true,
+        prints: false,
+        counts: false,
+    },
+    // Operands are revisions, not paths, so they declare no paths, as
+    // with `git rev-parse`.
+    Command {
+        name: "git merge-base",
+        flags: GIT_MERGE_BASE,
         paths: false,
         pattern: false,
         pattern_flags: &[],

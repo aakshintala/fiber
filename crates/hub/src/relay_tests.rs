@@ -10,7 +10,7 @@
 )]
 
 use fakes::MUST_SUCCEED_WITHIN;
-use std::io::BufRead;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
 use serde_json::{Value, json};
@@ -813,7 +813,7 @@ fn an_accepted_prompt_ack_settles_to_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_1".to_owned(),
         command("c_1", "prompt"),
-        true,
+        KeptState::Sent,
     )]));
     assert!(
         settle(
@@ -835,7 +835,7 @@ fn an_accepted_prompt_ack_settles_to_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_2".to_owned(),
         command("c_2", "subscribe"),
-        true,
+        KeptState::Sent,
     )]));
     match settle(
         acknowledgement(&ack("c_2")).as_ref(),
@@ -870,7 +870,7 @@ fn a_rejected_subscribe_settles_to_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_1".to_owned(),
         subscribe("c_1"),
-        true,
+        KeptState::Sent,
     )]));
     assert!(
         settle(
@@ -888,7 +888,7 @@ fn a_rejected_subscribe_settles_to_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_2".to_owned(),
         subscribe("c_2"),
-        true,
+        KeptState::Sent,
     )]));
     assert!(
         settle(
@@ -950,7 +950,11 @@ fn a_relay_without_a_thread_is_recovered_with_its_queue_first() {
         queued.insert("id".to_owned(), Value::String("c_1".to_owned()));
         queued.insert("command".to_owned(), Value::String("reply".to_owned()));
         queued.insert("args".to_owned(), Value::Object(serde_json::Map::new()));
-        let kept: Kept = Arc::new(Mutex::new(vec![("c_1".to_owned(), queued, false)]));
+        let kept: Kept = Arc::new(Mutex::new(vec![(
+            "c_1".to_owned(),
+            queued,
+            KeptState::Queued,
+        )]));
         crate::connection::lock(&relays).entries.push(Relay {
             session: SID.to_owned(),
             epoch,
@@ -1043,7 +1047,7 @@ fn an_accepted_rewind_settles_to_the_session_it_names() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_rw1".to_owned(),
         command,
-        true,
+        KeptState::Sent,
     )]));
     let ack = serde_json::to_vec(&json!({
         "kind": "command_accepted", "ts": 1, "schema_version": 1,
@@ -1066,7 +1070,7 @@ fn a_rewind_without_a_minted_session_settles_to_nothing() {
         std::sync::Arc::new(std::sync::Mutex::new(vec![(
             "c_rw1".to_owned(),
             command.as_object().unwrap().clone(),
-            true,
+            KeptState::Sent,
         )]))
     };
     let rewind = json!({"id": "c_rw1", "command": "rewind", "args": {}});
@@ -1137,7 +1141,7 @@ fn an_accepted_prompt_naming_a_minted_session_starts_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_p1".to_owned(),
         prompt,
-        true,
+        KeptState::Sent,
     )]));
     // Only a rewind starts a session, whatever result an acknowledgement carries.
     let ack = serde_json::to_vec(&json!({
@@ -1343,7 +1347,7 @@ fn a_recovered_command_never_queues_behind_an_older_relay() {
         kept: Arc::new(Mutex::new(vec![(
             "c_4".to_owned(),
             command("c_4", "reply"),
-            false,
+            KeptState::Queued,
         )])),
         replayed: Replayed::default(),
         thread: Some(parked),
@@ -1363,7 +1367,7 @@ fn a_recovered_command_never_queues_behind_an_older_relay() {
         kept: Arc::new(Mutex::new(vec![(
             "c_2".to_owned(),
             command("c_2", "reply"),
-            false,
+            KeptState::Queued,
         )])),
         replayed: Replayed::default(),
         thread: None,
@@ -1988,7 +1992,7 @@ fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
             .as_object()
             .unwrap()
             .clone(),
-        true,
+        KeptState::Sent,
     )]));
     order.enqueue(SID, "c_later");
     order.mark_rerouted("c_earlier", SID, EPOCH);
@@ -2048,7 +2052,7 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
                     .as_object()
                     .unwrap()
                     .clone(),
-                true,
+                KeptState::Sent,
             ),
             (
                 "c_queued".to_owned(),
@@ -2056,7 +2060,7 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
                     .as_object()
                     .unwrap()
                     .clone(),
-                false,
+                KeptState::Queued,
             ),
         ];
         if !expect_pop {
@@ -2071,7 +2075,7 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
                         .as_object()
                         .unwrap()
                         .clone(),
-                    true,
+                    KeptState::Sent,
                 ),
             );
         }
@@ -2175,7 +2179,7 @@ fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
             .as_object()
             .unwrap()
             .clone(),
-        true,
+        KeptState::Sent,
     )]));
     let (entry_writer, _entry_peer) = UnixStream::pair().unwrap();
     crate::connection::lock(&relays).entries.push(Relay {
@@ -2239,9 +2243,17 @@ fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
     let relays = Arc::new(Mutex::new(Relays::default()));
     let order = crate::connection::lock(&relays).order.clone();
     let kept: Kept = Arc::new(Mutex::new(vec![
-        ("c_sent".to_owned(), serde_json::Map::new(), true),
-        ("c_unsent1".to_owned(), serde_json::Map::new(), false),
-        ("c_unsent2".to_owned(), serde_json::Map::new(), false),
+        ("c_sent".to_owned(), serde_json::Map::new(), KeptState::Sent),
+        (
+            "c_unsent1".to_owned(),
+            serde_json::Map::new(),
+            KeptState::Queued,
+        ),
+        (
+            "c_unsent2".to_owned(),
+            serde_json::Map::new(),
+            KeptState::Queued,
+        ),
     ]));
     for id in ["c_sent", "c_unsent1", "c_unsent2"] {
         order.enqueue(SID, id);
@@ -2291,7 +2303,7 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
             .as_object()
             .unwrap()
             .clone(),
-        true,
+        KeptState::Sent,
     )]));
     let (entry_writer, _entry_peer) = UnixStream::pair().unwrap();
     crate::connection::lock(&relays).entries.push(Relay {
@@ -2398,7 +2410,7 @@ fn the_relay_parses_each_session_line_once() {
                 .as_object()
                 .unwrap()
                 .clone(),
-            true,
+            KeptState::Sent,
         ),
         (
             "c_rw".to_owned(),
@@ -2406,7 +2418,7 @@ fn the_relay_parses_each_session_line_once() {
                 .as_object()
                 .unwrap()
                 .clone(),
-            true,
+            KeptState::Sent,
         ),
     ]));
     // `replayed` holds `c_hub`.
@@ -2683,10 +2695,10 @@ impl Ended {
         };
         let mut queued = Vec::new();
         for id in sent {
-            queued.push(((*id).to_owned(), command(id), true));
+            queued.push(((*id).to_owned(), command(id), KeptState::Sent));
         }
         for id in unsent {
-            queued.push(((*id).to_owned(), command(id), false));
+            queued.push(((*id).to_owned(), command(id), KeptState::Queued));
         }
         for (id, _, _) in &queued {
             order.enqueue(END_SID, id);
@@ -2946,14 +2958,33 @@ fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     *crate::connection::lock(&ended.hub.on_pass_on) = Some(Box::new(move |passed| {
         dropped_tx.send(passed).unwrap_or(());
     }));
+    // `docs/invocation.md:730`, "Lifecycle": a disconnected client gets
+    // no `indeterminate` answer; the partly written command is dropped too.
+    ended.order.enqueue(END_SID, "c_p");
+    lock(&ended.kept).push((
+        "c_p".to_owned(),
+        json!({"id": "c_p", "command": "reply", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        KeptState::Partial,
+    ));
     ended.close_session();
     let passed = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&dropped_rx)
         .expect("the queue is cleared");
+    ended.client.get_mut().set_nonblocking(true).unwrap();
+    let mut answer = String::new();
+    let read = ended.client.read_line(&mut answer);
+    ended.client.get_mut().set_nonblocking(false).unwrap();
+    assert!(
+        matches!(read, Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "a partial command with no relay entry gets no answer: {answer:?}"
+    );
     assert!(matches!(passed, crate::retire::PassOn::Dropped(1)));
     assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
     assert!(ended.received_ids().is_empty());
-    for id in ["c_1", "c_2"] {
+    for id in ["c_1", "c_2", "c_p"] {
         assert_eq!(ended.order.session_for(id), None);
     }
     assert!(ended.kept.lock().unwrap().is_empty());
@@ -3153,4 +3184,220 @@ fn a_spawn_failure_answers_the_written_command() {
     assert_eq!(answer["payload"]["code"], "session_not_found");
     assert_eq!(answer["payload"]["command_id"], "c_unspawned");
     assert_eq!(order.session_for("c_unspawned"), None);
+}
+
+/// The command writer counts accepted bytes before a write or flush
+/// failure. A whole write succeeds; a cut reports its accepted count; a
+/// zero cap accepts nothing; a failed flush reports the whole line.
+#[test]
+fn the_command_writer_counts_accepted_bytes_before_its_failure() {
+    use std::os::unix::net::UnixStream;
+    let (writer, _peer) = UnixStream::pair().unwrap();
+    let bytes = b"{\"id\":\"c_1\"}\n";
+    assert!(write_client_command(&writer, bytes, None).is_ok());
+    let cut = bytes.len() - 1;
+    match write_client_command(&writer, bytes, Some(cut)) {
+        Err(partial) => {
+            assert_eq!(partial.written, cut);
+        }
+        Ok(()) => panic!("a cut write fails"),
+    }
+    match write_client_command(&writer, bytes, Some(0)) {
+        Err(partial) => assert_eq!(partial.written, 0, "a zero cap writes nothing"),
+        Ok(()) => panic!("a zero-capped write fails"),
+    }
+
+    struct FlushFails(Vec<u8>);
+    impl std::io::Write for FlushFails {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "the test failed the flush",
+            ))
+        }
+    }
+
+    let mut writer = FlushFails(Vec::new());
+    match write_through(&mut writer, bytes) {
+        Err(partial) => assert_eq!(partial.written, bytes.len(), "the line was accepted"),
+        Ok(()) => panic!("a failed flush is a failed write"),
+    }
+    assert_eq!(
+        writer.0, bytes,
+        "the fake accepted the whole line before flush"
+    );
+}
+
+/// `docs/invocation.md:728`, "Lifecycle": a `closing` answer for a command
+/// the hub only partly wrote is the session's own answer. It reaches the
+/// client instead of routing the command again, so the command is never
+/// delivered twice.
+#[test]
+fn a_closing_answer_for_a_partly_written_command_is_not_routed_again() {
+    let held = fakes::TempDir::new("rs");
+    let hub = hub(&held);
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let command = json!({"id": "c_1", "command": "prompt", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let closing = serde_json::to_vec(&json!({
+        "kind": "command_rejected",
+        "payload": {"command_id": "c_1", "code": "closing", "message": "m"},
+    }))
+    .unwrap();
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "c_1".to_owned(),
+        command,
+        KeptState::Partial,
+    )]));
+    assert!(
+        settle(acknowledgement(&closing).as_ref(), &kept, &hub, sid, true).is_none(),
+        "a partly written command's closing answer is its own"
+    );
+    assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
+}
+
+/// A failed `change_workspace` start keeps the old session's kept level:
+/// the relay answers the start's own code, and the redirect at the
+/// socket's end still finds the level, so `follow` retries the recorded
+/// child once.
+#[test]
+fn a_failed_change_workspace_start_keeps_the_old_subscription_for_the_retry() {
+    let held = fakes::TempDir::new("mvkeep");
+    let dir = held.path().join("h");
+    std::fs::create_dir_all(&dir).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let timed: std::sync::Arc<dyn contract::clock::Clock> = clock;
+    let starter = crate::fake::FakeStarter::exit_with(
+        &dir,
+        crate::fake::failure(contract::ErrorCode::SessionHeld, "the new process refused."),
+    );
+    let hub = std::sync::Arc::new(crate::testkit::hub(
+        &dir,
+        std::sync::Arc::new(starter.clone()),
+        timed,
+    ));
+    let old = crate::testkit::id(1);
+    let next = crate::testkit::id(2);
+    let other = crate::testkit::id(3);
+    let workspace = dir.join("w");
+    std::fs::create_dir_all(&workspace).unwrap();
+    crate::testkit::write_log(
+        &dir,
+        &old,
+        &workspace.to_string_lossy(),
+        None,
+        &[json!({
+            "kind": "moved", "session_id": old, "ts": 2, "schema_version": 1, "seq": 5,
+            "payload": {
+                "new_session_id": next, "seq": 3,
+                "workspace": workspace.to_string_lossy(),
+            },
+        })],
+    );
+    let relays: std::sync::Arc<std::sync::Mutex<Relays>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Relays::default()));
+    let epoch = crate::connection::lock(&relays).mint();
+    // The connection holds a kept level for the moved session and for an
+    // untouched one: the refusal must drop neither, so the redirect at the
+    // socket's end still finds the moved one.
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let other_level = json!({"id": "c_sub9", "command": "subscribe", "args": {"level": "summary"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    crate::connection::lock(&relays)
+        .subscribed
+        .push((old.clone(), level.clone()));
+    crate::connection::lock(&relays)
+        .subscribed
+        .push((other.clone(), other_level.clone()));
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "c_mv".to_owned(),
+        json!({"id": "c_mv", "command": "change_workspace", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        KeptState::Sent,
+    )]));
+    let (hub_session, mut session_peer) = UnixStream::pair().unwrap();
+    let reader = hub_session.try_clone().unwrap();
+    crate::connection::lock(&relays).entries.push(Relay {
+        session: old.clone(),
+        epoch,
+        writer: hub_session,
+        kept: std::sync::Arc::clone(&kept),
+        replayed: Default::default(),
+        thread: None,
+        retiring: None,
+        target: RelayTarget::LiveUnreadable,
+    });
+    let (client_write, client_read) = UnixStream::pair().unwrap();
+    client_read
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
+    let client_writer: std::sync::Arc<std::sync::Mutex<UnixStream>> =
+        std::sync::Arc::new(std::sync::Mutex::new(client_write));
+    let thread = spawn_for_test(
+        old.clone(),
+        epoch,
+        reader,
+        std::sync::Arc::clone(&hub),
+        std::sync::Arc::clone(&client_writer),
+        std::sync::Arc::clone(&relays),
+        kept,
+    );
+    // The session accepts the move, naming the new session: its start is
+    // refused, so the relay answers the start's code instead.
+    let ack = json!({
+        "kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_mv", "result": {"new_session_id": next}},
+    });
+    let mut bytes = serde_json::to_vec(&ack).unwrap();
+    bytes.push(b'\n');
+    session_peer.write_all(&bytes).unwrap();
+    session_peer.flush().unwrap();
+    let mut read = BufReader::new(client_read);
+    let mut text = String::new();
+    read.read_line(&mut text)
+        .expect("the client reads the refusal within the deadline");
+    assert!(!text.is_empty(), "the hub closed before the refusal");
+    let rejection: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(rejection["kind"], "command_rejected", "{rejection}");
+    assert_eq!(rejection["payload"]["command_id"], "c_mv", "{rejection}");
+    assert_eq!(rejection["payload"]["code"], "session_held", "{rejection}");
+    assert!(
+        !serde_json::to_string(&rejection).unwrap().contains(&next),
+        "the rejection carries no new session id: {rejection}"
+    );
+    assert_eq!(starter.rewound().len(), 1, "the start was attempted once");
+    // The session socket closes: the relay ends, and its redirect retries
+    // the recorded child once through the kept level.
+    drop(session_peer);
+    join_within_deadline(thread);
+    assert_eq!(
+        starter.rewound().len(),
+        2,
+        "the relay's follow retries the child once"
+    );
+    let held = crate::connection::lock(&relays);
+    assert_eq!(
+        held.subscription(&old),
+        Some(level),
+        "the refused move keeps the old session's level"
+    );
+    assert_eq!(
+        held.subscription(&other),
+        Some(other_level),
+        "the refusal keeps every other session's level"
+    );
 }

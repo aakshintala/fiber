@@ -56,10 +56,23 @@ pub(crate) use relays::Relays;
 
 /// The commands relayed on one session connection that the session has
 /// not acknowledged yet: each command id, its line without the
-/// `session_id`, and whether it was written to the socket, so a `closing`
+/// `session_id`, and how far its write got, so a `closing`
 /// answer can route it again and a retiring relay can pass on what it
 /// never wrote. Shared by the relay entry and its thread.
-pub(crate) type Kept = Arc<Mutex<Vec<(String, Map<String, Value>, bool)>>>;
+pub(crate) type Kept = Arc<Mutex<Vec<(String, Map<String, Value>, KeptState)>>>;
+
+/// How far a kept command's write got: queued but never written, fully
+/// written, or cut short by a failed write that may still have reached
+/// the session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeptState {
+    /// Queued on a retiring relay, never written.
+    Queued,
+    /// Fully written to the session socket.
+    Sent,
+    /// The write failed after accepting bytes the session may have read.
+    Partial,
+}
 
 /// The hub-minted `subscribe` ids whose acknowledgements one relay thread
 /// drops: the replay it sent again, and any level transferred onto its
@@ -564,7 +577,7 @@ pub(crate) fn route(
             // it on in the order it was read. Never written: the
             // session is exiting or gone.
             if let Some(entry) = held.entries.get(at) {
-                lock(&entry.kept).push((id.0.clone(), stripped.clone(), false));
+                lock(&entry.kept).push((id.0.clone(), stripped.clone(), KeptState::Queued));
             }
             return true;
         }
@@ -574,29 +587,36 @@ pub(crate) fn route(
         // this hold keeps until the write's result flips the entry.
         #[cfg(test)]
         let before_write = held.before_command_write.take();
-        let sent = held.entries.get(at).is_some_and(|entry| {
-            lock(&entry.kept).push((id.0.clone(), stripped.clone(), true));
-            #[cfg(test)]
-            if let Some(before_write) = before_write {
-                before_write();
-            }
-            write_all(&entry.writer, &bytes).is_ok()
+        #[cfg(test)]
+        let cap = command_cap(before_write, &bytes);
+        #[cfg(not(test))]
+        let cap = None;
+        let outcome = held.entries.get(at).map(|entry| {
+            lock(&entry.kept).push((id.0.clone(), stripped.clone(), KeptState::Sent));
+            write_client_command(&entry.writer, &bytes, cap)
         });
-        if sent {
+        if matches!(outcome, Some(Ok(()))) {
             return true;
         }
-        // The write failed: the session is gone. The relay keeps the
-        // command unsent and reads on: only the write half shuts, so
-        // every answer already in the kernel buffer is still read. A
-        // command the session never answered is dropped, as when a
-        // live relay's socket closes.
+        // The write failed: the session is gone. Only the write half
+        // shuts, so every answer already in the kernel buffer is still
+        // read. A write that accepted bytes may still have reached the
+        // session, so the command stays kept as partial: the drain
+        // answers it `indeterminate` however the session ends, and never
+        // routes it again. A write that accepted nothing keeps the
+        // command unsent, as when a live relay's socket closes.
         if let Some(entry) = held.entries.get_mut(at) {
             entry.retiring = Some(Retire::Dead);
-            if let Some(queued) = lock(&entry.kept)
+            let partial = matches!(&outcome, Some(Err(partial)) if partial.written > 0);
+            if let Some(kept) = lock(&entry.kept)
                 .iter_mut()
                 .find(|(kept, _, _)| *kept == id.0)
             {
-                queued.2 = false;
+                kept.2 = if partial {
+                    KeptState::Partial
+                } else {
+                    KeptState::Queued
+                };
             }
             match entry.writer.shutdown(Shutdown::Write) {
                 Ok(()) | Err(_) => {}
@@ -741,44 +761,42 @@ pub(crate) fn route(
     let retry_command = Some((id.clone(), bytes.clone(), stripped.clone()));
     // The connection's subscription first, under an id of the hub's own,
     // so the client's command reaches a subscribed connection.
-    if matches!(
-        attach_inner(
-            session,
-            stream,
-            hub,
-            writer,
-            relays,
-            kept,
-            Some((id.clone(), bytes, stripped)),
-            false,
-            None,
-            true,
-        ),
-        AttachOutcome::Stale
+    match attach_inner(
+        session,
+        stream,
+        hub,
+        writer,
+        relays,
+        kept,
+        Some((id.clone(), bytes, stripped)),
+        false,
+        None,
+        true,
     ) {
-        // The just-connected socket went stale before the pending
-        // command was written: the exiting process tore it down
-        // between the connect and the write, so the command reached
-        // no session. Resume the exited session once and attach the
-        // same command id and payload there, under the same opener
-        // gate and opening mark; a command is delivered once, in the
-        // order read (`docs/invocation.md`, "Lifecycle"). A retry
-        // that also fails is refused with the resume's own failure,
-        // never a new `session_not_found` for a log that exists.
-        match crate::resume::resume_exited(hub, &sid, credential.as_deref()) {
-            Ok(stream) => {
-                #[cfg(test)]
-                {
-                    // Taken out before the attach below, as
-                    // `after_connect` is: the hook shuts the retry
-                    // stream down, so the retry write fails.
-                    let after_resume = lock(&hub.after_resume_connect).take();
-                    if let Some(after_resume) = after_resume {
-                        after_resume(&stream);
+        AttachOutcome::Done => {}
+        AttachOutcome::Stale => {
+            // The just-connected socket went stale before the pending
+            // command was written: the exiting process tore it down
+            // between the connect and the write, so the command reached
+            // no session. Resume the exited session once and attach the
+            // same command id and payload there, under the same opener
+            // gate and opening mark; a command is delivered once, in the
+            // order read (`docs/invocation.md`, "Lifecycle"). A retry
+            // that also fails is refused with the resume's own failure,
+            // never a new `session_not_found` for a log that exists.
+            match crate::resume::resume_exited(hub, &sid, credential.as_deref()) {
+                Ok(stream) => {
+                    #[cfg(test)]
+                    {
+                        // Taken out before the attach below, as
+                        // `after_connect` is: the hook shuts the retry
+                        // stream down, so the retry write fails.
+                        let after_resume = lock(&hub.after_resume_connect).take();
+                        if let Some(after_resume) = after_resume {
+                            after_resume(&stream);
+                        }
                     }
-                }
-                if matches!(
-                    attach_inner(
+                    match attach_inner(
                         session,
                         stream,
                         hub,
@@ -789,36 +807,69 @@ pub(crate) fn route(
                         false,
                         None,
                         true,
-                    ),
-                    AttachOutcome::Stale
-                ) {
-                    // The resumed socket went stale before the
-                    // write: the resumed session ended without
-                    // answering, so the hub rejects the command
-                    // `closing` instead of leaving it unanswered
-                    // (`docs/invocation.md`, "Lifecycle").
+                    ) {
+                        AttachOutcome::Done => {}
+                        AttachOutcome::Stale => {
+                            // The resumed socket went stale before the
+                            // write: the resumed session ended without
+                            // answering, so the hub rejects the command
+                            // `closing` instead of leaving it unanswered
+                            // (`docs/invocation.md`, "Lifecycle").
+                            crate::retire::refuse(
+                                writer,
+                                hub,
+                                relays,
+                                session,
+                                id,
+                                &ErrorCode::Closing,
+                                "The session ended before answering.",
+                            );
+                        }
+                        AttachOutcome::Indeterminate => {
+                            // The resumed socket accepted part of the
+                            // command before it went stale: the session
+                            // may have read it, so the hub answers it
+                            // `indeterminate` instead of refusing it
+                            // `closing`.
+                            crate::retire::refuse(
+                                writer,
+                                hub,
+                                relays,
+                                session,
+                                id,
+                                &ErrorCode::Indeterminate,
+                                crate::retire::PARTIAL_WRITE_MAY_HAVE_RUN,
+                            );
+                        }
+                    }
+                }
+                Err(refused) => {
                     crate::retire::refuse(
                         writer,
                         hub,
                         relays,
                         session,
                         id,
-                        &ErrorCode::Closing,
-                        "The session ended before answering.",
+                        &refused.code,
+                        &refused.message,
                     );
                 }
             }
-            Err(refused) => {
-                crate::retire::refuse(
-                    writer,
-                    hub,
-                    relays,
-                    session,
-                    id,
-                    &refused.code,
-                    &refused.message,
-                );
-            }
+        }
+        AttachOutcome::Indeterminate => {
+            // The just-connected socket accepted part of the command
+            // before it went stale: the session may have read it, so the
+            // hub answers it `indeterminate` without resuming or
+            // retrying, and never delivers it again.
+            crate::retire::refuse(
+                writer,
+                hub,
+                relays,
+                session,
+                id,
+                &ErrorCode::Indeterminate,
+                crate::retire::PARTIAL_WRITE_MAY_HAVE_RUN,
+            );
         }
     }
 }
@@ -913,7 +964,11 @@ fn replay_exited_delegate(
     }
     let order = lock(relays).order.clone();
     crate::retire::enqueue_new(&order, session, id, stripped);
-    let kept: Kept = Arc::new(Mutex::new(vec![(id.0.clone(), stripped.clone(), true)]));
+    let kept: Kept = Arc::new(Mutex::new(vec![(
+        id.0.clone(),
+        stripped.clone(),
+        KeptState::Sent,
+    )]));
     let mark = crate::rejoin::Mark::now(&hub.home, session);
     let (hub_end, preload_end) = match UnixStream::pair() {
         Ok(pair) => pair,
@@ -1152,16 +1207,33 @@ pub(crate) fn attach(
     exclusive: bool,
 ) {
     let missing = command.as_ref().map(|(id, _, _)| id.clone());
-    let stale = matches!(
-        attach_inner(
-            session, stream, hub, writer, relays, replay, command, exclusive, None, false,
-        ),
-        AttachOutcome::Stale
-    );
-    // No resume here: a stale socket refuses the pending command, as
-    // before. Only `route` relays it through the exited session instead.
-    if stale && let Some(id) = &missing {
-        crate::retire::refuse_not_found(writer, hub, relays, session, id);
+    match attach_inner(
+        session, stream, hub, writer, relays, replay, command, exclusive, None, false,
+    ) {
+        AttachOutcome::Done => {}
+        // No resume here: a stale socket refuses the pending command, as
+        // before. Only `route` relays it through the exited session instead.
+        AttachOutcome::Stale => {
+            if let Some(id) = &missing {
+                crate::retire::refuse_not_found(writer, hub, relays, session, id);
+            }
+        }
+        // The socket accepted part of the command before it went stale:
+        // the session may have read it, so the hub answers it
+        // `indeterminate`, as `route` does.
+        AttachOutcome::Indeterminate => {
+            if let Some(id) = &missing {
+                crate::retire::refuse(
+                    writer,
+                    hub,
+                    relays,
+                    session,
+                    id,
+                    &ErrorCode::Indeterminate,
+                    crate::retire::PARTIAL_WRITE_MAY_HAVE_RUN,
+                );
+            }
+        }
     }
 }
 
@@ -1191,18 +1263,24 @@ pub(crate) fn attach_rejoin(
     );
 }
 
-/// What `attach_inner` left behind: a published relay, or a socket that
+/// What `attach_inner` left behind: a published relay, a socket that
 /// went stale before the pending command was written, for the caller to
-/// resume through. The pending command is written exactly once: a stale
-/// socket never saw it.
+/// resume through, or a socket that accepted part of the command, which
+/// the caller answers without resuming. The pending command is written
+/// exactly once: a stale socket never saw it.
 enum AttachOutcome {
     /// The entry published; nothing more to do.
     Done,
-    /// The clone, the replay write or the command write failed: the
-    /// connected socket is stale and the pending command was never
-    /// written. The clone runs before the command write, so a `Stale`
-    /// return never follows a delivered command.
+    /// The clone, the replay write or the command write failed before
+    /// accepting a byte: the connected socket is stale and the pending
+    /// command was never written. The clone runs before the command
+    /// write, and a failed replay write carries no client command, so a
+    /// `Stale` return never follows a delivered client command.
     Stale,
+    /// The command write failed after accepting bytes the session may
+    /// have read: the caller answers the command `indeterminate`,
+    /// without resuming or retrying.
+    Indeterminate,
 }
 
 #[allow(
@@ -1308,14 +1386,16 @@ fn attach_inner_with_spawner(
     let kept: Kept = Arc::new(Mutex::new(
         command
             .as_ref()
-            .map(|(id, _, stripped)| (id.0.clone(), stripped.clone(), true))
+            .map(|(id, _, stripped)| (id.0.clone(), stripped.clone(), KeptState::Sent))
             .into_iter()
             .collect(),
     ));
-    // Cloned before the pending-command write below, so every `Stale`
-    // return leaves the pending command undelivered: `route` resumes the
+    // Cloned before the pending-command write below. A `Stale` return
+    // leaves the pending command undelivered: `route` resumes the
     // exited session and relays the same command there exactly once, and
     // the first socket never saw it (`docs/invocation.md`, "Lifecycle").
+    // An `Indeterminate` return may have delivered part of it, so the
+    // caller answers instead of resuming.
     let reader = match stream.try_clone() {
         Ok(reader) => reader,
         Err(_) => {
@@ -1323,11 +1403,24 @@ fn attach_inner_with_spawner(
             return AttachOutcome::Stale;
         }
     };
-    if let Some((_, bytes, _)) = &command
-        && write_all(&stream, bytes).is_err()
-    {
-        drop(admission);
-        return AttachOutcome::Stale;
+    if let Some((_, bytes, _)) = &command {
+        // `attach_rejoin` passes no command, so this never runs while the
+        // rejoin guard holds the relays lock: taking the hook here cannot
+        // deadlock.
+        #[cfg(test)]
+        let cap = command_cap(lock(relays).before_command_write.take(), bytes);
+        #[cfg(not(test))]
+        let cap = None;
+        if let Err(partial) = write_client_command(&stream, bytes, cap) {
+            drop(admission);
+            // Nothing accepted goes stale for a resume and retry, while
+            // accepted bytes may have reached the session: that command
+            // is answered `indeterminate`, never resumed.
+            if partial.written > 0 {
+                return AttachOutcome::Indeterminate;
+            }
+            return AttachOutcome::Stale;
+        }
     }
     let mut held = match admission {
         Some(held) => held,
@@ -1581,9 +1674,10 @@ fn relay(
                         // the acknowledgement, so its next command finds
                         // it running. A start that fails is answered with
                         // the start's own code instead, through the same
-                        // ordered forward below, and the connection keeps
-                        // no subscription for the old session, so the
-                        // redirect at the socket's end moves it nowhere.
+                        // ordered forward below, and the old subscription
+                        // is kept: the redirect at the socket's end
+                        // retries the recorded child once when it sees
+                        // EOF.
                         match crate::rewind::reach(hub, &SessionId(session.to_owned()), &next) {
                             Ok(stream) => drop(stream),
                             Err(refused) => {
@@ -1605,7 +1699,6 @@ fn relay(
                                         rewound: None,
                                         last_seq: None,
                                     });
-                                    lock(relays).subscribed.retain(|(kept, _)| kept != session);
                                 }
                             }
                         }
@@ -1700,11 +1793,121 @@ fn line_bytes(line: &Map<String, Value>) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-fn write_all(stream: &UnixStream, bytes: &[u8]) -> std::io::Result<()> {
+/// What a failed write accepted before it failed: bytes the session may
+/// have read.
+struct PartialWrite {
+    /// Bytes accepted before the failure. Positive when the session may
+    /// have read the command, even when the whole buffer went out and
+    /// only the flush failed.
+    written: usize,
+}
+
+/// Counts the bytes the wrapped writer accepts, so a failed write
+/// reports how much of the command the session may have read.
+struct CountingWriter<'a, W: std::io::Write + ?Sized> {
+    inner: &'a mut W,
+    written: usize,
+}
+
+impl<W: std::io::Write + ?Sized> std::io::Write for CountingWriter<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let accepted = std::io::Write::write(&mut self.inner, buf)?;
+        self.written += accepted;
+        Ok(accepted)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut self.inner)
+    }
+}
+
+/// Writes `bytes` through `writer`, counting accepted bytes: success
+/// when the line and its flush both land, else how much went out first.
+/// A pause for the writer's `Interrupted` stays inside the write, as
+/// before.
+fn write_through(
+    writer: &mut (impl std::io::Write + ?Sized),
+    bytes: &[u8],
+) -> Result<(), PartialWrite> {
     // Pre-framed buffers carry their line feed; the writer takes the line.
     let line = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    let mut counting = CountingWriter {
+        inner: writer,
+        written: 0,
+    };
+    match support::framing::write_line(&mut counting, line) {
+        Ok(()) => Ok(()),
+        Err(_) => Err(PartialWrite {
+            written: counting.written,
+        }),
+    }
+}
+
+/// Writes one framed line: the line without its feed, then the feed and a
+/// flush, in one buffer as before.
+fn write_all(stream: &UnixStream, bytes: &[u8]) -> Result<(), PartialWrite> {
     let mut out: &UnixStream = stream;
-    support::framing::write_line(&mut out, line)
+    write_through(&mut out, bytes)
+}
+
+/// Tests only: a writer that accepts at most `remaining` bytes, then
+/// fails: the cut-write tests cap the command write below the byte
+/// counter, so the counter observes the partial write.
+#[cfg(test)]
+struct CappedCommand<'a> {
+    inner: &'a UnixStream,
+    remaining: usize,
+}
+
+#[cfg(test)]
+impl std::io::Write for CappedCommand<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "the test cut the command write",
+            ));
+        }
+        let take = buf.len().min(self.remaining);
+        let accepted = std::io::Write::write(&mut self.inner, &buf[..take])?;
+        self.remaining -= accepted;
+        Ok(accepted)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut self.inner)
+    }
+}
+
+/// Tests only: runs the one-shot command-write fault the test armed and
+/// returns the byte cap it names: `None` writes the whole command, as
+/// before.
+#[cfg(test)]
+fn command_cap(hook: Option<relays::BeforeCommandWrite>, bytes: &[u8]) -> Option<usize> {
+    let mut cap = None;
+    if let Some(hook) = hook {
+        hook(&mut cap, bytes);
+    }
+    cap
+}
+
+/// Writes one client command: the whole line, unless a test capped the
+/// write below the byte counter. Outside tests the cap is always `None`.
+fn write_client_command(
+    stream: &UnixStream,
+    bytes: &[u8],
+    cap: Option<usize>,
+) -> Result<(), PartialWrite> {
+    #[cfg(test)]
+    if let Some(limit) = cap {
+        let mut capped = CappedCommand {
+            inner: stream,
+            remaining: limit,
+        };
+        return write_through(&mut capped, bytes);
+    }
+    let _ = cap;
+    write_all(stream, bytes)
 }
 
 #[cfg(test)]

@@ -8,6 +8,8 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 
+use base64::Engine as _;
+
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
 
@@ -86,6 +88,11 @@ fn loop_with_viewer(
     lp.programs.viewer = viewer;
     lp.programs.images_dir = images.clone();
     lp.hub.store(ours);
+    // The writer clones this tty when the first image hands over: a
+    // writable temp file, so its chunks land instead of failing on the
+    // read-only `/dev/null` the test loop starts with.
+    lp.tty =
+        std::fs::File::create(dir.path().join("tty")).unwrap_or_else(|err| panic!("tty: {err}"));
     (lp, theirs, rx, images, marker, dir)
 }
 
@@ -173,6 +180,7 @@ fn completion(rx: &Receiver<Input>, wait: &Deadline) -> Input {
             | Input::HooksOfferNames { .. }
             | Input::HooksInstalled { .. }
             | Input::Login { .. }
+            | Input::KittyFailed
             | Input::Tick,
         ) => panic!("the worker answered something else"),
         Err(err) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the worker: {err}"),
@@ -210,6 +218,7 @@ fn a_click_on_an_image_line_reads_the_file_and_opens_it() {
         | Input::HooksOfferNames { .. }
         | Input::HooksInstalled { .. }
         | Input::Login { .. }
+        | Input::KittyFailed
         | Input::Tick => panic!("the worker answered something else"),
     }
     // The copy holds the file's bytes, and the viewer ran over it.
@@ -414,6 +423,45 @@ fn shown(lp: &Loop<TestBackend>) -> String {
     crate::view::text(lp.screen.backend().buffer())
 }
 
+/// The writer's bytes until `terms` escape terminators arrived, within
+/// the deadline: the transmit's chunks plus the place. The writer sends
+/// after the step returns, so the test waits for the bytes rather than
+/// draining what arrived so far.
+#[track_caller]
+fn read_wire(read: std::io::PipeReader, terms: usize) -> Vec<u8> {
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("loop-tty-read".to_owned())
+        .spawn(move || {
+            let mut read = read;
+            let mut bytes = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                match std::io::Read::read(&mut read, &mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        bytes.extend_from_slice(&chunk[..n]);
+                        if bytes
+                            .windows(2)
+                            .filter(|window| *window == b"\x1b\\")
+                            .count()
+                            >= terms
+                        {
+                            break;
+                        }
+                    }
+                    Err(err) => panic!("tty: {err}"),
+                }
+            }
+            done.send(bytes).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&finished) {
+        Ok(bytes) => bytes,
+        Err(err) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the wire: {err}"),
+    }
+}
+
 /// All bytes the loop has written to its tty so far: the pipe reads
 /// nonblocking, so the drain ends where the writes do.
 #[track_caller]
@@ -444,6 +492,7 @@ fn a_jpeg_converts_then_transmits() {
         "the first frame draws the caption: {}",
         shown(&lp)
     );
+    super::tests::flush_kitty(&lp);
     let before = drain_tty(&mut tty);
     assert!(
         !String::from_utf8_lossy(&before).contains("Ga=t"),
@@ -455,18 +504,31 @@ fn a_jpeg_converts_then_transmits() {
     let done = converted(&rx, &Deadline::after(MUST_SUCCEED_WITHIN));
     // The completion waits in the loop's inputs: still nothing on the
     // terminal, even though the child already finished.
+    super::tests::flush_kitty(&lp);
     let waiting = drain_tty(&mut tty);
     assert!(
         !String::from_utf8_lossy(&waiting).contains("Ga=t"),
         "nothing transmits while the completion waits"
     );
-    // Stepping the completion transmits under the placeholders.
+    // Stepping the completion hands the transmit to the writer: its bytes
+    // reach the tty after the step, so the test reads them with a
+    // deadline.
     let (lp, _rx) = stepped(lp, rx, done);
-    let sent = drain_tty(&mut tty);
+    super::tests::flush_kitty(&lp);
+    let png = base64::engine::general_purpose::STANDARD.encode(CONVERTED_PNG);
+    let transmit = crate::graphics::transmit(1, &png);
+    let sent = read_wire(tty, transmit.len() + 1);
     let sent = String::from_utf8_lossy(&sent);
+    for chunk in &transmit {
+        let text = String::from_utf8_lossy(chunk);
+        assert!(
+            sent.contains(text.as_ref()),
+            "the converted PNG transmits whole: {sent:?}"
+        );
+    }
     assert!(
-        sent.contains("Ga=t,f=100,i=1,"),
-        "the converted PNG transmits: {sent:?}"
+        sent.contains("Ga=p,U=1,i=1,"),
+        "the place binds the placeholders: {sent:?}"
     );
     assert!(shown(&lp).contains('\u{10EEEE}'));
     assert!(shown(&lp).contains("▣ shot"));
@@ -486,6 +548,7 @@ fn a_queued_conversion_without_an_executable_fails_without_a_child() {
         lp.app.notice(),
         Some("Could not show shot.jpg: image conversion failed.")
     );
+    super::tests::flush_kitty(&lp);
     let sent = drain_tty(&mut tty);
     assert!(
         !String::from_utf8_lossy(&sent).contains("Ga=t"),

@@ -113,7 +113,10 @@ use crate::link::Line;
 
 pub use attention::Attention;
 
-pub use catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, ReadModels, Refresh};
+pub use catalogue::{
+    Catalogue, LeftOutGroup, LeftOutModel, ListAge, ModelEntry, Price, PriceTier, ReadModels,
+    Refresh,
+};
 pub use configure::{
     BrowserLogin, Configure, ConfigureError, FileOutcome, FileSaved, HostGap, HostSaved, KeyEdit,
     Layer, LoginKind, LoginNeed, LoginShow, LoginTarget, LogoutRow, NotesFile, NotesSaved,
@@ -257,6 +260,10 @@ pub(crate) enum Input {
     /// working line").
     Tick,
     Signal(std::ffi::c_int),
+    /// The Kitty writer thread's tty write failed: every pending image
+    /// is dropped and nothing more is written, and the loop takes the
+    /// terminal-failure path (`docs/tui.md`, "Images").
+    KittyFailed,
 }
 
 /// Restores the terminal [`run`] set up: turns mouse reporting off, leaves

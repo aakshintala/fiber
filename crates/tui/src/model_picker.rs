@@ -141,6 +141,24 @@ pub(crate) struct Section {
     pub(crate) provider: String,
     pub(crate) state: Fresh,
     pub(crate) models: Vec<ModelRow>,
+    /// One count row per left-out group the query keeps, in provider
+    /// then setting order.
+    pub(crate) left_out: Vec<LeftOutRow>,
+}
+
+/// One left-out group's count row: what both its rows draw. `at` is
+/// the `RowAt` index that `select_frame_row` and `click_cell` ignore.
+pub(crate) struct LeftOutRow {
+    pub(crate) at: usize,
+    pub(crate) text: String,
+}
+
+/// One left-out group the open picker counts: its provider and
+/// setting, and its count row's text.
+pub(crate) struct ShownGroup {
+    pub(crate) provider: String,
+    pub(crate) setting: String,
+    pub(crate) text: String,
 }
 
 /// One shown provider's freshness.
@@ -204,6 +222,9 @@ enum RowAt {
     Model(usize),
     /// A not-installed provider, by name, after the last model.
     Install(String),
+    /// A placeholder-with-no-value count row, naming its provider and
+    /// setting: never a stop, so focus skips it and clicks ignore it.
+    LeftOut { provider: String, setting: String },
     /// The typed query matches no model: one dim line, no sections.
     NoMatch,
 }
@@ -805,6 +826,72 @@ impl ModelPicker {
         )
     }
 
+    /// Whether the open picker may count `provider`'s left-out models:
+    /// the choosing picker only, and under a set scope without "show
+    /// all" only a provider with an installed in-scope model. The query
+    /// plays no part: it filters the count, never the section.
+    fn group_visible(&self, open: &Open, provider: &str) -> bool {
+        if open.mode != Mode::Choose {
+            return false;
+        }
+        if self.scoped.is_empty() || open.show_all {
+            return true;
+        }
+        visible(&self.catalogue.models, &self.scoped, false)
+            .into_iter()
+            .filter_map(|index| self.catalogue.models.get(index))
+            .any(|entry| entry.provider.as_str() == provider)
+    }
+
+    /// Whether any raw left-out group may count under the open's mode
+    /// and scope, whatever the query hides: what admits the
+    /// empty-filter line when no listed model does.
+    fn has_visible_group(&self, open: &Open) -> bool {
+        self.catalogue
+            .left_out
+            .iter()
+            .any(|group| self.group_visible(open, &group.provider))
+    }
+
+    /// The left-out groups the open picker counts, with their row
+    /// texts: the choosing picker only, one entry per group the
+    /// query keeps. The text names the supplied file verbatim.
+    pub(crate) fn shown_left_out(&self, open: &Open) -> Vec<ShownGroup> {
+        self.catalogue
+            .left_out
+            .iter()
+            .filter(|group| self.group_visible(open, &group.provider))
+            .filter_map(|group| {
+                let count = group
+                    .models
+                    .iter()
+                    .filter(|model| {
+                        filter::matches_left_out(
+                            &group.provider,
+                            &model.id,
+                            model.name.as_deref(),
+                            &open.query,
+                        )
+                    })
+                    .count();
+                if count == 0 {
+                    return None;
+                }
+                Some(ShownGroup {
+                    provider: group.provider.clone(),
+                    setting: group.setting.clone(),
+                    text: left_out_text(
+                        &controls_to_space(&group.provider),
+                        &controls_to_space(&group.file),
+                        &controls_to_space(&group.setting),
+                        group.login,
+                        count,
+                    ),
+                })
+            })
+            .collect()
+    }
+
     /// The selection for an open: the on-screen model's row when it
     /// shows, else the first shown row, else `0` with nothing shown.
     fn selected_for(&self, on_screen: Option<(&str, Option<&str>)>, rows: &[usize]) -> usize {
@@ -838,7 +925,14 @@ impl ModelPicker {
         match layout.get(frame_row) {
             Some(RowAt::Model(index)) => self.go(Stop::Model(*index)),
             Some(RowAt::Install(name)) => self.go(Stop::Install(name.clone())),
-            Some(RowAt::Filter | RowAt::Buttons | RowAt::Heading(_) | RowAt::NoMatch) | None => {}
+            Some(
+                RowAt::Filter
+                | RowAt::Buttons
+                | RowAt::Heading(_)
+                | RowAt::LeftOut { .. }
+                | RowAt::NoMatch,
+            )
+            | None => {}
         }
     }
 
@@ -890,9 +984,14 @@ impl ModelPicker {
                 }
                 None
             }
-            Some(RowAt::Filter | RowAt::Heading(_) | RowAt::NoMatch | RowAt::Install(_)) | None => {
-                None
-            }
+            Some(
+                RowAt::Filter
+                | RowAt::Heading(_)
+                | RowAt::NoMatch
+                | RowAt::LeftOut { .. }
+                | RowAt::Install(_),
+            )
+            | None => None,
             Some(RowAt::Model(index)) => {
                 let index = *index;
                 self.installs.focus = None;
@@ -975,6 +1074,7 @@ impl ModelPicker {
         let mut shown = 0;
         let mut sections = Vec::new();
         let mut installs = Vec::new();
+        let left_out = self.shown_left_out(open);
         for (at, row) in layout.iter().enumerate() {
             if let RowAt::Heading(provider) = row {
                 let listed = self
@@ -998,6 +1098,7 @@ impl ModelPicker {
                         }
                     },
                     models: Vec::new(),
+                    left_out: Vec::new(),
                 });
             } else if let RowAt::Install(provider) = row {
                 installs.push(InstallRow {
@@ -1005,6 +1106,16 @@ impl ModelPicker {
                     provider: controls_to_space(provider),
                     hits: filter::id_hits(provider, &open.query),
                     progress: self.installs.progress(provider).cloned(),
+                });
+            } else if let RowAt::LeftOut { provider, setting } = row
+                && let Some(section) = sections.last_mut()
+                && let Some(group) = left_out
+                    .iter()
+                    .find(|group| &group.provider == provider && &group.setting == setting)
+            {
+                section.left_out.push(LeftOutRow {
+                    at,
+                    text: group.text.clone(),
                 });
             } else if let RowAt::Model(index) = row
                 && let Some(entry) = self.catalogue.models.get(*index)
@@ -1079,7 +1190,10 @@ impl ModelPicker {
             }),
             buttons_at,
             sections,
-            no_match: !open.query.is_empty() && shown == 0 && installs.is_empty(),
+            no_match: !open.query.is_empty()
+                && shown == 0
+                && installs.is_empty()
+                && left_out.is_empty(),
             status: self.status(),
             spinner: ctx.spinner.to_owned(),
             // The checklist marks rows and saves the list: no model
@@ -1114,8 +1228,10 @@ impl ModelPicker {
     }
 
     /// The layout rows in draw order: the filter first in every mode,
-    /// then the buttons, headings with their models, or the
-    /// empty-filter line. `None` while closed.
+    /// then the buttons, headings with their models and count rows, or
+    /// the empty-filter line. A provider with only left-out models
+    /// still reads its heading, with no model rows. `None` while
+    /// closed.
     fn layout(&self) -> Option<Vec<RowAt>> {
         let open = self.open.as_ref()?;
         let rows = self.shown(open);
@@ -1123,26 +1239,62 @@ impl ModelPicker {
         // is 1 everywhere.
         let mut layout = vec![RowAt::Filter, RowAt::Buttons];
         let installs = self.shown_installs();
-        // A typed query hiding every installed model and every
-        // not-installed row shows one dim line and no provider sections.
+        let left_out = self.shown_left_out(open);
+        // A typed query hiding every installed model, every
+        // not-installed row and every matching count row shows one dim
+        // line and no provider sections. With no listed model only a
+        // group the open may count admits the line: a zero-count group
+        // emits no heading.
         if !open.query.is_empty()
             && rows.is_empty()
             && installs.is_empty()
-            && !self.catalogue.models.is_empty()
+            && left_out.is_empty()
+            && (!self.catalogue.models.is_empty() || self.has_visible_group(open))
         {
             layout.push(RowAt::NoMatch);
             return Some(layout);
         }
+        // Shown models and count rows merge by provider, in provider
+        // name order on both sides: a provider's count rows flush at
+        // its first shown model, so each section reads heading, count
+        // rows, then models.
+        let mut groups = left_out.iter().peekable();
         let mut provider: Option<&str> = None;
         for index in rows {
             let Some(entry) = self.catalogue.models.get(index) else {
                 continue;
             };
+            while groups
+                .peek()
+                .is_some_and(|group| group.provider.as_str() <= entry.provider.as_str())
+            {
+                let Some(group) = groups.next() else {
+                    break;
+                };
+                if provider != Some(group.provider.as_str()) {
+                    provider = Some(group.provider.as_str());
+                    layout.push(RowAt::Heading(group.provider.clone()));
+                }
+                layout.push(RowAt::LeftOut {
+                    provider: group.provider.clone(),
+                    setting: group.setting.clone(),
+                });
+            }
             if provider != Some(entry.provider.as_str()) {
                 provider = Some(entry.provider.as_str());
                 layout.push(RowAt::Heading(entry.provider.clone()));
             }
             layout.push(RowAt::Model(index));
+        }
+        for group in groups {
+            if provider != Some(group.provider.as_str()) {
+                provider = Some(group.provider.as_str());
+                layout.push(RowAt::Heading(group.provider.clone()));
+            }
+            layout.push(RowAt::LeftOut {
+                provider: group.provider.clone(),
+                setting: group.setting.clone(),
+            });
         }
         layout.extend(installs.into_iter().map(RowAt::Install));
         Some(layout)
@@ -1159,6 +1311,16 @@ impl ModelPicker {
             }
             if self.want.is_some() || self.refreshing.is_some() {
                 return vec!["Reading the model lists…".to_owned()];
+            }
+            // A group the choosing picker counts reads instead of the
+            // install prompt: its count row says what is missing. Any
+            // other mode keeps the normal prompt.
+            if self
+                .open
+                .as_ref()
+                .is_some_and(|open| open.mode == Mode::Choose && self.has_visible_group(open))
+            {
+                return Vec::new();
             }
             return vec![
                 "No models. Install a provider: fiber extension install <name>.".to_owned(),
@@ -1222,6 +1384,23 @@ pub(crate) fn rebuild_cost(tokens: u64, price: Option<&Price>) -> String {
         .unwrap_or(price.micros_per_mtok);
     let dollars = tokens as f64 * micros as f64 / 1_000_000_000_000.0;
     format!("{size} · {}", crate::format::money(dollars))
+}
+
+/// One left-out group's count row: how many models need the setting,
+/// and the one fix. A provider with a login reads the login form; a
+/// provider with a credential label reads the setting form, naming the
+/// supplied file verbatim. Never the environment-variable clause.
+fn left_out_text(provider: &str, file: &str, setting: &str, login: bool, count: usize) -> String {
+    let subject = if count == 1 {
+        format!("1 model needs {setting}")
+    } else {
+        format!("{count} models need {setting}")
+    };
+    if login {
+        format!("{subject}: run `fiber login {provider}`")
+    } else {
+        format!("{subject}: set it in `{file}`")
+    }
 }
 
 /// An age in milliseconds as the picker says it.

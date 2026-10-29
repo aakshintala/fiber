@@ -11,7 +11,7 @@ use ratatui::text::Span;
 use self::install::{error_row, install_row, outcome_rows};
 use super::overlay::{self, Place, Row};
 use crate::format::width as cells;
-use crate::model_picker::{Fresh, ModelRow, PickerView, Progress};
+use crate::model_picker::{Fresh, LeftOutRow, ModelRow, PickerView, Progress};
 use crate::mouse::{Target, TargetId};
 use crate::swapped::Spot;
 use crate::text::to_u16;
@@ -400,44 +400,96 @@ struct Flat<'view> {
     row: &'view ModelRow,
 }
 
-/// The shown models flat, in show order.
-fn flats(view: &PickerView) -> Vec<Flat<'_>> {
-    view.sections
-        .iter()
-        .flat_map(|section| {
-            section.models.iter().map(|row| Flat {
+/// One flat count row with its provider and freshness, in show order.
+struct Count<'view> {
+    provider: &'view str,
+    state: &'view Fresh,
+    row: &'view LeftOutRow,
+}
+
+/// One windowed item, in draw order: a section's count rows stand
+/// after its heading and before its models, and the not-installed rows
+/// follow every section.
+enum Item<'view> {
+    Model(Flat<'view>),
+    Count(Count<'view>),
+}
+
+impl<'view> Item<'view> {
+    /// The item's provider: what opens a heading on a change.
+    fn provider(&self) -> &'view str {
+        match self {
+            Item::Model(flat) => flat.provider,
+            Item::Count(count) => count.provider,
+        }
+    }
+
+    /// The item's layout index. A count row's is never focused, so the
+    /// focus lookup skips it exactly as the frame does.
+    fn at(&self) -> usize {
+        match self {
+            Item::Model(flat) => flat.row.at,
+            Item::Count(count) => count.row.at,
+        }
+    }
+
+    /// The body rows the item takes past its heading: two per model,
+    /// three for a session-only choice, one per count row.
+    fn rows(&self) -> usize {
+        match self {
+            Item::Model(flat) => 2 + usize::from(flat.row.session_only),
+            Item::Count(_) => 1,
+        }
+    }
+}
+
+/// The windowed items in draw order.
+fn items(view: &PickerView) -> Vec<Item<'_>> {
+    let mut out = Vec::new();
+    for section in &view.sections {
+        for row in &section.left_out {
+            out.push(Item::Count(Count {
                 provider: section.provider.as_str(),
                 state: &section.state,
                 row,
-            })
-        })
-        .collect()
+            }));
+        }
+        for row in &section.models {
+            out.push(Item::Model(Flat {
+                provider: section.provider.as_str(),
+                state: &section.state,
+                row,
+            }));
+        }
+    }
+    out
 }
 
 /// The body rows the items from `start` to `end` take. The items are the
-/// flat models and then the not-installed rows. A model takes two rows,
-/// three for a session-only choice, with a heading row above each
-/// provider's first shown model and a blank row between sections. A
-/// not-installed row takes one, two with its error, and the first in the
-/// window takes a blank row above it when anything precedes it there.
-fn rows_for(view: &PickerView, flats: &[Flat], start: usize, end: usize) -> usize {
+/// section items and then the not-installed rows. A model takes two rows,
+/// three for a session-only choice, a count row takes one, with a heading
+/// row above each provider's first shown item and a blank row between
+/// sections. A not-installed row takes one, two with its error, and the
+/// first in the window takes a blank row above it when anything precedes
+/// it there.
+fn rows_for(view: &PickerView, items: &[Item], start: usize, end: usize) -> usize {
     let mut rows = 0;
     // A window starting inside a provider continues it with no heading;
     // any other provider change opens one.
     let mut before = start
         .checked_sub(1)
-        .and_then(|at| flats.get(at))
-        .map(|flat| flat.provider);
+        .and_then(|at| items.get(at))
+        .map(|item| item.provider());
     for at in start..end {
-        if let Some(flat) = flats.get(at) {
-            let headed = before.is_none_or(|provider| provider != flat.provider);
-            before = Some(flat.provider);
+        if let Some(item) = items.get(at) {
+            let headed = before.is_none_or(|provider| provider != item.provider());
+            before = Some(item.provider());
             if headed {
                 rows += if at == start { 1 } else { 2 };
             }
-            rows += 2 + usize::from(flat.row.session_only);
-        } else if let Some(install) = view.installs.get(at.saturating_sub(flats.len())) {
-            if at == flats.len() && at > start {
+            rows += item.rows();
+        } else if let Some(install) = view.installs.get(at.saturating_sub(items.len())) {
+            if at == items.len() && at > start {
                 rows += 1;
             }
             rows += 1 + usize::from(matches!(install.progress, Some(Progress::Failed(_))));
@@ -450,32 +502,32 @@ fn rows_for(view: &PickerView, flats: &[Flat], start: usize, end: usize) -> usiz
 /// starts at the focused item and takes earlier items while they fit,
 /// then later ones, so the focus stays visible.
 fn window(view: &PickerView, fit: usize) -> (usize, usize) {
-    let flats = flats(view);
-    let total = flats.len() + view.installs.len();
+    let items = items(view);
+    let total = items.len() + view.installs.len();
     if total == 0 {
         return (0, 0);
     }
-    let pos = flats
+    let pos = items
         .iter()
-        .position(|flat| Some(flat.row.at) == view.focused)
+        .position(|item| Some(item.at()) == view.focused)
         .or_else(|| {
             view.installs
                 .iter()
                 .position(|install| Some(install.at) == view.focused)
-                .map(|at| flats.len() + at)
+                .map(|at| items.len() + at)
         })
         .unwrap_or(0)
         .min(total.saturating_sub(1));
     let (mut start, mut end) = (pos, pos.saturating_add(1));
     // Iterators bound each walk by `total`, so no comparison mutant can spin.
     for s in (0..pos).rev() {
-        if rows_for(view, &flats, s, end) > fit {
+        if rows_for(view, &items, s, end) > fit {
             break;
         }
         start = s;
     }
     for e in pos.saturating_add(2)..=total {
-        if rows_for(view, &flats, start, e) > fit {
+        if rows_for(view, &items, start, e) > fit {
             break;
         }
         end = e;
@@ -492,11 +544,25 @@ fn model_fit(view: &PickerView, height: u16) -> usize {
     usize::from(height.saturating_sub(CHROME)).saturating_sub(reserved)
 }
 
-/// The page step over `view` at `height`: the windowed items, which
-/// the list pages by less one.
+/// The page step over `view` at `height`: the windowed focusable
+/// model and install stops, which the list pages by less one. Count
+/// rows consume viewport and window rows but never focus, so they stay
+/// in the window without growing the step.
 pub(crate) fn page_step(view: &PickerView, height: u16) -> usize {
-    let (start, end) = window(view, model_fit(view, height));
-    end.saturating_sub(start).max(1)
+    let fit = model_fit(view, height);
+    let shown = items(view);
+    let (start, end) = window(view, fit);
+    let mut step = 0;
+    for at in start..end {
+        if let Some(item) = shown.get(at) {
+            if matches!(item, Item::Model(_)) {
+                step += 1;
+            }
+        } else if view.installs.get(at.saturating_sub(shown.len())).is_some() {
+            step += 1;
+        }
+    }
+    step.max(1)
 }
 
 /// The spans' width in columns.
@@ -507,11 +573,26 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
 /// The overlay body for `view`: the filter, the buttons, the windowed
 /// sections, and the status lines. Exactly one row is barred while a
 /// model shows; none with only a message.
+/// One left-out count row, hung under its heading like a model's
+/// second row: four columns in, then the text dim. No targets, never
+/// barred: focus skips it and clicks ignore it.
+fn count_row(row: &LeftOutRow) -> Row {
+    Row {
+        spans: vec![
+            Span::raw("    ".to_owned()),
+            Span::styled(row.text.clone(), Style::new().add_modifier(Modifier::DIM)),
+        ],
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: false,
+    }
+}
+
 fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
     let priced = overlay::inner(overlay::width(PREFER, PREFER, width)) >= PRICE_MIN_INNER;
     // The filter row is first in every mode.
     let mut rows = vec![filter_row(view)];
-    let flats = flats(view);
+    let items = items(view);
     let fit = model_fit(view, height);
     let (start, end) = window(view, fit);
     // The content's natural width sets the refresh click's columns: the
@@ -535,21 +616,31 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
     // heading; any other provider change opens one. On a short overlay
     // the focused model's heading would push its first row out of the
     // frame, so that heading alone is omitted: the focused row stays on
-    // screen, and nothing else is trimmed.
+    // screen, and nothing else is trimmed. A first count row with fewer
+    // than two body rows is omitted with its heading together: a
+    // nonfocusable count never shows without the provider that names
+    // it, while two rows keep both.
     let trim_heading = fit < 2
-        && flats
+        && items.get(start).is_some_and(
+            |item| matches!(item, Item::Model(flat) if Some(flat.row.at) == view.focused),
+        );
+    let trim_count = fit < 2
+        && items
             .get(start)
-            .is_some_and(|flat| Some(flat.row.at) == view.focused);
+            .is_some_and(|item| matches!(item, Item::Count(_)));
     let mut before = start
         .checked_sub(1)
-        .and_then(|at| flats.get(at))
-        .map(|flat| flat.provider);
+        .and_then(|at| items.get(at))
+        .map(|item| item.provider());
     for (n, at) in (start..end).enumerate() {
-        let Some(flat) = flats.get(at) else {
-            if let Some(install) = view.installs.get(at.saturating_sub(flats.len())) {
+        if n == 0 && trim_count {
+            continue;
+        }
+        let Some(item) = items.get(at) else {
+            if let Some(install) = view.installs.get(at.saturating_sub(items.len())) {
                 // The first not-installed row in the window sits below a
                 // blank row when anything precedes it there.
-                if n > 0 && at == flats.len() {
+                if n > 0 && at == items.len() {
                     sections.push(Row {
                         spans: Vec::new(),
                         right: Vec::new(),
@@ -563,8 +654,12 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
             }
             continue;
         };
-        let headed = before.is_none_or(|provider| provider != flat.provider);
-        before = Some(flat.provider);
+        let (provider, state) = match item {
+            Item::Model(flat) => (flat.provider, flat.state),
+            Item::Count(count) => (count.provider, count.state),
+        };
+        let headed = before.is_none_or(|before| before != provider);
+        before = Some(provider);
         if headed && !(n == 0 && trim_heading) {
             if !first {
                 sections.push(Row {
@@ -574,18 +669,23 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
                     barred: false,
                 });
             }
-            sections.push(heading_row(flat.provider, flat.state, &view.spinner));
+            sections.push(heading_row(provider, state, &view.spinner));
             first = false;
         }
-        let focused = Some(flat.row.at) == view.focused;
-        if flat.row.mark.is_some() {
-            sections.push(scope_row(flat.row, focused, priced));
-            sections.push(scope_second_row(flat.row));
-        } else {
-            sections.push(model_first_row(flat.row, focused, priced));
-            sections.push(model_second_row(flat.row, focused));
-            if flat.row.session_only {
-                sections.push(session_row(flat.row));
+        match item {
+            Item::Count(count) => sections.push(count_row(count.row)),
+            Item::Model(flat) => {
+                let focused = Some(flat.row.at) == view.focused;
+                if flat.row.mark.is_some() {
+                    sections.push(scope_row(flat.row, focused, priced));
+                    sections.push(scope_second_row(flat.row));
+                } else {
+                    sections.push(model_first_row(flat.row, focused, priced));
+                    sections.push(model_second_row(flat.row, focused));
+                    if flat.row.session_only {
+                        sections.push(session_row(flat.row));
+                    }
+                }
             }
         }
     }
