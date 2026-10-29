@@ -727,8 +727,10 @@ fn discover_git(workspace: &Path) -> GitLayout {
 fn read_capped(path: &Path) -> String {
     use std::io::Read as _;
     let mut text = String::new();
-    if let Ok(file) = std::fs::File::open(path) {
-        let _ = file.take(4096).read_to_string(&mut text);
+    if let Ok(file) = std::fs::File::open(path)
+        && file.take(4096).read_to_string(&mut text).is_err()
+    {
+        return String::new();
     }
     text
 }
@@ -881,9 +883,13 @@ impl<R: std::io::Read> StripMarker<R> {
     /// Drains the classified bytes into `buf`.
     fn drain(&mut self, buf: &mut [u8]) -> usize {
         let count = self.pending.len().min(buf.len());
-        buf[..count].copy_from_slice(&self.pending[..count]);
-        self.pending.drain(..count);
-        count
+        if let (Some(front), Some(slot)) = (self.pending.get(..count), buf.get_mut(..count)) {
+            slot.copy_from_slice(front);
+            self.pending.drain(..count);
+            count
+        } else {
+            0
+        }
     }
 }
 
@@ -910,7 +916,8 @@ impl<R: std::io::Read> std::io::Read for StripMarker<R> {
                 self.pending = std::mem::take(&mut self.stash);
                 continue;
             }
-            self.stash.extend_from_slice(&chunk[..read]);
+            self.stash
+                .extend_from_slice(chunk.get(..read).unwrap_or_default());
             if self.stash.len() > MARKER_STASH_CAP {
                 self.done = true;
                 self.watch.miss(&self.stash);
@@ -918,13 +925,13 @@ impl<R: std::io::Read> std::io::Read for StripMarker<R> {
                 continue;
             }
             if let Some(end) = self.stash.iter().position(|&byte| byte == b'\n') {
-                let line = self.stash[..end].to_vec();
+                let line = self.stash.get(..end).unwrap_or_default().to_vec();
                 let hit = self.watch.check(&line);
                 self.done = true;
                 if hit {
                     // Only the marker line is suppressed: user bytes past
                     // it stay byte-identical.
-                    self.pending = self.stash[end + 1..].to_vec();
+                    self.pending = self.stash.get(end + 1..).unwrap_or_default().to_vec();
                 } else {
                     // No marker: the first line is user or wrapper output
                     // and drains with the rest.

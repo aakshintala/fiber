@@ -3653,10 +3653,13 @@ fn macos_confined_background_call_moves_only_after_its_marker() {
     assert!(effects.declared.confined);
 
     let running = start_confined(workspace, "echo hi", true, false, jobs.clone(), sandbox);
-    let receipt = running
-        .output
-        .recv_timeout(fakes::MUST_SUCCEED_WITHIN)
-        .expect("the confined move returns its receipt");
+    let receipt = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&running.output) {
+        Ok(receipt) => receipt,
+        Err(_) => panic!(
+            "waited {:?} for the confined move receipt",
+            fakes::MUST_SUCCEED_WITHIN
+        ),
+    };
     let job = started(&receipt);
     let ended = jobs
         .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
@@ -3692,10 +3695,13 @@ fn macos_confined_stty_on_a_pty_succeeds() {
     assert!(effects.declared.confined);
 
     let running = start_confined(workspace, "stty -g", false, true, jobs.clone(), sandbox);
-    let receipt = running
-        .output
-        .recv_timeout(fakes::MUST_SUCCEED_WITHIN)
-        .expect("the terminal move returns its receipt");
+    let receipt = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&running.output) {
+        Ok(receipt) => receipt,
+        Err(_) => panic!(
+            "waited {:?} for the terminal move receipt",
+            fakes::MUST_SUCCEED_WITHIN
+        ),
+    };
     let job = started(&receipt);
     let ended = jobs
         .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))

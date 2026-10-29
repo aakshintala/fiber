@@ -637,6 +637,10 @@ pub(crate) fn execute_confined(
 /// behavior; the post-drive check fails the unobserved remainder closed.
 /// Unconfined calls drive exactly once, as before.
 #[cfg(target_os = "macos")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the drive loop's inputs and the marker watch are one call"
+)]
 fn drive_confined(
     progress: &mut Run,
     policy: MovePolicy,

@@ -159,7 +159,7 @@ fn credential_files_merge_into_the_deny_set() {
     std::fs::create_dir_all(credential.parent().unwrap()).unwrap();
     std::fs::write(&credential, "shh").unwrap();
     let config = rig.config(Vec::<String>::new());
-    let settings = sandbox_settings(&config, &rig.home, &[credential.clone()]);
+    let settings = sandbox_settings(&config, &rig.home, std::slice::from_ref(&credential));
     let home = std::env::var_os("HOME").map_or_else(
         || std::path::PathBuf::from("/tmp"),
         std::path::PathBuf::from,
@@ -193,7 +193,7 @@ fn a_credential_path_inside_the_workspace_is_unavailable() {
     let denied = rig.workspace.join("secret");
     std::fs::write(&denied, "shh").expect("write secret");
     let config = rig.config(Vec::<String>::new());
-    let settings = sandbox_settings(&config, &fiber_home, &[denied.clone()]);
+    let settings = sandbox_settings(&config, &fiber_home, std::slice::from_ref(&denied));
     let unavailable =
         tools::sandbox_check_available(&settings, &rig.workspace).expect_err("overlap");
     assert_eq!(
@@ -230,7 +230,7 @@ fn refresh_forwards_credential_files_into_the_held_settings() {
     std::fs::create_dir_all(credential.parent().unwrap()).unwrap();
     std::fs::write(&credential, "shh").unwrap();
     let config = rig.config(Vec::<String>::new());
-    refresh_sandbox(&handle, &config, &[credential.clone()]);
+    refresh_sandbox(&handle, &config, std::slice::from_ref(&credential));
     assert!(support::lock(&handle).deny_read.contains(&credential));
 }
 
