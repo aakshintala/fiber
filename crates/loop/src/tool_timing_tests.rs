@@ -1589,12 +1589,14 @@ fn join_turn_carries_the_shared_must_succeed_bound() {
 }
 
 /// The next `permission_requested` on a watcher registered before the turn,
-/// with its request and action ids. The shared must-succeed bound covers
-/// the whole wait: every skipped line takes what remains of it, never a fresh wait.
+/// with its request and action ids. One wait started at entry covers the
+/// whole drain: every skipped line takes what remains of it, never a fresh
+/// bound per line.
 fn wait_requested(watcher: &mut log::Watcher, deadline: &Deadline, what: &str) -> (String, String) {
+    let wait = deadline.start_wait();
     loop {
         let line = watcher
-            .recv_timeout(deadline.left())
+            .recv_timeout(wait.left())
             .unwrap_or_else(|| panic!("a line arrives before the deadline: {what}"))
             .expect("the log stays readable")
             .expect("no end yet");
@@ -3303,19 +3305,20 @@ fn wait_interaction(watcher: &mut log::Watcher, deadline: &Deadline, what: &str)
 
 /// The nth `interaction_requested` (1-based): a resumed turn's watcher
 /// replays the first question, so the finishing turn waits for the second.
-/// One deadline bounds all `n` taps: every skipped line takes what
-/// remains of it, never a fresh wait.
+/// One wait started at entry bounds all `n` taps: every skipped line takes
+/// what remains of it, never a fresh bound per line.
 fn wait_interaction_nth(
     watcher: &mut log::Watcher,
     deadline: &Deadline,
     n: usize,
     what: &str,
 ) -> String {
+    let wait = deadline.start_wait();
     let mut found = String::new();
     let mut seen = 0;
     while seen < n {
         let line = watcher
-            .recv_timeout(deadline.left())
+            .recv_timeout(wait.left())
             .unwrap_or_else(|| panic!("a line arrives before the deadline: {what}"))
             .expect("the log stays readable")
             .expect("no end yet");

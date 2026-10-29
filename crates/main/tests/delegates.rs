@@ -503,16 +503,17 @@ impl Running {
     }
 
     /// Stdout lines until one completes `done`: the drain thread signals
-    /// every line over the channel. One deadline bounds the whole wait:
-    /// each receive takes what remains of the test's deadline, at most
-    /// 10 s (the shared must-succeed bound), so endless unrelated output
-    /// cannot postpone expiry, and a quiet hang fails fast.
+    /// every line over the channel. One wait started at entry bounds the
+    /// whole drain: each receive takes what remains of it, at most 10 s
+    /// (the shared must-succeed bound), so endless unrelated output cannot
+    /// postpone expiry, and a quiet hang fails fast.
     #[track_caller]
     fn wait_line(&mut self, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
+        let wait = self.deadline.start_wait();
         let mut got = Vec::new();
         loop {
-            // Capped, never reset: the remainder shrinks as the test runs.
-            let left = self.deadline.left().min(fakes::MUST_SUCCEED_WITHIN);
+            // Capped, never reset: the started wait's remainder shrinks as the drain runs.
+            let left = wait.left().min(fakes::MUST_SUCCEED_WITHIN);
             if left.is_zero() {
                 panic!("waited until the deadline for {what}; got {got:?}")
             }
@@ -576,8 +577,9 @@ impl Running {
                 panic!("the session wait thread ended without a result")
             }
         };
+        let wait = deadline.start_wait();
         loop {
-            match deadline.recv(&self.lines) {
+            match wait.recv(&self.lines) {
                 Ok(line) => out.push(line),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -3348,8 +3350,8 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         .to_owned();
     // The failure dump shows compact summaries, not whole lines: the full
     // session_status bodies would push the live trace and log tail past the
-    // output cap. The wait still reads every line through `Socket::next`
-    // under the test's deadline and returns them all on success.
+    // output cap. The wait still reads every line through one started wait
+    // and returns them all on success.
     let child_diag_dir = sessions_in(&setup.home(), &setup.workspace()).join(&live_child);
     child_socket.set_diag(support::Diag::new(
         Arc::clone(&running.stderr_snapshot),
@@ -3357,6 +3359,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     ));
     let child_close_diag = support::Diag::new(Arc::clone(&running.stderr_snapshot), child_diag_dir);
     let child_wait_what = "the child jobs wait is requested";
+    let child_drain = child_socket.start_wait();
     let mut child_wait: Vec<Value> = Vec::new();
     let mut child_wait_summaries: Vec<String> = Vec::new();
     let child_wait_action = loop {
@@ -3364,7 +3367,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
             .iter()
             .map(|summary| json!(summary))
             .collect();
-        match child_socket.next(child_wait_what, &got) {
+        match child_socket.next_through(&child_drain, child_wait_what, &got) {
             Some(line) => {
                 let done =
                     line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs";
