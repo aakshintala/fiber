@@ -2973,6 +2973,14 @@ fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     let passed = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&dropped_rx)
         .expect("the queue is cleared");
+    ended.client.get_mut().set_nonblocking(true).unwrap();
+    let mut answer = String::new();
+    let read = ended.client.read_line(&mut answer);
+    ended.client.get_mut().set_nonblocking(false).unwrap();
+    assert!(
+        matches!(read, Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "a partial command with no relay entry gets no answer: {answer:?}"
+    );
     assert!(matches!(passed, crate::retire::PassOn::Dropped(1)));
     assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
     assert!(ended.received_ids().is_empty());

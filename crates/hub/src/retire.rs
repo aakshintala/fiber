@@ -89,6 +89,10 @@ pub(crate) struct AckOrder {
     /// spawned thread on every run is not deterministic.
     #[cfg(test)]
     pub(crate) before_wait_rerouted: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: signals after `drain` has handled its queue, so a test
+    /// can wait for drain completion instead of polling relay state.
+    #[cfg(test)]
+    pub(crate) after_drain: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /// What [`AckOrder`] tracks: the unanswered commands per session in read
@@ -493,6 +497,10 @@ pub(crate) fn drain(
         }
     }
     pump(session, epoch, kept, hub, writer, relays, true);
+    #[cfg(test)]
+    if let Some(after) = lock(&order.after_drain).take() {
+        after();
+    }
 }
 
 /// Whether `session`'s socket still accepts while its log ends in

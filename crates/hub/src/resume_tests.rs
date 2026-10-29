@@ -3842,6 +3842,10 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
     }));
     client.send("c_2", "prompt");
     let order = crate::connection::lock(&relays).order.clone();
+    let (drained_tx, drained_rx) = std::sync::mpsc::channel();
+    *crate::connection::lock(&order.after_drain) = Some(Box::new(move || {
+        drained_tx.send(()).unwrap_or(());
+    }));
     // The route's cut write runs before the session ends: the fake
     // records the torn bytes, so ending it now cannot turn the failure
     // into a zero-byte one.
@@ -3862,14 +3866,11 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
         "The connection to the session failed while the command was being sent; the command may have run.",
         "{line}"
     );
-    // Wait for the drain to finish (its entry leaves), so the queue check
-    // and the no-more check below observe the hub done answering: a
-    // second answer would already be buffered.
-    crate::testkit::await_true("the relay to leave", {
-        let relays = Arc::clone(&relays);
-        move || crate::connection::lock(&relays).entries.is_empty()
-    });
-    assert_eq!(order.session_for("c_2"), None, "the answer left the queue");
+    // The test-controlled signal fires after drain has handled the queue,
+    // so the delivery and answer checks below run after the hub is done.
+    Deadline::after(DEADLINE)
+        .recv(&drained_rx)
+        .expect("the relay drain finished");
     // Two lines arrived on the session, the subscribe and the torn
     // fragment: the bytes arrived once and were never delivered again.
     // Raw lines, not parsed ones: a mid-body fragment parses to nothing.

@@ -1811,13 +1811,9 @@ struct CountingWriter<'a, W: std::io::Write + ?Sized> {
 
 impl<W: std::io::Write + ?Sized> std::io::Write for CountingWriter<'_, W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match std::io::Write::write(&mut self.inner, buf) {
-            Ok(accepted) => {
-                self.written += accepted;
-                Ok(accepted)
-            }
-            Err(error) => Err(error),
-        }
+        let accepted = std::io::Write::write(&mut self.inner, buf)?;
+        self.written += accepted;
+        Ok(accepted)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -1873,13 +1869,9 @@ impl std::io::Write for CappedCommand<'_> {
             ));
         }
         let take = buf.len().min(self.remaining);
-        match std::io::Write::write(&mut self.inner, &buf[..take]) {
-            Ok(accepted) => {
-                self.remaining -= accepted;
-                Ok(accepted)
-            }
-            Err(error) => Err(error),
-        }
+        let accepted = std::io::Write::write(&mut self.inner, &buf[..take])?;
+        self.remaining -= accepted;
+        Ok(accepted)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
