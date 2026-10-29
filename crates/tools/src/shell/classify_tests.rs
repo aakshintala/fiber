@@ -376,6 +376,81 @@ fn git_unified_and_diff_filter_forms() {
 }
 
 #[test]
+fn git_merge_base_substitution_reads() {
+    // `docs/tools.md`, "Shell", "Effects": a `$(git merge-base <rev>
+    // <rev>)` substitution reads as an operand of a listed git read, bare
+    // or composed with one `..`/`...` range against an outer plain ref.
+    // A validated word declares no path, so plain operands declare as
+    // before.
+    assert_declares(
+        "git diff $(git merge-base abc123 HEAD)..HEAD -- src",
+        &["/work/src"],
+    );
+    for command in [
+        "git diff $(git merge-base a b)",
+        "git diff $(git merge-base a b)...HEAD",
+        "git diff HEAD..$(git merge-base a b)",
+        "git diff HEAD...$(git merge-base a b)",
+        "git diff $(git merge-base HEAD~1 origin/main)..HEAD",
+        "git diff $(git merge-base a b) $(git merge-base c d)",
+        "git diff $(git merge-base HEAD~0 a)..HEAD",
+        "git log -p $(git merge-base a b)",
+    ] {
+        assert_reads(command);
+    }
+    // Two validated substitutions declare no paths of their own: the
+    // verdict matches a bare `git diff`, with only the workdir default.
+    assert_declares(
+        "git diff $(git merge-base a b) $(git merge-base c d)",
+        &["/work"],
+    );
+}
+
+#[test]
+fn git_merge_base_substitution_refusals_execute() {
+    for command in [
+        "cat $(git merge-base a b)",
+        "git diff $(git merge-base --fork-point a b)",
+        "git diff $(git rev-parse $(echo x))",
+        "git diff $(git log -1)",
+        "git log -p $(git rev-parse .env)",
+        "git diff $(git merge-base a b)--output=/tmp/f",
+        "git log -p -- $(git merge-base a b).env",
+        "git diff `git merge-base a b`..HEAD",
+        "git diff $(/tmp/x/git merge-base a b)..HEAD",
+        "git diff $(./git merge-base a b)..HEAD",
+        "git diff $(git merge-base a b;id)..HEAD",
+        "git diff $(git merge-base a b>f)..HEAD",
+        "git diff $(git merge-base\nsh x.sh)",
+        "git diff HEAD$(git merge-base a b)..HEAD",
+        "git diff .$(git merge-base a b).HEAD",
+        "git log -n $(git merge-base a b) .env",
+        "git blame -L $(git merge-base a b) .env",
+        "git diff $(git merge-base -- a b)",
+        "git diff -- $(git merge-base a b)",
+        "git diff $(git merge-base a b c)",
+        "git diff $(git merge-base a b)..HEAD~1",
+        "git diff $(git merge-base a b)....HEAD",
+        "git diff $(git merge-base a b)..",
+        "git diff ..$(git merge-base a b)",
+        "git diff $(git merge-base HEAD^^ a)..HEAD",
+        "git diff $(git merge-base a b)..HEAD --output=f",
+        "$(git merge-base a b)",
+        "git diff --diff-filter=$(git merge-base a b) -- src",
+        "git show a < $(git merge-base a b)",
+        "git show a > /dev/null $(git merge-base a b)",
+        "TZ=$(git merge-base a b) git diff x",
+        "env git diff $(git merge-base a b)..HEAD",
+        "timeout 5 git diff $(git merge-base a b)..HEAD",
+    ] {
+        assert_closed(command);
+    }
+    let entries = [configured("git stash show", &[])];
+    assert_configured_reads("git stash show x", &entries, &["/work/x"]);
+    assert_configured_closed("git stash show $(git merge-base a b)", &entries);
+}
+
+#[test]
 fn exact_forms_read_without_paths() {
     // `docs/tools.md`, "Shell", "Effects": if every command is on the
     // read-only list, the call declares `reads` with no paths here.

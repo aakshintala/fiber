@@ -204,6 +204,12 @@ pub(super) fn accept_flag(
             return None;
         }
         if flag.takes_value {
+            // A value-taking flag never consumes a substituted word: the
+            // substitution would hide the next path, as in
+            // `git log -n $(…) .env`.
+            if words.clone().next().is_some_and(|word| word.substituted) {
+                return None;
+            }
             let value = words.next()?;
             if flag.spelling == "--jq" && !jq_program_ok(&value.cooked) {
                 return None;

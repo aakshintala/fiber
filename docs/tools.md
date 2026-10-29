@@ -671,8 +671,19 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   nested at most 4 deep, and `.git` files of at most 512 bytes. Past any
   bound the call declares `executes`, so the bounds never widen the fast
   path.
-- Command substitution (`$( )` or backticks) always makes the call
-  `executes`. Its arguments are known only when it runs, so the path checks
+- Command substitution (`$( )` or backticks) makes the call `executes`,
+  with one exception: a substitution whose whole content is
+  `git merge-base <rev> <rev>` reads as an operand of a listed git read,
+  bare or composed with one `..` or `...` range against an outer plain
+  revision, such as `$(...)..HEAD`. Each `<rev>` is a plain word of hex
+  digits, `HEAD` or a ref name, optionally followed by `^`, `~<n>` or
+  `^{commit}`; any other inner command, including `git rev-parse`, and any
+  flag keep the call `executes`. The inner command runs under the same
+  repository checks as the outer read. It prints a commit id or nothing,
+  so its output is never a path and never a flag. A substitution anywhere
+  else — a command name, a flag value, a redirect target, an assignment
+  value or a `cd` target — keeps the call `executes`. Otherwise a
+  substitution's arguments are known only when it runs, so the path checks
   cannot see them: `cat $(echo ~/.ssh/id_rsa)` reads the key while every
   command in it is read-only.
 - A read-only command stays read-only with only these redirects: output

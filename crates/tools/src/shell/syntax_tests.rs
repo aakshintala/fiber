@@ -505,7 +505,6 @@ fn unlisted_words_and_redirects_opaque_their_stage() {
     for command in [
         "echo $HOME",
         "echo ${x}",
-        "echo $(x)",
         "echo `x`",
         "echo $((1))",
         "echo $'a'",
@@ -549,6 +548,18 @@ fn unlisted_words_and_redirects_opaque_their_stage() {
     ] {
         assert_opaque(command);
     }
+}
+
+#[test]
+fn a_dollar_paren_substitution_cooks_marked_but_unvalidated() {
+    // `docs/tools.md`, "Shell", "Effects": a `$(` substitution in an
+    // operand slot parses as a simple stage; the classifier validates its
+    // text later, so `echo` still declares `executes`.
+    let simple = only_simple("echo $(x)");
+    assert_eq!(simple.words.len(), 2);
+    assert!(!simple.words[0].substituted);
+    assert_eq!(simple.words[1].raw, "$(x)");
+    assert!(simple.words[1].substituted);
 }
 
 #[test]

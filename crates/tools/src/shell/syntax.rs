@@ -75,11 +75,14 @@ pub(super) struct Simple {
 
 /// One operand word: its raw spelling and its cooked text after quote
 /// removal. A quoted spelling keeps its quotes in raw, so it never counts
-/// as a redirect descriptor no matter its text.
+/// as a redirect descriptor no matter its text. `substituted` marks a word
+/// holding a `$(` substitution: the classifier validates its text, and
+/// only a validated operand of a listed read keeps the call read-only.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Word {
     pub(super) raw: String,
     pub(super) cooked: String,
+    pub(super) substituted: bool,
 }
 
 /// The three redirects the recogniser accepts: output discarded to
@@ -415,7 +418,12 @@ fn cook_command(node: Node, src: &str) -> Option<Simple> {
                 simple.tokens.push(word.raw.clone());
                 simple.words.push(word);
             }
-            "word" | "number" | "string" | "raw_string" | "concatenation" => {
+            "word"
+            | "number"
+            | "string"
+            | "raw_string"
+            | "concatenation"
+            | "command_substitution" => {
                 seen_name = true;
                 let word = cook_word(child, src)?;
                 simple.tokens.push(word.raw.clone());
@@ -450,6 +458,9 @@ fn cook_assignment(node: Node, src: &str) -> Option<(String, String)> {
                     return None;
                 }
                 let word = cook_word(child, src)?;
+                if word.substituted {
+                    return None;
+                }
                 value = Some(word.cooked);
             }
             "=" => {}
@@ -489,6 +500,9 @@ fn push_redirect(simple: &mut Simple, node: Node, src: &str, leading: bool) -> b
                 let Some(word) = cook_word(child, src) else {
                     return false;
                 };
+                if word.substituted {
+                    return false;
+                }
                 destinations.push((word, child.end_byte()));
             }
             ">" | ">&" | "<" => {
@@ -556,6 +570,7 @@ fn push_redirect(simple: &mut Simple, node: Node, src: &str, leading: bool) -> b
         simple.words.push(Word {
             raw: extra.raw.clone(),
             cooked: extra.cooked.clone(),
+            substituted: extra.substituted,
         });
     }
     if leading {
@@ -593,45 +608,119 @@ fn steal_descriptor(simple: &mut Simple, node: Node, src: &str) -> Option<String
     Some(cooked)
 }
 
-/// Cook a command name: every child is one plain word piece.
+/// Cook a command name: every child is one plain word piece. A
+/// substitution in the name refuses the stage.
 fn cook_name(node: Node, src: &str) -> Option<Word> {
     let mut cooked = String::new();
     for child in node.children(&mut node.walk()) {
-        cooked.push_str(&cook_word(child, src)?.cooked);
+        let word = cook_word(child, src)?;
+        if word.substituted {
+            return None;
+        }
+        cooked.push_str(&word.cooked);
     }
-    text(node, src).map(|raw| Word { raw, cooked })
+    text(node, src).map(|raw| Word {
+        raw,
+        cooked,
+        substituted: false,
+    })
 }
 
-/// Cook one word-ish node into its raw spelling and cooked text.
+/// Cook one word-ish node into its raw spelling, cooked text, and whether
+/// it holds a substitution. A bare `$(` command substitution cooks marked,
+/// with its raw spelling kept as its cooked text; any other substitution
+/// spelling refuses. A concatenation cooks marked only with exactly one
+/// such substitution at its first or last child beside one plain unquoted
+/// piece; a quoted piece or a middle substitution refuses. The classifier
+/// validates the marked text: cooking alone never reads.
 fn cook_word(node: Node, src: &str) -> Option<Word> {
     let raw = text(node, src)?;
-    let cooked = match node.kind() {
+    let (cooked, substituted) = match node.kind() {
         "word" | "number" => {
             if !raw.chars().all(is_plain) {
                 return None;
             }
-            raw.clone()
+            (raw.clone(), false)
         }
-        "string" => cook_quoted(&raw, '"')?,
-        "raw_string" => cook_quoted(&raw, '\'')?,
-        "concatenation" => {
-            let mut cooked = String::new();
-            for child in node.children(&mut node.walk()) {
-                if !child.is_named() {
-                    let anonymous = text(child, src)?;
-                    if !anonymous.chars().all(is_plain) {
-                        return None;
-                    }
-                    cooked.push_str(&anonymous);
-                    continue;
-                }
-                cooked.push_str(&cook_word(child, src)?.cooked);
+        "string" => (cook_quoted(&raw, '"')?, false),
+        "raw_string" => (cook_quoted(&raw, '\'')?, false),
+        "concatenation" => cook_concatenation(node, src)?,
+        "command_substitution" => {
+            if !raw.starts_with("$(") {
+                return None;
             }
-            cooked
+            (raw.clone(), true)
         }
         _ => return None,
     };
-    Some(Word { raw, cooked })
+    Some(Word {
+        raw,
+        cooked,
+        substituted,
+    })
+}
+
+/// Cook a concatenation: every piece plain, or exactly one `$(`
+/// substitution at an edge beside one plain unquoted piece, marked. Each
+/// other shape refuses, as does a substituted shape with a quoted piece or
+/// the substitution anywhere but the first or last child.
+fn cook_concatenation(node: Node, src: &str) -> Option<(String, bool)> {
+    // Each piece's shape: true when it holds the substitution.
+    let mut cooked = String::new();
+    let mut shape = Vec::new();
+    let mut quoted = false;
+    for child in node.children(&mut node.walk()) {
+        if !child.is_named() {
+            let anonymous = text(child, src)?;
+            if !anonymous.chars().all(is_plain) {
+                return None;
+            }
+            cooked.push_str(&anonymous);
+            shape.push(false);
+            continue;
+        }
+        match child.kind() {
+            "command_substitution" => {
+                let raw = text(child, src)?;
+                if !raw.starts_with("$(") {
+                    return None;
+                }
+                cooked.push_str(&raw);
+                shape.push(true);
+            }
+            "string" => {
+                let raw = text(child, src)?;
+                cooked.push_str(&cook_quoted(&raw, '"')?);
+                quoted = true;
+                shape.push(false);
+            }
+            "raw_string" => {
+                let raw = text(child, src)?;
+                cooked.push_str(&cook_quoted(&raw, '\'')?);
+                quoted = true;
+                shape.push(false);
+            }
+            _ => {
+                let word = cook_word(child, src)?;
+                if word.substituted {
+                    return None;
+                }
+                cooked.push_str(&word.cooked);
+                shape.push(false);
+            }
+        }
+    }
+    // One substitution at most, and then only at an edge beside one plain
+    // unquoted piece: two substitutions, a middle substitution, or a quoted
+    // piece beside it all refuse.
+    let marked = shape.iter().filter(|piece| **piece).count();
+    if marked > 1 {
+        return None;
+    }
+    if marked == 1 && (quoted || !matches!(shape.as_slice(), [true, false] | [false, true])) {
+        return None;
+    }
+    Some((cooked, marked == 1))
 }
 
 /// Cook a quoted spelling: strip the quotes and keep the inner text, after
@@ -665,8 +754,9 @@ fn cook_quoted(raw: &str, quote: char) -> Option<String> {
 }
 
 /// The characters an unquoted word may hold: letters, digits and the
-/// punctuation the old classifier read plainly.
-fn is_plain(ch: char) -> bool {
+/// punctuation the old classifier read plainly. The classifier reuses the
+/// set for its substitution checks.
+pub(super) fn is_plain(ch: char) -> bool {
     ch.is_ascii_alphanumeric()
         || matches!(
             ch,
