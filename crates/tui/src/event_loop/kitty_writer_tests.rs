@@ -547,15 +547,26 @@ fn handover_pauses_at_boundary_and_restarts_whole() {
 
 #[test]
 fn a_failed_write_drops_payloads_and_reports_failure() {
-    let gate = Arc::new(KittyChunkGate::new(false));
+    let gate = Arc::new(KittyChunkGate::new(true));
     let lock = Arc::new(TtyLock::new());
-    // A read-only tty: every write fails, like a dead terminal.
-    let tty = File::open("/dev/null").unwrap_or_else(|err| panic!("/dev/null: {err}"));
-    let (writer, failed, rx) = spawn_writer(tty, &gate, &lock);
-    let (first, _) = image(1, 1, 10);
+    let (read, write) = pipe();
+    let (writer, failed, rx) = spawn_writer(write, &gate, &lock);
+    let (first, first_bytes) = image(1, 1, 10);
     let (second, _) = image(2, 0, 5);
+    let head = first_chunk_len(&first);
     assert!(writer.push(first));
+    // The first chunk goes out despite the held gate; the gate parks
+    // the writer after it, so the second image queues before any
+    // failure.
+    let chunk_rx = read_exact(read, head);
+    let (bytes, read) = recv_bytes(&chunk_rx);
+    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
+    assert_eq!(bytes, first_bytes[..head].to_vec());
     assert!(writer.push(second));
+    // Closing the read end fails the next write after both images were
+    // queued, like a dead terminal.
+    drop(read);
+    gate.release();
     // The failure input arrives, and the flag is set: the loop takes
     // the terminal-failure path.
     match fakes::Deadline::after(DEADLINE).recv(&rx) {
@@ -565,7 +576,10 @@ fn a_failed_write_drops_payloads_and_reports_failure() {
     }
     assert!(failed.load(Ordering::SeqCst));
     // A dead ack receiver takes the terminal-failure path too.
+    // docs/tui.md:2534-2535 ("Images"): a failed write to the terminal
+    // is the terminal failing.
     assert!(!writer.barrier());
+    writer.join();
 }
 
 /// A scripted tty for the offset write: pops a canned result per write,
