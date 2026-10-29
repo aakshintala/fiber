@@ -88,6 +88,34 @@ impl ImportSource {
     }
 }
 
+/// Tells the import which source skill directories discovery would already
+/// load from another personal source (`docs/configuration.md`,
+/// "Importing"): the check maps each given source directory to the
+/// `SKILL.md` path discovery logged, and leaves the rest absent. `main`
+/// builds the real check over discovery's own code; the import never
+/// parses a header itself.
+pub trait PersonalSourceCheck: Send + Sync {
+    /// Maps each directory in `dirs` discovery would already read to the
+    /// `SKILL.md` path it logged; absent entries are not already read.
+    fn check(&self, dirs: &[PathBuf]) -> BTreeMap<PathBuf, PathBuf>;
+}
+
+impl<F> PersonalSourceCheck for F
+where
+    F: Fn(&[PathBuf]) -> BTreeMap<PathBuf, PathBuf> + Send + Sync,
+{
+    fn check(&self, dirs: &[PathBuf]) -> BTreeMap<PathBuf, PathBuf> {
+        self(dirs)
+    }
+}
+
+/// The finds-nothing check: no directory is already read. The doors socket
+/// drive defaults to it when no session wired a real one, and tests that
+/// need no check pass it.
+pub fn no_personal_sources(_dirs: &[PathBuf]) -> BTreeMap<PathBuf, PathBuf> {
+    BTreeMap::new()
+}
+
 /// What the import copied, by final name in Fiber home.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Imported {
@@ -159,13 +187,14 @@ pub fn import_source(
     home: &Path,
     source_home: &Path,
     source: ImportSource,
+    check: &dyn PersonalSourceCheck,
     clock: &dyn Clock,
 ) -> Result<ImportReport, ConfigError> {
     let receipt_file = home.join(source.receipt_name());
     if let Some(report) = read_receipt(&receipt_file, source)? {
         return Ok(report);
     }
-    let mut planned = classify(home, source_home, source)?;
+    let mut planned = classify(home, source_home, source, check)?;
     write_all(home, &mut planned)?;
     let report = planned.report();
     write_receipt(&receipt_file, source, clock, &report)?;
@@ -243,7 +272,12 @@ impl Planned {
 
 /// Reads the source and Fiber home's current state, planning every write
 /// and every left-behind entry. Reads only; writes nothing.
-fn classify(home: &Path, source_home: &Path, source: ImportSource) -> Result<Planned, ConfigError> {
+fn classify(
+    home: &Path,
+    source_home: &Path,
+    source: ImportSource,
+    check: &dyn PersonalSourceCheck,
+) -> Result<Planned, ConfigError> {
     let mut left_behind = Vec::new();
     let mut skills = Vec::new();
     let mut commands = Vec::new();
@@ -251,7 +285,13 @@ fn classify(home: &Path, source_home: &Path, source: ImportSource) -> Result<Pla
     // keeps, so the worst case retained is one cap plus one in-flight file.
     let mut budget = Budget::default();
     if plain(source_home, true)? {
-        read_skills(source_home, &mut skills, &mut left_behind, &mut budget)?;
+        read_skills(
+            source_home,
+            &mut skills,
+            &mut left_behind,
+            &mut budget,
+            check,
+        )?;
         read_flat(
             source,
             source_home,
@@ -293,6 +333,7 @@ fn read_skills(
     skills: &mut Vec<PlannedFile>,
     left_behind: &mut Vec<LeftBehind>,
     budget: &mut Budget,
+    _check: &dyn PersonalSourceCheck,
 ) -> Result<(), ConfigError> {
     let dir = source_home.join("skills");
     for name in read_source_dir(&dir, "skills", left_behind)? {
@@ -1654,7 +1695,13 @@ mod tests {
 
         /// Runs the import for `source` against this fixture.
         fn run(&self, source: ImportSource) -> Result<ImportReport, ConfigError> {
-            import_source(&self.home(), &self.source(), source, self.clock.as_ref())
+            import_source(
+                &self.home(),
+                &self.source(),
+                source,
+                &no_personal_sources,
+                self.clock.as_ref(),
+            )
         }
 
         /// Every file under Fiber home holding `needle`.

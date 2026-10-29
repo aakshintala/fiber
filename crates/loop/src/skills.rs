@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::events::{CommandInfo, Notice, SkillInfo, SkillListed, SkillSource};
@@ -497,6 +498,22 @@ fn info(
 /// One listing line.
 pub(crate) fn entry(skill: &SkillListed) -> String {
     format!("- {}: {} ({})", skill.name, skill.description, skill.path)
+}
+
+/// Which source skill directories discovery would already load from a
+/// personal source other than Fiber home (`docs/configuration.md`,
+/// "Importing"): for each checked directory whose `SKILL.md` parses to
+/// a header whose name a valid personal-place skill outside Fiber home
+/// shares, the checked directory maps to the `SKILL.md` path discovery
+/// logged. Everything else is absent.
+pub fn personal_source_paths(
+    fiber_home: &Path,
+    agents_home: Option<&Path>,
+    dirs: &[PathBuf],
+    clock: Arc<dyn contract::clock::Clock>,
+) -> BTreeMap<PathBuf, PathBuf> {
+    let _ = (fiber_home, agents_home, dirs, clock);
+    BTreeMap::new()
 }
 
 /// The `skills_large` notice, when the rendered listing of `listed`

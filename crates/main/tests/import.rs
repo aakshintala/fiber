@@ -96,6 +96,72 @@ fn receipt(home: &Path, name: &str) -> Value {
     serde_json::from_str(&fs::read_to_string(home.join(name)).unwrap()).unwrap()
 }
 
+/// A fake person home where two source skills duplicate one the person
+/// already reads: `~/.claude/skills/review` links into
+/// `~/.agents/skills/review`, and `~/.claude/skills/mine` is a real
+/// directory carrying the same header name. `lint` is found only in
+/// the source, so it is still copied.
+fn already_read_home(root: &Path) {
+    write(
+        root,
+        ".agents/skills/review/SKILL.md",
+        "---\nname: review\ndescription: Reviews code.\n---\n\nBody.\n",
+    );
+    fs::create_dir_all(root.join(".claude/skills")).unwrap();
+    std::os::unix::fs::symlink(
+        root.join(".agents/skills/review"),
+        root.join(".claude/skills/review"),
+    )
+    .unwrap();
+    write(
+        root,
+        ".claude/skills/mine/SKILL.md",
+        "---\nname: review\ndescription: Source copy.\n---\n\nBody.\n",
+    );
+    write(
+        root,
+        ".claude/skills/lint/SKILL.md",
+        "---\nname: lint\ndescription: Lints.\n---\n\nLint body.\n",
+    );
+}
+
+#[test]
+fn import_skips_skills_discovery_already_reads() {
+    let setup = Setup::new();
+    already_read_home(setup.root.path());
+    let run = import(&setup, &["import", "claude-code"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let agents_skill = setup.root.path().join(".agents/skills/review/SKILL.md");
+    assert_eq!(
+        run.stdout,
+        format!(
+            "imported skill lint\n\
+             left behind skills/mine/SKILL.md: already read from {}\n\
+             left behind skills/review/SKILL.md: already read from {}\n",
+            agents_skill.display(),
+            agents_skill.display(),
+        )
+    );
+    // Nothing is written to `skills/` in Fiber home but the control skill.
+    assert!(!setup.home().join("skills/review").exists());
+    assert!(!setup.home().join("skills/mine").exists());
+    assert!(setup.home().join("skills/lint/SKILL.md").exists());
+    // A follow-up start raises no `skill_shadowed`: the agents-side skill
+    // stands alone, with no Fiber-home copy to shadow it.
+    let server = ProviderServer::start_with_fallback([], hello()).unwrap();
+    setup.provider(&server);
+    let asked = setup.fiber(&["ask", "hi"]);
+    let run = Output::from(run_to_exit(setup.deadline, "fiber ask", asked));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let shadowed: Vec<Value> = run
+        .stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|line| line["kind"] == "notice" && line["payload"]["code"] == "skill_shadowed")
+        .collect();
+    assert!(shadowed.is_empty(), "{shadowed:?}");
+}
+
 #[test]
 fn claude_import_lands_mapped_items_and_names_the_rest() {
     let setup = Setup::new();

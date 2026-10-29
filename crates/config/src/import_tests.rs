@@ -54,7 +54,13 @@ impl Fixture {
 
     /// Runs the import for `source` against this fixture.
     fn run(&self, source: ImportSource) -> Result<ImportReport, ConfigError> {
-        import_source(&self.home(), &self.source(), source, self.clock.as_ref())
+        import_source(
+            &self.home(),
+            &self.source(),
+            source,
+            &no_personal_sources,
+            self.clock.as_ref(),
+        )
     }
 }
 
@@ -83,7 +89,13 @@ fn six_hundred_skill_dirs_import_the_first_512_and_report_more_than_512() {
         );
     }
     reset_write_count();
-    let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
+    let planned = classify(
+        &fixture.home(),
+        &fixture.source(),
+        ImportSource::ClaudeCode,
+        &no_personal_sources,
+    )
+    .unwrap();
     // docs/configuration.md, "Importing": at most 512 entries per source
     // directory, one overflow line past 512, kept entries in name order,
     // which 512 unspecified.
@@ -115,7 +127,13 @@ fn five_hundred_twelve_skill_dirs_report_nothing() {
         );
     }
     reset_write_count();
-    let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
+    let planned = classify(
+        &fixture.home(),
+        &fixture.source(),
+        ImportSource::ClaudeCode,
+        &no_personal_sources,
+    )
+    .unwrap();
     // docs/configuration.md, "Importing": at most 512 entries per source
     // directory, no overflow line at or under 512, kept entries in name
     // order, which 512 unspecified.
@@ -141,7 +159,13 @@ fn a_commands_dir_past_512_reports_under_its_own_name() {
         fixture.write_source(&format!("commands/do-{index:03}.md"), b"Do it.\n");
     }
     reset_write_count();
-    let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
+    let planned = classify(
+        &fixture.home(),
+        &fixture.source(),
+        ImportSource::ClaudeCode,
+        &no_personal_sources,
+    )
+    .unwrap();
     // docs/configuration.md, "Importing": at most 512 entries per source
     // directory, one overflow line past 512, kept entries in name order,
     // which 512 unspecified.
@@ -170,7 +194,13 @@ fn a_source_home_past_512_reports_under_the_source_name() {
         fixture.write_source(&format!("junk-{index:03}.txt"), b"junk\n");
     }
     reset_write_count();
-    let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
+    let planned = classify(
+        &fixture.home(),
+        &fixture.source(),
+        ImportSource::ClaudeCode,
+        &no_personal_sources,
+    )
+    .unwrap();
     let report = planned.report();
     // docs/configuration.md, "Importing": one overflow line past 512 under
     // the source's own name, which 512 unspecified, so no total or
@@ -534,4 +564,132 @@ fn a_one_mebibyte_stream_past_a_shorter_budget_reports_the_budget() {
         "over the 8 MiB read budget, left unread"
     );
     assert_eq!(budget.used, MAX_SOURCE_BYTES - (MAX_FILE_BYTES - 1));
+}
+
+/// A stub check diverting one source skill directory to its logged path
+/// under `/person/.agents/skills/`.
+fn divert_review() -> impl PersonalSourceCheck {
+    let logged = PathBuf::from("/person/.agents/skills/review/SKILL.md");
+    move |dirs: &[PathBuf]| {
+        let mut out: BTreeMap<PathBuf, PathBuf> = BTreeMap::new();
+        for dir in dirs {
+            if dir.ends_with("skills/review") {
+                out.insert(dir.clone(), logged.clone());
+            }
+        }
+        out
+    }
+}
+
+#[test]
+fn an_already_read_skill_is_left_behind_with_its_logged_path() {
+    let fixture = Fixture::new();
+    fixture.write_source(
+        "skills/review/SKILL.md",
+        b"---\nname: review\ndescription: Reviews code.\n---\n\nBody.\n",
+    );
+    reset_write_count();
+    let report = import_source(
+        &fixture.home(),
+        &fixture.source(),
+        ImportSource::ClaudeCode,
+        &divert_review(),
+        fixture.clock.as_ref(),
+    )
+    .unwrap();
+    // docs/configuration.md, "Importing": discovery already reads the
+    // skill from another personal source, so it is left behind with the
+    // logged path, and nothing is written under `skills/` in Fiber home.
+    assert!(report.imported.skills.is_empty(), "{report:?}");
+    assert_eq!(
+        reasons(&report),
+        vec![(
+            "skills/review/SKILL.md",
+            "already read from /person/.agents/skills/review/SKILL.md",
+        )],
+    );
+    assert!(
+        !fixture.home().join("skills/review/SKILL.md").exists(),
+        "an already-read skill writes nothing"
+    );
+    assert_eq!(write_count(), 1, "the receipt is the only write");
+}
+
+#[test]
+fn an_already_read_skill_over_the_cap_keeps_only_its_own_reason() {
+    let fixture = Fixture::new();
+    fixture.write_source("skills/review/SKILL.md", &skill_body(2 * 1024 * 1024));
+    let report = import_source(
+        &fixture.home(),
+        &fixture.source(),
+        ImportSource::ClaudeCode,
+        &divert_review(),
+        fixture.clock.as_ref(),
+    )
+    .unwrap();
+    // The already-read consult runs before the read caps: a diverted
+    // skill reports only its logged path, never the cap reason.
+    assert!(report.imported.skills.is_empty(), "{report:?}");
+    assert_eq!(
+        reasons(&report),
+        vec![(
+            "skills/review/SKILL.md",
+            "already read from /person/.agents/skills/review/SKILL.md",
+        )],
+    );
+    assert!(
+        !fixture.home().join("skills/review/SKILL.md").exists(),
+        "an already-read skill writes nothing"
+    );
+}
+
+#[test]
+fn already_read_skills_charge_nothing_to_the_read_budget() {
+    let fixture = Fixture::new();
+    for index in 0..9 {
+        fixture.write_source(
+            &format!("skills/skill-{index}/SKILL.md"),
+            &skill_body(1024 * 1024),
+        );
+    }
+    fixture.write_source("skills/kept/SKILL.md", &skill_body(1024 * 1024));
+    let check = |dirs: &[PathBuf]| {
+        let mut out: BTreeMap<PathBuf, PathBuf> = BTreeMap::new();
+        for dir in dirs {
+            if let Some(name) = dir.file_name().and_then(|name| name.to_str())
+                && name.starts_with("skill-")
+            {
+                out.insert(
+                    dir.clone(),
+                    PathBuf::from("/person/.agents/skills").join(format!("{name}/SKILL.md")),
+                );
+            }
+        }
+        out
+    };
+    let report = import_source(
+        &fixture.home(),
+        &fixture.source(),
+        ImportSource::ClaudeCode,
+        &check,
+        fixture.clock.as_ref(),
+    )
+    .unwrap();
+    // Nine diverted 1 MiB skills charge nothing to the 8 MiB budget: the
+    // tenth 1 MiB skill still fits and lands, and every diverted skill
+    // reports only its logged path.
+    assert_eq!(report.imported.skills, vec!["kept".to_owned()]);
+    let left: Vec<(String, String)> = report
+        .left_behind
+        .iter()
+        .map(|left| (left.item.clone(), left.reason.clone()))
+        .collect();
+    let mut expected = Vec::new();
+    for index in 0..9 {
+        expected.push((
+            format!("skills/skill-{index}/SKILL.md"),
+            format!("already read from /person/.agents/skills/skill-{index}/SKILL.md"),
+        ));
+    }
+    assert_eq!(left, expected);
 }

@@ -193,11 +193,14 @@ pub(crate) fn completions_installed(home_env: &Path, shell: &str) -> bool {
 /// step, and exits non-zero naming the failed step.
 pub fn setup(
     flags: &SetupFlags,
+    check: &dyn config::PersonalSourceCheck,
     clock: Arc<dyn Clock>,
     locks: Arc<dyn PathLock>,
     run: config::Runner<'_>,
 ) -> i32 {
-    crate::with_dirs_code(|home, workspace| self::run(home, workspace, flags, &clock, &locks, run))
+    crate::with_dirs_code(|home, workspace| {
+        self::run(home, workspace, flags, check, &clock, &locks, run)
+    })
 }
 
 /// The steps in their documented order, so a failure stops the later ones.
@@ -208,6 +211,7 @@ fn run(
     home: &Path,
     workspace: &Path,
     flags: &SetupFlags,
+    check: &dyn config::PersonalSourceCheck,
     clock: &Arc<dyn Clock>,
     locks: &Arc<dyn PathLock>,
     run: config::Runner<'_>,
@@ -216,7 +220,7 @@ fn run(
         let mut stdin = io::stdin().lock();
         let mut err = io::stderr();
         run_terminal(
-            home, workspace, flags, clock, locks, run, &mut stdin, &mut err,
+            home, workspace, flags, check, clock, locks, run, &mut stdin, &mut err,
         )
     } else {
         let mut err = io::stderr();
@@ -224,7 +228,7 @@ fn run(
         if code != 0 {
             return Ok(code);
         }
-        let code = step_import(home, flags, clock, None, &mut err)?;
+        let code = step_import(home, flags, check, clock, None, &mut err)?;
         if code != 0 {
             return Ok(code);
         }
@@ -254,6 +258,7 @@ fn run_terminal(
     home: &Path,
     workspace: &Path,
     flags: &SetupFlags,
+    check: &dyn config::PersonalSourceCheck,
     clock: &Arc<dyn Clock>,
     locks: &Arc<dyn PathLock>,
     run: config::Runner<'_>,
@@ -278,7 +283,7 @@ fn run_terminal(
     if code != 0 {
         return Ok(code);
     }
-    let code = step_import(home, flags, clock, Some(&mut *stdin), err)?;
+    let code = step_import(home, flags, check, clock, Some(&mut *stdin), err)?;
     if code != 0 {
         return Ok(code);
     }
@@ -372,13 +377,14 @@ fn step_providers(
 fn step_import(
     home: &Path,
     flags: &SetupFlags,
+    check: &dyn config::PersonalSourceCheck,
     clock: &Arc<dyn Clock>,
     stdin: Option<&mut dyn BufRead>,
     err: &mut dyn Write,
 ) -> Result<i32, CliError> {
     if !flags.import.is_empty() {
         for source in &flags.import {
-            let code = crate::import(*source, clock.as_ref());
+            let code = crate::import(*source, check, clock.as_ref());
             if code != 0 {
                 writeln!(err, "fiber: setup import failed").map_err(CliError::StandardError)?;
                 return Ok(code);
@@ -426,7 +432,7 @@ fn step_import(
             display_home(&dir)
         );
         if ask_yes(stdin, err, &prompt)? {
-            let code = crate::import(source, clock.as_ref());
+            let code = crate::import(source, check, clock.as_ref());
             if code != 0 {
                 writeln!(err, "fiber: setup import failed").map_err(CliError::StandardError)?;
                 return Ok(code);
