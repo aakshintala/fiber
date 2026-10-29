@@ -325,7 +325,7 @@ request's head and at its base commit (`scripts/release-size`). The base
 binary comes from the build cache when the backstop stored one for that
 commit, and is built otherwise. The scripts that build and measure both
 binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
-under 24 MiB and runs the benchmarks that gate each pull request, the rows the selection above chooses (the 10-busy-turns workload only when the selection chooses it),
+under 25 MiB and runs the benchmarks that gate each pull request, the rows the selection above chooses (the 10-busy-turns workload only when the selection chooses it),
 (`docs/performance.md`), timing-only workloads and the `paging` jig at 3 runs and the rest at 5. The head and base
 binaries run only the timing benchmarks the selection chooses, in the same job on the same runner, so a
 timing comparison never crosses runners: one harness process alternates head and base timings,
