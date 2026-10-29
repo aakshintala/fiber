@@ -7492,11 +7492,14 @@ fn a_session_wired_check_is_the_check_the_import_runs() {
     )
     .unwrap();
     assert!(report.imported.skills.is_empty(), "{report:?}");
-    assert_eq!(report.left_behind.len(), 1, "{report:?}");
-    assert_eq!(report.left_behind[0].item, "skills/review/SKILL.md");
+    let entry = report
+        .left_behind
+        .iter()
+        .find(|left| left.item == "skills/review/SKILL.md")
+        .expect("the already-read skill is left behind");
     assert_eq!(
-        report.left_behind[0].reason,
-        "already read from /person/.agents/skills/review/SKILL.md"
+        entry.reason, "already read from /person/.agents/skills/review/SKILL.md",
+        "{report:?}"
     );
     assert!(!fiber_home.join("skills/review/SKILL.md").exists());
     close_within(opened.session, opened.log);

@@ -48,3 +48,7 @@ pub enum SkillRead {
     /// invocation.
     Invalid,
 }
+
+#[cfg(test)]
+#[path = "skills_tests.rs"]
+mod tests;

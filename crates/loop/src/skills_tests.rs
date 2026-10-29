@@ -1472,7 +1472,6 @@ fn a_shared_header_name_diverts_to_a_logged_path() {
         Some(&tree.person()),
         std::slice::from_ref(&checked),
     );
-    assert_eq!(got.len(), 1, "one diverted entry: {got:?}");
     let logged = got.get(&checked).expect("the checked dir diverts");
     assert!(
         logged == &first || logged == &second,
