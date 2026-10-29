@@ -185,6 +185,11 @@ const GIT_DIFF: &[Flag] = &[
     flag("--no-ext-diff"),
     flag("--exit-code"),
     flag("--quiet"),
+    flag("--check"),
+    flag("--merge-base"),
+    flag("-w"),
+    flag("--ignore-all-space"),
+    value("--diff-filter"),
 ];
 
 const GIT_LOG: &[Flag] = &[
@@ -221,6 +226,9 @@ const GIT_REV_PARSE: &[Flag] = &[
     flag("--is-inside-work-tree"),
     flag("--show-prefix"),
 ];
+
+/// No flags: every flag word makes the call `executes`.
+const GIT_MERGE_BASE: &[Flag] = &[];
 
 const GIT_LS_FILES: &[Flag] = &[
     flag("-c"),
@@ -582,6 +590,18 @@ pub(super) const COMMANDS: &[Command] = &[
     Command {
         name: "git rev-parse",
         flags: GIT_REV_PARSE,
+        paths: false,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: true,
+        prints: false,
+        counts: false,
+    },
+    // Operands are revisions, not paths, so they declare no paths, as
+    // with `git rev-parse`.
+    Command {
+        name: "git merge-base",
+        flags: GIT_MERGE_BASE,
         paths: false,
         pattern: false,
         pattern_flags: &[],

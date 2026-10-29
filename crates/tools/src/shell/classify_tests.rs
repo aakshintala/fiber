@@ -320,6 +320,31 @@ fn new_git_forms_read() {
 }
 
 #[test]
+fn git_merge_base_reads_without_paths() {
+    // `docs/tools.md`, "Shell", "Effects": `git merge-base` is read-only
+    // with no flags, and its operands are revisions declaring no paths.
+    for command in ["git merge-base a HEAD", "git merge-base abc123 HEAD"] {
+        assert_reads(command);
+        assert!(classified(command).declared.paths.is_none(), "{command}");
+    }
+    assert_closed("git merge-base a HEAD --check");
+}
+
+#[test]
+fn git_diff_read_only_flags_read() {
+    for command in [
+        "git diff --check",
+        "git diff --merge-base",
+        "git diff -w",
+        "git diff --ignore-all-space",
+        "git diff --diff-filter=ACM",
+        "git diff --diff-filter=",
+    ] {
+        assert_reads(command);
+    }
+}
+
+#[test]
 fn exact_forms_read_without_paths() {
     // `docs/tools.md`, "Shell", "Effects": if every command is on the
     // read-only list, the call declares `reads` with no paths here.
@@ -533,6 +558,7 @@ fn hostile_git_forms_execute() {
         "git log -x8",
         "git show -8",
         "git diff -8",
+        "git diff --fork-point",
         "git rev-parse --short=7",
         "git rev-parse --git-dir",
         "git ls-files --exclude-from=f",
@@ -731,6 +757,7 @@ fn only_pathless_commands_declare_no_paths() {
         let declares = command.name != "echo"
             && command.name != "pwd"
             && command.name != "git rev-parse"
+            && command.name != "git merge-base"
             && command.name != "git status"
             && command.name != "git branch --show-current";
         assert_eq!(command.paths, declares, "{}", command.name);
@@ -1009,6 +1036,7 @@ fn every_command_states_whether_double_dash_ends_flags() {
         ("git log", true),
         ("git show", true),
         ("git rev-parse", true),
+        ("git merge-base", true),
         ("git ls-files", true),
         ("git blame", true),
         ("gh pr view", false),
