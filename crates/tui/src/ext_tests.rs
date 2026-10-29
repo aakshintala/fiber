@@ -2187,7 +2187,7 @@ fn an_animated_renderer_draws_its_frame_and_reports_its_interval() {
         panic!("expected drawn lines, got {decision:?}");
     };
     assert_eq!(extension, "animated-test");
-    assert_eq!(fake.frames.borrow().clone(), vec![7]); // docs/tui.md:2963: the frame reaches the renderer in its input.
+    assert_eq!(fake.frames.borrow().clone(), vec![7]); // docs/tui.md:2996: the frame reaches the renderer in its input.
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0][0].text, "anim7-0");
     assert_eq!(lines[1][0].text, "anim7-1");
@@ -2209,5 +2209,5 @@ fn a_stopped_animated_renderer_draws_once() {
     };
     let (_, continues) = fake.render_animated(&ctx, "notice", &notice, 80, 2, &|_, _| Vec::new());
     assert!(!continues);
-    assert_eq!(fake.frames.borrow().clone(), vec![2]); // docs/tui.md:2963: the frame reaches the renderer in its input.
+    assert_eq!(fake.frames.borrow().clone(), vec![2]); // docs/tui.md:2996: the frame reaches the renderer in its input.
 }

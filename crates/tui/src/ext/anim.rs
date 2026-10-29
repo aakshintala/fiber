@@ -13,7 +13,9 @@ use crate::tick::TICK;
 
 /// One animated item: its page, slot, input, extension and half, but no
 /// width. A width change keeps the frame counter, so the key leaves the
-/// width out and a new frame evicts every older entry at every width.
+/// width out and a new frame evicts every older entry at every width. A
+/// notice key also carries the notice instance, never its text: the same
+/// code and text raised again is a new item with its own counter.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct AnimKey {
     page: PageKey,
@@ -21,6 +23,7 @@ pub(crate) struct AnimKey {
     input: u64,
     extension: String,
     half: Option<String>,
+    notice_id: Option<usize>,
 }
 
 impl AnimKey {
@@ -39,12 +42,39 @@ impl AnimKey {
             input,
             extension: extension.to_owned(),
             half,
+            notice_id: None,
+        }
+    }
+
+    /// The animated notice `id`: the same page, slot, input, extension
+    /// and half as an item key, qualified by the notice instance, so two
+    /// notices with the same code and text advance independently.
+    pub(crate) fn for_notice(
+        page: PageKey,
+        slot: &str,
+        input: u64,
+        extension: &str,
+        half: Option<String>,
+        id: usize,
+    ) -> Self {
+        Self {
+            page,
+            slot: slot.to_owned(),
+            input,
+            extension: extension.to_owned(),
+            half,
+            notice_id: Some(id),
         }
     }
 
     /// The page the item draws on: page drops clear its counter.
     pub(crate) fn page(&self) -> &PageKey {
         &self.page
+    }
+
+    /// The notice instance the key animates, if any: items carry none.
+    pub(crate) fn notice_id(&self) -> Option<usize> {
+        self.notice_id
     }
 }
 

@@ -331,7 +331,7 @@ fn push_fitted_keeps_the_animated_tag_on_its_row() {
     rows.push_fitted(&line, None);
 
     let (_, texts) = rows.into_parts();
-    // docs/tui.md:2968: a painted replacement row keeps its animation tag.
+    // docs/tui.md:3001: a painted replacement row keeps its animation tag.
     assert_eq!(texts.first().and_then(|text| text.anim.clone()), Some(key));
 }
 
