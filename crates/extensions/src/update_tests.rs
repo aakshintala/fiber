@@ -15,14 +15,16 @@ use std::path::{Path, PathBuf};
 
 use fakes::ustar::{archive, gzip, header, sha256 as sha};
 
-use super::{Target, stage_update};
+use super::{Target, release_triple, stage_update};
 use crate::Error;
 use crate::manage::{Request, plan};
 use crate::release::{Release, install_release};
 use contract::ErrorCode;
 
 const RELEASE: &str = "0.2.0";
-const TRIPLE: &str = "test-triple";
+/// A listed triple the fixture serves: [`release_triple`] maps it to
+/// itself, so every existing stage test asks for the served archive.
+const TRIPLE: &str = "x86_64-unknown-linux-musl";
 /// The nightly release the fixture serves above [`RELEASE`].
 const NIGHTLY: &str = "0.2.1-nightly.20240101";
 
@@ -1082,4 +1084,57 @@ fn an_unlisted_platform_fails_before_any_download() {
         "no download runs: {:?}",
         server.requests()
     );
+}
+
+/// Both Linux gnu builds map to their own architecture's musl archive:
+/// flipping an arch maps a build at the other's archive, which the
+/// release never publishes.
+#[test]
+fn release_triple_maps_linux_gnu_builds_to_their_musl_archive() {
+    assert_eq!(
+        release_triple("x86_64-unknown-linux-gnu").unwrap(),
+        "x86_64-unknown-linux-musl"
+    );
+    assert_eq!(
+        release_triple("aarch64-unknown-linux-gnu").unwrap(),
+        "aarch64-unknown-linux-musl"
+    );
+}
+
+/// Listed triples stay themselves: both musl archives and the macOS
+/// archive pass through untouched.
+#[test]
+fn release_triple_passes_listed_triples_through() {
+    assert_eq!(
+        release_triple("x86_64-unknown-linux-musl").unwrap(),
+        "x86_64-unknown-linux-musl"
+    );
+    assert_eq!(
+        release_triple("aarch64-unknown-linux-musl").unwrap(),
+        "aarch64-unknown-linux-musl"
+    );
+    assert_eq!(
+        release_triple("aarch64-apple-darwin").unwrap(),
+        "aarch64-apple-darwin"
+    );
+}
+
+/// Platforms with no published archive fail with the platform and every
+/// published archive named: widening the match to pass one through
+/// asks for an archive the release never publishes.
+#[test]
+fn release_triple_rejects_platforms_with_no_published_archive() {
+    for unlisted in ["x86_64-apple-darwin", "x86_64-pc-windows-msvc"] {
+        let err = release_triple(unlisted).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::Usage, "{unlisted}");
+        let said = err.to_string();
+        assert!(said.contains(unlisted), "{said}");
+        for archive in [
+            "fiber-aarch64-apple-darwin.tar.gz",
+            "fiber-x86_64-unknown-linux-musl.tar.gz",
+            "fiber-aarch64-unknown-linux-musl.tar.gz",
+        ] {
+            assert!(said.contains(archive), "{said}");
+        }
+    }
 }

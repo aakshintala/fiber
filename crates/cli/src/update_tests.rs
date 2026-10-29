@@ -54,9 +54,10 @@ use std::path::PathBuf;
 
 use fakes::ustar::{archive, gzip, header, sha256};
 
-/// The triple `update` asks the fixture server for: any name works, the
-/// release step only interpolates it into the archive file name.
-const TRIPLE: &str = "test-arch-test-os";
+/// The triple `update` asks the fixture server for: a listed triple,
+/// so [`super::run`]'s platform check maps it to itself and the stage
+/// asks for the served archive.
+const TRIPLE: &str = "x86_64-unknown-linux-musl";
 
 /// The bytes the fixture binary archive holds: the staged `fiber` binary.
 const MARKER: &[u8] = b"new-fiber-binary";

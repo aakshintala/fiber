@@ -136,10 +136,14 @@ fn copy_binary(setup: &Setup) -> PathBuf {
 }
 
 /// The binary archive the fixture publishes for every release: the
-/// mapped triple's musl archive — on Linux the musl archive whatever
-/// libc the test binary was built against.
+/// mapped triple's archive — on Linux the musl archive whatever libc
+/// the test binary was built against, and the running target's own
+/// archive elsewhere.
 fn binary_archive() -> String {
-    format!("fiber-{}.tar.gz", "x86_64-unknown-linux-musl")
+    format!(
+        "fiber-{}.tar.gz",
+        extensions::release_triple(env!("FIBER_TARGET")).unwrap()
+    )
 }
 
 /// The fixture releases: docs, extensions and binary archives for
