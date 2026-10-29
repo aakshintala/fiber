@@ -71,8 +71,10 @@ fn buffer(app: &App, width: u16, height: u16) -> Buffer {
 /// test observes the built-in cross decision at the callback width.
 #[derive(Debug, Default)]
 struct BuiltinEcho {
-    /// The widths the slot drew at, in order.
+    /// The widths the built-in callback receives, in order.
     widths: std::cell::RefCell<Vec<u16>>,
+    /// Optional callback width to keep a returned cross visible at paint width.
+    builtin_width: Option<u16>,
 }
 
 impl crate::ext::Renderer for BuiltinEcho {
@@ -92,10 +94,11 @@ impl crate::ext::Renderer for BuiltinEcho {
         width: u16,
         builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
     ) -> crate::ext::Decision {
-        self.widths.borrow_mut().push(width);
+        let builtin_width = self.builtin_width.unwrap_or(width);
+        self.widths.borrow_mut().push(builtin_width);
         crate::ext::Decision::Draw {
             extension: self.name().into(),
-            lines: builtin(input, width),
+            lines: builtin(input, builtin_width),
         }
     }
 }
@@ -127,16 +130,23 @@ fn a_replacement_sees_the_builtin_cross_only_at_exact_fit() {
     );
     let plain = queue_row(&wide, "and test it");
     assert!(!plain.contains('✕'), "{plain:?}");
-    // One column short the same input draws without its cross: the
-    // input still carries the full 14-cell text, and only the callback
-    // width changed.
-    let narrow = screen(&app, 20, 12);
-    assert!(narrow.contains("Steering, joins"), "{narrow}");
-    let clipped = queue_row(&narrow, "use the parser");
-    assert!(!clipped.contains('✕'), "{clipped:?}");
-    // Both draws reached the built-in at their own width.
-    assert!(fake.widths.borrow().contains(&21));
-    assert!(fake.widths.borrow().contains(&20));
+    // One column short, the built-in omits its cross. Keep the paint
+    // area at 21 so a mutant that returns the cross at callback width 20
+    // cannot hide behind paint clipping.
+    let mut short_app = queued(21, 12);
+    let short_fake = Rc::new(BuiltinEcho {
+        builtin_width: Some(20),
+        ..BuiltinEcho::default()
+    });
+    short_app.install_renderer(short_fake.clone());
+    let short = screen(&short_app, 21, 12);
+    assert!(short.contains("Steering, joins"), "{short}");
+    let omitted = queue_row(&short, "use the parser");
+    assert!(!omitted.contains('✕'), "{omitted:?}");
+    // Exact-fit and one-short built-in results were returned to the same
+    // 21-column paint area at callback widths 21 and 20.
+    assert_eq!(&*fake.widths.borrow(), &[21]);
+    assert_eq!(&*short_fake.widths.borrow(), &[20]);
 }
 
 #[test]
