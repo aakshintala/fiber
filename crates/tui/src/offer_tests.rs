@@ -1218,14 +1218,25 @@ fn wheel_with_no_height_or_closed_keeps_everything() {
         let held = offer.held.as_ref().expect("open");
         (held.top, held.cursor, held.decisions.clone())
     };
+    // Each direction asserts alone: a down-then-up pair would cancel a
+    // mutant step and hide it (`docs/tui.md:576`).
     offer.wheel(false, 80, 0);
+    {
+        let held = offer.held.as_ref().expect("open");
+        assert_eq!(
+            (held.top, held.cursor),
+            (top, cursor),
+            "no height moves nothing down"
+        );
+        assert_eq!(held.decisions, choices, "no height keeps the choices");
+    }
     offer.wheel(true, 80, 0);
     {
         let held = offer.held.as_ref().expect("open");
         assert_eq!(
             (held.top, held.cursor),
             (top, cursor),
-            "no height moves nothing"
+            "no height moves nothing up"
         );
         assert_eq!(held.decisions, choices, "no height keeps the choices");
     }

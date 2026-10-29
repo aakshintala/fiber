@@ -1880,3 +1880,67 @@ fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
         "the below clamp lands inside the new window"
     );
 }
+
+/// An up wheel that resets the window to the start while the focus sits
+/// just past the new end clamps to the nearest visible row: row zero can
+/// never stand in for the focus, since only an exact focus match counts
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_up_resetting_to_zero_clamps_past_a_nonmatching_first_row() {
+    let mut app = attached(160, 11);
+    let mut catalogue = catalogue();
+    catalogue.models = (0..20)
+        .map(|at| ModelEntry {
+            reference: format!("acme/m{at}"),
+            provider: "acme".to_owned(),
+            id: format!("m{at}"),
+            levels: vec!["low".to_owned()],
+            default_level: Some("low".to_owned()),
+            configured: None,
+            roles: Vec::new(),
+            name: None,
+            price: None,
+        })
+        .collect();
+    app.on_models(Ok(catalogue));
+    open(&mut app);
+    let height = 11u16;
+    let view = app.model_picker_view().expect("open");
+    let fit = model_fit(&view, height);
+    assert_eq!(fit, 3, "height 11 fits exactly three body rows");
+    let display = display_rows(&view, false);
+    let focusables: Vec<usize> = display
+        .rows
+        .iter()
+        .enumerate()
+        .filter_map(|(at, row)| row.focus.map(|_| at))
+        .collect();
+    // Focus display row 5 with the stored window at 3: the focus-derived
+    // start stays 3, so one up step resets the window to zero with the
+    // focus just past its end. Rows 0 and 2 are blanks no model focuses.
+    let target = focusables[2];
+    assert_eq!(target, 5, "the third focusable row sits at display row 5");
+    let mut view = app.model_picker_view().expect("open");
+    view.focused = display.rows[target].focus;
+    view.top = 3;
+    let effective = keep_focus_visible_top(&view, height);
+    assert_eq!(effective, 3, "the stored window already shows the focus");
+    let (top, focus) = picker_wheel_window(&view, true, height);
+    assert_eq!(top, 0, "one step up resets the window to zero");
+    let end = top.saturating_add(fit);
+    // Row zero never matches the focus, so it must not count as found:
+    // the clamp is the nearest visible focusable row, row 1.
+    assert_eq!(
+        focus, display.rows[1].focus,
+        "the clamp passes row zero for the nearest visible row"
+    );
+    let nearest_row = display
+        .rows
+        .iter()
+        .position(|row| row.focus == focus)
+        .expect("nearest is displayed");
+    assert!(
+        nearest_row >= top && nearest_row < end,
+        "the clamp lands inside the new window"
+    );
+}

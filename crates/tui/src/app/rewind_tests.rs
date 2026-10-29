@@ -2771,3 +2771,81 @@ fn wheel_carrying_focus_offscreen_follows_the_new_target() {
         "the target is the new row's first boundary"
     );
 }
+
+/// A wheel-down that clamps the selection into the window also moves the
+/// detail's point: the lines under the rows name the new row's turn, never
+/// the conversation (`docs/tui.md:576`).
+#[test]
+fn wheel_down_clamping_into_the_window_moves_the_detail_point() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    app.set_size(80, 24);
+    let lines = open(&mut app, &clock);
+    let mut history = calls_segment();
+    for (n, at) in (2..=20).zip((12..).step_by(3)) {
+        history.extend([
+            history_line(
+                SESSION,
+                "turn_started",
+                at,
+                Some(format!("t_{n}").as_str()),
+                None,
+                message_input(format!("turn {n}").as_str()),
+            ),
+            history_line(
+                SESSION,
+                "step_started",
+                at + 1,
+                Some(format!("t_{n}").as_str()),
+                None,
+                json!({}),
+            ),
+            history_line(
+                SESSION,
+                "turn_completed",
+                at + 2,
+                Some(format!("t_{n}").as_str()),
+                None,
+                json!({"outcome": "completed"}),
+            ),
+        ]);
+    }
+    accept(&mut app, &lines[0]["id"], history);
+    for _ in 0..40 {
+        app.on_key(crate::keys::Key::Up, clock.now());
+    }
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.list.selected(), 0, "many Ups reach the first row");
+    // The cursor sits on the first turn's start, past its writing call:
+    // everything after it lists.
+    assert_eq!(
+        below(&app),
+        [
+            "Files written since the point: /w/a.rs",
+            "Calls that may have changed files: shell",
+            "None of it is undone.",
+            "Jobs that stop: none",
+        ]
+    );
+    let top = app.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.list.top(), 3, "one step down moves three rows");
+    assert_eq!(
+        frame.list.selected(),
+        3,
+        "the clamped selection follows into the window"
+    );
+    // The new row's turn wrote nothing: without the follow the detail
+    // would still name the first turn's files.
+    assert_eq!(
+        below(&app),
+        [
+            "Files written since the point: none",
+            "Calls that may have changed files: none",
+            "None of it is undone.",
+            "Jobs that stop: none",
+        ]
+    );
+}

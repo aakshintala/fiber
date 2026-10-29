@@ -356,8 +356,14 @@ impl App {
         // conversation it is drawn in, so testing the slab adds only
         // equivalent mutants on equality (removed).
         if self.keymap_top().is_some() {
-            let home = self.home.is_some();
-            if home || self.over_conversation(at) {
+            // Each arm swallows alike, so no compound condition remains
+            // to mutate: on home the whole screen is the map's, attached
+            // its conversation column is (removed: the `home ||`
+            // disjunction's arms share one outcome).
+            if self.home.is_some() {
+                return Some(Effect::None);
+            }
+            if self.over_conversation(at) {
                 return Some(Effect::None);
             }
             return None;

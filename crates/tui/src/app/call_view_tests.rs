@@ -2658,4 +2658,17 @@ fn wheel_down_refetches_a_missing_fill_only_at_the_tail() {
             .all(|line| line["args"]["offset"] != json!(99999)),
         "a wheel-down before the tail never refetches the fill: {sends:?}"
     );
+    // The wire already holds the tail's request, which would absorb a
+    // mutant queue without a send: the pager state itself must not move.
+    {
+        let view = app.call_view().expect("open");
+        assert!(
+            view.pager.missing.contains(&99999),
+            "a wheel-down before the tail leaves the missing fill missing"
+        );
+        assert!(
+            view.pager.queued.is_empty(),
+            "a wheel-down before the tail queues nothing"
+        );
+    }
 }
