@@ -1,11 +1,14 @@
 //! The no-raised-budget check (#3662, rule 3): a diff that raises `WAITS`,
 //! `BUDGET` or `CLEANUP`, or adds a `Deadline::after` of 60 s or more in a
-//! test, fails unless the line carries `// ruling: #N`. Only lines changed
-//! against the merge base are scanned, as Rust tokens like `must-succeed`
-//! does (comments never count); unchanged lines never fail.
+//! test, fails unless the line carries `// ruling: #N`. A bound the check
+//! cannot read — a shared name like `fakes::deadline::BUDGET`, or a computed
+//! `Duration` — fails the same way: only the known short bounds (`WAIT`,
+//! `MUST_SUCCEED_WITHIN`, `Duration::ZERO`) and direct literals below 60 s
+//! pass unruled. Only lines changed against the merge base are scanned, as
+//! Rust tokens like `must-succeed` does (comments never count); unchanged
+//! lines never fail.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::process::Command;
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
@@ -26,21 +29,21 @@ const AFTER_FLOOR_MS: u128 = 60_000;
 /// Runs `budget-bounds --base REV`: the violations on lines changed against
 /// the merge base with REV, as `path:line` lines.
 pub(crate) fn budget_bounds(base: &str) -> Result<Vec<String>, String> {
-    let members = workspace_members()?;
+    let members = crate::workspace_members()?;
     let changed = changed_lines(base)?;
-    Ok(check_files(&rust_files(&members)?, &changed))
+    Ok(check_files(&crate::rust_files(&members)?, &changed))
 }
 
 /// Lines changed against the merge base with `base`, by repository path:
 /// added lines are 1-based new-file lines; an untracked file counts whole.
 pub(crate) fn changed_lines(base: &str) -> Result<BTreeMap<String, BTreeSet<usize>>, String> {
-    let merge_base = git_lines(&["merge-base", base, "HEAD"])?
+    let merge_base = crate::git_lines(&["merge-base", base, "HEAD"])?
         .into_iter()
         .next()
         .ok_or("no merge base")?;
     let mut changed: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
     let mut path = String::new();
-    for line in output("git", &["diff", "-U0", &merge_base])?.lines() {
+    for line in crate::output("git", &["diff", "-U0", &merge_base])?.lines() {
         if let Some(rest) = line.strip_prefix("+++ ") {
             path = rest.strip_prefix("b/").unwrap_or(rest).to_owned();
         } else if let Some(hunk) = line.strip_prefix("@@ ") {
@@ -63,7 +66,7 @@ pub(crate) fn changed_lines(base: &str) -> Result<BTreeMap<String, BTreeSet<usiz
             }
         }
     }
-    for path in git_lines(&["ls-files", "--others", "--exclude-standard"])? {
+    for path in crate::git_lines(&["ls-files", "--others", "--exclude-standard"])? {
         if !path.ends_with(".rs") {
             continue;
         }
@@ -200,11 +203,28 @@ fn site_at(trees: &[TokenTree], i: usize, scan: &Scan, test: bool) -> Option<Sit
     if args.len() != 1 {
         return None;
     }
-    let (ms, spelling) = duration(args.first()?, scan)?;
-    (ms >= AFTER_FLOOR_MS).then(|| Site {
-        line: ident.span().start().line,
-        what: format!("Deadline::after({spelling}) is 60 s or more"),
-    })
+    let line = ident.span().start().line;
+    let arg = args.first()?;
+    if let Some((ms, spelling)) = duration(arg, scan) {
+        return (ms >= AFTER_FLOOR_MS).then(|| Site {
+            line,
+            what: format!("Deadline::after({spelling}) is 60 s or more"),
+        });
+    }
+    // Symbolic or computed: resolve a trailing known bound name, and fail
+    // closed on anything else, so an unshown bound needs its ruling.
+    let spelling: TokenStream = arg.iter().cloned().collect();
+    match trailing_ident(arg).as_deref().and_then(known_ms) {
+        Some(ms) if ms < AFTER_FLOOR_MS => None,
+        Some(_) => Some(Site {
+            line,
+            what: format!("Deadline::after({spelling}) is 60 s or more"),
+        }),
+        None => Some(Site {
+            line,
+            what: format!("Deadline::after({spelling}) is not shown below 60 s"),
+        }),
+    }
 }
 
 /// A `const WAITS|BUDGET|CLEANUP: Duration = <duration>` at `trees[i]`,
@@ -229,14 +249,50 @@ fn const_site(trees: &[TokenTree], i: usize, scan: &Scan) -> Option<Site> {
     let end = (eq..trees.len())
         .find(|&j| is_punct(trees.get(j), ';'))
         .unwrap_or(trees.len());
-    let (ms, _) = duration(trees.get(eq + 1..end)?, scan)?;
-    (ms > cap.as_millis()).then(|| Site {
-        line: name.span().start().line,
-        what: format!(
-            "const {name} is {}, above {}",
-            show(ms),
-            show(cap.as_millis())
-        ),
+    let line = name.span().start().line;
+    match duration(trees.get(eq + 1..end)?, scan) {
+        Some((ms, _)) if ms <= cap.as_millis() => None,
+        Some((ms, _)) => Some(Site {
+            line,
+            what: format!(
+                "const {name} is {}, above {}",
+                show(ms),
+                show(cap.as_millis())
+            ),
+        }),
+        // A computed or symbolic bound the check cannot read: fail closed.
+        None => Some(Site {
+            line,
+            what: format!(
+                "const {name} is not shown at or below {}",
+                show(cap.as_millis())
+            ),
+        }),
+    }
+}
+
+/// The bound in ms named by the last path segment `name`, when the lane
+/// knows it: the shared guards and the short must-succeed bound. An xtask
+/// test pins each against its const.
+fn known_ms(name: &str) -> Option<u128> {
+    match name {
+        "WAIT" => Some(40_000),
+        "WAITS" => Some(WAITS.as_millis()),
+        "BUDGET" => Some(BUDGET.as_millis()),
+        "CLEANUP" => Some(CLEANUP.as_millis()),
+        "MUST_SUCCEED_WITHIN" => Some(10_000),
+        "ZERO" => Some(0),
+        "MAX" => Some(u128::MAX),
+        _ => None,
+    }
+}
+
+/// The last identifier in `tokens`, such as `BUDGET` in
+/// `fakes::deadline::BUDGET` or `MUST_SUCCEED_WITHIN` alone.
+fn trailing_ident(tokens: &[TokenTree]) -> Option<String> {
+    tokens.iter().rev().find_map(|tree| match tree {
+        TokenTree::Ident(ident) => Some(ident.to_string()),
+        TokenTree::Group(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => None,
     })
 }
 
@@ -332,116 +388,6 @@ fn is_punct(tree: Option<&TokenTree>, ch: char) -> bool {
 
 fn is_ident(tree: Option<&TokenTree>, word: &str) -> bool {
     matches!(tree, Some(TokenTree::Ident(ident)) if ident == word)
-}
-
-fn output(program: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(program)
-        .args(args)
-        .output()
-        .map_err(|e| format!("{program}: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "{program} {}: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    String::from_utf8(out.stdout).map_err(|e| format!("{program}: {e}"))
-}
-
-fn git_lines(args: &[&str]) -> Result<Vec<String>, String> {
-    Ok(output("git", args)?
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(str::to_owned)
-        .collect())
-}
-
-fn workspace_members() -> Result<crate::select::Members, String> {
-    let meta: serde_json::Value = serde_json::from_str(&output(
-        "cargo",
-        &["metadata", "--format-version", "1", "--no-deps"],
-    )?)
-    .map_err(|e| format!("cargo metadata: {e}"))?;
-    let root = meta
-        .get("workspace_root")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("cargo metadata: no workspace_root")?;
-    let packages = meta
-        .get("packages")
-        .and_then(serde_json::Value::as_array)
-        .ok_or("cargo metadata: no packages")?;
-    Ok(packages
-        .iter()
-        .map(|package| {
-            let manifest = package
-                .get("manifest_path")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let dir = std::path::Path::new(manifest)
-                .parent()
-                .unwrap_or(std::path::Path::new(""))
-                .strip_prefix(root)
-                .unwrap_or(std::path::Path::new(""))
-                .to_string_lossy()
-                .replace('\\', "/");
-            let name = package
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            let version = package
-                .get("version")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            (
-                name,
-                crate::select::Member {
-                    dir,
-                    version,
-                    deps: Vec::new(),
-                    library: false,
-                },
-            )
-        })
-        .collect())
-}
-
-/// Every Rust file in a member, tracked or not, skipping ignored ones.
-fn rust_files(members: &crate::select::Members) -> Result<Vec<RustFile>, String> {
-    let mut args = vec![
-        "ls-files",
-        "--cached",
-        "--others",
-        "--exclude-standard",
-        "--",
-    ];
-    args.extend(members.values().map(|m| m.dir.as_str()));
-    let mut files = Vec::new();
-    for path in git_lines(&args)?.into_iter().collect::<BTreeSet<_>>() {
-        let Some(krate) = crate::select::owner(&path, members) else {
-            continue;
-        };
-        let Some(member) = members.get(krate) else {
-            continue;
-        };
-        if !path.ends_with(".rs") || !std::path::Path::new(&path).exists() {
-            continue;
-        }
-        let rel = path
-            .get(member.dir.len() + 1..)
-            .unwrap_or_default()
-            .to_owned();
-        let source = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
-        files.push(RustFile {
-            krate: krate.to_owned(),
-            path,
-            rel,
-            source,
-        });
-    }
-    Ok(files)
 }
 
 #[cfg(test)]

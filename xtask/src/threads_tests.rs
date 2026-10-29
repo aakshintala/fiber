@@ -1,3 +1,7 @@
+//! Thread-count pins (`docs/testing/running.md:22`): `scripts/check` runs
+//! nextest with one thread per CPU the host has free, so each count below is
+//! `floor(cpus - load)`, floored at 2 and capped at `cpus`.
+
 use super::*;
 
 #[test]

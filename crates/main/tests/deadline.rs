@@ -68,7 +68,9 @@ fn a_first_helper_wait_leaves_the_second_its_full_bound() {
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
     clock.advance(fakes::deadline::WAIT);
-    // The next wait still gets its full fresh bound, not the remainder.
+    // The next wait still gets its full fresh bound, not the remainder
+    // (`docs/testing.md:243`: one slow step does not use up a later step's
+    // time).
     assert_eq!(deadline.left(), fakes::deadline::WAIT);
     assert_eq!(
         deadline.start_wait().left(),

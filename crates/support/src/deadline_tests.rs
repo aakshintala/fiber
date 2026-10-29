@@ -248,7 +248,9 @@ fn a_slow_first_wait_leaves_the_next_wait_its_full_bound() {
         assert_eq!(answered, origin);
         // The first wait spent its whole bound.
         assert_eq!(first.left(), Duration::ZERO);
-        // The next wait still gets its full fresh bound, not the remainder.
+        // The next wait still gets its full fresh bound, not the remainder
+        // (`docs/testing.md:243`: one slow step does not use up a later
+        // step's time).
         assert_eq!(guard.left(), WAIT);
         assert_eq!(guard.start_wait().left(), WAIT);
     });
@@ -294,7 +296,9 @@ fn a_started_wait_does_not_refresh_per_receive() {
             .expect("waited for the waiter to leave its park");
     });
     // The started wait's bound fell by the advanced span: no receive
-    // renewed it. The root still offers a fresh bound.
+    // renewed it (`docs/testing.md:243`: the parts of one wait take that one
+    // deadline, never a fresh one per receive). The root still offers a
+    // fresh bound.
     assert_eq!(
         wait.left(),
         WAIT.checked_sub(drained)

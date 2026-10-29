@@ -27,6 +27,11 @@ fn the_bounds_match_the_shared_consts() {
     assert_eq!(WAITS, fakes::deadline::WAITS);
     assert_eq!(BUDGET, fakes::deadline::BUDGET);
     assert_eq!(CLEANUP, fakes::deadline::CLEANUP);
+    assert_eq!(known_ms("WAIT"), Some(fakes::deadline::WAIT.as_millis()));
+    assert_eq!(
+        known_ms("MUST_SUCCEED_WITHIN"),
+        Some(fakes::MUST_SUCCEED_WITHIN.as_millis())
+    );
 }
 
 #[test]
@@ -151,4 +156,72 @@ fn a_const_bound_passes_outside_the_diff() {
 fn a_shared_bound_name_passes() {
     let source = "fn a() { Deadline::after(fakes::deadline::WAIT); }";
     assert!(check("crates/x/tests/a.rs", "tests/a.rs", source, &[1]).is_empty());
+}
+
+#[test]
+fn a_short_named_bound_passes() {
+    for after in [
+        "MUST_SUCCEED_WITHIN",
+        "fakes::MUST_SUCCEED_WITHIN",
+        "Duration::ZERO",
+    ] {
+        let source = format!("fn a() {{ Deadline::after({after}); }}");
+        assert!(
+            check("crates/x/tests/a.rs", "tests/a.rs", &source, &[1]).is_empty(),
+            "{after} passes"
+        );
+    }
+}
+
+#[test]
+fn a_long_named_bound_fails() {
+    for (after, name) in [
+        ("fakes::deadline::WAITS", "WAITS"),
+        ("fakes::deadline::BUDGET", "BUDGET"),
+        ("fakes::deadline::CLEANUP", "CLEANUP"),
+        ("Duration::MAX", "MAX"),
+    ] {
+        let source = format!("fn a() {{ Deadline::after({after}); }}");
+        let failures = check("crates/x/tests/a.rs", "tests/a.rs", &source, &[1]);
+        assert_eq!(failures.len(), 1, "{after}: {failures:?}");
+        assert!(
+            failures[0].starts_with("crates/x/tests/a.rs:1: Deadline::after(")
+                && failures[0].ends_with("is 60 s or more"),
+            "{name}: {failures:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unshown_after_fails_closed() {
+    for (after, case) in [
+        ("SPAN", "a bare name"),
+        ("Duration::from_secs(30 + 30)", "a computed literal"),
+        ("Duration::from_secs(SIXTY)", "a named literal"),
+    ] {
+        let source = format!("fn a() {{ Deadline::after({after}); }}");
+        let failures = check("crates/x/tests/a.rs", "tests/a.rs", &source, &[1]);
+        assert_eq!(failures.len(), 1, "{case}: {failures:?}");
+        assert!(
+            failures[0].starts_with("crates/x/tests/a.rs:1: Deadline::after(")
+                && failures[0].ends_with("is not shown below 60 s"),
+            "{case}: {failures:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unshown_guard_const_fails_closed() {
+    let source = "pub const WAITS: Duration = Duration::from_secs(SIXTY);";
+    let failures = check(
+        "crates/support/src/deadline.rs",
+        "src/deadline.rs",
+        source,
+        &[1],
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].ends_with("is not shown at or below 90 s"),
+        "{failures:?}"
+    );
 }
