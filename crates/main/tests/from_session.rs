@@ -10,7 +10,8 @@
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
-    reason = "test helpers; a failure is the test's"
+    clippy::print_stderr,
+    reason = "test helpers; a failure is the test's; a skip prints its reason"
 )]
 
 mod support;
