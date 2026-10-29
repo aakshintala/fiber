@@ -93,8 +93,12 @@ pub(crate) fn read(
     run: config::Runner<'_>,
     clock: &dyn Clock,
 ) -> Result<tui::Catalogue, cli::ModelListsError> {
-    let (providers, config, mut notices) =
-        cli::model_lists(home, workspace, mode(refresh), load, run, clock)?;
+    let (providers, config, mut notices, not_host, groups) =
+        cli::model_lists_grouped(home, workspace, mode(refresh), load, run, clock)?;
+    // A placeholder with no value stays out of the notices: the picker
+    // counts its group instead. A value that is not a host still reads
+    // its per-model notice at launch.
+    notices.extend(not_host);
     let installable = match extensions::not_installed_providers(home) {
         Ok(names) => names.into_iter().map(str::to_owned).collect(),
         Err(error) => {
@@ -113,7 +117,32 @@ pub(crate) fn read(
         // list reads fresh.
         lists: ages(home, &providers, &config, now),
         notices,
+        left_out: groups.iter().map(left_out).collect(),
     })
+}
+
+/// One provider-and-setting group with no placeholder value, as the
+/// picker counts it: the raw extension name rides along, and `file` is
+/// the declaring extension's global configuration file, relative to
+/// Fiber home. The terminal renders the supplied file verbatim and
+/// never derives a path from the extension.
+fn left_out(group: &extensions::Unconfigured) -> tui::LeftOutGroup {
+    let extension = group.extension();
+    tui::LeftOutGroup {
+        provider: group.provider().to_owned(),
+        extension: extension.to_owned(),
+        file: format!("config/{}.json", config::dir_name(extension)),
+        setting: group.setting().to_owned(),
+        login: group.login(),
+        models: group
+            .models()
+            .iter()
+            .map(|model| tui::LeftOutModel {
+                id: model.id.clone(),
+                name: model.name.clone(),
+            })
+            .collect(),
+    }
 }
 
 /// The [`cli::ModelLists`] read behind each [`tui::Refresh`]: `Cached`
