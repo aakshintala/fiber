@@ -1758,7 +1758,10 @@ impl Harness {
             state,
             drive,
             dir,
-            contract::events::ExtensionReason::New,
+            super::process::context::ProcessRun::Session {
+                session_id: contract::SessionId("s_test".into()),
+                reason: contract::events::SessionReason::New,
+            },
             services,
             recorded,
         )
@@ -1813,7 +1816,7 @@ impl Harness {
             serde_json::Map::new(),
             None,
             dir,
-            contract::events::ExtensionReason::Call,
+            super::process::context::ProcessRun::Call,
             services,
             recorded,
         )
@@ -1844,7 +1847,10 @@ impl Harness {
             state,
             drive,
             dir,
-            contract::events::ExtensionReason::New,
+            super::process::context::ProcessRun::Session {
+                session_id: contract::SessionId("s_test".into()),
+                reason: contract::events::SessionReason::New,
+            },
             {
                 let recorded = Arc::clone(&recorded);
                 move |_, _, _| -> Arc<dyn super::process::context::ProcessHostServices> { recorded }
@@ -1865,7 +1871,7 @@ impl Harness {
         state: serde_json::Map<String, Value>,
         drive: Option<Arc<dyn contract::extension::Drive>>,
         dir: fakes::TempDir,
-        reason: contract::events::ExtensionReason,
+        run: super::process::context::ProcessRun,
         services: impl FnOnce(
             Arc<super::host::state::ExtensionState>,
             Arc<dyn contract::clock::Clock>,
@@ -1882,8 +1888,7 @@ impl Harness {
             &manifest,
         )));
         let context = ProcessContext {
-            session_id: Some(contract::SessionId("s_test".into())),
-            reason,
+            run,
             workspace: dir.path().to_path_buf(),
             data_dirs: contract::events::ExtensionDataDirs {
                 machine: dir.path().join("machine").display().to_string(),
@@ -6237,4 +6242,42 @@ fn finish_after_death_reaps_without_signals() {
         super::process::lifecycle::RunState::Finishing
     );
     assert_eq!(owner.drain(), CloseReason::Stopped);
+}
+
+/// A session run resends its latest start reason: recording a new one
+/// moves the hello, while a call run keeps reason `call` — no hello
+/// can smuggle a session id into a sessionless run.
+#[test]
+fn set_reason_moves_only_a_session_run() {
+    use super::process::context::ProcessRun;
+    use contract::events::{ExtensionHello, SessionReason};
+    let dir = fakes::TempDir::new("fiber-process-run-reason");
+    let context = || ProcessContext {
+        run: ProcessRun::Session {
+            session_id: contract::SessionId("s_test".into()),
+            reason: SessionReason::New,
+        },
+        workspace: dir.path().to_path_buf(),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "m".to_owned(),
+            project: "p".to_owned(),
+        },
+        state: Default::default(),
+        extension: "fiber.test/proc".into(),
+        home: dir.path().to_path_buf(),
+    };
+    let mut session = context();
+    session.set_reason(SessionReason::Resume);
+    let ExtensionHello::Session(hello) = session.hello() else {
+        panic!("a session run hellos as a session");
+    };
+    assert_eq!(hello.reason, SessionReason::Resume);
+    assert_eq!(hello.session_id, contract::SessionId("s_test".into()));
+    let mut call = context();
+    call.run = ProcessRun::Call;
+    call.set_reason(SessionReason::Resume);
+    let ExtensionHello::Call(hello) = call.hello() else {
+        panic!("a call run hellos without a session");
+    };
+    assert_eq!(hello.reason, contract::events::CallReason::Call);
 }

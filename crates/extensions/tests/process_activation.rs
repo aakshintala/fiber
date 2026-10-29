@@ -817,6 +817,11 @@ fn process_event_stream_forwards_live_and_replays_durable_lines() {
     for line in &replayed {
         session.deliver_line(line);
     }
+    // docs/extensions.md:246 (session order is kept) and :285 (a process
+    // extension keeps the same order, one item at a time); docs/events.md,
+    // `subscribe`/`history`: the fold sends before the stream goes live,
+    // in `seq` order. The live envelope arrives first, then the replayed
+    // pair, each exactly once.
     let watched = marker.clone();
     fakes::wait_until(
         "the three forwarded lines",
@@ -940,6 +945,32 @@ fn process_startup_failures_report_required_and_skip_the_rest() {
             .loaded_names()
             .contains(&"fiber.test/off".to_owned()),
         "the declined package never loads"
+    );
+    let cancel = CancelToken::new();
+    session.finish_processes(&cancel);
+}
+
+/// A `call` reason never starts a session extension: the contradictory
+/// start leaves the owner out with a notice instead of starting a
+/// sessionless child behind the session.
+#[test]
+fn a_call_reason_never_starts_a_session_extension() {
+    let env = Env::new("fiber-process-call-reason");
+    env.install_process("proc", &json!({}), &json!([{"read": {}}]));
+    let session = env.load(ExtensionReason::Call, 0);
+    let notices = session.notices();
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.code == contract::ErrorCode::ExtensionFailed
+                && notice.extension.as_deref() == Some("fiber.test/proc")),
+        "the contradictory start reports: {notices:?}"
+    );
+    assert!(
+        !session
+            .loaded_names()
+            .contains(&"fiber.test/proc".to_owned()),
+        "the contradictory start is left out"
     );
     let cancel = CancelToken::new();
     session.finish_processes(&cancel);

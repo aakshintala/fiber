@@ -21,13 +21,13 @@ use crate::host::admission::CallbackContext;
 /// What one process extension runs as: the first `extension_hello` line's
 /// payload, and the context every native host call reads. The session
 /// activates the owner at load, so the context is live from construction.
+/// The run is either a session's or outside one: a sessionless run has
+/// no session id and keeps reason `call`, so the contradictory state a
+/// bare session id beside reason `call` would name cannot be built.
 #[derive(Debug, Clone)]
 pub(crate) struct ProcessContext {
-    /// The session's id, as `extension_hello` carries it: absent for a
-    /// run outside a session.
-    pub session_id: Option<contract::SessionId>,
-    /// Why the session started, resent after a restart.
-    pub reason: contract::events::ExtensionReason,
+    /// Which run this is: a session's, or one outside a session.
+    pub run: ProcessRun,
     /// The session's workspace, resolving relative paths.
     pub workspace: PathBuf,
     /// The paths `host.data_dir` returns.
@@ -40,23 +40,55 @@ pub(crate) struct ProcessContext {
     pub home: PathBuf,
 }
 
+/// Which run a process context belongs to: a session's, carrying its
+/// id and why it started, or one outside a session.
+#[derive(Debug, Clone)]
+pub(crate) enum ProcessRun {
+    /// A session's run: the id and reason the hello carries.
+    Session {
+        /// The session's id, as `extension_hello` carries it.
+        session_id: contract::SessionId,
+        /// Why the session started, resent after a restart.
+        reason: contract::events::SessionReason,
+    },
+    /// A run outside a session: no id, reason `call`.
+    Call,
+}
+
 impl ProcessContext {
+    /// Whether the run is outside a session: only the Call-case set
+    /// runs, and its lines carry no session id.
+    pub(crate) fn is_call(&self) -> bool {
+        matches!(self.run, ProcessRun::Call)
+    }
+
     /// The `extension_hello` payload: the session's identity, why it
     /// started, its workspace, the extension's data directories and its
     /// folded state, with the state as it stands now. A call outside a
     /// session carries reason `call` and omits the session's id; the
     /// payload, not a mode flag, carries that reason.
     pub(crate) fn hello(&self) -> contract::events::ExtensionHello {
-        contract::events::ExtensionHello {
-            session_id: if self.reason == contract::events::ExtensionReason::Call {
-                None
-            } else {
-                self.session_id.clone()
-            },
-            reason: self.reason,
-            workspace: self.workspace.display().to_string(),
-            data_dirs: self.data_dirs.clone(),
-            state: self.state.clone(),
+        let workspace = self.workspace.display().to_string();
+        let data_dirs = self.data_dirs.clone();
+        let state = self.state.clone();
+        match &self.run {
+            ProcessRun::Session { session_id, reason } => {
+                contract::events::ExtensionHello::Session(contract::events::SessionHello {
+                    session_id: session_id.clone(),
+                    reason: *reason,
+                    workspace,
+                    data_dirs,
+                    state,
+                })
+            }
+            ProcessRun::Call => {
+                contract::events::ExtensionHello::Call(contract::events::CallHello {
+                    reason: contract::events::CallReason::Call,
+                    workspace,
+                    data_dirs,
+                    state,
+                })
+            }
         }
     }
 
@@ -67,9 +99,15 @@ impl ProcessContext {
     }
 
     /// Records the session's latest start reason, resent after a restart
-    /// with the state as it stands in the session.
-    pub(crate) fn set_reason(&mut self, reason: contract::events::ExtensionReason) {
-        self.reason = reason;
+    /// with the state as it stands in the session. A run outside a
+    /// session keeps reason `call`: nothing resends there.
+    pub(crate) fn set_reason(&mut self, reason: contract::events::SessionReason) {
+        if let ProcessRun::Session {
+            reason: current, ..
+        } = &mut self.run
+        {
+            *current = reason;
+        }
     }
 }
 

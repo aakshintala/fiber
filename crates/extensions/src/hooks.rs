@@ -505,11 +505,16 @@ impl SessionExtensions {
     }
 
     /// Records the session's latest `session_start` reason on the set
-    /// and every live process owner, before the hook chain runs.
+    /// and every live process owner, before the hook chain runs. A
+    /// reason `call` never starts a session, so it records nothing:
+    /// the set and its owners keep their last true reason together.
     pub(crate) fn record_start_reason(&self, reason: ExtensionReason) {
+        let Ok(session) = contract::events::SessionReason::try_from(reason) else {
+            return;
+        };
         *lock(&self.latest_reason) = reason;
         for live in &self.processes {
-            live.owner.update_reason(reason);
+            live.owner.update_reason(session);
         }
     }
 
@@ -1202,9 +1207,28 @@ impl SessionExtensions {
                 folded.insert(key, value);
             }
         }
+        // A session start never carries reason `call`: a contradictory
+        // start leaves the extension out instead of loading it.
+        let reason = match contract::events::SessionReason::try_from(start.reason) {
+            Ok(reason) => reason,
+            Err(_) => {
+                Self::process_failed(
+                    session,
+                    &name,
+                    &(
+                        contract::ErrorCode::ExtensionFailed,
+                        format!("{name}: a session start never carries reason `call`"),
+                    ),
+                    required,
+                );
+                return;
+            }
+        };
         let context = crate::process::context::ProcessContext {
-            session_id: Some(start.session_id.clone()),
-            reason: start.reason,
+            run: crate::process::context::ProcessRun::Session {
+                session_id: start.session_id.clone(),
+                reason,
+            },
             workspace: start.workspace.clone(),
             data_dirs,
             state: folded,

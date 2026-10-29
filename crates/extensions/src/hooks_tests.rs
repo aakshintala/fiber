@@ -4489,3 +4489,19 @@ fn start_provider_on_a_process_extension_starts_no_vm() {
         "a failed process provider start keeps no VM"
     );
 }
+
+/// Recording reason `call` changes nothing: `call` never starts a
+/// session, so the set keeps its last true reason instead of
+/// recording a contradictory one.
+#[test]
+fn recording_call_reason_changes_nothing() {
+    use contract::events::ExtensionReason;
+    let session = SessionExtensions::default();
+    assert_eq!(session.latest_reason(), ExtensionReason::New);
+    session.record_start_reason(ExtensionReason::Call);
+    assert_eq!(
+        session.latest_reason(),
+        ExtensionReason::New,
+        "a call reason records nothing"
+    );
+}

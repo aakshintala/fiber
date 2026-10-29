@@ -123,9 +123,7 @@ impl ProcessExtension {
         };
         // A run outside a session carries reason `call`: the driver
         // refuses without a session, and only the Call-case set runs.
-        if support::lock(&self.shared.context).reason == contract::events::ExtensionReason::Call
-            && call == "host.drive"
-        {
+        if support::lock(&self.shared.context).is_call() && call == "host.drive" {
             let (code, message) = calls::not_available(&call);
             self.answer_rejected(&id, code, message);
             return;
@@ -196,9 +194,7 @@ impl ProcessExtension {
         // Outside a session only the Call-case set runs: a state write,
         // a host.fs write or host.config rejects here, naming the call,
         // before decoding touches it.
-        if support::lock(&self.shared.context).reason == contract::events::ExtensionReason::Call
-            && !calls::sessionless_allowed(call)
-        {
+        if support::lock(&self.shared.context).is_call() && !calls::sessionless_allowed(call) {
             let (code, message) = calls::not_available(call);
             self.answer_rejected(&id, code, message);
             return;
@@ -375,6 +371,13 @@ impl ProcessExtension {
         }
     }
 
+    /// What one installed key runs as: the registration kind and name in
+    /// the Lua callback's words. One site shares the formatting across
+    /// every registration kind the spec below matches.
+    fn ran_by(kind: &str, name: &str) -> String {
+        format!("{kind} {name}")
+    }
+
     /// What one installed key dispatches as: its kind, what the callback
     /// runs as, and the timeout it counts against. `None` when the
     /// registry does not show the key, so the handler never installs.
@@ -392,7 +395,11 @@ impl ProcessExtension {
                 let tool = registry.tools().get(name)?;
                 let timeout = tool.declared.timeout;
                 if key == "run" {
-                    Some((requests::RequestKind::Tool, format!("tool {name}"), timeout))
+                    Some((
+                        requests::RequestKind::Tool,
+                        Self::ran_by("tool", name),
+                        timeout,
+                    ))
                 } else {
                     Some((
                         requests::RequestKind::Function,
@@ -406,7 +413,7 @@ impl ProcessExtension {
                 let timeout = hooks.last()?.timeout;
                 Some((
                     requests::RequestKind::Stream,
-                    format!("hook {name}"),
+                    Self::ran_by("hook", name),
                     timeout,
                 ))
             }
@@ -425,7 +432,7 @@ impl ProcessExtension {
                 let timeout = registry.commands().get(name)?.timeout;
                 Some((
                     requests::RequestKind::Stream,
-                    format!("command {name}"),
+                    Self::ran_by("command", name),
                     timeout,
                 ))
             }
@@ -433,7 +440,7 @@ impl ProcessExtension {
                 let (timeout, _) = registry.search().get(name)?;
                 Some((
                     requests::RequestKind::Function,
-                    format!("search {name}"),
+                    Self::ran_by("search", name),
                     *timeout,
                 ))
             }

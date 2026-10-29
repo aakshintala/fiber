@@ -223,7 +223,7 @@ impl ProcessExtension {
 
     /// Records the session's latest start reason in the hello context,
     /// resent after a restart with the state as it stands in the session.
-    pub(crate) fn update_reason(&self, reason: contract::events::ExtensionReason) {
+    pub(crate) fn update_reason(&self, reason: contract::events::SessionReason) {
         support::lock(&self.shared.context).set_reason(reason);
     }
 
@@ -768,9 +768,11 @@ pub(crate) fn envelope_line(
     kind: &str,
     payload: serde_json::Map<String, Value>,
 ) -> Vec<u8> {
-    let context = support::lock(&shared.context);
-    if context.reason == contract::events::ExtensionReason::Call {
-        let line = line::ProcessCallLine {
+    // The run decides the line: a sessionless run never carries a
+    // session id, so no session line can leave without one.
+    let run = support::lock(&shared.context).run.clone();
+    match run {
+        context::ProcessRun::Call => line::ProcessCallLine {
             kind: kind.to_owned(),
             ts: contract::clock::wall_ms(shared.clock.wall()),
             schema_version: contract::SCHEMA_VERSION,
@@ -778,44 +780,22 @@ pub(crate) fn envelope_line(
             action_id: None,
             seq: None,
             payload,
-        };
-        return line.to_vec();
-    }
-    let Some(session_id) = context.session_id.clone() else {
-        // No session line leaves without an id: a sessionless context
-        // never reaches here, so this rejects instead of mislabeling.
-        let rejected = contract::events::CommandRejected {
-            command_id: None,
-            code: contract::ErrorCode::InvalidArguments,
-            message: "the session context carries no session id".to_owned(),
-        };
-        let payload = serde_json::to_value(rejected)
-            .ok()
-            .and_then(|payload| payload.as_object().cloned())
-            .unwrap_or_default();
-        return line::ProcessCallLine {
-            kind: "command_rejected".to_owned(),
-            ts: contract::clock::wall_ms(shared.clock.wall()),
-            schema_version: contract::SCHEMA_VERSION,
-            turn_id: None,
-            action_id: None,
-            seq: None,
-            payload,
         }
-        .to_vec();
-    };
-    drop(context);
-    let envelope = contract::Envelope {
-        kind: kind.to_owned(),
-        session_id,
-        ts: contract::clock::wall_ms(shared.clock.wall()),
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload,
-    };
-    serde_json::to_vec(&envelope).unwrap_or_default()
+        .to_vec(),
+        context::ProcessRun::Session { session_id, .. } => {
+            let envelope = contract::Envelope {
+                kind: kind.to_owned(),
+                session_id,
+                ts: contract::clock::wall_ms(shared.clock.wall()),
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: None,
+                seq: None,
+                payload,
+            };
+            serde_json::to_vec(&envelope).unwrap_or_default()
+        }
+    }
 }
 
 /// Answers a driven command accepted, on the pump's thread.

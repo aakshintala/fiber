@@ -243,8 +243,10 @@ fn package_undeclared_provider_fails_the_package() {
 /// package directory as its workspace and home, and empty folded state.
 fn process_context(dir: &fakes::TempDir) -> super::process::context::ProcessContext {
     super::process::context::ProcessContext {
-        session_id: Some(contract::SessionId("s_test".into())),
-        reason: contract::events::ExtensionReason::New,
+        run: super::process::context::ProcessRun::Session {
+            session_id: contract::SessionId("s_test".into()),
+            reason: contract::events::SessionReason::New,
+        },
         workspace: dir.path().to_path_buf(),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: dir.path().join("machine").display().to_string(),
@@ -495,4 +497,30 @@ fn load_process_without_a_program_fails_a_required_extension() {
         panic!("a required extension loads without its program");
     };
     assert_eq!(code, contract::ErrorCode::IoFailed);
+}
+
+/// A sessionless start whose workspace keys to no valid project fails
+/// closed instead of writing another project's data: the child never
+/// spawns, so there is nothing to reap.
+#[test]
+fn sessionless_start_without_a_valid_project_key_fails_closed() {
+    let dir = package_dir(json!({"process": {
+        "program": "fiber-definitely-missing-program",
+        "exit_timeout_ms": 1000,
+    }}));
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let mut host = test_host(&dir);
+    host.cwd = std::path::PathBuf::new();
+    let outcome = Package::load_process_provider_with(
+        PackageOptions {
+            dir: dir.path().to_path_buf(),
+            clock,
+        },
+        super::package::ProcessProviderMode::Sessionless,
+        Some(host),
+    );
+    let Err((code, _)) = outcome else {
+        panic!("an unkeyable workspace fails the sessionless start");
+    };
+    assert_eq!(code, contract::ErrorCode::InvalidArguments);
 }
