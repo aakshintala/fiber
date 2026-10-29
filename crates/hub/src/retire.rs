@@ -472,10 +472,11 @@ pub(crate) fn drain(
             .map(|(id, _)| (session.to_owned(), id.clone()))
             .collect();
         if present && !client_gone {
-            // Drop before answering, so the client's answer implies the
-            // queue already cleared: `refuse` writes first and drops
-            // after, which races the test's immediate queue check.
-            order.drop_ids(&ids);
+            // The refusal stays queued until its answer is written, so a
+            // later command's acknowledgement on another relay cannot be
+            // forwarded first (`docs/invocation.md:1113-1118`,
+            // "Commands keep their order"): `refuse` writes the answer
+            // before `order.done` clears it.
             for (id, _) in partial {
                 refuse(
                     writer,
@@ -487,10 +488,6 @@ pub(crate) fn drain(
                     PARTIAL_WRITE_MAY_HAVE_RUN,
                 );
             }
-            // The refusal above answers first and drops the queue after,
-            // so an explicit drop keeps the id from lingering when the
-            // answer already left.
-            order.drop_ids(&ids);
         } else {
             order.drop_ids(&ids);
         }
