@@ -1072,3 +1072,229 @@ fn a_cut_band_mark_spins_while_its_dot_survives() {
         clock.origin().checked_add(Duration::from_millis(120))
     );
 }
+
+/// A `working_line` renderer recording its inputs: the folded lines it
+/// returns with the frame each animated call carries.
+#[derive(Debug)]
+struct RecordingRenderer {
+    lines: Vec<Vec<crate::ext::RawSpan>>,
+    interval: Option<Duration>,
+    inputs: std::cell::RefCell<Vec<crate::ext::WorkingLine>>,
+    frames: std::cell::RefCell<Vec<u64>>,
+    nows: std::cell::RefCell<Vec<u64>>,
+}
+
+impl RecordingRenderer {
+    fn lines(texts: &[&str], interval: Option<Duration>) -> Self {
+        Self {
+            lines: texts
+                .iter()
+                .map(|text| {
+                    vec![crate::ext::RawSpan {
+                        text: (*text).to_owned(),
+                        fg: None,
+                        bg: None,
+                        bold: false,
+                        dim: false,
+                        italic: false,
+                        underline: false,
+                        link: None,
+                        click: None,
+                    }]
+                })
+                .collect(),
+            interval,
+            inputs: std::cell::RefCell::new(Vec::new()),
+            frames: std::cell::RefCell::new(Vec::new()),
+            nows: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    fn record(&self, input: &crate::ext::Input<'_>) {
+        let crate::ext::Input::WorkingLine(line) = input else {
+            panic!("a working-line input, got {input:?}");
+        };
+        self.inputs.borrow_mut().push(line.clone());
+    }
+}
+
+impl crate::ext::Renderer for RecordingRenderer {
+    fn name(&self) -> &str {
+        "test"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "working_line"
+    }
+
+    fn animate_interval(&self, _ctx: &crate::ext::SessionCtx, _slot: &str) -> Option<Duration> {
+        self.interval
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        self.record(input);
+        crate::ext::Decision::Draw {
+            extension: "test".into(),
+            lines: self.lines.clone(),
+        }
+    }
+
+    fn render_animated(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        _width: u16,
+        frame: u64,
+        now: u64,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> (crate::ext::Decision, bool) {
+        self.record(input);
+        self.frames.borrow_mut().push(frame);
+        self.nows.borrow_mut().push(now);
+        (
+            crate::ext::Decision::Draw {
+                extension: "test".into(),
+                lines: self.lines.clone(),
+            },
+            true,
+        )
+    }
+}
+
+/// Draws `app`'s working line alone in `area`: the rows' text and the
+/// click targets it leaves.
+fn draw_line(app: &App, width: u16, height: u16) -> (String, Vec<crate::mouse::Target>) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    super::draw(app, area, &mut buf, &mut bottom, &mut targets);
+    (text(&buf), targets)
+}
+
+#[test]
+fn a_replacement_keeps_an_interrupt_target_on_every_line() {
+    let (mut app, clock) = home_app(WALL - 674_000);
+    app.set_now(clock.origin(), WALL);
+    let fake = std::rc::Rc::new(RecordingRenderer::lines(
+        &["custom one", "custom two"],
+        None,
+    ));
+    app.install_renderer(fake.clone());
+    let (shown, targets) = draw_line(&app, 80, 2);
+    assert!(shown.contains("custom one"), "{shown}");
+    assert!(shown.contains("custom two"), "{shown}");
+    let interrupts: Vec<_> = targets
+        .iter()
+        .filter(|target| target.id == crate::mouse::TargetId::Interrupt)
+        .collect();
+    // One interrupt target over each replacement line's full width.
+    assert_eq!(interrupts.len(), 2, "{targets:?}");
+    for (dy, target) in interrupts.iter().enumerate() {
+        assert_eq!(
+            (target.rect.x, target.rect.width, target.rect.height),
+            (0, 80, 1),
+            "{target:?}"
+        );
+        assert_eq!(usize::from(target.rect.y), dy, "{target:?}");
+    }
+}
+
+#[test]
+fn an_empty_replacement_hides_the_line() {
+    let (mut app, clock) = home_app(WALL - 674_000);
+    app.set_now(clock.origin(), WALL);
+    let fake = std::rc::Rc::new(RecordingRenderer::lines(&[], None));
+    app.install_renderer(fake);
+    // No rows reserved and none drawn, and no target left behind.
+    assert_eq!(super::count(&app, 80), 0);
+    let (shown, targets) = draw_line(&app, 80, 1);
+    assert!(!shown.contains("Working"), "{shown}");
+    assert!(
+        targets
+            .iter()
+            .all(|target| target.id != crate::mouse::TargetId::Interrupt),
+        "{targets:?}"
+    );
+    // The layout drops the hidden line's row: without a renderer the
+    // same app reserves one row more.
+    let (mut plain, plain_clock) = home_app(WALL - 674_000);
+    plain.set_now(plain_clock.origin(), WALL);
+    assert_eq!(app.below_rows() + 1, plain.below_rows());
+}
+
+#[test]
+fn the_fold_matches_the_turn_cards_prompts_when_narrowed() {
+    for width in [80u16, 20] {
+        let (mut app, clock) = home_app(WALL - 674_000);
+        app.set_now(clock.origin(), WALL);
+        let fake = std::rc::Rc::new(RecordingRenderer::lines(&["custom"], None));
+        app.install_renderer(fake.clone());
+        let (shown, _) = draw_line(&app, width, 1);
+        assert!(shown.contains("custom"), "{shown}");
+        // The input carries the turn card's start, however narrow.
+        let inputs = fake.inputs.borrow();
+        assert_eq!(inputs.len(), 1, "one folded input");
+        assert_eq!(inputs[0].started, Some(WALL - 674_000));
+        assert!(inputs[0].retry.is_none());
+    }
+}
+
+#[test]
+fn the_fold_maps_the_retry_schedule() {
+    let (mut app, clock) = home_app(WALL);
+    app.on_line(session_line("step_started", serde_json::json!({}), None));
+    app.on_line(session_line(
+        "assistant_message_started",
+        serde_json::json!({}),
+        Some("a_m"),
+    ));
+    app.on_line(session_line_at(
+        "retry_scheduled",
+        serde_json::json!({"code": "rate_limited", "attempt": 1,
+            "delay_ms": 4_000, "last_attempt": 4}),
+        Some("a_m"),
+        WALL,
+    ));
+    app.set_now(clock.origin(), WALL);
+    let fake = std::rc::Rc::new(RecordingRenderer::lines(&["custom"], None));
+    app.install_renderer(fake.clone());
+    let (shown, _) = draw_line(&app, 80, 1);
+    assert!(shown.contains("custom"), "{shown}");
+    let inputs = fake.inputs.borrow();
+    assert_eq!(inputs.len(), 1, "one folded input");
+    assert_eq!(inputs[0].started, Some(WALL));
+    let retry = inputs[0].retry.as_ref().expect("a pending retry");
+    assert!(matches!(retry.code, contract::ErrorCode::RateLimited));
+    // The attempt about to be made counts the call that failed, as the
+    // built-in's `attempt 2 of 4` does.
+    assert_eq!(retry.attempt, 2);
+    assert_eq!(retry.last_attempt, 4);
+    assert_eq!(retry.delay_ms, 4_000);
+    assert_eq!(retry.ts, WALL);
+}
+
+#[test]
+fn an_animated_replacement_records_frame_and_now() {
+    let (mut app, clock) = home_app(WALL - 674_000);
+    app.set_now(clock.origin(), WALL);
+    let fake = std::rc::Rc::new(RecordingRenderer::lines(
+        &["custom"],
+        Some(Duration::from_millis(500)),
+    ));
+    app.install_renderer(fake.clone());
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    assert!(text(&buf).contains("custom"), "{}", text(&buf));
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(fake.nows.borrow().clone(), vec![WALL]);
+}
