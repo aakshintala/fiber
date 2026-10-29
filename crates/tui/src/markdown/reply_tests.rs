@@ -718,3 +718,8 @@ fn table_counts_match_drawn_rows_at_fit_boundaries() {
         "| left | right |\n|---|---|\n| a longer cell | 123456789 |\n| x | 界 |",
     );
 }
+
+#[test]
+fn empty_code_lines_match_drawn_rows_at_fit_boundaries() {
+    assert_count_rows_match_drawn_rows("```\n\n```");
+}

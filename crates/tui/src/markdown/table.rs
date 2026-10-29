@@ -96,7 +96,7 @@ impl Table {
                             .unwrap_or_default()
                             .iter()
                             .fold(0usize, |sum, width| sum.saturating_add(*width));
-                        over_width |= width > 0 && piece_width > *column_width;
+                        over_width |= piece_width > *column_width;
                         cell_rows = cell_rows.saturating_add(1);
                     },
                 );
