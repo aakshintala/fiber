@@ -439,6 +439,7 @@ fn git_merge_base_substitution_refusals_execute() {
         "git diff \"x\"$(git merge-base a b)..HEAD",
         "git diff 'x'$(git merge-base a b)..HEAD",
         "git diff $(git merge-base a b)..HEAD~1",
+        "git diff $(git merge-base a b)..HEAD:foo",
         "git diff $(git merge-base a b)....HEAD",
         "git diff $(git merge-base a b)..",
         "git diff ..$(git merge-base a b)",
