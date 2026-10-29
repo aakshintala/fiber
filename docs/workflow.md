@@ -157,8 +157,8 @@ request body names the two failed fixes and gives the assumption, the test's
 command and its result. If the assumption is false, the next fix starts from
 what the test showed. If it holds, the cause is elsewhere.
 
-A flaky test's fixes count as fixes to one check, whatever issue each one
-closed: the second flake fix to the same test triggers this rule.
+A test file's flake fixes count as fixes to one check, whatever issue each
+one closed: the second flake fix to the same file triggers this rule.
 
 ## Size
 
