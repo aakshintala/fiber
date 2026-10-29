@@ -48,12 +48,13 @@ fn run_details_call(shell: Shell, arguments: Map<String, Value>) -> contract::to
 fn nullable_optional_arguments_parse_as_absent() {
     let dir = fakes::TempDir::new("fiber-shell-nullable");
     let arguments = fakes::tool_args(json!({"command": "ls", "workdir": null, "timeout_ms": null,
-        "run_in_background": null, "tty": null, "monitor": null}));
+        "run_in_background": null, "tty": null, "monitor": null, "unconfined": null}));
     let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
     assert_eq!(parsed.command, "ls");
     assert_eq!(parsed.mode, Mode::Foreground);
     assert_eq!(parsed.workdir, dir.path());
     assert_eq!(parsed.timeout_ms, 600_000);
+    assert!(!parsed.unconfined);
     let tool = Shell::new(dir.path().to_path_buf(), FakeClock::new());
     assert!(tool.effects(&arguments).is_ok());
     let schema = tool.definition().input_schema;
@@ -65,7 +66,8 @@ fn nullable_optional_arguments_parse_as_absent() {
             "timeout_ms",
             "run_in_background",
             "tty",
-            "monitor"
+            "monitor",
+            "unconfined"
         ])
     );
     for (key, kind) in [
@@ -74,9 +76,14 @@ fn nullable_optional_arguments_parse_as_absent() {
         ("run_in_background", "boolean"),
         ("tty", "boolean"),
         ("monitor", "boolean"),
+        ("unconfined", "boolean"),
     ] {
         assert_eq!(schema["properties"][key]["type"], json!([kind, "null"]));
     }
+    assert_eq!(
+        schema["properties"]["unconfined"]["description"],
+        json!("Leave the OS sandbox for this call. Reviewed exactly as with the sandbox off.")
+    );
     assert!(schema["properties"].get("deadline_ms").is_none());
     assert_eq!(
         schema["properties"]["timeout_ms"]["description"],
@@ -154,6 +161,17 @@ fn nullable_optional_arguments_parse_as_absent() {
         let parsed = parse(&args, dir.path(), 600_000).unwrap();
         assert_eq!(parsed.mode, Mode::Monitor);
         assert_eq!(parsed.timeout_ms, limit);
+    }
+    // `unconfined` defaults off: only a literal true leaves the sandbox.
+    for (given, expected) in [
+        (Value::Null, false),
+        (json!(false), false),
+        (json!(true), true),
+    ] {
+        let mut args = fakes::tool_args(json!({"command": "ls"}));
+        args.extend(json!({"unconfined": given}).as_object().unwrap().clone());
+        let parsed = parse(&args, dir.path(), 600_000).unwrap();
+        assert_eq!(parsed.unconfined, expected, "unconfined: {given}");
     }
 }
 
@@ -1280,6 +1298,86 @@ fn a_configured_direct_run_shares_the_sandbox_selection() {
     let output = shell.run(&args("echo hi"), &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), None);
     assert!(text(&output).starts_with("hi"), "a direct echo succeeds");
+}
+
+#[test]
+fn unconfined_true_declares_not_confined_with_sandbox_on() {
+    let dir = fakes::TempDir::new("fiber-shell-effects-unconfined");
+    let workspace = dir.path().to_path_buf();
+    let shell =
+        Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox_handle_for_test("unconfined"));
+    // The control still confines: the flag below is what leaves the sandbox.
+    let confined = effects(&shell, "echo hi");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    assert!(confined.declared.confined);
+    let mut arguments = args("echo hi");
+    arguments.insert("unconfined".into(), json!(true));
+    let declared = shell.effects(&arguments).unwrap();
+    assert!(
+        !declared.declared.confined,
+        "unconfined:true is reviewed as with the sandbox off"
+    );
+}
+
+#[test]
+fn omitted_null_and_false_unconfined_follow_the_session_setting() {
+    let dir = fakes::TempDir::new("fiber-shell-effects-unconfined-default");
+    let workspace = dir.path().to_path_buf();
+    let shell = Shell::new(workspace, FakeClock::new())
+        .with_sandbox(sandbox_handle_for_test("unconfined-default"));
+    for given in [Value::Null, json!(false)] {
+        let mut arguments = args("echo hi");
+        arguments.insert("unconfined".into(), given.clone());
+        let declared = shell.effects(&arguments).unwrap();
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        assert!(
+            declared.declared.confined,
+            "unconfined:{given} follows the session setting"
+        );
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        assert!(!declared.declared.confined);
+    }
+    // Without the sandbox nothing confines, whatever the flag says short of
+    // true.
+    let plain = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let mut arguments = args("echo hi");
+    arguments.insert("unconfined".into(), json!(false));
+    assert!(!plain.effects(&arguments).unwrap().declared.confined);
+}
+
+#[test]
+fn non_boolean_unconfined_is_invalid_arguments() {
+    let dir = fakes::TempDir::new("fiber-shell-unconfined-mistyped");
+    for given in [json!("true"), json!(1), json!({})] {
+        let mut arguments = args("echo hi");
+        arguments.insert("unconfined".into(), given.clone());
+        let error = parse(&arguments, dir.path(), 600_000)
+            .err()
+            .unwrap_or_else(|| panic!("unconfined:{given} parses"));
+        assert!(
+            matches!(error, ShellError::Arguments(_)),
+            "unconfined:{given} never reaches a spawn: {error}"
+        );
+        assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    }
+}
+
+#[test]
+fn a_configured_direct_run_with_unconfined_true_runs_unconfined() {
+    let dir = fakes::TempDir::new("fiber-shell-run-unconfined");
+    let workspace = dir.path().to_path_buf();
+    let shell = Shell::new(workspace, FakeClock::new())
+        .with_sandbox(sandbox_handle_for_test("run-unconfined"));
+    let mut arguments = args("echo hi");
+    arguments.insert("unconfined".into(), json!(true));
+    let declared = shell.effects(&arguments).unwrap();
+    assert!(!declared.declared.confined);
+    let output = run_details_call(shell, arguments);
+    assert_eq!(code(&output), None);
+    assert!(
+        text(&output).starts_with("hi"),
+        "an unconfined echo succeeds"
+    );
 }
 
 #[cfg(target_os = "linux")]
