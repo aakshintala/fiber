@@ -3739,6 +3739,10 @@ fn a_cut_command_write_is_indeterminate_on_first_attach() {
         "The connection to the session failed while the command was being sent; the command may have run.",
         "{line}"
     );
+    crate::testkit::await_true("the refusal to leave AckOrder", {
+        let order = order.clone();
+        move || order.session_for("c_1").is_none()
+    });
     assert_eq!(order.session_for("c_1"), None, "the answer left the queue");
     // One resume per session, and none for the cut command's retry: the
     // refused command is never resumed again.
