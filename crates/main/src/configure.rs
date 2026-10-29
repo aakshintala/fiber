@@ -103,6 +103,15 @@ fn from_failure(failure: Failure) -> ConfigureError {
     }
 }
 
+/// One confirmed entry as the configuration save takes it: the command
+/// path with the flag names it may take, global first beside the notes.
+fn entry_flags(entry: tui::ReadOnlyEntry) -> config::ReadOnlyFlags {
+    config::ReadOnlyFlags {
+        command: entry.command,
+        flags: entry.flags,
+    }
+}
+
 /// A configuration failure as the views show it.
 fn from_config(error: config::ConfigError) -> ConfigureError {
     ConfigureError {
@@ -388,10 +397,12 @@ impl tui::Configure for Seam {
             global.map(|write| config::NotesWrite {
                 version: write.version,
                 text: write.text,
+                read_only: write.read_only.into_iter().map(entry_flags).collect(),
             }),
             project.map(|write| config::NotesWrite {
                 version: write.version,
                 text: write.text,
+                read_only: write.read_only.into_iter().map(entry_flags).collect(),
             }),
         )
         .map_err(from_config)?;

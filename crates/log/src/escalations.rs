@@ -4,6 +4,9 @@
 //! unreadable log gives what was read before the failure.
 
 mod place;
+mod reviewer_shell_calls;
+
+pub use reviewer_shell_calls::{ShellCall, reviewer_shell_calls};
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};

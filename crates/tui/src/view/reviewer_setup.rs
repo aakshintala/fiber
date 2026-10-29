@@ -56,7 +56,7 @@ fn paragraph(text: &str, inner: usize, style: Style) -> Vec<Row> {
         .collect()
 }
 
-/// The topic line: `Topic n of 5 · <heading name>`.
+/// The topic line: `Topic n of 6 · <heading name>`.
 fn topic_row(setup: &Setup) -> Row {
     let name = setup.topic().heading().trim_start_matches("### ");
     dim_row(&format!(
@@ -64,6 +64,41 @@ fn topic_row(setup: &Setup) -> Row {
         setup.number(),
         contract::notes::Topic::ALL.len()
     ))
+}
+
+/// What the lines header says on the read-only topic instead of the
+/// question: entries are trusted, so the person sees the risk up front.
+const RISK_CAPTION: &str =
+    "An entry is trusted: a command on it that writes after all writes without review.";
+
+/// One dim row per withheld subject: its subject, its count and the one
+/// reason it gets no entry. No checkbox, layer key, cite, save or diff
+/// row: the row is evidence context, not a proposal.
+fn context_rows(context: &[contract::notes::AllowsTally], inner: usize) -> Vec<Row> {
+    let mut rows = Vec::new();
+    for tally in context {
+        rows.extend(paragraph(
+            &format!("{} · {} · {}", tally.subject(), tally.count(), tally.text()),
+            inner,
+            dim(),
+        ));
+    }
+    rows
+}
+
+/// The persistent proposal notice, when the read-only request never gave
+/// lines: exactly one dim row naming why.
+fn notice_row(setup: &Setup, inner: usize) -> Vec<Row> {
+    setup
+        .proposal_notice()
+        .map(|message| {
+            paragraph(
+                &format!("Read-only commands: not proposed: {message}"),
+                inner,
+                dim(),
+            )
+        })
+        .unwrap_or_default()
 }
 
 /// The overlay the setup draws at `inner` columns in `height` rows.
@@ -242,13 +277,22 @@ fn lines(setup: &Setup, inner: usize, capacity: usize) -> (Vec<Row>, Row) {
         .any(|line| !line.earlier && line.state == LineState::Open);
 
     // The question reads while the person is still deciding and no earlier
-    // line stands first.
+    // line stands first; the read-only topic shows the risk caption
+    // instead of a question it never asks.
     let mut header = vec![topic_row(setup)];
-    if !has_earlier && any_open {
+    if setup.topic() == contract::notes::Topic::ReadOnlyCommands {
+        header.extend(paragraph(RISK_CAPTION, inner, Style::new()));
+    } else if !has_earlier && any_open {
         header.extend(paragraph(setup.topic().question(), inner, Style::new()));
     }
+    header.extend(notice_row(setup, inner));
+    if let Some(message) = setup.error() {
+        header.extend(paragraph(message, inner, dim()));
+    }
+    let context = context_rows(&setup.evidence_context(), inner);
     if items.is_empty() {
         header.push(dim_row("No lines for this topic"));
+        header.extend(context);
         return (header, legend);
     }
 
@@ -271,7 +315,14 @@ fn lines(setup: &Setup, inner: usize, capacity: usize) -> (Vec<Row>, Row) {
             }
         }
         if line.focused && line.state == LineState::Struck {
-            rows.push(dim_row("struck — kept out of the notes"));
+            // Entries never enter the notes, so striking one only skips
+            // its save.
+            let struck = if setup.topic() == contract::notes::Topic::ReadOnlyCommands {
+                "struck — will not be saved"
+            } else {
+                "struck — kept out of the notes"
+            };
+            rows.push(dim_row(struck));
         }
         let own = rows.len();
         rows.extend(line_rows(line, inner));
@@ -332,6 +383,7 @@ fn lines(setup: &Setup, inner: usize, capacity: usize) -> (Vec<Row>, Row) {
         left = left.saturating_sub(rows.len());
         body.extend(rows);
     }
+    body.extend(context);
     (body, legend)
 }
 
@@ -375,7 +427,8 @@ fn diff_rows_of(rows: &[DiffRow], inner: usize) -> Vec<Row> {
 }
 
 /// Every row the diff screen has: each layer's file and its changed
-/// topics, then the error row and the reload offer.
+/// topics, then the proposed config sections, the notice and error rows,
+/// and the reload offer.
 fn diff_all(setup: &Setup, inner: usize) -> Vec<Row> {
     let mut rows = Vec::new();
     for (at, layer) in setup.layers().into_iter().enumerate() {
@@ -398,7 +451,32 @@ fn diff_all(setup: &Setup, inner: usize) -> Vec<Row> {
             rows.extend(diff_rows_of(layer.rows, inner));
         }
     }
+    for section in setup.config_sections().into_iter() {
+        if section.entries.is_empty() {
+            continue;
+        }
+        rows.push(row(Vec::new()));
+        rows.extend(paragraph(
+            &format!("shell.read_only · {}", section.file.display()),
+            inner,
+            dim(),
+        ));
+        rows.extend(diff_rows_of(
+            &section
+                .entries
+                .iter()
+                .map(|entry| {
+                    DiffRow::Added(contract::notes::render_read_only_entry(
+                        &entry.command,
+                        &entry.flags,
+                    ))
+                })
+                .collect::<Vec<_>>(),
+            inner,
+        ));
+    }
     rows.push(row(Vec::new()));
+    rows.extend(notice_row(setup, inner));
     if let Some(message) = setup.error() {
         rows.extend(paragraph(message, inner, dim()));
     }

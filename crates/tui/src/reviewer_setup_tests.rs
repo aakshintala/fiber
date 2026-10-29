@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use contract::ErrorCode;
-use contract::notes::{Evidence, ProposeNotesArgs, Proposed, SessionTally, Topic};
+use contract::notes::{AllowsTally, Evidence, ProposeNotesArgs, Proposed, SessionTally, Topic};
 use contract::shapes::Failure;
 
 use super::template::{DiffRow, NotesLayer};
@@ -46,6 +46,46 @@ fn answer(text: &str) -> Evidence {
 
 fn session(prefix: &str, count: u32, here: u32) -> Evidence {
     Evidence::Session(SessionTally::new(prefix.to_string(), count, here).expect("a valid tally"))
+}
+
+fn allows(prefix: &str, subject: &str, count: u32) -> Evidence {
+    Evidence::Allows(
+        AllowsTally::new(prefix.to_string(), subject.to_string(), count, count)
+            .expect("a valid tally"),
+    )
+}
+
+fn withheld(_prefix: &str, subject: &str, count: u32, reason: &str) -> Evidence {
+    // The loop's ack carries the one display reason as the tally text,
+    // with no prefix: build the evidence the way the loop does.
+    Evidence::Allows(
+        AllowsTally::from_wire(subject.to_string(), count, count, reason.to_string())
+            .expect("a valid tally"),
+    )
+}
+
+fn entry(text: &str, cites: &[usize]) -> Proposed {
+    Proposed::new(text.to_string(), cites.to_vec()).expect("a cited entry")
+}
+
+/// Walks the five notes topics to the read-only wait, unanswered: the
+/// fifth topic's lines stay decided.
+fn read_only_waiting() -> Setup {
+    let mut setup = Setup::open(notes("", ""));
+    for _ in 0..4 {
+        skip(&mut setup);
+    }
+    ask(&mut setup, &[files("f")], &[line("kept", &[0])]);
+    // Deciding the last notes line moves to the read-only topic, which
+    // proposes at once with no answer and no earlier lines.
+    let Act::Propose(args) = press(&mut setup, Key::Enter) else {
+        panic!("the read-only topic proposes itself");
+    };
+    assert_eq!(args.topic, Topic::ReadOnlyCommands);
+    assert_eq!(args.answer, None);
+    assert!(args.earlier.is_empty());
+    assert_eq!(setup.screen(), Screen::Waiting);
+    setup
 }
 
 fn line(text: &str, cites: &[usize]) -> Proposed {
@@ -93,10 +133,30 @@ fn first_lines(notes: ReviewerNotes, evidence: &[Evidence], proposed: &[Proposed
     setup
 }
 
-/// Gets past the current topic with no lines.
+/// Gets past the current topic with no lines. Leaving the last notes
+/// topic auto-proposes the model-free one, whose wait is answered at
+/// once, so every path ends past one topic with no act.
 fn skip(setup: &mut Setup) {
-    ask(setup, &[], &[]);
-    assert_eq!(press(setup, Key::Enter), Act::None);
+    if setup.screen() != Screen::Waiting {
+        ask(setup, &[], &[]);
+    }
+    match press(setup, Key::Enter) {
+        Act::None => {}
+        Act::Propose(args) => {
+            assert_eq!(args.topic, Topic::ReadOnlyCommands);
+            assert_eq!(args.answer, None);
+            assert!(args.earlier.is_empty());
+            assert_eq!(setup.screen(), Screen::Waiting);
+            setup.proposed(&[], &[], None);
+            assert_eq!(press(setup, Key::Enter), Act::None);
+        }
+        act @ (Act::Abandon
+        | Act::Save { .. }
+        | Act::Reread
+        | Act::Reload
+        | Act::Close
+        | Act::Unchanged) => panic!("leaving a topic sends nothing: {act:?}"),
+    }
 }
 
 fn texts(setup: &Setup) -> Vec<String> {
@@ -151,9 +211,20 @@ fn opening_shows_topic_one_with_both_layers_read() {
 
 #[test]
 fn the_topics_run_in_the_order_the_contract_gives_to_the_diff() {
+    // The proposal order is the bullets' order (docs/permissions.md,
+    // "Setting up the notes": "It proposes lines, one topic at a time, in
+    // the order of the bullets above").
     let mut setup = Setup::open(notes("", ""));
     let mut seen = Vec::new();
-    for _ in Topic::ALL {
+    for topic in Topic::ALL {
+        if topic == Topic::ReadOnlyCommands {
+            // Leaving the last notes topic walked the model-free one
+            // with it: the diff is open with it current.
+            assert_eq!(setup.screen(), Screen::Diff);
+            seen.push(setup.topic());
+            assert_eq!(setup.number(), seen.len());
+            break;
+        }
         assert_eq!(setup.screen(), Screen::Question);
         seen.push(setup.topic());
         assert_eq!(setup.number(), seen.len());
@@ -641,13 +712,24 @@ fn a_wrap_skips_a_decided_line_above() {
 }
 
 #[test]
-fn after_topic_five_the_diff_opens() {
+fn entering_the_last_read_only_topic_proposes_at_once_and_then_the_diff_opens() {
     let mut setup = Setup::open(notes("", ""));
     for _ in 0..4 {
         skip(&mut setup);
     }
     assert_eq!(setup.topic(), Topic::Never);
     ask(&mut setup, &[files("f")], &[line("a", &[0])]);
+    // Deciding the last notes line auto-proposes the model-free topic:
+    // no question, no answer, no earlier lines.
+    let Act::Propose(args) = press(&mut setup, Key::Enter) else {
+        panic!("the read-only topic proposes itself");
+    };
+    assert_eq!(args.topic, Topic::ReadOnlyCommands);
+    assert_eq!(args.answer, None);
+    assert!(args.earlier.is_empty());
+    assert_eq!(setup.screen(), Screen::Waiting);
+    setup.proposed(&[], &[], None);
+    assert_eq!(setup.screen(), Screen::Lines);
     assert_eq!(press(&mut setup, Key::Enter), Act::None);
     assert_eq!(setup.screen(), Screen::Diff);
 }
@@ -835,6 +917,7 @@ fn only_a_changed_layer_is_sent_with_the_version_it_read() {
         Some(NotesWrite {
             version: "global-v1".to_string(),
             text: "### Source control\n- g\n- my host\n".to_string(),
+            read_only: Vec::new(),
         })
     );
     assert_eq!(
@@ -842,6 +925,7 @@ fn only_a_changed_layer_is_sent_with_the_version_it_read() {
         Some(NotesWrite {
             version: "project-v1".to_string(),
             text: "### Source control\n- acme repo\n".to_string(),
+            read_only: Vec::new(),
         })
     );
 
@@ -1264,6 +1348,12 @@ fn the_save_applies_decisions_from_every_topic_in_topic_order() {
     for topic_lines in ["one", "two", "three", "four", "five"] {
         skip_current_question_with_lines(&mut setup, &[files("f")], &[line(topic_lines, &[0])]);
     }
+    // Leaving the last notes topic auto-proposed the model-free one,
+    // which is answered with nothing: it owns no notes text.
+    assert_eq!(setup.topic(), Topic::ReadOnlyCommands);
+    assert_eq!(setup.screen(), Screen::Waiting);
+    setup.proposed(&[], &[], None);
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
     assert_eq!(setup.screen(), Screen::Diff);
     let (_, project) = save_of(press(&mut setup, Key::Enter));
     assert_eq!(
@@ -1273,4 +1363,424 @@ fn the_save_applies_decisions_from_every_topic_in_topic_order() {
                 .to_string()
         )
     );
+}
+
+// ------------------------------------------------- the read-only topic
+
+/// Answers the read-only wait with `evidence` proposed as `proposed`,
+/// leaving decided rows on the lines screen.
+fn answer_read_only(setup: &mut Setup, evidence: &[Evidence], proposed: &[Proposed]) {
+    setup.proposed(evidence, proposed, None);
+    assert_eq!(setup.screen(), Screen::Lines);
+}
+
+#[test]
+fn read_only_esc_while_waiting_abandons_back_to_the_previous_topics_lines() {
+    let mut setup = read_only_waiting();
+    assert_eq!(press(&mut setup, Key::Esc), Act::Abandon);
+    assert_eq!(setup.topic(), Topic::Never);
+    assert_eq!(setup.screen(), Screen::Lines);
+    assert_eq!(texts(&setup), vec!["kept".to_string()]);
+}
+
+#[test]
+fn read_only_lines_esc_backs_to_the_previous_topics_lines() {
+    let mut setup = read_only_waiting();
+    answer_read_only(
+        &mut setup,
+        &[allows("acme-cli", "acme-cli query --json", 5)],
+        &[entry(
+            "shell.read_only.\"acme-cli query\".flags = [\"--json\"]",
+            &[0],
+        )],
+    );
+    assert_eq!(press(&mut setup, Key::Esc), Act::None);
+    assert_eq!(setup.topic(), Topic::Never);
+    assert_eq!(setup.screen(), Screen::Lines);
+    assert_eq!(texts(&setup), vec!["kept".to_string()]);
+}
+
+#[test]
+fn read_only_refused_skips_to_the_diff_with_a_notice() {
+    let mut setup = read_only_waiting();
+    setup.refused("the hub is busy");
+    assert_eq!(setup.topic(), Topic::ReadOnlyCommands);
+    assert_eq!(setup.screen(), Screen::Diff);
+    assert_eq!(setup.proposal_notice(), Some("the hub is busy"));
+    assert_eq!(setup.error(), None);
+    // Earlier decisions survive the skip: the fifth topic's kept line
+    // reaches the diff, and Enter still saves.
+    let (_, project) = save_of(press(&mut setup, Key::Enter));
+    assert_eq!(
+        project.map(|w| w.text),
+        Some("### What must never happen\n- kept\n".to_string())
+    );
+}
+
+#[test]
+fn read_only_lost_skips_to_the_diff_with_a_notice() {
+    let mut setup = read_only_waiting();
+    setup.lost();
+    assert_eq!(setup.topic(), Topic::ReadOnlyCommands);
+    assert_eq!(setup.screen(), Screen::Diff);
+    assert_eq!(
+        setup.proposal_notice(),
+        Some("The session restarted before its proposal arrived.")
+    );
+    assert_eq!(setup.error(), None);
+}
+
+#[test]
+fn read_only_rows_never_enter_the_notes_text() {
+    let global = "### Read-only commands\n\nMy own block.\n- my bullet\n";
+    let mut setup = Setup::open(notes(global, ""));
+    for _ in 0..4 {
+        skip(&mut setup);
+    }
+    ask(&mut setup, &[files("f")], &[line("kept", &[0])]);
+    let Act::Propose(_) = press(&mut setup, Key::Enter) else {
+        panic!("the read-only topic proposes itself");
+    };
+    answer_read_only(
+        &mut setup,
+        &[allows("acme-cli", "acme-cli query --json", 5)],
+        &[entry(
+            "shell.read_only.\"acme-cli query\".flags = [\"--json\"]",
+            &[0],
+        )],
+    );
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(setup.screen(), Screen::Diff);
+    let (global_save, project) = save_of(press(&mut setup, Key::Enter));
+    // The notes text is byte-for-byte what was read: the user block is
+    // untouched prose and the kept entry lives in configuration. The
+    // unchanged global layer sends nothing; the fifth topic's kept line
+    // rides along in the project notes beside the entry.
+    assert_eq!(global_save, None);
+    let project = project.expect("the kept notes line saves");
+    assert_eq!(
+        project.text,
+        "### What must never happen\n- kept\n".to_string()
+    );
+    assert_eq!(project.read_only.len(), 1);
+    assert_eq!(project.read_only[0].command, "acme-cli query");
+}
+
+#[test]
+fn read_only_confirmed_entries_save_per_layer() {
+    let mut setup = read_only_waiting();
+    answer_read_only(
+        &mut setup,
+        &[
+            allows("acme-cli", "acme-cli query --json", 5),
+            allows("acme-cli", "acme-cli push", 4),
+        ],
+        &[
+            entry(
+                "shell.read_only.\"acme-cli query\".flags = [\"--json\"]",
+                &[0],
+            ),
+            entry("shell.read_only.\"acme-cli push\".flags = []", &[1]),
+        ],
+    );
+    assert_eq!(layers(&setup), vec![NotesLayer::PerProject; 2]);
+    // The focused first row flips to global; the second stays per-project.
+    press(&mut setup, Key::Tab);
+    press(&mut setup, Key::Down);
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    press(&mut setup, Key::Up);
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(setup.screen(), Screen::Diff);
+    let (global, project) = save_of(press(&mut setup, Key::Enter));
+    let global = global.expect("the flipped entry saves globally");
+    assert_eq!(global.text, String::new());
+    assert_eq!(global.read_only.len(), 1);
+    assert_eq!(global.read_only[0].command, "acme-cli query");
+    assert_eq!(global.read_only[0].flags, vec!["--json".to_string()]);
+    let project = project.expect("entries save per layer");
+    // The fifth topic's kept line rides along in the project notes.
+    assert_eq!(
+        project.text,
+        "### What must never happen\n- kept\n".to_string()
+    );
+    assert_eq!(project.read_only.len(), 1);
+    assert_eq!(project.read_only[0].command, "acme-cli push");
+    assert!(project.read_only[0].flags.is_empty());
+}
+
+#[test]
+fn read_only_save_refuses_a_malformed_entry_row() {
+    let mut setup = read_only_waiting();
+    answer_read_only(
+        &mut setup,
+        &[allows("acme-cli", "acme-cli query --json", 5)],
+        &[entry(
+            "shell.read_only.\"acme-cli query\".flags = [\"--json\"]",
+            &[0],
+        )],
+    );
+    press(&mut setup, Key::Char('e'));
+    typed(&mut setup, " not an entry");
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(setup.screen(), Screen::Diff);
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(
+        setup.error(),
+        Some(
+            "shell.read_only.\"acme-cli query\".flags = [\"--json\"] not an entry is not a read-only entry"
+        )
+    );
+    assert_eq!(setup.screen(), Screen::Diff);
+}
+
+#[test]
+fn read_only_save_refuses_a_duplicate_command_in_one_layer() {
+    let mut setup = read_only_waiting();
+    answer_read_only(
+        &mut setup,
+        &[
+            allows("acme-cli", "acme-cli query --json", 5),
+            allows("other-cli", "other-cli query --json", 5),
+        ],
+        &[
+            entry(
+                "shell.read_only.\"acme-cli query\".flags = [\"--json\"]",
+                &[0],
+            ),
+            entry(
+                "shell.read_only.\"acme-cli query\".flags = [\"--yaml\"]",
+                &[1],
+            ),
+        ],
+    );
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(setup.screen(), Screen::Diff);
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(
+        setup.error(),
+        Some("acme-cli query is confirmed twice in one layer")
+    );
+    assert_eq!(setup.screen(), Screen::Diff);
+}
+
+#[test]
+fn read_only_overlapping_edits_reach_the_save() {
+    let mut setup = read_only_waiting();
+    answer_read_only(
+        &mut setup,
+        &[allows("acme-cli", "acme-cli query --json", 5)],
+        &[entry(
+            "shell.read_only.\"acme-cli query\".flags = [\"--json\"]",
+            &[0],
+        )],
+    );
+    // An overlap with configured entries is the save's refusal, not the
+    // edit's: editing to an overlapping command still keeps the row.
+    press(&mut setup, Key::Char('e'));
+    let len = texts(&setup)[0].len();
+    for _ in 0..len {
+        press(&mut setup, Key::Backspace);
+    }
+    typed(
+        &mut setup,
+        "shell.read_only.\"acme-cli\".flags = [\"--json\"]",
+    );
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(states(&setup), vec![LineState::Kept]);
+    assert_eq!(setup.screen(), Screen::Diff);
+    let (_, project) = save_of(press(&mut setup, Key::Enter));
+    let project = project.expect("the overlapping entry reaches the save");
+    assert_eq!(project.read_only.len(), 1);
+    assert_eq!(project.read_only[0].command, "acme-cli");
+}
+
+#[test]
+fn read_only_evidence_context_holds_uncited_tallies() {
+    let mut setup = read_only_waiting();
+    answer_read_only(
+        &mut setup,
+        &[
+            withheld(
+                "kubectl",
+                "kubectl -n x get pods",
+                5,
+                "words after the command: an entry would cover other subcommands",
+            ),
+            withheld(
+                "acme-cli",
+                "acme-cli --json",
+                5,
+                "one word: an entry names a subcommand",
+            ),
+            allows("other-cli", "other-cli query --json", 5),
+        ],
+        &[entry(
+            "shell.read_only.\"other-cli query\".flags = [\"--json\"]",
+            &[2],
+        )],
+    );
+    // Only the eligible row is proposed; the withheld tallies stay as
+    // dim context with their subjects, counts and reasons.
+    assert_eq!(
+        texts(&setup),
+        vec!["shell.read_only.\"other-cli query\".flags = [\"--json\"]".to_string()]
+    );
+    let context = setup.evidence_context();
+    assert_eq!(context.len(), 2);
+    assert_eq!(context[0].subject(), "kubectl -n x get pods");
+    assert_eq!(context[0].count(), 5);
+    assert_eq!(
+        context[0].text(),
+        "words after the command: an entry would cover other subcommands"
+    );
+    assert_eq!(context[1].subject(), "acme-cli --json");
+    assert_eq!(context[1].count(), 5);
+    assert_eq!(context[1].text(), "one word: an entry names a subcommand");
+}
+
+#[test]
+fn read_only_withheld_only_set_keeps_context_without_rows() {
+    let mut setup = read_only_waiting();
+    answer_read_only(
+        &mut setup,
+        &[
+            withheld(
+                "acme-cli",
+                "acme-cli --json",
+                5,
+                "one word: an entry names a subcommand",
+            ),
+            withheld(
+                "kubectl",
+                "kubectl -n x get pods",
+                5,
+                "words after the command: an entry would cover other subcommands",
+            ),
+        ],
+        &[],
+    );
+    assert!(setup.line_rows().is_empty());
+    let context = setup.evidence_context();
+    assert_eq!(context.len(), 2);
+    assert_eq!(context[0].subject(), "acme-cli --json");
+    assert_eq!(context[1].subject(), "kubectl -n x get pods");
+}
+
+#[test]
+fn read_only_pending_entries_count_as_a_change() {
+    let mut setup = read_only_waiting();
+    answer_read_only(
+        &mut setup,
+        &[allows("acme-cli", "acme-cli query --json", 5)],
+        &[entry(
+            "shell.read_only.\"acme-cli query\".flags = [\"--json\"]",
+            &[0],
+        )],
+    );
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(setup.screen(), Screen::Diff);
+    // Nothing in the notes changed, but the kept entry is a change.
+    assert!(matches!(press(&mut setup, Key::Enter), Act::Save { .. }));
+}
+
+#[test]
+fn read_only_stale_reread_keeps_entries() {
+    let mut setup = read_only_waiting();
+    answer_read_only(
+        &mut setup,
+        &[allows("acme-cli", "acme-cli query --json", 5)],
+        &[entry(
+            "shell.read_only.\"acme-cli query\".flags = [\"--json\"]",
+            &[0],
+        )],
+    );
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(setup.screen(), Screen::Diff);
+    assert!(matches!(setup.saved(Ok(NotesSaved::Stale)), Act::Reread));
+    setup.reread(Ok(notes("", "")));
+    assert_eq!(setup.screen(), Screen::Diff);
+    let sections = setup.config_sections();
+    assert_eq!(sections.len(), 2);
+    assert_eq!(sections[1].entries.len(), 1);
+    assert_eq!(sections[1].entries[0].command, "acme-cli query");
+    assert_eq!(sections[1].entries[0].flags, vec!["--json".to_string()]);
+}
+
+#[test]
+fn read_only_edited_rows_save_the_new_entry() {
+    let mut setup = read_only_waiting();
+    answer_read_only(
+        &mut setup,
+        &[allows("acme-cli", "acme-cli query --json", 5)],
+        &[entry(
+            "shell.read_only.\"acme-cli query\".flags = [\"--json\"]",
+            &[0],
+        )],
+    );
+    press(&mut setup, Key::Char('e'));
+    let len = texts(&setup)[0].len();
+    for _ in 0..len {
+        press(&mut setup, Key::Backspace);
+    }
+    typed(&mut setup, "shell.read_only.\"other-cli run\".flags = []");
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(states(&setup), vec![LineState::Kept]);
+    assert_eq!(setup.screen(), Screen::Diff);
+    let (_, project) = save_of(press(&mut setup, Key::Enter));
+    let project = project.expect("the edited entry saves");
+    assert_eq!(project.read_only.len(), 1);
+    assert_eq!(project.read_only[0].command, "other-cli run");
+}
+
+#[test]
+fn read_only_struck_rows_save_nothing() {
+    let mut setup = read_only_waiting();
+    answer_read_only(
+        &mut setup,
+        &[allows("acme-cli", "acme-cli query --json", 5)],
+        &[entry(
+            "shell.read_only.\"acme-cli query\".flags = [\"--json\"]",
+            &[0],
+        )],
+    );
+    // Striking the only open row advances straight to the diff.
+    press(&mut setup, Key::Char('x'));
+    assert_eq!(states(&setup), vec![LineState::Struck]);
+    assert_eq!(setup.screen(), Screen::Diff);
+    // A struck entry is kept out of the save: the project write carries
+    // the fifth topic's kept notes line with no entries.
+    let (global, project) = save_of(press(&mut setup, Key::Enter));
+    assert_eq!(global, None);
+    let project = project.expect("the kept notes line saves");
+    assert_eq!(
+        project.text,
+        "### What must never happen\n- kept\n".to_string()
+    );
+    assert!(project.read_only.is_empty());
+}
+
+#[test]
+fn read_only_flip_moves_the_row_between_layers() {
+    let mut setup = read_only_waiting();
+    answer_read_only(
+        &mut setup,
+        &[allows("acme-cli", "acme-cli query --json", 5)],
+        &[entry(
+            "shell.read_only.\"acme-cli query\".flags = [\"--json\"]",
+            &[0],
+        )],
+    );
+    assert_eq!(layers(&setup), vec![NotesLayer::PerProject]);
+    press(&mut setup, Key::Tab);
+    assert_eq!(layers(&setup), vec![NotesLayer::Global]);
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
+    assert_eq!(setup.screen(), Screen::Diff);
+    let (global, project) = save_of(press(&mut setup, Key::Enter));
+    let global = global.expect("the flipped entry saves globally");
+    assert_eq!(global.read_only.len(), 1);
+    assert_eq!(global.read_only[0].command, "acme-cli query");
+    assert!(project.map(|w| w.read_only.is_empty()).unwrap_or(true));
 }
