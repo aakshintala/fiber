@@ -2247,7 +2247,7 @@ fn a_run_timeout_switches_the_extension_off() {
 fn working_input(started: Option<u64>, retry: bool) -> Input<'static> {
     Input::WorkingLine(tui::ext::WorkingLine {
         started,
-        retry: retry.then(|| tui::ext::WorkingRetry {
+        retry: retry.then_some(tui::ext::WorkingRetry {
             code: contract::ErrorCode::RateLimited,
             attempt: 2,
             last_attempt: 4,
