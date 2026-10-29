@@ -2,9 +2,45 @@
 
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub(crate) use fakes::write_record;
+
+/// Fixture binaries warmed past their first-exec stall in this test
+/// process, keyed by binary path: nextest runs one test per process, so
+/// the first start of each binary warms and later starts skip it. The
+/// registry mutex is released before any warm runs, so concurrent starts
+/// share one cell without holding a lock across the bounded child wait.
+static WARMED: OnceLock<Mutex<HashMap<PathBuf, Arc<OnceLock<()>>>>> = OnceLock::new();
+
+/// Warms `path` past its first-exec stall once per test process: a
+/// `fail-start` directory makes the fixture exit 1 before reading
+/// anything, so the warm-up never blocks on input. The warm runs under
+/// `fakes::START_BOUND` before the test's own deadline starts, so the
+/// stall never eats the success-wait margin.
+fn warm_once(path: &Path) {
+    let cell = WARMED
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(OnceLock::new()))
+        .clone();
+    cell.get_or_init(|| {
+        let warm_dir = fakes::TempDir::new("fiber-main-warm");
+        std::fs::write(warm_dir.path().join("fail-start"), "").unwrap();
+        let warm_arg = warm_dir.path().display().to_string();
+        fakes::warm_up(path, &[warm_arg.as_str()], 1);
+    });
+}
+
+/// Warms the shared MCP fixture past its first-exec stall once per test
+/// process, before the test's own deadline starts.
+pub(crate) fn warm_mcp_fixture_once() {
+    warm_once(&fakes::mcp_fixture());
+}
 
 /// Loads the configuration for `home` and `workspace` under `project`,
 /// with `overrides` as `-c key=value` reads them. The one configuration

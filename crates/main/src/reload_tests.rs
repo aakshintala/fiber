@@ -254,6 +254,7 @@ impl Fixture {
     /// and `rewrite` replaces the global config before the next
     /// `prepare`, as editing the files does.
     fn with_servers(servers: &[(&str, serde_json::Value)]) -> Self {
+        crate::test_support::warm_mcp_fixture_once();
         let mut fixture = Self::new();
         let fakes: Vec<FakeServer> = servers
             .iter()
@@ -341,6 +342,30 @@ impl Fixture {
             ),
         }
     }
+}
+
+#[test]
+fn with_servers_warms_the_fixture_before_its_setup() {
+    // The first exec of a freshly linked binary can stall for seconds on
+    // macOS, so the server-starting fixture warms it through the shared
+    // once-per-process warm before `Self::new` builds its setup waits.
+    // This pins only the changed helper: it fails when the warm call is
+    // removed or moves after the setup.
+    let source =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/reload_tests.rs"))
+            .expect("reload_tests.rs");
+    let helper = source.find("fn with_servers").expect("with_servers");
+    let warm = source
+        .match_indices("warm_mcp_fixture_once()")
+        .map(|(at, _)| at)
+        .find(|&at| at > helper)
+        .expect("with_servers warms");
+    let setup = source
+        .match_indices("Self::new()")
+        .map(|(at, _)| at)
+        .find(|&at| at > helper)
+        .expect("with_servers builds its setup");
+    assert!(warm < setup, "with_servers warms before its setup");
 }
 
 /// The text of a caught panic payload, or a fixed line when it is not a
