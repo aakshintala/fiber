@@ -664,10 +664,12 @@ fn job_id(text: &str) -> String {
 }
 
 /// The nested-budget child's provider route trace: at most 8 entries of at
-/// most 256 bytes each. The responder records only route fields (session
-/// versus reviewer, the `Started delegate` and `scan deep` markers, the
-/// stage before and after, and the selected branch), never request bodies,
-/// so the timeout dump keeps the route visible under the output cap.
+/// most 256 bytes each, mirrored in the stderr snapshot's trace section
+/// (likewise the latest 8 lines, overflow markers included). The responder
+/// records only route fields (session versus reviewer, the `Started
+/// delegate` and `scan deep` markers, the stage before and after, and the
+/// selected branch), never request bodies, so the timeout dump keeps the
+/// route visible under the output cap.
 const NESTED_TRACE_CAP: usize = 8;
 const NESTED_ENTRY_CAP: usize = 256;
 /// A compact summary of a socket line seen while waiting for the child jobs
@@ -693,9 +695,40 @@ fn truncate_bounded(mut entry: String, cap: usize) -> String {
     entry
 }
 
+/// Appends one trace line (and its overflow marker, when `dropped`) to
+/// `snapshot`, then drops the oldest `nested route:` lines past the cap, so
+/// the snapshot's trace section holds the latest 8 lines including markers.
+/// Other stderr text is left alone; entries are already byte-capped.
+fn append_nested_route_to_snapshot(snapshot: &mut String, entry: &str, dropped: bool) {
+    snapshot.push_str("nested route: ");
+    snapshot.push_str(entry);
+    snapshot.push('\n');
+    if dropped {
+        snapshot.push_str("nested route: ...[truncated]\n");
+    }
+    let trace_lines = snapshot
+        .lines()
+        .filter(|line| line.starts_with("nested route: "))
+        .count();
+    if trace_lines <= NESTED_TRACE_CAP {
+        return;
+    }
+    let mut skip = trace_lines - NESTED_TRACE_CAP;
+    let mut kept = String::with_capacity(snapshot.len());
+    for piece in snapshot.split_inclusive('\n') {
+        let line = piece.strip_suffix('\n').unwrap_or(piece);
+        if line.starts_with("nested route: ") && skip > 0 {
+            skip -= 1;
+            continue;
+        }
+        kept.push_str(piece);
+    }
+    *snapshot = kept;
+}
+
 /// Records one responder route in `trace` (dropping the oldest past the
-/// cap) and appends it to the stderr snapshot the timeout dump reads, so a
-/// missing child jobs wait still shows which branch answered each request.
+/// cap) and in the stderr snapshot's bounded trace section, so a missing
+/// child jobs wait still shows which branch answered each request.
 /// The sink links the responder to the running session's snapshot once the
 /// session starts; routes recorded before the link stay in `trace`.
 fn record_nested_route(
@@ -712,12 +745,7 @@ fn record_nested_route(
     trace.push(entry.clone());
     if let Some(snapshot) = sink.lock().unwrap().as_ref() {
         let mut snapshot = snapshot.lock().unwrap();
-        snapshot.push_str("nested route: ");
-        snapshot.push_str(&entry);
-        snapshot.push('\n');
-        if dropped {
-            snapshot.push_str("nested route: ...[truncated]\n");
-        }
+        append_nested_route_to_snapshot(&mut snapshot, &entry, dropped);
     }
 }
 
@@ -787,9 +815,22 @@ fn nested_route_trace_keeps_only_route_fields_within_bounds() {
             ),
         );
     }
-    // At the cap nothing drops: every route is kept and none is marked.
-    assert_eq!(trace.lock().unwrap().len(), NESTED_TRACE_CAP);
+    // At the cap nothing drops: the first route is still kept in the trace
+    // and in the snapshot, and nothing is marked.
+    assert!(
+        trace
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|entry| entry.contains("stage=0->1 branch=c_spawn"))
+    );
     assert!(!snapshot.lock().unwrap().contains("...[truncated]"));
+    assert!(
+        snapshot
+            .lock()
+            .unwrap()
+            .contains("nested route: session=1 started=0 deep=0 stage=0->1 branch=c_spawn")
+    );
     record_nested_route(
         &trace,
         &sink,
@@ -797,7 +838,6 @@ fn nested_route_trace_keeps_only_route_fields_within_bounds() {
     );
     // Past the cap the oldest drops, the latest stays, and the cut is marked.
     let kept = trace.lock().unwrap().clone();
-    assert_eq!(kept.len(), NESTED_TRACE_CAP);
     assert!(kept.iter().any(|entry| entry.contains("branch=c_wait")));
     assert!(
         !kept
@@ -810,6 +850,11 @@ fn nested_route_trace_keeps_only_route_fields_within_bounds() {
             .unwrap()
             .contains("nested route: ...[truncated]")
     );
+    // The snapshot's trace section stays bounded too: the latest route is
+    // visible while the oldest route has scrolled out, markers included.
+    let dump = snapshot.lock().unwrap().clone();
+    assert!(dump.contains("branch=c_wait"), "{dump}");
+    assert!(!dump.contains("stage=0->1 branch=c_spawn"), "{dump}");
     for entry in &kept {
         assert!(entry.len() <= NESTED_ENTRY_CAP, "{entry}");
     }
@@ -852,19 +897,23 @@ fn child_wait_summaries_stay_compact_and_bounded() {
         summary.starts_with("session_status streaming/"),
         "{summary}"
     );
+    // Distinct names make eviction visible: each summary names its line.
     let mut ring: Vec<String> = Vec::new();
-    for _ in 0..CHILD_WAIT_SUMMARY_CAP {
-        push_child_wait_summary(&mut ring, &requested);
+    for n in 0..CHILD_WAIT_SUMMARY_CAP {
+        let line = json!({"kind": "tool_call_requested", "payload": {"name": format!("job{n}")}});
+        push_child_wait_summary(&mut ring, &line);
     }
-    assert_eq!(ring.len(), CHILD_WAIT_SUMMARY_CAP);
+    // Before overflow the earliest summary is still present.
+    assert!(ring.iter().any(|entry| entry == "tool_call_requested job0"));
     let other = json!({"kind": "fiber_exited", "payload": {"exit_code": 143}});
     push_child_wait_summary(&mut ring, &other);
-    assert_eq!(ring.len(), CHILD_WAIT_SUMMARY_CAP);
+    // Past the cap the latest summary stays while the stalest drops.
     assert_eq!(ring.last().unwrap(), "fiber_exited 143");
+    assert!(!ring.iter().any(|entry| entry == "tool_call_requested job0"));
+    assert!(ring.iter().any(|entry| entry == "tool_call_requested job1"));
     assert!(
-        !ring
-            .iter()
-            .any(|entry| entry.len() > CHILD_WAIT_SUMMARY_LEN)
+        ring.iter()
+            .all(|entry| entry.len() <= CHILD_WAIT_SUMMARY_LEN)
     );
 }
 
@@ -3255,9 +3304,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     *nested_sink.lock().unwrap() = Some(Arc::clone(&running.stderr_snapshot));
     for entry in nested_trace.lock().unwrap().iter() {
         let mut snapshot = running.stderr_snapshot.lock().unwrap();
-        snapshot.push_str("nested route: ");
-        snapshot.push_str(entry);
-        snapshot.push('\n');
+        append_nested_route_to_snapshot(&mut snapshot, entry, false);
     }
     let mut parked = running.wait_line("the root parked in jobs wait", |line| {
         line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
