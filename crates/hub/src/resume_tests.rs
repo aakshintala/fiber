@@ -3831,6 +3831,11 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
     let relays = Deadline::after(DEADLINE)
         .recv(&relays_rx)
         .expect("the forward ran");
+    let order = crate::connection::lock(&relays).order.clone();
+    let (drained_tx, drained_rx) = std::sync::mpsc::channel();
+    *crate::connection::lock(&order.after_drain) = Some(Box::new(move || {
+        drained_tx.send(()).unwrap_or(());
+    }));
     // Cut the command write, after its JSON body or its first byte:
     // the session's next line never completes, but the hub counted
     // accepted bytes and cannot know the session read nothing.
@@ -3841,11 +3846,6 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
         });
     }));
     client.send("c_2", "prompt");
-    let order = crate::connection::lock(&relays).order.clone();
-    let (drained_tx, drained_rx) = std::sync::mpsc::channel();
-    *crate::connection::lock(&order.after_drain) = Some(Box::new(move || {
-        drained_tx.send(()).unwrap_or(());
-    }));
     // The route's cut write runs before the session ends: the fake
     // records the torn bytes, so ending it now cannot turn the failure
     // into a zero-byte one.

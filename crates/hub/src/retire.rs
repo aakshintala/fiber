@@ -424,7 +424,7 @@ pub(crate) fn drain(
     if let Some(before) = lock(&order.before_drain).take() {
         before();
     }
-    let (present, sent, partial): (bool, Sent, Sent) = {
+    let (present, sent, partial): (bool, Sent, Vec<(String, String)>) = {
         let held = lock(relays);
         let present = relay_slot(&held.entries, session, epoch).is_some();
         let mut kept = lock(kept);
@@ -433,10 +433,10 @@ pub(crate) fn drain(
             .filter(|(_, _, state)| *state == KeptState::Sent)
             .map(|(id, line, _)| (id.clone(), line.clone()))
             .collect();
-        let partial: Sent = kept
+        let partial = kept
             .iter()
             .filter(|(_, _, state)| *state == KeptState::Partial)
-            .map(|(id, line, _)| (id.clone(), line.clone()))
+            .map(|(id, _, _)| (session.to_owned(), id.clone()))
             .collect();
         kept.retain(|(_, _, state)| *state == KeptState::Queued);
         (present, sent, partial)
@@ -471,29 +471,25 @@ pub(crate) fn drain(
     // After the sent commands, in read order: a partial write follows
     // every sent command on the relay, since the failure retires it.
     if !partial.is_empty() {
-        let ids: Vec<(String, String)> = partial
-            .iter()
-            .map(|(id, _)| (session.to_owned(), id.clone()))
-            .collect();
         if present && !client_gone {
             // The refusal stays queued until its answer is written, so a
             // later command's acknowledgement on another relay cannot be
             // forwarded first (`docs/invocation.md:1113-1118`,
             // "Commands keep their order"): `refuse` writes the answer
             // before `order.done` clears it.
-            for (id, _) in partial {
+            for (session, id) in &partial {
                 refuse(
                     writer,
                     hub,
                     relays,
                     session,
-                    &CommandId(id),
+                    &CommandId(id.clone()),
                     &ErrorCode::Indeterminate,
                     PARTIAL_WRITE_MAY_HAVE_RUN,
                 );
             }
         } else {
-            order.drop_ids(&ids);
+            order.drop_ids(&partial);
         }
     }
     pump(session, epoch, kept, hub, writer, relays, true);

@@ -2958,8 +2958,8 @@ fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     *crate::connection::lock(&ended.hub.on_pass_on) = Some(Box::new(move |passed| {
         dropped_tx.send(passed).unwrap_or(());
     }));
-    // A partly written command is dropped with the rest: a disconnected
-    // client gets no `indeterminate` answer for it either.
+    // `docs/invocation.md:730`, "Lifecycle": a disconnected client gets
+    // no `indeterminate` answer; the partly written command is dropped too.
     ended.order.enqueue(END_SID, "c_p");
     lock(&ended.kept).push((
         "c_p".to_owned(),
@@ -3233,7 +3233,7 @@ fn the_command_writer_counts_accepted_bytes_before_its_failure() {
     );
 }
 
-/// `docs/invocation.md`, "Lifecycle": a `closing` answer for a command
+/// `docs/invocation.md:728`, "Lifecycle": a `closing` answer for a command
 /// the hub only partly wrote is the session's own answer. It reaches the
 /// client instead of routing the command again, so the command is never
 /// delivered twice.
