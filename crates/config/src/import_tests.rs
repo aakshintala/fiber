@@ -566,6 +566,17 @@ fn a_one_mebibyte_stream_past_a_shorter_budget_reports_the_budget() {
     assert_eq!(budget.used, MAX_SOURCE_BYTES - (MAX_FILE_BYTES - 1));
 }
 
+#[test]
+fn the_finds_nothing_check_maps_nothing() {
+    // `no_personal_sources` is the finds-nothing default: whatever it is
+    // asked about, no directory is already read.
+    assert!(no_personal_sources(&[]).is_empty());
+    assert!(
+        no_personal_sources(&[PathBuf::from("/source/skills/review")]).is_empty(),
+        "a named directory still maps to nothing"
+    );
+}
+
 /// A stub check diverting one source skill directory to its logged path
 /// under `/person/.agents/skills/`.
 fn divert_review() -> impl PersonalSourceCheck {

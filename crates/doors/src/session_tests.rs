@@ -7445,3 +7445,59 @@ fn process_calls_on_an_ordinary_connection_are_rejected() {
         .unwrap();
     close_within(opened.session, opened.log);
 }
+
+#[test]
+fn a_session_wired_check_is_the_check_the_import_runs() {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    reset();
+    let opened = support::Opened::open(Vec::new());
+    let temp = fakes::TempDir::new("already-read-check");
+    let fiber_home = temp.path().join("fiber-home");
+    let source_home = temp.path().join("source");
+    fs::create_dir_all(source_home.join("skills/review")).unwrap();
+    fs::write(
+        source_home.join("skills/review/SKILL.md"),
+        "---\nname: review\ndescription: Reviews code.\n---\n\nBody.\n",
+    )
+    .unwrap();
+    let logged = PathBuf::from("/person/.agents/skills/review/SKILL.md");
+    opened
+        .session
+        .personal_source_check(Arc::new(move |dirs: &[PathBuf]| {
+            let mut out = BTreeMap::new();
+            for dir in dirs {
+                if dir.ends_with("skills/review") {
+                    out.insert(dir.clone(), logged.clone());
+                }
+            }
+            out
+        }));
+    // The `import` driver command reads the Gate field, defaulting to the
+    // finds-nothing check when no session wired one: with the stub wired,
+    // the skill diverts with its logged path instead of landing.
+    let check = opened
+        .session
+        .gate
+        .personal_source_check()
+        .unwrap_or_else(|| Arc::new(config::no_personal_sources));
+    let clock = FakeClock::new();
+    let report = config::import_source(
+        &fiber_home,
+        &source_home,
+        config::ImportSource::ClaudeCode,
+        check.as_ref(),
+        clock.as_ref(),
+    )
+    .unwrap();
+    assert!(report.imported.skills.is_empty(), "{report:?}");
+    assert_eq!(report.left_behind.len(), 1, "{report:?}");
+    assert_eq!(report.left_behind[0].item, "skills/review/SKILL.md");
+    assert_eq!(
+        report.left_behind[0].reason,
+        "already read from /person/.agents/skills/review/SKILL.md"
+    );
+    assert!(!fiber_home.join("skills/review/SKILL.md").exists());
+    close_within(opened.session, opened.log);
+}
