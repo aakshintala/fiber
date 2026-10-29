@@ -30,7 +30,9 @@ use fakes::clock::FakeClock;
 use fakes::jobs::FakeJobs;
 use fakes::{CancelToken, Recorder, Watchdog, group_alive, kill_group, kill_pid, pid_alive};
 use serde_json::{Map, Value, json};
-use tools::{SandboxSettings, Shell};
+#[cfg(target_os = "macos")]
+use tools::SandboxSettings;
+use tools::Shell;
 
 /// The bound on a child's startup-marker ready lines. How long a child takes to start
 /// follows the machine's load, not the test: at a load of 40 to 100 on 11
