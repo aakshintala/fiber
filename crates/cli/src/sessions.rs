@@ -49,9 +49,9 @@ fn run(
     out: &mut dyn Write,
 ) -> Result<PathBuf, CliError> {
     let (sessions, _) = project_of(home, workspace)?;
-    let project = doors::project(workspace);
+    let project = worktree::project(workspace);
     let id = log::resolve(&sessions, selector, &|started| {
-        doors::project(Path::new(started)) == project
+        worktree::project(Path::new(started)) == project
     })?;
     let target = match path {
         Some(path) => workspace.join(path),
@@ -123,9 +123,9 @@ fn delete_run(
         return Err(CliError::DeleteNobody);
     }
     let (sessions, _) = project_of(home, workspace)?;
-    let project = doors::project(workspace);
+    let project = worktree::project(workspace);
     let id = log::resolve(&sessions, selector, &|started| {
-        doors::project(Path::new(started)) == project
+        worktree::project(Path::new(started)) == project
     })?;
     let mut listed = vec![id.clone()];
     if cascade {

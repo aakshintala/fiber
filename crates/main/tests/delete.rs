@@ -45,7 +45,7 @@ fn append_moved(dir: &Path, old: &str, next: &str) {
 fn moved_child(setup: &Setup, id: &str, from: &str) -> PathBuf {
     let workspace = setup.root.path().join("elsewhere");
     fs::create_dir_all(&workspace).unwrap();
-    let dir = log::sessions_dir(&setup.home(), &doors::project(&workspace)).join(id);
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&workspace)).join(id);
     fs::create_dir_all(dir.join("artifacts")).unwrap();
     let first = json!({"kind": "session_started", "session_id": id, "ts": 0,
         "schema_version": 1, "seq": 0,
@@ -72,7 +72,7 @@ fn setup() -> Setup {
 /// The workspace's project directory, as the command derives it.
 fn project(setup: &Setup) -> PathBuf {
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
-    log::sessions_dir(&setup.home(), &doors::project(&workspace))
+    log::sessions_dir(&setup.home(), &worktree::project(&workspace))
         .parent()
         .unwrap()
         .to_path_buf()
@@ -359,13 +359,13 @@ fn stored_at(dir: &Path) -> Option<Vec<String>> {
 
 /// The ids of the sessions stored under the workspace, sorted.
 fn stored(setup: &Setup) -> Vec<String> {
-    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     stored_at(&dir).unwrap_or_else(|| panic!("session directory {} does not exist", dir.display()))
 }
 
 /// Waits for exactly `count` sessions to be stored before reading their ids.
 fn wait_stored(setup: &Setup, count: usize) -> Vec<String> {
-    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     fakes::wait_until("the stored session rows", setup.deadline, move || {
         stored_at(&dir).is_some_and(|ids| ids.len() == count)
     });
@@ -791,7 +791,7 @@ fn cascading_delete_waits_for_live_parent_exit_not_delegate_feed_row() {
     );
     run.ready();
     run.write(b"run it\r");
-    let sessions_dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let sessions_dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     fakes::wait_until("the delegate start event", setup.deadline, move || {
         stored_at(&sessions_dir).is_some_and(|ids| {
             ids.iter().any(|id| {
