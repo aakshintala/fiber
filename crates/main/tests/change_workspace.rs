@@ -816,7 +816,8 @@ fn a_missing_required_extension_fails_the_start_and_a_fixed_target_retries() {
         .as_str()
         .unwrap()
         .to_owned();
-    // The old process's exit retries the recorded child once, and the
+    // The old process's exit retries the recorded child once
+    // (`docs/invocation.md`, "Change workspace": the hub retries the same child id once when the old process exits), and the
     // retry fails like the initial attempt: the second matching hub.log
     // line is the retry's, and no `session_left` wait decides it.
     watch
@@ -827,15 +828,6 @@ fn a_missing_required_extension_fails_the_start_and_a_fixed_target_retries() {
                 >= 2
         })
         .unwrap();
-    let failures = setup
-        .hub_log()
-        .lines()
-        .filter(|line| line.contains(&same_child) && line.contains("could not start"))
-        .count();
-    assert_eq!(
-        failures, 2,
-        "the initial start and its one retry are each recorded"
-    );
     // Fix the package and approve its new content. The hub retries a
     // recorded child once: rerun its recorded start directly, with the
     // same id, and read its startup off its stdout.

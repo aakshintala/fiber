@@ -917,6 +917,64 @@ fn a_command_for_the_new_session_first_still_gets_its_level() {
     );
 }
 
+/// A starter that reports its second `rewind` through a channel: the
+/// relay-end retry signals completion instead of the test polling the
+/// recorded calls (`docs/testing.md`, "Races are forced").
+#[derive(Clone)]
+struct SignalSecondRewind {
+    inner: FakeStarter,
+    signaled: Arc<AtomicBool>,
+    done: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+}
+
+impl SignalSecondRewind {
+    fn rewound(&self) -> Vec<(SessionId, PathBuf, SessionId)> {
+        self.inner.rewound()
+    }
+}
+
+impl Starter for SignalSecondRewind {
+    fn start(
+        &self,
+        id: &SessionId,
+        workspace: &std::path::Path,
+        model: Option<&str>,
+        overrides: &[&str],
+        worktree: bool,
+        continues: Option<&SessionId>,
+        supervised: bool,
+    ) -> std::io::Result<Box<dyn crate::Started>> {
+        self.inner.start(
+            id, workspace, model, overrides, worktree, continues, supervised,
+        )
+    }
+
+    fn resume(
+        &self,
+        id: &SessionId,
+        workspace: &std::path::Path,
+        credential: Option<&str>,
+    ) -> std::io::Result<Box<dyn Started>> {
+        self.inner.resume(id, workspace, credential)
+    }
+
+    fn rewind(
+        &self,
+        id: &SessionId,
+        workspace: &std::path::Path,
+        from: &SessionId,
+    ) -> std::io::Result<Box<dyn crate::Started>> {
+        let started = self.inner.rewind(id, workspace, from);
+        if self.inner.rewound().len() == 2
+            && !self.signaled.swap(true, Ordering::SeqCst)
+            && let Some(done) = lock(&self.done).take()
+        {
+            done.send(()).unwrap_or(());
+        }
+        started
+    }
+}
+
 #[test]
 fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
     for code in [ErrorCode::SessionHeld, ErrorCode::ExtensionRequiredFailed] {
@@ -924,8 +982,15 @@ fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
         let workspace = temp.workspace();
         let code_name: String =
             serde_json::from_value(serde_json::to_value(&code).unwrap()).unwrap();
-        let starter =
-            FakeStarter::exit_with(&temp.dir, failure(code.clone(), "the new process refused."));
+        let (done_tx, done) = mpsc::channel();
+        let starter = SignalSecondRewind {
+            inner: FakeStarter::exit_with(
+                &temp.dir,
+                failure(code.clone(), "the new process refused."),
+            ),
+            signaled: Arc::new(AtomicBool::new(false)),
+            done: Arc::new(Mutex::new(Some(done_tx))),
+        };
         let hub = temp.hub(starter.clone());
         let old = id(1);
         let next = id(2);
@@ -963,6 +1028,7 @@ fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
             !serde_json::to_string(&rejection).unwrap().contains(&next),
             "the rejection carries no new session id: {rejection}"
         );
+        // `docs/invocation.md`, "Change workspace": the hub retries the same child id once when the old process exits.
         assert_eq!(starter.rewound().len(), 1, "the start was attempted once");
         // Before the old socket is released, a command for the new
         // session names a session with no log: it is rejected
@@ -976,21 +1042,23 @@ fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
         assert_eq!(refused["payload"]["code"], "session_not_found", "{refused}");
         // The old socket closes: the redirect retries the recorded
         // child once through the kept level, and the retry fails like the
-        // initial attempt. The retry runs on the relay thread after the
-        // session thread ends, so the wait below ends only after
-        // `follow` ran instead of asserting a count the thread may not
-        // have reached yet.
+        // initial attempt (`docs/invocation.md`, "Change workspace": the
+        // hub retries the same child id once when the old process exits).
+        // The retry runs on the relay thread after the session thread
+        // ends, so its starter signal ends the wait below: the retry's
+        // own handoff proves `follow` ran.
         drop(release_tx);
         old_session.join().unwrap();
-        let waited = starter.clone();
-        crate::testkit::await_true("the relay's follow retries the child once", move || {
-            waited.rewound().len() == 2
-        });
+        assert!(
+            Deadline::after(DEADLINE).recv(&done).is_ok(),
+            "the relay's follow retries the child once"
+        );
         client.send(&json!({
             "id": "c_old2", "session_id": old, "command": "tools", "args": {},
         }));
         let answered = client.next("the old session's later answer");
         assert_eq!(answered["payload"]["command_id"], "c_old2", "{answered}");
+        // `docs/invocation.md`, "Change workspace": the hub retries the same child id once when the old process exits.
         assert_eq!(
             starter.rewound().len(),
             2,
@@ -1103,6 +1171,7 @@ fn a_refused_rewind_keeps_the_old_sessions_kept_level_for_the_retry() {
     // The refusal keeps the rewound session's kept level and the
     // untouched one, so the redirect retries once through the kept level:
     // both sides of the kept-level check, plus the retry.
+    // `docs/invocation.md`, "Change workspace": the hub retries the same child id once when the old process exits.
     assert_eq!(
         starter.rewound().len(),
         2,
@@ -1417,6 +1486,7 @@ fn follow_without_a_kept_level_starts_the_child_but_attaches_nothing() {
     follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
     // The retry is not conditional on the level: the child starts, but no
     // relay is published without one to attach.
+    // `docs/invocation.md`, "Change workspace": the hub retries the same child id once when the old process exits.
     assert_eq!(starter.rewound().len(), 1, "the child still starts");
     assert!(starter.resumed().is_empty(), "a continued log starts");
     assert!(
@@ -2632,6 +2702,7 @@ fn a_failed_moved_child_retries_once_across_both_old_exit_paths() {
         // old log still ends `moved`.
         let refused = reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
         assert_eq!(refused.code, ErrorCode::ExtensionRequiredFailed);
+        // `docs/invocation.md`, "Change workspace": the hub retries the same child id once when the old process exits.
         assert_eq!(
             starter.rewound().len(),
             1,
@@ -2725,6 +2796,7 @@ fn a_failed_moved_child_retries_once_across_both_old_exit_paths() {
         );
         first.join().unwrap();
         second.join().unwrap();
+        // `docs/invocation.md`, "Change workspace": the hub retries the same child id once when the old process exits.
         assert_eq!(
             starter.rewound().len(),
             2,
@@ -2735,20 +2807,22 @@ fn a_failed_moved_child_retries_once_across_both_old_exit_paths() {
             Some(SessionId(next.clone())),
             "the old log stays ended"
         );
-        assert_eq!(
-            temp.hub_log().matches("could not start.").count(),
-            2,
-            "the initial attempt and its one retry each write one diagnostic"
-        );
     }
 }
 
 /// A `rewind` that fails its first call and binds after: the initial
 /// move-time start fails, then the single old-exit retry boots the child.
+/// Once armed, the retry waits for a release while reporting entry, so the
+/// overlapping test holds the winning old-exit callback inside the starter
+/// while its peer reaches the same child's held start guard. Unarmed
+/// retries run at once.
 #[derive(Clone)]
 struct FailOnceThenBind {
     inner: FakeStarter,
     attempts: Arc<Mutex<Vec<SessionId>>>,
+    holding: Arc<AtomicBool>,
+    entered: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+    release: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
 }
 
 impl FailOnceThenBind {
@@ -2756,6 +2830,9 @@ impl FailOnceThenBind {
         Self {
             inner: FakeStarter::bind_and_hold(home),
             attempts: Arc::new(Mutex::new(Vec::new())),
+            holding: Arc::new(AtomicBool::new(false)),
+            entered: Arc::new(Mutex::new(None)),
+            release: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -2800,6 +2877,14 @@ impl Starter for FailOnceThenBind {
         if first {
             return Err(std::io::Error::other("the initial start fails"));
         }
+        if self.holding.load(Ordering::SeqCst) {
+            if let Some(entered) = lock(&self.entered).take() {
+                entered.send(()).unwrap_or(());
+            }
+            if let Some(release) = lock(&self.release).take() {
+                release.recv().unwrap_or(());
+            }
+        }
         self.inner.rewind(id, workspace, from)
     }
 }
@@ -2807,11 +2892,16 @@ impl Starter for FailOnceThenBind {
 /// A moved child whose initial start fails is retried once when the old
 /// process exits, and the losing old-exit callback attaches to the
 /// running child instead of starting again: the feed-side retry and the
-/// relay-end `follow` share one per-child decision, in both orders, each
-/// with its own hub so the per-child claim starts fresh.
+/// relay-end `follow` share one per-child decision under the child's start
+/// guard, in both orders, each with its own hub so the per-child claim
+/// starts fresh. The winning retry is held inside the starter until the
+/// peer proves it reached the held guard, so the loser waits for the
+/// claimed start to finish before connecting instead of missing the bind
+/// (`docs/invocation.md`, "Change workspace": the hub retries the same
+/// child id once when the old process exits).
 #[test]
 fn a_failed_moved_child_retry_attaches_the_losing_callback() {
-    for feed_first in [true, false] {
+    for first_is_follow in [true, false] {
         let temp = Temp::new();
         let workspace = temp.workspace();
         let target = temp.dir.join("elsewhere");
@@ -2828,7 +2918,8 @@ fn a_failed_moved_child_retry_attaches_the_losing_callback() {
         let starter = FailOnceThenBind::new(&temp.dir);
         let hub = temp.hub(starter.clone());
         // The move-time reach is the initial attempt: it fails, and the
-        // old log still ends `moved`.
+        // old log still ends `moved` (`docs/invocation.md`, "Change
+        // workspace": the retry follows the initial attempt).
         reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
         assert_eq!(
             starter.attempts().len(),
@@ -2844,30 +2935,83 @@ fn a_failed_moved_child_retry_attaches_the_losing_callback() {
         lock(&relays).subscribed.push((old.clone(), level.clone()));
         let (write, _) = UnixStream::pair().unwrap();
         let writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(write));
-        if feed_first {
-            drop(retry_after_exit(
-                &hub,
-                &SessionId(old.clone()),
-                &SessionId(next.clone()),
-            ));
-            follow(&hub, &writer, &relays, &old);
-        } else {
-            follow(&hub, &writer, &relays, &old);
-            drop(retry_after_exit(
-                &hub,
-                &SessionId(old.clone()),
-                &SessionId(next.clone()),
-            ));
-        }
+        let (entered_tx, entered) = mpsc::channel();
+        let (release_tx, release) = mpsc::channel::<()>();
+        *lock(&starter.entered) = Some(entered_tx);
+        *lock(&starter.release) = Some(release);
+        starter.holding.store(true, Ordering::SeqCst);
+        let (first_tx, first_done) = mpsc::channel();
+        let first = thread::Builder::new()
+            .name("first-old-exit".to_owned())
+            .spawn({
+                let hub = Arc::clone(&hub);
+                let relays = Arc::clone(&relays);
+                let writer = Arc::clone(&writer);
+                let (from, next) = (old.clone(), next.clone());
+                move || {
+                    if first_is_follow {
+                        follow(&hub, &writer, &relays, &from);
+                    } else {
+                        drop(retry_after_exit(&hub, &SessionId(from), &SessionId(next)));
+                    }
+                    first_tx.send(()).unwrap_or(());
+                }
+            })
+            .unwrap();
+        // The winning retry is inside the starter before the peer runs:
+        // the channel says so, never a sleep.
+        assert!(
+            Deadline::after(DEADLINE).recv(&entered).is_ok(),
+            "the winning retry reaches the starter"
+        );
+        // The peer runs only now, so its contention signal proves it
+        // reached the same child's held guard before blocking on it.
+        let (contended_tx, contended) = mpsc::channel();
+        *lock(&hub.on_retry_contended) = Some(Box::new(move || {
+            contended_tx.send(()).unwrap_or(());
+        }));
+        let (second_tx, second_done) = mpsc::channel();
+        let second = thread::Builder::new()
+            .name("second-old-exit".to_owned())
+            .spawn({
+                let hub = Arc::clone(&hub);
+                let relays = Arc::clone(&relays);
+                let writer = Arc::clone(&writer);
+                let (from, next) = (old.clone(), next.clone());
+                move || {
+                    if first_is_follow {
+                        drop(retry_after_exit(&hub, &SessionId(from), &SessionId(next)));
+                    } else {
+                        follow(&hub, &writer, &relays, &from);
+                    }
+                    second_tx.send(()).unwrap_or(());
+                }
+            })
+            .unwrap();
+        assert!(
+            Deadline::after(DEADLINE).recv(&contended).is_ok(),
+            "the losing callback sees the child's start guard held"
+        );
+        drop(release_tx);
+        // Each worker's result arrives through its channel under the
+        // deadline; only then do the joins run, so a regression fails
+        // the test instead of hanging it.
+        assert!(
+            Deadline::after(DEADLINE).recv(&first_done).is_ok(),
+            "the winning retry answers"
+        );
+        assert!(
+            Deadline::after(DEADLINE).recv(&second_done).is_ok(),
+            "the losing callback answers"
+        );
+        first.join().unwrap();
+        second.join().unwrap();
+        // `docs/invocation.md`, "Change workspace": the hub retries the
+        // same child id once when the old process exits.
         assert_eq!(
             starter.attempts().len(),
             2,
             "one retry follows the initial attempt"
-        );
-        assert_eq!(
-            temp.hub_log().matches("could not start.").count(),
-            1,
-            "only the failed initial attempt writes a diagnostic"
         );
         let held = lock(&relays);
         assert_eq!(
@@ -2885,115 +3029,75 @@ fn a_failed_moved_child_retry_attaches_the_losing_callback() {
 
 /// The relay-end `follow` retries a failed moved child on the old
 /// socket's EOF even when the feed never observes the old process exit:
-/// the retry does not wait for the feed's scan.
+/// the retry does not wait for the feed's scan. With and without a saved
+/// subscription, the shared decision still makes the one retry; only
+/// attaching needs the kept level (`docs/invocation.md`, "Change
+/// workspace": the hub retries the same child id once when the old
+/// process exits).
 #[test]
 fn a_failed_moved_child_retries_on_old_exit_before_the_feed_scan() {
-    let temp = Temp::new();
-    let workspace = temp.workspace();
-    let target = temp.dir.join("elsewhere");
-    fs::create_dir_all(&target).unwrap();
-    let old = id(1);
-    let next = id(2);
-    write_log(
-        &temp.dir,
-        &old,
-        &workspace,
-        None,
-        &[moved_line(&old, &next, &target.to_string_lossy())],
-    );
-    let starter = FakeStarter::exit_with(
-        &temp.dir,
-        failure(
-            ErrorCode::ExtensionRequiredFailed,
-            "the new process refused.",
-        ),
-    );
-    let hub = temp.hub(starter.clone());
-    reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
-    assert_eq!(
-        starter.rewound().len(),
-        1,
-        "the move-time start was attempted once"
-    );
-    let relays: Arc<Mutex<crate::relay::Relays>> =
-        Arc::new(Mutex::new(crate::relay::Relays::default()));
-    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
-        .as_object()
-        .unwrap()
-        .clone();
-    lock(&relays).subscribed.push((old.clone(), level));
-    let (write, _) = UnixStream::pair().unwrap();
-    // No feed callback runs: the old process exits before the scan.
-    follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
-    assert_eq!(
-        starter.rewound().len(),
-        2,
-        "one retry follows the initial attempt"
-    );
-    assert_eq!(
-        continued(&temp.dir, &SessionId(old.clone())),
-        Some(SessionId(next)),
-        "the old log stays ended"
-    );
-    assert_eq!(
-        temp.hub_log().matches("could not start.").count(),
-        2,
-        "the initial attempt and its one retry each write one diagnostic"
-    );
-}
-
-/// `follow` makes the shared retry decision even when no old
-/// subscription was saved: only attaching needs the kept level, so the
-/// child still starts and no relay is published for it.
-#[test]
-fn a_failed_moved_child_retries_without_a_saved_subscription() {
-    let temp = Temp::new();
-    let workspace = temp.workspace();
-    let target = temp.dir.join("elsewhere");
-    fs::create_dir_all(&target).unwrap();
-    let old = id(1);
-    let next = id(2);
-    write_log(
-        &temp.dir,
-        &old,
-        &workspace,
-        None,
-        &[moved_line(&old, &next, &target.to_string_lossy())],
-    );
-    let starter = FakeStarter::exit_with(
-        &temp.dir,
-        failure(
-            ErrorCode::ExtensionRequiredFailed,
-            "the new process refused.",
-        ),
-    );
-    let hub = temp.hub(starter.clone());
-    reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
-    assert_eq!(
-        starter.rewound().len(),
-        1,
-        "the move-time start was attempted once"
-    );
-    let relays: Arc<Mutex<crate::relay::Relays>> =
-        Arc::new(Mutex::new(crate::relay::Relays::default()));
-    let (write, _) = UnixStream::pair().unwrap();
-    follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
-    assert_eq!(
-        starter.rewound().len(),
-        2,
-        "one retry follows the initial attempt"
-    );
-    let held = lock(&relays);
-    assert!(
-        held.entries.is_empty(),
-        "no relay without a level to attach"
-    );
-    assert_eq!(held.subscription(&next), None, "no level reaches the child");
-    assert_eq!(
-        continued(&temp.dir, &SessionId(old.clone())),
-        Some(SessionId(next)),
-        "the old log stays ended"
-    );
+    for saved_subscription in [true, false] {
+        let temp = Temp::new();
+        let workspace = temp.workspace();
+        let target = temp.dir.join("elsewhere");
+        fs::create_dir_all(&target).unwrap();
+        let old = id(1);
+        let next = id(2);
+        write_log(
+            &temp.dir,
+            &old,
+            &workspace,
+            None,
+            &[moved_line(&old, &next, &target.to_string_lossy())],
+        );
+        let starter = FakeStarter::exit_with(
+            &temp.dir,
+            failure(
+                ErrorCode::ExtensionRequiredFailed,
+                "the new process refused.",
+            ),
+        );
+        let hub = temp.hub(starter.clone());
+        reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
+        // `docs/invocation.md`, "Change workspace": the retry follows the
+        // initial attempt.
+        assert_eq!(
+            starter.rewound().len(),
+            1,
+            "the move-time start was attempted once"
+        );
+        let relays: Arc<Mutex<crate::relay::Relays>> =
+            Arc::new(Mutex::new(crate::relay::Relays::default()));
+        let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        if saved_subscription {
+            lock(&relays).subscribed.push((old.clone(), level));
+        }
+        let (write, _) = UnixStream::pair().unwrap();
+        // No feed callback runs: the old process exits before the scan.
+        follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
+        // `docs/invocation.md`, "Change workspace": the hub retries the
+        // same child id once when the old process exits.
+        assert_eq!(
+            starter.rewound().len(),
+            2,
+            "one retry follows the initial attempt"
+        );
+        assert_eq!(
+            continued(&temp.dir, &SessionId(old.clone())),
+            Some(SessionId(next.clone())),
+            "the old log stays ended"
+        );
+        let held = lock(&relays);
+        // The retry fails, so it attaches nothing either way; without a
+        // saved level there is nothing to attach.
+        assert!(held.entries.is_empty(), "a failed retry attaches nothing");
+        if !saved_subscription {
+            assert_eq!(held.subscription(&next), None, "no level reaches the child");
+        }
+    }
 }
 
 /// A failed old-exit retry stays consumed: no later old-exit callback
@@ -3042,6 +3146,7 @@ fn a_failed_old_exit_retry_is_never_repeated() {
         &SessionId(old.clone()),
         &SessionId(next.clone()),
     ));
+    // `docs/invocation.md`, "Change workspace": the hub retries the same child id once when the old process exits.
     assert_eq!(
         starter.rewound().len(),
         2,

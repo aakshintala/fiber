@@ -585,9 +585,11 @@ impl Hub {
 
     /// Claims the single old-exit retry of the recorded child `next`:
     /// true for the first old-exit callback to ask, false after. Both
-    /// old-exit paths consult it under the starting-map lock, so the two
-    /// callbacks make at most one retry attempt even when that attempt
-    /// fails. The move-time `reach` never claims.
+    /// old-exit paths consult it while holding the child's start guard,
+    /// so the first to lock starts and the loser blocks until that start
+    /// finishes before connecting; the two callbacks make at most one
+    /// retry attempt even when that attempt fails. The move-time `reach`
+    /// never claims.
     pub(crate) fn claim_retry(&self, next: &SessionId) -> bool {
         let mut starting = lock(&self.starting);
         let slot = starting.entry(next.clone()).or_insert_with(StartSlot::new);

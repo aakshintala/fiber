@@ -91,11 +91,26 @@ pub(crate) fn reach(
     // Admission first: a rewind admitted before the store reaches its
     // bind or refuses, and one after is refused at once. The guard
     // spans the whole reach.
-    let _admitted = hub.admit()?;
+    let admitted = hub.admit()?;
     let guard = guard_for(hub, next);
     #[cfg(test)]
     crate::connection::probe_retry_contention(hub, &guard);
     let held = lock(&guard);
+    reach_locked(hub, from, next, held, admitted)
+}
+
+/// The body of [`reach`] after admission and the per-child guard: the
+/// socket fast path, the resume fallback, and the recorded-workspace
+/// start with its bind wait. The caller holds both guards across the
+/// call, so two starts of one session serialize; the resume path drops
+/// the start guard before the shared gate, as [`reach`] documents.
+fn reach_locked(
+    hub: &Arc<Hub>,
+    from: &SessionId,
+    next: &SessionId,
+    held: std::sync::MutexGuard<'_, ()>,
+    _admitted: crate::connection::Admitted<'_>,
+) -> Result<UnixStream, crate::connection::Refused> {
     let socket = hub.home.join("run").join(&next.0);
     if let Ok(stream) = UnixStream::connect(&socket) {
         return Ok(stream);
@@ -230,21 +245,29 @@ pub(crate) fn reach(
 /// Starts `next` after `from`'s old process exits: the retry both
 /// old-exit callbacks (the relay-end `follow` and the feed's `on_rewound`)
 /// share, so the two paths reach one decision point. The move-time
-/// `reach` stays the initial attempt. The callback that loses the claim
-/// attaches to the winner's child when it runs, and starts nothing when
-/// the claimed attempt failed.
+/// `reach` stays the initial attempt. The claim runs under the child's
+/// start guard, so the first callback to lock it starts and the loser
+/// blocks until that start finishes before connecting: it attaches to
+/// the winner's child when it runs, and starts nothing when the claimed
+/// attempt failed.
 pub(crate) fn retry_after_exit(
     hub: &Arc<Hub>,
     from: &SessionId,
     next: &SessionId,
 ) -> Option<UnixStream> {
+    let guard = guard_for(hub, next);
     #[cfg(test)]
-    crate::connection::probe_retry_contention(hub, &guard_for(hub, next));
+    crate::connection::probe_retry_contention(hub, &guard);
+    let held = lock(&guard);
     if !hub.claim_retry(next) {
+        drop(held);
         let socket = hub.home.join("run").join(&next.0);
         return UnixStream::connect(&socket).ok();
     }
-    reach(hub, from, next).ok()
+    let Ok(admitted) = hub.admit() else {
+        return None;
+    };
+    reach_locked(hub, from, next, held, admitted).ok()
 }
 
 /// Subscribes the connection to the session `old`'s log continues in, at
