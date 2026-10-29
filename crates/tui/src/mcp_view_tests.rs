@@ -449,7 +449,7 @@ fn clicking_selects_the_row_enter_acts_on() {
 }
 
 /// The wheel shifts the visible rows three a step, keeping a visible
-/// selection where it was (`docs/tui.md`, "Swapped views"; see #3578).
+/// selection where it was (`docs/tui.md:576`, "Swapped views"; see #3578).
 #[test]
 fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
     let rows: Vec<McpServerRow> = (0..30).map(|n| ready(&format!("s{n:02}"))).collect();
@@ -462,4 +462,31 @@ fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
     assert!(matches!(mcp.wheel(false, &context), Act::Stay));
     assert_eq!(mcp.list.top(), top + 3);
     assert_eq!(mcp.list.selected(), selected, "a visible selection stays");
+}
+
+/// A wheel that moves clears what was said, while a wheel clamped at the
+/// top preserves it (`docs/tui.md:576`).
+#[test]
+fn wheel_move_clears_and_clamp_preserves_what_was_said() {
+    let rows: Vec<McpServerRow> = (0..30).map(|n| ready(&format!("s{n:02}"))).collect();
+    let (fake, mut mcp) = opened(&rows);
+    let context = context(&fake);
+    mcp.said = vec!["noted".to_owned()];
+    let (top, selected) = (mcp.list.top(), mcp.list.selected());
+    assert!(matches!(mcp.wheel(false, &context), Act::Stay));
+    assert_eq!(mcp.list.top(), top + 3, "the wheel moves three rows");
+    assert!(mcp.said.is_empty(), "a moving wheel clears the message");
+    mcp.said = vec!["noted".to_owned()];
+    assert!(matches!(mcp.wheel(true, &context), Act::Stay));
+    assert!(matches!(mcp.wheel(true, &context), Act::Stay));
+    let (clamped_top, clamped_selected) = (mcp.list.top(), mcp.list.selected());
+    mcp.said = vec!["held".to_owned()];
+    assert!(matches!(mcp.wheel(true, &context), Act::Stay));
+    assert_eq!(
+        (mcp.list.top(), mcp.list.selected()),
+        (clamped_top, clamped_selected),
+        "a clamped wheel moves nothing"
+    );
+    assert_eq!(mcp.said, ["held"], "a clamped wheel preserves the message");
+    let _ = selected;
 }

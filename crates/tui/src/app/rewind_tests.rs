@@ -2682,3 +2682,92 @@ fn wheel_over_rewind_moves_the_list_not_the_conversation() {
         "a selection still on screen stays where it was"
     );
 }
+
+/// The wheel that carries focus offscreen moves the selection and follows
+/// it to the new row's rewind target, never the conversation
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_carrying_focus_offscreen_follows_the_new_target() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    app.set_size(80, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    let lines = open(&mut app, &clock);
+    let mut history = segment_a();
+    history.extend([
+        history_line(
+            SESSION,
+            "turn_started",
+            7,
+            Some("t_3"),
+            None,
+            message_input("third"),
+        ),
+        history_line(SESSION, "step_started", 8, Some("t_3"), None, json!({})),
+        history_line(
+            SESSION,
+            "turn_completed",
+            9,
+            Some("t_3"),
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ]);
+    for (n, at) in (4..=20).zip((10..).step_by(3)) {
+        history.extend([
+            history_line(
+                SESSION,
+                "turn_started",
+                at,
+                Some(format!("t_{n}").as_str()),
+                None,
+                message_input(format!("turn {n}").as_str()),
+            ),
+            history_line(
+                SESSION,
+                "step_started",
+                at + 1,
+                Some(format!("t_{n}").as_str()),
+                None,
+                json!({}),
+            ),
+            history_line(
+                SESSION,
+                "turn_completed",
+                at + 2,
+                Some(format!("t_{n}").as_str()),
+                None,
+                json!({"outcome": "completed"}),
+            ),
+        ]);
+    }
+    accept(&mut app, &lines[0]["id"], history);
+    let top = app.top();
+    for _ in 0..40 {
+        app.on_key(crate::keys::Key::Up, clock.now());
+    }
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.list.selected(), 0, "many Ups reach the first row");
+    assert_eq!(frame.list.top(), 0);
+    let before = point(&app);
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.list.top(), 3, "one step down moves three rows");
+    assert_eq!(
+        frame.list.selected(),
+        3,
+        "the focus follows into the window"
+    );
+    assert_ne!(
+        point(&app),
+        before,
+        "the rewind target follows the selection"
+    );
+    assert_eq!(
+        point(&app),
+        app.rewind.turn_bounds(3).first().cloned(),
+        "the target is the new row's first boundary"
+    );
+}

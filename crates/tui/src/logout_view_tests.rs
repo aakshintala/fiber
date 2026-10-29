@@ -7,6 +7,8 @@ use crate::configure::{LoginKind, LoginTarget};
 use crate::configure_fake::Fake;
 use crate::keys::Key;
 use crate::settings_view::{Act, Ctx};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use std::path::Path;
 
 /// Thirty key providers: enough rows that the window moves three and
@@ -53,7 +55,7 @@ fn ctx_h(fake: &Fake, height: usize) -> Ctx<'_> {
 
 /// The wheel over the rows shifts the window three rows and keeps a
 /// focus still on screen: five Downs put it mid-window, so one step
-/// down moves the window three rows under it.
+/// down moves the window three rows under it (`docs/tui.md:576`).
 #[test]
 fn wheel_keeps_a_visible_focus_and_shifts_the_window_three() {
     let fake = fake_with(many_targets());
@@ -106,7 +108,8 @@ fn keyboard_navigation_after_wheel_keeps_its_one_target_step() {
 }
 
 /// The wheel up from the top row moves nothing, and the confirm takes
-/// no wheel: Enter asks, and the wheel over it changes nothing.
+/// no wheel: Enter asks, and the wheel over it changes nothing
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_up_at_the_top_and_over_the_confirm_moves_nothing() {
     let fake = fake_with(many_targets());
@@ -125,4 +128,52 @@ fn wheel_up_at_the_top_and_over_the_confirm_moves_nothing() {
         logout.selected, 4,
         "the wheel over the confirm keeps the confirmed row"
     );
+}
+
+/// The wheel after keyboard focus leaves the stored window steps three
+/// rows from what is visible, not the stale stored top (`docs/tui.md:576`).
+#[test]
+fn wheel_after_keyboard_outside_the_window_steps_from_what_is_visible() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 12);
+    let mut logout = Logout::open(&context);
+    for _ in 0..15 {
+        logout.key(&Key::Down, &context);
+    }
+    let (stored, selected) = (logout.top, logout.selected);
+    assert_eq!(stored, 0, "the keys never move the stored top");
+    let shown = super::shown_body_rows(12);
+    let rows = logout.body_len(80);
+    let end = rows.saturating_sub(shown);
+    let low = selected.saturating_add(1).saturating_sub(shown);
+    let rendered = stored.clamp(low, selected).min(end);
+    assert_ne!(rendered, stored, "the focus left the stored window");
+    assert!(matches!(logout.wheel(false, &context), Act::Stay));
+    assert_eq!(
+        logout.top,
+        rendered.saturating_add(3).min(end),
+        "one step down moves three rows from what was visible"
+    );
+}
+
+/// The body length counts wrapped status rows, and a short draw clips
+/// safely (`docs/tui.md:576`).
+#[test]
+fn body_len_counts_wrapped_status_and_short_draw_clips() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut logout = Logout::open(&context);
+    let plain = logout.body_len(80);
+    logout.said = vec!["x".repeat(200)];
+    let wrapped = logout.body_len(80);
+    assert!(
+        wrapped > plain + 1,
+        "a wrapped status adds rows: {plain} vs {wrapped}"
+    );
+    logout.said.clear();
+    assert_eq!(logout.body_len(80), plain, "clearing restores the count");
+    let area = Rect::new(0, 0, 80, 2);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    let _ = logout.draw(area, &mut buf, &mut targets);
 }

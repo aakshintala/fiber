@@ -29,9 +29,12 @@ fn wheel_targets_window_moves_three_rows_and_clamps_to_targets() {
         wheel_targets_window(false, 2, 0, 20, 6, &[0, 2, 5, 7, 9]),
         (5, 3)
     );
+    // A stale stored top steps from what is visible: keyboard focus on
+    // row 15 renders at top 10, so one step down reaches top 13 with the
+    // focus still on screen (`docs/tui.md:576`).
     assert_eq!(
         wheel_targets_window(false, 15, 3, 20, 6, &[0, 2, 5, 7, 9]),
-        (9, 6)
+        (15, 13)
     );
     assert_eq!(wheel_targets_window(false, 1, 0, 20, 6, &[]), (1, 3));
     assert_eq!(wheel_targets_window(false, 1, 0, 20, 0, &[1, 2]), (1, 0));
@@ -773,7 +776,8 @@ fn a_cramped_frame_skips_the_field_at_the_footer() {
     assert_eq!(effect, Effect::None);
 }
 
-/// One wheel step moves the window three rows, clamped at either end.
+/// One wheel step moves the window three rows, clamped at either end
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_moves_the_window_three_rows() {
     let (selected, top) = wheel_window(false, 0, 0, 20, 6, 3);
@@ -792,7 +796,7 @@ fn wheel_moves_the_window_three_rows() {
 }
 
 /// A selection still on screen stays where it was; one that leaves the
-/// window moves to the nearest shown row.
+/// window moves to the nearest shown row (`docs/tui.md:576`).
 #[test]
 fn wheel_keeps_a_visible_selection_and_clamps_a_leaving_one() {
     // In the middle, at the first row, and at the last row: all stay.
@@ -809,7 +813,7 @@ fn wheel_keeps_a_visible_selection_and_clamps_a_leaving_one() {
 }
 
 /// An empty or short list, or a zero-height window, does not move, and a
-/// blurred selection stays blurred.
+/// blurred selection stays blurred (`docs/tui.md:576`).
 #[test]
 fn wheel_leaves_empty_short_and_zero_height_lists() {
     assert_eq!(wheel_window(false, 0, 0, 0, 6, 3), (0, 0));
@@ -826,7 +830,7 @@ fn wheel_leaves_empty_short_and_zero_height_lists() {
 }
 
 /// `List::wheel` moves the window the shared helper computes: a stale
-/// top clamps into range before stepping.
+/// top clamps into range before stepping (`docs/tui.md:576`).
 #[test]
 fn list_wheel_shifts_the_window_and_clamps_the_selection() {
     let mut list = List::default();
@@ -846,4 +850,38 @@ fn list_wheel_shifts_the_window_and_clamps_the_selection() {
     stale.wheel(false, 20, 6, 3);
     assert_eq!(stale.top(), 14);
     assert_eq!(stale.selected(), 19);
+}
+
+/// A past-end selection stays past the last row while the window still
+/// steps three rows (`docs/tui.md:576`).
+#[test]
+fn wheel_window_keeps_a_past_end_selection() {
+    assert_eq!(wheel_window(false, 20, 0, 20, 6, 3), (20, 3));
+    assert_eq!(wheel_window(true, 20, 6, 20, 6, 3), (20, 3));
+}
+
+/// A selection exactly on the new top stays, and a target exactly on the
+/// exclusive bottom stays outside: the window still moves three rows
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_targets_window_holds_exact_edges() {
+    // Selected target 0 sits exactly on the new top 0 after a wheel-up
+    // that cannot move: it stays.
+    assert_eq!(
+        wheel_targets_window(true, 0, 0, 20, 6, &[0, 2, 5, 7, 9]),
+        (0, 0)
+    );
+    // Selected row 3 sits exactly on the new top 3 after one step down
+    // from a stale top: it stays, while a `<=` outside check would jump
+    // it to the next target 5.
+    assert_eq!(
+        wheel_targets_window(false, 3, 0, 20, 6, &[0, 2, 5, 7, 9]),
+        (3, 3)
+    );
+    // Target 7 sits exactly on the exclusive bottom of the new window
+    // [1, 7): it stays outside, so a focus above clamps to 5, not 7.
+    assert_eq!(
+        wheel_targets_window(true, 9, 0, 20, 6, &[0, 2, 5, 7, 9]),
+        (5, 1)
+    );
 }

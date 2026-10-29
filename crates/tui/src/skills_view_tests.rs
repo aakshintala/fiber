@@ -1434,7 +1434,7 @@ fn resize_redraws_rows_details_and_text_at_the_new_width() {
 }
 
 /// The wheel shifts the visible rows three a step, keeping a visible
-/// selection where it was (`docs/tui.md`, "Swapped views"; see #3578).
+/// selection where it was (`docs/tui.md:576`, "Swapped views"; see #3578).
 #[test]
 fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
     let fake = fake_with(off(&[], &[]));
@@ -1448,4 +1448,35 @@ fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
     assert!(matches!(skills.wheel(false, &ctx(&fake)), Act::Stay));
     assert_eq!(skills.list.top(), top + 3);
     assert_eq!(skills.list.selected(), 10, "a visible selection stays");
+}
+
+/// A wheel that moves clears what was said, while a clamped wheel keeps it
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_move_clears_and_clamp_preserves_what_was_said() {
+    let fake = fake_with(off(&[], &[]));
+    let infos: Vec<SkillInfo> = (0..30)
+        .map(|n| repository(&format!("skill-{n:02}")))
+        .collect();
+    let mut skills = opened(&fake, &infos);
+    skills.click(Spot::Row(10), &ctx(&fake));
+    skills.said = vec!["noted".to_owned()];
+    let top = skills.list.top();
+    assert!(matches!(skills.wheel(false, &ctx(&fake)), Act::Stay));
+    assert_eq!(skills.list.top(), top + 3, "the wheel moves three rows");
+    assert!(skills.said.is_empty(), "a moving wheel clears the message");
+    assert!(matches!(skills.wheel(true, &ctx(&fake)), Act::Stay));
+    let (clamped_top, clamped_selected) = (skills.list.top(), skills.list.selected());
+    skills.said = vec!["held".to_owned()];
+    assert!(matches!(skills.wheel(true, &ctx(&fake)), Act::Stay));
+    assert_eq!(
+        (skills.list.top(), skills.list.selected()),
+        (clamped_top, clamped_selected),
+        "a clamped wheel moves nothing"
+    );
+    assert_eq!(
+        skills.said,
+        ["held"],
+        "a clamped wheel preserves the message"
+    );
 }

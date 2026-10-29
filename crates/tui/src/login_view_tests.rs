@@ -3583,7 +3583,7 @@ fn many_targets() -> Vec<LoginTarget> {
 
 /// The wheel over the rows shifts the window three rows and keeps a
 /// focus still on screen: five Downs put it mid-window, so one step
-/// down moves the window three rows under it.
+/// down moves the window three rows under it (`docs/tui.md:576`).
 #[test]
 fn wheel_keeps_a_visible_focus_and_shifts_the_window_three() {
     let fake = fake_with(many_targets());
@@ -3601,6 +3601,54 @@ fn wheel_keeps_a_visible_focus_and_shifts_the_window_three() {
         login.selected, 6,
         "a focus still on screen stays where it was"
     );
+}
+
+/// The wheel after keyboard focus leaves the stored window steps three
+/// rows from what is visible, not the stale stored top (`docs/tui.md:576`).
+#[test]
+fn wheel_after_keyboard_outside_the_window_steps_from_what_is_visible() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 12);
+    let mut login = Login::open(&context);
+    for _ in 0..15 {
+        login.key(&Key::Down, &context);
+    }
+    let (stored, selected) = (login.top, login.selected);
+    assert_eq!(stored, 0, "the keys never move the stored top");
+    let shown = super::shown_body_rows(12);
+    let rows = login.body_len(80);
+    let end = rows.saturating_sub(shown);
+    let low = selected.saturating_add(1).saturating_sub(shown);
+    let rendered = stored.clamp(low, selected).min(end);
+    assert_ne!(rendered, stored, "the focus left the stored window");
+    assert!(matches!(login.wheel(false, &context), Act::Stay));
+    assert_eq!(
+        login.top,
+        rendered.saturating_add(3).min(end),
+        "one step down moves three rows from what was visible"
+    );
+}
+
+/// The body length counts wrapped status rows, and a short draw clips
+/// safely (`docs/tui.md:576`).
+#[test]
+fn body_len_counts_wrapped_status_and_short_draw_clips() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut login = Login::open(&context);
+    let plain = login.body_len(80);
+    login.said = vec!["x".repeat(200)];
+    let wrapped = login.body_len(80);
+    assert!(
+        wrapped > plain + 1,
+        "a wrapped status adds rows: {plain} vs {wrapped}"
+    );
+    login.said.clear();
+    assert_eq!(login.body_len(80), plain, "clearing restores the count");
+    let area = Rect::new(0, 0, 80, 2);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    let _ = login.draw(area, &mut buf, &mut targets);
 }
 
 /// The wheel clamps a focus that leaves the window to the nearest

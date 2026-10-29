@@ -1208,3 +1208,79 @@ fn the_footer_rows_draw_dim_on_the_buffer() {
     let hint = row_with(&buf, HINT, 80);
     assert_eq!(buf[(0, hint)].fg, Role::Muted.color(), "hint not dim");
 }
+
+/// A wheel with no height, or over a closed offer, moves nothing and keeps
+/// the cursor and the choices (`docs/tui.md:576`).
+#[test]
+fn wheel_with_no_height_or_closed_keeps_everything() {
+    let mut offer = holding(10);
+    let (top, cursor, choices) = {
+        let held = offer.held.as_ref().expect("open");
+        (held.top, held.cursor, held.decisions.clone())
+    };
+    offer.wheel(false, 80, 0);
+    offer.wheel(true, 80, 0);
+    {
+        let held = offer.held.as_ref().expect("open");
+        assert_eq!(
+            (held.top, held.cursor),
+            (top, cursor),
+            "no height moves nothing"
+        );
+        assert_eq!(held.decisions, choices, "no height keeps the choices");
+    }
+    let mut closed = Offer::default();
+    closed.wheel(false, 80, 10);
+    closed.wheel(true, 80, 10);
+    assert!(!closed.open(), "a closed offer stays closed");
+}
+
+/// A wheel that carries the cursor above the window clamps to the first
+/// position ending past the top, excluding one ending exactly there, and
+/// never changes the choices (`docs/tui.md:576`).
+#[test]
+fn wheel_from_above_clamps_past_an_exact_top_edge() {
+    let mut offer = holding(10);
+    {
+        let held = offer.held.as_mut().expect("open");
+        held.top = 3;
+        held.cursor = 0;
+    }
+    let choices = offer.held.as_ref().expect("open").decisions.clone();
+    offer.wheel(false, 80, 24);
+    let (top, cursor, kept) = {
+        let held = offer.held.as_ref().expect("open");
+        (held.top, held.cursor, held.decisions.clone())
+    };
+    assert_eq!(top, 6, "one step down moves three rows");
+    assert_eq!(
+        cursor, 1,
+        "a position ending exactly at the top stays above"
+    );
+    assert_eq!(kept, choices, "the wheel keeps the choices");
+}
+
+/// A wheel that carries the cursor below the window clamps to the last
+/// position starting before the bottom, excluding one starting exactly
+/// there, and never changes the choices (`docs/tui.md:576`).
+#[test]
+fn wheel_from_below_clamps_before_an_exact_bottom_edge() {
+    let mut offer = holding(10);
+    {
+        let held = offer.held.as_mut().expect("open");
+        held.top = 3;
+        held.cursor = 9;
+    }
+    let choices = offer.held.as_ref().expect("open").decisions.clone();
+    offer.wheel(false, 80, 24);
+    let (top, cursor, kept) = {
+        let held = offer.held.as_ref().expect("open");
+        (held.top, held.cursor, held.decisions.clone())
+    };
+    assert_eq!(top, 6, "one step down moves three rows");
+    assert_eq!(
+        cursor, 6,
+        "a position starting exactly at the bottom stays below"
+    );
+    assert_eq!(kept, choices, "the wheel keeps the choices");
+}

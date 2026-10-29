@@ -705,22 +705,10 @@ impl Login {
         Act::Stay
     }
 
-    /// How many body rows the provider list holds at `width` wide: one
-    /// per item, then what the last action said with its blank row, at
-    /// least three so the window never clips them.
+    /// How many body rows the provider list holds at `width` wide, shared
+    /// with `/logout` so both windows shift alike.
     fn body_len(&self, width: usize) -> usize {
-        let mut rows = self.items.len();
-        if !self.said.is_empty() {
-            let width = u16::try_from(width).unwrap_or(u16::MAX);
-            let overlay = overlay::width(u16::MAX, 96, width);
-            let inner = overlay::inner(overlay);
-            rows = rows.saturating_add(1);
-            for line in &self.said {
-                rows =
-                    rows.saturating_add(wrapped_rows(line, usize::from(inner), Style::new()).len());
-            }
-        }
-        rows.max(3)
+        crate::swapped::body_len(self.items.len(), &self.said, width)
     }
 
     /// Opens the selected row: a key or secret row opens the panel, a

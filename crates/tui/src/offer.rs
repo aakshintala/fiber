@@ -493,8 +493,13 @@ impl Offer {
         let (from, to) = span(held.cursor);
         let top = held.top;
         let bottom = top.saturating_add(height);
-        if to <= top || from >= bottom {
-            if from < top {
+        // `above` is read once for the outside check and the direction:
+        // re-testing `from < top` inside would leave equivalent mutants on
+        // the equality case, which never reaches the inner branch since a
+        // cursor starting exactly at the top is still on screen (removed).
+        let above = to <= top;
+        if above || from >= bottom {
+            if above {
                 // The cursor sits above the window: the first position
                 // whose rows end past the top is nearest.
                 if let Some(c) = (0..positions).find(|c| span(*c).1 > top) {

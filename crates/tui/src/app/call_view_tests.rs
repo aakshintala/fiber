@@ -2582,3 +2582,80 @@ fn wheel_over_a_call_view_with_a_missing_page_sends_artifact_page() {
     }
     assert!(asked.is_some(), "the wheel asks for the missing page");
 }
+
+/// A wheel-up pauses following, a wheel-down before the tail stays
+/// unfollowed, and a wheel-down reaching the tail resumes it, never the
+/// conversation (`docs/tui.md:576`).
+#[test]
+fn wheel_up_pauses_and_down_resumes_follow_only_at_the_tail() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    assert!(app.call_view().expect("open").follow, "following starts on");
+    let top = app.top();
+    let _ = app.on_wheel(&wheel(10, 5, false));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert!(
+        !app.call_view().expect("open").follow,
+        "a wheel-up pauses following"
+    );
+    let _ = app.on_wheel(&wheel(10, 5, false));
+    let _ = app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert!(
+        !app.call_view().expect("open").follow,
+        "a wheel-down before the tail stays unfollowed"
+    );
+    for _ in 0..40 {
+        app.on_wheel(&wheel(10, 5, true));
+        if app.call_view().expect("open").follow {
+            break;
+        }
+    }
+    assert!(
+        app.call_view().expect("open").follow,
+        "a wheel-down reaching the tail resumes following"
+    );
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+}
+
+/// A wheel-down before the tail never refetches the fill, while one
+/// reaching the tail does when it is missing (`docs/tui.md:576`).
+#[test]
+fn wheel_down_refetches_a_missing_fill_only_at_the_tail() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    {
+        let view = app.call_view_mut().expect("open");
+        view.pager.fill_next = Some(99999);
+        view.pager.missing.insert(99999);
+    }
+    let sends = sent(app.on_wheel(&wheel(10, 5, true)));
+    assert!(
+        sends
+            .iter()
+            .any(|line| line["args"]["offset"] == json!(99999)),
+        "a wheel-down at the tail refetches the missing fill: {sends:?}"
+    );
+    {
+        let view = app.call_view_mut().expect("open");
+        view.pager.fill_next = Some(99999);
+        view.pager.missing.insert(99999);
+    }
+    app.on_wheel(&wheel(10, 5, false));
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(
+        !app.call_view().expect("open").follow,
+        "wheel-ups leave the tail"
+    );
+    let sends = sent(app.on_wheel(&wheel(10, 5, true)));
+    assert!(
+        sends
+            .iter()
+            .all(|line| line["args"]["offset"] != json!(99999)),
+        "a wheel-down before the tail never refetches the fill: {sends:?}"
+    );
+}
