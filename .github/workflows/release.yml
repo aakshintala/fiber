@@ -450,7 +450,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # The backstop's test job runs this same full suite within these bounds (docs/ci.md, "Job time limits").
     # macOS cold build + full suite 24-26 min (runs 39679547149/39660697905); bound twice cold.
-    timeout-minutes: ${{ matrix.runner == 'macos-26' && 50 || 20 }}
+    # Linux full suite 17-20 min (runs 40487347149/40677917738/40865045602, the last cancelled at the old bound of 20); bound 30, as the backstop test job.
+    timeout-minutes: ${{ matrix.runner == 'macos-26' && 50 || 30 }}
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
     steps:
@@ -541,7 +542,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # The backstop's test job runs this same full suite within these bounds (docs/ci.md, "Job time limits").
     # macOS cold build + full suite 24-26 min (runs 39679547149/39660697905); bound twice cold.
-    timeout-minutes: ${{ matrix.runner == 'macos-26' && 50 || 20 }}
+    # Linux full suite 17-20 min (runs 40487347149/40677917738/40865045602, the last cancelled at the old bound of 20); bound 30, as the backstop test job.
+    timeout-minutes: ${{ matrix.runner == 'macos-26' && 50 || 30 }}
     env:
       VERSION: ${{ needs.nightly-preflight.outputs.nightly-version }}
     steps:
