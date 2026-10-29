@@ -475,6 +475,24 @@ fn plain_concatenated_operands_stay_unmarked() {
 }
 
 #[test]
+fn refused_substitution_concatenations_stay_opaque() {
+    for command in [
+        "git diff $(git merge-base a b)\"..HEAD\"",
+        "git diff $(git merge-base a b)'..HEAD'",
+        "git diff HEAD$(git merge-base a b)..HEAD",
+    ] {
+        let script = super::super::syntax::parse(command).expect("valid shell syntax");
+        assert!(
+            matches!(
+                script.elements[0].stages.as_slice(),
+                [super::super::syntax::Stage::Opaque(_)]
+            ),
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn exact_forms_read_without_paths() {
     // `docs/tools.md`, "Shell", "Effects": if every command is on the
     // read-only list, the call declares `reads` with no paths here.
@@ -1214,10 +1232,18 @@ fn every_command_states_whether_double_dash_ends_flags() {
         ("gh run list", false),
         ("gh run view", false),
     ];
-    assert_eq!(COMMANDS.len(), stated.len());
-    for (command, (name, ends_flags)) in COMMANDS.iter().zip(stated) {
-        assert_eq!(command.name, name);
-        assert_eq!(command.ends_flags, ends_flags, "{name}");
+    for command in COMMANDS {
+        let (_, ends_flags) = stated
+            .iter()
+            .find(|(name, _)| *name == command.name)
+            .unwrap_or_else(|| panic!("missing -- policy for {}", command.name));
+        assert_eq!(command.ends_flags, *ends_flags, "{}", command.name);
+    }
+    for (name, _) in stated {
+        assert!(
+            COMMANDS.iter().any(|command| command.name == name),
+            "stale -- policy for {name}"
+        );
     }
 }
 
