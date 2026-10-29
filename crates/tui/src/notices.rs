@@ -45,6 +45,7 @@ const KINDS: &[(&str, Kind)] = &[
     ("history_loading", Kind::Condition),
     ("hook_failed", Kind::Event),
     ("hub_version", Kind::Event),
+    ("indeterminate", Kind::Event),
     ("instructions_large", Kind::Event),
     ("invalid_arguments", Kind::Event),
     ("io_failed", Kind::Event),
@@ -356,7 +357,7 @@ impl Notices {
     /// built-in row.
     fn hidden(&self, bound: &Bound, width: u16, notice: &Notice) -> bool {
         matches!(
-            bound.notice_lines(&notice.code, &notice.text, width),
+            bound.notice_lines(notice.id, &notice.code, &notice.text, width),
             Some(lines) if lines.is_empty()
         )
     }
@@ -406,7 +407,7 @@ impl Notices {
             .take(SHOWN)
             .fold(usize::from(shown.len() > SHOWN), |rows, notice| {
                 let lines = bound
-                    .notice_lines(&notice.code, &notice.text, width)
+                    .notice_lines(notice.id, &notice.code, &notice.text, width)
                     .map_or(1, |lines| lines.len());
                 rows.saturating_add(lines)
             })
@@ -430,6 +431,13 @@ impl Notices {
                 .map(|notice| (notice.code.clone(), notice.text.clone()))
                 .collect(),
         })
+    }
+
+    /// The stacked notice instances, oldest first: the live set each
+    /// cache prunes against before its next paint, so a faded or
+    /// dismissed notice's animation state goes with the notice.
+    pub(crate) fn live_ids(&self) -> Vec<usize> {
+        self.stack.iter().map(|notice| notice.id).collect()
     }
 
     /// Removes notice `id`, closing an overlay that showed it alone.

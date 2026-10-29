@@ -275,7 +275,18 @@ adds no rail card, and the row stays under "exited". A ✕ on a live row stops t
 focused live row stops it too, after asking ("Quit"); on an unreadable row it does nothing, and with the link down it opens no question. Backspace never stops a session, whatever the row. Delete on a
 selected exited row deletes that session through the hub, after asking, and
 the question names any session `--cascade` would add (`docs/invocation.md`,
-"Deleting and pruning"). A row whose status this terminal cannot read says CANNOT ATTACH and why: "Cannot attach: this session runs Fiber <v>" when the hub runs another Fiber version or commit than this terminal, since a session runs the binary of the hub that started it, with `<v>` as `fiber --version` writes it; otherwise "Cannot attach: its status did not parse". Opening the row shows the same text as a `session_held` notice.
+"Deleting and pruning"). `/delete` deletes the session on screen instead:
+it asks the hub for the exact sessions the delete would remove, asks the
+person with those sessions named, stops every running one first, then
+deletes that same set, which never changes after the question. Esc, a click
+outside the frame or on its ✕ cancels and deletes nothing. It waits for fresh
+exit evidence only for held sessions represented in the feed; a delegate
+shuts down with its parent, and the hub's exact-set `session_held` refusal is
+the backstop. A stop the hub refuses deletes nothing and names the session
+still running; a stop with no answer shows `Stop status unknown`. A delete
+refused because a session is running again keeps the attached session with a
+`Not deleted` notice and does not retry; any other post-stop refusal returns
+home with its stopped rows and the hub's message. A row whose status this terminal cannot read says CANNOT ATTACH and why: "Cannot attach: this session runs Fiber <v>" when the hub runs another Fiber version or commit than this terminal, since a session runs the binary of the hub that started it, with `<v>` as `fiber --version` writes it; otherwise "Cannot attach: its status did not parse". Opening the row shows the same text as a `session_held` notice.
 
 The mouse wheel over the list's rows scrolls the list by three rows,
 leaving the focus where it is.
@@ -1011,7 +1022,7 @@ arrived after `sessions` was sent.
 
 ### Turns
 
-- **One card per turn.** The prompt that starts a turn floats above its card,
+- **One card per turn.** Only the person's prompt floats above its card,
   after a blank row, as a bubble on the right in the `prompt` tint, at most 72%
   of the width: the text padded one column on each side, a ▐ stripe in
   `accent` at its right edge, and "you 14:12" dim and right-aligned under it.
@@ -1025,6 +1036,16 @@ arrived after `sessions` was sent.
   spend during the turn included: "▣ completed · 38s · 12 calls · 18.2k tokens
   · $0.41 · $1.10 on subscription". A figure that is zero is left out, and a
   model with no price shows tokens only (`docs/model-routing.md`, "Cost").
+- **Non-driver messages stay in the card.** A non-driver input message sits
+  inside the card where it landed as a labelled rule. Start-input messages
+  open the card, before any entry, in the input's order. A Fiber message has a
+  muted `Fiber` label, a dim ` · <time> `, and dim text without one leading
+  `Fiber: `; a session message has its current name or id as a secondary
+  label, a dim ` · <time> ` and full-colour text; an extension message has its
+  name as a secondary label, a dim ` · <time> ` and full-colour text. Images
+  draw below text. A blank message draws only its labelled rule. A whole-turn
+  copy includes each message's label and text in draw order; the labelled
+  rule is decoration and is not copied.
 - **Replies lead, tool groups sit back.** Nothing inside the card is indented
   past its one-column padding: replies, summary lines, steering messages and
   answers all start at the same column. A tool group has no band of its own, and its summary line is dim
@@ -1303,6 +1324,7 @@ and an expiry wakes the loop even with no input.
 | `history_loading` | condition | History lands for the pending turn. |
 | `hook_failed` | event | Fades 10 s after it shows. |
 | `hub_version` | event | Fades 10 s after it shows. |
+| `indeterminate` | event | Fades 10 s after it shows. |
 | `instructions_large` | event | Fades 10 s after it shows. |
 | `invalid_arguments` | event | Fades 10 s after it shows. |
 | `io_failed` | event | Fades 10 s after it shows. |
@@ -1874,9 +1896,11 @@ Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  close-all and stop questions, the import report, the reviewer setup, the home screen's delete question or workspace picker, the
-  key map, an approval or question, an offer, the hooks install offer, the Ctrl+R panel, or a
-  notice's whole text; or the `/` or `@` completion panel while focus is not
+  close-all and stop questions, the import report, the reviewer setup, the
+  `/delete` question on an attached session, the session-list delete question
+  on home, the workspace picker, the key map, an approval or question, an
+  offer, the hooks install offer, the Ctrl+R panel, or a notice's whole text;
+  or the `/` or `@` completion panel while focus is not
   in the conversation. An overlay's own keys, such as an approval's ↑ and ↓,
   are not bindings.
 - Picker: the model picker or the credential picker is open. Only its own keys and the global actions
@@ -2011,6 +2035,7 @@ later release still applies.
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/clear` | Starts a fresh session in place, closing the session on screen ("Clearing"). |
 | `/close [all]`, `/stop [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
+| `/delete` | Asks before stopping the session and its cascade, then deletes the exact confirmed set permanently; it never retries a refusal ("The session list"). |
 | `/feedback <description>`, `/bug <description>` | Writes a feedback report with the description, version, platform, doctor output and the diagnostics of the session on screen, and prints its path and the issue link. With no session on screen, the diagnostics are the hub's lines only. A session this machine holds no diagnostic lines for, such as one on a remote hub, still gets its id, the instruction to export its log privately and the hub's lines, with a notice that this machine has no diagnostic lines for it. The report is the one `fiber feedback` writes (`docs/invocation.md`, "Commands and flags"). |
 | `/quit`, `/exit` | Quits ("Quit"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
@@ -2303,8 +2328,11 @@ tui       212   9,804
 ### Overlays
 
 Every surface drawn over the screen shares one frame: the
-key map, the quit question, the close-all question, the stop question, the hooks install offer, home's delete question and workspace picker, the
-`/login` overlay, the Ctrl+R panel, a notice's whole text, the import report, the reviewer setup, the `/` and `@` completion panels, and
+key map, the quit question, the close-all question, the stop question, the
+hooks install offer, the `/delete` question on an attached session, the
+session-list delete question on home, the workspace picker, the `/login`
+overlay, the Ctrl+R panel, a notice's whole text, the import report, the
+reviewer setup, the `/` and `@` completion panels, and
 the model picker inside its view.
 
 - **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,
@@ -2678,7 +2706,7 @@ itself is a separate client of the hub, not a TUI extension.
 | `layout` | Where each region goes: the conversation, the panel, the working line, the steering queue, the input box, the status rows, and any region an extension adds |
 | `home` | Home |
 | `turn_card` | A turn's card and its ▣ line |
-| `prompt` | A person's prompt bubble |
+| `prompt` | Only a person's prompt bubble: a non-driver message never calls it |
 | `reply` | An assistant reply |
 | `group_line` | A tool group's summary line |
 | `ledger_row:<tool>` | A ledger row for the named tool |
@@ -2717,7 +2745,7 @@ runs inside it; `prompt` draws only when the card itself is built in.
 
 | Field | What it holds |
 |---|---|
-| `prompts` | The turn's prompts in order, each with the `prompt` slot's `text` and `images` (`path`, `width`, `height` in pixels) |
+| `prompts` | The turn's person's prompts in order — only `Origin::Driver` messages — each with the `prompt` slot's `text` and `images` (`path`, `width`, `height` in pixels) |
 | `entries` | The card's items in order, each tagged with a `kind` and carrying the slot input shown below |
 | `started` | When the turn started |
 | `calls` | How many model calls the turn made |
@@ -2731,12 +2759,17 @@ The entries carry these slot inputs and extra fields:
 |---|---|
 | `reply` | The `reply` input: `text` (Markdown included) |
 | `steer` | The `steer` input: `text`, `images`, `ts` |
+| `message` | `source` (`fiber`, `session` or `extension`), `label`, `text`, `images`, `ts` |
 | `group` | The `group_line` input, plus `cut` and `sections` |
 | `aside` | No slot: `{kind = "line", text}`, `{kind = "warning", message}`, or `{kind = "orphans", jobs, open}`; each job has `name` and `message` |
 | `band` | The `handoff_band` input: `trigger`, `ts`, `state`; a `done` state carries `before` and optional `after` context sizes |
 | `answers` | The `answers` input: `outcome`, `parts`, `note?`, `ts?`; each part has `header`, `text`, `skipped` |
 
-**`prompt`** draws a person's prompt bubble.
+A session message's `label` is the sender's current non-empty session name,
+when one is known, else its session id. An extension message's label is its
+extension name. An unknown `kind` is skipped.
+
+**`prompt`** draws only a person's prompt bubble: a non-driver message never calls it, and goes in `entries` as `message` instead.
 
 | Field | What it holds |
 |---|---|
@@ -2905,8 +2938,8 @@ built-in rather than drawing the row again.
 - **Each drawn item is cached** by its input and the width. Its spans name
   colour roles, which the theme resolves as the frame is written, so a theme
   change runs no renderer. A renderer runs again only when its input, the width,
-  or an on-screen animated item's frame changes ("Animation"), so an unchanged
-  frame calls no Lua: one call per cache miss or frame advance, none on a hit.
+  or an on-screen animated item's or notice's frame changes ("Animation"), so an
+  unchanged frame calls no Lua: one call per cache miss or frame advance, none on a hit.
   The cache lives with the paging window and is dropped with its pages.
   The key also includes the page's session and index, the selected extension,
   and its session-half version when it has one. A change to any of these
@@ -2923,6 +2956,18 @@ built-in rather than drawing the row again.
   session's id and never an empty one. A client-only half draws for every
   home notice; a range-bound half stays inert without notice until the
   session's first `extensions_loaded`, as on a session it has not seen.
+- **A TUI extension binds whole-screen keys with `fiber.key`.**
+  `fiber.key(name, { timeout, run })` runs `run` for the key when nothing
+  built in should, and `fiber.key(name, { action, variant })` dispatches a
+  built-in action through its checked canonical event for that variant
+  (`docs/extensions.md`, "Whole-screen keys"). `run` receives exactly
+  `{ session_id = "…" }` and returns `true` when it handled the key;
+  anything else falls through to the built-in key map. Only `true`
+  handles: `false` and `nil` do not, and any other value is the usual
+  wrong-shape failure. A timeout switches the extension off until
+  `/reload`, exactly as a still call does. A client-only extension stays
+  compatible before the first `extensions_loaded`, with no session half at
+  all.
 
 Measured in the prototype on macOS arm64, on a session of 1,047 tool calls
 ([research/tui-prototype/SEAMS.md](../research/tui-prototype/SEAMS.md)): a
@@ -2941,6 +2986,18 @@ top. An extension's view or overlay takes focus when it opens.
   or `shift+enter`, and typed text as text. A paste is one event. The handler
   returns whether it handled the key. A key it did not handle goes to the key
   map as if no extension were there.
+- **Whole-screen bindings act before the built-in key map.** An eligible
+  `run` binding runs before every built-in early path; an action binding
+  runs before them where the Bindings table lists it for the context on
+  screen ("Bindings"). Neither kind acts with no session on screen, on a
+  job's live PTY view, or for a key the person set in `keys`. A `run`
+  binding never acts while an overlay, a picker or search has the keyboard,
+  and bare typing never reaches it in the input box: a single character
+  with no modifier but Shift, the space bar, and shift+space type instead.
+  A handled `run` settles with nothing built in running; drained notices
+  settle before the fallthrough, and action events keep their built-in
+  settle behavior. Only Ctrl+C reaches the bindings from the `/keys`
+  screen, so no screen code skips dispatch: Ctrl+C itself is unregistrable.
 - **Esc** closes whatever is on top, unless the focused slot handles it
   itself.
 - **The second Ctrl+C always quits** ("Quit"), whatever the focused
@@ -2959,11 +3016,11 @@ their own.
 
 ### Animation
 
-A renderer may declare `animate = { interval_ms }`. For conversation items,
-the terminal calls it again when the item's frame advances, with `frame` in
+A renderer may declare `animate = { interval_ms }`. For conversation items and
+notices, the terminal calls it again when the frame advances, with `frame` in
 its input. The terminal uses one timer for all motion. It asks for a timer only
-while an animated item was painted in the previous frame. Intervals below 120
-ms use that floor instead.
+while an animated item or notice row was painted in the previous frame.
+Intervals below 120 ms use that floor instead.
 
 The terminal calls an item when at least one of its rows was painted in the
 previous frame. It may make one due call on the frame the item scrolls off.
@@ -2980,7 +3037,16 @@ again at frame 0. Closed draws such as search and counts do not advance or
 schedule animation. They use stored lines when available; on a miss, they may
 cache frame 0 without changing animation state.
 
-Notices that declare animation draw frame 0 once. They do not animate yet.
+A notice animates as a conversation item does: frame 0 is still, and later
+frames advance only while a replacement row was painted in the prior frame. An
+advanced open frame's one result both measures and draws. After fade or
+dismissal, a re-raised notice is new and starts at frame 0; its animation
+state goes when the notice does. Live notices with identical code and text
+have independent frames. The animation key is stable across page changes;
+a new per-`Screen` cache starts a live notice at frame 0. A replacement
+returning no lines stays hidden until it fades or is pruned, and never advances
+or schedules animation while hidden. An event notice's fade and a condition's
+re-evaluation are unchanged, so an animation never holds a notice on screen.
 
 An extension's own timers (`host.after`, `host.every`) are for work other than
 drawing. They wake the terminal whether or not anything is on screen, which is
@@ -2997,7 +3063,12 @@ and a timeout switches the extension off as a still one does.
   again until that input changes. One notice names the extension, the slot
   and the Lua error, once for each extension and slot until `/reload`. A key or click handler that errors
   counts as not having handled the input. An extension's own view or overlay
-  has no built-in, so it closes.
+  has no built-in, so it closes. A key handler that errors or returns the
+  wrong shape likewise counts as not handled, falling back to the built-in
+  key map with one `hook_failed` notice for each extension and key slot
+  until `/reload`; a key handler that passes its timeout switches the
+  extension off until `/reload`, with one `extension_failed` notice, as a
+  still renderer does.
 - **A timeout** switches the extension off in this terminal until `/reload`
   (the terminal command; the `reload` driver command acts on the session
   only), with one notice. Every slot it replaced
@@ -3019,7 +3090,26 @@ one tool, the input box, the layout, or one key.
   (`docs/extensions.md`, "Commands and screens").
   The notice comes once for each slot and set of contenders until `/reload`. A `tui.slots."<slot>"` that names none of them picks no winner, and the notice names the setting.
 - **A key the person bound in `keys`** is the person's. An extension that
-  binds the same key does not get it, and a notice names the extension.
+  binds the same key does not get it, and a notice names the extension. The
+  registration stays dormant and reactivates at once when the person binding
+  lifts, so a `/keys` change flips the owner per stroke. A key the person
+  owns stays theirs in every context, even where the action does not act.
+
+Whole-screen keys canonicalize before they contend, with the same grammar
+as `keys` ("Bindings"): modifier order and the case of modifier and key
+names never distinguish two spellings, while an uppercase letter reads as
+Shift with that letter, so `Ctrl+C` parses as `ctrl+shift+c` and stays
+bindable, and plain `ctrl+c` never binds. The first registration to
+canonicalize to a key wins; a later one is skipped with one notice naming
+the extension. A key with one contender and no setting still selects that
+contender. An unparseable key suffix, or a setting naming no registered
+contender, selects no winner, with one notice naming the full setting, for
+example:
+
+`Invalid key binding setting: tui.slots."key:ctrl+"; the key does not parse; no extension wins.`
+
+A setting that names an extension that does not contend for the key never
+silently falls back to the one that does.
 - **A per-tool ledger row beats the catch-all** `ledger_row`, with no notice.
 - **An extension replacing a built-in** is not a conflict. The extension wins,
   as it does for a tool it registers by name.
@@ -3030,8 +3120,8 @@ The terminal holds the budgets in `docs/performance.md`: its idle memory, idle
 CPU and time to first frame. The design keeps to them this way:
 
 - **Nothing runs while nothing happens.** With no turn, delegate or job running and
-  no animated item on screen, there is no timer: no frame, no byte written (an on-screen
-  animated item holds the timer, "Animation"). A still pointer sends nothing under hover.
+  no animated item or notice on screen, there is no timer: no frame, no byte written (an
+  on-screen animated item or notice holds the timer, "Animation"). A still pointer sends nothing under hover.
 - **The first frame waits on nothing but the session's last page and loading TUI extensions.** Keyboard detection, the logo's image and session listing each arrive after it. The budget is measured with no TUI extension installed. Attaching reads the last page with `history` before the first frame, and the whole log once after it ("History and paging"). The pass takes about 12 ms per MiB of log on macOS arm64, so the scroll bar of a large session appears later than a small one's.
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**

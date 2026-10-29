@@ -1067,7 +1067,7 @@ fn configure_approval(setup: &Setup, extra: serde_json::Value) {
 
 /// A standing project ask for `prefix`.
 fn ask_rule(setup: &Setup, prefix: &str) {
-    let key = log::project_key(&doors::project(&setup.workspace()));
+    let key = log::project_key(&worktree::project(&setup.workspace()));
     let rule = setup.home().join("projects").join(key).join("rules");
     fs::create_dir_all(rule.parent().unwrap()).unwrap();
     fs::write(

@@ -2111,8 +2111,103 @@ fn paint_conversation(app: &App, at: std::time::Instant, height: u16) -> Buffer 
     let area = Rect::new(0, 0, WIDTH, height);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
-    conversation_rows(app, area, &mut buf, &mut targets);
+    let (_, painted) = conversation_rows(app, area, &mut buf, &mut targets);
+    app.pages().ext.cache.mark_painted(&painted);
     buf
+}
+
+/// One fake filling the animated summary slot and the notice slot. Both
+/// stamp the shared `animated-test` extension, so both draws pass the
+/// winner check, each under its own slot key.
+#[derive(Debug)]
+struct ItemAndNotice {
+    item: std::rc::Rc<crate::ext::tests::AnimatedRenderer>,
+    notice: std::rc::Rc<crate::ext::tests::AnimatedRenderer>,
+}
+
+impl crate::ext::Renderer for ItemAndNotice {
+    fn name(&self) -> &str {
+        "animated-test"
+    }
+    fn fills(&self, slot: &str) -> bool {
+        slot == "group_line" || slot == "notice"
+    }
+    fn render(
+        &self,
+        ctx: &crate::ext::SessionCtx,
+        slot: &str,
+        input: &crate::ext::Input<'_>,
+        width: u16,
+        builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        if slot == "notice" {
+            self.notice.render(ctx, slot, input, width, builtin)
+        } else {
+            self.item.render(ctx, slot, input, width, builtin)
+        }
+    }
+    fn animate_interval(
+        &self,
+        ctx: &crate::ext::SessionCtx,
+        slot: &str,
+    ) -> Option<std::time::Duration> {
+        if slot == "notice" {
+            self.notice.animate_interval(ctx, slot)
+        } else {
+            self.item.animate_interval(ctx, slot)
+        }
+    }
+    fn render_animated(
+        &self,
+        ctx: &crate::ext::SessionCtx,
+        slot: &str,
+        input: &crate::ext::Input<'_>,
+        width: u16,
+        frame: u64,
+        builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> (crate::ext::Decision, bool) {
+        if slot == "notice" {
+            self.notice
+                .render_animated(ctx, slot, input, width, frame, builtin)
+        } else {
+            self.item
+                .render_animated(ctx, slot, input, width, frame, builtin)
+        }
+    }
+}
+
+#[test]
+fn painted_item_and_notice_keys_join_the_shared_frame_mark() {
+    use crate::ext::tests::AnimatedRenderer;
+    let interval = std::time::Duration::from_millis(500);
+    let mut app = empty();
+    tool_turn(&mut app);
+    app.push_notice("io_failed", "x".to_owned());
+    let item = std::rc::Rc::new(AnimatedRenderer::filling("group_line", interval, 3));
+    let notice = std::rc::Rc::new(AnimatedRenderer::filling("notice", interval, 1));
+    app.install_renderer(std::rc::Rc::new(ItemAndNotice {
+        item: item.clone(),
+        notice: notice.clone(),
+    }));
+    let t0 = fakes::clock::FakeClock::new().origin();
+    app.set_now(t0, 1_000);
+    // The frame paints both rows through the shared exit: one item key
+    // and one notice key reach the single mark, scheduling both.
+    app.pages().ext.cache.begin_anim_frame(Some(t0), false);
+    let area = Rect::new(0, 0, WIDTH, 40);
+    let mut buf = Buffer::empty(area);
+    let (_, painted) = super::render_frame(&app, area, &mut buf, None);
+    assert_eq!(item.frames.borrow().clone(), vec![0]);
+    assert_eq!(notice.frames.borrow().clone(), vec![0]);
+    // docs/tui.md:2984: painted item and notice rows alike reach the one mark.
+    assert_eq!(painted.len(), 4);
+    let mut ids: Vec<Option<usize>> = painted.iter().map(|key| key.notice_id()).collect();
+    ids.sort();
+    assert_eq!(ids, vec![None, None, None, Some(0)]);
+    app.pages().ext.cache.mark_painted(&painted);
+    let mut dues = app.pages().ext.cache.anim_dues();
+    dues.sort();
+    assert_eq!(dues, vec![(t0, interval), (t0, interval)]);
 }
 
 /// The animated summary's first page row and the counted total, for the
@@ -3121,7 +3216,7 @@ fn copied_sits_on_the_row_under_the_bar() {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         let mut targets = Vec::new();
-        conversation_rows(&app, area, &mut buf, &mut targets);
+        let _ = conversation_rows(&app, area, &mut buf, &mut targets);
         // " Copied " is the only `info` on `surface`: its rows are its
         // row, even where the area clips its text.
         let rows: Vec<u16> = (0..height)
@@ -3194,7 +3289,7 @@ fn copied_sits_on_the_top_row_while_the_results_view_is_open() {
     let area = Rect::new(0, 0, 60, 10);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
-    conversation_rows(&app, area, &mut buf, &mut targets);
+    let _ = conversation_rows(&app, area, &mut buf, &mut targets);
     // " Copied " is the only `info` on `surface`: it sits on the top
     // row, with no bar offset while the results are open.
     let rows: Vec<u16> = (0..10)
@@ -3237,7 +3332,7 @@ fn copied_stays_inside_a_short_or_narrow_area() {
         );
         let mut buf = Buffer::empty(Rect::new(0, 0, 60, 10));
         let mut targets = Vec::new();
-        conversation_rows(&app, area, &mut buf, &mut targets);
+        let _ = conversation_rows(&app, area, &mut buf, &mut targets);
         // "Copied" is the only `info` on `surface` here: its cells are
         // its row, and none sits outside the area.
         let marked: Vec<(u16, u16)> = (0..60)
@@ -3285,7 +3380,7 @@ fn copied_draws_nothing_on_a_zero_height_area() {
     );
     let mut buf = Buffer::empty(Rect::new(0, 0, 60, 10));
     let mut targets = Vec::new();
-    conversation_rows(&app, Rect::new(0, 0, 60, 0), &mut buf, &mut targets);
+    let _ = conversation_rows(&app, Rect::new(0, 0, 60, 0), &mut buf, &mut targets);
     assert!(targets.is_empty(), "no target on a zero-height area");
     for y in 0..10u16 {
         for x in 0..60u16 {
@@ -3314,7 +3409,7 @@ fn a_zero_height_conversation_draws_no_pin() {
     let mut buf = Buffer::empty(Rect::new(0, 0, 60, 10));
     let mut targets = Vec::new();
     assert_eq!(
-        conversation_rows(&app, area, &mut buf, &mut targets),
+        conversation_rows(&app, area, &mut buf, &mut targets).0,
         None,
         "no pin from a zero-height area"
     );

@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::{Context, Contexts, Keyset, load};
+use super::{Context, Contexts, Keyset, canonical_key, check_action, load, person_bound_keys};
 use crate::bindings::BINDINGS;
 use crate::keys::{Edit, Key};
 use crate::stroke::Stroke;
@@ -832,4 +832,261 @@ fn person_bound_needs_a_person_row_in_this_context_with_this_key() {
     assert!(!keys.person_bound(&enter, Context::Input));
     // Their Home binding is not bound over the overlay.
     assert!(!keys.person_bound(&home, Context::Overlay));
+}
+
+#[test]
+fn canonical_key_reads_any_case_and_every_alias() {
+    for (name, canonical) in [
+        ("ctrl+o", "ctrl+o"),
+        // An uppercase letter reads as shift with that letter.
+        ("Ctrl+O", "ctrl+shift+o"),
+        ("CTRL+Q", "ctrl+shift+q"),
+        ("CTRL+ENTER", "ctrl+enter"),
+        ("control+k", "ctrl+k"),
+        ("escape", "esc"),
+        ("ESCAPE", "esc"),
+        ("opt+x", "alt+x"),
+        ("option+x", "alt+x"),
+        ("meta+x", "alt+x"),
+        ("cmd+z", "super+z"),
+        ("command+z", "super+z"),
+        ("return", "enter"),
+        ("ctrl++", "ctrl++"),
+        ("+", "+"),
+        ("A", "shift+a"),
+        ("space", "space"),
+        ("shift+space", "shift+space"),
+        ("F5", "f5"),
+        ("f12", "f12"),
+    ] {
+        assert_eq!(canonical_key(name).as_deref(), Some(canonical), "{name}");
+    }
+}
+
+#[test]
+fn canonical_key_rejects_names_that_do_not_parse() {
+    for name in ["", "ctrl+", "bogus", "ctrl+shift", "f13", "f0"] {
+        assert_eq!(canonical_key(name), None, "{name}");
+    }
+}
+
+#[test]
+fn check_action_accepts_plain_actions_without_a_variant() {
+    for id in [
+        "send",
+        "new_session",
+        "go_home",
+        "toggle_ledgers",
+        "model_picker",
+    ] {
+        assert_eq!(check_action(id, None), None, "{id}");
+    }
+}
+
+#[test]
+fn check_action_accepts_every_variant_of_the_six_variant_actions() {
+    for (id, variants) in [
+        ("move_word", &["left", "right"][..]),
+        ("line_start_end", &["start", "end"][..]),
+        ("focus_next_prev", &["next", "prev"][..]),
+        ("search_next_prev", &["next", "prev"][..]),
+        ("select_steering", &["up", "down"][..]),
+        (
+            "rail_row_n",
+            &["1", "2", "3", "4", "5", "6", "7", "8", "9"][..],
+        ),
+    ] {
+        for variant in variants {
+            assert_eq!(check_action(id, Some(variant)), None, "{id}/{variant}");
+        }
+    }
+}
+
+#[test]
+fn check_action_rejects_a_missing_or_unknown_variant() {
+    for (id, bad) in [
+        ("move_word", None),
+        ("move_word", Some("up")),
+        ("line_start_end", None),
+        ("line_start_end", Some("left")),
+        ("focus_next_prev", None),
+        ("focus_next_prev", Some("start")),
+        ("search_next_prev", None),
+        ("search_next_prev", Some("end")),
+        ("select_steering", None),
+        ("select_steering", Some("left")),
+        ("rail_row_n", None),
+        ("rail_row_n", Some("0")),
+        ("rail_row_n", Some("10")),
+        ("rail_row_n", Some("left")),
+    ] {
+        let reason = check_action(id, bad);
+        assert!(reason.is_some(), "{id}/{bad:?}");
+        let reason = reason.unwrap();
+        assert!(reason.contains(id), "{id}/{bad:?}: {reason}");
+    }
+}
+
+#[test]
+fn check_action_rejects_a_variant_for_a_one_variant_action() {
+    for id in ["send", "new_session", "toggle_ledgers"] {
+        let reason = check_action(id, Some("left"));
+        assert!(reason.is_some(), "{id}");
+        assert!(reason.unwrap().contains(id), "{id}");
+    }
+}
+
+#[test]
+fn check_action_rejects_an_unknown_action_and_clear_then_quit() {
+    for id in ["no_such_action", "clear_then_quit", "Clear_Then_Quit"] {
+        let reason = check_action(id, None);
+        assert!(reason.is_some(), "{id}");
+        assert!(reason.unwrap().contains(id), "{id}");
+    }
+}
+
+#[test]
+fn person_bound_keys_lists_the_person_set_canonicals() {
+    let mut user = Map::new();
+    user.insert("send".to_owned(), json!("ctrl+q"));
+    user.insert("new_session".to_owned(), json!("ctrl+n"));
+    let (keys, notices) = keyset(&[("send", json!("ctrl+q"))]);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(keys.person_bound(&stroke("ctrl+q"), Context::Input));
+    let owned = person_bound_keys(&user);
+    assert!(owned.contains("ctrl+q"), "{owned:?}");
+    // The default-equal entry counts as unset.
+    assert!(!owned.contains("ctrl+n"), "{owned:?}");
+}
+
+#[test]
+fn person_bound_keys_ignores_default_equal_unbound_and_invalid_entries() {
+    let entries = [
+        ("send", json!("enter")),
+        ("new_session", json!([])),
+        ("toggle_ledgers", json!("bogus")),
+    ];
+    let mut user = Map::new();
+    for (id, value) in &entries {
+        user.insert((*id).to_owned(), value.clone());
+    }
+    let (_, notices) = keyset(&entries);
+    // docs/tui.md:1941-1954: each clash reverts with one notice; an invalid entry gives one notice and keeps its defaults.
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(person_bound_keys(&user).is_empty());
+}
+
+#[test]
+fn person_bound_keys_reverts_a_person_plus_person_clash() {
+    let entries = [("send", json!("ctrl+q")), ("new_session", json!("ctrl+q"))];
+    let mut user = Map::new();
+    for (id, value) in &entries {
+        user.insert((*id).to_owned(), value.clone());
+    }
+    let (_, notices) = keyset(&entries);
+    // docs/tui.md:1941-1954: each clash reverts with one notice; an invalid entry gives one notice and keeps its defaults.
+    assert!(!notices.is_empty());
+    // Both sides revert to their defaults, so neither owns the key.
+    assert!(person_bound_keys(&user).is_empty());
+}
+
+#[test]
+fn action_event_returns_the_checked_canonical_event_for_every_variant() {
+    use super::{Keyset, Resolved};
+    for (id, variant, expected) in [
+        ("move_word", "left", Resolved::Edit(Edit::WordLeft)),
+        ("move_word", "right", Resolved::Edit(Edit::WordRight)),
+        ("line_start_end", "start", Resolved::Edit(Edit::LineStart)),
+        ("line_start_end", "end", Resolved::Edit(Edit::LineEnd)),
+        ("focus_next_prev", "next", Resolved::Key(Key::Down)),
+        ("focus_next_prev", "prev", Resolved::Key(Key::Up)),
+        ("search_next_prev", "next", Resolved::Key(Key::Down)),
+        ("search_next_prev", "prev", Resolved::Key(Key::Up)),
+        ("select_steering", "up", Resolved::Key(Key::AltUp)),
+        ("select_steering", "down", Resolved::Key(Key::AltDown)),
+        ("rail_row_n", "1", Resolved::Key(Key::AltDigit(1))),
+        ("rail_row_n", "5", Resolved::Key(Key::AltDigit(5))),
+        ("rail_row_n", "9", Resolved::Key(Key::AltDigit(9))),
+    ] {
+        assert_eq!(
+            Keyset::action_event(id, Some(variant)),
+            Some(expected),
+            "{id}/{variant}"
+        );
+    }
+    for (id, expected) in [
+        ("send", Resolved::Key(Key::Enter)),
+        ("line_break", Resolved::Edit(Edit::ShiftEnter)),
+        ("go_home", Resolved::Action("go_home")),
+        ("session_only", Resolved::Action("session_only")),
+    ] {
+        assert_eq!(Keyset::action_event(id, None), Some(expected), "{id}");
+    }
+}
+
+#[test]
+fn action_event_returns_none_for_an_invalid_id_variant_or_slot() {
+    use super::Keyset;
+    for (id, variant) in [
+        ("no_such_action", None),
+        ("clear_then_quit", None),
+        ("move_word", None),
+        ("move_word", Some("start")),
+        ("rail_row_n", Some("0")),
+        ("rail_row_n", Some("10")),
+        ("send", Some("left")),
+        ("new_session", Some("next")),
+    ] {
+        assert_eq!(Keyset::action_event(id, variant), None, "{id}/{variant:?}");
+    }
+}
+
+#[test]
+fn person_bound_any_covers_every_context() {
+    let contexts = [
+        Context::Input,
+        Context::Steering,
+        Context::Conversation,
+        Context::Search,
+        Context::Overlay,
+        Context::Picker,
+    ];
+    let (keys, notices) = keyset(&[("send", json!("ctrl+q"))]);
+    assert!(notices.is_empty(), "{notices:?}");
+    let owned = stroke("ctrl+q");
+    // The scoped check fires only where the action acts.
+    assert!(keys.person_bound(&owned, Context::Input));
+    assert!(!keys.person_bound(&owned, Context::Overlay));
+    // The live check ignores contexts: owned everywhere, even over the
+    // overlay and picker.
+    assert!(keys.person_bound_any(&owned));
+    // A default key is the person's nowhere.
+    let plain = stroke("enter");
+    assert!(!keys.person_bound_any(&plain));
+    for context in contexts {
+        assert!(!keys.person_bound(&plain, context), "{context:?}");
+    }
+}
+
+#[test]
+fn person_bound_any_ignores_default_equal_unbound_and_invalid_entries() {
+    let entries = [
+        ("send", json!("enter")),
+        ("new_session", json!([])),
+        ("toggle_ledgers", json!("bogus")),
+    ];
+    let (keys, _) = keyset(&entries);
+    for name in ["enter", "ctrl+n", "ctrl+o", "ctrl+q"] {
+        assert!(!keys.person_bound_any(&stroke(name)), "{name}");
+    }
+}
+
+#[test]
+fn person_bound_any_reverts_clashes_and_follows_live_edits() {
+    let (clashed, _) = keyset(&[("send", json!("ctrl+q")), ("new_session", json!("ctrl+q"))]);
+    assert!(!clashed.person_bound_any(&stroke("ctrl+q")));
+    // A live `/keys` change reloads the keyset: the freed key leaves the
+    // person set at once.
+    let (freed, _) = keyset(&[("send", json!("ctrl+q"))]);
+    assert!(freed.person_bound_any(&stroke("ctrl+q")));
 }

@@ -1499,6 +1499,7 @@ fn accept_waits_for_room_on_a_non_interrupted_error() {
 fn status(name: &str) -> Event {
     Event::SessionStatus(SessionStatus {
         name: name.to_owned(),
+        named: false,
         workspace: "/w".into(),
         parent: None,
         model: "m".into(),

@@ -1195,6 +1195,393 @@ fn an_open_turn_with_no_prompt_or_card_has_no_rows() {
 }
 
 #[test]
+fn non_driver_start_messages_render_inside_the_card_not_as_prompt_bubbles() {
+    let mut cards = fresh();
+    feed(
+        &mut cards,
+        "turn_started",
+        None,
+        json!({"input": [
+            {"type":"message", "source":"driver", "content":[{"type":"text","text":"go"}]},
+            {"type":"message", "source":"fiber", "content":[{"type":"text","text":"Fiber: quota notice"}]}
+        ]}),
+    );
+    text(&mut cards, "a_1", "Hello.");
+    done(&mut cards);
+    let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    // Only the person's prompt floats above its card, and the Fiber notice
+    // sits inside it without its `Fiber: ` prefix (`docs/tui.md`, "Turns").
+    assert_eq!(shown.iter().filter(|row| row.contains("go")).count(), 1);
+    assert!(shown.iter().any(|row| row.contains("Fiber")), "{shown:?}");
+    assert!(
+        shown.iter().any(|row| row.contains("quota notice")),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|row| row.contains("Fiber: quota notice")),
+        "{shown:?}"
+    );
+    assert_eq!(
+        shown.iter().filter(|row| row.starts_with("you ")).count(),
+        1,
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn message_entries_keep_each_source_label_and_timestamp() {
+    use ratatui::style::Modifier;
+
+    let sender = "s_bbbbbbbbbbbbbbbb";
+    let mut cards = fresh();
+    feed(
+        &mut cards,
+        "turn_started",
+        None,
+        json!({"input": [
+            {"type":"message", "source":"driver", "content":[{"type":"text","text":"go"}]},
+            {"type":"message", "source":"session", "from_session_id":sender, "content":[{"type":"text","text":"please check"}]},
+            {"type":"message", "source":"extension", "extension":"reviewer", "content":[{"type":"text","text":"looks good"}]},
+            {"type":"message", "source":"fiber", "content":[{"type":"text","text":"Fiber: quota notice"}]},
+            {"type":"message", "source":"extension", "extension":"reviewer", "content":[]}
+        ]}),
+    );
+    done(&mut cards);
+    let mut out = Rows::default();
+    out.session_names = std::sync::Arc::new(std::collections::HashMap::from([(
+        SessionId(sender.to_owned()),
+        "worker".to_owned(),
+    )]));
+    let input = cards.turns[0].card_input_with_names(None, false, &out.session_names);
+    let messages: Vec<_> = input
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            crate::ext::TurnEntry::Message {
+                source,
+                label,
+                text,
+                ts,
+                ..
+            } => Some((*source, label.as_ref(), *text, *ts)),
+            crate::ext::TurnEntry::Reply { .. }
+            | crate::ext::TurnEntry::Steer { .. }
+            | crate::ext::TurnEntry::Group(_)
+            | crate::ext::TurnEntry::Aside(_)
+            | crate::ext::TurnEntry::Band(_)
+            | crate::ext::TurnEntry::Answers(_) => None,
+        })
+        .collect();
+    // Start-input messages open the card in the input's order, each with its
+    // source label (`docs/tui.md`, "Turns").
+    assert_eq!(
+        messages,
+        [
+            ("session", "worker", "please check", 0),
+            ("extension", "reviewer", "looks good", 0),
+            ("fiber", "Fiber", "Fiber: quota notice", 0),
+            ("extension", "reviewer", "", 0),
+        ]
+    );
+    cards.turns[0].rows(
+        WIDTH,
+        &TimeZone::UTC,
+        Edges::BOTH,
+        &crate::image::Layout::default(),
+        &mut out,
+    );
+    let (rows, texts) = out.into_parts();
+    let shown = shown_rows(&rows);
+    for expected in [
+        "worker · 00:00",
+        "please check",
+        "reviewer · 00:00",
+        "looks good",
+        "Fiber · 00:00",
+        "quota notice",
+    ] {
+        assert!(
+            shown.iter().any(|row| row.contains(expected)),
+            "missing {expected:?}: {shown:?}"
+        );
+    }
+    assert!(
+        !shown.iter().any(|row| row.contains("Fiber: quota notice")),
+        "{shown:?}"
+    );
+    let fiber = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("Fiber · 00:00"))
+        .unwrap();
+    let fiber_label = fiber
+        .0
+        .spans
+        .iter()
+        .find(|span| span.content == "Fiber")
+        .unwrap();
+    assert_eq!(
+        fiber_label.style.fg,
+        Some(Role::Muted.color()),
+        "a Fiber label is muted, not dim"
+    );
+    let fiber_time = fiber
+        .0
+        .spans
+        .iter()
+        .find(|span| span.content == " · 00:00 ")
+        .unwrap_or_else(|| panic!("fiber time span: {:?}", fiber.0.spans));
+    assert!(
+        fiber_time.style.add_modifier.contains(Modifier::DIM),
+        "the time under it stays dim"
+    );
+    let fiber_body = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("quota notice"))
+        .unwrap_or_else(|| panic!("fiber body row: {shown:?}"));
+    assert!(
+        fiber_body
+            .0
+            .spans
+            .iter()
+            .filter(|span| span.content.contains("quota notice"))
+            .all(|span| span.style.add_modifier.contains(Modifier::DIM)),
+        "the Fiber body is dim"
+    );
+    let session = rows
+        .iter()
+        .find(|(line, _)| line.to_string().contains("worker · 00:00"))
+        .unwrap();
+    let session_label = session
+        .0
+        .spans
+        .iter()
+        .find(|span| span.content == "worker")
+        .unwrap();
+    assert_eq!(session_label.style.fg, Some(Role::Secondary.color()));
+    assert!(
+        texts.iter().any(|text| text.tail > 0),
+        "the rule is excluded from copied text"
+    );
+    // The copied card text keeps each message's label and body, in draw
+    // order, and loses the labelled rule (`docs/tui.md`, "Turns";
+    // `docs/tui.md`, "Selection and copy").
+    let copied: Vec<String> = crate::logical::logical(&rows, &texts)
+        .into_iter()
+        .map(|line| line.text)
+        .collect();
+    for expected in [
+        "worker · 00:00",
+        "please check",
+        "reviewer · 00:00",
+        "looks good",
+        "Fiber · 00:00",
+        "quota notice",
+    ] {
+        assert!(
+            copied.contains(&expected.to_owned()),
+            "missing {expected:?}: {copied:?}"
+        );
+    }
+    assert!(
+        copied.iter().all(|line| !line.contains('─')),
+        "the labelled rule is decoration: {copied:?}"
+    );
+}
+
+#[test]
+fn a_wrapped_session_message_copies_as_its_original_words() {
+    let sender = "s_bbbbbbbbbbbbbbbb";
+    let body = "please check the wiring in the corner cabinet on the third floor and report back before Friday";
+    let mut cards = fresh();
+    feed(
+        &mut cards,
+        "turn_started",
+        None,
+        json!({"input": [
+            {"type": "message", "source": "driver", "content": [{"type": "text", "text": "go"}]},
+            {"type": "message", "source": "session", "from_session_id": sender,
+             "content": [{"type": "text", "text": body}]}
+        ]}),
+    );
+    done(&mut cards);
+    let (rows, texts, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    // The body is wider than the card, so no one drawn row holds it
+    // whole: the wrapped rows join with their dropped spaces, and the
+    // copied logical text keeps the original words
+    // (`docs/tui.md`, "Selection and copy").
+    assert!(
+        shown.iter().all(|row| !row.contains(body)),
+        "the body wraps across rows: {shown:?}"
+    );
+    let copied: Vec<String> = crate::logical::logical(&rows, &texts)
+        .into_iter()
+        .map(|line| line.text)
+        .collect();
+    assert!(
+        copied.contains(&body.to_owned()),
+        "the wrapped body copies as its original words: {copied:?}"
+    );
+}
+
+#[test]
+fn a_mid_turn_non_driver_message_is_not_drawn_as_bold_steer() {
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    feed(
+        &mut cards,
+        "steering_applied",
+        None,
+        json!({"content": [{"type":"text","text":"Fiber: quota notice"}], "source":"fiber"}),
+    );
+    done(&mut cards);
+    let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    assert!(shown.iter().any(|row| row.contains("Fiber")), "{shown:?}");
+    assert!(
+        shown.iter().any(|row| row.contains("quota notice")),
+        "{shown:?}"
+    );
+    assert!(!shown.iter().any(|row| row.contains("steer")), "{shown:?}");
+}
+
+#[test]
+fn a_session_message_without_an_actual_name_falls_back_to_the_sender_id() {
+    let sender = "s_bbbbbbbbbbbbbbbb";
+    let mut cards = fresh();
+    feed(
+        &mut cards,
+        "turn_started",
+        None,
+        json!({"input": [
+            {"type":"message", "source":"driver", "content":[{"type":"text","text":"go"}]},
+            {"type":"message", "source":"session", "from_session_id":sender,
+             "content":[{"type":"text","text":"please check"}]}
+        ]}),
+    );
+    done(&mut cards);
+    // No status has named the sender, and a `named` status with an
+    // empty name names nothing: the sender's session id is the label.
+    let unlabelled: std::collections::HashMap<SessionId, String> = std::collections::HashMap::new();
+    let blank = std::collections::HashMap::from([(SessionId(sender.to_owned()), String::new())]);
+    for names in [unlabelled, blank] {
+        let mut out = Rows::default();
+        out.session_names = std::sync::Arc::new(names);
+        cards.turns[0].rows(
+            WIDTH,
+            &TimeZone::UTC,
+            Edges::BOTH,
+            &crate::image::Layout::default(),
+            &mut out,
+        );
+        let (rows, _) = out.into_parts();
+        let shown = shown_rows(&rows);
+        assert!(
+            shown.iter().any(|row| row.contains(sender)),
+            "the sender id labels the message: {shown:?}"
+        );
+    }
+}
+
+#[test]
+fn a_session_message_label_follows_the_current_name_at_draw() {
+    let sender = "s_bbbbbbbbbbbbbbbb";
+    let mut cards = fresh();
+    feed(
+        &mut cards,
+        "turn_started",
+        None,
+        json!({"input": [
+            {"type":"message", "source":"driver", "content":[{"type":"text","text":"go"}]},
+            {"type":"message", "source":"session", "from_session_id":sender,
+             "content":[{"type":"text","text":"please check"}]}
+        ]}),
+    );
+    done(&mut cards);
+    // The card resolves the label at draw time, so a rename reaches a
+    // resident card (`docs/tui.md`, "Turns").
+    for (name, other) in [("worker", "renamed"), ("renamed", "worker")] {
+        let mut out = Rows::default();
+        out.session_names = std::sync::Arc::new(std::collections::HashMap::from([(
+            SessionId(sender.to_owned()),
+            name.to_owned(),
+        )]));
+        cards.turns[0].rows(
+            WIDTH,
+            &TimeZone::UTC,
+            Edges::BOTH,
+            &crate::image::Layout::default(),
+            &mut out,
+        );
+        let (rows, _) = out.into_parts();
+        let shown = shown_rows(&rows);
+        assert!(
+            shown
+                .iter()
+                .any(|row| row.contains(&format!("{name} · 00:00"))),
+            "the label is {name:?}: {shown:?}"
+        );
+        assert!(
+            !shown
+                .iter()
+                .any(|row| row.contains(&format!("{other} · 00:00"))),
+            "the label is not {other:?}: {shown:?}"
+        );
+    }
+}
+
+#[test]
+fn a_message_image_draws_below_its_text() {
+    let sender = "s_bbbbbbbbbbbbbbbb";
+    let mut cards = fresh();
+    feed(
+        &mut cards,
+        "turn_started",
+        None,
+        json!({"input": [
+            {"type":"message", "source":"driver", "content":[{"type":"text","text":"go"}]},
+            {"type":"message", "source":"session", "from_session_id":sender, "content":[
+                {"type":"text", "text":"please check"},
+                {"type":"image", "path":"artifacts/a.png", "mime_type":"image/png",
+                 "width":10, "height":8}]}
+        ]}),
+    );
+    done(&mut cards);
+    let mut out = Rows::default();
+    out.session_names = std::sync::Arc::new(std::collections::HashMap::from([(
+        SessionId(sender.to_owned()),
+        "worker".to_owned(),
+    )]));
+    cards.turns[0].rows(
+        WIDTH,
+        &TimeZone::UTC,
+        Edges::BOTH,
+        &crate::image::Layout::default(),
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    let shown = shown_rows(&rows);
+    let label = shown
+        .iter()
+        .position(|row| row.contains("worker · 00:00"))
+        .unwrap_or_else(|| panic!("the label row: {shown:?}"));
+    let text = shown
+        .iter()
+        .position(|row| row.contains("please check"))
+        .unwrap_or_else(|| panic!("the text row: {shown:?}"));
+    let image = shown
+        .iter()
+        .position(|row| row.contains("▣ a.png · 10×8"))
+        .unwrap_or_else(|| panic!("the image row: {shown:?}"));
+    // Images draw below text (`docs/tui.md`, "Turns").
+    assert!(
+        label < text && text < image,
+        "the image draws below the text: {shown:?}"
+    );
+}
+
+#[test]
 fn an_open_card_or_a_handoff_does_not_get_a_trailing_gap() {
     let mut cards = fresh();
     start(&mut cards, "go");
@@ -1589,7 +1976,8 @@ fn a_running_card_marks_its_open_group_running() {
             | Entry::Steer(_)
             | Entry::Aside(_)
             | Entry::Band(_)
-            | Entry::Answers(_) => None,
+            | Entry::Answers(_)
+            | Entry::Message(_) => None,
         })
         .expect("a card group");
     let entry_at = turn
@@ -1827,7 +2215,8 @@ fn the_card_input_uses_the_summary_totals_and_ending() {
         | crate::ext::TurnEntry::Steer { .. }
         | crate::ext::TurnEntry::Aside(_)
         | crate::ext::TurnEntry::Band(_)
-        | crate::ext::TurnEntry::Answers(_) => None,
+        | crate::ext::TurnEntry::Answers(_)
+        | crate::ext::TurnEntry::Message { .. } => None,
     });
     assert_eq!(group_running, Some(crate::ext::TurnGroupState::Finished));
     // An open summary keeps the card's own ending and running: the
@@ -1923,6 +2312,7 @@ fn the_card_input_holds_every_entry_variant() {
                 "given"
             }
             TurnEntry::Answers(TurnAnswers::Declined) => "declined",
+            TurnEntry::Message { .. } => "message",
         })
         .collect();
     for expected in [

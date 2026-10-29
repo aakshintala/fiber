@@ -332,6 +332,8 @@ pub(crate) struct Pages {
     /// pages' caches, and whether the screen reader drops every style.
     pub(crate) ext: crate::ext::Ext,
     halves: BTreeMap<SessionId, BTreeMap<String, String>>,
+    /// Actual names currently known for senders in this conversation.
+    session_names: Arc<HashMap<SessionId, String>>,
 }
 
 impl Pages {
@@ -364,6 +366,7 @@ impl Pages {
             recounts: 0,
             ext: crate::ext::Ext::default(),
             halves: BTreeMap::new(),
+            session_names: Arc::new(HashMap::new()),
         }
     }
 
@@ -375,7 +378,9 @@ impl Pages {
         let sizing = self.images.sizing;
         let handle = self.ext.handle;
         let flat = self.ext.flat;
+        let session_names = Arc::clone(&self.session_names);
         *self = Self::new(self.width);
+        self.session_names = session_names;
         self.fold.ledgers = ledgers;
         self.open.fold.ledgers = ledgers;
         self.zone = zone;
@@ -1077,7 +1082,20 @@ impl Pages {
         fresh.ext.flat = self.ext.flat;
         fresh.ext.cache = Arc::new(self.ext.cache.scratch_sharing_pending());
         fresh.halves = self.halves.clone();
+        fresh.session_names = Arc::clone(&self.session_names);
         fresh
+    }
+
+    /// Replaces sender labels and recounts resident pages whose visible text can change.
+    pub(crate) fn set_session_labels(&mut self, names: Arc<HashMap<SessionId, String>>) {
+        if *self.session_names == *names {
+            return;
+        }
+        self.session_names = names;
+        for at in 0..=self.residency.len() {
+            self.index.invalidate(at);
+        }
+        self.recount();
     }
 
     /// What `target` names on the fold, by the identity that survives a
@@ -1354,7 +1372,8 @@ impl Pages {
                 | Entry::Group(_)
                 | Entry::Aside(_)
                 | Entry::Band(_)
-                | Entry::Answers(_) => None,
+                | Entry::Answers(_)
+                | Entry::Message(_) => None,
             })
         })
     }
@@ -1630,6 +1649,7 @@ impl Pages {
     /// The resident pages' lines, in order.
     pub(crate) fn rows(&self) -> Vec<Row> {
         let mut out = Rows::default();
+        out.session_names = Arc::clone(&self.session_names);
         for (at, part) in self
             .residency
             .resident()
@@ -1831,6 +1851,7 @@ impl Pages {
             Draw::AllOpen => Rows::all_open(),
         }
         .with_seam(seam);
+        out.session_names = Arc::clone(&self.session_names);
         let mut turns = Vec::new();
         let mut asides = part
             .fold

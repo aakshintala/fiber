@@ -396,9 +396,43 @@ fn draw_delete_question(
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
 ) -> Rect {
-    let rows = question_rows(question, area);
+    draw_delete_frame(app, question, scroll, area, buf, targets, false)
+}
+
+/// Draws the command's delete frame over the attached session: the same
+/// title, ✕, footer, text wrapping, scroll clamp and slab target, with
+/// the permanence warning pinned as the last drawn row so a long
+/// cascade still shows it on its first frame. Home's frame scrolls
+/// every row instead, as its clipped test pins.
+pub(crate) fn draw_command_delete_question(
+    app: &App,
+    question: &str,
+    scroll: usize,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) -> Rect {
+    draw_delete_frame(app, question, scroll, area, buf, targets, true)
+}
+
+/// The delete frame: the scrolled body window at `scroll`, clamped, its
+/// wrap joins, its footer and its slab target. Pinned keeps the
+/// permanence warning as the last drawn row, outside the scrolled
+/// window; unpinned scrolls every row, as home's frame does.
+fn draw_delete_frame(
+    app: &App,
+    question: &str,
+    scroll: usize,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+    pinned: bool,
+) -> Rect {
+    let mut rows = question_rows(question, area);
     let capacity = super::overlay::question_capacity(area.height);
-    let max = rows.len().saturating_sub(capacity);
+    let warning = pinned.then(|| rows.pop()).flatten();
+    let window = capacity.saturating_sub(usize::from(pinned));
+    let max = rows.len().saturating_sub(window);
     // The head's wrap joins read from the same wrap the rows keep.
     let inner = super::overlay::question_inner(area.width);
     let (head, _) = split_question(question);
@@ -406,10 +440,23 @@ fn draw_delete_question(
         .into_iter()
         .map(|(_, join)| join)
         .collect();
-    head_joins.resize(rows.len(), crate::rows::Join::Break);
+    head_joins.resize(
+        rows.len() + usize::from(warning.is_some()),
+        crate::rows::Join::Break,
+    );
+    let warn_join = if warning.is_some() {
+        head_joins.pop()
+    } else {
+        None
+    };
     let start = scroll.min(max);
-    let body: Vec<super::overlay::Row> = rows.into_iter().skip(start).take(capacity).collect();
-    let joins: Vec<crate::rows::Join> = head_joins.into_iter().skip(start).take(capacity).collect();
+    let mut body: Vec<super::overlay::Row> = rows.into_iter().skip(start).take(window).collect();
+    let mut joins: Vec<crate::rows::Join> =
+        head_joins.into_iter().skip(start).take(window).collect();
+    if let (Some(warning), Some(join)) = (warning, warn_join) {
+        body.push(warning);
+        joins.push(join);
+    }
     let (_, footer) = split_question(question);
     let legend = match footer {
         DeleteFooter::Delete => super::overlay::legend(&[("Enter", "delete"), ("Esc", "keep")]),
@@ -746,10 +793,11 @@ pub(super) fn render(
     area: Rect,
     buf: &mut Buffer,
     pointer: Option<(u16, u16)>,
-) -> Vec<Target> {
+) -> (Vec<Target>, Vec<super::super::ext::anim::AnimKey>) {
     if area.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
+    let mut painted = Vec::new();
     let mut targets = Vec::new();
     let placed = layout(app, screen, area);
     if placed.logo_rows == 4 {
@@ -1037,14 +1085,14 @@ pub(super) fn render(
     app.frames().note(Surface::Notice, slab);
     // The rows sit above the banner, unreserved, over the area's bottom
     // rows (`docs/tui.md`, "Notices").
-    super::notice_rows::draw(
+    painted.extend(super::notice_rows::draw(
         app,
         rows,
         buf,
         &mut bottom,
         &mut targets,
         &super::notice_rows::frame_bound(app),
-    );
+    ));
     // The completion panels draw after the rows under them, so their
     // cells win, and before the quit question, which takes every key.
     // The Ctrl+R panel centres over home's whole area, as the quit
@@ -1131,7 +1179,7 @@ pub(super) fn render(
             }
         }
     }
-    targets
+    (targets, painted)
 }
 
 /// One body row of the typed workspace picker, top to bottom.
