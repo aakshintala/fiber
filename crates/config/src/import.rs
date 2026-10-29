@@ -333,11 +333,26 @@ fn read_skills(
     skills: &mut Vec<PlannedFile>,
     left_behind: &mut Vec<LeftBehind>,
     budget: &mut Budget,
-    _check: &dyn PersonalSourceCheck,
+    check: &dyn PersonalSourceCheck,
 ) -> Result<(), ConfigError> {
     let dir = source_home.join("skills");
-    for name in read_source_dir(&dir, "skills", left_behind)? {
-        let entry = dir.join(&name);
+    let names = read_source_dir(&dir, "skills", left_behind)?;
+    // The already-read consult runs once for every kept entry directory,
+    // before any read: a hit joins left-behind with its reason only, with
+    // no copy-path read and no budget charge. Past-512 entries were never
+    // enumerated, so they stay unchecked and keep the overflow accounting
+    // above.
+    let entries: Vec<PathBuf> = names.iter().map(|name| dir.join(name)).collect();
+    let already = check.check(&entries);
+    for name in &names {
+        let entry = dir.join(name);
+        if let Some(logged) = already.get(&entry) {
+            left_behind.push(LeftBehind {
+                item: format!("skills/{name}/SKILL.md"),
+                reason: format!("already read from {}", logged.display()),
+            });
+            continue;
+        }
         if !entry.is_dir() {
             left_behind.push(LeftBehind {
                 item: format!("skills/{name}"),
