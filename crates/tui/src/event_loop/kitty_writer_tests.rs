@@ -669,52 +669,51 @@ fn write_chunk_polls_on_wouldblock_and_resumes_where_it_stopped() {
 #[test]
 fn kitty_writer_yields_to_waiting_loop() {
     let lock = Arc::new(TtyLock::new());
-    let gate = Arc::new(KittyChunkGate::new(false));
-    let (mut read, mut write) = pipe();
-    // Fill the pipe with zeros, leaving exactly 100 bytes free: the
-    // writer's first chunk writes what fits, then blocks holding its
-    // chunk guard while the loop waiter queues behind it.
-    rustix::fs::fcntl_setfl(&write, rustix::fs::OFlags::NONBLOCK)
-        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
-    let filler = vec![0u8; 65536];
-    let mut filled = 0;
-    loop {
-        match write.write(&filler) {
-            Ok(n) => filled += n,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-            Err(error) => panic!("fill: {error}"),
-        }
-    }
-    let mut free = [0u8; 100];
-    std::io::Read::read_exact(&mut read, &mut free).unwrap_or_else(|err| panic!("free: {err}"));
-    let frame_tty = write
+    // A closed gate parks the writer after its first chunk: the
+    // first-chunk read below is the pause point that orders writer
+    // progress before the waiter, with no thread-scheduling hold. The
+    // pipe stays blocking with room to spare, so the marker never meets
+    // a full pipe (`Resource temporarily unavailable`, os error 11).
+    let gate = Arc::new(KittyChunkGate::new(true));
+    let (read, write) = pipe();
+    let marker_tty = write
         .try_clone()
         .unwrap_or_else(|err| panic!("clone: {err}"));
     let (writer, _failed, _rx) = spawn_writer(write, &gate, &lock);
     let (upload, full) = image(1, 1, 10);
+    let head = first_chunk_len(&upload);
     assert!(writer.push(upload));
-    // Give the writer first scheduling: it blocks mid-chunk holding
-    // the guard.
-    for _ in 0..8 {
-        std::thread::yield_now();
-    }
-    // Queue the loop waiter before draining: with no drain the writer
-    // cannot complete its chunk, so the waiter either parks behind it
-    // or, if the writer has not started, writes first. Either way the
-    // marker precedes the writer's next chunk. The queued signal proves
-    // the waiter registered its loop write; the deadline fails the test
-    // instead of hanging it.
+    // Reader progress before any marker write: this read proves the
+    // writer reached the boundary and parked. The deadline fails the
+    // test instead of hanging it.
+    let rx = read_exact(read, head);
+    let (first, read) = recv_bytes(&rx);
+    assert_eq!(first, full[..head].to_vec());
+    // Queue the loop waiter behind the parked writer: it holds the loop
+    // write across the marker, so the writer's next chunk parks behind
+    // it. The queued signal proves the waiter registered its loop write
+    // and the acquired signal proves it holds ahead of the next chunk;
+    // the deadlines fail the test instead of hanging it.
     let marker = b"<<FRAME>>";
     let (queued_tx, queued_rx) = std::sync::mpsc::channel();
     lock.set_queued_hook(queued_tx);
+    let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+    let (go_tx, go_rx) = std::sync::mpsc::channel();
     let waiter = std::thread::Builder::new()
         .name("kitty-test-waiter".to_owned())
         .spawn({
             let lock = Arc::clone(&lock);
             move || {
                 let _guard = lock.loop_write();
-                let mut frame_tty = frame_tty;
-                frame_tty
+                acquired_tx.send(()).unwrap_or(());
+                // Hold the loop guard while waiting for the drain below:
+                // the writer's next chunk parks behind this queued write.
+                match fakes::Deadline::after(DEADLINE).recv(&go_rx) {
+                    Ok(()) => {}
+                    Err(error) => panic!("waited {DEADLINE:?} for the drain: {error}"),
+                }
+                let mut marker_tty = marker_tty;
+                marker_tty
                     .write_all(marker)
                     .unwrap_or_else(|err| panic!("marker: {err}"));
             }
@@ -724,10 +723,17 @@ fn kitty_writer_yields_to_waiting_loop() {
         Ok(()) => {}
         Err(error) => panic!("waited {DEADLINE:?} for the waiter to queue: {error}"),
     }
-    // Drain: whatever order the threads reached, the marker lands
-    // atomically between whole pieces, and priority puts it before the
-    // writer's next chunk.
-    let rx = read_exact(read, filled - 100 + full.len() + marker.len());
+    match fakes::Deadline::after(DEADLINE).recv(&acquired_rx) {
+        Ok(()) => {}
+        Err(error) => panic!("waited {DEADLINE:?} for the waiter to hold: {error}"),
+    }
+    // Drain: the drain thread exists before the marker write — spawn
+    // order plus the `go` handshake put reader before marker with no
+    // scheduling assumption — and blocks for the marker and the writer's
+    // remainder. Priority puts the marker before the writer's next chunk.
+    let rx = read_exact(read, marker.len() + full.len() - head);
+    go_tx.send(()).unwrap_or(());
+    gate.release();
     let (tail, _read) = recv_bytes(&rx);
     let at_marker = tail
         .windows(marker.len())
