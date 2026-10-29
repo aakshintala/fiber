@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use contract::shapes::Effect;
 use contract::tool::Effects;
 
-use super::super::read_only::COMMANDS;
+use super::super::read_only::{COMMANDS, Flag};
 use super::classify;
 
 #[test]
@@ -320,6 +320,180 @@ fn new_git_forms_read() {
 }
 
 #[test]
+fn git_merge_base_reads_without_paths() {
+    // `docs/tools.md`, "Shell", "Effects": `git merge-base` is read-only
+    // with no flags, and its operands are revisions declaring no paths.
+    for command in ["git merge-base a HEAD", "git merge-base abc123 HEAD"] {
+        assert_reads(command);
+        assert!(classified(command).declared.paths.is_none(), "{command}");
+    }
+    assert_closed("git merge-base a HEAD --check");
+}
+
+#[test]
+fn git_diff_read_only_flags_read() {
+    for command in [
+        "git diff --check",
+        "git diff --merge-base",
+        "git diff -w",
+        "git diff --ignore-all-space",
+        "git diff --diff-filter=ACM",
+        "git diff --diff-filter=",
+    ] {
+        assert_reads(command);
+    }
+}
+
+#[test]
+fn git_unified_and_diff_filter_forms() {
+    // `-U<n>` takes attached digits only, and `--unified=<n>` its inline
+    // all-digit value, for `git diff`, `git log` and `git show`;
+    // `--diff-filter=<value>` takes its value inline only. A flag after
+    // the first operand still reads.
+    for command in [
+        "git diff -U80 a..HEAD --check",
+        "git log -U3",
+        "git show --unified=5",
+        "git diff --unified=007",
+        "git log -U0",
+    ] {
+        assert_reads(command);
+    }
+    for command in [
+        "git diff -U",
+        "git diff -U8x",
+        "git diff -U 80",
+        "git diff --unified",
+        "git diff --unified=",
+        "git diff --unified=x",
+        "git diff --unified 5",
+        "git diff --diff-filter",
+        "git diff --diff-filter ACM",
+        "git rev-parse -U5",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn git_merge_base_substitution_reads() {
+    // `docs/tools.md`, "Shell", "Effects": a `$(git merge-base <rev>
+    // <rev>)` substitution reads as an operand of a listed git read, bare
+    // or composed with one `..`/`...` range against an outer plain ref.
+    // A validated word declares no path, so plain operands declare as
+    // before.
+    assert_declares(
+        "git diff $(git merge-base abc123 HEAD)..HEAD -- src",
+        &["/work/src"],
+    );
+    for command in [
+        "git diff $(git merge-base a b)",
+        "git diff $(git merge-base a b)...HEAD",
+        "git diff HEAD..$(git merge-base a b)",
+        "git diff HEAD...$(git merge-base a b)",
+        "git diff $(git merge-base HEAD~1 origin/main)..HEAD",
+        "git diff $(git merge-base a b) $(git merge-base c d)",
+        "git diff $(git merge-base HEAD~0 a)..HEAD",
+        "git log -p $(git merge-base a b)",
+        // A leading discard redirect stays read-only: the redirect drops
+        // out before the flag walk, and the substitution still lines up
+        // with its own token.
+        ">/dev/null git diff $(git merge-base a b)..HEAD",
+    ] {
+        assert_reads(command);
+    }
+    // Two validated substitutions declare no paths of their own: the
+    // verdict matches a bare `git diff`, with only the workdir default.
+    assert_declares(
+        "git diff $(git merge-base a b) $(git merge-base c d)",
+        &["/work"],
+    );
+}
+
+#[test]
+fn git_merge_base_substitution_refusals_execute() {
+    for command in [
+        "cat $(git merge-base a b)",
+        "git diff $(git merge-base --fork-point a b)",
+        "git diff $(git rev-parse $(echo x))",
+        "git diff $(git log -1)",
+        "git log -p $(git rev-parse .env)",
+        "git diff $(git merge-base a b)--output=/tmp/f",
+        "git log -p -- $(git merge-base a b).env",
+        "git diff `git merge-base a b`..HEAD",
+        "git diff $(/tmp/x/git merge-base a b)..HEAD",
+        "git diff $(./git merge-base a b)..HEAD",
+        "git diff $(git merge-base a b;id)..HEAD",
+        "git diff $(git merge-base a b>f)..HEAD",
+        "git diff $(git merge-base\nsh x.sh)",
+        "git diff HEAD$(git merge-base a b)..HEAD",
+        "git diff .$(git merge-base a b).HEAD",
+        "git log -n $(git merge-base a b) .env",
+        "git blame -L $(git merge-base a b) .env",
+        "git diff $(git merge-base -- a b)",
+        "git diff -- $(git merge-base a b)",
+        "git diff $(git merge-base a b c)",
+        "git diff $(git merge-base HEAD~ a)..HEAD",
+        "git diff $(git merge-base HEAD~x a)..HEAD",
+        "git diff $(git merge-base a:b c)..HEAD",
+        "git diff \"x\"$(git merge-base a b)..HEAD",
+        "git diff 'x'$(git merge-base a b)..HEAD",
+        "git diff $(git merge-base a b)..HEAD~1",
+        "git diff $(git merge-base a b)..HEAD:foo",
+        "git diff $(git merge-base a b)....HEAD",
+        "git diff $(git merge-base a b)..",
+        "git diff ..$(git merge-base a b)",
+        "git diff $(git merge-base HEAD^^ a)..HEAD",
+        "git diff $(git merge-base a b)..HEAD --output=f",
+        "$(git merge-base a b)",
+        "git diff --diff-filter=$(git merge-base a b) -- src",
+        "git show a < $(git merge-base a b)",
+        "git show a > /dev/null $(git merge-base a b)",
+        "TZ=$(git merge-base a b) git diff x",
+        "env git diff $(git merge-base a b)..HEAD",
+        "timeout 5 git diff $(git merge-base a b)..HEAD",
+    ] {
+        assert_closed(command);
+    }
+    let entries = [configured("git stash show", &[])];
+    assert_configured_reads("git stash show x", &entries, &["/work/x"]);
+    assert_configured_closed("git stash show $(git merge-base a b)", &entries);
+}
+
+#[test]
+fn a_substituted_executes_names_no_subject() {
+    // A substituted call that executes names no subject: no allow rule can
+    // match a reviewed call whose words arrive only when it runs.
+    assert_closed("cat $(echo x)");
+    assert!(classified("cat $(echo x)").subject.is_none());
+}
+
+#[test]
+fn plain_concatenated_operands_stay_unmarked() {
+    // `syntax.rs` cooks a concatenation with no substitution unmarked, so
+    // an ordinary concatenated operand still reads on a non-git command.
+    assert_reads("echo a\"b\"c");
+}
+
+#[test]
+fn refused_substitution_concatenations_stay_opaque() {
+    for command in [
+        "git diff $(git merge-base a b)\"..HEAD\"",
+        "git diff $(git merge-base a b)'..HEAD'",
+        "git diff HEAD$(git merge-base a b)..HEAD",
+    ] {
+        let script = super::super::syntax::parse(command).expect("valid shell syntax");
+        assert!(
+            matches!(
+                script.elements[0].stages.as_slice(),
+                [super::super::syntax::Stage::Opaque(_)]
+            ),
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn exact_forms_read_without_paths() {
     // `docs/tools.md`, "Shell", "Effects": if every command is on the
     // read-only list, the call declares `reads` with no paths here.
@@ -533,6 +707,7 @@ fn hostile_git_forms_execute() {
         "git log -x8",
         "git show -8",
         "git diff -8",
+        "git diff --fork-point",
         "git rev-parse --short=7",
         "git rev-parse --git-dir",
         "git ls-files --exclude-from=f",
@@ -564,6 +739,34 @@ fn gh_read_only_forms_read() {
         &["/work/123"],
     );
     assert_network("LC_ALL=C gh pr view 123", &[], &["/work/123"]);
+}
+
+#[test]
+fn gh_jq_programs_read_unless_they_name_the_environment_or_input() {
+    // `docs/tools.md`, "Shell", "Effects": `--jq` joins each listed `gh`
+    // read, and a program holding `env`, `ENV` or `input` as a substring,
+    // matched case-sensitively, makes the call `executes`.
+    for (command, paths) in [
+        ("gh pr view 3 --json body --jq .body", vec!["/work/3"]),
+        ("gh pr view 3 --json body --jq=.body", vec!["/work/3"]),
+        ("gh pr diff --patch --jq .", vec!["/work"]),
+        ("gh pr view 3 --json body --jq Env", vec!["/work/3"]),
+        ("gh pr view 3 --json body --jq INPUT", vec!["/work/3"]),
+        // A repo-like program is `--jq`'s value, never a named owner.
+        ("gh pr view --jq owner/repo", vec!["/work"]),
+    ] {
+        assert_network(command, &[], &paths);
+    }
+    for command in [
+        "gh pr view 3 --json body --jq 'env.GH_TOKEN'",
+        "gh pr view 3 --json body --jq '$ENV'",
+        "gh pr view 3 --json body --jq '\"env\"'",
+        "gh pr view 3 --json body --jq inputs",
+        "gh pr view 3 --json body --jq=env.x",
+        "gh pr view 3 --json body --jq $(git merge-base a b)",
+    ] {
+        assert_closed(command);
+    }
 }
 
 #[test]
@@ -731,6 +934,7 @@ fn only_pathless_commands_declare_no_paths() {
         let declares = command.name != "echo"
             && command.name != "pwd"
             && command.name != "git rev-parse"
+            && command.name != "git merge-base"
             && command.name != "git status"
             && command.name != "git branch --show-current";
         assert_eq!(command.paths, declares, "{}", command.name);
@@ -811,6 +1015,21 @@ fn every_listed_command_with_a_plain_operand_reads() {
     }
 }
 
+/// One read-only spelling of a flag: an inline-only value rides `=`, an
+/// all-digit value rides `=5`, any other value rides the next word, and a
+/// plain flag stands alone.
+fn inline_value_line(name: &str, flag: &Flag) -> String {
+    if flag.digits_only() {
+        format!("{name} {}=5", flag.spelling)
+    } else if flag.inline_only() {
+        format!("{name} {}=v", flag.spelling)
+    } else if flag.takes_value() {
+        format!("{name} {} v", flag.spelling)
+    } else {
+        format!("{name} {}", flag.spelling)
+    }
+}
+
 #[test]
 fn each_allowed_flag_keeps_the_command_read_only() {
     for command in COMMANDS {
@@ -818,21 +1037,13 @@ fn each_allowed_flag_keeps_the_command_read_only() {
         // with the default host instead of `Reads`.
         if command.name.starts_with("gh ") {
             for flag in command.flags {
-                let line = if flag.takes_value {
-                    format!("{} {} v", command.name, flag.spelling)
-                } else {
-                    format!("{} {}", command.name, flag.spelling)
-                };
+                let line = inline_value_line(command.name, flag);
                 assert_network(&line, &[], &["/work"]);
             }
             continue;
         }
         for flag in command.flags {
-            let line = if flag.takes_value {
-                format!("{} {} v", command.name, flag.spelling)
-            } else {
-                format!("{} {}", command.name, flag.spelling)
-            };
+            let line = inline_value_line(command.name, flag);
             assert_reads(&line);
             let paths = classified(&line).declared.paths;
             if command.paths {
@@ -1009,6 +1220,7 @@ fn every_command_states_whether_double_dash_ends_flags() {
         ("git log", true),
         ("git show", true),
         ("git rev-parse", true),
+        ("git merge-base", true),
         ("git ls-files", true),
         ("git blame", true),
         ("gh pr view", false),
@@ -1021,10 +1233,18 @@ fn every_command_states_whether_double_dash_ends_flags() {
         ("gh run list", false),
         ("gh run view", false),
     ];
-    assert_eq!(COMMANDS.len(), stated.len());
-    for (command, (name, ends_flags)) in COMMANDS.iter().zip(stated) {
-        assert_eq!(command.name, name);
-        assert_eq!(command.ends_flags, ends_flags, "{name}");
+    for command in COMMANDS {
+        let (_, ends_flags) = stated
+            .iter()
+            .find(|(name, _)| *name == command.name)
+            .unwrap_or_else(|| panic!("missing -- policy for {}", command.name));
+        assert_eq!(command.ends_flags, *ends_flags, "{}", command.name);
+    }
+    for (name, _) in stated {
+        assert!(
+            COMMANDS.iter().any(|command| command.name == name),
+            "stale -- policy for {name}"
+        );
     }
 }
 

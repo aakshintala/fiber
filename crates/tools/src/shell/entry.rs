@@ -178,23 +178,53 @@ fn is_option_word(cooked: &str) -> bool {
 
 /// Whether the entry accepts one flag word, consuming its value when the
 /// flag takes one. Clusters, `--name=value` and `-<digits>` follow the
-/// built-in grammar; anything else is refused.
+/// built-in grammar; anything else is refused. An inline-only value flag
+/// takes its value only after `=`: a bare word with its spelling refuses,
+/// so it never consumes the next word.
 pub(super) fn accept_flag(
     entry: &Command,
     words: &mut std::slice::Iter<'_, Word>,
     cooked: &str,
 ) -> Option<()> {
     if let Some(name) = long_value_name(cooked) {
+        let inline = cooked.split_once('=').map_or("", |(_, value)| value);
         return entry
             .flags
             .iter()
-            .any(|flag| flag.takes_value && flag.spelling == name)
+            .any(|flag| {
+                flag.takes_value()
+                    && flag.spelling == name
+                    && (!flag.digits_only() || digits_value(cooked))
+                    && (flag.spelling != "--jq" || jq_program_ok(inline))
+            })
             .then_some(());
     }
     if let Some(flag) = entry.flags.iter().find(|flag| flag.spelling == cooked) {
-        if flag.takes_value {
-            words.next()?;
+        if flag.inline_only() {
+            return None;
         }
+        if flag.takes_value() {
+            // A value-taking flag never consumes a substituted word: the
+            // substitution would hide the next path, as in
+            // `git log -n $(…) .env`.
+            if words.clone().next().is_some_and(|word| word.substituted) {
+                return None;
+            }
+            let value = words.next()?;
+            if flag.spelling == "--jq" && !jq_program_ok(&value.cooked) {
+                return None;
+            }
+        }
+        return Some(());
+    }
+    // `-U<digits>`, the attached short form of `--unified=<digits>`, as in
+    // `git diff -U80`. Only an entry listing `--unified` takes it; a bare
+    // `-U` never consumes the next word.
+    if let Some(digits) = cooked.strip_prefix("-U")
+        && !digits.is_empty()
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && entry.flags.iter().any(|flag| flag.spelling == "--unified")
+    {
         return Some(());
     }
     // `git log -<digits>`, as in `git log -8`.
@@ -202,6 +232,23 @@ pub(super) fn accept_flag(
         return Some(());
     }
     short_cluster(entry, cooked).then_some(())
+}
+
+/// Whether the text after the first `=` holds only ASCII digits, never
+/// empty, as in `--unified=5`.
+fn digits_value(cooked: &str) -> bool {
+    cooked.split_once('=').is_some_and(|(_, value)| {
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
+/// Whether a `--jq` program keeps the call read-only: it holds none of
+/// `env`, `ENV` or `input` as a substring, matched case-sensitively, so
+/// `$ENV`, `env.X` and `input_filename` all refuse. gh evaluates `--jq`
+/// in-process with the process environment loaded, which would print the
+/// environment into the result: the same leak the `/proc/` rule blocks.
+fn jq_program_ok(program: &str) -> bool {
+    !program.contains("env") && !program.contains("ENV") && !program.contains("input")
 }
 
 /// `--name=value`, and only that form. A short flag does not take `=`.
@@ -235,7 +282,7 @@ fn short_cluster(entry: &Command, cooked: &str) -> bool {
 /// The letter of a value-less short flag: `-n` gives `n`, `--long` and
 /// `-n <value>` give none.
 fn short_letter(flag: &Flag) -> Option<char> {
-    if flag.takes_value {
+    if flag.takes_value() {
         return None;
     }
     let rest = flag.spelling.strip_prefix('-')?;
