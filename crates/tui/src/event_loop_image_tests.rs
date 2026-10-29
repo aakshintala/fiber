@@ -21,6 +21,32 @@ use crate::mouse::TargetId;
 use crate::screen::Screen;
 use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 
+fn bounded_sixel_test(name: &str, body: fn()) {
+    const CHILD: &str = "FIBER_SIXEL_TEST_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        body();
+        return;
+    }
+    use std::os::unix::process::CommandExt as _;
+    let child = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .arg("--exact")
+        .arg(name)
+        .arg("--nocapture")
+        .env(CHILD, "1")
+        .process_group(0)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the Sixel test process spawns");
+    let output = fakes::wait_output(child, name);
+    assert!(
+        output.status.success(),
+        "{name} passed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 use crate::convert::tests::PNG as CONVERTED_PNG;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
@@ -1023,6 +1049,13 @@ fn logo_iterm_rewrites_after_touch() {
 /// 80 image.
 #[test]
 fn logo_sixel_scales_to_the_measured_cell() {
+    bounded_sixel_test(
+        "event_loop::image_tests::logo_sixel_scales_to_the_measured_cell",
+        logo_sixel_scales_to_the_measured_cell_body,
+    );
+}
+
+fn logo_sixel_scales_to_the_measured_cell_body() {
     let (mut lp, mut tty, rx) = logo_loop();
     lp.app.set_measured_cell(Some((10, 20)));
     assert_eq!(lp.step(Input::Bytes(b"\x1b[?62;4c".to_vec()), &rx), None);
@@ -1037,6 +1070,13 @@ fn logo_sixel_scales_to_the_measured_cell() {
 /// keep pixels with no Sixel bytes; 64 by 128 draws 2048 by 512.
 #[test]
 fn logo_cell_bound_rows() {
+    bounded_sixel_test(
+        "event_loop::image_tests::logo_cell_bound_rows",
+        logo_cell_bound_rows_body,
+    );
+}
+
+fn logo_cell_bound_rows_body() {
     for cell in [None, Some((0, 0)), Some((65, 128)), Some((65535, 65535))] {
         let (mut lp, mut tty, rx) = logo_loop();
         lp.app.set_measured_cell(cell);

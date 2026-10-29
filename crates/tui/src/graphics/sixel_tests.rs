@@ -4,9 +4,42 @@
 
 use super::encode;
 
+fn bounded_sixel_test(name: &str, body: fn()) {
+    const CHILD: &str = "FIBER_SIXEL_TEST_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        body();
+        return;
+    }
+    use std::os::unix::process::CommandExt as _;
+    let child = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .arg("--exact")
+        .arg(name)
+        .arg("--nocapture")
+        .env(CHILD, "1")
+        .process_group(0)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the Sixel test process spawns");
+    let output = fakes::wait_output(child, name);
+    assert!(
+        output.status.success(),
+        "{name} passed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// Two red columns over six rows: one band, one register, no RLE.
 #[test]
 fn one_band_one_register_encodes_exactly() {
+    bounded_sixel_test(
+        "graphics::sixel::tests::one_band_one_register_encodes_exactly",
+        one_band_one_register_encodes_exactly_body,
+    );
+}
+
+fn one_band_one_register_encodes_exactly_body() {
     let rgba = [[255, 0, 0, 255]].repeat(2 * 6).concat();
     assert_eq!(
         encode(2, 6, &rgba, [0, 0, 0]),
@@ -17,6 +50,13 @@ fn one_band_one_register_encodes_exactly() {
 /// A run over 3 packs into `!count char`; exactly 3 stays literal.
 #[test]
 fn runs_over_three_pack_the_rest_stays_literal() {
+    bounded_sixel_test(
+        "graphics::sixel::tests::runs_over_three_pack_the_rest_stays_literal",
+        runs_over_three_pack_the_rest_stays_literal_body,
+    );
+}
+
+fn runs_over_three_pack_the_rest_stays_literal_body() {
     let rgba = [[255, 0, 0, 255]].repeat(8 * 6).concat();
     assert_eq!(
         encode(8, 6, &rgba, [0, 0, 0]),
@@ -38,6 +78,13 @@ fn runs_over_three_pack_the_rest_stays_literal() {
 /// returns the carriage between them, `-` ends the band.
 #[test]
 fn two_registers_switch_selectors_inside_the_band() {
+    bounded_sixel_test(
+        "graphics::sixel::tests::two_registers_switch_selectors_inside_the_band",
+        two_registers_switch_selectors_inside_the_band_body,
+    );
+}
+
+fn two_registers_switch_selectors_inside_the_band_body() {
     let mut rgba = Vec::new();
     for _ in 0..6 {
         rgba.extend_from_slice(&[255, 0, 0, 255].repeat(3));
@@ -52,6 +99,13 @@ fn two_registers_switch_selectors_inside_the_band() {
 /// Rows past six open a second band after `-`.
 #[test]
 fn seven_rows_open_a_second_band() {
+    bounded_sixel_test(
+        "graphics::sixel::tests::seven_rows_open_a_second_band",
+        seven_rows_open_a_second_band_body,
+    );
+}
+
+fn seven_rows_open_a_second_band_body() {
     let rgba = [[255, 0, 0, 255]].repeat(7).concat();
     assert_eq!(
         encode(1, 7, &rgba, [0, 0, 0]),
@@ -62,6 +116,13 @@ fn seven_rows_open_a_second_band() {
 /// Alpha under 32 reads as the background; 32 and up blends.
 #[test]
 fn alpha_under_32_is_unset_at_32_it_blends() {
+    bounded_sixel_test(
+        "graphics::sixel::tests::alpha_under_32_is_unset_at_32_it_blends",
+        alpha_under_32_is_unset_at_32_it_blends_body,
+    );
+}
+
+fn alpha_under_32_is_unset_at_32_it_blends_body() {
     assert_eq!(
         encode(1, 1, &[255, 0, 0, 31], [0, 0, 0]),
         b"\x1bP0;1q\"1;1;1;1#0;2;0;0;0#0@$-\x1b\\".as_slice()
@@ -76,6 +137,13 @@ fn alpha_under_32_is_unset_at_32_it_blends() {
 /// palette then names.
 #[test]
 fn the_background_fills_transparent_pixels() {
+    bounded_sixel_test(
+        "graphics::sixel::tests::the_background_fills_transparent_pixels",
+        the_background_fills_transparent_pixels_body,
+    );
+}
+
+fn the_background_fills_transparent_pixels_body() {
     assert_eq!(
         encode(1, 1, &[255, 0, 0, 0], [255, 255, 255]),
         b"\x1bP0;1q\"1;1;1;1#0;2;100;100;100#0@$-\x1b\\".as_slice()
@@ -85,6 +153,13 @@ fn the_background_fills_transparent_pixels() {
 /// Half alpha blends each channel toward the background.
 #[test]
 fn half_alpha_blends_toward_the_background() {
+    bounded_sixel_test(
+        "graphics::sixel::tests::half_alpha_blends_toward_the_background",
+        half_alpha_blends_toward_the_background_body,
+    );
+}
+
+fn half_alpha_blends_toward_the_background_body() {
     // (200 * 128 + 10 * 127) / 255 = 105, (100 * 128 + 20 * 127) /
     // 255 = 60, (50 * 128 + 30 * 127) / 255 = 40.
     assert_eq!(
@@ -97,6 +172,13 @@ fn half_alpha_blends_toward_the_background() {
 // 255 = 127, the middle of the red ramp.
 #[test]
 fn blend_weights_the_background_term() {
+    bounded_sixel_test(
+        "graphics::sixel::tests::blend_weights_the_background_term",
+        blend_weights_the_background_term_body,
+    );
+}
+
+fn blend_weights_the_background_term_body() {
     assert_eq!(
         encode(1, 1, &[0, 0, 0, 128], [255, 0, 0]),
         b"\x1bP0;1q\"1;1;1;1#0;2;43;0;0#0@$-\x1b\\".as_slice()
@@ -107,6 +189,13 @@ fn blend_weights_the_background_term() {
 // 255 = 223.
 #[test]
 fn blend_uses_255_minus_alpha() {
+    bounded_sixel_test(
+        "graphics::sixel::tests::blend_uses_255_minus_alpha",
+        blend_uses_255_minus_alpha_body,
+    );
+}
+
+fn blend_uses_255_minus_alpha_body() {
     assert_eq!(
         encode(1, 1, &[0, 0, 0, 32], [255, 0, 0]),
         b"\x1bP0;1q\"1;1;1;1#0;2;86;0;0#0@$-\x1b\\".as_slice()
@@ -117,6 +206,13 @@ fn blend_uses_255_minus_alpha() {
 /// selector, so a `/` in the row walk reads the wrong colour.
 #[test]
 fn two_columns_pin_the_band_walk_to_row_times_width() {
+    bounded_sixel_test(
+        "graphics::sixel::tests::two_columns_pin_the_band_walk_to_row_times_width",
+        two_columns_pin_the_band_walk_to_row_times_width_body,
+    );
+}
+
+fn two_columns_pin_the_band_walk_to_row_times_width_body() {
     let mut rgba = Vec::new();
     for _ in 0..6 {
         rgba.extend_from_slice(&[255, 0, 0, 255]);
@@ -128,46 +224,33 @@ fn two_columns_pin_the_band_walk_to_row_times_width() {
     );
 }
 
-/// Thirteen rows open three bands: the tail band holds one row. The
-/// encode runs in a child process under the must-succeed bound, so a
-/// broken band step fails the test instead of hanging its runner: the
-/// child's group is killed and reaped on the deadline.
+/// Thirteen rows open three bands, including a one-row tail band.
 #[test]
 fn thirteen_rows_open_three_bands() {
-    // In the child, run the probe and assert the exact bytes here, so
-    // a mismatch fails where the bytes are made.
-    if std::env::var("FIBER_SIXEL_BAND_PROBE").is_ok() {
-        let rgba = [[255, 0, 0, 255]].repeat(13).concat();
-        assert_eq!(
-            encode(1, 13, &rgba, [0, 0, 0]),
-            b"\x1bP0;1q\"1;1;1;13#0;2;100;0;0#0~$-#0~$-#0@$-\x1b\\".as_slice()
-        );
-        return;
-    }
-    use std::os::unix::process::CommandExt as _;
-    let exe = std::env::current_exe().expect("the test binary");
-    let child = std::process::Command::new(exe)
-        .arg("--exact")
-        .arg("graphics::sixel::tests::thirteen_rows_open_three_bands")
-        .arg("--nocapture")
-        .env("FIBER_SIXEL_BAND_PROBE", "1")
-        .process_group(0)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("the band probe spawns");
-    let output = fakes::wait_output(child, "the third band encodes");
-    assert!(
-        output.status.success(),
-        "the band probe passed: {}",
-        String::from_utf8_lossy(&output.stderr)
+    bounded_sixel_test(
+        "graphics::sixel::tests::thirteen_rows_open_three_bands",
+        thirteen_rows_open_three_bands_body,
+    );
+}
+
+fn thirteen_rows_open_three_bands_body() {
+    let rgba = [[255, 0, 0, 255]].repeat(13).concat();
+    assert_eq!(
+        encode(1, 13, &rgba, [0, 0, 0]),
+        b"\x1bP0;1q\"1;1;1;13#0;2;100;0;0#0~$-#0~$-#0@$-\x1b\\".as_slice()
     );
 }
 
 /// 300 distinct colors still fit the 256 registers 3-3-2 allows.
 #[test]
 fn the_palette_never_passes_256_registers() {
+    bounded_sixel_test(
+        "graphics::sixel::tests::the_palette_never_passes_256_registers",
+        the_palette_never_passes_256_registers_body,
+    );
+}
+
+fn the_palette_never_passes_256_registers_body() {
     let mut rgba = Vec::new();
     for at in 0..300u16 {
         let bucket = u8::try_from(at % 256).unwrap_or(u8::MAX);

@@ -7,6 +7,32 @@ use super::{
 };
 use crate::keys::{Event, Reply};
 
+fn bounded_sixel_test(name: &str, body: fn()) {
+    const CHILD: &str = "FIBER_SIXEL_TEST_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        body();
+        return;
+    }
+    use std::os::unix::process::CommandExt as _;
+    let child = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .arg("--exact")
+        .arg(name)
+        .arg("--nocapture")
+        .env(CHILD, "1")
+        .process_group(0)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the Sixel test process spawns");
+    let output = fakes::wait_output(child, name);
+    assert!(
+        output.status.success(),
+        "{name} passed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// A complete reply carries the version text and its length.
 #[test]
 fn dcs_done_names_the_version_and_its_length() {
@@ -315,6 +341,13 @@ fn iterm_is_a_32_by_4_png_with_bel_after_it() {
 // cell's pixels wide, 4 rows high.
 #[test]
 fn sixel_names_its_raster_after_the_measured_cell() {
+    bounded_sixel_test(
+        "graphics::logo::tests::sixel_names_its_raster_after_the_measured_cell",
+        sixel_names_its_raster_after_the_measured_cell_body,
+    );
+}
+
+fn sixel_names_its_raster_after_the_measured_cell_body() {
     let tint = tint();
     let small = sixel(&tint, [0, 0, 0], (1, 1));
     let small = String::from_utf8(small).expect("sixel is ASCII");
@@ -360,6 +393,13 @@ fn after_frame_emits_once_then_holds() {
 
 #[test]
 fn after_frame_repaints_a_gone_sixel_rect_but_not_a_kitty_one() {
+    bounded_sixel_test(
+        "graphics::logo::tests::after_frame_repaints_a_gone_sixel_rect_but_not_a_kitty_one",
+        after_frame_repaints_a_gone_sixel_rect_but_not_a_kitty_one_body,
+    );
+}
+
+fn after_frame_repaints_a_gone_sixel_rect_but_not_a_kitty_one_body() {
     use ratatui::layout::Rect;
     let rect = Rect::new(10, 5, 32, 4);
     let tint = (tint(), [4, 5, 6]);
